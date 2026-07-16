@@ -18,7 +18,7 @@ This file is a map, not a manual — read the linked source of truth before acti
 
 ## Build, test, run
 
-Go toolchain >= 1.22, arriving with Epic 1. Until then there is no Go module (Epic 0 scope is docs-only — see build-plan.md). Once code lands:
+Go toolchain >= 1.24 (raised from 1.22 by the VT emulator dependency — see ADR-005).
 
 ```bash
 go build ./...

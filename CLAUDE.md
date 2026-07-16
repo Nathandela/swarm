@@ -52,7 +52,7 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-Go toolchain >= 1.22 (Go code arrives with Epic 1; the module does not exist yet).
+Go toolchain >= 1.24 (raised by the VT emulator dependency, ADR-005).
 
 ```bash
 go build ./...

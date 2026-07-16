@@ -19,6 +19,7 @@
 - [ADR-002](adr/ADR-002-protocol-control-data-split.md) — control/data plane split, in-shim VT emulation
 - [ADR-003](adr/ADR-003-persistence-schema.md) — per-session metadata as source of truth
 - [ADR-004](adr/ADR-004-security-baseline.md) — v1 security baseline
+- [ADR-005](adr/ADR-005-vt-emulator-library.md) — VT emulator library (charmbracelet/x/vt)
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
