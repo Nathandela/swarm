@@ -16,3 +16,6 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# build artifacts
+/swarm
