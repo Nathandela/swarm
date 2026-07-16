@@ -52,18 +52,25 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
+Go toolchain >= 1.22 (Go code arrives with Epic 1; the module does not exist yet).
 
 ```bash
-# Example:
-# npm install
-# npm test
+go build ./...
+go test ./...        # -race on packages that spawn goroutines
+go vet ./...
+golangci-lint run
 ```
+
+All four must be green before any epic closes (implementation-goals.md GG-4).
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Terminal multi-CLI agent tracker: a Bubble Tea TUI client talks over a UDS to a supervisor daemon, which orchestrates per-session shim processes that own the PTYs — sessions survive terminal close and daemon crash/upgrade. Start at [AGENTS.md](AGENTS.md) and [docs/INDEX.md](docs/INDEX.md); the authoritative documents are the system spec, build plan, implementation goals, invariants, and ADRs linked there.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- **TDD is mandatory**: write failing tests before implementation; the failing-first run must be evidenced (implementation-goals.md GG-5). Never modify a test to make it pass — if a test seems wrong, stop and discuss.
+- **Verification exit criteria**: an epic is done only when every exit criterion in docs/specifications/implementation-goals.md is demonstrably true and its evidence file exists under docs/verification/.
+- **Decision changes require an ADR** (docs/adr/README.md has the convention); never silently drift from the spec.
+- **No emojis** in code, comments, or docs.
+- **Commit and push often** — small checkpoints that can be walked back.

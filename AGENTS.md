@@ -1,40 +1,32 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+swarm is a terminal application that centralizes every coding-agent CLI session on a machine into one keyboard-driven, Agent View-style dashboard. A Go + Bubble Tea client talks to a per-user supervisor daemon, which orchestrates per-session shim processes that own the PTYs — so sessions survive terminal close and daemon crash/upgrade alike. Design is approved (Gate 3); the codebase is currently docs-and-scaffolding only (Epic 0).
 
-## Quick Reference
+This file is a map, not a manual — read the linked source of truth before acting, don't rely on this summary.
+
+## Entry points
+
+| Need | Read |
+|---|---|
+| Everything, one hop away | [docs/INDEX.md](docs/INDEX.md) |
+| Requirements (EARS ids), architecture, scenarios | [docs/specifications/system-spec.md](docs/specifications/system-spec.md) |
+| 15 ordered epics, contracts, gap resolutions | [docs/specifications/build-plan.md](docs/specifications/build-plan.md) |
+| Per-epic exit criteria, global goals, orchestration protocol | [docs/specifications/implementation-goals.md](docs/specifications/implementation-goals.md) |
+| Safety/liveness invariants (S1-S12, L1-L3) | [docs/invariants/system-invariants.md](docs/invariants/system-invariants.md) |
+| Foundational architecture decisions | [docs/adr/README.md](docs/adr/README.md) |
+| Vendored codebase-governance principles | [docs/governance/](docs/governance/) |
+
+## Build, test, run
+
+Go toolchain >= 1.22, arriving with Epic 1. Until then there is no Go module (Epic 0 scope is docs-only — see build-plan.md). Once code lands:
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+go build ./...
+go test ./...
+golangci-lint run
 ```
 
-## Non-Interactive Shell Commands
-
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
-
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
-
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
-
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
-
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+## Beads workflow
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -82,3 +74,7 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## Verification
+
+An epic closes only when every exit criterion listed for it in implementation-goals.md is demonstrably true (passing test, produced artifact, or recorded verification) and the GG-4 quality gates (build, vet, lint, test, `-race`) are green. Evidence is recorded per epic under `docs/verification/`.

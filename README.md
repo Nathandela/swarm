@@ -16,3 +16,7 @@ Design approved (Gate 2). See:
 - [Design preview](docs/design/ui-preview.html) — navigable UI mockup
 - [Landscape research](docs/research/agent_view_landscape.md)
 - [DESIGN.md](DESIGN.md) — original design brief (superseded by the spec)
+
+## Limitations
+
+Sessions run only while the host machine is awake. Machine sleep pauses every agent process; they resume automatically on wake, with nothing lost, but they make no progress while asleep. swarm does not prevent sleep in v1 — a caffeinate-style keep-awake option is a possible v1.x addition (see system-spec.md, requirement N-7).
