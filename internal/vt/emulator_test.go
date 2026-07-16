@@ -404,8 +404,12 @@ func TestHostileEscapesFiltered(t *testing.T) {
 	// E2.4 / N-6. testdata/hostile.raw is the normative filter contract:
 	// OSC 52 clipboard writes (BEL and ST), an OSC 0 title with an embedded
 	// control byte, an OSC 2 title, DCS/APC/PM strings, an 8-bit C1 CSI, and an
-	// 8-bit C1 OSC. All grid content in the fixture is ASCII by construction, so
-	// any byte in 0x80-0x9f in the snapshot is a leaked C1 control, not UTF-8.
+	// 8-bit C1 OSC. The fixture also carries a row of Trojan-source runes as grid
+	// content — NBSP (U+00A0), RLO (U+202E), ZWSP (U+200B), U+2028 (F2 amendment)
+	// — which the sanitizer must fold to spaces. All printable grid content is
+	// otherwise ASCII and every non-printable rune is replaced by a space before
+	// serialization, so any byte in 0x80-0x9f in the snapshot is a leaked control,
+	// never legitimate UTF-8.
 	e := NewEmulator(gridCols, gridRows)
 	e.Feed(readFixture(t, "testdata/hostile.raw"))
 	b, err := e.Snapshot()

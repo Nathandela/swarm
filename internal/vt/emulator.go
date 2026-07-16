@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"unicode"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	xvt "github.com/charmbracelet/x/vt"
@@ -225,26 +226,21 @@ func colorSpec(c color.Color) string {
 	return fmt.Sprintf("#%02x%02x%02x", uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-// sanitizeText strips control runes (C0, DEL, C1) from s, leaving printable
-// content and spaces. This is the N-6 filter for the two free-form snapshot
-// fields, Run.Text and Snap.Title. Invalid UTF-8 decodes to U+FFFD (printable)
-// and is preserved, so no raw 0x80-0x9f byte can survive.
+// sanitizeText replaces every non-printable rune of s with a space, keeping
+// only printable runes and the ASCII space. This is the N-6 filter for the two
+// free-form snapshot fields, Run.Text and Snap.Title. It removes ESC/C0/C1/DEL,
+// and — because the snapshot feeds a security-sensitive viewer — every other
+// non-printable rune too: NBSP, bidi overrides (e.g. U+202E RLO), zero-width
+// marks (U+200B, U+FEFF) and line/paragraph separators (U+2028/U+2029), which
+// are the Trojan-source class that reorders, hides, or spoofs content.
+// Replacing rather than dropping preserves cell width and never shifts columns.
+// Invalid UTF-8 decodes to U+FFFD, which is printable and kept, so no raw
+// 0x80-0x9f byte can survive.
 func sanitizeText(s string) string {
-	if !strings.ContainsFunc(s, isControlRune) {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if isControlRune(r) {
-			continue
+	return strings.Map(func(r rune) rune {
+		if r == ' ' || unicode.IsPrint(r) {
+			return r
 		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// isControlRune reports whether r is a C0 control, DEL, or a C1 control.
-func isControlRune(r rune) bool {
-	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+		return ' '
+	}, s)
 }

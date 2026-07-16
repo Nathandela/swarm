@@ -101,3 +101,24 @@ freezes that surface.
 
 Reversal cost is low: the chosen library sits behind the Epic 2 `Emulator`
 wrapper, so swapping it later touches one package.
+
+## Known limitations
+
+- **Grapheme clusters split across PTY reads may render as separate cells.**
+  charm x/vt flushes its pending grapheme buffer at every `Write` boundary, so a
+  multi-rune grapheme cluster (base rune + combining mark, or a ZWJ emoji
+  sequence) that straddles two `Feed` calls commits as separate cells instead of
+  one. Buffering the trailing runes inside our wrapper is rejected: it would
+  delay echo of the last typed character, which attach/live-view cannot accept.
+  Product impact is minor — real PTY reads rarely bisect a cluster, and the next
+  paint (or a redraw) reconciles the grid — so we accept it rather than diverge
+  from upstream. The E2.5 fuzz property is scoped accordingly: on valid UTF-8,
+  `whole == split` is required except when the split byte offset falls strictly
+  inside a grapheme cluster (checked with `rivo/uniseg`); on malformed UTF-8 it
+  is not enforced, because charm's byte-level error recovery (consuming stray
+  control/continuation bytes into replacement runes, then clustering them) makes
+  cross-`Write` behavior implementation-defined and not analyzable from the byte
+  stream. Any panic or deadlock still fails, and real buffering regressions still
+  surface on the well-formed inputs the fuzzer explores. Revisit if charm gains
+  cross-`Write` grapheme merging, at which point the scoping can tighten back
+  toward unconditional.
