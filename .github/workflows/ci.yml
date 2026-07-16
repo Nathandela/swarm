@@ -42,6 +42,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+      - name: Vet (GG-4)
+        run: go vet ./...
       - name: Run tests
         run: go test -race ./...
 
@@ -58,9 +60,20 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Build (CGO_ENABLED=0)
+      - name: Build swarm binary (CGO_ENABLED=0)
         env:
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build ./...
+        run: go build -o swarm-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/swarm
+      # E1.2 static-linking assertion runs on the linux targets only: `file` on
+      # this ubuntu runner reads ELF metadata, so "statically linked" is
+      # meaningful for GOOS=linux (including the cross-built arm64 ELF). Darwin
+      # cross-builds produce Mach-O, which the ELF-oriented `file` here cannot
+      # classify the same way, so those are compiled for coverage but not
+      # static-checked.
+      - name: Assert linux binary is statically linked (E1.2)
+        if: matrix.goos == 'linux'
+        run: |
+          file swarm-${{ matrix.goos }}-${{ matrix.goarch }}
+          file swarm-${{ matrix.goos }}-${{ matrix.goarch }} | grep -q "statically linked"

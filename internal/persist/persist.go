@@ -51,8 +51,13 @@ type Store struct {
 }
 
 // NewStore returns a Store rooted at dir, creating dir (0700) if it is missing.
+// A pre-existing root is hardened to 0700 as well: MkdirAll leaves an existing
+// directory's mode untouched, so the chmod is unconditional.
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
 	return &Store{root: dir}, nil
@@ -64,6 +69,9 @@ var idRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 // validateID enforces the orchestrator-pinned id contract per ADR-004: ids are
 // path-safe by validation. An id must match idRE and must not be ".", "..", or
 // start with "-", so it can never escape the store root or be mistaken for a flag.
+//
+// Case-collisions on case-insensitive filesystems are avoided by the id generator
+// (lowercase-only, Epic 5), not by validation.
 func validateID(id string) error {
 	if !idRE.MatchString(id) || id == "." || id == ".." || strings.HasPrefix(id, "-") {
 		return fmt.Errorf("invalid session id %q: must match %s and not be %q, %q, or start with %q",
@@ -72,17 +80,52 @@ func validateID(id string) error {
 	return nil
 }
 
+// sessionPath returns <root>/<id>, first refusing to follow a symlink out of the
+// store root: if the path exists and is a symlink, it errors (ADR-004 escape).
+// A missing path is fine — there is nothing to escape through yet. Callers must
+// have already validated id.
+func (s *Store) sessionPath(id string) (string, error) {
+	p := filepath.Join(s.root, id)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return p, nil
+		}
+		return "", err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("session path %q is a symlink; refusing to follow it out of the store root", p)
+	}
+	return p, nil
+}
+
 // Save writes m atomically to <root>/<m.ID>/meta.json: marshal, write a 0600
 // temp file in the session dir, then rename over meta.json. A crash before the
 // rename leaves the previous meta.json (or nothing) intact — never a torn file.
+//
+// Save is the single choke point that enforces two on-disk invariants: the env
+// is allowlist-filtered (ADR-004) and the schema version is stamped to the
+// current build's, so a caller can persist neither an unfiltered secret nor an
+// arbitrary schema version.
+//
+// Durability model is process-crash (ADR-003); no parent-directory fsync
+// (power-loss out of scope).
 func (s *Store) Save(m Meta) error {
 	if err := validateID(m.ID); err != nil {
 		return err
 	}
-	dir := filepath.Join(s.root, m.ID)
+	dir, err := s.sessionPath(m.ID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	m.Env = FilterEnv(m.Env)
+	m.SchemaVersion = SchemaVersion
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -114,11 +157,15 @@ func (s *Store) Load(id string) (Meta, error) {
 	if err := validateID(id); err != nil {
 		return Meta{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(s.root, id, metaFile))
+	dir, err := s.sessionPath(id)
 	if err != nil {
 		return Meta{}, err
 	}
-	return decodeMeta(data)
+	data, err := os.ReadFile(filepath.Join(dir, metaFile))
+	if err != nil {
+		return Meta{}, err
+	}
+	return decodeMeta(data, id)
 }
 
 // Scan rebuilds the roster purely by directory scan (ADR-003: roster.json is a
@@ -132,6 +179,9 @@ func (s *Store) Scan() ([]Meta, error) {
 	}
 	var out []Meta
 	for _, e := range entries {
+		if e.Type()&os.ModeSymlink != 0 {
+			continue // never follow a symlinked session entry out of the root
+		}
 		if !e.IsDir() || validateID(e.Name()) != nil {
 			continue
 		}
@@ -139,7 +189,7 @@ func (s *Store) Scan() ([]Meta, error) {
 		if err != nil {
 			continue
 		}
-		m, err := decodeMeta(data)
+		m, err := decodeMeta(data, e.Name())
 		if err != nil {
 			continue
 		}
@@ -153,25 +203,60 @@ func (s *Store) Delete(id string) error {
 	if err := validateID(id); err != nil {
 		return err
 	}
-	return os.RemoveAll(filepath.Join(s.root, id))
+	dir, err := s.sessionPath(id)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
 }
 
-// decodeMeta parses a meta.json body, rejecting a schema version newer than this
-// build and applying read-side migration for older versions (G6). No field has
-// been removed or renamed between v0 and the current schema, so migration only
-// stamps the current version onto the returned Meta; the file is never rewritten.
-func decodeMeta(data []byte) (Meta, error) {
+// decodeMeta parses a meta.json body owned by session directory wantID. It
+// rejects garbage-but-valid JSON (an empty id, or an id that disagrees with the
+// directory it was read from) and a schema version newer than this build, then
+// applies read-side migration for older versions (G6). The file is never
+// rewritten; migration mutates only the returned Meta.
+func decodeMeta(data []byte, wantID string) (Meta, error) {
 	var m Meta
 	if err := json.Unmarshal(data, &m); err != nil {
 		return Meta{}, err
 	}
+	if m.ID == "" {
+		return Meta{}, fmt.Errorf("meta has empty id")
+	}
+	if m.ID != wantID {
+		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
+	}
 	if m.SchemaVersion > SchemaVersion {
 		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, SchemaVersion)
 	}
-	if m.SchemaVersion < SchemaVersion {
-		m.SchemaVersion = SchemaVersion
-	}
+	applyMigrations(&m, SchemaVersion, migrations)
 	return m, nil
+}
+
+// migrateV0toV1 upgrades a Meta from schema v0 to v1. v0 and v1 share the same
+// field set, so it makes no field change; it exists as a named registry entry so
+// the migration chain is a real primitive (a future v1->v2 slots in beside it)
+// rather than a bare version stamp.
+func migrateV0toV1(*Meta) {}
+
+// migrations maps schema version N to the function that upgrades a Meta from
+// version N to N+1. applyMigrations walks it in order.
+var migrations = map[int]func(*Meta){
+	0: migrateV0toV1,
+}
+
+// applyMigrations upgrades m in place from its current SchemaVersion up to
+// target, applying each registered step in ascending version order and stamping
+// the version after each. A version with no registered step advances the stamp
+// unchanged (fields already compatible). chain is a parameter so the ordering
+// can be exercised with a synthetic migration set in tests.
+func applyMigrations(m *Meta, target int, chain map[int]func(*Meta)) {
+	for m.SchemaVersion < target {
+		if migrate, ok := chain[m.SchemaVersion]; ok {
+			migrate(m)
+		}
+		m.SchemaVersion++
+	}
 }
 
 // DefaultDir returns the default state directory per the XDG Base Directory

@@ -19,7 +19,8 @@ func main() {
 	}
 
 	var script io.Reader
-	if os.Args[1] == "-" {
+	fromStdin := os.Args[1] == "-"
+	if fromStdin {
 		script = os.Stdin
 	} else {
 		f, err := os.Open(os.Args[1])
@@ -35,6 +36,17 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+
+	// When the script itself came from stdin, stdin is already consumed, so an
+	// ask step has no channel left to read its answer from. Reject before running.
+	if fromStdin {
+		for _, s := range steps {
+			if s.Kind == fakeagent.KindAsk {
+				fmt.Fprintln(os.Stderr, "ask requires a script file (stdin is consumed by the script)")
+				os.Exit(2)
+			}
+		}
 	}
 
 	code, err := fakeagent.Run(steps, os.Stdin, os.Stdout, time.Sleep)
