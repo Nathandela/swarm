@@ -33,7 +33,7 @@ Additional pinned contract (ADR-004): session ids validated `^[A-Za-z0-9._-]{1,1
 - **Opus (independent, saw no implementation)**: APPROVE; 5 LOW notes, all addressed or recorded (vet step added to CI; stdin-ask fixed; FilterEnv wired into Save; case-collision + fsync scope notes below).
 - **codex GPT-5.6 sol (cross-model), round 1**: FIX REQUIRED — 7 HIGH / 3 MEDIUM. All fixed in e4492b1 except four carried to round 2.
 - **codex round 2**: 6/10 OK; residuals (vacuous crash test, silent migration gaps, darwin static claim, GG-5 evidence) fixed in 3ba3c8b + this file; new MEDIUM (committed build artifact) fixed in afaa532.
-- **codex round 3 (final confirmation)**: see addendum below.
+- **codex round 3 (final confirmation)**: APPROVE on all five residual items (crash test non-vacuous; migration gaps error; darwin linkage check honest; GG-5 committed; binary untracked). Epic closed with both reviewers approving.
 
 ## Accepted deferrals (recorded, with rationale)
 
