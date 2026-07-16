@@ -136,6 +136,7 @@
     <button role="tab" aria-selected="false" data-tab="lifecycle">lifecycle</button>
     <button role="tab" aria-selected="false" data-tab="testing">testing</button>
     <button role="tab" aria-selected="false" data-tab="reqs">requirements</button>
+    <button role="tab" aria-selected="false" data-tab="plan">build plan</button>
   </nav>
 </header>
 
@@ -356,6 +357,34 @@ stateDiagram-v2
     <li><b>F-1</b> Protocol versioned + capability-negotiated; endpoint ids + namespaced session ids from release one.</li>
     <li><b>F-2</b> Remote transport is NOT claimed v1-ready — it gets its own auth/threat-model ADR; v1 only guarantees no UDS-specific schema assumptions.</li>
   </ul></div></details>
+</section>
+
+<!-- ============ BUILD PLAN ============ -->
+<section class="panel" id="panel-plan">
+  <h2>Build plan — 15 epics, dependency-ordered</h2>
+  <p class="lede">Gate 3-approved. Source of truth: <span class="mono">docs/specifications/build-plan.md</span>; backlog tracked in beads. The strategy: prove the whole architecture on a <b>fake agent</b> first — the walking skeleton at Epic 8 — before touching any volatile real-CLI adapter.</p>
+  <pre class="mermaid">
+flowchart LR
+  E0["0 agentic codebase"] --> E1["1 foundations"]
+  E1 --> E2["2 VT emulator"] & E3["3 transcript"]
+  E2 & E3 --> E4["4 shim"]
+  E4 --> E5["5 daemon core"]
+  E5 --> E6["6 protocol"]
+  E6 --> E7["7 TUI view"]
+  E4 & E6 & E7 --> E8(["8 attach<br/>WALKING SKELETON"])
+  E2 & E4 --> E9["9 adapter contract<br/>+ characterization"]
+  E6 & E9 --> E10["10 status engine"]
+  E9 & E10 --> E11["11 claude + codex"]
+  E5 & E7 --> E12["12 worktrees"]
+  E8 & E11 --> E13["13 release"]
+  E11 & E12 & E13 --> E14["14 integration verification"]
+  </pre>
+  <div class="cols">
+    <div class="card"><h4>WALKING SKELETON (E8)</h4><p>Launch a fake agent, see it grouped, attach (snapshot paint), type, detach, kill -9 the daemon, reconnect — nothing lost. Scenarios 2, 3, 7–10, 16 green before any real adapter exists.</p></div>
+    <div class="card"><h4>CHARACTERIZE BEFORE BUILD (E9→E11)</h4><p>No adapter is written until the harness has recorded the real CLI's behavior into versioned fixtures and a capability matrix — the adapter's acceptance baseline.</p></div>
+    <div class="card"><h4>15 INVARIANTS</h4><p>12 safety + 3 liveness properties (e.g. "kill -9 the daemon → every agent PID still alive"), each bound to a test, all asserted in Epic 14.</p></div>
+    <div class="card"><h4>THIS PAGE IS A REFERENCE</h4><p>The screens tab is the approved visual spec for Epics 7–8 and lives in the repo at <span class="mono">docs/design/ui-preview.html</span>, versioned with the code.</p></div>
+  </div>
 </section>
 </div>
 

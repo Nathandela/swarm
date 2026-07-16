@@ -8,7 +8,9 @@ Inspired by Claude Code's Agent View, but agent-agnostic: Claude Code and Codex 
 
 Design approved (Gate 2). See:
 
+- [Documentation index](docs/INDEX.md) — everything, one hop away
 - [System specification](docs/specifications/system-spec.md) — EARS requirements, diagrams, scenarios
+- [Build plan](docs/specifications/build-plan.md) — 15 ordered epics (Gate 3-approved); backlog in beads (`bd ready`)
 - [ADRs](docs/adr/) — the four foundational decisions
 - [Audit report](docs/verification/audit-001-system-spec.md) — committee findings that shaped Draft 2
 - [Design preview](docs/design/ui-preview.html) — navigable UI mockup
