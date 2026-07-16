@@ -229,7 +229,9 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.SchemaVersion > SchemaVersion {
 		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, SchemaVersion)
 	}
-	applyMigrations(&m, SchemaVersion, migrations)
+	if err := applyMigrations(&m, SchemaVersion, migrations); err != nil {
+		return Meta{}, err
+	}
 	return m, nil
 }
 
@@ -247,16 +249,21 @@ var migrations = map[int]func(*Meta){
 
 // applyMigrations upgrades m in place from its current SchemaVersion up to
 // target, applying each registered step in ascending version order and stamping
-// the version after each. A version with no registered step advances the stamp
-// unchanged (fields already compatible). chain is a parameter so the ordering
-// can be exercised with a synthetic migration set in tests.
-func applyMigrations(m *Meta, target int, chain map[int]func(*Meta)) {
+// the version after each. A gap — no registered step for a version below target
+// — is a loud error ("no migration registered from vN"), never a silent advance,
+// so a file this build cannot faithfully upgrade is rejected rather than
+// half-migrated. chain is a parameter so the ordering and gap behavior can be
+// exercised with a synthetic migration set in tests.
+func applyMigrations(m *Meta, target int, chain map[int]func(*Meta)) error {
 	for m.SchemaVersion < target {
-		if migrate, ok := chain[m.SchemaVersion]; ok {
-			migrate(m)
+		migrate, ok := chain[m.SchemaVersion]
+		if !ok {
+			return fmt.Errorf("no migration registered from v%d", m.SchemaVersion)
 		}
+		migrate(m)
 		m.SchemaVersion++
 	}
+	return nil
 }
 
 // DefaultDir returns the default state directory per the XDG Base Directory

@@ -5,6 +5,7 @@ package persist
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -28,7 +29,9 @@ func TestApplyMigrationsRunsInAscendingVersionOrder(t *testing.T) {
 	}
 
 	m := Meta{SchemaVersion: 0, AgentType: "base-"}
-	applyMigrations(&m, 2, chain)
+	if err := applyMigrations(&m, 2, chain); err != nil {
+		t.Fatalf("applyMigrations with a complete chain errored: %v", err)
+	}
 
 	if m.SchemaVersion != 2 {
 		t.Errorf("SchemaVersion after migration = %d, want 2", m.SchemaVersion)
@@ -41,16 +44,16 @@ func TestApplyMigrationsRunsInAscendingVersionOrder(t *testing.T) {
 	}
 }
 
-// A version with no registered step still advances the stamp to target without
-// changing fields, so the loop always terminates.
-func TestApplyMigrationsMissingStepAdvancesStamp(t *testing.T) {
+// A gap in the chain between the file's version and the target must ERROR, never
+// silently advance the stamp: an unmigratable file is a loud failure, not a
+// half-upgraded meta.
+func TestApplyMigrationsMissingStepErrors(t *testing.T) {
 	m := Meta{SchemaVersion: 0, AgentType: "unchanged"}
-	applyMigrations(&m, 3, map[int]func(*Meta){}) // empty chain
-
-	if m.SchemaVersion != 3 {
-		t.Errorf("SchemaVersion = %d, want 3", m.SchemaVersion)
+	err := applyMigrations(&m, 3, map[int]func(*Meta){}) // empty chain: gap at v0
+	if err == nil {
+		t.Fatal("applyMigrations with a missing step returned nil error; must reject")
 	}
-	if m.AgentType != "unchanged" {
-		t.Errorf("AgentType = %q, want unchanged", m.AgentType)
+	if !strings.Contains(err.Error(), "no migration registered from v0") {
+		t.Errorf("error = %v, want it to mention %q", err, "no migration registered from v0")
 	}
 }
