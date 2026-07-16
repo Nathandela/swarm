@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/status [github.com/Nathandela/swarm/internal/status.test]
+internal/status/status_test.go:52:14: undefined: Process
+internal/status/status_test.go:53:14: undefined: Turn
+internal/status/status_test.go:54:14: undefined: Interaction
+internal/status/status_test.go:55:14: undefined: Group
+internal/status/status_test.go:58:3: undefined: ProcessRunning
+internal/status/status_test.go:58:19: undefined: TurnActive
+internal/status/status_test.go:58:31: undefined: InteractionNone
+internal/status/status_test.go:58:48: undefined: GroupWorking
+internal/status/status_test.go:59:3: undefined: ProcessRunning
+internal/status/status_test.go:59:19: undefined: TurnActive
+internal/status/status_test.go:59:19: too many errors
+FAIL	github.com/Nathandela/swarm/internal/status [build failed]
+FAIL

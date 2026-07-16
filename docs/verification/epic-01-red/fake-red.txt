@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/fakeagent [github.com/Nathandela/swarm/internal/fakeagent.test]
+internal/fakeagent/fakeagent_test.go:29:16: undefined: Parse
+internal/fakeagent/fakeagent_test.go:34:12: undefined: Step
+internal/fakeagent/fakeagent_test.go:35:10: undefined: KindPrint
+internal/fakeagent/fakeagent_test.go:36:10: undefined: KindAsk
+internal/fakeagent/fakeagent_test.go:37:10: undefined: KindIdle
+internal/fakeagent/fakeagent_test.go:38:10: undefined: KindExit
+internal/fakeagent/fakeagent_test.go:97:18: undefined: Parse
+internal/fakeagent/fakeagent_test.go:115:13: undefined: Step
+internal/fakeagent/fakeagent_test.go:115:25: undefined: KindPrint
+internal/fakeagent/fakeagent_test.go:118:15: undefined: Run
+internal/fakeagent/fakeagent_test.go:118:15: too many errors
+FAIL	github.com/Nathandela/swarm/internal/fakeagent [build failed]
+FAIL

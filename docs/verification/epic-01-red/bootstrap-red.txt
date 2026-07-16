@@ -1,0 +1,4 @@
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/main_test.go:51:15: undefined: dispatch
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

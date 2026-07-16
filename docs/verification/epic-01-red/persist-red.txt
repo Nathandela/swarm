@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/persist [github.com/Nathandela/swarm/internal/persist.test]
+internal/persist/persist_test.go:23:35: undefined: Store
+internal/persist/persist_test.go:26:12: undefined: NewStore
+internal/persist/persist_test.go:36:17: undefined: Meta
+internal/persist/persist_test.go:38:9: undefined: Meta
+internal/persist/persist_test.go:39:19: undefined: SchemaVersion
+internal/persist/persist_test.go:198:12: undefined: NewStore
+internal/persist/persist_test.go:228:26: undefined: SchemaVersion
+internal/persist/persist_test.go:229:72: undefined: SchemaVersion
+internal/persist/persist_test.go:365:9: undefined: FilterEnv
+internal/persist/persist_test.go:375:14: undefined: DefaultDir
+internal/persist/persist_test.go:375:14: too many errors
+FAIL	github.com/Nathandela/swarm/internal/persist [build failed]
+FAIL
