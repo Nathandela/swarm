@@ -1,6 +1,6 @@
 # swarm — Implementation Goals
 
-**Status**: Draft 2 (post [audit-002](../verification/audit-002-implementation-goals.md); Draft 1 verdict REVISE, all accepted fixes applied)
+**Status**: Approved (Draft 2 post [audit-002](../verification/audit-002-implementation-goals.md); independent verification confirmed 35/35 committee findings resolved)
 **Purpose**: The orchestration contract for building the 15 epics in [build-plan.md](build-plan.md). Each epic closes only when every one of its exit criteria is demonstrably true (a passing automated test, a produced artifact, or a recorded verification). The finished system is audited against this document.
 **Sources**: [system-spec.md](system-spec.md) (EARS ids), [system-invariants.md](../invariants/system-invariants.md) (S1–S12, L1–L3), ADR-001..004, Gate 3 gap resolutions G1–G6.
 
@@ -72,7 +72,7 @@ Goal: lifecycle authority that can die and come back without losing anyone.
 - E5.3 Reconnect-before-lost ordering: a live shim is never transiently marked lost (test).
 - E5.4 Two-phase launch (persist meta → spawn shim → confirm) with crash injection at each phase boundary: no orphan shims, no phantom sessions (S11).
 - E5.5 Side-file merge into meta on observation/reconnect; daemon is sole meta writer (G6; test: shim never writes meta).
-- E5.6 Kill/delete routing: kill outcome persisted to meta (S-4); R-3 retention delete; max-session cap enforced with a clear inline error to the client (S-7).
+- E5.6 Kill/delete routing: kill outcome persisted to meta (S-4); R-3 retention delete; configurable max-session cap enforced with a clear inline error to the client, tested at a non-default cap value (S-7).
 - E5.7 Permission sweep: with a permissive umask forced, every artifact is created with correct mode and re-checked after replacement — state dir 0700; daemon socket, per-session shim sockets, meta.json, roster.json, final snapshots, exit side-files, daemon log 0600 (ADR-004, D-6).
 - E5.8 The S1 core test passes: `kill -9` daemon → every agent PID alive → restarted daemon lists and reconnects all sessions (L2).
 - E5.9 D-1 auto-start: a client command finding no live daemon spawns one detached (setsid, stdio→log) and connects transparently; test: cold state dir → `swarm list` succeeds with no pre-started daemon (scenario 1).
@@ -81,9 +81,9 @@ Goal: lifecycle authority that can die and come back without losing anyone.
 
 ### Epic 6 — Client protocol + daemon API
 Goal: the low-reversibility wire surface, documented and hostile-input-proof.
-- E6.1 G1 frame envelope codec (shared `wire` package): length-prefix + type tag; a defined maximum frame size enforced *before* allocation; tests for oversized declared length, partial header, truncated payload, unknown type tag, and length overflow; round-trip tests + fuzz in CI; test asserts the same envelope runs on both client⇄daemon and daemon⇄shim sockets (G1).
+- E6.1 G1 frame envelope codec (shared `wire` package): length-prefix + type tag; a defined maximum frame size enforced *before* allocation; tests for oversized declared length, partial header, truncated payload, unknown type tag, and length overflow; round-trip tests + fuzz in CI; CONTROL frames carry JSON, DATA_IN/DATA_OUT/SNAPSHOT carry opaque binary — demux tested explicitly; test asserts the same envelope runs on both client⇄daemon and daemon⇄shim sockets (G1).
 - E6.2 `docs/specifications/protocol.md` written at field level, versioned; CI drift check per GG-7.
-- E6.3 Handshake with version + capability negotiation; incompatible-version path returns a clear error naming `swarm daemon restart` (D-8, F-1).
+- E6.3 Handshake with version + capability negotiation; incompatible-version path returns a clear error that names `swarm daemon restart` AND states the restart is safe / loses no live sessions — test asserts the safety statement in the error text (D-8's "SHALL say so", F-1).
 - E6.4 Exclusive controller lease with generation ids: concurrent-attach test shows zero stale-generation inputs applied (S2); lease AND its event stream/subscription released on client EOF, next attach succeeds (P-4, L3).
 - E6.5 Event fan-out with bounded per-client queues; wedged-subscriber test: disconnected within bound, PTY drain unaffected (S9, L1).
 - E6.6 Server-side revalidation of every client-supplied field; negative-path tests for each op.
