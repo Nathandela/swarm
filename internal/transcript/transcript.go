@@ -14,6 +14,7 @@ package transcript
 
 import (
 	"bytes"
+	"errors"
 	"sync"
 )
 
@@ -40,6 +41,10 @@ type sink interface {
 // tests can point it at a fake sink for the duration of one test.
 var newSink = newFileSink
 
+// errClosing is returned by Flush once Close has been requested: the drain
+// goroutine that would service a Flush request may already be gone (R-1/F2).
+var errClosing = errors.New("transcript: Flush called on a closing or closed Writer")
+
 // Writer is an append-only, non-blocking transcript writer. All exported
 // methods are safe for concurrent use.
 type Writer struct {
@@ -65,8 +70,13 @@ type Writer struct {
 }
 
 // New opens (creating if needed) the transcript at path and starts its
-// background drain goroutine.
+// background drain goroutine. cfg.MaxBytes and cfg.MaxFiles must both be
+// positive: a zero-value Config must never silently produce an uncapped,
+// never-rotating transcript (R-1).
 func New(path string, cfg Config) (*Writer, error) {
+	if cfg.MaxBytes <= 0 || cfg.MaxFiles <= 0 {
+		return nil, errors.New("transcript: MaxBytes/MaxFiles must be positive")
+	}
 	s, err := newSink(path, cfg)
 	if err != nil {
 		return nil, err
@@ -153,8 +163,16 @@ func (w *Writer) Dropped() int64 {
 // this call reaches the sink, then best-effort fsyncs. It is the deterministic
 // sync point an otherwise async Writer needs for tests (and for callers that
 // need a known-durable checkpoint).
+//
+// Flush returns errClosing immediately once Close has been requested, rather
+// than registering a wait that the drain goroutine — possibly already
+// exited — would never service (F2).
 func (w *Writer) Flush() error {
 	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		return errClosing
+	}
 	if w.held != nil {
 		w.enqueueLocked(w.held)
 		w.held = nil

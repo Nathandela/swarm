@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/transcript [github.com/Nathandela/swarm/internal/transcript.test]
+internal/transcript/transcript_test.go:104:10: undefined: newSink
+internal/transcript/transcript_test.go:105:2: undefined: newSink
+internal/transcript/transcript_test.go:105:34: undefined: Config
+internal/transcript/transcript_test.go:105:43: undefined: sink
+internal/transcript/transcript_test.go:106:18: undefined: newSink
+internal/transcript/transcript_test.go:135:12: undefined: New
+internal/transcript/transcript_test.go:135:22: undefined: Config
+internal/transcript/transcript_test.go:168:12: undefined: New
+internal/transcript/transcript_test.go:168:22: undefined: Config
+internal/transcript/transcript_test.go:215:12: undefined: New
+internal/transcript/transcript_test.go:215:12: too many errors
+FAIL	github.com/Nathandela/swarm/internal/transcript [build failed]
+FAIL
