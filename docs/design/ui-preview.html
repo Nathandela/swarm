@@ -1,0 +1,492 @@
+<title>swarm — design preview</title>
+<style>
+  :root {
+    --bg: #FAFAF8; --fg: #1A1D21; --muted: #6F6B60; --line: #E5E2D9;
+    --accent: #B8821F; --accent-soft: #B8821F1F;
+    --card: #FFFFFF; --term-bg: #101418; --term-fg: #D8D6D0; --term-line: #23262B;
+    --red: #C74A3C; --blue: #3D7FB8; --green: #2F9964; --grey: #7A7F87;
+    --tred: #E0604F; --tblue: #5B9DD9; --tgreen: #4DBD86; --tgrey: #6E747E;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0E1114; --fg: #E8E6E1; --muted: #8A877D; --line: #23262B;
+      --accent: #E2AC4F; --accent-soft: #E2AC4F22;
+      --card: #14181D; --red: #E0604F; --blue: #5B9DD9; --green: #4DBD86; --grey: #8A8F98;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E1114; --fg: #E8E6E1; --muted: #8A877D; --line: #23262B;
+    --accent: #E2AC4F; --accent-soft: #E2AC4F22;
+    --card: #14181D; --red: #E0604F; --blue: #5B9DD9; --green: #4DBD86; --grey: #8A8F98;
+  }
+  :root[data-theme="light"] {
+    --bg: #FAFAF8; --fg: #1A1D21; --muted: #6F6B60; --line: #E5E2D9;
+    --accent: #B8821F; --accent-soft: #B8821F1F;
+    --card: #FFFFFF; --red: #C74A3C; --blue: #3D7FB8; --green: #2F9964; --grey: #7A7F87;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; padding: 0 0 6rem;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; }
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 0 1.25rem; }
+
+  header.site { padding: 2.5rem 0 0; }
+  .brand { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; }
+  .brand .dollar { color: var(--accent); }
+  .tagline { color: var(--muted); margin-top: .25rem; max-width: 42rem; }
+
+  nav.tabs {
+    display: flex; gap: .25rem; flex-wrap: wrap; margin-top: 1.75rem;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0;
+    background: var(--bg); z-index: 5; padding-top: .5rem;
+  }
+  nav.tabs button {
+    font-family: ui-monospace, Menlo, monospace; font-size: .8rem; letter-spacing: .04em;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: .5rem .75rem; cursor: pointer;
+  }
+  nav.tabs button:hover { color: var(--fg); }
+  nav.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  nav.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  section.panel { display: none; padding-top: 2rem; }
+  section.panel.active { display: block; }
+  h2 { font-family: ui-monospace, Menlo, monospace; font-size: 1.15rem; margin: 0 0 .35rem; text-wrap: balance; }
+  h3 { font-family: ui-monospace, Menlo, monospace; font-size: .95rem; margin: 2rem 0 .5rem; }
+  .lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 44rem; }
+  p { max-width: 44rem; }
+  a { color: var(--accent); }
+
+  .term {
+    background: var(--term-bg); color: var(--term-fg);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.55;
+    border: 1px solid var(--term-line); border-radius: 6px;
+    padding: 14px 16px; overflow-x: auto; white-space: pre;
+  }
+  .term:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .term .dim { color: #5C636E; }
+  .term .amber { color: #E2AC4F; }
+  .term .red { color: var(--tred); }
+  .term .blue { color: var(--tblue); }
+  .term .green { color: var(--tgreen); }
+  .term .grey { color: var(--tgrey); }
+  .term .sel { background: #E2AC4F26; display: inline-block; width: 100%; }
+  .term .selbar { color: #E2AC4F; }
+  .term .cursor { animation: blink 1.1s steps(1) infinite; background: #D8D6D0; color: #101418; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
+
+  .kbd-hint {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    font-size: .8rem; color: var(--muted); margin: .6rem 0 1.5rem;
+  }
+  kbd {
+    font-family: ui-monospace, Menlo, monospace; font-size: .75rem;
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
+    padding: 0 .4em; background: var(--card);
+  }
+  .live-badge {
+    font-family: ui-monospace, Menlo, monospace; font-size: .7rem; letter-spacing: .08em;
+    color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: .15rem .5rem;
+  }
+
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  th { text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: .72rem; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  th, td { padding: .5rem .75rem .5rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; color: var(--accent); }
+  .tablewrap { overflow-x: auto; }
+
+  details { border-top: 1px solid var(--line); }
+  details:last-of-type { border-bottom: 1px solid var(--line); }
+  summary {
+    cursor: pointer; padding: .7rem 0; font-family: ui-monospace, Menlo, monospace; font-size: .85rem;
+    display: flex; justify-content: space-between; align-items: baseline; list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary .count { color: var(--muted); font-size: .75rem; }
+  summary:hover { color: var(--accent); }
+  details > div { padding: 0 0 1rem; }
+  details li { margin: .3rem 0; font-size: .875rem; max-width: 46rem; }
+  details li b { font-family: ui-monospace, Menlo, monospace; font-weight: 600; color: var(--accent); }
+
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.1rem; }
+  .card h4 { margin: 0 0 .4rem; font-family: ui-monospace, Menlo, monospace; font-size: .8rem; letter-spacing: .05em; }
+  .card p { font-size: .85rem; color: var(--muted); margin: 0; }
+  .card .pill { font-family: ui-monospace, Menlo, monospace; font-size: .68rem; letter-spacing: .06em; padding: .1rem .45rem; border-radius: 3px; }
+
+  pre.mermaid { background: none; overflow-x: auto; }
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: .75rem 1rem; border-radius: 0 6px 6px 0; font-size: .875rem; max-width: 44rem;
+  }
+</style>
+
+<div class="wrap">
+<header class="site">
+  <div class="brand"><span class="dollar">$</span> swarm</div>
+  <p class="tagline">Every coding agent on your machine, in one keyboard-driven view — running in the background, surviving the terminal. This page is the navigable design: screens, flows, architecture, lifecycle, and the test strategy.</p>
+  <nav class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="screens">screens</button>
+    <button role="tab" aria-selected="false" data-tab="flow">flow</button>
+    <button role="tab" aria-selected="false" data-tab="arch">architecture</button>
+    <button role="tab" aria-selected="false" data-tab="lifecycle">lifecycle</button>
+    <button role="tab" aria-selected="false" data-tab="testing">testing</button>
+    <button role="tab" aria-selected="false" data-tab="reqs">requirements</button>
+  </nav>
+</header>
+
+<!-- ============ SCREENS ============ -->
+<section class="panel active" id="panel-screens">
+  <h2>The screens <span class="live-badge">LIVE MOCKUP</span></h2>
+  <p class="lede">This mockup is interactive — click it, then drive it with your keyboard exactly as you will drive swarm.</p>
+  <div class="kbd-hint">
+    <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp; <kbd>⏎</kbd> attach &nbsp; <kbd>n</kbd> new session &nbsp; <kbd>x</kbd> kill / delete &nbsp; <kbd>q</kbd> detach (real app: <kbd>ctrl+\</kbd>) &nbsp; <kbd>esc</kbd> back
+  </div>
+  <div class="term" id="mockup" tabindex="0" aria-label="Interactive swarm mockup. Use arrow keys, enter, n, x, q and escape."></div>
+
+  <h3>Design intent</h3>
+  <div class="cols">
+    <div class="card"><h4 style="color:var(--red)">NEEDS INPUT</h4><p>The group that matters. Always first, always highlighted. A session lands here when its agent asks a question or requests permission.</p></div>
+    <div class="card"><h4 style="color:var(--blue)">WORKING</h4><p>Agents mid-task. The one-line summary shows the last meaningful output so you know what each is doing without attaching.</p></div>
+    <div class="card"><h4 style="color:var(--green)">READY FOR REVIEW</h4><p>The agent finished its turn. Attach, review the diff, send the next prompt — the session drops back to Working.</p></div>
+    <div class="card"><h4 style="color:var(--grey)">COMPLETED</h4><p>Exited sessions, exit code shown. They stay listed (transcript on disk) until you delete them with <span class="mono">x</span>.</p></div>
+  </div>
+  <div class="note">Attach is raw passthrough: the agent CLI's own interface, untouched, full-screen. swarm adds exactly one thin line — session name and the detach key — and even that is toggleable. No fluff.</div>
+</section>
+
+<!-- ============ FLOW ============ -->
+<section class="panel" id="panel-flow">
+  <h2>Screen flow</h2>
+  <p class="lede">Three screens, five keys. Everything reachable without leaving the home row for long.</p>
+  <pre class="mermaid">
+flowchart LR
+  G["general view"] -- "⏎ attach" --> A["attached session<br/>(raw CLI + thin bar)"]
+  A -- "ctrl+q detach" --> G
+  G -- "n" --> L["launch form"]
+  L -- "⏎ launch" --> G
+  L -- "esc" --> G
+  G -- "ctrl+x → y" --> K["kill / delete"]
+  K --> G
+  G -- "esc" --> Q(("quit TUI<br/>agents keep running"))
+  </pre>
+  <h3>Why the terminal can close — and why upgrades are safe too</h3>
+  <pre class="mermaid">
+flowchart LR
+  subgraph T1["your terminal (disposable)"]
+    TUI["swarm TUI"]
+  end
+  subgraph BG["background (persistent)"]
+    D["swarm daemon (replaceable)"]
+    S1["shim · PTY · claude"]
+    S2["shim · PTY · codex"]
+  end
+  TUI <-- "unix socket" --> D
+  D <-- "reconnects" --> S1
+  D <-- "reconnects" --> S2
+  </pre>
+  <p>The TUI is a thin client, and the daemon itself is replaceable: each session lives under its own tiny <b>shim</b> process that owns the PTY. Close the terminal, kill the daemon, <span class="mono">brew upgrade swarm</span> — the agents keep running and the next daemon reconnects to the shims (ADR-001). This beats Agent View, where a daemon restart ends your sessions.</p>
+</section>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section class="panel" id="panel-arch">
+  <h2>Architecture</h2>
+  <p class="lede">One binary, two roles: <span class="mono">swarm</span> is the TUI; it auto-spawns <span class="mono">swarm daemon</span> on first run. The protocol between them is the product's spine — the V2 mobile client will speak the same one.</p>
+  <pre class="mermaid">
+flowchart TB
+  subgraph clients["clients (thin)"]
+    TUI["TUI · Bubble Tea"]
+    MOB["mobile (V2)<br/>own auth ADR later"]
+  end
+  subgraph daemon["swarm daemon (replaceable)"]
+    API["protocol server<br/>NDJSON control + binary data frames"]
+    REG["registry (rebuildable index)"]
+    DET["status engine<br/>typed events first, grid heuristics fallback"]
+    AD["adapters: claude + codex (v1)<br/>gemini · opencode · agy (v1.1)"]
+  end
+  subgraph shims["per-session shims (survive the daemon)"]
+    S1["shim: PTY · VT grid · transcript"]
+    S2["shim: PTY · VT grid · transcript"]
+  end
+  A1["claude"] --- S1
+  A2["codex"] --- S2
+  TUI <--> API
+  MOB -.-> API
+  API --> REG & DET
+  DET --> AD
+  API <--> S1 & S2
+  S1 & S2 --> DISK[("state dir: meta.json per session<br/>(atomic, versioned) + capped transcripts")]
+  </pre>
+  <div class="cols">
+    <div class="card"><h4>PROTOCOL <span class="pill" style="background:var(--red);color:#fff">IRREVERSIBLE</span></h4><p>Control plane: versioned NDJSON. Data plane: length-prefixed binary frames for PTY bytes (JSON can't carry them). Exclusive attach lease. Changes require an ADR (002).</p></div>
+    <div class="card"><h4>DISK SCHEMA <span class="pill" style="background:var(--red);color:#fff">IRREVERSIBLE</span></h4><p>meta.json per session is the truth (atomic writes, schema_version); roster is a rebuildable index. Survives crashes by construction (ADR-003).</p></div>
+    <div class="card"><h4>VT EMULATOR <span class="pill" style="background:var(--red);color:#fff">HARDEST PIECE</span></h4><p>Each shim maintains the session's real screen grid. Attach paints a snapshot of it — raw byte replay can't reconstruct a full-screen TUI. Status heuristics read the grid too (ADR-002).</p></div>
+    <div class="card"><h4>ADAPTERS <span class="pill" style="background:var(--blue);color:#fff">HIGH CHURN</span></h4><p>Typed events first: Claude hooks, Codex app-server, Gemini hooks, OpenCode events. Grid parsing is the last resort. Every adapter is preceded by a characterization harness recording the real CLI.</p></div>
+  </div>
+</section>
+
+<!-- ============ LIFECYCLE ============ -->
+<section class="panel" id="panel-lifecycle">
+  <h2>Session lifecycle</h2>
+  <p class="lede">Status is three independent dimensions — <b>process</b> (running / exited / lost), <b>turn</b> (active / idle / unknown), <b>interaction</b> (none / prompt / permission) — and the four view groups are derived from them. Detection prefers typed signals (Claude hooks, Codex app-server events); grid heuristics are the fallback; a staleness guard turns silence into <span class="mono">unknown</span>, never into a confident lie.</p>
+  <pre class="mermaid">
+stateDiagram-v2
+  [*] --> starting: launch (shim spawns agent)
+  starting --> active: first grid activity
+  starting --> exited: early exit / bad flags
+  active --> needs_input: permission event / grid heuristic
+  active --> review: turn-complete signal
+  needs_input --> active: input forwarded
+  review --> active: new prompt
+  active --> unknown: staleness guard
+  unknown --> active: signal recovers
+  active --> exited: process exit
+  needs_input --> exited: process exit
+  review --> exited: process exit
+  unknown --> exited: process exit
+  active --> lost: shim gone (reboot)
+  needs_input --> lost
+  review --> lost
+  exited --> [*]: deleted
+  lost --> [*]: deleted
+  lost --> starting: relaunch / resume
+  </pre>
+  <div class="tablewrap"><table>
+    <tr><th>VIEW GROUP</th><th>DERIVED FROM</th><th>SIGNAL SOURCE</th></tr>
+    <tr><td>Needs input</td><td>running ∧ idle ∧ permission/prompt</td><td>typed event (hook, app-server) or grid heuristic</td></tr>
+    <tr><td>Working</td><td>running ∧ active (or turn unknown, marked ?)</td><td>grid activity, typed turn events, staleness guard</td></tr>
+    <tr><td>Ready for review</td><td>running ∧ idle ∧ turn completed</td><td>Stop hook / turn-complete event</td></tr>
+    <tr><td>Completed</td><td>exited (code kept) or lost (reboot)</td><td>shim exit report / PID+start-time reconciliation</td></tr>
+  </table></div>
+</section>
+
+<!-- ============ TESTING ============ -->
+<section class="panel" id="panel-testing">
+  <h2>Test strategy</h2>
+  <p class="lede">Manifesto discipline: tests are the specification, written first. Two keystones: a <b>fake agent</b> (scripted binary that prints, asks, idles, exits — every daemon/shim flow testable deterministically, no API keys) and the <b>characterization harness</b> — before any adapter is built, it records the real CLI's behavior (PTY output per state, hook/event payloads, version) into a fixture corpus that becomes the adapter's acceptance baseline.</p>
+  <div class="cols">
+    <div class="card"><h4>CHARACTERIZATION</h4><p>Per CLI, before its adapter exists: record real fixtures for working / asking / idle / exit, capture hook and app-server event payloads, produce the capability-matrix entry. Re-run on every CLI upgrade.</p></div>
+    <div class="card"><h4>UNIT</h4><p>Adapter signal rules against recorded fixtures; VT emulator golden-grid tests (feed bytes, assert final grid) + fuzz on split escape sequences; status derivation; protocol frame round-trips; meta.json schema round-trips.</p></div>
+    <div class="card"><h4>COMPONENT</h4><p>TUI via <span class="mono">teatest</span> golden files; daemon handlers over an in-memory socket pair; shim against the fake agent.</p></div>
+    <div class="card"><h4>INTEGRATION</h4><p>Real daemon + shims + fake agent over real UDS: launch → events → attach (snapshot + live) → resize → kill (process group). Daemon kill -9 → restart → shims survive, reconnect (scenarios 10–11). Disk-full, slow-subscriber, lease-conflict injections.</p></div>
+  </div>
+  <h3>Traceability</h3>
+  <p>Every EARS requirement maps to at least one test; the scenario table in the spec is the acceptance suite skeleton. Invariants (e.g. <i>“a client disconnect never kills a session”</i>, <i>“roster on disk is always parseable by the previous minor version”</i>) get their own property tests. Fixture corpus grows whenever an agent CLI ships a UI change that breaks a parser — the fix commits the new recording (never answer the same question twice).</p>
+  <div class="note">The adapter fixture corpus is the project's most valuable test asset: real recorded terminal output of each agent CLI in each state (working, asking, idle). It is what makes “agent-agnostic” a tested claim instead of a hope.</div>
+</section>
+
+<!-- ============ REQUIREMENTS ============ -->
+<section class="panel" id="panel-reqs">
+  <h2>Requirements (EARS)</h2>
+  <p class="lede">The system spec in <span class="mono">docs/specifications/system-spec.md</span> is the source of truth. Summary by area:</p>
+  <details open><summary>D — Daemon &amp; shim lifecycle <span class="count">8 reqs</span></summary><div><ul>
+    <li><b>D-1</b> Any swarm command auto-starts the daemon if absent (setsid, stdio to log).</li>
+    <li><b>D-2</b> Each session's PTY is owned by a dedicated shim process, not the daemon.</li>
+    <li><b>D-3</b> Closing the launching terminal never affects sessions.</li>
+    <li><b>D-4</b> On start: rebuild registry from per-session metadata, reconnect live shims, mark gone ones lost (PID + start-time verified).</li>
+    <li><b>D-5</b> Daemon crash or upgrade: sessions continue under shims, next daemon reconnects, nothing lost.</li>
+    <li><b>D-6</b> 0700 state dir, 0600 socket; flock before bind; stale sockets unlinked under the lock.</li>
+    <li><b>D-7</b> Second daemon exits on lock failure; its client retries the winner.</li>
+    <li><b>D-8</b> Version-skew handshake failure → clear error + safe `swarm daemon restart`.</li>
+  </ul></div></details>
+  <details><summary>S — Sessions <span class="count">7 reqs</span></summary><div><ul>
+    <li><b>S-1</b> Launch: shim execs adapter-composed argv (never a shell string) in its own process group.</li>
+    <li><b>S-2</b> Persisted: id, agent, dir, options, captured env, timestamps, status, shim PID+start-time, native conversation id, exit code, schema_version.</li>
+    <li><b>S-3</b> Worktree isolation (later epic): branch swarm/&lt;id&gt;, teardown on delete.</li>
+    <li><b>S-4</b> Kill signals the whole process group (MCP servers don't leak).</li>
+    <li><b>S-5</b> Shim maintains the VT grid + capped, rotated transcript; spinner frames collapsed.</li>
+    <li><b>S-6</b> Launch carries the client's environment — agents never inherit the daemon's stale env.</li>
+    <li><b>S-7</b> Configurable max concurrent sessions with clear rejection.</li>
+  </ul></div></details>
+  <details><summary>P — Protocol <span class="count">6 reqs</span></summary><div><ul>
+    <li><b>P-1</b> Control plane: versioned NDJSON. Data plane: length-prefixed binary frames. One UDS, defined framing + max frame size.</li>
+    <li><b>P-2</b> Control ops: handshake, list, launch, kill, delete, attach/detach, resize, subscribe. Data: PTY I/O, grid snapshots.</li>
+    <li><b>P-3</b> Status events pushed to subscribers; slow subscribers disconnected, never blocking PTY drain.</li>
+    <li><b>P-4</b> Client disconnect mid-attach never harms the session; lease released.</li>
+    <li><b>P-5</b> Exclusive controller lease with generation ids; stale input/resize rejected.</li>
+    <li><b>P-6</b> Daemon re-validates all client-supplied input server-side.</li>
+  </ul></div></details>
+  <details><summary>V — General view <span class="count">6 reqs</span></summary><div><ul>
+    <li><b>V-1</b> Groups: Needs input / Working / Ready for review / Completed.</li>
+    <li><b>V-2</b> Status events reflected ≤ 1 s, no user action.</li>
+    <li><b>V-3</b> Keyboard-only: ↑↓, ⏎ attach, esc back, ctrl+x kill (confirm), n new.</li>
+    <li><b>V-4</b> Row = agent, dir, status, elapsed, one-line summary.</li>
+    <li><b>V-5</b> needs_input / review transitions surface an in-TUI notification.</li>
+    <li><b>V-6</b> Claude Code minimalism; no mouse required.</li>
+  </ul></div></details>
+  <details><summary>L — Launch flow <span class="count">3 reqs</span></summary><div><ul>
+    <li><b>L-1</b> Form: dir (free text, ~ expansion), agent, model/options, optional prompt, worktree toggle.</li>
+    <li><b>L-2</b> Only PATH-detected CLIs offered; missing ones greyed with install hint.</li>
+    <li><b>L-3</b> Invalid dir = inline error, no launch.</li>
+  </ul></div></details>
+  <details><summary>A — Attach <span class="count">5 reqs</span></summary><div><ul>
+    <li><b>A-1</b> Raw mode (IXON off) full-screen passthrough; every key forwarded except detach.</li>
+    <li><b>A-2</b> Ctrl+\ detaches (configurable; Ctrl+Q rejected — XON collision); session continues.</li>
+    <li><b>A-3</b> Controlling client's resize propagates to the session PTY (lease authority).</li>
+    <li><b>A-4</b> Attach paints a serialized VT-grid snapshot, then the live stream — never raw byte replay, never blank.</li>
+    <li><b>A-5</b> Chrome ≤ one thin line, toggleable off.</li>
+  </ul></div></details>
+  <details><summary>T — Adapters &amp; status <span class="count">7 reqs</span></summary><div><ul>
+    <li><b>T-1</b> One adapter interface: detect + version range, launch args, declarative options schema, signal sources, resume + conversation-id extraction.</li>
+    <li><b>T-2</b> Typed signals first: Claude hooks, Codex app-server, Gemini hooks, OpenCode events — authenticated with per-session tokens, installed per-invocation.</li>
+    <li><b>T-3</b> Grid heuristics (emulated screen, never raw bytes) as fallback.</li>
+    <li><b>T-4</b> Staleness guard: silence while "active" degrades to unknown — never confidently wrong.</li>
+    <li><b>T-5</b> New adapter = zero changes to core/protocol/TUI.</li>
+    <li><b>T-6</b> Characterization harness records the real CLI before its adapter is built; fixtures are the acceptance baseline.</li>
+    <li><b>T-7</b> v1.0: Claude Code + Codex. v1.1: Gemini, OpenCode, AGY (after characterization).</li>
+  </ul></div></details>
+  <details><summary>R — Persistence <span class="count">3 reqs</span></summary><div><ul>
+    <li><b>R-1</b> XDG state dir (0700): meta.json per session = truth (atomic, schema_version); roster = rebuildable index; transcripts 0600, capped.</li>
+    <li><b>R-2</b> Resume creates a new session linked via resumed_from, using the captured native conversation id.</li>
+    <li><b>R-3</b> Completed sessions listed until deleted (delete also tears down worktrees).</li>
+  </ul></div></details>
+  <details><summary>N — Non-functional <span class="count">7 reqs</span></summary><div><ul>
+    <li><b>N-1</b> TUI first paint &lt; 100 ms p95 (daemon warm, ≤ 50 sessions).</li>
+    <li><b>N-2</b> Attach adds &lt; 10 ms local latency p95.</li>
+    <li><b>N-3</b> Event-driven; PTYs always drained; spinner churn collapsed; near-zero client-idle CPU.</li>
+    <li><b>N-4</b> Single static binary (CGO_ENABLED=0, client+daemon+shim roles); Homebrew + go install; macOS/Linux; no tmux.</li>
+    <li><b>N-5</b> Repo follows the agentic-codebase-manifesto (vendored).</li>
+    <li><b>N-6</b> Faithful ANSI/alt-screen passthrough; hostile escapes (OSC 52) filtered.</li>
+    <li><b>N-7</b> Documented limitation: machine sleep pauses agents (keep-awake is v1.x).</li>
+  </ul></div></details>
+  <details><summary>F — V2-forward <span class="count">2 reqs</span></summary><div><ul>
+    <li><b>F-1</b> Protocol versioned + capability-negotiated; endpoint ids + namespaced session ids from release one.</li>
+    <li><b>F-2</b> Remote transport is NOT claimed v1-ready — it gets its own auth/threat-model ADR; v1 only guarantees no UDS-specific schema assumptions.</li>
+  </ul></div></details>
+</section>
+</div>
+
+<script>
+(function () {
+  // ---- tabs ----
+  var tabs = document.querySelectorAll('nav.tabs button');
+  var panels = document.querySelectorAll('section.panel');
+  function show(name) {
+    tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.tab === name)); });
+    panels.forEach(function (p) { p.classList.toggle('active', p.id === 'panel-' + name); });
+  }
+  tabs.forEach(function (t) { t.addEventListener('click', function () { show(t.dataset.tab); }); });
+
+  // ---- interactive mockup ----
+  var el = document.getElementById('mockup');
+  var GROUPS = [
+    { key: 'needs_input', label: 'NEEDS INPUT', cls: 'red', icon: '●' },
+    { key: 'working', label: 'WORKING', cls: 'blue', icon: '◐' },
+    { key: 'review', label: 'READY FOR REVIEW', cls: 'green', icon: '✓' },
+    { key: 'done', label: 'COMPLETED', cls: 'grey', icon: '─' }
+  ];
+  var sessions = [
+    { agent: 'claude', dir: '~/Code/quanthome-api', st: 'needs_input', t: '12m', sum: 'Permission: run db migration?' },
+    { agent: 'codex', dir: '~/Code/agents-tracker', st: 'working', t: '3m', sum: 'Writing adapter fixture tests…' },
+    { agent: 'agy', dir: '~/Code/nathan-site', st: 'working', t: '41s', sum: 'Refactoring nav component' },
+    { agent: 'claude', dir: '~/Code/mcp-soml ⎇wt', st: 'review', t: '1h', sum: 'Turn finished — 14 files changed' },
+    { agent: 'gemini', dir: '~/Code/scratch', st: 'done', t: '2h', sum: 'exit 0' }
+  ];
+  var screen = 'general', sel = 0, confirming = false;
+
+  function pad(s, n) { s = String(s); return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length); }
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+  function renderGeneral() {
+    var running = sessions.filter(function (s) { return s.st !== 'done'; }).length;
+    var needs = sessions.filter(function (s) { return s.st === 'needs_input'; }).length;
+    var out = '<span class="amber">swarm</span><span class="dim">' +
+      pad('', 46) + running + ' running · ' + needs + ' needs you</span>\n\n';
+    var flat = [];
+    GROUPS.forEach(function (g) {
+      var rows = sessions.filter(function (s) { return s.st === g.key; });
+      if (!rows.length) return;
+      out += '  <span class="dim">' + g.label + '</span>\n';
+      rows.forEach(function (s) {
+        var i = flat.length; flat.push(s);
+        var line = ' ' + '<span class="' + g.cls + '">' + g.icon + '</span> ' +
+          pad(esc(s.agent), 9) + '<span class="dim">' + pad(esc(s.dir), 28) + '</span>' +
+          '<span class="' + g.cls + '">' + pad(g.key.replace('_', ' '), 13) + '</span>' +
+          '<span class="dim">' + pad(s.t, 6) + esc(s.sum) + '</span>';
+        if (i === sel) {
+          var mark = confirming
+            ? '<span class="red">kill? y/n</span> '
+            : '<span class="selbar">▌</span>';
+          out += '<span class="sel">' + mark + line + '</span>\n';
+        } else {
+          out += '  ' + line + '\n';
+        }
+      });
+      out += '\n';
+    });
+    out += '  <span class="dim">↑↓ navigate   ⏎ attach   n new   ctrl+x kill   esc quit</span>';
+    el.innerHTML = out;
+    el.dataset.count = flat.length;
+  }
+
+  function renderLaunch() {
+    el.innerHTML =
+      '<span class="amber">swarm</span><span class="dim"> · new session</span>\n\n' +
+      '  <span class="dim">directory</span>   ~/Code/quanthome-api<span class="cursor"> </span>\n' +
+      '  <span class="dim">agent</span>       <span class="amber">● claude</span>   <span class="dim">○ codex   ○ gemini   ○ opencode   ✕ agy (not installed)</span>\n' +
+      '  <span class="dim">model</span>       opus <span class="dim">▾</span>\n' +
+      '  <span class="dim">options</span>     --permission-mode acceptEdits\n' +
+      '  <span class="dim">prompt</span>      <span class="dim">(optional) </span>Fix the failing CI on branch feat/rates\n' +
+      '  <span class="dim">worktree</span>    [ ] isolate in a git worktree\n\n' +
+      '  <span class="dim">⏎ launch   tab next field   esc cancel</span>';
+  }
+
+  function renderAttach() {
+    var s = sessions[Math.min(sel, sessions.length - 1)] || sessions[0];
+    el.innerHTML =
+      '<span class="dim">[</span><span class="amber">' + esc(s.agent) + '</span><span class="dim"> · ' + esc(s.dir) +
+      ' ──────────────────────────── ctrl+\\ detach]</span>\n\n' +
+      '<span class="dim">&gt;</span> Fix the failing CI on branch feat/rates\n\n' +
+      '<span class="amber">●</span> I found the failing job — the rates fixture is stale.\n\n' +
+      '  Update <span class="green">tests/fixtures/rates_2026.json</span> with the new schema?\n\n' +
+      '  <span class="dim">❯</span> 1. Yes\n' +
+      '  <span class="dim">  2. Yes, and don\'t ask again</span>\n' +
+      '  <span class="dim">  3. No, tell Claude what to do differently</span>\n\n' +
+      '<span class="dim">(this is the agent CLI\'s own UI, byte-for-byte — swarm only owns the top line)</span>';
+  }
+
+  function render() {
+    if (screen === 'general') renderGeneral();
+    else if (screen === 'launch') renderLaunch();
+    else renderAttach();
+  }
+
+  el.addEventListener('keydown', function (e) {
+    if (e.metaKey) return;
+    var k = e.key;
+    var count = Number(el.dataset.count || sessions.length);
+    var handled = true;
+    if (screen === 'general') {
+      if (confirming) {
+        if (k === 'y') {
+          var flat = [];
+          GROUPS.forEach(function (g) { sessions.forEach(function (s) { if (s.st === g.key) flat.push(s); }); });
+          var victim = flat[sel];
+          if (victim.st === 'done') sessions.splice(sessions.indexOf(victim), 1);
+          else { victim.st = 'done'; victim.sum = 'killed'; victim.t = 'now'; }
+          sel = Math.max(0, Math.min(sel, sessions.length - 1));
+        }
+        confirming = false;
+      }
+      else if (k === 'ArrowDown' || k === 'j') sel = Math.min(count - 1, sel + 1);
+      else if (k === 'ArrowUp' || k === 'k') sel = Math.max(0, sel - 1);
+      else if (k === 'Enter') screen = 'attach';
+      else if (k === 'n') screen = 'launch';
+      else if (k === 'x') confirming = true;
+      else handled = false;
+    } else if (screen === 'launch') {
+      if (k === 'Escape' || k === 'Enter') screen = 'general';
+      else handled = false;
+    } else if (screen === 'attach') {
+      if (k === 'q' || k === 'Escape') screen = 'general';
+      else handled = false;
+    }
+    if (handled) { e.preventDefault(); render(); }
+  });
+  el.addEventListener('click', function () { el.focus(); });
+  render();
+})();
+</script>

@@ -1,6 +1,6 @@
-# Design brief
+# Design brief (historical)
 
-Working document. Decisions locked so far, requirements gathered, and open questions to iterate on.
+> Superseded by [docs/specifications/system-spec.md](docs/specifications/system-spec.md) (Draft 2, Gate 2-approved) and the ADRs in docs/adr/. Kept as the record of the initial framing. The app is named **swarm**; open questions below are resolved in the spec.
 
 ## Vision
 

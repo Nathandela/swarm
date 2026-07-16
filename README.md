@@ -1,9 +1,16 @@
-# agents-tracker
+# swarm
 
-A terminal-based multi-CLI agent tracker, inspired by Claude Code's Agent View.
+Every coding agent on your machine, in one keyboard-driven terminal view — running in the background, surviving the terminal (and the daemon).
 
-One central view of every coding-agent session on your machine — Claude Code, Codex, Gemini CLI, OpenCode, AGY — running in the background under a supervisor daemon, surviving terminal close, navigable entirely by keyboard.
+Inspired by Claude Code's Agent View, but agent-agnostic: Claude Code and Codex first, then Gemini CLI, OpenCode, AGY — each behind a tested adapter. Go + Bubble Tea; supervisor daemon + per-session shim processes owning PTYs.
 
 ## Status
 
-Design phase. See [DESIGN.md](DESIGN.md) for decisions and open questions, and [agent_view_landscape.md](agent_view_landscape.md) for the landscape research this builds on.
+Design approved (Gate 2). See:
+
+- [System specification](docs/specifications/system-spec.md) — EARS requirements, diagrams, scenarios
+- [ADRs](docs/adr/) — the four foundational decisions
+- [Audit report](docs/verification/audit-001-system-spec.md) — committee findings that shaped Draft 2
+- [Design preview](docs/design/ui-preview.html) — navigable UI mockup
+- [Landscape research](docs/research/agent_view_landscape.md)
+- [DESIGN.md](DESIGN.md) — original design brief (superseded by the spec)
