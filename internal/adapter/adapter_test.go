@@ -11,6 +11,7 @@ package adapter
 // internal/adapter/refadapter.
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/vt"
@@ -34,8 +35,14 @@ func TestAdapterInterfaceMethodSet(t *testing.T) {
 	if a.Name() == "" {
 		t.Error("Name() empty")
 	}
-	if _, err := a.Detect(); err != nil {
-		t.Errorf("Detect() error: %v", err)
+	if a.Binary() == "" {
+		t.Error("Binary() empty")
+	}
+	if a.VersionArgs() == nil {
+		t.Error("VersionArgs() nil")
+	}
+	if _, ok := a.ParseVersion("stub-cli 1.2.0"); !ok {
+		t.Error("ParseVersion() did not parse a valid version line")
 	}
 	_ = a.SupportedVersions()
 	if _, err := a.Command(LaunchSpec{Cwd: "/w", Options: map[string]string{"model": "smart"}, InitialPrompt: "hi"}); err != nil {
@@ -68,4 +75,52 @@ func TestFrozenTypeShape(t *testing.T) {
 	// projection, the ONLY core type the boundary shares (E9.5 boundary: the
 	// adapter depends on the contract + vt, nothing else).
 	var _ func(*vt.Snap, []byte) (string, bool) = baseAdapter{}.ExtractConversationID
+
+	// The core Detect function takes an Adapter and a HostProber (the frozen
+	// detection shape); a value receiver stub satisfies HostProber.
+	var _ func(Adapter, HostProber) Detection = Detect
+	var _ HostProber = fakeHostProber{}
+}
+
+// TestDetect_CoreDrivesDescriptorsThroughHostProber — Detect is now a CORE
+// function: it owns the LookPath/exec through a HostProber and fills Detection
+// from the adapter's pure descriptors. Driving a FAKE HostProber proves the
+// three outcomes without touching PATH or exec: found-in-range, not-found, and
+// found-out-of-range. baseAdapter supports [1.0.0, 2.0.0].
+func TestDetect_CoreDrivesDescriptorsThroughHostProber(t *testing.T) {
+	a := baseAdapter{}
+
+	t.Run("found-in-range", func(t *testing.T) {
+		got := Detect(a, fakeHostProber{path: "/opt/bin/stub-cli", runOut: "stub-cli 1.5.0"})
+		if !got.Found || got.Path != "/opt/bin/stub-cli" {
+			t.Errorf("Found/Path = %v/%q, want true//opt/bin/stub-cli", got.Found, got.Path)
+		}
+		if got.Version != "1.5.0" || !got.InRange {
+			t.Errorf("Version/InRange = %q/%v, want 1.5.0/true", got.Version, got.InRange)
+		}
+	})
+
+	t.Run("not-found", func(t *testing.T) {
+		got := Detect(a, fakeHostProber{lookErr: errors.New("not on PATH")})
+		if got.Found || got.Path != "" || got.Version != "" || got.InRange {
+			t.Errorf("missing binary should yield the zero Detection, got %+v", got)
+		}
+	})
+
+	t.Run("found-out-of-range", func(t *testing.T) {
+		got := Detect(a, fakeHostProber{path: "/opt/bin/stub-cli", runOut: "stub-cli 3.0.0"})
+		if !got.Found || got.Version != "3.0.0" {
+			t.Errorf("Found/Version = %v/%q, want true/3.0.0", got.Found, got.Version)
+		}
+		if got.InRange {
+			t.Error("InRange = true for 3.0.0 outside [1.0.0, 2.0.0]")
+		}
+	})
+
+	t.Run("found-version-unparseable", func(t *testing.T) {
+		got := Detect(a, fakeHostProber{path: "/opt/bin/stub-cli", runOut: "no version here"})
+		if !got.Found || got.Version != "" || got.InRange {
+			t.Errorf("unparseable version should be Found with empty Version, got %+v", got)
+		}
+	})
 }

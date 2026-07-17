@@ -25,19 +25,16 @@ package adapter
 //	    Raw          json.RawMessage `json:"raw"`
 //	    ReceivedAtMs int64           `json:"received_at_ms"`
 //	}
-//	func LoadFixture(path string) (Fixture, error)   // validates version, rejects future/garbage
 //	func (f Fixture) Validate() error
 //
 // Validate rules (pinned): SchemaVersion == FixtureSchemaVersion; CLI, Version,
 // Scenario non-empty; PTYCapture non-empty; every HookPayload has a non-empty
-// Event and a syntactically valid JSON Raw body.
+// Event and a syntactically valid JSON Raw body. The disk loader LoadFixture
+// now lives in internal/adapter/fixtureio (E9.2 — the contract package opens no
+// files); its tests moved there with it.
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -59,76 +56,6 @@ func sampleFixture() Fixture {
 func TestFixtureSchemaVersionConstant(t *testing.T) {
 	if FixtureSchemaVersion != 1 {
 		t.Fatalf("FixtureSchemaVersion = %d, want 1", FixtureSchemaVersion)
-	}
-}
-
-// TestFixtureRoundTrip — a fixture marshaled to JSON and reloaded via
-// LoadFixture is byte-for-byte the same value, including the raw PTY capture and
-// the hook payloads.
-func TestFixtureRoundTrip(t *testing.T) {
-	want := sampleFixture()
-	b, err := json.Marshal(want)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "fx.json")
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got, err := LoadFixture(path)
-	if err != nil {
-		t.Fatalf("LoadFixture: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got, want)
-	}
-}
-
-// TestLoadFixture_Valid reads a real on-disk fixture from testdata (proving the
-// loader parses the wire format, not just Go-marshaled bytes).
-func TestLoadFixture_Valid(t *testing.T) {
-	f, err := LoadFixture("testdata/fixtures/valid.json")
-	if err != nil {
-		t.Fatalf("LoadFixture(valid): %v", err)
-	}
-	if f.CLI == "" || f.Version == "" || f.Scenario == "" {
-		t.Errorf("valid fixture has empty identity fields: %+v", f)
-	}
-	if len(f.PTYCapture) == 0 {
-		t.Error("valid fixture decoded an empty PTYCapture")
-	}
-	if err := f.Validate(); err != nil {
-		t.Errorf("valid fixture failed Validate: %v", err)
-	}
-}
-
-// TestLoadFixture_RejectsFutureSchemaVersion — a fixture stamped newer than this
-// build must be rejected loudly, never silently read (T-6 drift discipline).
-func TestLoadFixture_RejectsFutureSchemaVersion(t *testing.T) {
-	_, err := LoadFixture("testdata/fixtures/future_version.json")
-	if err == nil {
-		t.Fatal("LoadFixture accepted a future schema version")
-	}
-	if !strings.Contains(err.Error(), "newer") && !strings.Contains(err.Error(), "version") {
-		t.Errorf("error %q should explain the version mismatch", err)
-	}
-}
-
-// TestLoadFixture_RejectsGarbage — non-JSON and a nonexistent path are errors.
-func TestLoadFixture_RejectsGarbage(t *testing.T) {
-	if _, err := LoadFixture("testdata/fixtures/garbage.json"); err == nil {
-		t.Error("LoadFixture accepted non-JSON garbage")
-	}
-	if _, err := LoadFixture("testdata/fixtures/does-not-exist.json"); err == nil {
-		t.Error("LoadFixture accepted a missing file")
-	}
-}
-
-// TestLoadFixture_RejectsZeroVersion — a schema version below the current one
-// (here 0, the JSON zero value) is garbage this build will not read.
-func TestLoadFixture_RejectsZeroVersion(t *testing.T) {
-	if _, err := LoadFixture("testdata/fixtures/zero_version.json"); err == nil {
-		t.Error("LoadFixture accepted schema version 0")
 	}
 }
 

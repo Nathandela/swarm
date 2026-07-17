@@ -7,7 +7,7 @@ package refadapter
 import (
 	"testing"
 
-	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/fixtureio"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -17,7 +17,7 @@ func FuzzReferenceExtractConversationIDTotality(f *testing.F) {
 	f.Add([]byte{0x00, 0x1b, 0x5b, 0xff})
 	f.Add([]byte("conv-id="))
 
-	fx, err := adapter.LoadFixture("testdata/reference.json")
+	fx, err := fixtureio.LoadFixture("testdata/reference.json")
 	if err != nil {
 		f.Fatalf("load reference fixture: %v", err)
 	}

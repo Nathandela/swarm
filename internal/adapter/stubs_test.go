@@ -21,10 +21,32 @@ package adapter
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/Nathandela/swarm/internal/vt"
 )
+
+// fakeHostProber is an in-memory HostProber for driving the core Detect function
+// without touching PATH or exec. lookErr forces a "not found"; runOut is the
+// version stdout Run returns.
+type fakeHostProber struct {
+	path    string
+	lookErr error
+	runOut  string
+	runErr  error
+}
+
+func (h fakeHostProber) LookPath(string) (string, error) {
+	if h.lookErr != nil {
+		return "", h.lookErr
+	}
+	return h.path, nil
+}
+
+func (h fakeHostProber) Run(string, []string) (string, error) {
+	return h.runOut, h.runErr
+}
 
 // convMarker is the token baseAdapter.ExtractConversationID scans for. A real
 // adapter scans the CLI's real transcript/grid; the stub uses a fixed marker so
@@ -36,8 +58,41 @@ type baseAdapter struct{}
 
 func (baseAdapter) Name() string { return "stub" }
 
-func (baseAdapter) Detect() (Detection, error) {
-	return Detection{Found: true, Path: "/usr/bin/stub", Version: "1.2.0", InRange: true}, nil
+func (baseAdapter) Binary() string { return "stub-cli" }
+
+func (baseAdapter) VersionArgs() []string { return []string{"--version"} }
+
+// ParseVersion scans output for the first "x.y.z" dotted-numeric token. It is
+// pure and total: any string (garbage, empty, multibyte) yields ("", false)
+// without panicking rather than slicing out of range.
+func (baseAdapter) ParseVersion(output string) (string, bool) {
+	for _, field := range strings.Fields(output) {
+		v := strings.TrimPrefix(field, "v")
+		parts := strings.Split(v, ".")
+		if len(parts) < 2 {
+			continue
+		}
+		allNum := true
+		for _, p := range parts {
+			if p == "" {
+				allNum = false
+				break
+			}
+			for _, r := range p {
+				if r < '0' || r > '9' {
+					allNum = false
+					break
+				}
+			}
+			if !allNum {
+				break
+			}
+		}
+		if allNum {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 func (baseAdapter) SupportedVersions() VersionConstraint {
@@ -207,4 +262,64 @@ type okButEmptyExtract struct{ baseAdapter }
 
 func (okButEmptyExtract) ExtractConversationID(*vt.Snap, []byte) (string, bool) {
 	return "", true
+}
+
+// panicOnNonNilGrid violates: ExtractConversationID must be total for EVERY
+// grid, not only nil. It is nil-safe but dereferences a non-nil grid's Lines
+// unconditionally, so it survives the nil-grid probe yet panics on &vt.Snap{}.
+type panicOnNonNilGrid struct{ baseAdapter }
+
+func (panicOnNonNilGrid) ExtractConversationID(grid *vt.Snap, _ []byte) (string, bool) {
+	if grid != nil {
+		_ = grid.Lines[0] // panics on a non-nil grid with no lines (e.g. &vt.Snap{})
+	}
+	return "", false
+}
+
+// emptyBinary violates: Binary() must name the executable to detect.
+type emptyBinary struct{ baseAdapter }
+
+func (emptyBinary) Binary() string { return "" }
+
+// nilVersionArgs violates: VersionArgs() must be non-nil (empty is allowed).
+type nilVersionArgs struct{ baseAdapter }
+
+func (nilVersionArgs) VersionArgs() []string { return nil }
+
+// panicParseVersion violates: ParseVersion must be TOTAL (never panics).
+type panicParseVersion struct{ baseAdapter }
+
+func (panicParseVersion) ParseVersion(output string) (string, bool) {
+	return output[:5], true // panics on any output shorter than 5 bytes
+}
+
+// nondeterministicParseVersion violates: ParseVersion must be deterministic.
+type nondeterministicParseVersion struct {
+	baseAdapter
+	n atomic.Int64
+}
+
+func (p *nondeterministicParseVersion) ParseVersion(string) (string, bool) {
+	return fmt.Sprintf("1.0.%d", p.n.Add(1)), true
+}
+
+// okEmptyParseVersion violates: ok==true implies a non-empty version.
+type okEmptyParseVersion struct{ baseAdapter }
+
+func (okEmptyParseVersion) ParseVersion(string) (string, bool) { return "", true }
+
+// envShellCommand violates: no argv element may be a shell — here core would be
+// routed through a shell via `env sh -c`.
+type envShellCommand struct{ baseAdapter }
+
+func (envShellCommand) Command(spec LaunchSpec) ([]string, error) {
+	return []string{"/usr/bin/env", "sh", "-c", "stub-cli --cwd " + spec.Cwd}, nil
+}
+
+// shellAsLaterArgCommand violates: a shell may not appear at any argv position,
+// not just argv[0].
+type shellAsLaterArgCommand struct{ baseAdapter }
+
+func (shellAsLaterArgCommand) Command(LaunchSpec) ([]string, error) {
+	return []string{"stub-cli", "bash", "-lc", "x"}, nil
 }

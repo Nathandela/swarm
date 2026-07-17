@@ -15,16 +15,18 @@ package adapter
 //	    Options int
 //	    Signals []string      // sorted, de-duped SignalSource kinds
 //	}
-//	func Capability(a Adapter, fx Fixture) CapabilityEntry
+//	func Capability(a Adapter, fx Fixture, grid *vt.Snap) CapabilityEntry
 //
 // Derivation (pinned): Hooks = adapter declares a "hook" signal source; Resume =
 // Resume(a valid id) returns non-empty argv; ConversationID = the adapter
-// extracts an id from the fixture's PTYCapture (grid + tail); Options =
+// extracts an id from the fixture's REAL grid + PTYCapture tail (the grid is the
+// *vt.Snap the harness renders from the capture, never nil); Options =
 // len(Options()); CLI/Version copied from the fixture.
 
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/vt"
@@ -44,7 +46,7 @@ func (caplessAdapter) ExtractConversationID(*vt.Snap, []byte) (string, bool) { r
 // supports resume, and its fixture capture carries an extractable id.
 func TestCapability_FullyCapableAdapter(t *testing.T) {
 	fx := sampleFixture() // capture contains "conv-id=abc123"
-	got := Capability(baseAdapter{}, fx)
+	got := Capability(baseAdapter{}, fx, snapFrom(t, fx.PTYCapture))
 
 	if got.CLI != fx.CLI || got.Version != fx.Version {
 		t.Errorf("identity = %q/%q, want %q/%q", got.CLI, got.Version, fx.CLI, fx.Version)
@@ -66,11 +68,54 @@ func TestCapability_FullyCapableAdapter(t *testing.T) {
 	}
 }
 
+// gridReadingAdapter extracts the id ONLY from the rendered grid, ignoring the
+// tail — the way an adapter that reads a status line off the screen behaves. It
+// is the probe that proves Capability feeds the REAL grid.
+type gridReadingAdapter struct{ baseAdapter }
+
+func (gridReadingAdapter) ExtractConversationID(grid *vt.Snap, _ []byte) (string, bool) {
+	if grid == nil {
+		return "", false
+	}
+	const marker = "conv-id="
+	for _, line := range grid.Lines {
+		var b strings.Builder
+		for _, r := range line.Runs {
+			b.WriteString(r.Text)
+		}
+		text := b.String()
+		if i := strings.Index(text, marker); i >= 0 {
+			id := strings.TrimSpace(text[i+len(marker):])
+			if j := strings.IndexAny(id, " \t"); j >= 0 {
+				id = id[:j]
+			}
+			if id != "" {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+// TestCapability_FeedsRealGridNotNil — an adapter that reads the id only from the
+// grid yields ConversationID=true, proving Capability renders and passes the REAL
+// grid from the capture (the audit's nil-grid hole). With a nil grid the same
+// adapter finds nothing, so the assertion genuinely depends on the grid.
+func TestCapability_FeedsRealGridNotNil(t *testing.T) {
+	fx := sampleFixture() // capture renders "conv-id=abc123" onto the grid
+	if !Capability(gridReadingAdapter{}, fx, snapFrom(t, fx.PTYCapture)).ConversationID {
+		t.Error("ConversationID=false: the real grid was not fed to extraction")
+	}
+	if Capability(gridReadingAdapter{}, fx, nil).ConversationID {
+		t.Error("ConversationID=true with a nil grid; the grid-only adapter should find nothing")
+	}
+}
+
 // TestCapability_CaplessAdapter — an adapter with no hooks/resume and no
 // extractable id yields an all-false entry (with the fixture identity intact).
 func TestCapability_CaplessAdapter(t *testing.T) {
 	fx := sampleFixture()
-	got := Capability(caplessAdapter{}, fx)
+	got := Capability(caplessAdapter{}, fx, snapFrom(t, fx.PTYCapture))
 
 	if got.Hooks || got.Resume || got.ConversationID {
 		t.Errorf("capless adapter reported a capability: %+v", got)
@@ -86,7 +131,8 @@ func TestCapability_CaplessAdapter(t *testing.T) {
 // TestCapabilityEntry_JSONRoundTrip — the entry is serialized into the
 // capability matrix; it must survive a JSON round-trip unchanged.
 func TestCapabilityEntry_JSONRoundTrip(t *testing.T) {
-	want := Capability(baseAdapter{}, sampleFixture())
+	fx := sampleFixture()
+	want := Capability(baseAdapter{}, fx, snapFrom(t, fx.PTYCapture))
 	b, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

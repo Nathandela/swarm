@@ -7,7 +7,11 @@ package adapter
 // many launch options it exposes — derived from the adapter itself and
 // cross-checked against the fixture.
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/Nathandela/swarm/internal/vt"
+)
 
 // CapabilityEntry is one row of the capability matrix.
 type CapabilityEntry struct {
@@ -23,8 +27,10 @@ type CapabilityEntry struct {
 // Capability derives a's capability entry, cross-checked against fx. CLI and
 // Version are copied from the fixture; Hooks/Resume/Options/Signals come from
 // the adapter's declarations; ConversationID is proven by extracting an id from
-// the fixture's real PTY capture.
-func Capability(a Adapter, fx Fixture) CapabilityEntry {
+// the fixture's REAL rendered grid + raw capture — grid is the *vt.Snap the
+// harness builds from fx.PTYCapture (not nil), so extraction is exercised
+// exactly as the engine drives it at runtime.
+func Capability(a Adapter, fx Fixture, grid *vt.Snap) CapabilityEntry {
 	entry := CapabilityEntry{
 		CLI:     fx.CLI,
 		Version: fx.Version,
@@ -47,7 +53,7 @@ func Capability(a Adapter, fx Fixture) CapabilityEntry {
 	if argv, err := a.Resume(ResumeSpec{ConversationID: probeConversationID}); err == nil && len(argv) > 0 {
 		entry.Resume = true
 	}
-	if id, ok := a.ExtractConversationID(nil, fx.PTYCapture); ok && id != "" {
+	if id, ok := a.ExtractConversationID(grid, fx.PTYCapture); ok && id != "" {
 		entry.ConversationID = true
 	}
 	return entry

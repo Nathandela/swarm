@@ -12,6 +12,7 @@ package refadapter
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -42,13 +43,41 @@ func (r refAdapter) program() string {
 
 func (r refAdapter) Name() string { return r.program() }
 
-func (r refAdapter) Detect() (adapter.Detection, error) {
-	return adapter.Detection{
-		Found:   true,
-		Path:    "/usr/local/bin/" + r.program(),
-		Version: r.version,
-		InRange: true,
-	}, nil
+func (r refAdapter) Binary() string { return r.program() }
+
+func (refAdapter) VersionArgs() []string { return []string{"--version"} }
+
+// ParseVersion reads the first "x.y.z" dotted-numeric token out of the version
+// banner (the reference CLI prints e.g. "reference-cli v1.0.0"). It is pure and
+// total: any string yields ("", false) without panicking.
+func (refAdapter) ParseVersion(output string) (string, bool) {
+	for _, field := range strings.Fields(output) {
+		v := strings.TrimPrefix(field, "v")
+		parts := strings.Split(v, ".")
+		if len(parts) < 2 {
+			continue
+		}
+		numeric := true
+		for _, p := range parts {
+			if p == "" {
+				numeric = false
+				break
+			}
+			for _, c := range p {
+				if c < '0' || c > '9' {
+					numeric = false
+					break
+				}
+			}
+			if !numeric {
+				break
+			}
+		}
+		if numeric {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 func (refAdapter) SupportedVersions() adapter.VersionConstraint {

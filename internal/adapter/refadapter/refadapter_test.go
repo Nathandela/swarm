@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/fixtureio"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -40,7 +41,7 @@ const refPkg = "github.com/Nathandela/swarm/internal/adapter/refadapter"
 // loadRef loads the reference fixture and builds the reference adapter from it.
 func loadRef(t *testing.T) (adapter.Adapter, adapter.Fixture) {
 	t.Helper()
-	fx, err := adapter.LoadFixture("testdata/reference.json")
+	fx, err := fixtureio.LoadFixture("testdata/reference.json")
 	if err != nil {
 		t.Fatalf("load reference fixture: %v", err)
 	}
@@ -97,7 +98,22 @@ func TestReferenceAdapter_ExtractsFixtureConversationID(t *testing.T) {
 // a worked example of E9.6 output.
 func TestReferenceAdapter_Capability(t *testing.T) {
 	a, fx := loadRef(t)
-	entry := adapter.Capability(a, fx)
+
+	// Render the recorded capture to the real grid (the projection the engine
+	// hands the adapter), then derive the capability from it — not a nil grid.
+	emu := vt.NewEmulator(80, 24)
+	emu.Feed(fx.PTYCapture)
+	b, err := emu.Snapshot()
+	emu.Close()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	grid, err := vt.DecodeSnapshot(b)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	entry := adapter.Capability(a, fx, grid)
 	if !entry.Hooks || !entry.Resume || !entry.ConversationID {
 		t.Errorf("reference capability incomplete: %+v", entry)
 	}
@@ -126,12 +142,20 @@ func TestReferenceAdapter_ImportBoundary(t *testing.T) {
 }
 
 // TestReferenceAdapter_Stateless_NoIOInSource — E9.2 statelessness, automated.
-// The review checklist ("grep adapter packages for os.Open/os.Create/
-// os.MkdirAll/net.Listen/net.Dial outside tests — zero hits") is enforced here
-// as a source scan over the reference adapter's non-test files. Core owns all
-// lifecycle; adapters own no fds/disk/sockets.
+// The review checklist ("grep adapter packages for fd/disk/socket/exec
+// primitives outside tests — zero hits") is enforced here as a source scan over
+// the reference adapter's non-test files. Core owns all lifecycle; adapters own
+// no fds/disk/sockets. The banned list mirrors the contract package's
+// bannedIOTokens and implementation-goals.md E9.2.
 func TestReferenceAdapter_Stateless_NoIOInSource(t *testing.T) {
-	banned := []string{"os.Open", "os.Create", "os.MkdirAll", "os.OpenFile", "net.Listen", "net.Dial"}
+	banned := []string{
+		"os.Open", "os.OpenFile", "os.Create", "os.CreateTemp",
+		"os.ReadFile", "os.WriteFile", "os.ReadDir", "os.MkdirAll",
+		"io/ioutil",
+		"net.Listen", "net.Dial", "net.Dialer", "net.ListenConfig",
+		"exec.Command", "exec.LookPath",
+		"syscall.Open", "syscall.Socket",
+	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("glob: %v", err)

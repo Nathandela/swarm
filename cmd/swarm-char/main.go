@@ -59,9 +59,14 @@ func main() {
 	}
 
 	// Emit the capability matrix entry derived from the recorded fixture. With no
-	// real adapter wired for an arbitrary CLI, the reference adapter is the worked
-	// example: it reads the same fixture and yields an E9.6 CapabilityEntry.
-	entry := adapter.Capability(refadapter.New(fx), fx)
+	// real adapter wired for an arbitrary CLI yet (Epic 11), the reference adapter
+	// is the worked example — the ACTUAL adapter passed to deriveCapability, which
+	// renders the real grid from the capture and feeds it to extraction.
+	entry, err := deriveCapability(refadapter.New(fx), fx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	capJSON, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "swarm-char: marshal capability:", err)

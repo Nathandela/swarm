@@ -74,7 +74,14 @@ func TestConformance_RejectsViolations(t *testing.T) {
 	}{
 		{"empty-name", emptyName{}, "name"},
 		{"unstable-name", &unstableName{}, "name"},
+		{"empty-binary", emptyBinary{}, "binary"},
+		{"nil-version-args", nilVersionArgs{}, "versionargs"},
+		{"parseversion-panics", panicParseVersion{}, "parseversion"},
+		{"parseversion-nondeterministic", &nondeterministicParseVersion{}, "determin"},
+		{"parseversion-ok-empty", okEmptyParseVersion{}, "parseversion"},
 		{"shell-argv0", shellCommand{}, "shell"},
+		{"env-shell-router", envShellCommand{}, "shell"},
+		{"shell-as-later-arg", shellAsLaterArgCommand{}, "shell"},
 		{"single-string-argv", singleStringCommand{}, "argv"},
 		{"empty-command", emptyCommand{}, "command"},
 		{"nondeterministic-command", &nondeterministicCommand{}, "determin"},
@@ -85,6 +92,7 @@ func TestConformance_RejectsViolations(t *testing.T) {
 		{"resume-without-id", resumeWithoutID{}, "resume"},
 		{"resume-omits-id", resumeOmitsID{}, "resume"},
 		{"extract-panics", panicExtract{}, "extract"},
+		{"extract-panics-non-nil-grid", panicOnNonNilGrid{}, "extract"},
 		{"extract-ok-empty", okButEmptyExtract{}, "extract"},
 	}
 	for _, tc := range cases {
@@ -111,6 +119,59 @@ func TestCheckConformance_ExtractTotalityIsProbed(t *testing.T) {
 	}
 	if !errsContain(CheckConformance(panicExtract{}), "extract") {
 		t.Error("panicking extractor was NOT flagged — totality probe missing")
+	}
+}
+
+// TestCheckConformance_ExtractTotalityProbesNonNilGrid — the totality probe must
+// feed a NON-NIL grid, not only nil. panicOnNonNilGrid survives every nil-grid
+// call but panics the instant it touches &vt.Snap{}; a harness that only ever
+// passed nil would green-light it. This is the FIX-B grid-axis regression guard.
+func TestCheckConformance_ExtractTotalityProbesNonNilGrid(t *testing.T) {
+	if !errsContain(CheckConformance(panicOnNonNilGrid{}), "extract") {
+		t.Error("extractor that panics on a non-nil grid was NOT flagged — the totality probe never feeds a non-nil grid")
+	}
+}
+
+// TestCheckConformance_CommandShellScanCoversAllArgv — the shell check must scan
+// EVERY argv element, not just argv[0]: an `env sh -c ...` router and a shell
+// dropped into a later arg both route the command through a shell and must be
+// rejected. This is the FIX-B argv-scan regression guard.
+func TestCheckConformance_CommandShellScanCoversAllArgv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    Adapter
+	}{
+		{"env-sh-c", envShellCommand{}},
+		{"shell-as-later-arg", shellAsLaterArgCommand{}},
+	} {
+		if !errsContain(CheckConformance(tc.a), "shell") {
+			t.Errorf("%s: a shell reachable past argv[0] was NOT flagged", tc.name)
+		}
+	}
+	if errsContain(CheckConformance(baseAdapter{}), "shell") {
+		t.Error("a shell-free adapter was flagged")
+	}
+}
+
+// TestCheckConformance_DetectDescriptorsAreProbed — the descriptor checks have
+// teeth: a total conformant adapter passes, while an empty Binary, nil
+// VersionArgs, and a panicking/non-deterministic/ok-empty ParseVersion are each
+// flagged. This proves detection purity is enforced through descriptors now that
+// Detect is a core function, not an adapter method.
+func TestCheckConformance_DetectDescriptorsAreProbed(t *testing.T) {
+	if errsContain(CheckConformance(baseAdapter{}), "binary") ||
+		errsContain(CheckConformance(baseAdapter{}), "versionargs") ||
+		errsContain(CheckConformance(baseAdapter{}), "parseversion") {
+		t.Error("conformant descriptors were flagged")
+	}
+	if !errsContain(CheckConformance(emptyBinary{}), "binary") {
+		t.Error("empty Binary() not flagged")
+	}
+	if !errsContain(CheckConformance(nilVersionArgs{}), "versionargs") {
+		t.Error("nil VersionArgs() not flagged")
+	}
+	if !errsContain(CheckConformance(panicParseVersion{}), "parseversion") {
+		t.Error("panicking ParseVersion not flagged — totality probe missing")
 	}
 }
 
