@@ -50,6 +50,19 @@ jobs:
       # The parser UNIT tests run above (untagged); this covers the syscall path.
       - name: CPU sampler integration (E10.6, linux /proc)
         run: go test -tags integration -race ./internal/engine/
+      # E14.4 (N-3, scenario 15): the real daemon + shims idle-CPU soak, in the same
+      # `-tags integration` lane. Scoped by -run to the single >=60s soak so it does
+      # not re-run the whole daemon suite (already run untagged under `go test -race
+      # ./...` above). Non-race on purpose: the sampled daemon is a re-exec of this
+      # test binary, so an uninstrumented build measures a faithful idle CPU.
+      - name: Daemon idle-CPU soak (E14.4, N-3, scenario 15)
+        run: go test -tags integration -run '^TestDaemonIdleCPUNearZero$' -count=1 ./internal/daemon/
+      # E14.4 (N-1): the real-daemon first-paint p95 gate. NON-race on purpose —
+      # the TUI client is goroutine/channel-heavy so -race inflates first-paint
+      # ~25x (a 2s sanity ceiling is asserted under -race by `go test -race ./...`
+      # above); an uninstrumented build asserts the authoritative <100ms p95 @50.
+      - name: TUI first-paint p95 gate (E14.4, N-1)
+        run: go test -run '^TestFirstPaintGate_RealDaemon_FiftySessions_P95$' -count=1 ./internal/tui/
 
   # E10.6: the darwin half. The pure CPU parsers run in the unit step (untagged, on
   # every runner), and the integration step exercises the REAL proc_pidinfo syscall
@@ -67,6 +80,11 @@ jobs:
         run: go test -race ./internal/engine/... ./internal/hookclient/...
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
         run: go test -tags integration -race ./internal/engine/
+      # E14.4 (N-3, scenario 15): the real daemon + shims idle-CPU soak on darwin
+      # (proc_taskinfo path). Scoped by -run to the single >=60s soak; non-race so
+      # the sampled daemon subprocess is a faithful, uninstrumented build.
+      - name: Daemon idle-CPU soak (E14.4, N-3, scenario 15)
+        run: go test -tags integration -run '^TestDaemonIdleCPUNearZero$' -count=1 ./internal/daemon/
 
   # E14.5: active fuzzing (not just the seed corpus already covered by the
   # untagged `go test` above). `-fuzz` runs exactly one target per invocation

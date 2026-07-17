@@ -10,9 +10,10 @@ package shimwire
 
 import "encoding/json"
 
-// Version is the shimwire protocol version, carried in a hello message's
-// WireVersion field.
-const Version = 1
+// Version (the shimwire protocol version carried in a hello message's
+// WireVersion field) is defined in version.go. It is split into build-tagged
+// files ONLY so the E14.3 compat-matrix test can compile adjacent-version shim
+// binaries; the default build is unchanged at 1. See version.go.
 
 // Message type vocabulary, shared verbatim between daemon and shim.
 const (
