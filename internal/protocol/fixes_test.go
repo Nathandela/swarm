@@ -164,9 +164,15 @@ func TestFix_SupersedeSendsFreshSnapshot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFix_LargeSnapshotChunkedRoundTrips(t *testing.T) {
-	big := make([]byte, 3*wire.MaxFrame+12345)
+	// A max-grid-scale snapshot (well above wire.MaxFrame AND above the old 16 MiB
+	// cap) must chunk and reassemble intact — the reassembly cap is derived from
+	// maxDim so a legal large snapshot is never rejected (F2 + audit re-review).
+	big := make([]byte, 25<<20) // 25 MiB, > old 16 MiB cap, < maxSnapshotBytes
 	for i := range big {
 		big[i] = byte('A' + i%26)
+	}
+	if len(big) >= maxSnapshotBytes {
+		t.Fatalf("test snapshot %d must be below the cap %d", len(big), maxSnapshotBytes)
 	}
 	d := newFixDaemon(big)
 	sock, _ := serveFix(t, d)
@@ -174,7 +180,7 @@ func TestFix_LargeSnapshotChunkedRoundTrips(t *testing.T) {
 	c := dialClient(t, sock, []string{"attach"})
 	a, err := c.Attach(onlyViewID(t, c))
 	if err != nil {
-		t.Fatalf("Attach with a >MaxFrame snapshot: %v", err)
+		t.Fatalf("Attach with a large (>MaxFrame, >16 MiB) snapshot: %v", err)
 	}
 	if !bytes.Equal(a.Snapshot(), big) {
 		t.Fatalf("chunked snapshot mismatch: got %d bytes, want %d", len(a.Snapshot()), len(big))
@@ -605,7 +611,7 @@ func TestFix_InvalidSnapshotLenRejected(t *testing.T) {
 		chunks  [][]byte
 	}{
 		{"negative", -1, nil},
-		{"huge", (16 << 20) + 1, nil},
+		{"beyond-cap", maxSnapshotBytes + 1, nil},
 		{"overshoot", 4, [][]byte{bytes.Repeat([]byte("x"), 9)}},
 	}
 	for _, tc := range cases {

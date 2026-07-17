@@ -42,7 +42,7 @@ const (
 	// transitioning at once on a daemon reconnect) without evicting a healthy
 	// subscriber, while still far below any flood a genuinely wedged subscriber
 	// produces — so a wedged subscriber is still disconnected within a bound.
-	eventQueueCap = 64
+	eventQueueCap = 256
 
 	// snapshotChunkSize is the largest snapshot slice carried in one TSnapshot
 	// frame. A grid snapshot can exceed wire.MaxFrame (maxDim=1000 → far over
@@ -785,15 +785,19 @@ func (cc *clientConn) handleResize(c Control) {
 }
 
 func (cc *clientConn) handleSubscribe() {
-	cc.replyOK("")
 	cc.subOnce.Do(func() {
 		cc.eventQ = make(chan Control, eventQueueCap)
+		// Start the writer BEFORE registering, so the bounded queue is always being
+		// drained the moment distribute can see this subscriber — no fill window that
+		// could wrongly evict a healthy subscriber. Register BEFORE the ack, so a
+		// status change right after subscribe is never lost (F4/L1/S9).
 		cc.srv.wg.Add(1)
 		go cc.eventWriter()
+		cc.srv.subMu.Lock()
+		cc.srv.subs[cc] = struct{}{}
+		cc.srv.subMu.Unlock()
 	})
-	cc.srv.subMu.Lock()
-	cc.srv.subs[cc] = struct{}{}
-	cc.srv.subMu.Unlock()
+	cc.replyOK("")
 }
 
 func (cc *clientConn) handleDataIn(payload []byte) {

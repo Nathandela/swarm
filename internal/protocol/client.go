@@ -435,10 +435,24 @@ func (a *Attachment) Detach() error {
 	return nil
 }
 
-// maxSnapshotBytes caps a reassembled snapshot: larger than any real grid, small
-// enough not to OOM. A declared snapshot_len outside [0, max] is rejected without
-// allocation (untrusted length hardening).
-const maxSnapshotBytes = 16 << 20 // 16 MiB
+// maxSnapshotBytes caps a reassembled snapshot so a garbage or oversized
+// snapshot_len can never OOM the client, while still admitting the LARGEST snapshot
+// the shim can legally produce. The vt emulator serializes ONE JSON run per grid
+// cell (Epic 2's accepted no-run-merging decision): a maxDim x maxDim grid is up to
+// maxDim*maxDim runs, and a fully-styled run (text + width + fg/bg hex + the five
+// attribute flags) serializes to ~124 bytes. snapshotBytesPerCell rounds that up to
+// leave margin for multi-codepoint graphemes and the per-line array framing, so the
+// cap = maxDim*maxDim*snapshotBytesPerCell is finite (a garbage/huge length is
+// rejected, no OOM) yet large enough that no legal max-grid snapshot is rejected.
+// If maxDim (the resize clamp) changes, this cap tracks it automatically.
+//
+// Epic 8 note (N-1 first-paint budget): per-cell run serialization makes a
+// worst-case snapshot large (~150 MiB at maxDim=1000). If first-paint latency
+// suffers, run-merging in the snapshot format is the eventual optimization.
+const (
+	snapshotBytesPerCell = 160
+	maxSnapshotBytes     = maxDim * maxDim * snapshotBytesPerCell
+)
 
 // beginSnapshot starts snapshot reassembly for a lease whose snapshot is n bytes
 // total. A negative or oversized length is rejected (no allocation); an empty
