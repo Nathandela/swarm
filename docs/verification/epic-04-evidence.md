@@ -31,7 +31,7 @@ Emulator query-reply carry-forward: DSR replies piped back to the PTY via a boun
 ## Review outcomes (protocol step 5 — cross-model required)
 
 - **Opus (independent)**: FIX REQUIRED → resolved. Cleared spawn security, S10 atomicity, exit-report timeout, vt race-freedom with explicit probes.
-- **codex GPT-5.6 sol (cross-model)**: FIX REQUIRED (1 CRITICAL + HIGHs) → fix round → delta re-review 10/12 OK → final round on the last 2 HIGHs (escalation-join, guaranteed setsid) → [final verdict recorded at close].
+- **codex GPT-5.6 sol (cross-model)**: FIX REQUIRED (1 CRITICAL + HIGHs) → fix round → delta re-review 10/12 OK → final round on the last 2 HIGHs → **APPROVE** (escalation join covers all exit paths, no worker left armed; setsid guaranteed with loop-guarded re-exec and SID==PID proof; no new defects).
 - Committee synthesis: [audit-003-epic-04.md](audit-003-epic-04.md).
 
 ## Quality gates (GG-4)
