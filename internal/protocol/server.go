@@ -15,6 +15,12 @@ import (
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
+// OptionWorktree is the reserved launch-option key through which the worktree
+// toggle (LaunchReq.Worktree) reaches the daemon's PreLaunch/PreDelete hooks. The
+// daemon LaunchSpec carries no dedicated field, so the boolean travels in Options
+// (value "true"); the assembly (skeleton) reads it to gate worktree isolation.
+const OptionWorktree = "worktree"
+
 // daemonLaunchSpec builds the DaemonAPI launch spec from a validated request,
 // applying the server-side env allowlist (S-6). Argv composition is the adapter's
 // job (Epic 9), so it is left empty here.
@@ -25,9 +31,24 @@ func daemonLaunchSpec(req *LaunchReq) daemon.LaunchSpec {
 		ClientEnv:     persist.FilterEnv(req.Env),
 		Cols:          req.Cols,
 		Rows:          req.Rows,
-		Options:       req.Options,
+		Options:       launchOptions(req),
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 	}
+}
+
+// launchOptions returns the launch options, adding the reserved worktree flag when
+// the request opted in. It copies the client map so the injected key never mutates
+// the caller's request.
+func launchOptions(req *LaunchReq) map[string]string {
+	if !req.Worktree {
+		return req.Options
+	}
+	out := make(map[string]string, len(req.Options)+1)
+	for k, v := range req.Options {
+		out[k] = v
+	}
+	out[OptionWorktree] = "true"
+	return out
 }
 
 // Server-side validation caps (E6.6/P-6). Every client-supplied field is
@@ -75,7 +96,13 @@ type Server struct {
 	d  DaemonAPI
 	ln net.Listener
 
-	epSeq atomic.Uint64 // endpoint-id source
+	// endpointID, when non-empty, is the STABLE endpoint id every connection to
+	// this server is assigned — the assembled daemon is a single federation
+	// endpoint (NewServer sets it to the daemon's persistent identity), so a
+	// session's namespaced id is the same for every client and across daemon
+	// restarts. Empty (the Serve default) falls back to a per-connection counter.
+	endpointID string
+	epSeq      atomic.Uint64 // per-connection endpoint-id source (when endpointID == "")
 
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
@@ -119,18 +146,54 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s := newServer(d)
+	s.ln = ln
+	s.wg.Add(1)
+	go s.acceptLoop()
+	return s, nil
+}
+
+// NewServer builds a Server that does NOT own a listener: the caller accepts
+// connections elsewhere and feeds it the CLIENT ones via ServeConn. This is the
+// Epic 8 assembly seam — the daemon owns the singleton socket and demuxes hook
+// posts from client connections, so only the client connections reach the Server.
+// It still fans daemon events out to subscribers. Close it with Close.
+//
+// endpointID is the stable id every connection is assigned (the assembled daemon
+// is one federation endpoint), so a session's namespaced id is identical for every
+// client and stable across restarts. An empty endpointID falls back to the
+// per-connection counter (the Serve default).
+func NewServer(d DaemonAPI, endpointID string) *Server {
+	s := newServer(d)
+	s.endpointID = endpointID
+	return s
+}
+
+// newServer allocates a Server and starts its event fan-out. The listener (Serve)
+// or the per-connection feed (NewServer/ServeConn) is layered on by the caller.
+func newServer(d DaemonAPI) *Server {
 	s := &Server{
 		d:      d,
-		ln:     ln,
 		conns:  make(map[*clientConn]struct{}),
 		leases: make(map[string]*sessionLease),
 		subs:   make(map[*clientConn]struct{}),
 		stop:   make(chan struct{}),
 	}
-	s.wg.Add(2)
-	go s.acceptLoop()
+	s.wg.Add(1)
 	go s.fanoutLoop()
-	return s, nil
+	return s
+}
+
+// ServeConn serves one already-accepted client connection to completion. It is
+// the per-connection half of the accept loop, exposed for a caller that owns the
+// socket (the daemon) and hands the Server only the client connections it demuxed.
+// It blocks until the connection ends, so the caller runs it in its own goroutine.
+func (s *Server) ServeConn(conn net.Conn) {
+	cc := s.registerConn(conn)
+	if cc == nil {
+		return
+	}
+	cc.serve() // blocks; its defer calls wg.Done
 }
 
 // Close stops serving, disconnects every client, and releases the socket.
@@ -148,7 +211,9 @@ func (s *Server) Close() error {
 	}
 	s.mu.Unlock()
 
-	s.ln.Close()
+	if s.ln != nil {
+		s.ln.Close() // NewServer has no listener; the daemon owns the socket
+	}
 	for _, cc := range conns {
 		cc.close()
 	}
@@ -168,18 +233,29 @@ func (s *Server) acceptLoop() {
 		if err != nil {
 			return // listener closed
 		}
-		cc := &clientConn{srv: s, conn: conn, done: make(chan struct{})}
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			conn.Close()
-			return
+		cc := s.registerConn(conn)
+		if cc == nil {
+			return // server closed while accepting
 		}
-		s.conns[cc] = struct{}{}
-		s.mu.Unlock()
-		s.wg.Add(1)
 		go cc.serve()
 	}
+}
+
+// registerConn tracks an accepted connection and reserves its wg slot, returning
+// its clientConn (or nil, having closed the connection, if the server is closing).
+// The caller runs cc.serve(), which calls wg.Done when the connection ends.
+func (s *Server) registerConn(conn net.Conn) *clientConn {
+	cc := &clientConn{srv: s, conn: conn, done: make(chan struct{})}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		conn.Close()
+		return nil
+	}
+	s.conns[cc] = struct{}{}
+	s.mu.Unlock()
+	s.wg.Add(1)
+	return cc
 }
 
 // fanoutLoop drains the single daemon event source and distributes each status
@@ -660,7 +736,11 @@ func (cc *clientConn) handleHello(c Control) {
 	if cc.helloed {
 		return
 	}
-	cc.endpointID = "ep-" + strconv.FormatUint(cc.srv.epSeq.Add(1), 10)
+	if cc.srv.endpointID != "" {
+		cc.endpointID = cc.srv.endpointID // stable per-daemon id (assembly)
+	} else {
+		cc.endpointID = "ep-" + strconv.FormatUint(cc.srv.epSeq.Add(1), 10)
+	}
 	if c.ProtocolVersion != Version {
 		cc.replyError(d8Message(Version, c.ProtocolVersion)) // (daemonV, clientV) — was swapped (F10)
 		return

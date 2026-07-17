@@ -108,6 +108,7 @@ and unrelated secrets are dropped.
 | `cols`           | int                 | initial terminal columns                                   |
 | `rows`           | int                 | initial terminal rows                                      |
 | `initial_prompt` | string              | optional initial prompt text                               |
+| `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
 
 ## Control-op vocabulary
 
@@ -149,11 +150,14 @@ The client sends `attach` with a `session_id`. The daemon grants the exclusive
 controller lease, replying with `lease` (carrying the new `generation` and
 `snapshot_len`), then the snapshot as one or more `TSnapshot` chunk frames, then
 the live `TDataOut` stream (S10). A second concurrent attach **supersedes** the
-first: it wins a strictly higher `generation`, reuses the single upstream stream,
-**re-snapshots the current grid** (so the new controller sees the live screen, not
-the snapshot captured when the stream first opened), and the prior controller's
-live stream ends (its frames channel closes) — see `detach`. A slow or wedged
-controller is evicted within a bound so a supersede/detach never blocks on it (S9).
+first: it wins a strictly higher `generation` and **re-attaches** — it releases
+the prior controller and its upstream connection and opens a **fresh** connection
+to the session's shim, whose atomic snapshot-then-stream gives the new controller
+the shim's CURRENT grid (no daemon-side re-snapshot of a live stream). The prior
+controller's live stream ends (its frames channel closes) — see `detach`. A slow
+or wedged controller is evicted within a bound so a supersede/detach never blocks
+on it (S9); a supersede whose fresh attach fails is a clean error, never a stale
+screen.
 
 A second `attach` on the **same connection** auto-detaches the first (its lease is
 released) before the new lease is granted, so one connection never holds two

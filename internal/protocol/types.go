@@ -84,6 +84,12 @@ type LaunchReq struct {
 	Cols          int               `json:"cols"`
 	Rows          int               `json:"rows"`
 	InitialPrompt string            `json:"initial_prompt"`
+	// Worktree opts this session into launch-time git-worktree isolation (Epic 12):
+	// the daemon runs the session's agent in a fresh isolated worktree/branch. It is
+	// carried to the daemon's PreLaunch/PreDelete hooks by the assembly (skeleton),
+	// which registers worktree.Create/Remove gated on this flag; the protocol layer
+	// only transports it.
+	Worktree bool `json:"worktree,omitempty"`
 }
 
 // Event is the client-facing subscribe payload: one status-changed session view.

@@ -21,12 +21,25 @@ import (
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"golang.org/x/sys/unix"
 )
 
 // defaultMaxSessions caps concurrent sessions for a production daemon.
 const defaultMaxSessions = 128
+
+// Engine tuning for the assembled daemon: a low-frequency fallback poll and the
+// staleness window that bounds a stale typed signal / an active-but-silent turn.
+const (
+	daemonPollInterval       = time.Second
+	daemonStalenessThreshold = 30 * time.Second
+)
+
+// envFakeAgentBin is the dev/test-only knob naming the swarm-fake-agent binary the
+// walking-skeleton assembly execs for the reserved agent "fake". It is unset in a
+// real install, so "fake" simply does not resolve there.
+const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 
 // shimSessionEnv guards the setsid re-exec against an infinite loop: it is set
 // on the re-exec'd child so a shim that still cannot become a session leader
@@ -78,22 +91,23 @@ func runTUI(_, stderr io.Writer) int {
 }
 
 // runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the
-// D-8 safe restart. A plain `swarm daemon` opens the daemon from its
-// SWARM_DAEMON_* environment (set by the client's detached auto-start, D-1) and
-// serves until signalled; with no such configuration it is a no-op stub, since
-// the daemon is never started bare by a user — the client auto-starts it.
+// D-8 safe restart. A plain `swarm daemon` stands up the FULL assembly
+// (internal/skeleton) from its SWARM_DAEMON_* environment (set by the client's
+// detached auto-start, D-1) and serves until signalled; with no such configuration
+// it is a no-op stub, since the daemon is never started bare by a user — the
+// client auto-starts it.
 func runDaemon(args []string, _, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "restart" {
 		return runDaemonRestart(stderr)
 	}
-	cfg, ok := daemonConfigFromEnv()
+	cfg, ok := skeletonConfigFromEnv()
 	if !ok {
 		fmt.Fprintln(stderr, "daemon: not implemented")
 		return 1
 	}
-	d, err := daemon.Open(cfg)
+	d, err := skeleton.Serve(cfg)
 	if err != nil {
-		fmt.Fprintf(stderr, "daemon: open: %v\n", err)
+		fmt.Fprintf(stderr, "daemon: serve: %v\n", err)
 		return 1
 	}
 	// Serve until a termination signal, then Close cleanly (running shims are
@@ -105,21 +119,25 @@ func runDaemon(args []string, _, stderr io.Writer) int {
 	return 0
 }
 
-// daemonConfigFromEnv builds a daemon Config from the SWARM_DAEMON_* environment.
-// It reports false when no state dir is configured (the bare-invocation stub).
-func daemonConfigFromEnv() (daemon.Config, bool) {
+// skeletonConfigFromEnv builds the assembly Config from the SWARM_DAEMON_*
+// environment (plus the dev/test-only fake-agent knob). It reports false when no
+// state dir is configured (the bare-invocation stub).
+func skeletonConfigFromEnv() (skeleton.Config, bool) {
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
-		return daemon.Config{}, false
+		return skeleton.Config{}, false
 	}
 	exe, _ := os.Executable() // the daemon spawns `swarm shim` from its own binary
-	return daemon.Config{
-		StateDir:    stateDir,
-		SocketPath:  os.Getenv(daemon.EnvSocket),
-		LockPath:    os.Getenv(daemon.EnvLock),
-		LogPath:     os.Getenv(daemon.EnvLog),
-		ShimBinary:  exe,
-		MaxSessions: defaultMaxSessions,
+	return skeleton.Config{
+		StateDir:           stateDir,
+		SocketPath:         os.Getenv(daemon.EnvSocket),
+		LockPath:           os.Getenv(daemon.EnvLock),
+		LogPath:            os.Getenv(daemon.EnvLog),
+		ShimBinary:         exe,
+		MaxSessions:        defaultMaxSessions,
+		PollInterval:       daemonPollInterval,
+		StalenessThreshold: daemonStalenessThreshold,
+		FakeAgentBin:       os.Getenv(envFakeAgentBin),
 	}, true
 }
 

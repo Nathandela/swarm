@@ -39,7 +39,11 @@ func TestLiveness_EventMovesRowGroup(t *testing.T) {
 	if strings.Contains(final, "WORKING") || strings.Contains(final, "compiling now") {
 		t.Fatalf("stale WORKING placement/summary still present after move:\n%s", final)
 	}
-	if n := strings.Count(final, "codex"); n != 1 {
-		t.Fatalf("expected the session updated in place (one codex row), found %d:\n%s", n, final)
+	// Banner migration (Epic 8): the V-5 transition banner now renders IN
+	// View().Content ("codex needs input"), so a moved-in-place codex session shows
+	// once in its row AND once in the transient banner — two occurrences (was one
+	// before the in-view banner moved out of tea.Printf scrollback).
+	if n := strings.Count(final, "codex"); n != 2 {
+		t.Fatalf("expected the session updated in place plus its in-view banner (two codex occurrences), found %d:\n%s", n, final)
 	}
 }

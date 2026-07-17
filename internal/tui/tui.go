@@ -106,26 +106,55 @@ type rootModel struct {
 	launch  launchModel
 	attach  attachModel
 
+	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
+
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
 	ticking  bool // whether a repaint tick is in flight (only on the general view)
 }
 
+// listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
+// paint. A live local daemon answers in single-digit milliseconds; this only bites
+// when the daemon is hung, in which case New comes up with an empty (still usable)
+// board and the Subscribe stream fills it in once the daemon responds.
+const listDialTimeout = time.Second
+
 // New builds the router. It eagerly lists sessions (N-1: the first paint must
-// already show them) and opens the subscribe stream so Init can wire live
-// updates. Errors from the stub are non-fatal — the model still renders.
-func New(c Client, detect DetectFunc) tea.Model {
-	// Epic 8 (the real client) must give this initial List a bounded dial/List
-	// timeout so a hung daemon cannot stall first paint; the stub returns at once.
-	sessions, _ := c.List()
+// already show them) under a bounded dial (a hung daemon cannot stall first paint)
+// and opens the subscribe stream so Init can wire live updates. Errors from the
+// client are non-fatal — the model still renders. Options (WithAttachRunner) are
+// applied last; the 2-arg form used across the suite is unaffected.
+func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	events, _ := c.Subscribe()
-	return rootModel{
+	m := rootModel{
 		client:  c,
 		detect:  detect,
 		screen:  screenGeneral,
-		general: newGeneralModel(sessions),
+		general: newGeneralModel(boundedList(c)),
 		events:  events,
 		ticking: true, // Init arms the first repaint tick
+	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
+}
+
+// boundedList performs the eager List under listDialTimeout so a hung daemon cannot
+// stall first paint. On timeout it returns an empty board; the blocked List
+// goroutine drains into the buffered channel and is collected when it finally
+// returns.
+func boundedList(c Client) []protocol.SessionView {
+	ch := make(chan []protocol.SessionView, 1)
+	go func() {
+		s, _ := c.List()
+		ch <- s
+	}()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(listDialTimeout):
+		return nil
 	}
 }
 
@@ -164,6 +193,21 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
 		return m, tea.Batch(banner, waitForEvent(m.events))
+
+	case attachDoneMsg:
+		// The passthrough returned (detached / session ended / error); come back to
+		// the general board and re-arm its repaint tick.
+		return m, m.enterGeneral()
+
+	case bannerExpireMsg:
+		// The transient banner reached its expiry; re-emit the general frame so the
+		// (now wall-clock-expired) banner disappears. Mirrors repaintMsg's full
+		// re-emit (SGR nonce + ClearScreen); a no-op off the general view.
+		if m.screen != screenGeneral {
+			return m, nil
+		}
+		m.repaintN++
+		return m, tea.ClearScreen
 
 	case repaintMsg:
 		if m.screen != screenGeneral {

@@ -67,6 +67,17 @@ type Config struct {
 	// PreDelete runs in Delete, before the session's directory is torn down. Its
 	// error is logged and returned, but never blocks the mandatory teardown.
 	PreDelete func(m persist.Meta) error
+
+	// ConnHandler, when non-nil, REPLACES the daemon's minimal 4-byte version
+	// handshake (serveClient) as the handler for every connection accepted on the
+	// singleton socket (Epic 8 assembly). The daemon still owns the socket —
+	// flock-before-bind, stale-socket reclaim under the lock, and the accept loop
+	// all stay here (S12) — but the connection SERVING moves to the caller, so the
+	// skeleton can run protocol.Server's per-connection loop (and demux hook posts)
+	// on the daemon's own socket instead of binding a second one. Each accepted
+	// connection is handed to ConnHandler in its own goroutine; the handler owns
+	// closing it.
+	ConnHandler func(net.Conn)
 }
 
 // LaunchSpec is a request to launch a new session.

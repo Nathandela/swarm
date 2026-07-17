@@ -63,15 +63,20 @@ func bindSocket(path string) (net.Listener, error) {
 }
 
 // acceptLoop serves the daemon socket until the listener is closed. Each client
-// gets the minimal version handshake (Epic 6 layers the real RPC on top).
+// gets the minimal version handshake, unless cfg.ConnHandler was supplied — the
+// Epic 8 assembly hands connections to protocol.Server on this same socket.
 func (d *Daemon) acceptLoop() {
 	defer d.wg.Done()
+	handle := d.serveClient
+	if d.cfg.ConnHandler != nil {
+		handle = d.cfg.ConnHandler
+	}
 	for {
 		conn, err := d.listener.Accept()
 		if err != nil {
 			return // listener closed by Close/abandon
 		}
-		go d.serveClient(conn)
+		go handle(conn)
 	}
 }
 

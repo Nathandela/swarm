@@ -37,8 +37,16 @@ type generalModel struct {
 	confirmID   string // session the confirm targets, captured by identity when it opened
 	confirmKill bool   // whether that target was running (kill) vs. completed (delete) at open
 
+	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
+	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
+
 	width int
 }
+
+// bannerDuration is how long the transient V-5 banner stays on screen before it
+// auto-expires. Long enough to be read (and to still be present for the coordinated
+// TestLiveness in-view assertion), short enough to stay transient.
+const bannerDuration = 4 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
@@ -154,16 +162,33 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	m.restoreSel(selID)
 
 	if bannerGroup(s.Group) && (!found || oldGroup != s.Group) {
-		// tea.Printf writes above the program (never into View content), so the
-		// notification is observable in the output stream yet leaves the
-		// persistent render — and its row count — untouched. NOTE (Epic 8): under
-		// the alt-screen this becomes a no-op; V-5's transient in-view banner must
-		// move into View().Content THEN, together with updating the frozen
-		// TestLiveness row-count assertion (which currently assumes the banner is
-		// not part of the rendered frame).
-		return tea.Printf("%s %s", s.Agent, statusToken(s.Group))
+		// A transition INTO needs_input/ready_for_review raises a transient banner
+		// (V-5) rendered IN View().Content, so it is visible under the alt-screen —
+		// where the former tea.Printf (which writes to scrollback above the program)
+		// was a no-op. It auto-expires after bannerDuration; the tick re-emits the
+		// frame at expiry so the banner disappears on time.
+		m.bannerText = s.Agent + " " + statusToken(s.Group)
+		m.bannerExpiry = time.Now().Add(bannerDuration)
+		return bannerTick()
 	}
 	return nil
+}
+
+// bannerExpireMsg fires when the transient banner reaches its expiry, prompting a
+// frame re-emit so the (wall-clock-expired) banner is cleared from the render.
+type bannerExpireMsg struct{}
+
+// bannerTick schedules the banner's auto-expiry re-emit.
+func bannerTick() tea.Cmd {
+	return tea.Tick(bannerDuration, func(time.Time) tea.Msg { return bannerExpireMsg{} })
+}
+
+// bannerLine renders the transient banner, or "" once it has expired or is unset.
+func (m generalModel) bannerLine() string {
+	if m.bannerText == "" || !time.Now().Before(m.bannerExpiry) {
+		return ""
+	}
+	return "  " + lipgloss.NewStyle().Foreground(colAmber).Bold(true).Render("● "+m.bannerText)
 }
 
 // bannerGroup reports whether a transition into g raises a notification banner.
@@ -186,8 +211,14 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyUp || (k.Text == "k"):
 		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
-		// Route the attach at the selection captured now (this keypress).
+		// Route the attach at the selection captured now (this keypress). With an
+		// injected runner this is the raw passthrough (completed/lost rows go
+		// read-only, G3); without one it is the Epic 7 identify-only placeholder.
 		if s, ok := m.general.selected(); ok {
+			if m.attachRunner != nil {
+				readOnly := s.Group == status.GroupCompleted
+				return m, runAttach(m.attachRunner, s, readOnly)
+			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
 		}
@@ -257,6 +288,10 @@ func (m generalModel) view() string {
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
 
+	if bn := m.bannerLine(); bn != "" {
+		b.WriteString(bn + "\n\n")
+	}
+
 	// idx walks the flat display order so it lines up with the selection index.
 	idx := 0
 	for _, g := range groupOrder {
@@ -307,9 +342,13 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		lipgloss.NewStyle().Foreground(gc).Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
 
+	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
+	// selected row, so a mid-confirm regroup/removal cannot paint the prompt onto a
+	// neighbor. When the target has been removed (confirmID matches no row) no row
+	// shows it.
 	var prefix string
 	switch {
-	case selected && m.confirm:
+	case m.confirm && s.ID == m.confirmID:
 		prefix = lipgloss.NewStyle().Foreground(colNeedsInput).Render(confirmPrompt(s)) + " "
 	case selected:
 		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
