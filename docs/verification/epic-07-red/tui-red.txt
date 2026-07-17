@@ -1,0 +1,18 @@
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/fakes_test.go:183:20: undefined: DetectFunc
+internal/tui/fakes_test.go:184:18: undefined: AgentInfo
+internal/tui/fakes_test.go:185:12: undefined: AgentInfo
+internal/tui/fakes_test.go:218:31: undefined: Client
+internal/tui/fakes_test.go:218:41: undefined: DetectFunc
+internal/tui/fakes_test.go:220:7: undefined: New
+internal/tui/stub_test.go:14:7: undefined: Client
+internal/tui/stub_test.go:19:20: undefined: New
+internal/tui/banner_test.go:17:19: undefined: New
+internal/tui/banner_test.go:30:19: undefined: New
+internal/tui/banner_test.go:61:19: undefined: New
+internal/tui/firstpaint_test.go:42:7: undefined: New
+internal/tui/general_test.go:108:19: undefined: New
+internal/tui/launch_test.go:144:19: undefined: New
+internal/tui/liveness_test.go:18:19: undefined: New
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
