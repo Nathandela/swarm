@@ -73,7 +73,9 @@ func Dial(socketPath string, caps []string) (*Client, error) {
 	}
 	if reply.Op == OpError {
 		conn.Close()
-		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, reply.Error)
+		// The daemon rejected the handshake. Synthesize the D-8 guidance
+		// client-side rather than surfacing arbitrary daemon prose verbatim (F10).
+		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, d8ClientMessage())
 	}
 	if reply.Op != OpHello || reply.ProtocolVersion != Version {
 		conn.Close()
@@ -159,6 +161,16 @@ func (c *Client) Subscribe() (<-chan Event, error) {
 // Attach takes the controller lease on a session and returns its Attachment: the
 // one snapshot followed by the live output stream.
 func (c *Client) Attach(id string) (*Attachment, error) {
+	// A second attach on this client auto-detaches the first cleanly, before the
+	// new lease is installed, so a detach meant for the first never cross-closes
+	// the second (F7).
+	c.mu.Lock()
+	prev := c.att
+	c.mu.Unlock()
+	if prev != nil {
+		_ = prev.Detach()
+	}
+
 	att := newAttachment(c, id)
 	c.mu.Lock()
 	c.att = att
@@ -239,7 +251,7 @@ func (c *Client) readLoop() {
 			att := c.att
 			c.mu.Unlock()
 			if att != nil {
-				att.deliverSnapshot(payload)
+				att.deliverSnapshotChunk(payload)
 			}
 		case wire.TDataOut:
 			c.mu.Lock()
@@ -263,6 +275,20 @@ func (c *Client) dispatchControl(ctrl Control) {
 			case ch <- Event{Session: *ctrl.Session}:
 			case <-c.done:
 			}
+		}
+	case OpLease:
+		// The lease grant carries the snapshot's total length. Begin reassembly in
+		// the read-loop goroutine BEFORE the following TSnapshot chunk frames are
+		// read, then forward the lease to the pending Attach as its response (F2).
+		c.mu.Lock()
+		att := c.att
+		c.mu.Unlock()
+		if att != nil {
+			att.beginSnapshot(ctrl.SnapshotLen)
+		}
+		select {
+		case c.respCh <- ctrl:
+		default:
 		}
 	case OpDetach:
 		// Server revoked our lease (supersede or orderly detach): close the
@@ -336,6 +362,14 @@ type Attachment struct {
 	snapReady chan struct{}
 	snapOnce  sync.Once
 
+	// Snapshot reassembly, driven only by the read-loop goroutine: chunk frames
+	// accumulate into snapBuf until it reaches snapLen bytes, then the whole
+	// snapshot is delivered (F2). No lock is needed — beginSnapshot,
+	// deliverSnapshotChunk and closeFrames are all read-loop-serialized.
+	snapLen  int
+	snapBuf  []byte
+	snapDone bool
+
 	frames    chan []byte
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -394,9 +428,32 @@ func (a *Attachment) Detach() error {
 	return nil
 }
 
-func (a *Attachment) deliverSnapshot(p []byte) {
+// beginSnapshot starts snapshot reassembly for a lease whose snapshot is n bytes
+// total. An empty snapshot is delivered immediately. Read-loop goroutine only.
+func (a *Attachment) beginSnapshot(n int) {
+	a.snapLen = n
+	a.snapBuf = make([]byte, 0, n)
+	if n <= 0 {
+		a.finishSnapshot()
+	}
+}
+
+// deliverSnapshotChunk appends one snapshot chunk, delivering the whole snapshot
+// once snapLen bytes have arrived (F2). Read-loop goroutine only.
+func (a *Attachment) deliverSnapshotChunk(p []byte) {
+	if a.snapDone {
+		return
+	}
+	a.snapBuf = append(a.snapBuf, p...)
+	if len(a.snapBuf) >= a.snapLen {
+		a.finishSnapshot()
+	}
+}
+
+func (a *Attachment) finishSnapshot() {
+	a.snapDone = true
 	a.snapOnce.Do(func() {
-		a.snapshot = append([]byte(nil), p...)
+		a.snapshot = a.snapBuf
 		close(a.snapReady)
 	})
 }

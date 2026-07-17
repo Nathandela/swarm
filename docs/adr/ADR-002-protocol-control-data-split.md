@@ -34,3 +34,13 @@ No emulator needed; rejected as technically wrong for alt-screen TUIs (starts mi
 
 ### Two sockets (control vs data)
 Cleaner separation; rejected as more connection lifecycle for no measured gain — revisit if profiling disagrees.
+
+## Amendments
+
+### 2026-07-17 — Snapshot framing, supersede re-snapshot, and bounded eviction (audit-006)
+
+The Epic 6 protocol review (audit-006) surfaced three wire/liveness gaps in the attach path; the resolutions refine (do not reverse) the decision above.
+
+- **Snapshot chunking.** A single `TSnapshot` frame cannot carry a full grid snapshot: with `maxDim = 1000`, a styled snapshot is far larger than `wire.MaxFrame` (1 MiB). The snapshot is now delivered as a **sequence of one or more `TSnapshot` frames** carrying raw ordered chunk bytes. The preceding `lease` control carries `snapshot_len` (the snapshot's total byte length); the client concatenates chunk payloads until it has that many bytes before painting. A snapshot that fits in one frame is still sent as a single raw `TSnapshot` frame, so the common path and the S10 ordering (`lease` → snapshot → live `TDataOut`) are unchanged. This adds one field (`snapshot_len`) to the control schema; no frame type changes.
+- **Re-snapshot on supersede.** A supersede reuses the single upstream stream (L3) but the new controller must see the **current** grid, not the snapshot captured when the stream first opened. On supersede the daemon re-fetches a fresh snapshot from the shim (which always holds the current grid) and sends that. The shim already re-snapshots on a repeated attach over the same connection, so no shim-protocol change is needed.
+- **Bounded controller eviction.** The attach output path now writes to the controller under a per-write deadline; a wedged/slow controller's write fails at the deadline and the controller is evicted (its lease released, its connection closed). This makes supersede and detach **always** proceed within a bound — a wedged client can never hold the lease or block the daemon (S9), consistent with the original "bounded per-client outbound queues; slow subscribers are disconnected" decision.

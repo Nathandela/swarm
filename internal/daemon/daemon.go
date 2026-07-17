@@ -62,6 +62,9 @@ type LaunchSpec struct {
 	ClientEnv  []string
 	Cols, Rows int
 	Options    map[string]string
+	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
+	// it into the agent argv; the daemon only carries it (F8).
+	InitialPrompt string
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a

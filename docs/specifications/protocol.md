@@ -27,7 +27,7 @@ used:
 | Frame type    | Direction        | Payload                                             |
 | ------------- | ---------------- | --------------------------------------------------- |
 | `TControl`    | both             | a JSON-encoded `Control` message (see below)        |
-| `TSnapshot`   | daemon → client  | opaque snapshot bytes, exactly one per attach (S10) |
+| `TSnapshot`   | daemon → client  | opaque snapshot bytes, one or more per attach (S10) |
 | `TDataOut`    | daemon → client  | opaque live terminal-output bytes                   |
 | `TDataIn`     | client → daemon  | opaque terminal-input bytes (controller only)       |
 
@@ -36,6 +36,18 @@ and are never JSON-decoded. The planes demux purely by frame type. A control
 payload larger than the envelope cap (`wire.MaxFrame`) is rejected before any
 allocation. A malformed control payload is answered with an `error` op — the
 server never crashes on bad input.
+
+### Snapshot chunking (ADR-002 amendment)
+
+A full grid snapshot can exceed `wire.MaxFrame` (with `maxDim = 1000`, a styled
+snapshot is far over 1 MiB). The snapshot is therefore delivered as a **sequence
+of one or more `TSnapshot` frames** carrying raw, ordered chunk bytes. The `lease`
+control that precedes them carries `snapshot_len`, the snapshot's total byte
+length; the client concatenates `TSnapshot` payloads until it has that many bytes,
+and only then does it have the whole snapshot (which `Attachment.Snapshot()`
+returns). A snapshot that fits in one frame is sent as a single raw `TSnapshot`
+frame (the common case), so the ordering guarantee is unchanged: the `lease`, then
+the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 
 ## The `Control` message
 
@@ -51,6 +63,7 @@ server never crashes on bad input.
 | `protocol_version` | int             | protocol version, carried on `hello`                                      |
 | `capabilities`     | []string        | offered (client) / negotiated (daemon) capabilities, carried on `hello`   |
 | `generation`       | uint64          | controller lease generation, carried on `lease` and `resize`             |
+| `snapshot_len`     | int             | total snapshot byte length, carried on `lease` for chunk reassembly       |
 | `cols`             | int             | terminal columns, carried on `resize` (and inside `launch`)               |
 | `rows`             | int             | terminal rows, carried on `resize` (and inside `launch`)                  |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
@@ -133,17 +146,26 @@ The client sends `delete` with a `session_id`. The daemon removes the session
 ### `attach`
 
 The client sends `attach` with a `session_id`. The daemon grants the exclusive
-controller lease, replying with `lease` (carrying the new `generation`), then
-exactly one `TSnapshot` frame, then the live `TDataOut` stream (S10). A second
-concurrent attach **supersedes** the first: it wins a strictly higher
-`generation`, reuses the single upstream stream, and the prior controller's live
-stream ends (its frames channel closes) — see `detach`.
+controller lease, replying with `lease` (carrying the new `generation` and
+`snapshot_len`), then the snapshot as one or more `TSnapshot` chunk frames, then
+the live `TDataOut` stream (S10). A second concurrent attach **supersedes** the
+first: it wins a strictly higher `generation`, reuses the single upstream stream,
+**re-snapshots the current grid** (so the new controller sees the live screen, not
+the snapshot captured when the stream first opened), and the prior controller's
+live stream ends (its frames channel closes) — see `detach`. A slow or wedged
+controller is evicted within a bound so a supersede/detach never blocks on it (S9).
+
+A second `attach` on the **same connection** auto-detaches the first (its lease is
+released) before the new lease is granted, so one connection never holds two
+leases.
 
 ### `detach`
 
 Two directions share this op:
 - **client → daemon**: the controller sends `detach` with `session_id` and its
-  `generation` to release the lease; the daemon stops the stream and closes the
+  `generation` to release the lease; the daemon validates the `generation` against
+  the current lease (a delayed old-generation detach is ignored, so it cannot
+  release a lease held by a later controller), then stops the stream and closes the
   single upstream pipe (1→0, L3).
 - **daemon → client**: the daemon sends `detach` to a controller whose lease has
   ended (supersede or orderly release), signalling that its live frame stream is

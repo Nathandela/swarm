@@ -50,6 +50,7 @@ type Control struct {
 	ProtocolVersion int           `json:"protocol_version,omitempty"`
 	Capabilities    []string      `json:"capabilities,omitempty"`
 	Generation      uint64        `json:"generation,omitempty"`
+	SnapshotLen     int           `json:"snapshot_len,omitempty"`
 	Cols            int           `json:"cols,omitempty"`
 	Rows            int           `json:"rows,omitempty"`
 	Launch          *LaunchReq    `json:"launch,omitempty"`
@@ -103,6 +104,16 @@ type SessionStream interface {
 	Input(p []byte) error
 	Resize(cols, rows int) error
 	Close() error
+}
+
+// reSnapshotter is an optional SessionStream capability: a stream that can
+// re-fetch a FRESH snapshot of the session's CURRENT grid (the shim emulator
+// always holds it). On supersede the Server re-snapshots through this so the new
+// controller sees the current screen, not the snapshot captured when the stream
+// was first opened (F1/ADR-002). A stream that does not implement it falls back
+// to Snapshot().
+type reSnapshotter interface {
+	ReSnapshot() ([]byte, error)
 }
 
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so
