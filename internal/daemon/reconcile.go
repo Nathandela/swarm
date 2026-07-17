@@ -150,23 +150,28 @@ func (d *Daemon) pollMonitor(id string, pid int, start int64, stop chan struct{}
 // running-ness under the lock, so a Delete that already removed the session, or a
 // double-fire, is a no-op.
 func (d *Daemon) handleShimExit(id string) {
+	// Fast-path: skip the side-file read for an already-terminal session with no
+	// exit report. The AUTHORITATIVE refuse (and the exited>lost precedence against a
+	// concurrent markLost) happens in finalizeTerminal under writeMu (S1).
 	d.mu.Lock()
 	s, ok := d.sessions[id]
-	if !ok || s.meta.Status.Process != status.ProcessRunning {
-		d.mu.Unlock()
+	terminalAlready := ok && s.meta.Status.Process != status.ProcessRunning
+	d.mu.Unlock()
+	if !ok {
 		return
 	}
-	m := s.meta
-	d.mu.Unlock()
-
-	if ei, ok := readExitSideFile(d.sessionDir(id)); ok {
-		m = mergeExit(m, ei)
-	} else {
+	ei, hasExit := readExitSideFile(d.sessionDir(id))
+	if !hasExit && terminalAlready {
+		return // no exit report and already terminal: nothing to advance
+	}
+	d.finalizeTerminal(id, func(cur persist.Meta) persist.Meta {
+		if hasExit {
+			return mergeExit(cur, ei) // exited+code (rank 2): wins over a racing lost
+		}
+		m := cur
 		m.Status.Process = status.ProcessLost
-	}
-	if err := d.saveMeta(m); err != nil {
-		d.logf("exit-merge: persist meta for %s: %v", id, err)
-	}
+		return m
+	})
 	// The session has ended: retire its engine registration and token (S6).
 	if d.cfg.OnSessionEnd != nil {
 		d.cfg.OnSessionEnd(id)

@@ -272,6 +272,45 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	return nil
 }
 
+// SetConversationID records a session's native conversation id captured from its
+// output (Epic 11 / R-2) — the id a later resume replays. It is WRITE-ONCE: the
+// first non-empty capture wins and later captures are ignored, so the id never
+// flaps. The write goes through the sole meta writer under writeMu (G6, no second
+// writer); an unknown or tombstoned session and an empty id are no-ops.
+func (d *Daemon) SetConversationID(id, convID string) error {
+	if convID == "" {
+		return nil
+	}
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if m.ConversationID != "" {
+		d.writeMu.Unlock()
+		return nil // write-once: already captured
+	}
+	m.ConversationID = convID
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
+}
+
 // Close is a clean shutdown: stop serving and release the singleton (flock +
 // socket). Running shims are independent and survive; their monitors are stopped
 // without finalizing them. The lock is released so a fresh daemon can take over.
@@ -350,6 +389,62 @@ func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	}
 	d.putMem(m)
 	return true, nil
+}
+
+// processRank orders the process dimension for the terminal-write precedence
+// (S1): a terminal transition may only ADVANCE the rank, so exited (from the
+// authoritative exit side-file) always wins over lost, lost wins over running, and
+// neither can regress a more-terminal state. Two concurrent finalizers (markLost
+// vs handleShimExit) thus converge on the highest-rank outcome regardless of the
+// order in which they commit.
+func processRank(p status.Process) int {
+	switch p {
+	case status.ProcessExited:
+		return 2
+	case status.ProcessLost:
+		return 1
+	default: // running (or unknown)
+		return 0
+	}
+}
+
+// finalizeTerminal atomically transitions a session to a terminal process state
+// under writeMu, re-reading the LIVE meta so two concurrent finalizers cannot
+// clobber each other (S1). compute derives the target meta from the CURRENT meta;
+// the write is applied ONLY if it advances the process rank (exited > lost >
+// running), so a late lost can never overwrite an authoritative exited+code and no
+// finalizer regresses a more-terminal state. Returns whether it wrote, and fires
+// the onMetaSave observer on a write (mirrors saveMeta).
+func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) bool {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var cur persist.Meta
+	if ok {
+		cur = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return false
+	}
+	next := compute(cur)
+	if processRank(next.Status.Process) <= processRank(cur.Status.Process) {
+		d.writeMu.Unlock()
+		return false // would not advance the terminal state: refuse (S1)
+	}
+	next.SchemaVersion = persist.SchemaVersion
+	next.Env = persist.FilterEnv(next.Env)
+	written, err := d.saveMetaLocked(next)
+	d.writeMu.Unlock()
+	if err != nil {
+		d.logf("finalize: persist terminal meta for %s: %v", id, err)
+		return false
+	}
+	if written && d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(next)
+	}
+	return written
 }
 
 // isDeleted reports whether id has been tombstoned by Delete (F3).

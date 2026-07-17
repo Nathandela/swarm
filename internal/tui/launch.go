@@ -199,20 +199,37 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	for k, v := range lm.options {
 		opts[k] = v
 	}
+	cols, rows := launchDims(m.width, m.height)
 	req := protocol.LaunchReq{
 		Agent:         lm.agents[lm.agentIdx].Name,
 		Cwd:           expanded,
 		Options:       opts,
 		InitialPrompt: lm.prompt,
+		Env:           os.Environ(), // so the daemon can resolve the agent binary on PATH
+		Cols:          cols,
+		Rows:          rows,
 	}
 	cmd := m.enterGeneral()
 	return m, tea.Batch(launchCmd(m.client, req), cmd)
 }
 
+// launchDims resolves the session terminal size from the current UI size, falling
+// back to a sane default before the first WindowSizeMsg arrives (the daemon rejects
+// a zero/out-of-range size).
+func launchDims(w, h int) (int, int) {
+	if w <= 0 {
+		w = defaultResumeCols
+	}
+	if h <= 0 {
+		h = defaultResumeRows
+	}
+	return w, h
+}
+
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 	return func() tea.Msg {
-		_, _ = c.Launch(req)
-		return nil
+		_, err := c.Launch(req)
+		return launchResultMsg{err: err}
 	}
 }
 

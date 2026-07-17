@@ -70,6 +70,10 @@ type eventMsg struct{ ev protocol.Event }
 // column (see repaintTick).
 type repaintMsg struct{}
 
+// launchResultMsg carries the outcome of an async launch/resume so a FAILURE is
+// surfaced to the user (the transient banner) instead of silently discarded (B1).
+type launchResultMsg struct{ err error }
+
 // repaintInterval is how often the general view re-emits its frame to refresh the
 // live elapsed-time column. Elapsed granularity is seconds and coarser, so a
 // one-second cadence suffices (down from the former 200 ms, cutting the idle
@@ -193,6 +197,15 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
 		return m, tea.Batch(banner, waitForEvent(m.events))
+
+	case launchResultMsg:
+		// A launch/resume failed: surface the reason on the general board's banner
+		// (B1 — never a silent failure). A success is a no-op; the new session arrives
+		// via the subscribe stream.
+		if msg.err != nil {
+			return m, m.general.setBanner("launch failed: " + msg.err.Error())
+		}
+		return m, nil
 
 	case attachDoneMsg:
 		// The passthrough returned (detached / session ended / error); come back to

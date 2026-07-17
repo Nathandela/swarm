@@ -42,11 +42,13 @@ const sessionMarker = "Session "
 // the status-package string constants, spelled literally so this package depends
 // only on the contract + vt (T-5): a hook may not import internal/status.
 //
-// Notification carries an optional subtype refinement: its DEFAULT interaction is
-// permission (a Notification is usually the session asking for attention), but when
-// the payload names a subtype the engine maps it via subtypeMap — so an idle-nudge
-// Notification is idle/none, not a false permission prompt. PermissionRequest is the
-// unconditional, dedicated permission event.
+// Notification is subtype-driven: its interaction comes from the payload subtype via
+// subtypeMap (permission->permission, idle->none, prompt->prompt). The nominal
+// descriptor interaction (permission) is the DOCUMENTED value, but at runtime a
+// MISSING or UNKNOWN subtype degrades to interaction=none in the engine (B5) — the
+// engine never asserts a permission prompt it cannot confirm from the payload.
+// PermissionRequest is the unconditional, dedicated permission event, so a genuine
+// permission signal never depends on guessing a Notification subtype.
 var hookEvents = []struct {
 	event, turn, interaction string
 	subtypeField, subtypeMap string

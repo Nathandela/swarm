@@ -4,14 +4,18 @@
 // dependencies are the contract package and internal/vt (the T-5 boundary).
 //
 // Codex reports status through TYPED EVENTS from its app-server JSON-RPC stream —
-// turn/started (active), turn/completed (idle), item/commandExecution/requestApproval
-// (permission) — NOT settings hooks. That is the second signal style Epic 11 proves
-// against the one frozen interface (claude = hooks, codex = events). The app-server
-// carries the conversation as a threadId (with per-turn turnId) in its JSON-RPC
-// params; ExtractConversationID recovers it from the transcript tail. The generic
-// grid heuristic is the T-3 fallback. The exact method + field names are VERIFY
-// items for Epic 14's live smoke; the status mapping keys off the mapped
-// turn/interaction values, so it is resilient to a method-name drift (T-6).
+// turn/started (active) and turn/completed (idle) are NOTIFICATIONS carrying a
+// nested params.turn object, and item/commandExecution/requestApproval (permission)
+// is a server REQUEST (it carries a JSON-RPC id) — NOT settings hooks. That is the
+// second signal style Epic 11 proves against the one frozen interface (claude =
+// hooks, codex = events). The app-server carries the conversation as a threadId in
+// its JSON-RPC params; ExtractConversationID recovers it from the transcript tail
+// regardless of the surrounding nesting. The generic grid heuristic is the T-3
+// fallback — and, per audit-010, Codex's v1 RUNTIME status driver, since the live
+// app-server typed-event producer is deferred to Epic 14's flagged real-CLI smoke;
+// the typed mapping here is fixture-proven pending that live wiring. The status
+// mapping keys off the mapped turn/interaction values, so it is resilient to a
+// method/field-name drift (T-6, Epic 14 VERIFY).
 package codex
 
 import (

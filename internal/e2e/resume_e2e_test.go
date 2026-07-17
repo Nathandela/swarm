@@ -1,22 +1,10 @@
-// Epic 11 RESUME-AS-NEW-SESSION end-to-end test (E11.5 / R-2, scenario 12). When an
-// ended/lost session captured a native conversation id and its adapter supports
-// resume, relaunching it produces a NEW session linked to the original via
-// meta.ResumedFrom — never a mutation of the old row. The generic engine/daemon
-// resume wiring is core work landed inside this epic (separate from the adapter
-// packages); the adapter's contribution — composing the resume argv that carries
-// the conversation id — is pinned in the claude/codex adapter suites.
-//
-// PINNED SURFACE (mirrors the worktree toggle's reserved-option pattern,
-// protocol.OptionWorktree = "worktree"): the client requests resume by carrying the
-// source session's id under the reserved launch option "resume_from"; the daemon
-// resolves it, launches a fresh session, and records meta.ResumedFrom = <source
-// local id>. The implementer may instead promote this to a typed
-// LaunchReq.ResumeFrom field + protocol.OptionResumeFrom const and update THIS one
-// test's key. Using an existing map value keeps the suite COMPILING today; it
-// FAILS AT RUNTIME because no resume wiring exists yet (the new session's
-// ResumedFrom stays empty).
-//
-// COST: fake agent only; no billable real-CLI run.
+// Epic 11 RESUME-AS-NEW-SESSION end-to-end (E11.5 / R-2, scenario 12), strengthened
+// per audit-010 B1/B2: resume is a real flow, not a label. A session whose adapter
+// captures a native conversation id, once ended, RESUMES into a NEW session whose
+// argv is the adapter's REAL resume argv carrying that id (never a fresh launch
+// falsely stamped ResumedFrom). This drives the reference adapter (registry-resolved,
+// resumable, marker-based id extraction) backed by a FAKE "reference-cli" stub — no
+// billable real-CLI run; the exact real Claude/Codex markers are Epic 14 VERIFY.
 package e2e
 
 import (
@@ -25,111 +13,114 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// optResumeFrom is the reserved launch-option key carrying the source session id to
-// resume. See the pinned-surface note above.
-const optResumeFrom = "resume_from"
+// fakeReferenceBinDir writes a stub "reference-cli" (the reference adapter's binary)
+// that emits the conv-id marker its ExtractConversationID reads, then idles so the
+// session stays running long enough for the runtime capture.
+func fakeReferenceBinDir(t *testing.T, convID string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "swfakeref")
+	if err != nil {
+		t.Fatalf("bin dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	script := "#!/bin/sh\n" +
+		"# Fake reference-cli (Epic 11 B2 capture test): print the conv-id marker the\n" +
+		"# reference adapter extracts from the transcript, then idle.\n" +
+		"printf 'conv-id=%s\\n' '" + convID + "'\n" +
+		"sleep 30\n"
+	if err := os.WriteFile(filepath.Join(dir, "reference-cli"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake reference-cli: %v", err)
+	}
+	return dir
+}
 
-// intPtr returns a pointer to i (for Meta.ExitCode).
-func intPtr(i int) *int { return &i }
-
-// TestE2E_ResumeAsNewSession_R2 seeds an ENDED session that captured a conversation
-// id, then resumes it and asserts a distinct NEW session is created and linked via
-// resumed_from (R-2). The source is seeded on disk before the daemon starts, so the
-// daemon rebuilds it from the meta scan (D-4) as a completed, resumable row.
+// TestE2E_ResumeAsNewSession_R2 launches a reference-adapter session that emits a
+// conversation-id marker, lets the daemon CAPTURE it at runtime from the output tap
+// (B2), ends it, then RESUMES it — asserting the new session's argv is the adapter's
+// real RESUME argv carrying the captured id (not a fresh launch), and that
+// ResumedFrom links back to the source (R-2, B1).
 func TestE2E_ResumeAsNewSession_R2(t *testing.T) {
 	buildBinaries(t)
 	env := newDaemonEnv(t)
-
-	// Seed an ended session with a captured conversation id, directly on disk (the
-	// daemon is the sole meta writer at runtime, but this is pre-start fixture state
-	// the daemon discovers by scan).
-	srcDir := t.TempDir()
-	store, err := persist.NewStore(env.stateDir)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	const srcLocal = "resumesrc"
-	src := persist.Meta{
-		ID:             srcLocal,
-		AgentType:      "fake",
-		Cwd:            srcDir,
-		ConversationID: "conv-RESUME-abc123",
-		Status:         status.Status{Process: status.ProcessExited, Turn: status.TurnIdle, Interaction: status.InteractionNone},
-		ExitCode:       intPtr(0),
-		CreatedAt:      time.Now().Add(-time.Hour),
-		LastActivity:   time.Now().Add(-time.Hour),
-	}
-	if err := store.Save(src); err != nil {
-		t.Fatalf("seed ended session: %v", err)
-	}
-
 	startDaemon(t, env)
 	c := dial(t, env.sock)
 
-	// The daemon lists the seeded, completed session (R-3: completed rows remain).
-	srcID := findSessionByLocal(t, c, srcLocal)
+	const convID = "conv-REF-abc123"
+	binDir := fakeReferenceBinDir(t, convID)
+	agentEnv := []string{"PATH=" + binDir + ":" + os.Getenv("PATH")}
+	srcCwd := t.TempDir()
 
-	// Resume it: relaunch carrying the source id under the reserved option. A script
-	// makes the NEW fake session actually runnable.
-	spath := filepath.Join(t.TempDir(), "resume-script.txt")
-	if err := os.WriteFile(spath, []byte("print RESUMED\nidle 120s\n"), 0o644); err != nil {
-		t.Fatalf("write script: %v", err)
+	srcID, err := c.Launch(protocol.LaunchReq{
+		Agent: "reference", Cwd: srcCwd, Options: map[string]string{},
+		Env: agentEnv, Cols: 80, Rows: 24,
+	})
+	if err != nil {
+		t.Fatalf("launch reference: %v", err)
 	}
+	t.Cleanup(func() { _ = c.Delete(srcID) })
+	srcLocal := localOf(t, srcID)
+
+	// (B2) The daemon captures the conversation id from the session's live output.
+	waitForConversationID(t, env.stateDir, srcLocal, convID)
+
+	// End the source so it is resumable (resume requires an ended/lost source).
+	if err := c.Kill(srcID); err != nil {
+		t.Fatalf("kill source: %v", err)
+	}
+	if _, ok := waitForStatus(t, c, srcID, l1Bound, func(s status.Status) bool {
+		return s.Process != status.ProcessRunning
+	}); !ok {
+		t.Fatalf("source session never ended after Kill")
+	}
+
+	// Resume it → a NEW session whose argv is the adapter RESUME argv carrying the id.
 	newID, err := c.Launch(protocol.LaunchReq{
-		Agent:   "fake",
-		Cwd:     srcDir,
-		Options: map[string]string{optResumeFrom: srcID, "script": spath},
-		Env:     []string{"PATH=" + os.Getenv("PATH")},
-		Cols:    80,
-		Rows:    24,
+		Agent: "reference", Cwd: srcCwd,
+		Options: map[string]string{protocol.OptionResumeFrom: srcID},
+		Env:     agentEnv, Cols: 80, Rows: 24,
 	})
 	if err != nil {
 		t.Fatalf("resume launch: %v", err)
 	}
-
+	t.Cleanup(func() { _ = c.Delete(newID) })
 	newLocal := localOf(t, newID)
 	if newLocal == srcLocal {
 		t.Fatalf("resume reused the source id %q; R-2 resumes as a NEW session", srcLocal)
 	}
 
-	// The new session's meta must link back to the source via resumed_from.
+	// The composed argv must be the adapter's resume argv carrying the captured id —
+	// proof the resume actually resumes, rather than a fresh launch (B1).
+	argv := readShimArgv(t, env.stateDir, newLocal)
+	if !argvHas(argv, "--resume") || !argvHas(argv, convID) {
+		t.Fatalf("resumed session argv %v is not the adapter resume argv carrying %q", argv, convID)
+	}
+
+	// And the new session links back to the source.
 	deadline := time.Now().Add(l1Bound)
 	for time.Now().Before(deadline) {
-		m := readMeta(t, env.stateDir, newLocal)
-		if m.ResumedFrom == srcLocal {
-			return // linked — R-2 satisfied
+		if readMeta(t, env.stateDir, newLocal).ResumedFrom == srcLocal {
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	got := readMeta(t, env.stateDir, newLocal)
-	t.Fatalf("new session %q has ResumedFrom=%q; want %q — the resume-as-new-session flow must record the "+
-		"resumed_from link (R-2). Wire the reserved %q option (or a typed LaunchReq.ResumeFrom) through the "+
-		"daemon launch path so it copies the source's conversation id into the adapter's Resume argv and "+
-		"stamps meta.ResumedFrom.", newLocal, got.ResumedFrom, srcLocal, optResumeFrom)
+	t.Fatalf("new session ResumedFrom = %q; want %q (R-2 link)", readMeta(t, env.stateDir, newLocal).ResumedFrom, srcLocal)
 }
 
-// findSessionByLocal returns the namespaced id of the session whose local id equals
-// want, waiting until the daemon lists it.
-func findSessionByLocal(t *testing.T, c *protocol.Client, want string) string {
+// waitForConversationID polls a session's persisted meta until its ConversationID
+// equals want — the daemon's runtime capture from the output tap (B2), or fails.
+func waitForConversationID(t *testing.T, stateDir, local, want string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		views, err := c.List()
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
-		for _, v := range views {
-			if _, local, ok := protocol.ParseID(v.ID); ok && local == want {
-				return v.ID
-			}
+		if readMeta(t, stateDir, local).ConversationID == want {
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("daemon never listed the seeded session %q", want)
-	return ""
+	t.Fatalf("daemon never captured conversation id %q for %s within 10s (B2: the grid-tap must call "+
+		"adapter.ExtractConversationID on the output and persist Meta.ConversationID)", want, local)
 }

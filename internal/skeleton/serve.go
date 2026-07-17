@@ -25,6 +25,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -34,6 +37,7 @@ import (
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/worktree"
@@ -59,6 +63,7 @@ type Daemon struct {
 	api        *coreAPI
 	eng        *engine.Engine
 	socketPath string
+	stateDir   string // for reading a session's transcript tail (conversation-id capture)
 
 	cancel context.CancelFunc // stops engine.Run
 
@@ -92,6 +97,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	epID := endpointID(cfg.StateDir)
 	d := &Daemon{
 		socketPath: cfg.SocketPath,
+		stateDir:   cfg.StateDir,
 		ready:      make(chan struct{}),
 		closing:    make(chan struct{}),
 		sampling:   make(map[string]struct{}),
@@ -167,6 +173,11 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 		sources = ad.SignalSources()
 	}
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources)
+	// Seed the engine with the session's PERSISTED status (S7): at fresh launch this
+	// is the humble launch baseline, but on reconcile after a restart it is the
+	// last-persisted status, so the engine believes a persisted turn=active and the
+	// staleness guard can downgrade a now-idle session rather than leave it stale.
+	d.eng.SeedStatus(m.ID, m.Status)
 }
 
 // emitStatus is the engine's late-bound emission sink (see Serve): it forwards an
@@ -270,6 +281,58 @@ func (d *Daemon) sampleGrid(id string) {
 		return
 	}
 	d.eng.OnOutput(id, snap)
+	d.captureConversationID(id, snap)
+}
+
+// convTailBytes bounds the transcript tail read for conversation-id extraction.
+const convTailBytes = 64 << 10
+
+// captureConversationID recovers a session's native conversation id from its output
+// and persists it ONCE (Epic 11 / R-2, the id a later resume replays). It runs on
+// the existing grid-tap seam: it feeds the session's ADAPTER the rendered grid plus
+// a bounded transcript tail (the raw agent output), and on a successful extraction
+// persists Meta.ConversationID through the daemon's sole meta writer (write-once,
+// G6). It is a cheap no-op once the id is captured, for a session with no registry
+// adapter (the reserved fake agent), or when nothing extracts yet.
+func (d *Daemon) captureConversationID(id string, snap *vt.Snap) {
+	m, ok := d.core.Get(id)
+	if !ok || m.ConversationID != "" {
+		return
+	}
+	ad, ok := registry.New(m.AgentType)
+	if !ok {
+		return
+	}
+	tail := readTranscriptTail(filepath.Join(d.stateDir, id, shim.TranscriptFile), convTailBytes)
+	convID, ok := ad.ExtractConversationID(snap, tail)
+	if !ok || convID == "" {
+		return
+	}
+	_ = d.core.SetConversationID(id, convID)
+}
+
+// readTranscriptTail returns up to the last n bytes of the file at path — the raw
+// agent output the adapter's ExtractConversationID scans. A missing/short file
+// yields what is there; any error yields nil.
+func readTranscriptTail(path string, n int64) []byte {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	off := int64(0)
+	if fi.Size() > n {
+		off = fi.Size() - n
+	}
+	buf := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return nil
+	}
+	return buf
 }
 
 // SocketPath is the path clients dial (the daemon's singleton socket).

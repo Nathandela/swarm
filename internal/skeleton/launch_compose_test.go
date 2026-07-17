@@ -125,10 +125,31 @@ func TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv(t *testing.T) {
 	}
 }
 
-// TestComposeLaunchSpec_FakeResumeRelaunchesFresh mirrors the existing R-2 e2e: the
-// reserved fake agent has no registry adapter, so a resume relaunches fresh (fake
-// binary) while STILL recording the resume link.
-func TestComposeLaunchSpec_FakeResumeRelaunchesFresh(t *testing.T) {
+// TestComposeLaunchSpec_NoConversationIDRejected: a real adapter asked to resume a
+// source that never captured a conversation id must be REJECTED — never silently
+// downgraded to a fresh launch falsely stamped ResumedFrom (B1).
+func TestComposeLaunchSpec_NoConversationIDRejected(t *testing.T) {
+	const local = "srclocal"
+	src := endedClaudeSource(local)
+	src.ConversationID = "" // never captured
+	spec := daemon.LaunchSpec{
+		AgentType: "claude",
+		Cwd:       "/work",
+		Options:   map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, local)},
+	}
+	got, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter(local, src), stubLookPath)
+	if err == nil {
+		t.Fatalf("resume with no captured conversation id was accepted (got %+v); want a clear rejection", got)
+	}
+	if got.ResumedFrom != "" || len(got.Argv) != 0 {
+		t.Errorf("a rejected resume must not stamp ResumedFrom or compose argv; got ResumedFrom=%q argv=%v", got.ResumedFrom, got.Argv)
+	}
+}
+
+// TestComposeLaunchSpec_FakeResumeRejected: the reserved fake agent has no registry
+// adapter that can resume, so a resume request is rejected rather than relaunching
+// fresh with a misleading ResumedFrom (B1).
+func TestComposeLaunchSpec_FakeResumeRejected(t *testing.T) {
 	const local = "fakesrc"
 	src := persist.Meta{ID: local, AgentType: "fake", ConversationID: "c", Status: status.Status{Process: status.ProcessExited}}
 	spec := daemon.LaunchSpec{
@@ -136,15 +157,8 @@ func TestComposeLaunchSpec_FakeResumeRelaunchesFresh(t *testing.T) {
 		Cwd:       "/work",
 		Options:   map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, local), "script": "/s.txt"},
 	}
-	got, err := composeLaunchSpec(spec, testEndpoint, "/bin/fake-agent", srcGetter(local, src), stubLookPath)
-	if err != nil {
-		t.Fatalf("fake resume: %v", err)
-	}
-	if got.ResumedFrom != local {
-		t.Errorf("fake resume ResumedFrom = %q; want %q", got.ResumedFrom, local)
-	}
-	if len(got.Argv) == 0 || got.Argv[0] != "/bin/fake-agent" {
-		t.Fatalf("fake resume argv = %v; want a fresh fake relaunch [/bin/fake-agent /s.txt]", got.Argv)
+	if _, err := composeLaunchSpec(spec, testEndpoint, "/bin/fake-agent", srcGetter(local, src), stubLookPath); err == nil {
+		t.Fatalf("fake resume (no resuming adapter) was accepted; want a clear rejection")
 	}
 }
 

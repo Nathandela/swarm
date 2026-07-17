@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -293,7 +294,9 @@ const (
 // carries the source session's id under the reserved resume_from option so the
 // daemon validates the source, composes the adapter's resume argv from the source's
 // captured conversation id, and links the new session's ResumedFrom. The source's
-// agent + cwd carry over.
+// agent + cwd carry over. It passes Env (so the daemon can resolve the real agent
+// binary on PATH — B1) and surfaces a launch failure via launchResultMsg instead of
+// discarding it, so a rejected resume (e.g. no captured conversation id) is visible.
 func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 	if cols <= 0 {
 		cols = defaultResumeCols
@@ -305,13 +308,22 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		Agent:   s.Agent,
 		Cwd:     s.Cwd,
 		Options: map[string]string{protocol.OptionResumeFrom: s.ID},
+		Env:     os.Environ(),
 		Cols:    cols,
 		Rows:    rows,
 	}
 	return func() tea.Msg {
-		_, _ = c.Launch(req)
-		return nil
+		_, err := c.Launch(req)
+		return launchResultMsg{err: err}
 	}
+}
+
+// setBanner shows a transient banner (reusing the V-5 notification surface) — used
+// to surface a launch/resume failure to the user rather than discarding it.
+func (m *generalModel) setBanner(text string) tea.Cmd {
+	m.bannerText = text
+	m.bannerExpiry = time.Now().Add(bannerDuration)
+	return bannerTick()
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {

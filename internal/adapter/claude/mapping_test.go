@@ -40,10 +40,14 @@ func TestHookMapping_DrivesStatusViaSignalSources(t *testing.T) {
 		wantTurn  status.Turn
 		wantInter status.Interaction
 	}{
-		{"Stop from fixture", "Stop", fixturePayload["Stop"], status.TurnIdle, status.InteractionNone},
+		{"Stop from fixture -> idle", "Stop", fixturePayload["Stop"], status.TurnIdle, status.InteractionNone},
 		{"PermissionRequest is the dedicated permission event", "PermissionRequest", nil, status.TurnIdle, status.InteractionPermission},
-		{"idle Notification maps to idle, not permission", "Notification", map[string]string{"notification_type": "idle"}, status.TurnIdle, status.InteractionNone},
-		{"permission Notification from fixture defaults to permission", "Notification", fixturePayload["Notification"], status.TurnIdle, status.InteractionPermission},
+		// B5: a bare Notification (no confirmed subtype — the fixture's is such) must
+		// NOT be assumed a permission prompt; it degrades to none. A permission signal
+		// comes from the dedicated PermissionRequest event, or an explicit subtype.
+		{"Notification with no subtype degrades to none (B5)", "Notification", fixturePayload["Notification"], status.TurnIdle, status.InteractionNone},
+		{"Notification idle subtype -> none", "Notification", map[string]string{"notification_type": "idle"}, status.TurnIdle, status.InteractionNone},
+		{"Notification explicit permission subtype -> permission", "Notification", map[string]string{"notification_type": "permission"}, status.TurnIdle, status.InteractionPermission},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -103,24 +103,30 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if err != nil {
 			return daemon.LaunchSpec{}, err
 		}
-		spec.ResumedFrom = local
-		if ad, ok := registry.New(spec.AgentType); ok {
-			argv, rerr := ad.Resume(adapter.ResumeSpec{
-				Cwd:            spec.Cwd,
-				ConversationID: srcMeta.ConversationID,
-				Options:        spec.Options,
-			})
-			if rerr != nil {
-				return daemon.LaunchSpec{}, fmt.Errorf("resume: compose argv: %w", rerr)
-			}
-			if len(argv) > 0 { // the resume argv carries the source's conversation id
-				resolved, lerr := resolveArgv0(argv, spec.ClientEnv, lookPath)
-				if lerr != nil {
-					return daemon.LaunchSpec{}, fmt.Errorf("resume: %w", lerr)
-				}
-				spec.Argv = resolved
-			}
+		ad, ok := registry.New(spec.AgentType)
+		if !ok {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
 		}
+		argv, rerr := ad.Resume(adapter.ResumeSpec{
+			Cwd:            spec.Cwd,
+			ConversationID: srcMeta.ConversationID,
+			Options:        spec.Options,
+		})
+		if rerr != nil {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: compose argv: %w", rerr)
+		}
+		// An empty resume argv means the adapter had no conversation id to replay
+		// (never captured). REFUSE rather than fall through to a fresh launch falsely
+		// stamped ResumedFrom (B1): a resume must resume, or fail with a clear reason.
+		if len(argv) == 0 {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: cannot resume %q: no captured conversation id", local)
+		}
+		resolved, lerr := resolveArgv0(argv, spec.ClientEnv, lookPath)
+		if lerr != nil {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: %w", lerr)
+		}
+		spec.Argv = resolved     // the resume argv carries the source's conversation id
+		spec.ResumedFrom = local // stamp ONLY now that a real resume argv is composed
 	}
 
 	if len(spec.Argv) == 0 {

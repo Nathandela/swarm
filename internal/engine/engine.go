@@ -182,6 +182,23 @@ func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.Si
 	}
 }
 
+// SeedStatus overwrites a just-registered session's status WITHOUT emitting, so a
+// RECONNECTED session's engine view equals its PERSISTED status after a daemon
+// restart (S7). RegisterSession installs the humble unknown baseline; the reconcile
+// path then seeds the persisted status here, so the engine believes a persisted
+// turn=active and the staleness guard (Tick) can downgrade a now-idle session
+// instead of leaving it stale-active. It is called immediately after
+// RegisterSession — no signal can have intervened — so it simply overwrites the
+// baseline; it never emits (the caller wants no status event for a mere reconnect).
+// A no-op for an unknown or ended session.
+func (e *Engine) SeedStatus(id string, s status.Status) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sess, ok := e.sessions[id]; ok && sess.alive {
+		sess.status = s
+	}
+}
+
 // EndSession retires a session; its token dies with it, so any later callback
 // bearing that token is rejected (S6).
 func (e *Engine) EndSession(id string) {
@@ -437,11 +454,14 @@ func deriveDims(sources []adapter.SignalSource, event string, payload map[string
 		dims[PayloadKeyTurn] = t
 	}
 	interaction := desc[descKeyInteraction]
-	// Payload-dependent refinement: if the descriptor declares a subtype field and a
-	// subtype->interaction table, and the payload carries a known subtype, that
-	// interaction overrides the descriptor default (e.g. an idle-subtype Notification
-	// maps to none instead of the default permission).
+	// Subtype-driven events (a descriptor with a subtype field) derive their
+	// interaction ENTIRELY from the payload subtype: a known subtype maps via the
+	// table; a MISSING or UNKNOWN subtype degrades to a SAFE default (none), NEVER the
+	// descriptor's nominal interaction — the engine must not assert a permission
+	// prompt it cannot confirm (B5). Events without a subtype field keep the
+	// descriptor's static interaction.
 	if field := desc[descKeySubtypeField]; field != "" {
+		interaction = string(status.InteractionNone)
 		if sub := payload[field]; sub != "" {
 			if mapped, ok := lookupSubtype(desc[descKeySubtypeMap], sub); ok {
 				interaction = mapped

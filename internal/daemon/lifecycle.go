@@ -106,18 +106,14 @@ func (d *Daemon) shimIdentityMatches(m persist.Meta) bool {
 // markLost reclassifies a still-running session as lost and persists it, sending
 // no signal (S3). Used when a pre-signal identity recheck fails (F6).
 func (d *Daemon) markLost(id string) {
-	d.mu.Lock()
-	s, ok := d.sessions[id]
-	if !ok || s.meta.Status.Process != status.ProcessRunning {
-		d.mu.Unlock()
-		return
-	}
-	m := s.meta
-	d.mu.Unlock()
-	m.Status.Process = status.ProcessLost
-	if err := d.saveMeta(m); err != nil {
-		d.logf("kill: persist lost for %s: %v", id, err)
-	}
+	// The lost transition is applied atomically under writeMu and ONLY advances a
+	// running session — a racing handleShimExit that recorded exited+code (rank 2)
+	// is never regressed to lost (rank 1), regardless of ordering (S1).
+	d.finalizeTerminal(id, func(cur persist.Meta) persist.Meta {
+		m := cur
+		m.Status.Process = status.ProcessLost
+		return m
+	})
 	// The session has ended (lost): retire its engine registration and token (S6),
 	// exactly as handleShimExit does for a clean exit — otherwise a lost session's
 	// stale engine entry lingers and a late hook could still be accepted.

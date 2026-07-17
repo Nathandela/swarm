@@ -51,10 +51,11 @@ type fakeClient struct {
 	events   chan protocol.Event
 	listErr  error
 
-	launched []protocol.LaunchReq
-	killed   []string
-	deleted  []string
-	launchID string
+	launched  []protocol.LaunchReq
+	killed    []string
+	deleted   []string
+	launchID  string
+	launchErr error // when set, Launch returns it (B1 error-surfacing tests)
 }
 
 func newFakeClient(sessions ...protocol.SessionView) *fakeClient {
@@ -80,6 +81,9 @@ func (f *fakeClient) Launch(r protocol.LaunchReq) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launched = append(f.launched, r)
+	if f.launchErr != nil {
+		return "", f.launchErr
+	}
 	return f.launchID, nil
 }
 
