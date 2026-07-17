@@ -52,6 +52,21 @@ type Config struct {
 	// just-saved meta (test seam E5.3). It observes the reconnect-before-lost
 	// ordering: a live shim is never persisted as lost.
 	onMetaSave func(persist.Meta)
+
+	// PreLaunch and PreDelete are optional launch-time isolation hooks (Epic 12):
+	// the daemon core calls them generically and carries no worktree-specific
+	// logic itself. Both are nil by default (opt-in; every pre-Epic-12 Config
+	// leaves current behavior unchanged).
+	//
+	// PreLaunch runs in launch(), after the session id is reserved and before the
+	// shim is spawned. A non-nil cwdOverride replaces the AGENT's working
+	// directory (e.g. an isolated git worktree) without altering the persisted
+	// meta.Cwd. An error aborts the launch cleanly before any shim exists.
+	PreLaunch func(id string, spec LaunchSpec) (cwdOverride string, err error)
+
+	// PreDelete runs in Delete, before the session's directory is torn down. Its
+	// error is logged and returned, but never blocks the mandatory teardown.
+	PreDelete func(m persist.Meta) error
 }
 
 // LaunchSpec is a request to launch a new session.

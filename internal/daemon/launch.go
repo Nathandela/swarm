@@ -127,6 +127,22 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
 
+	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
+	// the AGENT's working directory. m.Cwd above already captured the caller's
+	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,
+	// not the persisted meta. Nothing has touched disk yet, so on error dropping
+	// the reservation is a clean abort — no orphan.
+	if d.cfg.PreLaunch != nil {
+		cwd, err := d.cfg.PreLaunch(id, spec)
+		if err != nil {
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("daemon: pre-launch hook for %s: %w", id, err)
+		}
+		if cwd != "" {
+			spec.Cwd = cwd
+		}
+	}
+
 	dir := d.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		d.dropReserved(id)

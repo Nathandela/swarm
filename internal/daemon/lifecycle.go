@@ -55,6 +55,7 @@ func (d *Daemon) Delete(id string) error {
 	d.tombstoneID(id)
 	d.mu.Unlock()
 
+	var preDeleteErr error
 	if ok {
 		close(s.stop) // stop this session's monitor WITHOUT finalizing it
 		// Only signal if the recorded shim identity still matches; otherwise the shim
@@ -62,6 +63,14 @@ func (d *Daemon) Delete(id string) error {
 		if s.meta.Status.Process == status.ProcessRunning && d.shimIdentityMatches(s.meta) {
 			_ = signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigKill)
 			d.awaitShimGone(s.meta.ShimPID)
+		}
+		// Epic 12: an optional pre-delete hook (e.g. worktree teardown) runs before
+		// the session directory is removed below. Its error is logged here and
+		// returned below, but never skips the mandatory directory teardown (R-3).
+		if d.cfg.PreDelete != nil {
+			if preDeleteErr = d.cfg.PreDelete(s.meta); preDeleteErr != nil {
+				d.logf("delete %s: pre-delete hook: %v", id, preDeleteErr)
+			}
 		}
 	}
 
@@ -71,7 +80,10 @@ func (d *Daemon) Delete(id string) error {
 	d.writeMu.Lock()
 	err := d.store.Delete(id)
 	d.writeMu.Unlock()
-	return err
+	if err != nil {
+		return err
+	}
+	return preDeleteErr
 }
 
 // shimIdentityMatches reports whether the recorded shim (PID, start-time) still
