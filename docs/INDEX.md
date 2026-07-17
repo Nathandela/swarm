@@ -3,6 +3,7 @@
 ## Quick start
 - [AGENTS.md](../AGENTS.md) — agent entry point (finalized)
 - [README](../README.md) — project overview
+- [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## The plan
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)

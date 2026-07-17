@@ -4,6 +4,10 @@ Every coding agent on your machine, in one keyboard-driven terminal view — run
 
 Inspired by Claude Code's Agent View, but agent-agnostic: Claude Code and Codex first, then Gemini CLI, OpenCode, AGY — each behind a tested adapter. Go + Bubble Tea; supervisor daemon + per-session shim processes owning PTYs.
 
+## Install
+
+See [docs/install.md](docs/install.md) — Homebrew tap, `go install`, or a static binary download (checksums + upgrade notes included).
+
 ## Status
 
 Design approved (Gate 2). See:

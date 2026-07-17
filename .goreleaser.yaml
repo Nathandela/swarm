@@ -1,0 +1,75 @@
+version: 2
+
+project_name: swarm
+
+before:
+  hooks:
+    - go mod tidy
+
+# swarm is the ONLY release artifact. swarm-char and swarm-fake-agent
+# (cmd/swarm-char, cmd/swarm-fake-agent) are dev/test tools and are never
+# built by this pipeline.
+builds:
+  - id: swarm
+    main: ./cmd/swarm
+    binary: swarm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # N-4: CGO_ENABLED=0 + pure Go already guarantees a statically linked
+    # binary with zero third-party runtime dependencies; -s -w just strips
+    # debug info. ldflags stamp internal/version so `swarm version` and the
+    # D-8 hello handshake (E13.2) report the real release version.
+    ldflags:
+      - -s -w
+      - -X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}
+      - -X github.com/Nathandela/swarm/internal/version.Commit={{ .Commit }}
+      - -X github.com/Nathandela/swarm/internal/version.Date={{ .Date }}
+
+archives:
+  - id: swarm
+    ids:
+      - swarm
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Homebrew tap (E13.3), via the current (non-deprecated) `homebrew_casks`
+# config — goreleaser deprecated the older `brews:` Formula pipe in favor of
+# this one; a plain CLI binary (no .app bundle) works the same way, just via a
+# `binary "swarm"` stanza instead of a hand-written `install`/`test` block. A
+# snapshot/dry-run build (--skip=publish, what CI runs) DOES generate the cask
+# file locally (dist/homebrew/Casks/swarm.rb) — it only skips PUSHING it to
+# the tap repo, which needs a GITHUB_TOKEN. The tap repo itself
+# (Nathandela/homebrew-swarm) is not created by this config; see
+# packaging/homebrew/swarm.rb for an example of the formula this generates
+# (captured from a real `goreleaser release --snapshot --clean --skip=publish`
+# run, not hand-written), committed for reference.
+homebrew_casks:
+  - name: swarm
+    ids:
+      - swarm
+    repository:
+      owner: Nathandela
+      name: homebrew-swarm
+    homepage: "https://github.com/Nathandela/swarm"
+    description: "Every coding agent on your machine, in one keyboard-driven terminal view"
+    # F1: swarm is unsigned/unnotarized. Homebrew preserves the
+    # com.apple.quarantine xattr from download onto the staged binary, so
+    # macOS Gatekeeper blocks the first run ("cannot be opened because the
+    # developer cannot be verified" / "is damaged"). This is the standard,
+    # documented fix for unsigned cask binaries: strip quarantine in postflight
+    # before the user ever runs it.
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/swarm"]

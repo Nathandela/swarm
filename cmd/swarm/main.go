@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/tui"
+	"github.com/Nathandela/swarm/internal/version"
 	"golang.org/x/sys/unix"
 )
 
@@ -56,12 +58,13 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook]
+const usage = `usage: swarm [daemon|shim|hook|version]
 
-  swarm          open the TUI
-  swarm daemon   run the session daemon
-  swarm shim     run the PTY-owning shim process
-  swarm hook     post a hook event to the daemon
+  swarm            open the TUI
+  swarm daemon     run the session daemon
+  swarm shim       run the PTY-owning shim process
+  swarm hook       post a hook event to the daemon
+  swarm version    print the build version
 `
 
 const shimUsage = `usage: swarm shim --config <path>
@@ -89,10 +92,23 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "version", "--version":
+		return runVersion(stdout)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+}
+
+// runVersion is the `swarm version` (and `--version`) role (E13.2): it prints
+// the build-time stamped version (internal/version.Version, "dev" unless
+// overridden via -ldflags at release build time — see .goreleaser.yaml) plus
+// the Go toolchain version. This is also the value the D-8 hello handshake
+// reports to a connecting client (internal/protocol's Control.BuildVersion),
+// so a client can tell it is talking to a different-build daemon.
+func runVersion(stdout io.Writer) int {
+	fmt.Fprintf(stdout, "swarm %s (%s)\n", version.Version, runtime.Version())
+	return 0
 }
 
 // runTUI is the no-argument role: it opens the client TUI on the real terminal

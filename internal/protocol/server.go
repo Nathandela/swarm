@@ -12,6 +12,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/version"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -759,6 +760,7 @@ func (cc *clientConn) handleHello(c Control) {
 		Op:              OpHello,
 		EndpointID:      cc.endpointID,
 		ProtocolVersion: Version,
+		BuildVersion:    version.Version,
 		Capabilities:    cc.caps,
 	})
 }

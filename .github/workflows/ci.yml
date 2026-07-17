@@ -129,3 +129,61 @@ jobs:
             echo "$bad"
             exit 1
           fi
+
+  # E13.1: the RELEASE pipeline itself (.goreleaser.yaml), as opposed to the
+  # plain `go build` matrix above — a dry-run snapshot proves it produces the 4
+  # static artifacts + checksums without publishing anything (--skip=publish,
+  # no tag/token needed), and re-asserts N-4 (zero runtime deps) on its actual
+  # output via both `file` and `ldd` on the linux/amd64 artifact.
+  release-dryrun:
+    name: release dry-run (goreleaser snapshot, E13.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        # Pinned exactly (not the floating '1.24' the other jobs use): this is
+        # the release pipeline, so its toolchain should be reproducible.
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+      - name: Set up goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: '2.17.0' # the version verified locally for this config
+      - name: Validate .goreleaser.yaml
+        run: goreleaser check
+      - name: Snapshot release (build + archive + checksum, no publish)
+        run: goreleaser release --snapshot --clean --skip=publish
+      - name: Assert 4 static artifacts + a checksums file exist (E13.1)
+        run: |
+          count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)
+          echo "archives: $count"
+          test "$count" -eq 4
+          test -f dist/checksums.txt
+      - name: Verify archives against checksums.txt (E13.1)
+        working-directory: dist
+        run: sha256sum -c checksums.txt
+      - name: Assert linux artifacts are statically linked (N-4)
+        run: |
+          for arch in amd64 arm64; do
+            bin=$(find dist -type f -name swarm -path "*linux_${arch}*" | head -n1)
+            test -n "$bin"
+            file "$bin"
+            file "$bin" | grep -q "statically linked"
+          done
+      - name: Assert linux/amd64 artifact has zero runtime deps via ldd (N-4)
+        run: |
+          bin=$(find dist -type f -name swarm -path '*linux_amd64*' | head -n1)
+          out=$(ldd "$bin" 2>&1 || true)
+          echo "$out"
+          if ! echo "$out" | grep -q "not a dynamic executable"; then
+            echo "N-4 violation: ldd reports linux/amd64 binary has dynamic dependencies"
+            exit 1
+          fi
+      - name: Verify `go install ./cmd/swarm` builds and runs (E13.3)
+        run: |
+          tmp=$(mktemp -d)
+          GOBIN="$tmp" go install ./cmd/swarm
+          "$tmp/swarm" version
+          "$tmp/swarm" version | grep -q "swarm "

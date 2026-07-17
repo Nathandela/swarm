@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/version"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/wire"
 )
@@ -19,9 +20,10 @@ const clientTimeout = 10 * time.Second
 // synchronous request/reply ops, a subscribe event stream, and one attach data
 // stream over a single connection.
 type Client struct {
-	conn       net.Conn
-	endpointID string
-	caps       []string
+	conn         net.Conn
+	endpointID   string
+	caps         []string
+	buildVersion string
 
 	writeMu sync.Mutex
 
@@ -51,7 +53,7 @@ func Dial(socketPath string, caps []string) (*Client, error) {
 		done:   make(chan struct{}),
 	}
 
-	if err := c.writeControl(Control{Op: OpHello, ProtocolVersion: Version, Capabilities: caps}); err != nil {
+	if err := c.writeControl(Control{Op: OpHello, ProtocolVersion: Version, BuildVersion: version.Version, Capabilities: caps}); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -84,6 +86,7 @@ func Dial(socketPath string, caps []string) (*Client, error) {
 	}
 	c.endpointID = reply.EndpointID
 	c.caps = reply.Capabilities
+	c.buildVersion = reply.BuildVersion
 	go c.readLoop()
 	return c, nil
 }
@@ -93,6 +96,13 @@ func (c *Client) EndpointID() string { return c.endpointID }
 
 // Capabilities returns the negotiated capability intersection.
 func (c *Client) Capabilities() []string { return c.caps }
+
+// BuildVersion returns the daemon's internal/version.Version, as reported on
+// the hello reply (E13.2). Unlike a ProtocolVersion mismatch, a BuildVersion
+// difference from this client's own version.Version is not fatal — it is the
+// signal a caller uses to notice a different-build daemon and nudge `swarm
+// daemon restart`.
+func (c *Client) BuildVersion() string { return c.buildVersion }
 
 // List returns the daemon's sessions, each stamped for this endpoint with a
 // server-computed status Group.

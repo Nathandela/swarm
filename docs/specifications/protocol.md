@@ -61,6 +61,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `endpoint_id`      | string          | the connection's endpoint id (F-1); always present after the handshake    |
 | `session_id`       | string          | namespaced session id `<endpoint_id>/<local>` for session-scoped ops      |
 | `protocol_version` | int             | protocol version, carried on `hello`                                      |
+| `build_version`    | string          | build version (`internal/version.Version`), carried on `hello` (E13.2)   |
 | `capabilities`     | []string        | offered (client) / negotiated (daemon) capabilities, carried on `hello`   |
 | `generation`       | uint64          | controller lease generation, carried on `lease` and `resize`             |
 | `snapshot_len`     | int             | total snapshot byte length, carried on `lease` for chunk reassembly       |
@@ -116,11 +117,16 @@ All op values are lowercase snake_case strings.
 
 ### `hello`
 
-Handshake. The client sends `hello` with `protocol_version` and its offered
-`capabilities`. The daemon replies with `hello` carrying the assigned unique
-`endpoint_id`, its `protocol_version`, and the negotiated `capabilities` (the
-intersection of the client's offer and the daemon's support). On a version
-mismatch the daemon replies with `error` naming `swarm daemon restart` (D-8).
+Handshake. The client sends `hello` with `protocol_version`, its own
+`build_version`, and its offered `capabilities`. The daemon replies with `hello`
+carrying the assigned unique `endpoint_id`, its `protocol_version`, its own
+`build_version`, and the negotiated `capabilities` (the intersection of the
+client's offer and the daemon's support). On a `protocol_version` mismatch the
+daemon replies with `error` naming `swarm daemon restart` (D-8). `build_version`
+is ADDITIVE and never fatal to the handshake: a client whose `build_version`
+differs from the daemon's (e.g. the daemon is still running an older build
+after an upgrade) can surface that and suggest `swarm daemon restart` even when
+`protocol_version` still matches (E13.2).
 
 ### `list`
 

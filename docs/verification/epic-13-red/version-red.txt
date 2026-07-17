@@ -1,0 +1,54 @@
+# PRE-IMPLEMENTATION RED RUN (GG-5 evidence, Epic 13 / E13.2).
+# Captured by temporarily reverting ONLY the implementation symbols
+# (internal/version's Version/Commit/Date vars, cmd/swarm's `version`/
+# `--version` subcommand + runVersion, and protocol.Control.BuildVersion +
+# its client.go/server.go wiring) while keeping every test file in place,
+# then running: go test ./internal/version/ ./internal/protocol/ ./cmd/swarm/
+# Implementation was restored immediately after this capture; the tree is
+# green again. See docs/verification/audit-012-epic-13.md (F7/red-log).
+
+# github.com/Nathandela/swarm/internal/version [github.com/Nathandela/swarm/internal/version.test]
+internal/version/version_test.go:11:5: undefined: Version
+internal/version/version_test.go:12:45: undefined: Version
+FAIL	github.com/Nathandela/swarm/internal/version [build failed]
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/version_test.go:26:11: reply.BuildVersion undefined (type Control has no field or method BuildVersion)
+internal/protocol/version_test.go:26:35: undefined: version.Version
+internal/protocol/version_test.go:27:87: reply.BuildVersion undefined (type Control has no field or method BuildVersion)
+internal/protocol/version_test.go:27:109: undefined: version.Version
+internal/protocol/version_test.go:38:7: c.BuildVersion undefined (type *Client has no field or method BuildVersion)
+internal/protocol/version_test.go:38:33: undefined: version.Version
+internal/protocol/version_test.go:39:80: c.BuildVersion undefined (type *Client has no field or method BuildVersion)
+internal/protocol/version_test.go:39:104: undefined: version.Version
+internal/protocol/version_test.go:65:11: reply.BuildVersion undefined (type Control has no field or method BuildVersion)
+internal/protocol/version_test.go:65:35: undefined: version.Version
+internal/protocol/version_test.go:65:35: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+--- FAIL: TestDispatch_VersionSubcommand (0.00s)
+    --- FAIL: TestDispatch_VersionSubcommand/version (0.00s)
+        version_test.go:30: dispatch("version") exit = 2, want 0 (stderr: usage: swarm [daemon|shim|hook]
+
+              swarm          open the TUI
+              swarm daemon   run the session daemon
+              swarm shim     run the PTY-owning shim process
+              swarm hook     post a hook event to the daemon
+            )
+    --- FAIL: TestDispatch_VersionSubcommand/--version (0.00s)
+        version_test.go:30: dispatch("--version") exit = 2, want 0 (stderr: usage: swarm [daemon|shim|hook]
+
+              swarm          open the TUI
+              swarm daemon   run the session daemon
+              swarm shim     run the PTY-owning shim process
+              swarm hook     post a hook event to the daemon
+            )
+usage: swarm [daemon|shim|hook]
+
+  swarm          open the TUI
+  swarm daemon   run the session daemon
+  swarm shim     run the PTY-owning shim process
+  swarm hook     post a hook event to the daemon
+--- FAIL: TestVersionSubcommand_ReportsLdflagsStampedVersion (1.78s)
+    version_test.go:63: run swarm version: exit status 2
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	15.220s
+FAIL

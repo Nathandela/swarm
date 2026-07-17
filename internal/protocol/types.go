@@ -44,19 +44,25 @@ const (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
-	Op              string        `json:"op"`
-	EndpointID      string        `json:"endpoint_id"`
-	SessionID       string        `json:"session_id,omitempty"`
-	ProtocolVersion int           `json:"protocol_version,omitempty"`
-	Capabilities    []string      `json:"capabilities,omitempty"`
-	Generation      uint64        `json:"generation,omitempty"`
-	SnapshotLen     int           `json:"snapshot_len,omitempty"`
-	Cols            int           `json:"cols,omitempty"`
-	Rows            int           `json:"rows,omitempty"`
-	Launch          *LaunchReq    `json:"launch,omitempty"`
-	Sessions        []SessionView `json:"sessions,omitempty"`
-	Session         *SessionView  `json:"session,omitempty"`
-	Error           string        `json:"error,omitempty"`
+	Op              string `json:"op"`
+	EndpointID      string `json:"endpoint_id"`
+	SessionID       string `json:"session_id,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	// BuildVersion is the daemon's internal/version.Version, carried on the hello
+	// reply (E13.2). It is ADDITIVE: unlike ProtocolVersion (the wire skew gate,
+	// unchanged by this field), a mismatch here is not fatal to the handshake — it
+	// lets a client notice it is talking to a different-build daemon and nudge
+	// `swarm daemon restart` even when the wire protocol still matches.
+	BuildVersion string        `json:"build_version,omitempty"`
+	Capabilities []string      `json:"capabilities,omitempty"`
+	Generation   uint64        `json:"generation,omitempty"`
+	SnapshotLen  int           `json:"snapshot_len,omitempty"`
+	Cols         int           `json:"cols,omitempty"`
+	Rows         int           `json:"rows,omitempty"`
+	Launch       *LaunchReq    `json:"launch,omitempty"`
+	Sessions     []SessionView `json:"sessions,omitempty"`
+	Session      *SessionView  `json:"session,omitempty"`
+	Error        string        `json:"error,omitempty"`
 }
 
 // SessionView is one general-view row (V-4), stamped for the receiving client: a
