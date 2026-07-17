@@ -16,7 +16,14 @@ import (
 
 // ProtocolVersion is the client<->daemon handshake version. It is a var (not a
 // const) so a skew can be exercised by dialing at ProtocolVersion+1.
-var ProtocolVersion = 1
+//
+// v2 (F2): the version probe now leads with VersionProbeTag before its 4-byte
+// version — an INCOMPATIBLE wire change from the untagged v1 probe. Bumping the
+// version is what makes D-8 skew detection correct across it: a current client
+// dialing a still-running v1 (untagged) daemon reads its v1 reply, sees the
+// mismatch, and prompts `swarm daemon restart` instead of mistaking the changed
+// wire for compatible.
+var ProtocolVersion = 2
 
 // VersionProbeTag is the explicit 1-byte discriminator a version handshake sends
 // before its 4-byte version, so the assembled daemon's socket demux

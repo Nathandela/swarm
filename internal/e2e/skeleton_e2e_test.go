@@ -32,6 +32,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -224,8 +225,10 @@ func agentPIDOf(t *testing.T, shimPID int) int {
 		t.Fatalf("pgrep -P %d (find the shim's agent child): %v", shimPID, err)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		t.Fatalf("shim %d has no child agent process", shimPID)
+	// The shim execs exactly ONE agent in its PTY, so it must have exactly one child
+	// — a tighter invariant that also guards against picking the wrong PID.
+	if len(fields) != 1 {
+		t.Fatalf("shim %d has %d children %v; want exactly one (the agent)", shimPID, len(fields), fields)
 	}
 	pid, err := strconv.Atoi(fields[0])
 	if err != nil {
@@ -234,11 +237,11 @@ func agentPIDOf(t *testing.T, shimPID int) int {
 	return pid
 }
 
-// attachWhenGridHas attaches and returns once the painted grid contains want,
-// re-attaching until it does (the agent prints asynchronously at startup). It gives
-// the test a deterministic starting grid, so a later input's PTY echo cannot race
-// ahead of the agent's own output and make the grid content nondeterministic.
-func attachWhenGridHas(t *testing.T, c *protocol.Client, id, want string) *protocol.Attachment {
+// attachWhenGridHas attaches and returns once the painted grid contains every want,
+// re-attaching until it does (the agent prints asynchronously, and an input's PTY
+// echo lands asynchronously too). It returns the attachment and the settled decoded
+// grid, so the caller has a deterministic grid to compare across a kill/restart.
+func attachWhenGridHas(t *testing.T, c *protocol.Client, id string, wants ...string) (*protocol.Attachment, string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -246,14 +249,45 @@ func attachWhenGridHas(t *testing.T, c *protocol.Client, id, want string) *proto
 		if err != nil {
 			t.Fatalf("Attach: %v", err)
 		}
-		if strings.Contains(gridText(t, a.Snapshot()), want) {
-			return a
+		grid := gridText(t, a.Snapshot())
+		if containsAll(grid, wants) {
+			return a, grid
 		}
 		_ = a.Detach()
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("session grid never showed %q within 10s", want)
-	return nil
+	t.Fatalf("session grid never showed all of %v within 10s", wants)
+	return nil, ""
+}
+
+// containsAll reports whether s contains every substring in subs.
+func containsAll(s string, subs []string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+// transcriptContains polls a session's on-disk transcript (transcript.log in the
+// session dir — the SOLE record of the agent's raw output) until it exists, is
+// non-empty, and contains want, or the timeout elapses. GG-1 uses it to prove the
+// transcript survives a daemon kill -9 intact (not lost or truncated).
+func transcriptContains(t *testing.T, stateDir, local, want string) {
+	t.Helper()
+	path := filepath.Join(stateDir, local, shim.TranscriptFile)
+	deadline := time.Now().Add(10 * time.Second)
+	var lastLen int
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		lastLen = len(data)
+		if err == nil && len(data) > 0 && strings.Contains(string(data), want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("transcript %s never held %q (len=%d) within 10s — lost/truncated by the daemon kill?", path, want, lastLen)
 }
 
 // gridText decodes an attach snapshot — the shim's authoritative serialized grid —
@@ -311,7 +345,7 @@ func TestE2E_WalkingSkeleton_GG1(t *testing.T) {
 	// for the agent's printed line to land in the grid BEFORE typing, so the input's
 	// PTY echo cannot race ahead of the agent's own output (which would make the
 	// grid content nondeterministic).
-	a := attachWhenGridHas(t, c, id, "SKELETON-LIVES")
+	a, _ := attachWhenGridHas(t, c, id, "SKELETON-LIVES")
 	if len(a.Snapshot()) == 0 {
 		t.Fatal("attach painted an empty snapshot (A-4/S10)")
 	}
@@ -334,6 +368,15 @@ func TestE2E_WalkingSkeleton_GG1(t *testing.T) {
 	if !alive(agentPID) {
 		t.Fatalf("agent %d (child of shim %d) not alive before kill", agentPID, meta.ShimPID)
 	}
+
+	// Capture the SETTLED pre-kill grid — the agent's output AND the echoed input —
+	// as the authoritative grid the reconnected client must reproduce EXACTLY, and
+	// confirm the transcript already records the agent's output before the kill.
+	preA, preGrid := attachWhenGridHas(t, c, id, "SKELETON-LIVES", "hello")
+	if err := preA.Detach(); err != nil {
+		t.Fatalf("pre-kill detach: %v", err)
+	}
+	transcriptContains(t, env.stateDir, local, "SKELETON-LIVES")
 
 	// 4) kill -9 the daemon -> the shim AND its agent process MUST survive (S1). The
 	// headline claim is agent survival, so assert the real agent PID, not just the shim.
@@ -371,10 +414,14 @@ func TestE2E_WalkingSkeleton_GG1(t *testing.T) {
 			meta2.ShimPID, meta.ShimPID)
 	}
 
-	// 6) re-attach after restart -> the client-painted grid still carries the agent's
-	// output. Decoding the client's snapshot back through the vt emulator and finding
-	// the agent's printed line proves the grid the client paints matches the shim's
-	// authoritative grid (GG-1 zero-loss), not merely that some bytes arrived.
+	// Transcript continuity: the on-disk transcript still holds the pre-kill output
+	// after the daemon kill -9 + restart (not lost or truncated) — GG-1 requires it.
+	transcriptContains(t, env.stateDir, local, "SKELETON-LIVES")
+
+	// 6) re-attach after restart -> the client-painted grid is the shim's authoritative
+	// grid, preserved EXACTLY. Comparing the whole decoded grid (every cell, not a
+	// substring) against the pre-kill grid proves the client paints what the surviving
+	// shim holds and that the kill -9 + reconnect lost nothing (GG-1 zero-loss).
 	a2, err := c2.Attach(id)
 	if err != nil {
 		t.Fatalf("re-Attach after restart: %v", err)
@@ -382,8 +429,12 @@ func TestE2E_WalkingSkeleton_GG1(t *testing.T) {
 	if len(a2.Snapshot()) == 0 {
 		t.Fatal("re-attach after restart painted an empty snapshot — grid lost (GG-1 zero-loss)")
 	}
-	if grid := gridText(t, a2.Snapshot()); !strings.Contains(grid, "SKELETON-LIVES") {
-		t.Fatalf("re-attach grid lost the agent's output (GG-1 zero-loss); grid was:\n%s", grid)
+	postGrid := gridText(t, a2.Snapshot())
+	if !strings.Contains(postGrid, "SKELETON-LIVES") {
+		t.Fatalf("re-attach grid lost the agent's output (GG-1 zero-loss); grid was:\n%s", postGrid)
+	}
+	if postGrid != preGrid {
+		t.Fatalf("client grid after reconnect does not match the pre-kill shim grid (GG-1 zero-loss)\n--- pre-kill ---\n%s\n--- post-restart ---\n%s", preGrid, postGrid)
 	}
 }
 

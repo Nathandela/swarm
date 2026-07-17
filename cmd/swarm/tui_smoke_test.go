@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -149,6 +150,44 @@ func TestTUI_OpensAndRestoresOverPTY(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("swarm TUI did not exit within 10s of SIGINT")
+	}
+}
+
+// TestTUI_RejectsRedirectedStdin covers the codex stdin-guard gap: a TTY stdout is
+// not enough — a redirected/non-TTY stdin (Bubble Tea + attach both read it) must be
+// rejected too. Here stdout is a real PTY but stdin is /dev/null, so the guard must
+// fire before any daemon dial (no daemon is started) with the clear error.
+func TestTUI_RejectsRedirectedStdin(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	swarmBin, _ := buildRoleBinaries(t)
+
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open: %v", err)
+	}
+	defer func() { _ = ptmx.Close(); _ = tty.Close() }()
+	go func() { _, _ = copyUntilClosed(ptmx, &lockedBuf{}) }() // drain the master
+
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	defer devnull.Close()
+
+	var stderr bytes.Buffer
+	cmd := exec.Command(swarmBin) // no args -> the TUI role
+	cmd.Stdin = devnull           // non-TTY stdin
+	cmd.Stdout = tty              // TTY stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+
+	if err == nil {
+		t.Fatal("swarm with a redirected (non-TTY) stdin must exit non-zero")
+	}
+	if !strings.Contains(stderr.String(), "not a terminal") {
+		t.Fatalf("expected a not-a-terminal error for redirected stdin; stderr=%q", stderr.String())
 	}
 }
 

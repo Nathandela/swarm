@@ -102,8 +102,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 // screen. A user-initiated quit (Esc, or SIGINT that Bubble Tea catches and turns
 // into ErrInterrupted after restoring the terminal) is a clean exit.
 func runTUI(stdout, stderr io.Writer) int {
-	out, ok := stdout.(*os.File)
-	if !ok || !term.IsTerminal(out.Fd()) {
+	out, ok := interactiveTTY(stdout, os.Stdin)
+	if !ok {
 		fmt.Fprintln(stderr, "swarm: not a terminal; the TUI needs an interactive terminal")
 		return 1
 	}
@@ -137,6 +137,23 @@ func runTUI(stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// interactiveTTY verifies BOTH stdout and stdin are interactive terminals — the TUI
+// needs both: Bubble Tea renders to stdout while the attach passthrough reads
+// keystrokes from stdin, so a piped/redirected either end (a non-TTY) must be
+// rejected up front rather than half-drawing a screen or blocking on dead input.
+// Checking only stdout would let `swarm < /dev/null` (a redirected stdin) slip past.
+// It returns the stdout file to render into when both are terminals.
+func interactiveTTY(stdout io.Writer, stdin *os.File) (out *os.File, ok bool) {
+	f, isFile := stdout.(*os.File)
+	if !isFile || !term.IsTerminal(f.Fd()) {
+		return nil, false
+	}
+	if stdin == nil || !term.IsTerminal(stdin.Fd()) {
+		return nil, false
+	}
+	return f, true
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected

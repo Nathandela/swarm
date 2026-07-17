@@ -1,7 +1,12 @@
 package daemon
 
 import (
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,6 +36,58 @@ func TestVersionSkew_SmokeReconnectRealShim(t *testing.T) {
 	}
 	if !processAlive(agentPID) {
 		t.Fatalf("agent %d not alive after smoke reconnect", agentPID)
+	}
+}
+
+// TestVersionSkew_DetectsLegacyUntaggedDaemon asserts the D-8 promise across the
+// F2 wire change: the 'V' version-probe tag is an INCOMPATIBLE change, so a current
+// client dialing an already-running PRE-change daemon must detect it as skew (and
+// name the restart fix) rather than mistaking it for compatible. A legacy daemon
+// spoke ProtocolVersion 1 and read a BARE 4-byte version (no tag); this stands one
+// up and confirms the current Dial classifies it as skew. It is RED until
+// ProtocolVersion is bumped past the legacy value 1 (at v1 the legacy reply matches
+// the client and the wire change goes undetected).
+func TestVersionSkew_DetectsLegacyUntaggedDaemon(t *testing.T) {
+	dir, err := os.MkdirTemp("", "sw")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "legacy.sock")
+
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	// A legacy (pre-'V') daemon: read exactly 4 untagged bytes, reply version 1.
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				var hdr [4]byte
+				if _, rerr := io.ReadFull(conn, hdr[:]); rerr != nil {
+					return
+				}
+				var out [4]byte
+				binary.BigEndian.PutUint32(out[:], 1) // legacy ProtocolVersion
+				_, _ = conn.Write(out[:])
+			}()
+		}
+	}()
+
+	_, err = Dial(sock, ProtocolVersion)
+	if !errors.Is(err, ErrVersionSkew) {
+		t.Fatalf("Dial against a legacy untagged daemon = %v; want ErrVersionSkew "+
+			"(the 'V' wire change must be a version bump so D-8 detects it)", err)
+	}
+	if !strings.Contains(err.Error(), "swarm daemon restart") {
+		t.Fatalf("skew error must name the fix `swarm daemon restart`; got %q", err.Error())
 	}
 }
 
