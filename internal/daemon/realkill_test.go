@@ -211,6 +211,76 @@ func TestSurvival_RealKillNineReconnectsAll(t *testing.T) {
 	}
 }
 
+// TestRestart_RealDaemonHandsOff asserts N1 against real processes: `swarm daemon
+// restart` must stop the running daemon and bring up a replacement that actually
+// took over — reporting success only once a client can reach the new daemon, never
+// prematurely while the old daemon still holds the lock. Uses the real Restart()
+// path (defaultSpawnDaemon), not the abandon()+Open model.
+func TestRestart_RealDaemonHandsOff(t *testing.T) {
+	dir := shortStateDir(t)
+	cc := ClientConfig{
+		StateDir:   dir,
+		SocketPath: filepath.Join(dir, "daemon.sock"),
+		LockPath:   filepath.Join(dir, "daemon.lock"),
+		LogPath:    filepath.Join(dir, "daemon.log"),
+		DaemonBin:  swarmBin,
+	}
+
+	// Start the first real daemon and wait for it to serve.
+	old := exec.Command(swarmBin, "daemon")
+	old.Env = append(os.Environ(),
+		EnvStateDir+"="+dir,
+		EnvSocket+"="+cc.SocketPath,
+		EnvLock+"="+cc.LockPath,
+		EnvLog+"="+cc.LogPath,
+	)
+	old.Stdout, old.Stderr = os.Stderr, os.Stderr
+	if err := old.Start(); err != nil {
+		t.Fatalf("start first daemon: %v", err)
+	}
+	oldPID := old.Process.Pid
+	oldDone := make(chan struct{})
+	go func() { _, _ = old.Process.Wait(); close(oldDone) }()
+	t.Cleanup(func() { killTree(oldPID); stopRunningDaemon(cc) })
+	waitDial(t, cc.SocketPath, pollTimeout)
+
+	// The real restart: stop the old daemon, wait for the lock, spawn + confirm.
+	if err := Restart(cc); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+
+	// Restart returned success, so a client MUST reach a live daemon now.
+	conn, err := Dial(cc.SocketPath, ProtocolVersion)
+	if err != nil {
+		t.Fatalf("Dial after Restart reported success: %v", err)
+	}
+	_ = conn.Close()
+
+	// The old daemon is gone; the pidfile names a different, live daemon.
+	select {
+	case <-oldDone:
+	case <-time.After(pollTimeout):
+		t.Fatalf("old daemon still running after Restart")
+	}
+	if processAlive(oldPID) {
+		t.Fatalf("old daemon PID %d still alive after Restart", oldPID)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "daemon.pid"))
+	if err != nil {
+		t.Fatalf("read pidfile after Restart: %v", err)
+	}
+	newPID, _, ok := parsePIDFile(data)
+	if !ok {
+		t.Fatalf("pidfile after Restart is unparseable: %q", data)
+	}
+	if newPID == oldPID {
+		t.Fatalf("pidfile still names the old daemon (%d); want a fresh one", oldPID)
+	}
+	if !processAlive(newPID) {
+		t.Fatalf("replacement daemon PID %d not alive after Restart", newPID)
+	}
+}
+
 // TestSingleton_TwoRealProcessesOneWins asserts E5.1/S12/D-7 against real
 // processes: two production `swarm daemon` processes started simultaneously over
 // the same lock/socket → exactly one acquires the singleton and serves, the other

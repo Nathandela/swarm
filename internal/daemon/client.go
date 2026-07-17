@@ -184,13 +184,64 @@ func openDaemonLog(path string) (*os.File, error) {
 // Restart performs the `swarm daemon restart` half of D-8: stop the running
 // daemon (its shims survive independently — S1), then spawn a fresh one that
 // reconnects them. A stale or absent pidfile makes the stop a no-op.
+//
+// It reports success ONLY once the replacement has actually taken over (N1): it
+// waits for the old daemon to RELEASE the flock before spawning (Close unlinks the
+// socket before releasing the lock, so the socket going quiet is not proof the
+// lock is free), then confirms the replacement is reachable. Spawning too early
+// would make the replacement lose the singleton and exit while restart falsely
+// reported success.
 func Restart(cfg ClientConfig) error {
 	stopRunningDaemon(cfg)
+
+	// The replacement cannot win the singleton until the old daemon drops the lock.
+	if err := waitLockFree(cfg.LockPath, ensureTimeout); err != nil {
+		return fmt.Errorf("daemon restart: previous daemon did not release the lock: %w", err)
+	}
+
 	spawn := cfg.spawnDaemon
 	if spawn == nil {
 		spawn = defaultSpawnDaemon
 	}
-	return spawn(cfg)
+	if err := spawn(cfg); err != nil {
+		return err
+	}
+
+	// Confirm the replacement actually took over before reporting success.
+	deadline := time.Now().Add(ensureTimeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := Dial(cfg.SocketPath, ProtocolVersion)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		time.Sleep(ensureBackoff)
+	}
+	return fmt.Errorf("daemon restart: replacement did not become reachable: %w", lastErr)
+}
+
+// waitLockFree polls until the daemon lock at path can be acquired — proof the old
+// daemon released it — releasing it immediately, or the timeout elapses (N1). A
+// real error opening the lock file is returned at once; a still-held lock past the
+// deadline yields ErrAlreadyRunning.
+func waitLockFree(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		f, err := acquireLock(path)
+		if err == nil {
+			_ = releaseLock(f) // release at once so the replacement can take it
+			return nil
+		}
+		if !errors.Is(err, ErrAlreadyRunning) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return err // still held (ErrAlreadyRunning)
+		}
+		time.Sleep(ensureBackoff)
+	}
 }
 
 // stopRunningDaemon best-effort terminates the daemon named in the state dir's
@@ -225,10 +276,18 @@ func stopRunningDaemon(cfg ClientConfig) {
 	}
 }
 
-// parsePIDFile parses a "PID STARTTIME" daemon pidfile (F1). Anything that is not
-// exactly two integer fields is unparseable, which callers treat as a stale/absent
-// pidfile — a no-op. This also rejects the legacy PID-only format, whose lack of a
-// start-time makes safe verification impossible.
+// parsePIDFile parses a "PID STARTTIME" daemon pidfile (F1). It returns ok=false —
+// an explicit, non-fatal rejection, never a misparse into a wrong PID — for every
+// input this build cannot safely act on:
+//   - a legacy PID-only pidfile (one field): no start-time, so identity cannot be
+//     verified. v1.0 is the first release, so no such files exist in the field, but
+//     the rejection is deliberate rather than an accidental partial parse.
+//   - garbage: a non-integer PID or start-time, or not exactly two fields.
+//
+// stopRunningDaemon maps ok=false to a safe no-op (it signals nothing). That never
+// blocks a fresh daemon from starting: when no old daemon is actually running the
+// lock is free and Restart proceeds; only a live-but-unidentifiable daemon (lock
+// held) prevents a hand-off, which is the correct, safe outcome.
 func parsePIDFile(data []byte) (pid int, start int64, ok bool) {
 	fields := strings.Fields(string(data))
 	if len(fields) != 2 {

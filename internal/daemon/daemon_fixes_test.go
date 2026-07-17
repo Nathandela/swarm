@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -194,34 +195,60 @@ func TestStopRunningDaemon_PIDReuseSafety(t *testing.T) {
 // F2 — Launch identity-read error kills the shim, leaves no phantom
 // ---------------------------------------------------------------------------
 
-// TestLaunch_IdentityReadFailure_KillsShimNoPhantom asserts F2: if the post-spawn
-// process-start-time read fails, launch must NOT persist ShimStartTime=0 (a later
-// reconcile would mark the live shim lost). It kills the just-spawned shim, drops
-// the reservation, and returns the error — leaving no running shim and no phantom
-// session.
+// TestLaunch_IdentityReadFailure_KillsShimNoPhantom asserts F2/N2: if the
+// post-spawn process-start-time read fails, launch must NOT persist ShimStartTime=0
+// (a later reconcile would mark the live shim lost). It must kill the just-spawned
+// shim AND its agent — and the agent runs in its OWN process group, so a bare
+// kill(-shimPID) would orphan it (N2). The agent here IGNORES HUP/TERM and never
+// reads stdin, so it survives the shim's death (PTY-master-close SIGHUP): only an
+// explicit group-kill delivered through the shim socket can terminate it. The
+// injected failure is delayed until the agent PID exists, forcing cleanup to reach
+// a live agent.
 func TestLaunch_IdentityReadFailure_KillsShimNoPhantom(t *testing.T) {
 	cfg := daemonConfig(t)
 	d := openDaemon(t, cfg)
 
-	var gotShimPID int
+	pidFile := filepath.Join(t.TempDir(), "agent.pid")
+	script := "trap '' HUP TERM INT; echo $$ > " + pidFile + "; while :; do sleep 1; done"
+	spec := LaunchSpec{
+		AgentType: "fake",
+		Argv:      []string{"/bin/sh", "-c", script},
+		Cwd:       t.TempDir(),
+		ClientEnv: []string{"PATH=" + os.Getenv("PATH")},
+		Cols:      80,
+		Rows:      24,
+	}
+
+	var gotShimPID, gotAgentPID int
 	orig := procStartTimeFn
 	procStartTimeFn = func(pid int) (int64, error) {
 		gotShimPID = pid
+		// Wait for the agent to actually exist before injecting the failure, so the
+		// cleanup must terminate a live agent in its own process group (N2).
+		gotAgentPID = waitPIDFileValue(pidFile, pollTimeout)
 		return 0, errors.New("injected identity-read failure")
 	}
 	defer func() { procStartTimeFn = orig }()
 
-	pidFile := filepath.Join(t.TempDir(), "agent.pid")
-	_, err := d.Launch(announceSpec(t, pidFile))
+	_, err := d.Launch(spec)
 	if err == nil {
 		t.Fatalf("Launch succeeded despite an identity-read failure; want an error")
 	}
 	if gotShimPID <= 0 {
 		t.Fatalf("the seam never observed the spawned shim PID")
 	}
-	t.Cleanup(func() { _ = syscall.Kill(-gotShimPID, syscall.SIGKILL); killTree(gotShimPID) })
+	if gotAgentPID <= 0 {
+		t.Fatalf("the agent never spawned; the test did not exercise the orphan path (N2)")
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-gotAgentPID, syscall.SIGKILL)
+		_ = syscall.Kill(-gotShimPID, syscall.SIGKILL)
+		killTree(gotAgentPID)
+		killTree(gotShimPID)
+	})
 
-	// No shim left running: the just-spawned shim must have been killed.
+	// Neither the shim NOR the agent (its own process group) may be left running.
+	waitProcessGone(t, gotAgentPID, pollTimeout)
 	waitProcessGone(t, gotShimPID, pollTimeout)
 
 	// No phantom: the registry has no running session, and nothing serves a socket.
@@ -231,6 +258,21 @@ func TestLaunch_IdentityReadFailure_KillsShimNoPhantom(t *testing.T) {
 	if len(d.List()) != 0 {
 		t.Fatalf("registry size = %d after a failed launch; want 0", len(d.List()))
 	}
+}
+
+// waitPIDFileValue polls path for a positive PID, returning it or 0 on timeout. It
+// is non-fatal (safe to call from inside an injected seam that runs within Launch).
+func waitPIDFileValue(path string, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+			if pid, cerr := strconv.Atoi(strings.TrimSpace(string(b))); cerr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(pollStep)
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------------------

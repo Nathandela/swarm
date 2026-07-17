@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -22,11 +23,15 @@ var ErrMaxSessions = errors.New("daemon: max sessions reached")
 // in launch; tests override it to inject a post-spawn identity-read failure (F2).
 var procStartTimeFn = processStartTime
 
-// killSpawnedShim terminates a just-spawned shim whose launch is being aborted
-// before its supervisor started (F2). The shim setsids in place, so its pgid ==
-// its pid once it has; kill the group best-effort, then the process, then reap it.
-func killSpawnedShim(cmd *exec.Cmd, pid int) {
-	if pid > 0 {
+// killSpawnedShim tears down a just-spawned shim whose launch is aborting before
+// its supervisor started (F2/N2). The AGENT runs in its OWN process group (the
+// shim setsids it — Epic 4), so a bare kill(-shimPID) never reaches it and would
+// orphan the agent. Instead the shim is told to KILL its agent's group over the
+// socket; only if the socket is not serving yet (the agent has not been spawned)
+// do we fall back to a best-effort group kill of the shim. Finally the shim
+// process itself is killed and reaped (no supervisor is running yet).
+func (d *Daemon) killSpawnedShim(cmd *exec.Cmd, id string, pid int) {
+	if err := signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigKill); err != nil && pid > 0 {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}
 	_ = cmd.Process.Kill()
@@ -139,16 +144,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		// A shim whose start-time we cannot record is un-trackable: reconcile matches
 		// by (PID, start-time), so persisting ShimStartTime=0 would let a later Open
 		// mark this LIVE shim lost. This is a setup failure, not a crash, so we DO
-		// clean up: kill the just-spawned shim and abort (F2). The shim setsids in
-		// place (pgid == pid once it has), so take the group best-effort, then the
-		// process; no supervisor is running yet, so we reap it here.
-		killSpawnedShim(cmd, m.ShimPID)
+		// clean up: kill the just-spawned shim (and its agent, over the socket) and
+		// abort (F2/N2). No supervisor is running yet, so we reap it here.
+		d.killSpawnedShim(cmd, id, m.ShimPID)
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
 	if err := d.saveMeta(m); err != nil {
-		killSpawnedShim(cmd, m.ShimPID)
+		d.killSpawnedShim(cmd, id, m.ShimPID)
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
 	}
