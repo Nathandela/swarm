@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-17
 **Committee**: codex GPT-5.6 sol (cross-model; couldn't run gates — sandbox) + Opus (independent, ran the FULL -race suite + demo). agy quota-blocked.
-**Verdict**: FIX REQUIRED. Sharp divergence resolved by Opus's actual gate runs + constant-level verification: codex's 3 CRITICALs largely downgrade, but both agree on the real gap (runTUI stub).
+**Verdict**: FIX REQUIRED → **RESOLVED (codex APPROVE)**. Sharp divergence resolved by Opus's actual gate runs + constant-level verification: codex's 3 CRITICALs largely downgraded, but both agreed on the real gap (runTUI stub). All fixes landed across commits 43b9b12 + ce92b08; codex confirmed on final re-review: runTUI opens the real TUI (PTY smoke test), the demux is deterministic/timer-free with the ProtocolVersion bump for the wire change, and GG-1 is self-contained (exact grid == shim grid + transcript continuity + agent-PID survival across a real kill -9).
 
 ## Consensus — FIX
 1. **runTUI is an unwired stub** (codex CRITICAL, Opus MEDIUM): cmd/swarm/main.go:88 returns "tui: not implemented"; bare `swarm` doesn't open the TUI. All three layers (skeleton daemon, internal/attach, internal/tui) are built + tested in isolation but never assembled into the no-arg binary — no tui.New, no Client.Attach, no terminal handoff. The scripted GG-1/E8.7 demo passes (proven programmatically via protocol.Client), but a human running `swarm` gets the stub. Not tracked as a deferral. FIX: wire runTUI (EnsureDaemon → protocol.Client → tui.New(WithAttachRunner(NewAttachRunner(...))) → run the program; graceful no-tty error).

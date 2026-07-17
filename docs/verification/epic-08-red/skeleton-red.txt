@@ -1,0 +1,38 @@
+======================================================================
+Epic 8 (walking skeleton) — RED RUN
+date: Fri Jul 17 17:05:28 CEST 2026
+======================================================================
+
+### PART A — internal/attach (undefined-only RED) ###
+# github.com/Nathandela/swarm/internal/attach [github.com/Nathandela/swarm/internal/attach.test]
+internal/attach/passthrough_test.go:14:9: undefined: Reason
+internal/attach/passthrough_test.go:18:26: undefined: Config
+internal/attach/passthrough_test.go:21:13: undefined: Run
+internal/attach/passthrough_test.go:57:24: undefined: Config
+internal/attach/passthrough_test.go:88:24: undefined: Config
+internal/attach/passthrough_test.go:103:24: undefined: Config
+internal/attach/fakes_test.go:57:4: undefined: TermControl
+internal/attach/fakes_test.go:58:4: undefined: Session
+internal/attach/latency_test.go:31:24: undefined: Config
+internal/attach/latency_test.go:56:19: undefined: DefaultDetachKey
+internal/attach/passthrough_test.go:103:24: too many errors
+FAIL	github.com/Nathandela/swarm/internal/attach [build failed]
+FAIL
+
+### PART A — internal/tui epic8 seam (undefined-only RED) ###
+# github.com/Nathandela/swarm/internal/tui
+# [github.com/Nathandela/swarm/internal/tui]
+vet: internal/tui/epic8_test.go:83:29: undefined: WithAttachRunner
+
+### PART B — internal/skeleton (undefined-only RED) ###
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/serve_test.go:89:30: undefined: Daemon
+
+### PART B — internal/e2e (COMPILES; runtime assembly-not-built RED) ###
+e2e vet exit: 0 (0 = compiles clean, fails at runtime)
+
+### PART B — internal/e2e RUNTIME RED (assembly-not-built) ###
+--- FAIL: TestE2E_WalkingSkeleton_GG1 (11.48s)
+    skeleton_e2e_test.go:233: swarm daemon never served the client protocol on /tmp/swe1895418249/d.sock within 10s (the daemon assembly is not built: runDaemon must stand up protocol.Serve + engine + hook routing)
+FA
