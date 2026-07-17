@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "cli": "claude-code",
+  "version": "2.1.212",
+  "scenario": "idle-after-permission",
+  "pty_capture": "Q2xhdWRlIENvZGUgdjIuMS4yMTINCg0KICBTZXNzaW9uIDNmMmExYzllLTdiNGQtNGUyYS05ZjEwLWFiYzEyM2RlZjQ1Ng0KDQrij7ogRG9uZS4gV2hhdCB3b3VsZCB5b3UgbGlrZSB0byBkbyBuZXh0Pw0KDQrina8g",
+  "hook_payloads": [
+    {
+      "event": "UserPromptSubmit",
+      "raw": {"session_id": "3f2a1c9e-7b4d-4e2a-9f10-abc123def456", "transcript_path": "/home/u/.claude/projects/-home-u-proj/3f2a1c9e-7b4d-4e2a-9f10-abc123def456.jsonl", "hook_event_name": "UserPromptSubmit", "cwd": "/home/u/proj", "prompt": "refactor the parser"},
+      "received_at_ms": 1710000000000
+    },
+    {
+      "event": "PreToolUse",
+      "raw": {"session_id": "3f2a1c9e-7b4d-4e2a-9f10-abc123def456", "transcript_path": "/home/u/.claude/projects/-home-u-proj/3f2a1c9e-7b4d-4e2a-9f10-abc123def456.jsonl", "hook_event_name": "PreToolUse", "cwd": "/home/u/proj", "tool_name": "Bash", "tool_input": {"command": "go test ./..."}},
+      "received_at_ms": 1710000000500
+    },
+    {
+      "event": "Notification",
+      "raw": {"session_id": "3f2a1c9e-7b4d-4e2a-9f10-abc123def456", "transcript_path": "/home/u/.claude/projects/-home-u-proj/3f2a1c9e-7b4d-4e2a-9f10-abc123def456.jsonl", "hook_event_name": "Notification", "cwd": "/home/u/proj", "message": "Claude needs your permission to use Bash"},
+      "received_at_ms": 1710000001000
+    },
+    {
+      "event": "PostToolUse",
+      "raw": {"session_id": "3f2a1c9e-7b4d-4e2a-9f10-abc123def456", "transcript_path": "/home/u/.claude/projects/-home-u-proj/3f2a1c9e-7b4d-4e2a-9f10-abc123def456.jsonl", "hook_event_name": "PostToolUse", "cwd": "/home/u/proj", "tool_name": "Bash", "tool_input": {"command": "go test ./..."}},
+      "received_at_ms": 1710000002000
+    },
+    {
+      "event": "Stop",
+      "raw": {"session_id": "3f2a1c9e-7b4d-4e2a-9f10-abc123def456", "transcript_path": "/home/u/.claude/projects/-home-u-proj/3f2a1c9e-7b4d-4e2a-9f10-abc123def456.jsonl", "hook_event_name": "Stop", "cwd": "/home/u/proj", "stop_hook_active": false},
+      "received_at_ms": 1710000003000
+    }
+  ]
+}
