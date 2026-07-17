@@ -46,6 +46,7 @@ package shim
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -86,7 +87,7 @@ const (
 	modeTermCooperate = "term-cooperative" // default TERM disposition (dies on TERM), print PID, block (E4.4/S5)
 	modeIdle          = "idle"             // print IDLING, block (kill/exit side-file cases)
 	modeBurstExit     = "burst-exit"       // print many lines + BURST_DONE, exit 0 (no-consumer drain, E4.6/S1)
-	modeFloodIdle     = "flood-idle"       // print many lines + FLOOD_DONE, block (wedged-consumer, E4.6/S9)
+	modeFloodIdle     = "flood-idle"       // flood output continuously until killed (wedged-consumer, E4.6/S9)
 )
 
 // stream-block phase sizing (E4.3). Kept small; the grid is 24 rows, so the
@@ -95,11 +96,6 @@ const (
 	phase1Lines = 40
 	phase2Lines = 40
 )
-
-// floodLines is large enough that, against a small bounded per-conn queue and a
-// wedged consumer, the PTY drain must have continued well past the PTY kernel
-// buffer for FLOOD_DONE to appear at all (E4.6/S9).
-const floodLines = 6000
 
 // runHelperAgent executes one helper mode as the agent, then exits the process.
 // It never returns.
@@ -132,6 +128,16 @@ func runHelperAgent(mode string) {
 		os.Exit(99)
 	}
 	os.Exit(0) // helpers that fall through end successfully
+}
+
+// park keeps a helper process alive until the shim ends it (by signal, or by
+// closing the PTY). A bare select{} trips the Go runtime's deadlock detector
+// once the shim drains the helper's final output — with every goroutine asleep
+// the runtime aborts with "all goroutines are asleep - deadlock!" (exit 2),
+// killing the agent before any signal arrives. A blocking stdin read keeps a
+// live M and also models a real agent CLI, which blocks reading its stdin.
+func park() {
+	_, _ = io.Copy(io.Discard, os.Stdin)
 }
 
 func helperInfo() {
@@ -239,7 +245,7 @@ func helperStreamActive() {
 		time.Sleep(150 * time.Microsecond)
 	}
 	fmt.Printf("STREAM_DONE\n")
-	select {} // stay alive until killed
+	park() // stay alive until killed
 }
 
 func helperTermStubborn() {
@@ -256,25 +262,25 @@ func helperTermStubborn() {
 		fmt.Printf("CHILD_START_ERR\t%v\n", err)
 	}
 	fmt.Printf("PARENT_PID\t%d\n", os.Getpid())
-	select {} // ignore TERM; only a group KILL ends this
+	park() // ignore TERM; only a group KILL ends this
 }
 
 func helperChildStubborn() {
 	signal.Ignore(syscall.SIGTERM)
 	fmt.Printf("CHILD_PID\t%d\n", os.Getpid())
-	select {}
+	park()
 }
 
 func helperTermCooperative() {
 	// Default SIGTERM disposition: the Go runtime terminates the process on
 	// SIGTERM when it is not caught, so this agent dies from TERM within grace.
 	fmt.Printf("PARENT_PID\t%d\n", os.Getpid())
-	select {}
+	park()
 }
 
 func helperIdle() {
 	fmt.Printf("IDLING\n")
-	select {}
+	park()
 }
 
 func helperBurstExit() {
@@ -285,11 +291,19 @@ func helperBurstExit() {
 }
 
 func helperFloodIdle() {
-	for i := 0; i < floodLines; i++ {
-		fmt.Printf("F%05d\n", i)
+	// Flood continuously until the shim kills us. A wedged consumer cannot keep
+	// up, so the shim's bounded per-conn queue (subQueueCap frames) overflows
+	// once ~subQueueCap read-chunks accrue behind the blocked socket writer, and
+	// frames are dropped (S9); meanwhile the emulator grid keeps advancing
+	// (authoritative, S1 shim half). No completion marker: forcing enough total
+	// bytes through the emulator to "finish" a flood is far slower than reaching
+	// the drop condition, especially under -race, so the test polls the drop
+	// counter and the grid rather than waiting for the flood to end. The tight
+	// loop is not a busy spin: it blocks on PTY writes once the kernel buffer
+	// fills, throttled to the drain's speed.
+	for i := 0; ; i++ {
+		fmt.Printf("F%08d\n", i)
 	}
-	fmt.Printf("FLOOD_DONE\n")
-	select {}
 }
 
 // replaceEnv returns env with key's assignment set to val (replacing any

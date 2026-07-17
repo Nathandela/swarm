@@ -5,6 +5,7 @@ go 1.24.2
 require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/vt v0.0.0-20260713092006-0d683c34c74b
+	github.com/creack/pty v1.1.24
 	github.com/rivo/uniseg v0.4.7
 )
 

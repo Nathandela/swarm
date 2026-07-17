@@ -6,6 +6,8 @@ package shim
 // blocking the drain, and the grid stays authoritative.
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,10 +35,29 @@ func TestSurvival_DrainsWithNoConsumer(t *testing.T) {
 	}
 }
 
-// E4.6 / S9 — a wedged consumer (attaches, then never reads) must not stall the
-// PTY drain: the agent keeps producing, frames are dropped from the shim's
-// bounded per-conn queue (FramesDropped increments), and a fresh reconnect sees
-// the output produced WHILE the consumer was wedged (FLOOD_DONE in the grid).
+var floodIdxRE = regexp.MustCompile(`F(\d+)`)
+
+// maxFloodIndex returns the largest "F<n>" line index visible in grid text, or
+// -1 if none.
+func maxFloodIndex(grid string) int {
+	max := -1
+	for _, m := range floodIdxRE.FindAllStringSubmatch(grid, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > max {
+			max = n
+		}
+	}
+	return max
+}
+
+// E4.6 / S9 (+ S1 shim half) — a wedged consumer (attaches, then never reads)
+// must not stall the PTY drain. The agent floods continuously; the wedged
+// client's socket buffer fills, its bounded outbound queue fills, and further
+// frames are DROPPED (FramesDropped increments) rather than buffered without
+// bound. A drop can only be counted from inside the drain's feed path, so drops
+// prove the drain kept running while the consumer was stuck. The grid stays
+// authoritative: after disconnecting the wedged client, a fresh reconnect sees
+// the flood advanced far past a single screen, output produced while nothing was
+// consuming.
 func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	cfg := helperConfig(t, modeFloodIdle, nil, nil)
 	ch := runShimAsync(cfg)
@@ -46,11 +67,22 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeAttach})
 
-	// Let the agent flood while the consumer is wedged.
-	time.Sleep(2 * time.Second)
+	// Poll the drop counter directly: overflow happens once ~subQueueCap
+	// read-chunks accrue behind the blocked socket writer, which is robust to
+	// chunk size and emulator throughput (incl. the -race slowdown) in a way a
+	// fixed sleep is not.
+	deadline := time.Now().Add(20 * time.Second)
+	for cfg.Metrics.FramesDropped.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no frames dropped within 20s under a wedged consumer — the bounded-queue drop path did not engage (S9)")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
-	// The PTY drain must have continued: a fresh connection's snapshot shows the
-	// tail the agent produced while the wedged client was stuck.
+	// The grid stayed authoritative while the consumer was wedged: the emulator
+	// is fed every chunk before the (dropping) subscriber enqueue, so a fresh
+	// reconnect shows the flood well past one screenful. Disconnect the wedged
+	// client first (single connection at a time — v1 pin).
 	wedged.conn.Close()
 	fresh := dialShim(t, cfg.SocketPath)
 	fresh.startReader()
@@ -60,14 +92,8 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode reconnect snapshot: %v", err)
 	}
-	if !strings.Contains(gridText(snap), "FLOOD_DONE") {
-		t.Errorf("reconnect grid missing FLOOD_DONE — the PTY drain stalled behind the wedged consumer (S9 violated):\n%s", gridText(snap))
-	}
-
-	// Frames were dropped (bounded queue), proving memory stays bounded rather
-	// than buffering the whole flood for a stuck consumer.
-	if cfg.Metrics.FramesDropped.Load() == 0 {
-		t.Errorf("FramesDropped = 0, want > 0 — a wedged consumer must cause bounded-queue drops, not unbounded buffering")
+	if idx := maxFloodIndex(gridText(snap)); idx < 100 {
+		t.Errorf("reconnect grid only advanced to line F%d (want >= 100) — the drain did not stay authoritative while the consumer was wedged (S1/S9):\n%s", idx, gridText(snap))
 	}
 
 	fresh.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
