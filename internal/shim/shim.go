@@ -12,12 +12,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/creack/pty"
@@ -92,6 +94,18 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, err
 	}
 
+	// Arm the self-containment signal handler BEFORE spawning the agent, so that from
+	// the instant the agent exists, ANY catchable termination of the shim
+	// (SIGTERM/SIGINT/SIGHUP) first runs the agent's process-group TERM->grace->KILL.
+	// This makes shim-exited ⇒ agent-group-killed with no socket round-trip and no
+	// startup/acceptLoop-window race: the daemon can SIGTERM the shim at any moment to
+	// reliably contain the agent (audit-004 N2 containment primitive). Signals are
+	// buffered here and acted on once the agent's pgid is known (below). A SIGKILL of
+	// the shim itself remains uncatchable — the documented last-resort residual.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	sigStop := func() { signal.Stop(sigCh) } // signal.Stop is idempotent
+
 	cmd := &exec.Cmd{
 		Path: cfg.Argv[0],
 		Args: cfg.Argv,
@@ -101,6 +115,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	ws := &pty.Winsize{Rows: uint16(cfg.Rows), Cols: uint16(cfg.Cols)}
 	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
+		sigStop()
 		listener.Close()
 		closeTranscript(tr)
 		return 0, fmt.Errorf("shim: start agent: %w", err)
@@ -113,6 +128,19 @@ func Run(cfg Config) (agentExit int, err error) {
 	// emulator's reply drain (and thus the PTY drain) on a full PTY (S9).
 	replies := newReplyPump(srv.ptyIn)
 	emu.SetReplyWriter(replies)
+
+	// The agent pgid is now known: act on any catchable termination of the shim by
+	// running the same TERM->grace->KILL of the agent's group (the socket signal path,
+	// reused). A signal buffered since before the spawn is handled here too. On a
+	// clean agent exit, sigDone releases this goroutine without signalling anything.
+	sigDone := make(chan struct{})
+	go func() {
+		select {
+		case <-sigCh:
+			srv.onSignal(shimwire.SigTerm)
+		case <-sigDone:
+		}
+	}()
 
 	acceptDone := make(chan struct{})
 	go func() {
@@ -127,6 +155,12 @@ func Run(cfg Config) (agentExit int, err error) {
 
 	// Block until the agent (group leader) is reaped.
 	waitErr := cmd.Wait()
+
+	// Agent reaped: stop catching signals and release the handler, so no late signal
+	// re-signals a possibly-reused pgid after finalization (finishEscalation, below,
+	// issues the single final group KILL).
+	sigStop()
+	close(sigDone)
 
 	// Bound the wait for the PTY to reach EOF: a descendant can hold the slave
 	// open after the leader is reaped. We do not kill here — finishEscalation

@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
-	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -23,23 +23,33 @@ var ErrMaxSessions = errors.New("daemon: max sessions reached")
 var procStartTimeFn = processStartTime
 
 // killSpawnedShim tears down a just-spawned shim whose launch is aborting before
-// its supervisor started (F2/N2). The AGENT runs in its OWN process group (the shim
-// setsids it — Epic 4), and right after cmd.Start the shim may not have setsid'd
-// yet, so a bare kill(-shimPID) can miss the agent OR race the shim's setsid +
-// agent-spawn. Instead we wait (bounded) for the shim to serve its socket. The shim
-// binds its UDS BEFORE it spawns the agent (internal/shim/shim.go: listen() precedes
-// pty.StartWithSize — the load-bearing cross-epic ordering invariant), so:
-//   - once it serves, the agent may exist in its own group and the shim KILLs that
-//     group over the socket (reliable — no race); and
-//   - if it never serves, no agent was ever spawned, so killing the shim suffices.
-//
-// Then the shim process itself is killed and reaped (no supervisor is running yet).
-func (d *Daemon) killSpawnedShim(cmd *exec.Cmd, sock string) {
-	if d.waitShimServing(sock, launchConfirmTimeout) {
-		_ = signalShim(sock, shimwire.SigKill)
+// its supervisor started (F2/N2). It SIGTERMs the shim: the shim's own signal
+// handler runs the agent's process-group TERM->grace->KILL before exiting (Fix A in
+// internal/shim, armed BEFORE the agent is spawned), so the shim exiting implies the
+// agent group was killed first — no socket dependency and no startup/acceptLoop-
+// window race. We wait bounded for the shim to exit; only if it does not do we
+// SIGKILL it as a last resort (the uncatchable residual) and report that containment
+// was not confirmed, so the caller can log/escalate rather than silently orphan.
+func (d *Daemon) killSpawnedShim(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
 	}
-	_ = cmd.Process.Kill()
-	_, _ = cmd.Process.Wait()
+	pid := cmd.Process.Pid
+	termErr := syscall.Kill(pid, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() { _, _ = cmd.Process.Wait(); close(done) }() // reap in all paths
+	if termErr != nil {
+		<-done // already gone (ESRCH): its own exit path contained the agent
+		return nil
+	}
+	select {
+	case <-done:
+		return nil // shim exited ⇒ its handler killed the agent group first
+	case <-time.After(deleteWait):
+		_ = cmd.Process.Kill() // last resort: uncatchable SIGKILL of the shim itself
+		<-done
+		return fmt.Errorf("daemon: shim %d did not exit on SIGTERM within %s; SIGKILLed as last resort — agent containment not confirmed", pid, deleteWait)
+	}
 }
 
 // launchPhase marks a two-phase-launch boundary for the crash-injection seam.
@@ -152,17 +162,21 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	//
 	// A read/persist failure makes the shim un-trackable (persisting ShimStartTime=0
 	// would let a later Open mark this live shim lost), so we abort and clean up. The
-	// cleanup is race-free even this early: killSpawnedShim waits for the shim to
-	// serve, then KILLs the agent's own process group over the socket (F2/N2).
+	// cleanup is race-free even this early: killSpawnedShim SIGTERMs the shim, whose
+	// own signal handler contains its agent group before exiting (F2/N2).
 	st, sterr := procStartTimeFn(m.ShimPID)
 	if sterr != nil {
-		d.killSpawnedShim(cmd, sock)
+		if kerr := d.killSpawnedShim(cmd); kerr != nil {
+			d.logf("launch %s: abort cleanup: %v", id, kerr)
+		}
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
 	if err := d.saveMeta(m); err != nil {
-		d.killSpawnedShim(cmd, sock)
+		if kerr := d.killSpawnedShim(cmd); kerr != nil {
+			d.logf("launch %s: abort cleanup: %v", id, kerr)
+		}
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
 	}

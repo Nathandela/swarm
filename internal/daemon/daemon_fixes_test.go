@@ -199,11 +199,12 @@ func TestStopRunningDaemon_PIDReuseSafety(t *testing.T) {
 // post-spawn process-start-time read fails, launch must NOT persist ShimStartTime=0
 // (a later reconcile would mark the live shim lost). It must kill the just-spawned
 // shim AND its agent — and the agent runs in its OWN process group, so a bare
-// kill(-shimPID) would orphan it (N2). The agent here IGNORES HUP/TERM and never
-// reads stdin, so it survives the shim's death (PTY-master-close SIGHUP): only an
-// explicit group-kill delivered through the shim socket can terminate it. The
-// injected failure is delayed until the agent PID exists, forcing cleanup to reach
-// a live agent.
+// kill(-shimPID) would orphan it (N2). Cleanup SIGTERMs the shim, whose own signal
+// handler contains its agent group before exiting (Fix A). The agent here IGNORES
+// HUP/TERM and never reads stdin, so it survives the shim's mere death (PTY-master-
+// close SIGHUP): only the shim's TERM->grace->KILL of the agent's group can end it.
+// The injected failure is delayed until the agent PID exists, forcing cleanup to
+// reach a live agent.
 func TestLaunch_IdentityReadFailure_KillsShimNoPhantom(t *testing.T) {
 	cfg := daemonConfig(t)
 	d := openDaemon(t, cfg)
@@ -257,30 +258,6 @@ func TestLaunch_IdentityReadFailure_KillsShimNoPhantom(t *testing.T) {
 	}
 	if len(d.List()) != 0 {
 		t.Fatalf("registry size = %d after a failed launch; want 0", len(d.List()))
-	}
-}
-
-// TestShimInvariant_SocketServesWhenAgentExists guards the cross-epic ordering that
-// launch's abort cleanup (killSpawnedShim) now relies on (N2): the shim binds its
-// UDS BEFORE it spawns the agent (internal/shim/shim.go: listen() precedes
-// pty.StartWithSize). The observable consequence — asserted here — is that whenever
-// the agent process exists, the shim socket is already serving. Contrapositive: a
-// socket that never serves means no agent was ever spawned, so when cleanup waits
-// for serving and the socket never comes up, killing the shim alone cannot orphan a
-// (separately-grouped) agent. Epic 14's failure-injection suite (agents-tracker-a7d)
-// should assert the ordering directly.
-func TestShimInvariant_SocketServesWhenAgentExists(t *testing.T) {
-	stateDir := shortStateDir(t)
-	id := "bindorder1"
-	// spawnRealShim returns only after BOTH the socket file and the agent pidfile
-	// exist — i.e. the agent process is confirmed running.
-	_, agentPID := spawnRealShim(t, stateDir, id)
-	if !processAlive(agentPID) {
-		t.Fatalf("agent %d not alive; test setup failed", agentPID)
-	}
-	if !confirmShimServing(shimSocketPath(stateDir, id)) {
-		t.Fatalf("agent %d exists but the shim socket is not serving; the bind-before-spawn "+
-			"invariant is violated and launch's timeout cleanup would be unsafe (N2)", agentPID)
 	}
 }
 
