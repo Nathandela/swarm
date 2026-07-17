@@ -1,8 +1,14 @@
 // Epic 11 C1: conversation-id capture must be INDEPENDENT of the live attach. The
 // shim serves connections serially, so while a client holds an attach the grid-tap
-// can never sample the session; a session attached at launch and held until exit
-// would end with an empty ConversationID and be non-resumable. Capture is driven off
-// the transcript file on disk (poll cadence + session end), so it works regardless.
+// can never sample the session; the old grid-tap-only capture would leave such a
+// session with an empty ConversationID and non-resumable. Capture is driven off the
+// transcript file on disk (poll cadence + a session-end net), so it works regardless.
+//
+// This test proves the PRIMARY path: capture completes WHILE a client holds the
+// attach for the session's whole running life, purely from the transcript-file poll
+// (never the grid-tap's own attach, which is blocked here). The session-end capture
+// net (OnSessionEnd -> SetConversationID after finalizeTerminal) is exercised by the
+// daemon/skeleton unit tests; here the running-phase poll already captures the id.
 package e2e
 
 import (
@@ -12,7 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
-func TestE2E_ConversationCapture_AttachedUntilExit_C1(t *testing.T) {
+func TestE2E_ConversationCapture_DuringHeldAttach_C1(t *testing.T) {
 	buildBinaries(t)
 	env := newDaemonEnv(t)
 	startDaemon(t, env)
