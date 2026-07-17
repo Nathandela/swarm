@@ -122,3 +122,22 @@ wrapper, so swapping it later touches one package.
   surface on the well-formed inputs the fuzzer explores. Revisit if charm gains
   cross-`Write` grapheme merging, at which point the scoping can tighten back
   toward unconditional.
+
+- **charm x/vt's own `Emulator.Close` races its own `Emulator.Read`.**
+  Upstream's `Emulator` type checks an unexported `closed bool` at the top of
+  `Read` and sets it (unsynchronized, no mutex or atomic) in `Close`; calling
+  the two concurrently — which our wrapper's reply-drain goroutine and an
+  external `Close` naturally would, since the drain must stay blocked in
+  `Read` for the emulator's whole lifetime to keep charm's synchronous
+  DA/DSR/etc. replies from deadlocking `Feed` — is a genuine data race
+  (`go test -race` catches it reliably). Our `vt.Emulator.Close` therefore
+  never calls the underlying `term.Close`: it marks the wrapper closed and
+  writes a harmless DSR "operating status" query (`\x1b[5n`, unconditionally
+  answered with `ESC[0n`) to provoke the reply that unblocks a parked `Read`,
+  letting the drain goroutine observe the closed state and exit on its own
+  before `Close` returns. The runtime finalizer still calls the real
+  `term.Close` as a last-resort reclaim path for callers that never call
+  `Close`, but by design the drain has always already exited by the time our
+  `Close` returns, so a later finalizer run never overlaps a live reader.
+  Revisit (and simplify back to calling `term.Close` directly) if upstream
+  synchronizes that field.

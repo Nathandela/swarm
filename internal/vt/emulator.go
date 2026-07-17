@@ -81,15 +81,60 @@ type Emulator struct {
 	rows    int
 	title   string // latest raw window title (OSC 0/2), sanitized on snapshot
 	visible bool   // cursor visibility (DECTCEM), tracked via callback
+
+	reply     replySink     // query-reply destination; discards until SetReplyWriter
+	closing   chan struct{} // closed by Close; isClosed does a lock-free receive on it
+	drainDone chan struct{} // closed when the reply-drain goroutine exits
+	closeOnce sync.Once
+}
+
+// isClosed reports whether Close has run. It never blocks and never touches
+// mu: the drain goroutine calls it between reads, and if it had to wait on mu
+// it could deadlock against a Close that is itself waiting inside term.Write
+// for that same goroutine to read the provoked reply (see Close).
+func (e *Emulator) isClosed() bool {
+	select {
+	case <-e.closing:
+		return true
+	default:
+		return false
+	}
+}
+
+// replySink is a concurrency-safe, swappable io.Writer: the drain goroutine
+// copies charm's query replies through it while SetReplyWriter may retarget
+// the destination at any time, including before the first Feed. A nil
+// destination discards.
+type replySink struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *replySink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	w := s.w
+	s.mu.Unlock()
+	if w == nil {
+		return len(p), nil
+	}
+	return w.Write(p)
+}
+
+func (s *replySink) set(w io.Writer) {
+	s.mu.Lock()
+	s.w = w
+	s.mu.Unlock()
 }
 
 // NewEmulator creates an emulator with a cols x rows grid.
 func NewEmulator(cols, rows int) *Emulator {
 	e := &Emulator{
-		term:    xvt.NewEmulator(cols, rows),
-		cols:    cols,
-		rows:    rows,
-		visible: true, // DECTCEM defaults to set (cursor shown)
+		term:      xvt.NewEmulator(cols, rows),
+		cols:      cols,
+		rows:      rows,
+		visible:   true, // DECTCEM defaults to set (cursor shown)
+		closing:   make(chan struct{}),
+		drainDone: make(chan struct{}),
 	}
 	// These callbacks fire synchronously inside term.Write, which only runs
 	// while Feed holds e.mu, so the writes below need no extra locking.
@@ -99,29 +144,91 @@ func NewEmulator(cols, rows int) *Emulator {
 	})
 	// Charm answers device queries (DA, DSR, mode/color reports, ...) by writing
 	// synchronously into an unbuffered reply pipe during Write; an undrained
-	// pipe would block Feed forever on such input. We never consume replies, so
-	// drain and discard them on a goroutine. The goroutine captures only the
-	// inner terminal, not e, so e stays collectable; a finalizer closes the
-	// terminal when e is dropped (Feed/Snapshot/Resize are the whole API — there
-	// is no Close), which returns EOF to the drain and lets it exit.
+	// pipe would block Feed forever on such input. A goroutine drains that pipe
+	// into e.reply for the emulator's lifetime, discarding replies until
+	// SetReplyWriter retargets them.
+	//
+	// The underlying charm Emulator's own Read/Close race on an unsynchronized
+	// field (its Read checks a closed bool that its Close sets, with no lock),
+	// so this wrapper never calls term.Close() while the drain goroutine might
+	// be blocked in term.Read() — see Close below and ADR-005 "Known
+	// limitations". The goroutine therefore captures only the inner terminal,
+	// not e, so e stays collectable; a finalizer closes the terminal as a last
+	// resort if Close is never called. By the time Close returns, the drain
+	// goroutine has exited, so a later finalizer run never overlaps it either.
 	term := e.term
-	go func() { _, _ = io.Copy(io.Discard, term) }()
+	go func() {
+		defer close(e.drainDone)
+		buf := make([]byte, 4096)
+		for {
+			n, err := term.Read(buf)
+			if n > 0 {
+				_, _ = e.reply.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+			if e.isClosed() {
+				return
+			}
+		}
+	}()
 	runtime.SetFinalizer(e, func(e *Emulator) { _ = e.term.Close() })
 	return e
 }
 
+// SetReplyWriter routes every reply the emulator generates while processing
+// Feed (device queries such as DSR/DA) to w, replacing the discard drain. It
+// may be called before the first Feed.
+func (e *Emulator) SetReplyWriter(w io.Writer) {
+	e.reply.set(w)
+}
+
+// Close retires the emulator and stops the reply-drain goroutine. It never
+// calls the underlying charm terminal's Close (see the race note in
+// NewEmulator); instead, under mu (so it is serialized with any in-flight
+// Feed/Resize the same way they serialize with each other), it marks the
+// emulator closed and provokes a harmless device-status query (DSR
+// "operating status", always answered unconditionally with "ESC[0n"), whose
+// synchronous reply unblocks a drain goroutine that may be parked in a
+// blocking Read, letting it observe closed and exit on its own. Close waits
+// for that exit before returning, so the drain is stopped deterministically.
+// After Close, Feed and Resize become no-ops (either could otherwise write
+// into the reply pipe with no reader left to drain it, deadlocking);
+// Snapshot keeps working since it only reads grid state and never touches
+// the pipe. Close always returns nil and is idempotent and safe to call
+// concurrently or more than once.
+func (e *Emulator) Close() error {
+	e.closeOnce.Do(func() {
+		e.mu.Lock()
+		close(e.closing)
+		_, _ = e.term.Write([]byte("\x1b[5n"))
+		e.mu.Unlock()
+		<-e.drainDone
+	})
+	return nil
+}
+
 // Feed writes raw terminal bytes into the grid. Partial escape sequences and
 // multi-byte runes split across calls are buffered by the underlying parser.
+// A no-op after Close.
 func (e *Emulator) Feed(p []byte) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.isClosed() {
+		return
+	}
 	_, _ = e.term.Write(p)
 }
 
-// Resize changes the grid dimensions.
+// Resize changes the grid dimensions. A no-op after Close (in-band-resize
+// mode can make charm write a reply into the pipe, same as Feed).
 func (e *Emulator) Resize(cols, rows int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.isClosed() {
+		return
+	}
 	e.term.Resize(cols, rows)
 	e.cols = cols
 	e.rows = rows
