@@ -36,10 +36,10 @@ func TestHandleCallbackRejectsInvalidVocabulary(t *testing.T) {
 				t.Fatalf("invalid-vocabulary callback emitted %d change(s), want 0", rec.count())
 			}
 
-			// The sequence must NOT have advanced: a valid callback with a LOWER
-			// sequence (3 <= the rejected 5, but > the never-advanced 0) is accepted.
+			// The dimension high-water must NOT have advanced: a valid callback with a
+			// LOWER sequence (3 < the rejected 5, but > the never-advanced 0) is accepted.
 			if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok1", Sequence: 3, Event: "active", Payload: turnSignal(status.TurnActive)}); err != nil {
-				t.Fatalf("valid seq=3 after rejected seq=5: %v (the rejected callback must not advance lastSeq)", err)
+				t.Fatalf("valid seq=3 after rejected seq=5: %v (the rejected callback must not advance the sequence high-water)", err)
 			}
 			if got, _ := rec.last(); got.s.Turn != status.TurnActive {
 				t.Fatalf("valid callback turn=%s, want active", got.s.Turn)

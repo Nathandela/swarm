@@ -7,8 +7,8 @@
 // Three signal paths feed one status per session:
 //
 //   - Typed signals (HandleCallback) — a `swarm hook` post authenticated against
-//     the session's live token and a strictly-increasing sequence (S6/G5). These
-//     are authoritative: a fresh typed signal outranks the heuristic.
+//     the session's live token and a per-dimension monotonic sequence (S6/G5).
+//     These are authoritative: a fresh typed signal outranks the heuristic.
 //   - Grid heuristics (OnOutput) — a deterministic read of the emulated screen on
 //     each output event. It only applies when no fresh typed signal outranks it,
 //     and an inconclusive read maps to turn=unknown, never a confident guess.
@@ -107,7 +107,15 @@ type session struct {
 
 	status status.Status
 
-	lastSeq      uint64    // last accepted callback sequence; 0 = none yet (first valid >=1)
+	// Per-dimension high-water sequence (G5): a typed callback writes a dimension
+	// only if its sequence exceeds that dimension's last-applied sequence. This
+	// tolerates reordered/concurrent hook delivery — a callback for one dimension is
+	// not dropped just because a callback for ANOTHER dimension arrived first with a
+	// higher sequence — while still rejecting an exact replay and a stale sequence
+	// that would regress a dimension a newer sequence already set. 0 = none yet.
+	turnSeq  uint64
+	interSeq uint64
+
 	lastTypedAt  time.Time // when the last typed signal applied (precedence freshness)
 	lastSignalAt time.Time // when any signal (typed or output) was last observed (staleness)
 }
@@ -167,10 +175,11 @@ func (e *Engine) EndSession(id string) {
 
 // HandleCallback authenticates and applies a typed status signal (S6/G5). It
 // rejects — with an error and NO emit — any callback that is tokenless, carries a
-// foreign token, targets an unregistered or ended session, replays a
-// non-increasing sequence, or names a status value outside the vocabulary (F2).
-// A rejected callback advances nothing (not even the sequence). An accepted
-// callback updates only the dimensions its payload names and emits only if a
+// foreign token, targets an unregistered or ended session, names a status value
+// outside the vocabulary (F2), or is stale/replayed for every dimension it names
+// (its sequence exceeds none of the named dimensions' high-water). A rejected
+// callback advances nothing. An accepted callback writes only the named dimensions
+// whose sequence is newer than that dimension's high-water, and emits only if a
 // dimension actually changed. Emit runs outside e.mu, serialized per session by
 // s.emitMu (F3).
 func (e *Engine) HandleCallback(cb Callback) error {
@@ -195,19 +204,18 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
-	// Strictly increasing from a first valid sequence >= 1. lastSeq starts at 0,
-	// so seq 0 (or any replay/reorder) is rejected without a separate guard.
-	if cb.Sequence <= s.lastSeq {
-		e.mu.Unlock()
-		return fmt.Errorf("engine: callback sequence %d not greater than last accepted %d", cb.Sequence, s.lastSeq)
-	}
-	next, err := applyPayload(s.status, cb.Payload)
+	next, advanced, err := applyTyped(s, cb.Sequence, cb.Payload)
 	if err != nil {
 		e.mu.Unlock()
 		return err // out-of-vocabulary payload: reject like an auth failure, advance nothing
 	}
+	if !advanced {
+		// The sequence is not newer than the high-water of ANY dimension it names:
+		// an exact replay or a stale reorder. Reject without advancing or emitting.
+		e.mu.Unlock()
+		return fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", cb.Sequence)
+	}
 	now := e.now()
-	s.lastSeq = cb.Sequence
 	s.lastTypedAt = now
 	s.lastSignalAt = now
 	changed := commit(s, next)
@@ -343,25 +351,35 @@ func commit(s *session, next status.Status) bool {
 	return true
 }
 
-// applyPayload returns cur with only the dimensions named in payload overwritten,
-// leaving unnamed dimensions untouched (so a turn-only signal never disturbs
-// interaction). A named dimension whose value is outside the status vocabulary is
-// an error: an authenticated-but-malformed callback must not store a bogus
-// dimension a downstream Derive would then have to interpret (F2).
-func applyPayload(cur status.Status, payload map[string]string) (status.Status, error) {
-	if v, ok := payload[PayloadKeyTurn]; ok {
-		if !validTurn(v) {
-			return status.Status{}, fmt.Errorf("engine: callback turn %q is not in the status vocabulary", v)
-		}
-		cur.Turn = status.Turn(v)
+// applyTyped computes the would-be status of a typed callback under the
+// per-dimension anti-replay rule (G5) and reports whether any dimension advanced.
+// A named dimension is written only if seq exceeds that dimension's high-water, so
+// reordered/concurrent hooks touching DIFFERENT dimensions are both kept, while a
+// replayed or stale sequence never regresses a dimension a newer sequence already
+// set. Vocabulary is validated for EVERY named dimension BEFORE any high-water
+// advances, so a malformed payload advances nothing and stores no bogus dimension
+// a downstream Derive would have to interpret (F2). Caller holds e.mu.
+func applyTyped(s *session, seq uint64, payload map[string]string) (next status.Status, advanced bool, err error) {
+	tv, hasTurn := payload[PayloadKeyTurn]
+	if hasTurn && !validTurn(tv) {
+		return status.Status{}, false, fmt.Errorf("engine: callback turn %q is not in the status vocabulary", tv)
 	}
-	if v, ok := payload[PayloadKeyInteraction]; ok {
-		if !validInteraction(v) {
-			return status.Status{}, fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", v)
-		}
-		cur.Interaction = status.Interaction(v)
+	iv, hasInter := payload[PayloadKeyInteraction]
+	if hasInter && !validInteraction(iv) {
+		return status.Status{}, false, fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", iv)
 	}
-	return cur, nil
+	next = s.status
+	if hasTurn && seq > s.turnSeq {
+		s.turnSeq = seq
+		next.Turn = status.Turn(tv)
+		advanced = true
+	}
+	if hasInter && seq > s.interSeq {
+		s.interSeq = seq
+		next.Interaction = status.Interaction(iv)
+		advanced = true
+	}
+	return next, advanced, nil
 }
 
 // validTurn / validInteraction gate a payload's dimension values to the status

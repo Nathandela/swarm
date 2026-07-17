@@ -16,6 +16,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/engine"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // N concurrent increments of one counter file yield N distinct, strictly
@@ -60,9 +61,10 @@ func TestNextSequenceMonotonicUnderConcurrency(t *testing.T) {
 	}
 }
 
-// With a counter file injected, successive FromEnv invocations (each a separate
-// `swarm hook`) produce strictly increasing sequences, and the engine accepts them
-// in order while rejecting a replay of an already-accepted one.
+// End-to-end: the counter allocates strictly increasing sequences across separate
+// `swarm hook` invocations, and callbacks touching DIFFERENT dimensions are
+// accepted by the engine even when they ARRIVE out of order (the reorder concurrent
+// hooks can produce) — while an exact replay is still rejected.
 func TestCounterSequencesDriveEngineAcceptance(t *testing.T) {
 	seqFile := filepath.Join(t.TempDir(), "hook.seq")
 	rec := &localRecorder{}
@@ -78,25 +80,33 @@ func TestCounterSequencesDriveEngineAcceptance(t *testing.T) {
 	env := map[string]string{EnvSessionID: "s1", EnvToken: "tok", EnvSequenceFile: seqFile}
 	getenv := func(k string) string { return env[k] }
 
-	var seqs []uint64
-	for _, turn := range []string{"active", "idle", "active"} {
-		cb, err := FromEnv(getenv, "e", map[string]string{"turn": turn})
-		if err != nil {
-			t.Fatalf("FromEnv: %v", err)
-		}
-		if err := e.HandleCallback(cb); err != nil {
-			t.Fatalf("HandleCallback seq=%d: %v (per-event callbacks must not be rejected as replays)", cb.Sequence, err)
-		}
-		seqs = append(seqs, cb.Sequence)
+	// Two separate hook invocations allocate seq 1 (turn) then seq 2 (interaction).
+	cbTurn, err := FromEnv(getenv, "e", map[string]string{"turn": "active"})
+	if err != nil {
+		t.Fatalf("FromEnv turn: %v", err)
 	}
-	if !(seqs[0] < seqs[1] && seqs[1] < seqs[2]) {
-		t.Fatalf("sequences not strictly increasing: %v", seqs)
+	cbInter, err := FromEnv(getenv, "e", map[string]string{"interaction": "permission"})
+	if err != nil {
+		t.Fatalf("FromEnv interaction: %v", err)
+	}
+	if !(cbTurn.Sequence == 1 && cbInter.Sequence == 2) {
+		t.Fatalf("counter sequences = (%d, %d), want (1, 2)", cbTurn.Sequence, cbInter.Sequence)
 	}
 
-	// A replay of an already-accepted sequence is rejected by the engine.
-	replay := engine.Callback{SessionID: "s1", Token: "tok", Sequence: seqs[0], Event: "e", Payload: map[string]string{"turn": "idle"}}
-	if err := e.HandleCallback(replay); err == nil {
-		t.Fatalf("replayed seq=%d: got nil error, want rejection", seqs[0])
+	// Deliver OUT OF ORDER (seq 2 before seq 1): both must be accepted.
+	if err := e.HandleCallback(cbInter); err != nil {
+		t.Fatalf("HandleCallback seq=2 interaction: %v", err)
+	}
+	if err := e.HandleCallback(cbTurn); err != nil {
+		t.Fatalf("HandleCallback seq=1 turn arriving after seq=2 was WRONGLY REJECTED: %v", err)
+	}
+	if got, ok := rec.last(); !ok || got.Turn != status.TurnActive || got.Interaction != status.InteractionPermission {
+		t.Fatalf("final status = (turn=%s, interaction=%s), want (active, permission)", got.Turn, got.Interaction)
+	}
+
+	// An exact replay of an already-applied sequence is rejected.
+	if err := e.HandleCallback(cbInter); err == nil {
+		t.Fatalf("replayed seq=%d: got nil error, want rejection", cbInter.Sequence)
 	}
 }
 

@@ -263,8 +263,10 @@ func hookSeqFilePath(dir string) string {
 
 // newHookToken mints a fresh per-session hook-authentication token (crypto/rand).
 // It is injected into the agent env and (Epic 8) registered with the engine, so a
-// callback bearing it authenticates; it is never persisted, so no other local
-// process can spoof the session's hooks (ADR-004).
+// callback bearing it authenticates. It is never written to meta.json or the
+// transcript; it transits only the 0600 shim-launch config and the agent's
+// environment, which is ADR-004's 0600 threat model — a local process that cannot
+// read the owner-only session dir cannot spoof the session's hooks.
 func newHookToken() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
