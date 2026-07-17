@@ -7,6 +7,7 @@ package shim
 
 import (
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -67,5 +68,34 @@ func TestShimSelfContainsAgentGroupOnSIGTERM(t *testing.T) {
 	ei := readExitInfo(t, cfg.SessionDir)
 	if ei.ExitSignal != "SIGKILL" {
 		t.Errorf("exit_signal = %q; want SIGKILL (agent ignored TERM, so KILL at grace ended it)", ei.ExitSignal)
+	}
+}
+
+// TestShimSignalHandler_ReleasedAndJoinedOnCleanExit asserts the signal-handler
+// goroutine is released AND joined before Run returns, so it cannot invoke onSignal
+// during or after finalization (which would signal a possibly-reused pgid). The
+// agent exits on its own with NO OS signal to the shim, so the handler must be freed
+// via the sigDone close + WaitGroup join rather than by consuming a signal. A leak
+// (handler never released/joined) leaves a goroutine blocked in the select forever.
+func TestShimSignalHandler_ReleasedAndJoinedOnCleanExit(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	cfg := helperConfig(t, modeBurstExit, nil, nil)
+	r := waitRun(t, runShimAsync(cfg), 20*time.Second)
+	if r.err != nil {
+		t.Fatalf("Run: %v", r.err)
+	}
+
+	// Once Run has returned, every shim goroutine — including the signal handler —
+	// must have exited: the count returns to the pre-run baseline.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if n := runtime.NumGoroutine(); n <= before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutine count %d did not return to baseline %d after Run — the signal handler leaked (not released/joined)", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

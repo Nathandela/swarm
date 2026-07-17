@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -133,8 +134,12 @@ func Run(cfg Config) (agentExit int, err error) {
 	// running the same TERM->grace->KILL of the agent's group (the socket signal path,
 	// reused). A signal buffered since before the spawn is handled here too. On a
 	// clean agent exit, sigDone releases this goroutine without signalling anything.
+	// It is a one-shot (at most one onSignal) and is JOINED at finalization (below).
 	sigDone := make(chan struct{})
+	var sigWG sync.WaitGroup
+	sigWG.Add(1)
 	go func() {
+		defer sigWG.Done()
 		select {
 		case <-sigCh:
 			srv.onSignal(shimwire.SigTerm)
@@ -156,11 +161,18 @@ func Run(cfg Config) (agentExit int, err error) {
 	// Block until the agent (group leader) is reaped.
 	waitErr := cmd.Wait()
 
-	// Agent reaped: stop catching signals and release the handler, so no late signal
-	// re-signals a possibly-reused pgid after finalization (finishEscalation, below,
-	// issues the single final group KILL).
+	// Agent reaped: stop catching signals, release the handler, drain any signal that
+	// was buffered before the stop, and JOIN the handler goroutine. After this it is
+	// provably quiescent — no onSignal can run during or after finalization to signal
+	// a possibly-reused pgid (finishEscalation, below, issues the single final group
+	// KILL). This mirrors the escalation worker's cancel-and-join discipline.
 	sigStop()
 	close(sigDone)
+	sigWG.Wait()
+	select {
+	case <-sigCh: // discard a signal buffered before sigStop; nothing acts on it now
+	default:
+	}
 
 	// Bound the wait for the PTY to reach EOF: a descendant can hold the slave
 	// open after the leader is reaped. We do not kill here — finishEscalation
