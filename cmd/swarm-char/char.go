@@ -194,6 +194,12 @@ func feedInput(w io.Writer, inputs []ScriptedInput, done <-chan struct{}) {
 	}
 }
 
+// hookDrainGrace bounds how long collect waits for accepted hook connections to
+// drain after the run ends. A well-behaved hook posts and closes, so the drain
+// finishes immediately; this only caps a client that keeps its connection open,
+// so the harness can never hang past the characterization run + this grace.
+const hookDrainGrace = 2 * time.Second
+
 // hookSink is the harness-owned unix-socket sink the CLI's hooks post JSON to
 // during a run. Each accepted connection carries newline-delimited JSON objects;
 // each object becomes one recorded HookPayload.
@@ -203,6 +209,7 @@ type hookSink struct {
 	connWG   sync.WaitGroup
 	mu       sync.Mutex
 	payloads []adapter.HookPayload
+	conns    []net.Conn // accepted connections, for bounded teardown
 }
 
 // startHookSink listens on the unix socket at path and begins accepting hook
@@ -222,8 +229,10 @@ func startHookSink(path string) (*hookSink, error) {
 	return s, nil
 }
 
-// acceptLoop accepts hook connections until the listener is closed, spawning a
-// reader per connection.
+// acceptLoop accepts hook connections until the listener is closed, tracking
+// each and spawning a reader for it. Because it records every accepted conn
+// before looping, once the accept loop has exited (listener closed) s.conns
+// holds every connection collect must tear down.
 func (s *hookSink) acceptLoop() {
 	defer s.acceptWG.Done()
 	for {
@@ -231,6 +240,9 @@ func (s *hookSink) acceptLoop() {
 		if err != nil {
 			return // listener closed
 		}
+		s.mu.Lock()
+		s.conns = append(s.conns, conn)
+		s.mu.Unlock()
 		s.connWG.Add(1)
 		go s.readConn(conn)
 	}
@@ -262,17 +274,44 @@ func (s *hookSink) readConn(conn net.Conn) {
 	}
 }
 
-// collect closes the sink, waits for every posted payload to be recorded, and
-// returns them in arrival order (nil when the sink was disabled).
+// collect closes the sink and returns every recorded payload in arrival order
+// (nil when the sink was disabled). It is BOUNDED: after the listener is closed
+// (no new connections) it gives accepted connections a read deadline of
+// hookDrainGrace, so a client that keeps its connection open — posting nothing —
+// cannot wedge the harness past the run. Well-behaved hooks that already closed
+// drain instantly.
 func (s *hookSink) collect() []adapter.HookPayload {
 	if s.ln != nil {
 		_ = s.ln.Close()
-		s.acceptWG.Wait()
-		s.connWG.Wait()
+		s.acceptWG.Wait() // no more accepts; s.conns is complete
+
+		deadline := time.Now().Add(hookDrainGrace)
+		s.mu.Lock()
+		for _, c := range s.conns {
+			_ = c.SetReadDeadline(deadline) // unblocks a reader stuck on an open, idle client
+		}
+		s.mu.Unlock()
+
+		waitWithTimeout(&s.connWG, hookDrainGrace+time.Second)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.payloads
+}
+
+// waitWithTimeout waits for wg but never longer than d. A reader whose deadline
+// has fired exits on its own, so the backing goroutine finishes shortly after;
+// the timeout is a hard ceiling against any untracked straggler.
+func waitWithTimeout(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+	}
 }
 
 // stop closes the listener if collect did not already; safe to call after
@@ -302,11 +341,20 @@ func hookEvent(raw []byte) string {
 	}
 }
 
-// buildGrid renders capture through the vt emulator and returns the final grid
-// snapshot — the same projection the engine hands an adapter at runtime. The
-// standard 80x24 geometry is used (the fixture records raw bytes, not size).
-func buildGrid(capture []byte) (*vt.Snap, error) {
-	emu := vt.NewEmulator(80, 24)
+// buildGrid renders capture through the vt emulator at cols x rows and returns
+// the final grid snapshot — the same projection the engine hands an adapter at
+// runtime. The geometry MUST match the one characterization ran at, or the grid
+// an adapter reads would differ from what the real CLI drew (wrapping, cursor
+// position). Non-positive dimensions fall back to the 80x24 default, matching
+// characterize's own normalization.
+func buildGrid(capture []byte, cols, rows int) (*vt.Snap, error) {
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	emu := vt.NewEmulator(cols, rows)
 	defer emu.Close()
 	emu.Feed(capture)
 	b, err := emu.Snapshot()
@@ -318,9 +366,10 @@ func buildGrid(capture []byte) (*vt.Snap, error) {
 
 // deriveCapability derives the E9.6 capability entry from the ACTUAL adapter a
 // (passed in, not a hardcoded reference), rendering the REAL grid from the
-// recorded capture and feeding it to extraction — never a nil grid.
-func deriveCapability(a adapter.Adapter, fx adapter.Fixture) (adapter.CapabilityEntry, error) {
-	grid, err := buildGrid(fx.PTYCapture)
+// recorded capture at the characterization geometry (cols x rows) and feeding it
+// to extraction — never a nil grid, never a fixed size.
+func deriveCapability(a adapter.Adapter, fx adapter.Fixture, cols, rows int) (adapter.CapabilityEntry, error) {
+	grid, err := buildGrid(fx.PTYCapture, cols, rows)
 	if err != nil {
 		return adapter.CapabilityEntry{}, fmt.Errorf("swarm-char: render capability grid: %w", err)
 	}

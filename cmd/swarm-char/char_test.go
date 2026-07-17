@@ -31,8 +31,10 @@ package main
 // to avoid the import no longer applies.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +43,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/fixtureio"
 	"github.com/Nathandela/swarm/internal/adapter/refadapter"
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -213,6 +216,7 @@ func TestCharacterize_HookSinkRecordsPayloads(t *testing.T) {
 		Rows:     24,
 		Timeout:  20 * time.Second,
 		HookSink: sock,
+		Input:    []ScriptedInput{{Delay: 100 * time.Millisecond, Data: "go\n"}}, // unblock hookprobe's stdin read
 	})
 	if err != nil {
 		t.Fatalf("characterize: %v", err)
@@ -250,12 +254,83 @@ func TestCharacterize_NoHookSinkStillValid(t *testing.T) {
 		Cols:     80,
 		Rows:     24,
 		Timeout:  20 * time.Second,
+		Input:    []ScriptedInput{{Delay: 100 * time.Millisecond, Data: "go\n"}}, // unblock hookprobe's stdin read
 	})
 	if err != nil {
 		t.Fatalf("characterize: %v", err)
 	}
 	if len(fx.HookPayloads) != 0 {
 		t.Errorf("expected no hook payloads without a sink, got %d", len(fx.HookPayloads))
+	}
+}
+
+// TestBuildGrid_UsesCharacterizationGeometry — the capability grid is rendered
+// at the ACTUAL characterization geometry, not a fixed 80x24. A capture rendered
+// at each size must yield a Snap of exactly that size (an adapter reading the
+// grid must see the same wrapping/cursor the real CLI drew).
+func TestBuildGrid_UsesCharacterizationGeometry(t *testing.T) {
+	capture := []byte("hello\r\nconv-id=xyz\r\n> \r\n")
+	for _, tc := range []struct{ cols, rows int }{{80, 24}, {100, 40}, {120, 50}} {
+		grid, err := buildGrid(capture, tc.cols, tc.rows)
+		if err != nil {
+			t.Fatalf("buildGrid(%dx%d): %v", tc.cols, tc.rows, err)
+		}
+		if grid.Cols != tc.cols || grid.Rows != tc.rows {
+			t.Errorf("grid geometry = %dx%d, want %dx%d (capability grid must match the run geometry)", grid.Cols, grid.Rows, tc.cols, tc.rows)
+		}
+	}
+}
+
+// TestCharacterize_HookSinkDoesNotHangOnOpenClient — a hook client that connects
+// and holds its connection open (posting nothing, never closing) must NOT wedge
+// the harness. collect() bounds its drain wait, so characterize returns within
+// the run + hookDrainGrace rather than blocking forever.
+func TestCharacterize_HookSinkDoesNotHangOnOpenClient(t *testing.T) {
+	dir, err := os.MkdirTemp("", "sc")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "h.sock")
+
+	// Misbehaving client: once the sink is up, connect and hold the connection
+	// open until the test tears down.
+	clientStop := make(chan struct{})
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		for i := 0; i < 1000; i++ {
+			if c, err := net.Dial("unix", sock); err == nil {
+				<-clientStop
+				_ = c.Close()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	defer func() { close(clientStop); <-clientDone }()
+
+	// The CLI idles long enough for the client to be accepted, then exits; collect
+	// then faces a still-open client connection.
+	script := writeScript(t, "print starting\nidle 500ms\nexit 0\n")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := characterize(charSpec{
+			CLI: "fake-agent", Version: "0.0.1", Scenario: "open-client",
+			Argv: []string{fakeAgentBin, script}, Cwd: t.TempDir(),
+			Cols: 80, Rows: 24, Timeout: 10 * time.Second, HookSink: sock,
+		})
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("characterize: %v", err)
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("characterize hung on an open hook client (collect() did not bound its wait)")
 	}
 }
 
@@ -310,7 +385,7 @@ func TestDeriveCapability_FromActualAdapterAndRealGrid(t *testing.T) {
 	}
 
 	a := gridReader{refadapter.New(fx)}
-	entry, err := deriveCapability(a, fx)
+	entry, err := deriveCapability(a, fx, 80, 24)
 	if err != nil {
 		t.Fatalf("deriveCapability: %v", err)
 	}
@@ -319,5 +394,120 @@ func TestDeriveCapability_FromActualAdapterAndRealGrid(t *testing.T) {
 	}
 	if entry.CLI != fx.CLI || entry.Version != fx.Version {
 		t.Errorf("capability identity %q/%q != fixture %q/%q", entry.CLI, entry.Version, fx.CLI, fx.Version)
+	}
+}
+
+// noHookAdapter wraps the reference adapter but declares NO hook signal source.
+// Registered under a test-only -adapter name, it makes capability selection
+// observable: refadapter yields Hooks=true, this yields Hooks=false.
+type noHookAdapter struct{ adapter.Adapter }
+
+func (noHookAdapter) SignalSources() []adapter.SignalSource {
+	return []adapter.SignalSource{{Kind: "heuristic", Descriptor: map[string]string{"grid": "spinner"}}}
+}
+
+// TestRun_CLIWiresInputHooksAndSelectedAdapter — the R1 end-to-end: the swarm-char
+// CLI (run) wires -scenario, -input, -hook-sink, -geometry, and -adapter. Driving
+// hookprobe: -input answers its interactive read, -hook-sink records its posts,
+// and -adapter selects a distinctive adapter (no hooks) so the capability entry
+// is provably from the SELECTED adapter, not a hardcoded refadapter.
+func TestRun_CLIWiresInputHooksAndSelectedAdapter(t *testing.T) {
+	// Register a distinctive adapter to prove -adapter selection is honored.
+	adapterRegistry["testcap"] = func(fx adapter.Fixture) adapter.Adapter {
+		return noHookAdapter{refadapter.New(fx)}
+	}
+	defer delete(adapterRegistry, "testcap")
+
+	dir, err := os.MkdirTemp("", "sc")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "h.sock")
+	fixturePath := filepath.Join(t.TempDir(), "fx.json")
+	inputPath := writeScript(t, `200ms cli-driven-reply\n`) // <delay> <data>, \n escaped
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-cli", "hookprobe-cli",
+		"-version", "9.9.9",
+		"-scenario", "cli-e2e",
+		"-geometry", "90x30",
+		"-adapter", "testcap",
+		"-input", inputPath,
+		"-hook-sink", sock,
+		"-out", fixturePath,
+		"-cwd", t.TempDir(),
+		"-timeout", "20s",
+		"--", hookprobeBin,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run exit=%d, stderr:\n%s", code, stderr.String())
+	}
+
+	// Fixture written to -out: scenario stamped, hooks recorded, -input drove it.
+	fx, err := fixtureio.LoadFixture(fixturePath)
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	if fx.Scenario != "cli-e2e" {
+		t.Errorf("Scenario = %q, want cli-e2e", fx.Scenario)
+	}
+	if len(fx.HookPayloads) == 0 {
+		t.Error("HookPayloads empty; -hook-sink did not receive payloads")
+	}
+	if !strings.Contains(string(fx.PTYCapture), "got: cli-driven-reply") {
+		t.Errorf("capture missing the interactive echo; -input did not drive the CLI:\n%s", fx.PTYCapture)
+	}
+
+	// Capability emitted to stderr, from the SELECTED adapter (testcap => no hooks),
+	// not the default refadapter (which declares a hook).
+	var entry adapter.CapabilityEntry
+	if err := json.Unmarshal(stderr.Bytes(), &entry); err != nil {
+		t.Fatalf("parse capability JSON from stderr (%q): %v", stderr.String(), err)
+	}
+	if entry.Hooks {
+		t.Error("capability Hooks=true — the default refadapter was used, not the selected -adapter testcap")
+	}
+	if entry.CLI != fx.CLI || entry.Version != fx.Version {
+		t.Errorf("capability identity %q/%q != fixture %q/%q", entry.CLI, entry.Version, fx.CLI, fx.Version)
+	}
+}
+
+// TestResolveGeometry and TestParseScriptedInput cover the -geometry / -input
+// parsers directly (unit-level, no PTY).
+func TestResolveGeometry(t *testing.T) {
+	if c, r, err := resolveGeometry("100x40", 80, 24); err != nil || c != 100 || r != 40 {
+		t.Errorf("resolveGeometry(100x40) = %d,%d,%v; want 100,40,nil", c, r, err)
+	}
+	if c, r, err := resolveGeometry("", 80, 24); err != nil || c != 80 || r != 24 {
+		t.Errorf("resolveGeometry(\"\") = %d,%d,%v; want 80,24,nil (fallback)", c, r, err)
+	}
+	for _, bad := range []string{"80", "80xzz", "0x24", "80x0", "axb"} {
+		if _, _, err := resolveGeometry(bad, 80, 24); err == nil {
+			t.Errorf("resolveGeometry(%q) accepted a malformed geometry", bad)
+		}
+	}
+}
+
+func TestParseScriptedInput(t *testing.T) {
+	in, err := parseScriptedInput("# comment\n\n300ms hello\\n\n1s /help\\n")
+	if err != nil {
+		t.Fatalf("parseScriptedInput: %v", err)
+	}
+	if len(in) != 2 {
+		t.Fatalf("parsed %d inputs, want 2", len(in))
+	}
+	if in[0].Delay != 300*time.Millisecond || in[0].Data != "hello\n" {
+		t.Errorf("input[0] = %+v, want {300ms, \"hello\\n\"}", in[0])
+	}
+	if in[1].Delay != time.Second || in[1].Data != "/help\n" {
+		t.Errorf("input[1] = %+v, want {1s, \"/help\\n\"}", in[1])
+	}
+	if _, err := parseScriptedInput("nodelaydata"); err == nil {
+		t.Error("parseScriptedInput accepted a line without a delay")
+	}
+	if _, err := parseScriptedInput("notaduration data"); err == nil {
+		t.Error("parseScriptedInput accepted an invalid delay")
 	}
 }

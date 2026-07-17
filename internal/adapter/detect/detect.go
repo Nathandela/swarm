@@ -18,10 +18,12 @@ func (Host) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-// Run executes path with args and returns its stdout. A non-zero exit or a
-// spawn failure is returned as the error (stdout captured so far still comes
-// back for best-effort parsing).
+// Run executes path with args and returns its combined stdout+stderr. Many CLIs
+// print their version banner to STDERR, so capturing only stdout would find the
+// binary but leave it unversioned; CombinedOutput captures both. A non-zero exit
+// or a spawn failure is returned as the error (output captured so far still
+// comes back for best-effort parsing).
 func (Host) Run(path string, args []string) (string, error) {
-	out, err := exec.Command(path, args...).Output()
+	out, err := exec.Command(path, args...).CombinedOutput()
 	return string(out), err
 }

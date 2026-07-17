@@ -1,13 +1,15 @@
 // Command hookprobe is a TEST-ONLY stand-in for a real agent CLI's hook. It
 // dials the characterization hook sink named by $SWARM_CHAR_HOOK_SINK, posts a
 // couple of newline-delimited JSON payloads (as a real CLI's hook command
-// would), prints a marker to stdout so it also produces a PTY capture, and
-// exits. swarm-char's char_test.go drives it to prove the hook-collection sink
-// records payloads into Fixture.HookPayloads end to end, without a real CLI.
-// Never shipped.
+// would), prints a marker to stdout so it also produces a PTY capture, then
+// reads ONE line from stdin and echoes it — so a scripted -input can drive it
+// through an interactive step. swarm-char's char_test.go drives it to prove the
+// CLI wiring (-input, -hook-sink, -scenario, -adapter) end to end without a real
+// CLI. Never shipped.
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -23,5 +25,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "hookprobe: dial sink:", err)
 		}
 	}
-	fmt.Println("hookprobe-marker done")
+	fmt.Println("hookprobe-ready")
+
+	// Read one scripted keystroke line and echo it, mirroring a CLI's interactive
+	// prompt so -input has something to drive.
+	sc := bufio.NewScanner(os.Stdin)
+	if sc.Scan() {
+		fmt.Printf("got: %s\n", sc.Text())
+	}
+	fmt.Println("hookprobe-done")
 }
