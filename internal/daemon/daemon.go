@@ -71,11 +71,13 @@ type Config struct {
 	// OnSessionStart and OnSessionEnd are optional status-engine wiring hooks (Epic
 	// 11). Both are nil by default (opt-in; pre-Epic-11 configs are unchanged).
 	//
-	// OnSessionStart fires once per successful launch, after the shim identity is
-	// persisted, with the new session's meta and its freshly-minted per-session hook
-	// token. It is the ONLY path by which the engine learns that token (it is never
-	// written to meta.json), so the assembly registers the session with the engine
-	// here so an authenticated hook callback can drive its status.
+	// OnSessionStart fires for a launched session — once at fresh launch (after the
+	// shim identity is persisted) and again on reconcile when a live shim is
+	// reconnected after a daemon restart (L2) — with the session's meta and its
+	// per-session hook token. The assembly registers the session with the engine
+	// here so an authenticated hook callback can drive its status. The token is
+	// never written to meta.json; at fresh launch it arrives from the launch path,
+	// and on reconnect reconcile re-reads it from the 0600 shim-launch.json (ADR-004).
 	//
 	// OnSessionEnd fires when a session ends (its shim exits, or it is deleted), so
 	// the assembly retires the engine session and its token (S6).
@@ -224,23 +226,50 @@ func (d *Daemon) Get(id string) (persist.Meta, bool) {
 // exited or lost session. It is a no-op for an unchanged status and an error for
 // an unknown session; a tombstoned (deleted) session is dropped by saveMeta.
 func (d *Daemon) SetStatus(id string, s status.Status) error {
+	// Hold writeMu across the whole read-modify-write so the status write is an
+	// ATOMIC RMW against the CURRENT meta under one serialization boundary. Every
+	// process-dimension writer (handleShimExit/markLost/reconcile via saveMeta)
+	// also commits under writeMu, so re-reading the live meta HERE, inside the
+	// write section, observes any exit that already committed — closing the TOCTOU
+	// window in which a stale read let a late emit resurrect an exited session (F1).
+	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
 	if !ok {
-		d.mu.Unlock()
+		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
 	}
-	m := sess.meta
-	d.mu.Unlock()
-
+	// Refuse to persist activity for a session that is no longer running: the
+	// daemon stays the sole authority on the process dimension, so a late engine
+	// emit can never overwrite an exited or lost session back to running (F1).
+	if m.Status.Process != status.ProcessRunning {
+		d.writeMu.Unlock()
+		return nil
+	}
 	next := m.Status
 	next.Turn = s.Turn
 	next.Interaction = s.Interaction
 	if next == m.Status {
+		d.writeMu.Unlock()
 		return nil // no activity change to persist
 	}
 	m.Status = next
-	return d.saveMeta(m)
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
 }
 
 // Close is a clean shutdown: stop serving and release the singleton (flock +
@@ -291,25 +320,36 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = persist.FilterEnv(m.Env)
 
-	// The tombstone check and store.Save are both under writeMu, mutually exclusive
-	// with Delete's tombstone-set + store.Delete, so a merge racing a Delete can
-	// never recreate the session dir after it is removed (F3).
 	d.writeMu.Lock()
-	if d.isDeleted(m.ID) {
-		d.writeMu.Unlock()
-		return nil // session was deleted; do not resurrect its on-disk state
-	}
-	err := d.store.Save(m)
+	written, err := d.saveMetaLocked(m)
 	d.writeMu.Unlock()
-	if err != nil {
+	if err != nil || !written {
 		return err
 	}
-
-	d.putMem(m)
 	if d.cfg.onMetaSave != nil {
 		d.cfg.onMetaSave(m)
 	}
 	return nil
+}
+
+// saveMetaLocked persists m to disk AND publishes it to the in-memory registry as
+// ONE step; the caller holds writeMu, so the on-disk write and the in-memory
+// update commit together and no reader can observe disk and memory disagreeing
+// (this is what lets SetStatus re-read a trustworthy live process dimension under
+// writeMu, F1). The tombstone check + store.Save are under writeMu, mutually
+// exclusive with Delete's tombstone-set + store.Delete, so a merge racing a Delete
+// can never recreate the session dir after it is removed (F3). It returns
+// written=false for a tombstoned id, leaving disk and memory untouched. Firing the
+// onMetaSave observer is the caller's job, done after writeMu is released.
+func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
+	if d.isDeleted(m.ID) {
+		return false, nil // session was deleted; do not resurrect its on-disk state
+	}
+	if err := d.store.Save(m); err != nil {
+		return false, err
+	}
+	d.putMem(m)
+	return true, nil
 }
 
 // isDeleted reports whether id has been tombstoned by Delete (F3).
