@@ -11,12 +11,19 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/transcript"
 )
+
+// defaultMaxSessions caps concurrent sessions for a production daemon.
+const defaultMaxSessions = 128
 
 // shimSessionEnv guards the setsid re-exec against an infinite loop: it is set
 // on the re-exec'd child so a shim that still cannot become a session leader
@@ -51,7 +58,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 
 	switch args[0] {
 	case "daemon":
-		return runDaemon(stdout, stderr)
+		return runDaemon(args[1:], stdout, stderr)
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
@@ -67,9 +74,84 @@ func runTUI(_, stderr io.Writer) int {
 	return 1
 }
 
-func runDaemon(_, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "daemon: not implemented")
-	return 1
+// runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the
+// D-8 safe restart. A plain `swarm daemon` opens the daemon from its
+// SWARM_DAEMON_* environment (set by the client's detached auto-start, D-1) and
+// serves until signalled; with no such configuration it is a no-op stub, since
+// the daemon is never started bare by a user — the client auto-starts it.
+func runDaemon(args []string, _, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "restart" {
+		return runDaemonRestart(stderr)
+	}
+	cfg, ok := daemonConfigFromEnv()
+	if !ok {
+		fmt.Fprintln(stderr, "daemon: not implemented")
+		return 1
+	}
+	d, err := daemon.Open(cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "daemon: open: %v\n", err)
+		return 1
+	}
+	// Serve until a termination signal, then Close cleanly (running shims are
+	// independent and survive; the singleton lock is released).
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
+	_ = d.Close()
+	return 0
+}
+
+// daemonConfigFromEnv builds a daemon Config from the SWARM_DAEMON_* environment.
+// It reports false when no state dir is configured (the bare-invocation stub).
+func daemonConfigFromEnv() (daemon.Config, bool) {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		return daemon.Config{}, false
+	}
+	exe, _ := os.Executable() // the daemon spawns `swarm shim` from its own binary
+	return daemon.Config{
+		StateDir:    stateDir,
+		SocketPath:  os.Getenv(daemon.EnvSocket),
+		LockPath:    os.Getenv(daemon.EnvLock),
+		LogPath:     os.Getenv(daemon.EnvLog),
+		ShimBinary:  exe,
+		MaxSessions: defaultMaxSessions,
+	}, true
+}
+
+// runDaemonRestart stops the running daemon and spawns a fresh one (D-8). Its
+// shims survive the handoff and are reconnected by the replacement.
+func runDaemonRestart(stderr io.Writer) int {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+			return 1
+		}
+	}
+	exe, _ := os.Executable()
+	cc := daemon.ClientConfig{
+		StateDir:   stateDir,
+		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
+		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
+		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
+		DaemonBin:  exe,
+	}
+	if err := daemon.Restart(cc); err != nil {
+		fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// envOr returns the environment value for key, or fallback when it is unset.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
