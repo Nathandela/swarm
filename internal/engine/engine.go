@@ -163,39 +163,33 @@ func New(cfg Config) *Engine {
 }
 
 // RegisterSession installs a session with its live authentication token, pid, and
-// declared signal sources. The token is per-invocation and dies with the session
-// (EndSession). The session starts at the humble unknown baseline; no status is
-// emitted until a signal moves it.
-func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.SignalSource) {
+// declared signal sources, seeding its INITIAL status in the SAME locked operation
+// (C2): the optional initialStatus is installed atomically with registration, so
+// there is no register-then-seed gap for an early authenticated callback to fall
+// into and then be overwritten (which would lose the real signal while keeping its
+// advanced high-water). Fresh launch omits it (or passes the humble baseline);
+// reconcile passes the PERSISTED status so a reconnected session's engine view
+// equals its persisted status after a restart (S7) — the engine then believes a
+// persisted turn=active and the staleness guard (Tick) can downgrade a now-idle
+// session. The token is per-invocation and dies with the session (EndSession). No
+// status is emitted here (a mere register/reconnect raises no status event).
+func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.SignalSource, initialStatus ...status.Status) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	st := status.Status{
+		Process:     status.ProcessRunning,
+		Turn:        status.TurnUnknown,
+		Interaction: status.InteractionUnknown,
+	}
+	if len(initialStatus) > 0 {
+		st = initialStatus[0]
+	}
 	e.sessions[id] = &session{
 		token:   token,
 		pid:     pid,
 		sources: sources,
 		alive:   true,
-		status: status.Status{
-			Process:     status.ProcessRunning,
-			Turn:        status.TurnUnknown,
-			Interaction: status.InteractionUnknown,
-		},
-	}
-}
-
-// SeedStatus overwrites a just-registered session's status WITHOUT emitting, so a
-// RECONNECTED session's engine view equals its PERSISTED status after a daemon
-// restart (S7). RegisterSession installs the humble unknown baseline; the reconcile
-// path then seeds the persisted status here, so the engine believes a persisted
-// turn=active and the staleness guard (Tick) can downgrade a now-idle session
-// instead of leaving it stale-active. It is called immediately after
-// RegisterSession — no signal can have intervened — so it simply overwrites the
-// baseline; it never emits (the caller wants no status event for a mere reconnect).
-// A no-op for an unknown or ended session.
-func (e *Engine) SeedStatus(id string, s status.Status) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if sess, ok := e.sessions[id]; ok && sess.alive {
-		sess.status = s
+		status:  st,
 	}
 }
 

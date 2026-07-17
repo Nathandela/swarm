@@ -86,8 +86,10 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 //     endpoint, exists, is ended/lost, agent type matches); an invalid source is
 //     rejected with a clear error. A resolvable adapter composes the resume argv
 //     from the source's conversation id, so the new process CONTINUES the
-//     conversation, and the new session's ResumedFrom links back to the source. The
-//     reserved "fake" agent (no adapter) relaunches fresh, still linked.
+//     conversation, and the new session's ResumedFrom links back to the source. A
+//     resume is rejected (never silently downgraded to a fresh launch) when the
+//     agent has no resuming adapter — e.g. the reserved "fake" agent — or no
+//     conversation id was captured, so ResumedFrom is stamped only on a real resume.
 //   - Fresh launch: a registry-resolvable agent's argv is composed via
 //     adapter.Command (the real argv, including any inline hook injection); the
 //     reserved dev/test "fake" agent resolves to the swarm-fake-agent binary. The

@@ -22,9 +22,9 @@ func TestSeedStatus_EnablesStalenessDowngradeAfterReconcile(t *testing.T) {
 		StalenessThreshold: time.Second,
 		Emit:               func(_ string, s status.Status) { emitted = s; gotEmit = true },
 	})
-	e.RegisterSession("s1", "tok", 1, kinds("hook", "heuristic"))
-	// Reconcile seeds the PERSISTED status (turn=active) recovered after a restart.
-	e.SeedStatus("s1", status.Status{Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
+	// Reconcile registers WITH the persisted status (turn=active) in one atomic op.
+	e.RegisterSession("s1", "tok", 1, kinds("hook", "heuristic"),
+		status.Status{Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
 
 	now = now.Add(2 * time.Second) // past staleness, no fresh signal
 	e.Tick()
@@ -47,11 +47,35 @@ func TestSeedStatus_FreshBaselineNotDowngradedSpuriously(t *testing.T) {
 		StalenessThreshold: time.Second,
 		Emit:               func(_ string, _ status.Status) { gotEmit = true },
 	})
-	e.RegisterSession("s1", "tok", 1, kinds("hook"))
-	e.SeedStatus("s1", status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone})
+	e.RegisterSession("s1", "tok", 1, kinds("hook"),
+		status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone})
 	now = now.Add(2 * time.Second)
 	e.Tick()
 	if gotEmit {
 		t.Errorf("Tick emitted for a turn=unknown baseline session; only an active turn is a staleness-downgrade candidate")
+	}
+}
+
+// TestRegisterSession_FirstSignalNotClobbered (C2): folding the initial status into
+// RegisterSession makes the old register->seed clobber structurally impossible. A
+// hook that lands right after a fresh registration advances the status AND its
+// high-water, with no separate seed step to overwrite it — so the real signal is
+// retained and its replay is rejected.
+func TestRegisterSession_FirstSignalNotClobbered(t *testing.T) {
+	var last status.Status
+	e := New(Config{Emit: func(_ string, s status.Status) { last = s }})
+	e.RegisterSession("s1", "tok", 1, kinds("hook")) // fresh: one atomic install (baseline)
+
+	if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok", Sequence: 5, Event: "e", Payload: turnSignal(status.TurnActive)}); err != nil {
+		t.Fatalf("first hook after registration: %v", err)
+	}
+	if last.Turn != status.TurnActive {
+		t.Fatalf("first hook after registration was not retained: %+v", last)
+	}
+	// A replay of seq=5 must be rejected — proof the register path did not reset the
+	// high-water (which the old separate-seed step could not, but a future regression
+	// re-installing the session would).
+	if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok", Sequence: 5, Event: "e", Payload: turnSignal(status.TurnIdle)}); err == nil {
+		t.Errorf("a replayed seq=5 was accepted; the anti-replay high-water was reset")
 	}
 }

@@ -194,21 +194,28 @@ func optionFlags(opts map[string]string) []string {
 	return flags
 }
 
-// sessionIDFrom returns the whitespace-delimited token following the session
-// marker in s. It is total; an absent marker or empty token yields ("", false).
+// sessionIDFrom returns the whitespace-delimited token following the session marker
+// in s. It requires the token to be followed by a TERMINATOR (whitespace/newline):
+// a value running to EOF with no terminator is a transcript read mid-write whose id
+// may be truncated, so it is NOT accepted as complete (C3) — it will be captured on
+// a later read once the line is whole, rather than committed partial write-once. It
+// is total; an absent marker, an unterminated token, or an empty token yields
+// ("", false).
 func sessionIDFrom(s string) (string, bool) {
 	i := strings.Index(s, sessionMarker)
 	if i < 0 {
 		return "", false
 	}
 	rest := s[i+len(sessionMarker):]
-	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
-		rest = rest[:end]
+	end := strings.IndexAny(rest, " \t\r\n")
+	if end < 0 {
+		return "", false // no terminator: the id is truncated at EOF; wait for a whole line
 	}
-	if rest == "" {
+	id := rest[:end]
+	if id == "" {
 		return "", false
 	}
-	return rest, true
+	return id, true
 }
 
 // gridText concatenates a snapshot's visible text, newline-separated. It is

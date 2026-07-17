@@ -172,12 +172,12 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	if ad, ok := registry.New(m.AgentType); ok {
 		sources = ad.SignalSources()
 	}
-	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources)
-	// Seed the engine with the session's PERSISTED status (S7): at fresh launch this
-	// is the humble launch baseline, but on reconcile after a restart it is the
-	// last-persisted status, so the engine believes a persisted turn=active and the
-	// staleness guard can downgrade a now-idle session rather than leave it stale.
-	d.eng.SeedStatus(m.ID, m.Status)
+	// Register WITH the session's persisted status in ONE atomic op (C2/S7): at fresh
+	// launch m.Status is the humble launch baseline; on reconcile after a restart it
+	// is the last-persisted status, so the engine believes a persisted turn=active and
+	// the staleness guard can downgrade a now-idle session. Folding the status into
+	// RegisterSession closes the register->seed gap an early hook could fall into.
+	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
 }
 
 // emitStatus is the engine's late-bound emission sink (see Serve): it forwards an
@@ -195,6 +195,13 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	// A final conversation-id capture before the engine retires the session: a
+	// session attached-until-exit (the grid tap never sampled it) or a very
+	// short-lived one still gets its id from the transcript tail on disk (C1). This
+	// is sequential with the daemon's terminal write — finalizeTerminal has already
+	// released writeMu before firing OnSessionEnd — so SetConversationID's writeMu is
+	// never nested (no deadlock).
+	d.captureConversationID(id)
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
@@ -220,6 +227,7 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 			for _, m := range d.core.List() {
 				if m.Status.Process == status.ProcessRunning {
 					d.sampleGridAsync(ctx, m.ID)
+					d.captureConversationID(m.ID) // attach-independent id capture (C1)
 				}
 			}
 		}
@@ -281,20 +289,26 @@ func (d *Daemon) sampleGrid(id string) {
 		return
 	}
 	d.eng.OnOutput(id, snap)
-	d.captureConversationID(id, snap)
 }
 
 // convTailBytes bounds the transcript tail read for conversation-id extraction.
 const convTailBytes = 64 << 10
 
 // captureConversationID recovers a session's native conversation id from its output
-// and persists it ONCE (Epic 11 / R-2, the id a later resume replays). It runs on
-// the existing grid-tap seam: it feeds the session's ADAPTER the rendered grid plus
-// a bounded transcript tail (the raw agent output), and on a successful extraction
-// persists Meta.ConversationID through the daemon's sole meta writer (write-once,
-// G6). It is a cheap no-op once the id is captured, for a session with no registry
-// adapter (the reserved fake agent), or when nothing extracts yet.
-func (d *Daemon) captureConversationID(id string, snap *vt.Snap) {
+// and persists it ONCE (Epic 11 / R-2, the id a later resume replays). It reads the
+// session's TRANSCRIPT tail on disk (bounded) and feeds it to the session's adapter
+// — INDEPENDENT of any live attach (C1). The shim serves connections serially, so
+// the grid tap cannot attach while a client holds the session, and a session left
+// attached until exit would otherwise never be sampled and end non-resumable.
+// Driving capture off the continuously-written transcript file instead means an
+// attached-until-exit or short-lived session still gets its id — on the poll cadence
+// and again at session end. On a successful extraction it persists
+// Meta.ConversationID through the daemon's sole meta writer (write-once, G6). Cheap
+// no-op once captured, for an adapterless agent (the reserved fake), or when nothing
+// extracts yet. SetConversationID takes writeMu, so it is never called nested inside
+// another writeMu holder (finalizeTerminal has already released it before endSession
+// runs).
+func (d *Daemon) captureConversationID(id string) {
 	m, ok := d.core.Get(id)
 	if !ok || m.ConversationID != "" {
 		return
@@ -304,7 +318,10 @@ func (d *Daemon) captureConversationID(id string, snap *vt.Snap) {
 		return
 	}
 	tail := readTranscriptTail(filepath.Join(d.stateDir, id, shim.TranscriptFile), convTailBytes)
-	convID, ok := ad.ExtractConversationID(snap, tail)
+	if len(tail) == 0 {
+		return
+	}
+	convID, ok := ad.ExtractConversationID(nil, tail)
 	if !ok || convID == "" {
 		return
 	}
