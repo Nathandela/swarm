@@ -1,0 +1,8 @@
+{
+  "schema_version": 0,
+  "cli": "reference-cli",
+  "version": "1.0.0",
+  "scenario": "idle-after-greeting",
+  "pty_capture": "V2VsY29tZSB0byByZWZlcmVuY2UtY2xpDQpjb252LWlkPWFiYzEyMw0KPiANCg==",
+  "hook_payloads": []
+}

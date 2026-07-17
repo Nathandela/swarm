@@ -88,10 +88,9 @@ type Emulator struct {
 	closeOnce sync.Once
 }
 
-// isClosed reports whether Close has run. It never blocks and never touches
-// mu: the drain goroutine calls it between reads, and if it had to wait on mu
-// it could deadlock against a Close that is itself waiting inside term.Write
-// for that same goroutine to read the provoked reply (see Close).
+// isClosed reports whether Close has run. It never blocks and never touches mu,
+// so Feed and Resize can gate on it (becoming no-ops after Close) without
+// ordering against Close's own lock.
 func (e *Emulator) isClosed() bool {
 	select {
 	case <-e.closing:
@@ -146,22 +145,23 @@ func NewEmulator(cols, rows int) *Emulator {
 	// synchronously into an unbuffered reply pipe during Write; an undrained
 	// pipe would block Feed forever on such input. A goroutine drains that pipe
 	// into e.reply for the emulator's lifetime, discarding replies until
-	// SetReplyWriter retargets them.
+	// SetReplyWriter retargets them. It exits only when term.Read returns an
+	// error, which happens when Close closes the reply pipe's writer (see Close);
+	// it consults no shared flag, so nothing it reads can race a Close.
 	//
 	// The underlying charm Emulator's own Read/Close race on an unsynchronized
 	// field (its Read checks a closed bool that its Close sets, with no lock),
 	// so this wrapper never calls term.Close() while the drain goroutine might
 	// be blocked in term.Read() — see Close below and ADR-005 "Known
-	// limitations". The goroutine captures e (via e.reply and e.isClosed), so e
-	// stays reachable for as long as the goroutine runs; it exits only when
-	// Close provokes it or term.Read returns an error. The finalizer is a
-	// best-effort fallback for the path where Close is never called: it can run
-	// only once the goroutine has already exited on its own (e.g. term.Read
-	// errored) and e has become unreachable, closing the inner terminal that
-	// would otherwise leak. It is not a substitute for Close — a goroutine
-	// parked forever in term.Read keeps e alive and the finalizer never fires.
-	// By the time Close returns, the drain goroutine has exited, so a later
-	// finalizer run never overlaps it either.
+	// limitations". The goroutine captures e (via e.reply), so e stays reachable
+	// for as long as the goroutine runs. The finalizer is a best-effort fallback
+	// for the path where Close is never called: it can run only once the
+	// goroutine has already exited on its own (e.g. term.Read errored) and e has
+	// become unreachable, closing the inner terminal that would otherwise leak.
+	// It is not a substitute for Close — a goroutine parked forever in term.Read
+	// keeps e alive and the finalizer never fires. By the time Close returns, the
+	// drain goroutine has exited, so a later finalizer run never overlaps it
+	// either.
 	term := e.term
 	go func() {
 		defer close(e.drainDone)
@@ -172,9 +172,6 @@ func NewEmulator(cols, rows int) *Emulator {
 				_, _ = e.reply.Write(buf[:n])
 			}
 			if err != nil {
-				return
-			}
-			if e.isClosed() {
 				return
 			}
 		}
@@ -192,24 +189,29 @@ func (e *Emulator) SetReplyWriter(w io.Writer) {
 
 // Close retires the emulator and stops the reply-drain goroutine. It never
 // calls the underlying charm terminal's Close (see the race note in
-// NewEmulator); instead, under mu (so it is serialized with any in-flight
-// Feed/Resize the same way they serialize with each other), it marks the
-// emulator closed and provokes a harmless device-status query (DSR
-// "operating status", always answered unconditionally with "ESC[0n"), whose
-// synchronous reply unblocks a drain goroutine that may be parked in a
-// blocking Read, letting it observe closed and exit on its own. Close waits
-// for that exit before returning, so the drain is stopped deterministically.
-// After Close, Feed and Resize become no-ops (either could otherwise write
-// into the reply pipe with no reader left to drain it, deadlocking);
-// Snapshot keeps working since it only reads grid state and never touches
-// the pipe. Close always returns nil and is idempotent and safe to call
-// concurrently or more than once.
+// NewEmulator): that would write charm's unsynchronized `closed` bool while the
+// drain is reading it. Instead Close marks the emulator closed (so Feed and
+// Resize become no-ops — either could otherwise write into the reply pipe with
+// no reader left to drain it) and closes the reply pipe's writer via InputPipe.
+// Closing the writer makes the drain's blocked term.Read return io.EOF so the
+// goroutine exits — on ANY Feed history, with no dependence on parser state and
+// no shared flag for charm to race, because io.Pipe fully synchronizes the
+// close against the concurrent read. Close waits for that exit before returning,
+// so shutdown is deterministic. Snapshot keeps working after Close since it only
+// reads grid state and never touches the pipe. Close always returns nil and is
+// idempotent and safe to call concurrently or more than once.
 func (e *Emulator) Close() error {
 	e.closeOnce.Do(func() {
 		e.mu.Lock()
 		close(e.closing)
-		_, _ = e.term.Write([]byte("\x1b[5n"))
 		e.mu.Unlock()
+		// Unblock the drain's blocking term.Read by closing charm's reply-pipe
+		// writer — the io.Pipe end charm writes replies into and term.Read
+		// drains. We own the read side of this pipe already; closing its writer
+		// never touches charm's racy `closed` field the way term.Close would.
+		if pw, ok := e.term.InputPipe().(*io.PipeWriter); ok {
+			_ = pw.CloseWithError(io.EOF)
+		}
 		<-e.drainDone
 	})
 	return nil

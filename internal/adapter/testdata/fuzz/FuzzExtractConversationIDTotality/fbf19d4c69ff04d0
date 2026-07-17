@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("\xd0")
+[]byte("\xd000000*E\x19E\x9ew\xe1R0")
