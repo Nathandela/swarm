@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Nathandela/swarm/internal/shim"
 )
 
@@ -152,7 +154,7 @@ func TestRunShim_ReExecsToAcquireSessionWhenGroupLeader(t *testing.T) {
 func becomesSessionLeader(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if sid, err := syscall.Getsid(pid); err == nil && sid == pid {
+		if sid, err := unix.Getsid(pid); err == nil && sid == pid {
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)
