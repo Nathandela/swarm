@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -437,21 +438,38 @@ func (a *Attachment) Detach() error {
 
 // maxSnapshotBytes caps a reassembled snapshot so a garbage or oversized
 // snapshot_len can never OOM the client, while still admitting the LARGEST snapshot
-// the shim can legally produce. The vt emulator serializes ONE JSON run per grid
-// cell (Epic 2's accepted no-run-merging decision): a maxDim x maxDim grid is up to
-// maxDim*maxDim runs, and a fully-styled run (text + width + fg/bg hex + the five
-// attribute flags) serializes to ~124 bytes. snapshotBytesPerCell rounds that up to
-// leave margin for multi-codepoint graphemes and the per-line array framing, so the
-// cap = maxDim*maxDim*snapshotBytesPerCell is finite (a garbage/huge length is
-// rejected, no OOM) yet large enough that no legal max-grid snapshot is rejected.
-// If maxDim (the resize clamp) changes, this cap tracks it automatically.
+// the shim can LEGALLY produce. The vt emulator serializes ONE JSON run per grid
+// cell (Epic 2's accepted no-run-merging decision) and CLAMPS the two free-form
+// fields producer-side (vt.SnapshotTextMax per cell, vt.SnapshotTitleMax for the
+// title), so the largest legal snapshot at maxDim x maxDim is bounded. The cap is
+// finite (a garbage/huge/negative length is rejected without allocation) yet large
+// enough that no legal snapshot is rejected. It DEPENDS on the vt producer-side
+// limits it references — if those or maxDim change, the cap tracks them.
 //
-// Epic 8 note (N-1 first-paint budget): per-cell run serialization makes a
-// worst-case snapshot large (~150 MiB at maxDim=1000). If first-paint latency
-// suffers, run-merging in the snapshot format is the eventual optimization.
+// Derivation:
+//   - per cell: a fully-styled Run's fixed JSON fields (~124 B) + the clamped cell
+//     text. A cell's Text is ONE grapheme (vt), so at most its base rune is
+//     JSON-escapable (< > & -> \uXXXX, 6 B); combining marks are emitted verbatim.
+//     So escaped text <= vt.SnapshotTextMax + a small escape slack.
+//   - per line: the {"runs":[ ... ]} array framing.
+//   - once: the title (free-form, so every byte may escape to \uXXXX) + the Snap
+//     wrapper (version/cols/rows/cursor/keys).
+//
+// Epic 8 note (N-1 first-paint budget): per-cell run serialization still makes a
+// worst-case snapshot large (~190 MiB at maxDim=1000); run-merging in the snapshot
+// format is the eventual optimization if first-paint latency suffers.
 const (
-	snapshotBytesPerCell = 160
-	maxSnapshotBytes     = maxDim * maxDim * snapshotBytesPerCell
+	snapshotRunFixedMax     = 128                    // fully-styled Run JSON, empty text, + separator
+	snapshotCellTextMax     = vt.SnapshotTextMax + 8 // clamped one-grapheme text, escaped worst case
+	snapshotBytesPerCell    = snapshotRunFixedMax + snapshotCellTextMax
+	snapshotLineFraming     = 16                         // {"runs":[ ]} + separator, per line
+	snapshotTitleSerialized = vt.SnapshotTitleMax*6 + 16 // clamped title, every byte escaped to \uXXXX
+	snapshotWrapperMax      = 256                        // version/cols/rows/cursor + keys
+
+	maxSnapshotBytes = maxDim*maxDim*snapshotBytesPerCell +
+		maxDim*snapshotLineFraming +
+		snapshotTitleSerialized +
+		snapshotWrapperMax
 )
 
 // beginSnapshot starts snapshot reassembly for a lease whose snapshot is n bytes

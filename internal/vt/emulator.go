@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	xvt "github.com/charmbracelet/x/vt"
@@ -34,6 +35,18 @@ import (
 // whenever the Snap/Line/Run wire format changes; DecodeSnapshot rejects any
 // other version.
 const SnapshotVersion = 1
+
+// SnapshotTextMax bounds a single cell's Run.Text (its grapheme cluster) in a
+// snapshot. 64 bytes covers any real grapheme cluster (long ZWJ emoji, flag
+// sequences, base + combining marks) with margin; a hostile agent's absurdly long
+// single-"grapheme" cell is truncated to this bound so a snapshot stays bounded
+// (N-6). The Epic 6 reassembly cap (internal/protocol) is derived from this.
+const SnapshotTextMax = 64
+
+// SnapshotTitleMax bounds Snap.Title (the free-form OSC window title) in a
+// snapshot, for the same reason: a hostile agent cannot inflate a snapshot with an
+// unbounded title. The Epic 6 reassembly cap is derived from this too.
+const SnapshotTitleMax = 256
 
 // Run is the projection of a single grapheme cell: its content and style. Runs
 // are per-cell (a cell is never merged with a neighbor), so a run's Text is one
@@ -261,7 +274,7 @@ func (e *Emulator) buildSnap() *Snap {
 		CursorX:       pos.X,
 		CursorY:       pos.Y,
 		CursorVisible: e.visible,
-		Title:         sanitizeText(e.title),
+		Title:         clampBytes(sanitizeText(e.title), SnapshotTitleMax),
 		Lines:         make([]Line, e.rows),
 	}
 	for y := 0; y < e.rows; y++ {
@@ -319,7 +332,7 @@ func DecodeSnapshot(b []byte) (*Snap, error) {
 // styleRun builds a Run for one cell from its style, sanitized text, and width.
 func styleRun(st uv.Style, text string, width int) Run {
 	return Run{
-		Text:      text,
+		Text:      clampBytes(text, SnapshotTextMax),
 		Width:     width,
 		Fg:        colorSpec(st.Fg),
 		Bg:        colorSpec(st.Bg),
@@ -358,4 +371,20 @@ func sanitizeText(s string) string {
 		}
 		return ' '
 	}, s)
+}
+
+// clampBytes truncates s to at most maxBytes, on a rune boundary so a multi-byte
+// rune is never split. It bounds the two free-form snapshot fields (Run.Text and
+// Snap.Title) so a pathological or hostile agent cannot inflate a snapshot with an
+// unbounded grapheme cluster or title; a normal grapheme/title is always shorter
+// than its bound and passes through unchanged.
+func clampBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	b := maxBytes
+	for b > 0 && !utf8.RuneStart(s[b]) {
+		b--
+	}
+	return s[:b]
 }
