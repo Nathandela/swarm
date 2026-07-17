@@ -13,10 +13,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -62,7 +64,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
-		return runHook(stdout, stderr)
+		return runHook(args[1:], stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -280,7 +282,41 @@ func reexecWithSetsid() (int, error) {
 	return 0, nil
 }
 
-func runHook(_, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "hook: not implemented")
-	return 1
+// runHook runs the `swarm hook <event>` role (E10.1, G4): it composes an
+// authenticated status callback from the per-session environment injected at
+// spawn (session id, live token, daemon socket, monotonic sequence) and posts it
+// to the daemon socket. Optional `key=value` args populate the callback's status
+// payload (e.g. `swarm hook Stop turn=idle`); the per-CLI event-to-dimension
+// mapping is Epic 11 adapter work. A bare `swarm hook` with no event has nothing
+// to post.
+func runHook(args []string, _, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "hook: not implemented")
+		return 1
+	}
+	cb, err := hookclient.FromEnv(os.Getenv, args[0], parseHookPayload(args[1:]))
+	if err != nil {
+		fmt.Fprintf(stderr, "hook: %v\n", err)
+		return 1
+	}
+	if err := hookclient.Post(os.Getenv(hookclient.EnvSocket), cb); err != nil {
+		fmt.Fprintf(stderr, "hook: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// parseHookPayload turns `key=value` args into a status-dimension payload,
+// ignoring any arg without '='. Returns nil when there is nothing to carry.
+func parseHookPayload(args []string) map[string]string {
+	if len(args) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(args))
+	for _, a := range args {
+		if k, v, ok := strings.Cut(a, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
 }
