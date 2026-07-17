@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,13 +12,19 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
+// scanStoreFn is the seam for the reconcile scan; tests override it to inject a
+// scan failure so Open's error propagation is exercised (F4).
+var scanStoreFn = func(s *persist.Store) ([]persist.Meta, error) { return s.Scan() }
+
 // reconcile rebuilds the registry from the meta scan and resolves every session
 // (S3/S11/L2). It runs synchronously in Open, before the daemon serves, so
-// List/Get reflect the reconnected world immediately.
-func (d *Daemon) reconcile() {
-	metas, err := d.store.Scan()
+// List/Get reflect the reconnected world immediately. A scan failure is returned
+// (never swallowed): Open must refuse to serve a blind registry rather than drop
+// live sessions (F4). Per-session persistence errors are logged, not fatal.
+func (d *Daemon) reconcile() error {
+	metas, err := scanStoreFn(d.store)
 	if err != nil {
-		return
+		return fmt.Errorf("daemon: scan registry: %w", err)
 	}
 	for _, m := range metas {
 		if m.Status.Process != status.ProcessRunning {
@@ -26,6 +33,7 @@ func (d *Daemon) reconcile() {
 		}
 		d.reconcileRunning(m)
 	}
+	return nil
 }
 
 // reconcileRunning resolves one meta that was last persisted as running.
@@ -36,7 +44,9 @@ func (d *Daemon) reconcileRunning(m persist.Meta) {
 	//    session is EXITED (not lost — lost is reserved for a shim that vanished
 	//    with no exit report). True even if the PID lingers or was reused.
 	if ei, ok := readExitSideFile(dir); ok {
-		_ = d.saveMeta(mergeExit(m, ei))
+		if err := d.saveMeta(mergeExit(m, ei)); err != nil {
+			d.logf("reconcile: persist exited meta for %s: %v", m.ID, err)
+		}
 		return
 	}
 
@@ -55,7 +65,9 @@ func (d *Daemon) reconcileRunning(m persist.Meta) {
 	// 3. Reaped, PID-reused, or not serving → LOST. Zero signals are sent: the
 	//    daemon reclassifies only its own record, never touching the PID (S3).
 	m.Status.Process = status.ProcessLost
-	_ = d.saveMeta(m)
+	if err := d.saveMeta(m); err != nil {
+		d.logf("reconcile: persist lost meta for %s: %v", m.ID, err)
+	}
 }
 
 // registerRunning adopts a live, reconnected shim: it records the running meta in
@@ -112,7 +124,9 @@ func (d *Daemon) handleShimExit(id string) {
 	} else {
 		m.Status.Process = status.ProcessLost
 	}
-	_ = d.saveMeta(m)
+	if err := d.saveMeta(m); err != nil {
+		d.logf("exit-merge: persist meta for %s: %v", id, err)
+	}
 }
 
 // putMem inserts or updates a session in the registry without writing to disk,
@@ -121,6 +135,12 @@ func (d *Daemon) handleShimExit(id string) {
 func (d *Daemon) putMem(m persist.Meta) *session {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// A tombstoned id was removed by Delete: never resurrect it in the registry
+	// (F3). Delete tombstones under d.mu together with the registry removal, so a
+	// tombstoned id is guaranteed absent from d.sessions here.
+	if d.isDeleted(m.ID) {
+		return &session{stop: make(chan struct{})} // throwaway; not stored
+	}
 	s, ok := d.sessions[m.ID]
 	if !ok {
 		s = &session{stop: make(chan struct{})}

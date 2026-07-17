@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
@@ -16,6 +17,21 @@ import (
 // ErrMaxSessions is returned by Launch when the daemon is at its configured
 // concurrent-session cap; the message names the cap value (S-7).
 var ErrMaxSessions = errors.New("daemon: max sessions reached")
+
+// procStartTimeFn is the seam for reading a just-spawned shim's process-start-time
+// in launch; tests override it to inject a post-spawn identity-read failure (F2).
+var procStartTimeFn = processStartTime
+
+// killSpawnedShim terminates a just-spawned shim whose launch is being aborted
+// before its supervisor started (F2). The shim setsids in place, so its pgid ==
+// its pid once it has; kill the group best-effort, then the process, then reap it.
+func killSpawnedShim(cmd *exec.Cmd, pid int) {
+	if pid > 0 {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
+}
 
 // launchPhase marks a two-phase-launch boundary for the crash-injection seam.
 type launchPhase int
@@ -118,8 +134,24 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, err
 	}
 	m.ShimPID = cmd.Process.Pid
-	m.ShimStartTime, _ = processStartTime(m.ShimPID)
-	_ = d.saveMeta(m) // record the shim identity; the shim is already running
+	st, sterr := procStartTimeFn(m.ShimPID)
+	if sterr != nil {
+		// A shim whose start-time we cannot record is un-trackable: reconcile matches
+		// by (PID, start-time), so persisting ShimStartTime=0 would let a later Open
+		// mark this LIVE shim lost. This is a setup failure, not a crash, so we DO
+		// clean up: kill the just-spawned shim and abort (F2). The shim setsids in
+		// place (pgid == pid once it has), so take the group best-effort, then the
+		// process; no supervisor is running yet, so we reap it here.
+		killSpawnedShim(cmd, m.ShimPID)
+		d.dropReserved(id)
+		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
+	}
+	m.ShimStartTime = st
+	if err := d.saveMeta(m); err != nil {
+		killSpawnedShim(cmd, m.ShimPID)
+		d.dropReserved(id)
+		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
+	}
 	d.wg.Add(1)
 	go d.superviseLaunched(id, cmd, s.stop)
 

@@ -74,7 +74,8 @@ func Dial(socketPath string, clientVersion int) (net.Conn, error) {
 	daemonVersion := int(binary.BigEndian.Uint32(in[:]))
 	if daemonVersion != clientVersion {
 		conn.Close()
-		return nil, fmt.Errorf("%w: daemon speaks protocol v%d, client v%d; run `swarm daemon restart`",
+		return nil, fmt.Errorf("%w: daemon speaks protocol v%d, client v%d; run `swarm daemon restart` "+
+			"(safe: your running sessions keep running and are reconnected — no live sessions are lost)",
 			ErrVersionSkew, daemonVersion, clientVersion)
 	}
 	_ = conn.SetDeadline(time.Time{}) // hand the caller a fresh, deadline-free conn
@@ -84,6 +85,10 @@ func Dial(socketPath string, clientVersion int) (net.Conn, error) {
 // EnsureDaemon is the D-1 auto-start choke point: it dials the daemon, and on a
 // miss spawns one detached and backoff-dials until it answers. Idempotent — a
 // second call with a daemon already up connects without spawning.
+//
+// DEFERRED: the production `swarm list` client command that calls EnsureDaemon is
+// the Epic 6/7 client layer; Epic 5 provides and tests this choke point but does
+// not wire a user-facing client command through it.
 func EnsureDaemon(cfg ClientConfig) (net.Conn, error) {
 	if conn, err := Dial(cfg.SocketPath, ProtocolVersion); err == nil {
 		return conn, nil
@@ -123,6 +128,18 @@ func defaultSpawnDaemon(cfg ClientConfig) error {
 		bin = exe
 	}
 
+	// Create the private state dir (0700) BEFORE opening the log: on a truly cold
+	// start the dir does not exist yet, and the log lives inside it, so opening the
+	// log first would ENOENT (F5, D-1/D-6).
+	if cfg.StateDir != "" {
+		if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(cfg.StateDir, 0o700); err != nil {
+			return err
+		}
+	}
+
 	logf, err := openDaemonLog(cfg.LogPath)
 	if err != nil {
 		return err
@@ -146,12 +163,22 @@ func defaultSpawnDaemon(cfg ClientConfig) error {
 }
 
 // openDaemonLog opens the daemon's stdio log (append, 0600), or /dev/null when no
-// path is configured.
+// path is configured. An already-existing log that predates this daemon with a
+// wider mode is hardened back to 0600 on every open — O_CREATE does not chmod an
+// existing file (E5.7/D-6, F10).
 func openDaemonLog(path string) (*os.File, error) {
 	if path == "" {
 		return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 // Restart performs the `swarm daemon restart` half of D-8: stop the running
@@ -175,8 +202,15 @@ func stopRunningDaemon(cfg ClientConfig) {
 	if err != nil {
 		return
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
+	pid, start, ok := parsePIDFile(data)
+	if !ok || pid <= 0 {
+		return
+	}
+	// Verify the pidfile still names THIS daemon before signalling: after a crash +
+	// PID reuse the recorded PID may belong to an unrelated process — the exact S3
+	// hazard, here in the daemon's own pidfile. A start-time mismatch (or an
+	// un-readable PID) makes stop a genuine no-op rather than signal a stranger (F1).
+	if st, serr := processStartTime(pid); serr != nil || st != start {
 		return
 	}
 	if syscall.Kill(pid, syscall.SIGTERM) != nil {
@@ -189,4 +223,24 @@ func stopRunningDaemon(cfg ClientConfig) {
 		}
 		time.Sleep(ensureBackoff)
 	}
+}
+
+// parsePIDFile parses a "PID STARTTIME" daemon pidfile (F1). Anything that is not
+// exactly two integer fields is unparseable, which callers treat as a stale/absent
+// pidfile — a no-op. This also rejects the legacy PID-only format, whose lack of a
+// start-time makes safe verification impossible.
+func parsePIDFile(data []byte) (pid int, start int64, ok bool) {
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	p, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	s, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return p, s, true
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -19,9 +20,17 @@ func (d *Daemon) Kill(id string) error {
 		d.mu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
 	}
-	running := s.meta.Status.Process == status.ProcessRunning
+	m := s.meta
+	running := m.Status.Process == status.ProcessRunning
 	d.mu.Unlock()
 	if !running {
+		return nil
+	}
+	// Re-verify the shim identity before signalling: if (PID, start-time) no longer
+	// matches, the shim exited or its PID was reused, so signalling its socket could
+	// hit a rebound stranger. Resolve as lost instead of signalling (S3, F6).
+	if !d.shimIdentityMatches(m) {
+		d.markLost(id)
 		return nil
 	}
 	if err := signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigTerm); err != nil {
@@ -40,16 +49,58 @@ func (d *Daemon) Delete(id string) error {
 	if ok {
 		delete(d.sessions, id)
 	}
+	// Tombstone within the same d.mu section as the registry removal, so a concurrent
+	// exit-merge's putMem/saveMeta sees it and cannot re-add or re-persist this id
+	// after the removal below (F3).
+	d.tombstoneID(id)
 	d.mu.Unlock()
 
 	if ok {
 		close(s.stop) // stop this session's monitor WITHOUT finalizing it
-		if s.meta.Status.Process == status.ProcessRunning {
+		// Only signal if the recorded shim identity still matches; otherwise the shim
+		// is gone or its PID was reused and must not be signalled (S3, F6).
+		if s.meta.Status.Process == status.ProcessRunning && d.shimIdentityMatches(s.meta) {
 			_ = signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigKill)
 			d.awaitShimGone(s.meta.ShimPID)
 		}
 	}
-	return d.store.Delete(id) // remove the session directory
+
+	// Remove the session directory under writeMu, mutually exclusive with saveMeta's
+	// tombstone-check + store.Save, so a merge racing this Delete cannot recreate the
+	// directory after it is removed (F3).
+	d.writeMu.Lock()
+	err := d.store.Delete(id)
+	d.writeMu.Unlock()
+	return err
+}
+
+// shimIdentityMatches reports whether the recorded shim (PID, start-time) still
+// names the process the session was launched with. A mismatch means the shim
+// exited or its PID was reused; the daemon must not signal that PID (S3). This is
+// the cheap pre-signal recheck that closes the rebound-socket window (F6).
+func (d *Daemon) shimIdentityMatches(m persist.Meta) bool {
+	if m.ShimPID <= 0 || !pidAlive(m.ShimPID) {
+		return false
+	}
+	st, err := processStartTime(m.ShimPID)
+	return err == nil && st == m.ShimStartTime
+}
+
+// markLost reclassifies a still-running session as lost and persists it, sending
+// no signal (S3). Used when a pre-signal identity recheck fails (F6).
+func (d *Daemon) markLost(id string) {
+	d.mu.Lock()
+	s, ok := d.sessions[id]
+	if !ok || s.meta.Status.Process != status.ProcessRunning {
+		d.mu.Unlock()
+		return
+	}
+	m := s.meta
+	d.mu.Unlock()
+	m.Status.Process = status.ProcessLost
+	if err := d.saveMeta(m); err != nil {
+		d.logf("kill: persist lost for %s: %v", id, err)
+	}
 }
 
 // awaitShimGone waits (bounded) for a shim PID to be reaped, so Delete never

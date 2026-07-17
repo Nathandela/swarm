@@ -87,6 +87,14 @@ type Daemon struct {
 	writeMu sync.Mutex     // serializes meta writes (single-writer, G6)
 	stopCh  chan struct{}  // closed by Close/abandon: stop monitors + accept loop
 	wg      sync.WaitGroup // accept loop + poll/launched supervisors (not the reapers)
+
+	// tombMu guards deleted, a set of ids removed by Delete. A concurrent exit-merge
+	// must not recreate a session's dir or registry entry after Delete removed it
+	// (F3): saveMeta/putMem consult this set and skip a tombstoned id. It is a leaf
+	// lock, taken only for the brief map op. The set grows by one per Delete over the
+	// daemon's lifetime; that bound is acceptable (ids are never reused).
+	tombMu  sync.Mutex
+	deleted map[string]struct{}
 }
 
 // Open acquires the singleton (flock-before-bind), rebuilds the registry from the
@@ -118,10 +126,19 @@ func Open(cfg Config) (*Daemon, error) {
 		listener: listener,
 		sessions: make(map[string]*session),
 		stopCh:   make(chan struct{}),
+		deleted:  make(map[string]struct{}),
 	}
 	writePIDFile(cfg.StateDir) // best-effort; for `swarm daemon restart`
 
-	d.reconcile() // rebuild + reconnect BEFORE serving so List/Get are correct
+	// Rebuild + reconnect BEFORE serving so List/Get are correct. A scan failure is
+	// fatal to Open: serving a blind, possibly-empty registry would silently drop
+	// live sessions (F4). Release everything acquired above before returning.
+	if err := d.reconcile(); err != nil {
+		d.listener.Close()
+		removePIDFile(cfg.StateDir)
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
 
 	d.wg.Add(1)
 	go d.acceptLoop()
@@ -199,7 +216,14 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = persist.FilterEnv(m.Env)
 
+	// The tombstone check and store.Save are both under writeMu, mutually exclusive
+	// with Delete's tombstone-set + store.Delete, so a merge racing a Delete can
+	// never recreate the session dir after it is removed (F3).
 	d.writeMu.Lock()
+	if d.isDeleted(m.ID) {
+		d.writeMu.Unlock()
+		return nil // session was deleted; do not resurrect its on-disk state
+	}
 	err := d.store.Save(m)
 	d.writeMu.Unlock()
 	if err != nil {
@@ -211,6 +235,34 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 		d.cfg.onMetaSave(m)
 	}
 	return nil
+}
+
+// isDeleted reports whether id has been tombstoned by Delete (F3).
+func (d *Daemon) isDeleted(id string) bool {
+	d.tombMu.Lock()
+	_, ok := d.deleted[id]
+	d.tombMu.Unlock()
+	return ok
+}
+
+// tombstoneID marks id as deleted so no later write recreates its dir or registry
+// entry (F3). Delete calls it under d.mu, together with the registry removal.
+func (d *Daemon) tombstoneID(id string) {
+	d.tombMu.Lock()
+	d.deleted[id] = struct{}{}
+	d.tombMu.Unlock()
+}
+
+// logf appends a line to the daemon log (best-effort). It surfaces reconcile and
+// side-file-merge persistence errors that would otherwise be silently dropped,
+// rather than letting the served registry diverge from disk unseen (F4).
+func (d *Daemon) logf(format string, args ...any) {
+	f, err := openDaemonLog(d.cfg.LogPath)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "daemon: "+format+"\n", args...)
+	_ = f.Close()
 }
 
 // sessionDir returns the on-disk directory for a session id.
@@ -229,9 +281,18 @@ func (d *Daemon) liveCountLocked() int {
 	return n
 }
 
-// writePIDFile records the daemon's PID for `swarm daemon restart`. Best-effort.
+// writePIDFile records the daemon's PID and its process-start-time ("PID START")
+// for `swarm daemon restart`, so the stop step can verify the pidfile still names
+// THIS daemon before signalling it — not a PID-reused stranger (S3, F1).
+// Best-effort: if the start-time cannot be read the pidfile is skipped, which makes
+// a later restart a safe no-op rather than an unverifiable signal.
 func writePIDFile(stateDir string) {
-	_ = os.WriteFile(filepath.Join(stateDir, pidFileName), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600)
+	pid := os.Getpid()
+	st, err := processStartTime(pid)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(stateDir, pidFileName), []byte(fmt.Sprintf("%d %d\n", pid, st)), 0o600)
 }
 
 func removePIDFile(stateDir string) {

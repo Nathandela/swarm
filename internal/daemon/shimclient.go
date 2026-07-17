@@ -47,6 +47,14 @@ func dialShimHello(sock string) (net.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("shim handshake: got %q, want hello", ctrl.Type)
 	}
+	// The reconnect hello must compare WireVersion, not merely the reply type: a
+	// shim advertising an incompatible wire version is rejected here (not adopted),
+	// so reconcile marks it lost rather than driving it over a mismatched protocol
+	// (F9). The full compat matrix is E14.3; this is the single-version gate.
+	if ctrl.WireVersion != shimwire.Version {
+		conn.Close()
+		return nil, fmt.Errorf("shim handshake: wire version %d, want %d", ctrl.WireVersion, shimwire.Version)
+	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
 }
