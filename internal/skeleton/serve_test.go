@@ -33,6 +33,7 @@
 package skeleton
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -332,5 +333,30 @@ func TestSkeleton_HookPostDemuxDoesNotWedgeClientSocket(t *testing.T) {
 	c := dialClient(t, sk, "attach")
 	if _, err := c.List(); err != nil {
 		t.Fatalf("client socket wedged after a hook post (demux broken): %v", err)
+	}
+}
+
+// Version-probe DEMUX (F2) — the daemon's liveness handshake (daemon.Dial, the
+// 'V'-tagged probe used by EnsureDaemon / Restart) is routed to the version handler
+// on the SAME assembled socket the client protocol serves, with no timing window: a
+// matching probe returns the daemon's version, a skewed one is detected as skew
+// (4-byte reply semantics preserved), and neither wedges the socket for real clients.
+func TestSkeleton_VersionProbeDemuxCoexistsWithClients(t *testing.T) {
+	sk := assemble(t)
+
+	conn, err := daemon.Dial(sk.SocketPath(), daemon.ProtocolVersion)
+	if err != nil {
+		t.Fatalf("version probe at matching version failed through the demux: %v", err)
+	}
+	_ = conn.Close()
+
+	if _, err := daemon.Dial(sk.SocketPath(), daemon.ProtocolVersion+1); !errors.Is(err, daemon.ErrVersionSkew) {
+		t.Fatalf("skewed version probe error = %v; want ErrVersionSkew", err)
+	}
+
+	// The client protocol still serves on the same socket after the probes.
+	c := dialClient(t, sk, "attach")
+	if _, err := c.List(); err != nil {
+		t.Fatalf("client socket wedged after version probes (demux broken): %v", err)
 	}
 }

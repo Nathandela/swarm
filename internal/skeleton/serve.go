@@ -15,9 +15,10 @@
 // SOCKET OWNERSHIP: the daemon binds and owns the singleton socket (flock-before-
 // bind, stale-socket reclaim under the lock — S12 all stay in daemon). Its accept
 // loop hands each connection to this package's ConnHandler, which DEMUXES the one
-// socket: a wire frame's 4-byte length always begins 0x00, a raw-JSON hook post
-// begins '{', so the first byte routes a client to protocol.Server.ServeConn and a
-// hook to engine.HandleCallback with no ambiguity and no change to the hook wire.
+// socket on an EXPLICIT first byte (see conn.go): a version probe leads with
+// daemon.VersionProbeTag ('V'), a hook post with '{', and a wire frame with 0x00
+// (its length MSB). The three are disjoint, so a single first-byte read routes each
+// connection immediately — no timing window, no change to the hook or frame wire.
 package skeleton
 
 import (

@@ -15,9 +15,10 @@ import (
 // overhead — feed a keystroke on In, the loop reads it and calls Session.Input,
 // the echo returns on Frames, the loop writes it to Out — with no network or PTY
 // in the path. We stamp each keystroke, detect its echo on Out, and record the
-// delta. The assertion is on p95 of >= 1000 samples, per N-2. (The real end-to-end
-// budget over a live shim is asserted in the e2e suite; this isolates the client
-// passthrough contribution the requirement names.)
+// delta. The assertion is on p95 of >= 1000 samples, per N-2. N-2 IS this
+// client-side ADDED latency — the passthrough's own overhead — which is what this
+// test measures. The true end-to-end keystroke budget over a live shim is E14.4 and
+// is not asserted here or anywhere yet (there is no e2e latency assertion).
 func TestPassthrough_KeystrokeEchoLatencyP95(t *testing.T) {
 	if testing.Short() {
 		t.Skip("latency budget is a full-run assertion")

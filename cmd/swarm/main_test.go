@@ -14,10 +14,14 @@ func TestDispatch(t *testing.T) {
 		wantStderr string
 	}{
 		{
-			name:       "no args opens TUI stub",
+			// No args opens the TUI (F1). Under `go test` stdout is not a terminal,
+			// so the interactive-terminal guard fires with a clear error and a
+			// non-zero exit — never a panic or a half-drawn screen. The real TUI path
+			// (live daemon + PTY) is exercised by TestTUI_OpensAndRestoresOverPTY.
+			name:       "no args, no tty, reports not-a-terminal",
 			args:       []string{},
 			wantExit:   1,
-			wantStderr: "tui: not implemented",
+			wantStderr: "not a terminal",
 		},
 		{
 			name:       "daemon subcommand routes to stub",

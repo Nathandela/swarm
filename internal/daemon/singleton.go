@@ -81,15 +81,20 @@ func (d *Daemon) acceptLoop() {
 }
 
 // serveClient performs the client<->daemon version handshake: read the client's
-// 4-byte big-endian version, reply with ProtocolVersion. The client (Dial) is the
-// side that classifies a mismatch as ErrVersionSkew. Epic 6 extends the exchange;
-// for Epic 5 the connection is closed after the version is reported.
+// VersionProbeTag + 4-byte big-endian version, reply with ProtocolVersion. The
+// client (Dial) is the side that classifies a mismatch as ErrVersionSkew. Epic 6
+// extends the exchange; for Epic 5 the connection is closed after the version is
+// reported. This bare-daemon handler runs only when no ConnHandler is supplied (the
+// assembled daemon demuxes the tag in internal/skeleton instead).
 func (d *Daemon) serveClient(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(helloIO))
-	var hdr [4]byte
+	var hdr [5]byte // VersionProbeTag + 4-byte version
 	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 		return
+	}
+	if hdr[0] != VersionProbeTag {
+		return // not a version probe on this bare-daemon socket
 	}
 	var out [4]byte
 	binary.BigEndian.PutUint32(out[:], uint32(ProtocolVersion))

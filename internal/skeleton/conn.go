@@ -12,35 +12,38 @@ import (
 )
 
 const (
-	// classifyTimeout bounds reading the demux prefix from a fresh connection. A
-	// protocol client and a hook post each write their whole first message at once,
-	// so their prefix bytes are available immediately; only the daemon's 4-byte
-	// version handshake sends exactly four bytes and then waits, so it is this
-	// window (not a hang) that identifies it. It must stay under the version
-	// client's own handshake deadline (daemon.helloIO, 3s).
-	classifyTimeout = 250 * time.Millisecond
-	// versionHandshakeLen is the daemon's minimal liveness handshake: a 4-byte
-	// big-endian version, answered with the daemon's version (Epic 5 / D-8). A
-	// protocol frame is longer — a 4-byte length prefix followed by at least the
-	// type byte — so a fifth byte's presence tells the two apart.
-	versionHandshakeLen = 4
+	// demuxReadTimeout bounds reading the single discriminator byte from a fresh
+	// connection, so a peer that connects and then stalls (or sends nothing) cannot
+	// leak its handler goroutine or wedge anything. Every real client writes its
+	// first byte immediately on connect, so this only ever bites a broken/idle peer.
+	// It is a plain safety bound, NOT a classification window: routing happens the
+	// instant the byte arrives (F2 — no 250ms timing demux).
+	demuxReadTimeout = 3 * time.Second
+	// versionPayloadLen is the daemon liveness handshake's payload after its tag: a
+	// 4-byte big-endian version, answered with the daemon's own version (Epic 5/D-8).
+	versionPayloadLen = 4
 )
 
 // handleConn is the daemon's ConnHandler for the assembled socket: one socket
-// carries THREE kinds of first message, demuxed by their opening bytes:
+// carries THREE kinds of first message, demuxed by an EXPLICIT first byte with no
+// timing window (F2):
 //
-//   - a raw-JSON hook post (hookclient.Post) — first byte '{' (0x7B);
-//   - the daemon's 4-byte version handshake (daemon.Dial, used by Restart /
-//     EnsureDaemon / liveness probes) — exactly four bytes, then the peer waits;
+//   - the daemon's version handshake (daemon.Dial, used by Restart / EnsureDaemon /
+//     liveness probes) — a leading daemon.VersionProbeTag ('V', 0x56) then a 4-byte
+//     version;
+//   - a raw-JSON hook post (hookclient.Post) — first byte '{' (0x7B), the JSON
+//     object's opening brace;
 //   - a framed protocol client (protocol.Dial) — a wire frame whose 4-byte length
-//     prefix is followed at once by the type byte and payload (wire.WriteFrame
-//     writes the whole frame in one Write, so the fifth byte co-arrives).
+//     prefix always begins 0x00 (the max frame is 2^20, so the length's most-
+//     significant byte is 0x00).
 //
-// The demux is unambiguous: a hook is set apart by '{' (every wire length's
-// most-significant byte is 0x00, since the max frame is 2^20); a version handshake
-// is the one first message that stops at four bytes. This keeps the hook wire
-// format (raw JSON) and the version handshake (Epic 5) both intact on the socket
-// protocol.Server now owns.
+// The three leading bytes are disjoint ('V' vs '{' vs 0x00), so a single first-byte
+// read routes every connection deterministically and immediately. Only the version
+// probe carries a dedicated tag: its payload (a bare 4-byte int) would otherwise
+// also begin 0x00 and collide with a protocol frame — the sole ambiguity the old
+// 250ms classify window existed to resolve. The hook's '{' and the frame's 0x00 are
+// their own guaranteed first bytes and are routed directly. An unexpected first byte
+// is rejected cleanly.
 func (d *Daemon) handleConn(conn net.Conn) {
 	// Serve nothing until the assembly is fully wired.
 	select {
@@ -50,55 +53,38 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		return
 	}
 
-	prefix, err := readPrefix(conn)
-	if err != nil {
-		conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
+	var tag [1]byte
+	if _, err := io.ReadFull(conn, tag[:]); err != nil {
+		conn.Close() // empty / stalled / partial: bounded, never wedges the accept loop
 		return
 	}
-	_ = conn.SetReadDeadline(time.Time{}) // hand off a deadline-free connection
 
-	switch {
-	case prefix[0] == '{':
-		d.serveHook(conn, prefix)
-	case len(prefix) == versionHandshakeLen:
+	switch tag[0] {
+	case daemon.VersionProbeTag:
 		serveVersionHandshake(conn)
+	case '{':
+		// The '{' is the hook JSON's first byte: replay it, then decode.
+		d.serveHook(conn, tag[0])
+	case 0x00:
+		// The 0x00 is the wire frame's length MSB: replay it, hand a deadline-free
+		// connection to the Server's per-connection loop (blocks until it ends).
+		_ = conn.SetReadDeadline(time.Time{})
+		d.srv.ServeConn(prefixConn(conn, tag[0]))
 	default:
-		// A framed protocol client: replay the prefix and run the Server's per-
-		// connection loop (blocks until the connection ends).
-		d.srv.ServeConn(prefixConn(conn, prefix))
+		conn.Close() // not one of the three known first bytes
 	}
 }
 
-// readPrefix reads the demux prefix under classifyTimeout: up to five bytes, which
-// is enough to tell a version handshake (exactly four bytes, then a wait that trips
-// the deadline) from a protocol frame (a fifth byte co-arrives) or a hook ('{'
-// first). It returns the bytes actually read (>=1), or an error if fewer than the
-// four-byte minimum arrived.
-func readPrefix(conn net.Conn) ([]byte, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(classifyTimeout))
-	buf := make([]byte, versionHandshakeLen+1)
-	n, err := io.ReadFull(conn, buf)
-	if n >= versionHandshakeLen {
-		return buf[:n], nil // full handshake, or a frame's prefix (n == 5)
-	}
-	if n >= 1 && buf[0] == '{' {
-		return buf[:n], nil // a short hook post is still a hook
-	}
-	if err == nil {
-		err = io.ErrUnexpectedEOF
-	}
-	return nil, err
-}
-
-// serveHook decodes one raw-JSON hook callback (replaying the demux prefix) and
+// serveHook decodes one raw-JSON hook callback (replaying the leading brace) and
 // routes it to the status engine, which authenticates it (S6/G5). A rejected or
 // malformed callback is dropped; the point is that a hook post never corrupts the
 // shared socket (this connection is the hook's alone and is closed here), so a
 // client can still use the socket afterward.
-func (d *Daemon) serveHook(conn net.Conn, prefix []byte) {
+func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(classifyTimeout))
-	r := io.MultiReader(bytes.NewReader(prefix), conn)
+	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
+	r := io.MultiReader(bytes.NewReader([]byte{brace}), conn)
 	cb, err := hookclient.Decode(r)
 	if err != nil {
 		return
@@ -106,16 +92,22 @@ func (d *Daemon) serveHook(conn net.Conn, prefix []byte) {
 	_ = d.eng.HandleCallback(cb) // engine authenticates; rejection is expected pre-Epic-11
 }
 
-// serveVersionHandshake answers the daemon's 4-byte liveness handshake with the
-// daemon's protocol version and closes (Epic 5 / D-8): the caller (daemon.Dial,
-// used by Restart / EnsureDaemon) classifies a mismatch as skew. Preserving it on
-// the assembled socket keeps those daemon-internal probes working now that the
-// socket speaks the full client protocol.
+// serveVersionHandshake answers the daemon's version handshake with the daemon's
+// protocol version and closes (Epic 5 / D-8): the caller (daemon.Dial, used by
+// Restart / EnsureDaemon) classifies a mismatch as skew. The leading tag byte is
+// already consumed; this reads the 4-byte version payload (draining the client's
+// write) and replies with the 4-byte version. Preserving it on the assembled socket
+// keeps those daemon-internal probes working now that the socket speaks the full
+// client protocol.
 func serveVersionHandshake(conn net.Conn) {
 	defer conn.Close()
+	var payload [versionPayloadLen]byte
+	if _, err := io.ReadFull(conn, payload[:]); err != nil {
+		return
+	}
 	var out [4]byte
 	binary.BigEndian.PutUint32(out[:], uint32(daemon.ProtocolVersion))
-	_ = conn.SetWriteDeadline(time.Now().Add(classifyTimeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(demuxReadTimeout))
 	_, _ = conn.Write(out[:])
 }
 
@@ -127,8 +119,9 @@ type prefixedConn struct {
 	r io.Reader
 }
 
-// prefixConn wraps conn so its first reads yield prefix, then the rest of conn.
-func prefixConn(conn net.Conn, prefix []byte) net.Conn {
+// prefixConn wraps conn so its first reads yield the already-consumed prefix bytes,
+// then the rest of conn.
+func prefixConn(conn net.Conn, prefix ...byte) net.Conn {
 	return &prefixedConn{
 		Conn: conn,
 		r:    io.MultiReader(bytes.NewReader(prefix), conn),

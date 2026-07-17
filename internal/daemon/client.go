@@ -18,6 +18,15 @@ import (
 // const) so a skew can be exercised by dialing at ProtocolVersion+1.
 var ProtocolVersion = 1
 
+// VersionProbeTag is the explicit 1-byte discriminator a version handshake sends
+// before its 4-byte version, so the assembled daemon's socket demux
+// (internal/skeleton) can route it with a single first-byte read — no timing
+// window. It is 'V' (0x56), distinct from a protocol frame's leading length byte
+// (always 0x00, since the max frame is 2^20) and a hook post's leading '{' (0x7B),
+// which the demux routes on directly. serveClient (a bare daemon) and the skeleton
+// demux both consume this tag; Dial writes it.
+const VersionProbeTag = 'V'
+
 // ErrVersionSkew is returned by Dial when the daemon speaks a different protocol
 // version than the client; the wrapped message names the fix, `swarm daemon
 // restart` (D-8).
@@ -60,8 +69,11 @@ func Dial(socketPath string, clientVersion int) (net.Conn, error) {
 	}
 	_ = conn.SetDeadline(time.Now().Add(helloIO))
 
-	var out [4]byte
-	binary.BigEndian.PutUint32(out[:], uint32(clientVersion))
+	// A leading VersionProbeTag lets the assembled daemon's demux route this probe
+	// on its first byte with no classify timer (F2). The 4-byte version follows.
+	var out [5]byte
+	out[0] = VersionProbeTag
+	binary.BigEndian.PutUint32(out[1:], uint32(clientVersion))
 	if _, err := conn.Write(out[:]); err != nil {
 		conn.Close()
 		return nil, err

@@ -17,12 +17,19 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/term"
+
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/transcript"
+	"github.com/Nathandela/swarm/internal/tui"
 	"golang.org/x/sys/unix"
 )
 
@@ -85,9 +92,98 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runTUI(_, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "tui: not implemented")
-	return 1
+// runTUI is the no-argument role: it opens the client TUI on the real terminal
+// (F1 — the Epic 8 milestone that assembles skeleton + attach + tui into the bare
+// binary). It ensures a daemon is running (auto-start, D-1), dials a protocol
+// client, builds the agent-detect and attach-runner seams, and runs the Bubble Tea
+// program over the controlling terminal, handing the terminal to internal/attach on
+// Enter and taking it back on detach. Without an interactive terminal (a pipe / CI)
+// it fails with a clear message and a non-zero exit — never a panic or a half-drawn
+// screen. A user-initiated quit (Esc, or SIGINT that Bubble Tea catches and turns
+// into ErrInterrupted after restoring the terminal) is a clean exit.
+func runTUI(stdout, stderr io.Writer) int {
+	out, ok := stdout.(*os.File)
+	if !ok || !term.IsTerminal(out.Fd()) {
+		fmt.Fprintln(stderr, "swarm: not a terminal; the TUI needs an interactive terminal")
+		return 1
+	}
+
+	client, err := dialClient()
+	if err != nil {
+		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	// prog is captured by the attach runner's terminal handoff; it is assigned just
+	// before Run, so the closures see the live program when an attach fires.
+	var prog *tea.Program
+	dialAttach := func(id string) (attach.Session, error) {
+		att, aerr := client.Attach(id)
+		if aerr != nil {
+			return nil, aerr
+		}
+		return att, nil
+	}
+	runner := tui.NewAttachRunner(dialAttach, tui.TerminalHandoff{
+		Release: func() error { return prog.ReleaseTerminal() },
+		Restore: func() error { return prog.RestoreTerminal() },
+	})
+	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)), tui.WithAttachRunner(runner))
+
+	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
+	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {
+		fmt.Fprintf(stderr, "swarm: tui: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
+// protocol client to it. The SWARM_DAEMON_* environment overrides the default home
+// (the same knobs `swarm daemon` reads), so a test can point the client at a
+// controlled daemon; EnsureDaemon only spawns one when the socket does not answer.
+func dialClient() (*protocol.Client, error) {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			return nil, err
+		}
+	}
+	exe, _ := os.Executable()
+	cc := daemon.ClientConfig{
+		StateDir:   stateDir,
+		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
+		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
+		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
+		DaemonBin:  exe,
+	}
+	conn, err := daemon.EnsureDaemon(cc)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.Close() // EnsureDaemon proved the daemon is live; the TUI speaks the full client protocol on its own dial
+	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+}
+
+// detectAgents builds the launch-form agent detector. For the walking skeleton the
+// only resolvable agent is the reserved dev/test "fake" (gated on
+// SWARM_FAKE_AGENT_BIN, exactly as the daemon assembly resolves it); real adapters
+// are Epic 9/11. In a real install the knob is unset and the picker is empty until
+// an adapter lands.
+func detectAgents(fakeBin string) tui.DetectFunc {
+	return func() []tui.AgentInfo {
+		if fakeBin == "" {
+			return nil
+		}
+		return []tui.AgentInfo{{
+			Name:      "fake",
+			Installed: true,
+			InRange:   true,
+			Options:   []adapter.OptionSpec{{Key: "script", Label: "Script path", Type: "string", Required: true}},
+		}}
+	}
 }
 
 // runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the

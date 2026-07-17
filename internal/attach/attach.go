@@ -138,7 +138,11 @@ func Run(cfg Config) (reason Reason, err error) {
 	var detachOnce sync.Once
 	signalDetach := func() { detachOnce.Do(func() { close(detachCh) }) }
 	go func() {
-		defer func() { _ = recover() }() // a pump fault never crashes the process
+		// A pump fault never crashes the process. It does not itself re-raw or
+		// re-restore the terminal, but Run's deferred restore still runs when the
+		// main loop exits, so a panicking pump degrades to a detach, not a wrecked
+		// terminal (pump-goroutine self-restore is a deferred hardening, not v1.0).
+		defer func() { _ = recover() }()
 		in := cfg.Term.In()
 		buf := make([]byte, inputBufSize)
 		for {
