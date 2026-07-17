@@ -63,6 +63,13 @@ type ExitInfo struct {
 	FinishedAt time.Time `json:"finished_at"`
 }
 
+// testHookAfterSignalArm, when non-nil, is invoked inside Run once the
+// self-containment signal handler is armed (signal.Notify) and before the agent
+// is spawned (pty.StartWithSize). It exists ONLY to make the arm->spawn ordering
+// window observable to a test; it is nil in production and changes no behavior.
+// See shim_signal_order_test.go.
+var testHookAfterSignalArm func()
+
 // Run execs the agent under a fresh PTY, serves the per-session socket, and
 // blocks until the agent exits. It always drains the PTY to completion, writes
 // the final snapshot + exit side-files, and reports the agent's exit code. err
@@ -106,6 +113,14 @@ func Run(cfg Config) (agentExit int, err error) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	sigStop := func() { signal.Stop(sigCh) } // signal.Stop is idempotent
+
+	// Test-only seam (nil in production): runs inside the arm->spawn window —
+	// after the handler is armed, before the agent is spawned — so a test can
+	// deliver a signal into that exact window and prove it is buffered, not lost.
+	// It adds no production behavior.
+	if testHookAfterSignalArm != nil {
+		testHookAfterSignalArm()
+	}
 
 	cmd := &exec.Cmd{
 		Path: cfg.Argv[0],

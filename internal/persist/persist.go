@@ -24,6 +24,13 @@ const SchemaVersion = 1
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
 
+// writeTemp writes data to the freshly-created temp file during Save. It is a
+// package-level indirection defaulting to the real *os.File.Write so a test can
+// inject a disk-full (ENOSPC) fault at the exact byte-commit point and prove the
+// atomic temp+rename never tears the committed meta.json (S8). Production always
+// uses the default; behavior is identical.
+var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data) }
+
 // Meta is the persisted state of a single session (S-2). Every field carries an
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
@@ -136,7 +143,7 @@ func (s *Store) Save(m Meta) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error path
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := writeTemp(tmp, data); err != nil {
 		tmp.Close()
 		return err
 	}

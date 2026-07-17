@@ -68,6 +68,30 @@ jobs:
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
         run: go test -tags integration -race ./internal/engine/
 
+  # E14.5: active fuzzing (not just the seed corpus already covered by the
+  # untagged `go test` above). `-fuzz` runs exactly one target per invocation
+  # and its regex must match a single Fuzz func, so each target gets its own
+  # step; `-run '^$'` skips the normal tests so the step only fuzzes.
+  fuzz:
+    name: fuzz (active, bounded fuzztime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Fuzz FuzzRoundTrip (internal/wire)
+        run: go test -run '^$' -fuzz '^FuzzRoundTrip$' -fuzztime=30s ./internal/wire
+      - name: Fuzz FuzzReadFrame (internal/wire)
+        run: go test -run '^$' -fuzz '^FuzzReadFrame$' -fuzztime=30s ./internal/wire
+      - name: Fuzz FuzzFeedSplitConsistency (internal/vt)
+        run: go test -run '^$' -fuzz '^FuzzFeedSplitConsistency$' -fuzztime=30s ./internal/vt
+      - name: Fuzz FuzzExtractConversationIDTotality (internal/adapter)
+        run: go test -run '^$' -fuzz '^FuzzExtractConversationIDTotality$' -fuzztime=30s ./internal/adapter
+      - name: Fuzz FuzzReferenceExtractConversationIDTotality (internal/adapter/refadapter)
+        run: go test -run '^$' -fuzz '^FuzzReferenceExtractConversationIDTotality$' -fuzztime=30s ./internal/adapter/refadapter
+
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
