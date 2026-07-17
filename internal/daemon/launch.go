@@ -70,6 +70,12 @@ const (
 // reconciliation on the next Open resolves the orphan/phantom.
 type launchProbe func(phase launchPhase, m persist.Meta) error
 
+// shimLaunchConfigFile is the per-session `swarm shim --config` JSON the daemon
+// writes at spawn (0600). Besides the argv/env/socket it carries the per-session
+// hook token (in Env), which reconcile re-reads to re-register a reconnected
+// session with the engine across a daemon restart (L2, ADR-004).
+const shimLaunchConfigFile = "shim-launch.json"
+
 // shimGrace is the TERM->KILL grace window handed to each spawned shim.
 const shimGrace = 2 * time.Second
 
@@ -266,7 +272,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	if err != nil {
 		return nil, err
 	}
-	cfgPath := filepath.Join(dir, "shim-launch.json")
+	cfgPath := filepath.Join(dir, shimLaunchConfigFile)
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
 		return nil, err
 	}

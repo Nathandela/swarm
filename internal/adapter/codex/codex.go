@@ -3,11 +3,15 @@
 // no process, fd, socket, or disk (core owns all lifecycle), so its only in-module
 // dependencies are the contract package and internal/vt (the T-5 boundary).
 //
-// Codex reports status through TYPED EVENTS from its app-server/exec stream —
-// turn.started (active), turn.completed (idle), exec_approval_request (permission)
-// — NOT settings hooks. That is the second signal style Epic 11 proves against the
-// one frozen interface (claude = hooks, codex = events). The generic grid
-// heuristic is the T-3 fallback.
+// Codex reports status through TYPED EVENTS from its app-server JSON-RPC stream —
+// turn/started (active), turn/completed (idle), item/commandExecution/requestApproval
+// (permission) — NOT settings hooks. That is the second signal style Epic 11 proves
+// against the one frozen interface (claude = hooks, codex = events). The app-server
+// carries the conversation as a threadId (with per-turn turnId) in its JSON-RPC
+// params; ExtractConversationID recovers it from the transcript tail. The generic
+// grid heuristic is the T-3 fallback. The exact method + field names are VERIFY
+// items for Epic 14's live smoke; the status mapping keys off the mapped
+// turn/interaction values, so it is resilient to a method-name drift (T-6).
 package codex
 
 import (
@@ -20,20 +24,20 @@ import (
 // binary is the `codex` executable name on PATH.
 const binary = "codex"
 
-// sessionMarker is the label Codex prints before its session id, in both the
-// rendered grid and the raw capture; the id is the token that follows it.
-const sessionMarker = "session "
+// threadIDKey is the JSON field carrying the codex conversation id (its app-server
+// "threadId") in the transcript tail.
+const threadIDKey = `"threadId"`
 
-// eventSources are Codex's typed status events and their mapping onto the engine's
-// generic "turn"/"interaction" dimensions. The values are the status-package
-// string constants, spelled literally so this package depends only on the contract
-// + vt (T-5): an adapter may not import internal/status.
+// eventSources are Codex's typed app-server JSON-RPC status methods and their
+// mapping onto the engine's generic "turn"/"interaction" dimensions. The values are
+// the status-package string constants, spelled literally so this package depends
+// only on the contract + vt (T-5): an adapter may not import internal/status.
 var eventSources = []struct {
 	event, turn, interaction string
 }{
-	{"turn.started", "active", "none"},
-	{"turn.completed", "idle", "none"},
-	{"exec_approval_request", "idle", "permission"},
+	{"turn/started", "active", "none"},
+	{"turn/completed", "idle", "none"},
+	{"item/commandExecution/requestApproval", "idle", "permission"},
 }
 
 // codexAdapter is the stateless Codex strategy object; shared by value, safe
@@ -111,13 +115,15 @@ func (codexAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	return []string{binary, "resume", spec.ConversationID}, nil
 }
 
-// ExtractConversationID recovers the session id from the raw capture, falling back
-// to the rendered grid. It is total and deterministic; ok==true implies non-empty.
+// ExtractConversationID recovers the conversation id (Codex's app-server threadId)
+// from the raw transcript tail's JSON-RPC messages, falling back to the rendered
+// grid. It is total (a nil/garbage grid and tail never panic) and deterministic;
+// ok==true implies a non-empty id.
 func (codexAdapter) ExtractConversationID(grid *vt.Snap, tail []byte) (string, bool) {
-	if id, ok := sessionIDFrom(string(tail)); ok {
+	if id, ok := threadIDFrom(string(tail)); ok {
 		return id, true
 	}
-	return sessionIDFrom(gridText(grid))
+	return threadIDFrom(gridText(grid))
 }
 
 // optionFlags translates resolved option values into codex flags in a fixed
@@ -133,21 +139,29 @@ func optionFlags(opts map[string]string) []string {
 	return flags
 }
 
-// sessionIDFrom returns the whitespace-delimited token following the session
-// marker in s. It is total; an absent marker or empty token yields ("", false).
-func sessionIDFrom(s string) (string, bool) {
-	i := strings.Index(s, sessionMarker)
+// threadIDFrom extracts the double-quoted value of the JSON "threadId" field from
+// s (Codex's app-server conversation id). It is total: an absent field, missing
+// colon/quotes, or empty value yields ("", false), and it never panics on any
+// input. It tolerates optional whitespace between the key, the colon, and the value.
+func threadIDFrom(s string) (string, bool) {
+	i := strings.Index(s, threadIDKey)
 	if i < 0 {
 		return "", false
 	}
-	rest := s[i+len(sessionMarker):]
-	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
-		rest = rest[:end]
+	rest := s[i+len(threadIDKey):]
+	j := 0
+	for j < len(rest) && (rest[j] == ':' || rest[j] == ' ' || rest[j] == '\t') {
+		j++
 	}
-	if rest == "" {
+	if j >= len(rest) || rest[j] != '"' {
 		return "", false
 	}
-	return rest, true
+	rest = rest[j+1:]
+	end := strings.IndexByte(rest, '"')
+	if end <= 0 {
+		return "", false // no closing quote (end<0) or an empty value (end==0)
+	}
+	return rest[:end], true
 }
 
 // gridText concatenates a snapshot's visible text, newline-separated. It is

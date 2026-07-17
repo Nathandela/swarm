@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
@@ -71,12 +73,50 @@ func (d *Daemon) reconcileRunning(m persist.Meta) {
 }
 
 // registerRunning adopts a live, reconnected shim: it records the running meta in
-// memory (no disk write) and starts a liveness monitor that finalizes the session
-// when the shim later exits or vanishes.
+// memory (no disk write), starts a liveness monitor that finalizes the session
+// when the shim later exits or vanishes, and RE-REGISTERS the session with the
+// status engine so typed hooks AND the grid tap keep driving its status across a
+// daemon restart (L2). RegisterSession is otherwise called only from fresh launch;
+// without this a reconnected session's every real hook is rejected as unregistered
+// and its grid tap no-ops until the shim exits. The per-session hook token was
+// persisted in the 0600 shim-launch.json (ADR-004's 0600 threat model), so it is
+// re-read here rather than re-minted.
 func (d *Daemon) registerRunning(m persist.Meta) {
 	s := d.putMem(m)
 	d.wg.Add(1)
 	go d.pollMonitor(m.ID, m.ShimPID, m.ShimStartTime, s.stop)
+	if d.cfg.OnSessionStart != nil {
+		if token, ok := readShimLaunchToken(d.sessionDir(m.ID)); ok {
+			d.cfg.OnSessionStart(m, token)
+		}
+	}
+}
+
+// readShimLaunchToken re-reads a session's per-session hook token out of the 0600
+// shim-launch.json the daemon wrote at spawn (launch.go). The token lives ONLY
+// there and in the agent env — never in meta.json or the transcript — which is
+// ADR-004's 0600 threat model, so a restarting daemon can recover it to re-share
+// with the engine on reconnect.
+func readShimLaunchToken(dir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, shimLaunchConfigFile))
+	if err != nil {
+		return "", false
+	}
+	var lc struct {
+		Env []string `json:"env"`
+	}
+	if json.Unmarshal(data, &lc) != nil {
+		return "", false
+	}
+	prefix := hookclient.EnvToken + "="
+	for _, kv := range lc.Env {
+		if strings.HasPrefix(kv, prefix) {
+			if v := kv[len(prefix):]; v != "" {
+				return v, true
+			}
+		}
+	}
+	return "", false
 }
 
 // pollMonitor watches a reconnected shim by (PID, start-time) until it exits or

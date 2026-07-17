@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,6 +22,8 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/detect"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
@@ -184,22 +187,41 @@ func dialClient() (*protocol.Client, error) {
 	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
 }
 
-// detectAgents builds the launch-form agent detector. For the walking skeleton the
-// only resolvable agent is the reserved dev/test "fake" (gated on
-// SWARM_FAKE_AGENT_BIN, exactly as the daemon assembly resolves it); real adapters
-// are Epic 9/11. In a real install the knob is unset and the picker is empty until
-// an adapter lands.
+// detectAgents builds the launch-form agent detector. It probes the host for every
+// registered adapter (claude, codex) through the CORE adapter.Detect + the real
+// exec-based detect.Host, so the picker greys an agent that is missing or
+// out-of-supported-range (L-2). The reserved dev/test "fake" agent is appended when
+// SWARM_FAKE_AGENT_BIN is set (unset in a real install). Detection runs the free
+// `--version` probe only — never a billable agent run.
 func detectAgents(fakeBin string) tui.DetectFunc {
 	return func() []tui.AgentInfo {
-		if fakeBin == "" {
-			return nil
+		var agents []tui.AgentInfo
+		host := detect.Host{}
+		for _, name := range registry.Names() {
+			if name == "reference" {
+				continue // the reference adapter is a test harness, not an installable CLI
+			}
+			ad, ok := registry.New(name)
+			if !ok {
+				continue
+			}
+			det := adapter.Detect(ad, host)
+			agents = append(agents, tui.AgentInfo{
+				Name:      name,
+				Installed: det.Found,
+				InRange:   det.InRange,
+				Options:   ad.Options(),
+			})
 		}
-		return []tui.AgentInfo{{
-			Name:      "fake",
-			Installed: true,
-			InRange:   true,
-			Options:   []adapter.OptionSpec{{Key: "script", Label: "Script path", Type: "string", Required: true}},
-		}}
+		if fakeBin != "" {
+			agents = append(agents, tui.AgentInfo{
+				Name:      "fake",
+				Installed: true,
+				InRange:   true,
+				Options:   []adapter.OptionSpec{{Key: "script", Label: "Script path", Type: "string", Required: true}},
+			})
+		}
+		return agents
 	}
 }
 
@@ -414,19 +436,26 @@ func reexecWithSetsid() (int, error) {
 	return 0, nil
 }
 
-// runHook runs the `swarm hook <event>` role (E10.1, G4): it composes an
-// authenticated status callback from the per-session environment injected at
-// spawn (session id, live token, daemon socket, monotonic sequence) and posts it
-// to the daemon socket. Optional `key=value` args populate the callback's status
-// payload (e.g. `swarm hook Stop turn=idle`); the per-CLI event-to-dimension
-// mapping is Epic 11 adapter work. A bare `swarm hook` with no event has nothing
-// to post.
+// runHook runs the `swarm hook <event>` role (E10.1 / G4, Epic 11 mapping bridge):
+// it composes an authenticated status callback from the per-session environment
+// injected at spawn (session id, live token, daemon socket, monotonic sequence) and
+// posts it to the daemon socket. The hook CLI (e.g. Claude Code) posts its JSON
+// payload on STDIN, whose top-level fields are extracted into the callback payload;
+// the engine then NORMALIZES {event, payload} into status dimensions via the
+// session's registered SignalSources (the adapter's event->status table). Explicit
+// `key=value` args still work (and override a stdin field of the same name), so
+// `swarm hook Stop` and `swarm hook Notification notification_type=idle` both work.
+// A bare `swarm hook` with no event has nothing to post.
 func runHook(args []string, _, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "hook: not implemented")
 		return 1
 	}
-	cb, err := hookclient.FromEnv(os.Getenv, args[0], parseHookPayload(args[1:]))
+	payload := parseHookStdin(os.Stdin)
+	for k, v := range parseHookPayload(args[1:]) {
+		payload[k] = v // explicit args override a stdin field of the same name
+	}
+	cb, err := hookclient.FromEnv(os.Getenv, args[0], payload)
 	if err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
@@ -436,6 +465,42 @@ func runHook(args []string, _, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// hookStdinLimit bounds how much of a hook's stdin payload we read. Claude posts a
+// small JSON object; the cap guards against an unbounded or garbage stream.
+const hookStdinLimit = 1 << 20
+
+// parseHookStdin reads a hook's JSON payload from r (Claude Code posts it on stdin)
+// and extracts its top-level STRING fields into a status payload the engine
+// normalizes via the session's SignalSources. It is best-effort and total: nil,
+// empty, non-JSON, or a non-object stream yields an empty (never nil) map. The
+// reserved dimension keys "turn"/"interaction" are skipped, so a crafted payload
+// cannot inject a status dimension directly — deriving those from the event is the
+// engine's job.
+func parseHookStdin(r io.Reader) map[string]string {
+	out := map[string]string{}
+	if r == nil {
+		return out
+	}
+	data, err := io.ReadAll(io.LimitReader(r, hookStdinLimit))
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return out
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) != nil {
+		return out
+	}
+	for k, raw := range obj {
+		if k == "turn" || k == "interaction" { // engine.PayloadKey* — never client-injected
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) == nil && s != "" {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // parseHookPayload turns `key=value` args into a status-dimension payload,

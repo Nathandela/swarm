@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -63,6 +65,17 @@ type Daemon struct {
 	ready   chan struct{} // closed once the assembly is wired; gates the ConnHandler
 	closing chan struct{} // closed by Close; aborts a connection still waiting on ready
 
+	// Grid-tap sampling state (FIX 7): each running session is sampled in its own
+	// goroutine so one busy shim never stalls another session's cadence (L1, no
+	// head-of-line blocking); sampling dedups per session (at most one in-flight
+	// sample each), and sampleWG lets Close drain in-flight samples. sampleFn is the
+	// per-session sample op — d.sampleGrid in production, overridable in tests.
+	sampleMu sync.Mutex
+	sampling map[string]struct{}
+	sampleWG sync.WaitGroup // in-flight per-session grid samples
+	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG Adder)
+	sampleFn func(id string)
+
 	closeOnce sync.Once
 }
 
@@ -71,11 +84,33 @@ type Daemon struct {
 // hook posts route to the engine. The caller owns the returned *Daemon and closes
 // it with Close.
 func Serve(cfg Config) (*Daemon, error) {
+	// The daemon is one federation endpoint with a STABLE id derived from its
+	// persistent home, so a session's namespaced id is identical for every client
+	// and unchanged across restarts (a session launched by one client is the same
+	// id a later client — or the same daemon after a kill/restart — lists). The
+	// coreAPI needs it to validate a resume request's source endpoint (R-2).
+	epID := endpointID(cfg.StateDir)
 	d := &Daemon{
 		socketPath: cfg.SocketPath,
 		ready:      make(chan struct{}),
 		closing:    make(chan struct{}),
+		sampling:   make(map[string]struct{}),
 	}
+	d.sampleFn = d.sampleGrid // the per-session grid sample (overridable in tests)
+
+	// Build the status engine BEFORE opening the core: daemon.Open runs reconcile
+	// synchronously and, for every reconnected running session, fires OnSessionStart
+	// (registerSession) to RE-REGISTER it with the engine so typed hooks + the grid
+	// tap keep driving status across a restart (L2). So the engine must already
+	// exist when Open runs. Emit is the late-bound d.emitStatus because the engine's
+	// sink (the coreAPI) is not built until after Open returns the core — and no emit
+	// can fire in that window (reconcile's RegisterSession installs sessions at the
+	// humble unknown baseline and emits nothing; hook/tap emits are gated on d.ready).
+	d.eng = engine.New(engine.Config{
+		StalenessThreshold: cfg.StalenessThreshold,
+		PollInterval:       cfg.PollInterval,
+		Emit:               d.emitStatus,
+	})
 
 	// The core owns the socket but delegates connection serving to d.handleConn,
 	// and runs the worktree isolation hooks gated on the per-launch worktree flag
@@ -98,37 +133,50 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d.core = core
-	d.api = newCoreAPI(core, cfg.FakeAgentBin)
-
-	d.eng = engine.New(engine.Config{
-		StalenessThreshold: cfg.StalenessThreshold,
-		PollInterval:       cfg.PollInterval,
-		Emit:               d.api.emitStatus, // engine status changes reach subscribers
-	})
-	// The daemon is one federation endpoint with a STABLE id derived from its
-	// persistent home, so a session's namespaced id is identical for every client
-	// and unchanged across restarts (a session launched by one client is the same
-	// id a later client — or the same daemon after a kill/restart — lists).
-	d.srv = protocol.NewServer(d.api, endpointID(cfg.StateDir))
+	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.srv = protocol.NewServer(d.api, epID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
-	go d.eng.Run(ctx)  // the ONLY periodic driver (E10.8); idle when PollInterval<=0
-	go d.tapGrids(ctx) // the shim->engine output tap (seam b)
+	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
+	// tapGrids is the sole caller of sampleGridAsync (the only sampleWG Adder), so
+	// Close waits for it to RETURN before draining sampleWG — an Add must never race
+	// a Wait (F7).
+	d.tapWG.Add(1)
+	go func() { defer d.tapWG.Done(); d.tapGrids(ctx) }() // shim->engine output tap (seam b)
 
 	close(d.ready) // assembly complete: the ConnHandler may now serve
 	return d, nil
 }
 
 // registerSession is the daemon's OnSessionStart hook (Epic 11 seam a): it
-// registers a freshly-launched session with the status engine under its
-// per-session hook token, so an authenticated callback (S6) can drive the
-// session's status. The token arrives here privately from the daemon launch path
-// and is never persisted. Signal sources are left nil: the generic grid heuristic
-// (seam b) and typed hooks need none; a real adapter (Epic 11) supplies them.
+// registers a launched session with the status engine under its per-session hook
+// token, so an authenticated callback (S6) can drive its status. It fires at fresh
+// launch (token from the launch path) and on reconcile after a restart (token
+// re-read from the 0600 shim-launch.json, L2). The session's declared SignalSources
+// come from its agent's registry adapter — that is how a real hook's event is
+// normalized to a status dimension (the mapping bridge, seam c). The reserved dev
+// "fake" agent has no adapter, so its sources are nil and only explicit-dimension
+// callbacks / the grid heuristic drive it.
 func (d *Daemon) registerSession(m persist.Meta, token string) {
-	if d.eng != nil {
-		d.eng.RegisterSession(m.ID, token, m.ShimPID, nil)
+	if d.eng == nil {
+		return
+	}
+	var sources []adapter.SignalSource
+	if ad, ok := registry.New(m.AgentType); ok {
+		sources = ad.SignalSources()
+	}
+	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources)
+}
+
+// emitStatus is the engine's late-bound emission sink (see Serve): it forwards an
+// engine-derived status change to the coreAPI, which persists it through the
+// daemon's sole meta writer (G6) and fans it out to subscribers (Epic 6). It is
+// nil-guarded because the engine is constructed before the coreAPI exists; no emit
+// fires in that window.
+func (d *Daemon) emitStatus(id string, s status.Status) {
+	if d.api != nil {
+		d.api.emitStatus(id, s)
 	}
 }
 
@@ -160,11 +208,46 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 		case <-t.C:
 			for _, m := range d.core.List() {
 				if m.Status.Process == status.ProcessRunning {
-					d.sampleGrid(m.ID)
+					d.sampleGridAsync(ctx, m.ID)
 				}
 			}
 		}
 	}
+}
+
+// sampleGridAsync samples one session's grid in its OWN goroutine, so a session
+// whose shim is momentarily busy — a client controller holds its single serve slot,
+// or the shim is slow — cannot stall the sampling CADENCE of other sessions (L1, no
+// head-of-line blocking: the former serial loop blocked every later session behind a
+// busy shim's dial/hello). It is deduped per session: at most one in-flight sample
+// each, so a persistently slow shim never piles up a fresh goroutine every poll. The
+// goroutine is tracked so Close can drain in-flight samples (bounded by the shim
+// dial/hello timeouts).
+func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
+	d.sampleMu.Lock()
+	if _, busy := d.sampling[id]; busy {
+		d.sampleMu.Unlock()
+		return // a sample for this session is already in flight
+	}
+	select {
+	case <-ctx.Done():
+		d.sampleMu.Unlock()
+		return
+	default:
+	}
+	d.sampling[id] = struct{}{}
+	d.sampleMu.Unlock()
+
+	d.sampleWG.Add(1)
+	go func() {
+		defer d.sampleWG.Done()
+		defer func() {
+			d.sampleMu.Lock()
+			delete(d.sampling, id)
+			d.sampleMu.Unlock()
+		}()
+		d.sampleFn(id)
+	}()
 }
 
 // sampleGrid grabs one session's current shim grid and feeds it to the engine's
@@ -203,7 +286,9 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
-		d.cancel()
+		d.cancel()         // stops tapGrids + engine.Run: no NEW grid samples start
+		d.tapWG.Wait()     // tapGrids returned: no more sampleWG.Add can race the Wait (F7)
+		d.sampleWG.Wait()  // drain in-flight grid samples (bounded by shim timeouts)
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
 		d.api.close()      // stops the roster poller

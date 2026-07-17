@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,22 @@ import (
 const (
 	PayloadKeyTurn        = "turn"
 	PayloadKeyInteraction = "interaction"
+)
+
+// Descriptor keys an adapter's SignalSource carries (adapter.SignalSource.Descriptor)
+// and that the engine reads to NORMALIZE a raw hook callback's event into status
+// dimensions — the mapping bridge. descKeyEvent matches a callback's Event to a
+// source; descKeyTurn/descKeyInteraction are that event's status mapping. The two
+// optional subtype keys let one event map by a payload field (e.g. a Claude
+// Notification whose subtype distinguishes a permission prompt from an idle nudge):
+// descKeySubtypeField names the payload field carrying the subtype, and
+// descKeySubtypeMap is a "subtype=interaction;..." table selecting the interaction.
+const (
+	descKeyEvent        = "event"
+	descKeyTurn         = "turn"
+	descKeyInteraction  = "interaction"
+	descKeySubtypeField = "subtype_field"
+	descKeySubtypeMap   = "subtype_interaction"
 )
 
 // Callback is one authenticated status post from a session's `swarm hook`
@@ -204,7 +221,20 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
-	next, advanced, err := applyTyped(s, cb.Sequence, cb.Payload)
+	// Normalize the callback's event + payload into status dimensions via the
+	// session's registered SignalSources (the mapping bridge, seam c): a real hook
+	// posts {event, payload fields} and the engine derives turn/interaction from the
+	// adapter's declared event->status descriptor. A pre-normalized caller carrying
+	// explicit turn/interaction dims is honored as-is.
+	dims := deriveDims(s.sources, cb.Event, cb.Payload)
+	if len(dims) == 0 {
+		// The event maps to no status dimension and none was supplied explicitly (an
+		// unmapped event): accept as a benign no-op — the grid heuristic still governs
+		// — rather than reject it as an auth/replay failure.
+		e.mu.Unlock()
+		return nil
+	}
+	next, advanced, err := applyTyped(s, cb.Sequence, dims)
 	if err != nil {
 		e.mu.Unlock()
 		return err // out-of-vocabulary payload: reject like an auth failure, advance nothing
@@ -380,6 +410,72 @@ func applyTyped(s *session, seq uint64, payload map[string]string) (next status.
 		advanced = true
 	}
 	return next, advanced, nil
+}
+
+// deriveDims normalizes a callback's event + raw payload into the status
+// dimensions to apply, using the session's registered SignalSources (the adapter's
+// declared event->status table). This is the mapping bridge: a real hook posts an
+// event name (and, for payload-dependent events, a subtype field), and the engine —
+// CLI-agnostically, purely from the descriptor data the adapter declared —
+// derives turn/interaction. A caller that already carries explicit turn/interaction
+// dims (a pre-normalized post, or the in-process test path) is honored verbatim, so
+// this is backward compatible. An unmapped event with no explicit dims yields an
+// empty result (nothing typed to apply). It is a pure function of its inputs.
+func deriveDims(sources []adapter.SignalSource, event string, payload map[string]string) map[string]string {
+	if _, ok := payload[PayloadKeyTurn]; ok {
+		return payload
+	}
+	if _, ok := payload[PayloadKeyInteraction]; ok {
+		return payload
+	}
+	desc, ok := descriptorForEvent(sources, event)
+	if !ok {
+		return nil // no descriptor for this event: nothing typed to apply
+	}
+	dims := make(map[string]string, 2)
+	if t := desc[descKeyTurn]; t != "" {
+		dims[PayloadKeyTurn] = t
+	}
+	interaction := desc[descKeyInteraction]
+	// Payload-dependent refinement: if the descriptor declares a subtype field and a
+	// subtype->interaction table, and the payload carries a known subtype, that
+	// interaction overrides the descriptor default (e.g. an idle-subtype Notification
+	// maps to none instead of the default permission).
+	if field := desc[descKeySubtypeField]; field != "" {
+		if sub := payload[field]; sub != "" {
+			if mapped, ok := lookupSubtype(desc[descKeySubtypeMap], sub); ok {
+				interaction = mapped
+			}
+		}
+	}
+	if interaction != "" {
+		dims[PayloadKeyInteraction] = interaction
+	}
+	return dims
+}
+
+// descriptorForEvent finds the SignalSource descriptor whose event matches event.
+func descriptorForEvent(sources []adapter.SignalSource, event string) (map[string]string, bool) {
+	if event == "" {
+		return nil, false
+	}
+	for _, s := range sources {
+		if s.Descriptor[descKeyEvent] == event {
+			return s.Descriptor, true
+		}
+	}
+	return nil, false
+}
+
+// lookupSubtype parses a "sub=interaction;sub2=interaction2" table and returns the
+// interaction mapped to sub. It is total (a malformed table simply yields no match).
+func lookupSubtype(table, sub string) (string, bool) {
+	for _, pair := range strings.Split(table, ";") {
+		if k, v, ok := strings.Cut(pair, "="); ok && k == sub {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // validTurn / validInteraction gate a payload's dimension values to the status

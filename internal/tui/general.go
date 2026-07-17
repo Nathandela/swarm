@@ -225,6 +225,14 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Text == "n":
 		m.launch = newLaunchModel(m.detect(), m.width)
 		m.screen = screenLaunch
+	case k.Text == "r":
+		// Resume an ended/lost session as a NEW linked session (R-2): offered only on
+		// a non-running row (a running session has nothing to resume). The daemon
+		// validates the source and composes the adapter's resume argv from the source's
+		// captured conversation id.
+		if s, ok := m.general.selected(); ok && s.Status.Process != status.ProcessRunning {
+			return m, resumeCmd(m.client, s, m.width, m.height)
+		}
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
 		// so a concurrent status event cannot shift a different row under it.
@@ -273,6 +281,37 @@ func isCtrlX(k tea.KeyPressMsg) bool {
 
 func killCmd(c Client, id string) tea.Cmd {
 	return func() tea.Msg { _ = c.Kill(id); return nil }
+}
+
+// defaultResumeCols/Rows size a resume launch when the window size is not yet known.
+const (
+	defaultResumeCols = 80
+	defaultResumeRows = 24
+)
+
+// resumeCmd issues a resume-as-new-session launch for an ended/lost row (R-2): it
+// carries the source session's id under the reserved resume_from option so the
+// daemon validates the source, composes the adapter's resume argv from the source's
+// captured conversation id, and links the new session's ResumedFrom. The source's
+// agent + cwd carry over.
+func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
+	if cols <= 0 {
+		cols = defaultResumeCols
+	}
+	if rows <= 0 {
+		rows = defaultResumeRows
+	}
+	req := protocol.LaunchReq{
+		Agent:   s.Agent,
+		Cwd:     s.Cwd,
+		Options: map[string]string{protocol.OptionResumeFrom: s.ID},
+		Cols:    cols,
+		Rows:    rows,
+	}
+	return func() tea.Msg {
+		_, _ = c.Launch(req)
+		return nil
+	}
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {

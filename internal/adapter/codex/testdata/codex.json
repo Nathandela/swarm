@@ -3,21 +3,21 @@
   "cli": "codex",
   "version": "0.144.1",
   "scenario": "idle-after-turn-completed",
-  "pty_capture": "Y29kZXgtY2xpIDAuMTQ0LjENCg0KICBzZXNzaW9uIGExYjJjM2Q0LWU1ZjYtN2E4Yi05YzBkLTFlMmYzYTRiNWM2ZA0KDQogIHR1cm4gY29tcGxldGUNCg0KPiA=",
+  "pty_capture": "Y29kZXgtY2xpIDAuMTQ0LjENCg0KeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoidHVybi9jb21wbGV0ZWQiLCJwYXJhbXMiOnsidGhyZWFkSWQiOiJhMWIyYzNkNC1lNWY2LTdhOGItOWMwZC0xZTJmM2E0YjVjNmQiLCJ0dXJuSWQiOiJ0LTEifX0NCg0KPiA=",
   "hook_payloads": [
     {
-      "event": "turn.started",
-      "raw": {"type": "turn.started", "conversation_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turn_id": "t-1"},
+      "event": "turn/started",
+      "raw": {"jsonrpc": "2.0", "method": "turn/started", "params": {"threadId": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turnId": "t-1"}},
       "received_at_ms": 1710000000000
     },
     {
-      "event": "exec_approval_request",
-      "raw": {"type": "exec_approval_request", "conversation_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turn_id": "t-1", "call_id": "c-1", "command": ["bash", "-lc", "go test ./..."], "cwd": "/home/u/proj"},
+      "event": "item/commandExecution/requestApproval",
+      "raw": {"jsonrpc": "2.0", "method": "item/commandExecution/requestApproval", "params": {"threadId": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turnId": "t-1", "itemId": "item-1", "command": ["bash", "-lc", "go test ./..."], "cwd": "/home/u/proj"}},
       "received_at_ms": 1710000000500
     },
     {
-      "event": "turn.completed",
-      "raw": {"type": "turn.completed", "conversation_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turn_id": "t-1", "usage": {"input_tokens": 1200, "output_tokens": 340}},
+      "event": "turn/completed",
+      "raw": {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "turnId": "t-1", "usage": {"input_tokens": 1200, "output_tokens": 340}}},
       "received_at_ms": 1710000003000
     }
   ]

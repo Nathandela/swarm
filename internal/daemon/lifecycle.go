@@ -118,6 +118,12 @@ func (d *Daemon) markLost(id string) {
 	if err := d.saveMeta(m); err != nil {
 		d.logf("kill: persist lost for %s: %v", id, err)
 	}
+	// The session has ended (lost): retire its engine registration and token (S6),
+	// exactly as handleShimExit does for a clean exit — otherwise a lost session's
+	// stale engine entry lingers and a late hook could still be accepted.
+	if d.cfg.OnSessionEnd != nil {
+		d.cfg.OnSessionEnd(id)
+	}
 }
 
 // awaitShimGone waits (bounded) for a shim PID to be reaped, so Delete never

@@ -4,13 +4,18 @@
 // socket, or disk (core owns all lifecycle), so its only in-module dependencies
 // are the contract package and internal/vt (the T-5 boundary E11.8 greps for).
 //
-// Claude Code reports status through SETTINGS-CONFIGURED HOOKS: six events
-// (PreToolUse/PostToolUse/Notification/Stop/SubagentStop/UserPromptSubmit), each
-// posting a documented JSON payload. Because the adapter owns no fds it cannot
-// write a settings file, so Command injects the hooks as an INLINE-JSON --settings
-// value (T-2, per-invocation — never a global-config mutation) that wires every
-// event to `swarm hook <event>`. Idle/active is derived from those hooks, with the
-// generic grid heuristic as the T-3 fallback.
+// Claude Code reports status through SETTINGS-CONFIGURED HOOKS: the documented
+// events (PreToolUse/PostToolUse/Notification/Stop/SubagentStop/UserPromptSubmit),
+// plus PermissionRequest as the DEDICATED permission event, each posting a JSON
+// payload. Because the adapter owns no fds it cannot write a settings file, so
+// Command injects the hooks as an INLINE-JSON --settings value (T-2, per-invocation
+// — never a global-config mutation) that wires every event to `swarm hook <event>`.
+// Idle/active is derived from those hooks via the engine's SignalSource mapping,
+// with the generic grid heuristic as the T-3 fallback. Notification is NOT
+// unconditionally a permission prompt: it maps by its subtype (its default is a
+// permission nudge, but an idle-subtype Notification maps to interaction none), so
+// the permission signal proper is PermissionRequest. The exact real event set +
+// the Notification subtype field are VERIFY items for Epic 14's live smoke (T-6).
 package claude
 
 import (
@@ -32,20 +37,27 @@ const hookCommandPrefix = "swarm hook "
 // rendered grid and the raw capture; the id is the token that follows it.
 const sessionMarker = "Session "
 
-// hookEvents are Claude Code's six settings-configured hook events and their
-// status mapping (the engine's generic "turn"/"interaction" dimensions). The
-// values are the status-package string constants, spelled literally so this
-// package depends only on the contract + vt (T-5): a hook may not import
-// internal/status.
+// hookEvents are Claude Code's settings-configured hook events and their status
+// mapping (the engine's generic "turn"/"interaction" dimensions). The values are
+// the status-package string constants, spelled literally so this package depends
+// only on the contract + vt (T-5): a hook may not import internal/status.
+//
+// Notification carries an optional subtype refinement: its DEFAULT interaction is
+// permission (a Notification is usually the session asking for attention), but when
+// the payload names a subtype the engine maps it via subtypeMap — so an idle-nudge
+// Notification is idle/none, not a false permission prompt. PermissionRequest is the
+// unconditional, dedicated permission event.
 var hookEvents = []struct {
 	event, turn, interaction string
+	subtypeField, subtypeMap string
 }{
-	{"UserPromptSubmit", "active", "none"},
-	{"PreToolUse", "active", "none"},
-	{"PostToolUse", "active", "none"},
-	{"Notification", "idle", "permission"},
-	{"Stop", "idle", "none"},
-	{"SubagentStop", "active", "none"},
+	{"UserPromptSubmit", "active", "none", "", ""},
+	{"PreToolUse", "active", "none", "", ""},
+	{"PostToolUse", "active", "none", "", ""},
+	{"Notification", "idle", "permission", "notification_type", "idle=none;permission=permission;prompt=prompt"},
+	{"Stop", "idle", "none", "", ""},
+	{"SubagentStop", "active", "none", "", ""},
+	{"PermissionRequest", "idle", "permission", "", ""},
 }
 
 // claudeAdapter is the stateless Claude Code strategy object. It carries no state,
@@ -104,14 +116,19 @@ func (claudeAdapter) Options() []adapter.OptionSpec {
 func (claudeAdapter) SignalSources() []adapter.SignalSource {
 	sources := make([]adapter.SignalSource, 0, len(hookEvents)+1)
 	for _, h := range hookEvents {
-		sources = append(sources, adapter.SignalSource{
-			Kind: "hook",
-			Descriptor: map[string]string{
-				"event":       h.event,
-				"turn":        h.turn,
-				"interaction": h.interaction,
-			},
-		})
+		desc := map[string]string{
+			"event":       h.event,
+			"turn":        h.turn,
+			"interaction": h.interaction,
+		}
+		// The optional subtype refinement (Notification): the engine reads these keys
+		// (its descKeySubtypeField / descKeySubtypeMap) to map the interaction by a
+		// payload subtype. Spelled literally to keep the T-5 boundary (no engine import).
+		if h.subtypeField != "" {
+			desc["subtype_field"] = h.subtypeField
+			desc["subtype_interaction"] = h.subtypeMap
+		}
+		sources = append(sources, adapter.SignalSource{Kind: "hook", Descriptor: desc})
 	}
 	sources = append(sources, adapter.SignalSource{
 		Kind:       "heuristic",
