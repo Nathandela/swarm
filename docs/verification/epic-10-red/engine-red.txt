@@ -1,0 +1,36 @@
+===== RED RUN (test-only, no implementation) =====
+$ go test ./internal/engine/ ./internal/hookclient/
+github.com/Nathandela/swarm/internal/engine: build constraints exclude all Go files in /Users/Nathan/Code/agents-tracker/internal/engine
+# github.com/Nathandela/swarm/internal/engine [github.com/Nathandela/swarm/internal/engine.test]
+internal/engine/helpers_test.go:149:123: undefined: Engine
+internal/engine/auth_test.go:23:26: undefined: Callback
+internal/engine/auth_test.go:42:26: undefined: Callback
+internal/engine/auth_test.go:59:29: undefined: Callback
+internal/engine/auth_test.go:66:27: undefined: Callback
+internal/engine/auth_test.go:89:26: undefined: Callback
+internal/engine/auth_test.go:105:26: undefined: Callback
+internal/engine/auth_test.go:123:29: undefined: Callback
+internal/engine/auth_test.go:134:23: undefined: Callback
+internal/engine/auth_test.go:135:23: undefined: Callback
+internal/engine/auth_test.go:135:23: too many errors
+FAIL	github.com/Nathandela/swarm/internal/engine [build failed]
+FAIL	github.com/Nathandela/swarm/internal/hookclient [build failed]
+FAIL
+EXIT=1
+
+$ go test -tags integration ./internal/engine/
+# github.com/Nathandela/swarm/internal/engine [github.com/Nathandela/swarm/internal/engine.test]
+internal/engine/helpers_test.go:149:123: undefined: Engine
+internal/engine/auth_test.go:23:26: undefined: Callback
+internal/engine/auth_test.go:42:26: undefined: Callback
+internal/engine/auth_test.go:59:29: undefined: Callback
+internal/engine/auth_test.go:66:27: undefined: Callback
+internal/engine/auth_test.go:89:26: undefined: Callback
+internal/engine/auth_test.go:105:26: undefined: Callback
+internal/engine/auth_test.go:123:29: undefined: Callback
+internal/engine/auth_test.go:134:23: undefined: Callback
+internal/engine/auth_test.go:135:23: undefined: Callback
+internal/engine/auth_test.go:135:23: too many errors
+FAIL	github.com/Nathandela/swarm/internal/engine [build failed]
+FAIL
+EXIT=1
