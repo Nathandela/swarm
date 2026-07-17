@@ -56,6 +56,17 @@ func main() {
 	if os.Getenv("F1_ROLE") == "child" {
 		signal.Ignore(syscall.SIGTERM)
 		fmt.Printf("CHILD_PID\t%d\n", os.Getpid())
+		if os.Getenv("F1_CHILD_NOPTY") == "1" {
+			// Release every PTY fd, then park: the child ignores TERM but does
+			// NOT hold the PTY, so the leader's reap yields PTY EOF at once and
+			// only a synchronous group KILL (not the drain-EOF wait) can contain
+			// this child.
+			os.Stdin.Close()
+			os.Stdout.Close()
+			os.Stderr.Close()
+			time.Sleep(time.Hour)
+			return
+		}
 		io.Copy(io.Discard, os.Stdin) // hold the PTY slave; only a group KILL ends this
 		return
 	}
@@ -215,6 +226,42 @@ func TestF1_NaturalExitWithLingeringChildStillFinalizes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.SessionDir, SnapshotFile)); err != nil {
 		t.Errorf("final snapshot missing: %v", err)
+	}
+}
+
+// R1 (re-review) — after a fast COOPERATIVE exit, a TERM-ignoring descendant
+// that does NOT hold the PTY must be contained by the synchronous final KILL
+// during finalization, not by a grace-timer that outlives Run. Grace is set
+// long: a leaked escalation timer would kill the child only at t+grace (after
+// Run has returned, at a possibly-reused pgid). The fix reaps the child before
+// Run returns and joins the worker, so no goroutine can signal the pgid after.
+func TestR1_SurvivorKilledSynchronouslyNotByLeakedTimer(t *testing.T) {
+	grace := 10 * time.Second // long: a leaked grace-timer would fire well after Run returns
+	cfg := f1Config(t, grace, "F1_LEADER=cooperative", "F1_CHILD_NOPTY=1")
+	ch := runShimAsync(cfg)
+
+	c := dialShim(t, cfg.SocketPath)
+	c.startReader()
+	c.hello(shimwire.Version)
+	c.attach()
+	childPID := f1WaitPID(t, c, "CHILD_PID", 5*time.Second)
+
+	sent := time.Now()
+	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigTerm})
+	r := waitRun(t, ch, 15*time.Second)
+	if r.err != nil {
+		t.Errorf("Run err = %v, want nil", r.err)
+	}
+	// Finalization must complete well before the grace timer would fire:
+	// containment came from the synchronous KILL, not from waiting out (or
+	// leaking) the timer.
+	if elapsed := time.Since(sent); elapsed >= grace {
+		t.Errorf("Run took %s (>= grace %s) — finalization relied on the escalation timer, not a synchronous kill", elapsed, grace)
+	}
+	// The child must ALREADY be dead just after Run returns. Pre-fix it survives
+	// until the leaked timer fires at t+grace.
+	if !processGone(childPID, 1*time.Second) {
+		t.Errorf("TERM-ignoring child %d still alive just after Run returned — left to a leaked escalation timer instead of reaped synchronously (R1)", childPID)
 	}
 }
 

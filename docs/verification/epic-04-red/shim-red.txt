@@ -1,0 +1,45 @@
+==============================================================================
+Epic 4 (shim) RED run — FAILING-FIRST tests, delivered (test-files-only) state
+Date: Fri Jul 17 02:36:36 CEST 2026
+Go: go version go1.26.1 darwin/amd64
+==============================================================================
+
+### 1. go test ./internal/wire/  (expect: undefined symbols only) ###
+# github.com/Nathandela/swarm/internal/wire [github.com/Nathandela/swarm/internal/wire.test]
+internal/wire/wire_test.go:43:18: undefined: Type
+internal/wire/wire_test.go:43:23: undefined: TControl
+internal/wire/wire_test.go:43:33: undefined: TDataOut
+internal/wire/wire_test.go:43:43: undefined: TDataIn
+internal/wire/wire_test.go:43:52: undefined: TSnapshot
+internal/wire/wire_test.go:267:17: undefined: Type
+internal/wire/fuzz_test.go:15:14: undefined: TControl
+internal/wire/fuzz_test.go:16:14: undefined: TDataOut
+internal/wire/fuzz_test.go:17:14: undefined: TDataIn
+internal/wire/fuzz_test.go:18:14: undefined: TSnapshot
+internal/wire/fuzz_test.go:18:14: too many errors
+FAIL	github.com/Nathandela/swarm/internal/wire [build failed]
+FAIL
+
+### 2. go test ./internal/shimwire/  (expect: undefined symbols only) ###
+# github.com/Nathandela/swarm/internal/shimwire [github.com/Nathandela/swarm/internal/shimwire.test]
+internal/shimwire/shimwire_test.go:40:5: undefined: Version
+internal/shimwire/shimwire_test.go:41:36: undefined: Version
+internal/shimwire/shimwire_test.go:49:3: undefined: TypeHello
+internal/shimwire/shimwire_test.go:50:3: undefined: TypeAttach
+internal/shimwire/shimwire_test.go:51:3: undefined: TypeResize
+internal/shimwire/shimwire_test.go:52:3: undefined: TypeSignal
+internal/shimwire/shimwire_test.go:53:3: undefined: TypeExitReport
+internal/shimwire/shimwire_test.go:54:3: undefined: SigTerm
+internal/shimwire/shimwire_test.go:55:3: undefined: SigKill
+internal/shimwire/shimwire_test.go:67:8: undefined: Control
+internal/shimwire/shimwire_test.go:67:8: too many errors
+FAIL	github.com/Nathandela/swarm/internal/shimwire [build failed]
+FAIL
+
+### 3a. go build ./internal/vt/  (expect: CLEAN — production untouched) ###
+BUILD OK (exit 0)
+
+### 3b. go test ./internal/vt/  (expect: undefined SetReplyWriter/Close only) ###
+# github.com/Nathandela/swarm/internal/vt [github.com/Nathandela/swarm/internal/vt.test]
+internal/vt/replies_test.go:73:10: e.Close undefined (type *Emulator has no field or method Close)
+internal/vt/replies_test.go:75:4: e.SetReplyWriter undefined (type *Emulator has no

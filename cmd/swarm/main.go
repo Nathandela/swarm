@@ -5,16 +5,23 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/transcript"
 )
+
+// shimSessionEnv guards the setsid re-exec against an infinite loop: it is set
+// on the re-exec'd child so a shim that still cannot become a session leader
+// fails loudly instead of re-exec'ing again.
+const shimSessionEnv = "SWARM_SHIM_SESSION"
 
 const usage = `usage: swarm [daemon|shim|hook]
 
@@ -106,10 +113,18 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return 2
 	}
 
-	// Detach from any controlling terminal so the shim outlives the launching
-	// session (E4.1 "Shim setsids", D-3). Best-effort: an EPERM (we already lead
-	// a process group) is expected and fine.
-	_, _ = syscall.Setsid()
+	// Guarantee the shim leads its own session so it outlives the launching
+	// terminal (E4.1 "Shim setsids", D-3). On success we proceed; if a re-exec
+	// was needed to acquire the session, we return its child's exit code; any
+	// unexpected failure is fatal.
+	code, reexeced, err := ensureSession()
+	if err != nil {
+		fmt.Fprintf(stderr, "shim: %v\n", err)
+		return 1
+	}
+	if reexeced {
+		return code
+	}
 
 	cfg := shim.Config{
 		SessionID:     lc.SessionID,
@@ -131,6 +146,56 @@ func runShim(args []string, _, stderr io.Writer) int {
 		}
 	}
 	return exit
+}
+
+// ensureSession makes the shim a session leader (E4.1). It returns:
+//   - reexeced=false, err=nil: this process is now (or already was) a session
+//     leader — proceed to run the shim here.
+//   - reexeced=true: we could not setsid in place, so we re-exec'd ourselves
+//     with SysProcAttr{Setsid:true} and ran the shim in that child; exitCode is
+//     the child's exit code, which the caller must return.
+//   - err!=nil: an unexpected, fatal failure — never silently proceed.
+func ensureSession() (exitCode int, reexeced bool, err error) {
+	if _, serr := syscall.Setsid(); serr == nil {
+		return 0, false, nil // we are now a session leader
+	} else if !errors.Is(serr, syscall.EPERM) {
+		return 0, false, fmt.Errorf("setsid: %w", serr)
+	}
+	// EPERM: we are already a process-group leader. If we already lead the
+	// session, that is fine; otherwise we must re-exec to acquire one.
+	if sid, gerr := syscall.Getsid(0); gerr == nil && sid == os.Getpid() {
+		return 0, false, nil
+	}
+	if os.Getenv(shimSessionEnv) == "1" {
+		return 0, false, errors.New("setsid: not a session leader even after re-exec")
+	}
+	code, rerr := reexecWithSetsid()
+	if rerr != nil {
+		return 0, false, rerr
+	}
+	return code, true, nil
+}
+
+// reexecWithSetsid re-launches this binary with the same args in a fresh session
+// (SysProcAttr.Setsid), guarded by shimSessionEnv to prevent re-exec loops, and
+// returns the child's exit code.
+func reexecWithSetsid() (int, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, fmt.Errorf("locate self for setsid re-exec: %w", err)
+	}
+	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), shimSessionEnv+"=1")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), nil
+		}
+		return 0, fmt.Errorf("setsid re-exec: %w", err)
+	}
+	return 0, nil
 }
 
 func runHook(_, stderr io.Writer) int {

@@ -46,6 +46,16 @@ type server struct {
 	socketPath string
 	listener   net.Listener
 
+	// escalation tracks the single TERM->KILL worker so finalization can cancel
+	// and JOIN it — rather than leave an armed timer that could fire a stray
+	// group KILL after Run returns (at a possibly-reused pgid) — and then issue
+	// exactly one final synchronous group KILL for containment.
+	escMu      sync.Mutex
+	escStarted bool
+	escStopped bool
+	escStop    chan struct{}
+	escDone    chan struct{}
+
 	mu      sync.Mutex
 	curConn net.Conn // the connection currently being served, or nil
 }
@@ -59,6 +69,8 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 		graceTimeout: grace,
 		socketPath:   socketPath,
 		listener:     l,
+		escStop:      make(chan struct{}),
+		escDone:      make(chan struct{}),
 	}
 }
 
@@ -68,6 +80,9 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 // bind would leave the socket briefly group/other-accessible.
 func listen(path string) (net.Listener, error) {
 	_ = os.Remove(path) // clear a stale socket from a prior crash
+	// syscall.Umask is process-global; this brackets it tightly around the bind
+	// and assumes one-shim-per-process (the production model — a shim process
+	// owns exactly one session), so no concurrent file creation races the window.
 	old := syscall.Umask(0o177)
 	l, err := net.Listen("unix", path)
 	syscall.Umask(old)
@@ -186,21 +201,55 @@ func (s *server) resize(cols, rows int) {
 }
 
 // onSignal terminates the session process group. kill is immediate; term sends
-// SIGTERM, then ALWAYS SIGKILLs the group at the grace deadline. The escalation
-// is keyed to the grace window, not the leader's reap: a TERM-ignoring
-// descendant that outlives the leader must still be killed (S5). Killing an
-// already-empty group is a harmless ESRCH no-op.
+// SIGTERM and arms the escalation worker, which SIGKILLs the group at the grace
+// deadline UNLESS finalization cancels it first. The grace KILL is what reaps a
+// TERM-ignoring leader so cmd.Wait can return; finalization then joins the
+// worker and issues one final synchronous KILL (see finishEscalation), so no
+// armed timer ever outlives Run.
 func (s *server) onSignal(sig string) {
 	switch sig {
 	case shimwire.SigKill:
 		_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 	case shimwire.SigTerm:
-		go func() {
-			_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
-			time.Sleep(s.graceTimeout)
-			_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
-		}()
+		_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
+		s.escMu.Lock()
+		if !s.escStarted && !s.escStopped {
+			s.escStarted = true
+			go s.escalationWorker()
+		}
+		s.escMu.Unlock()
 	}
+}
+
+// escalationWorker SIGKILLs the group once the grace window elapses, unless
+// finalization cancels it via escStop first. Started at most once per session.
+func (s *server) escalationWorker() {
+	defer close(s.escDone)
+	select {
+	case <-time.After(s.graceTimeout):
+		_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
+	case <-s.escStop:
+	}
+}
+
+// finishEscalation cancels and JOINS the escalation worker (if TERM ever armed
+// it), then issues exactly one final synchronous SIGKILL to the group. Called
+// once during finalization, before Run returns: after it, no goroutine remains
+// that could later signal the pgid, and the group is guaranteed contained (a
+// descendant that ignored TERM without holding the PTY is reaped here, not left
+// to a timer). Killing an already-empty group is a harmless ESRCH no-op.
+func (s *server) finishEscalation() {
+	s.escMu.Lock()
+	started := s.escStarted
+	if !s.escStopped {
+		s.escStopped = true
+		close(s.escStop)
+	}
+	s.escMu.Unlock()
+	if started {
+		<-s.escDone
+	}
+	_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 }
 
 // shutdown flushes buffered DataOut to a connected client, emits the exit_report

@@ -63,8 +63,10 @@ type ExitInfo struct {
 // Run execs the agent under a fresh PTY, serves the per-session socket, and
 // blocks until the agent exits. It always drains the PTY to completion, writes
 // the final snapshot + exit side-files, and reports the agent's exit code. err
-// is non-nil only for a shim-level setup failure; any agent outcome (clean
-// exit, non-zero, or signal death) returns err == nil.
+// is non-nil for a shim-level failure — either a setup failure (before the
+// agent runs) or a side-file persistence failure at exit; in the latter case
+// agentExit still carries the agent's real exit code. Any agent outcome (clean
+// exit, non-zero, or signal death) on its own returns err == nil.
 func Run(cfg Config) (agentExit int, err error) {
 	if cfg.Metrics == nil {
 		cfg.Metrics = &Metrics{}
@@ -123,23 +125,26 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv.drain()
 	}()
 
-	// Block until the agent (group leader) is reaped, then finish draining
-	// whatever the PTY still holds before deciding the final grid/transcript
-	// state. A descendant can outlive the leader and hold the PTY slave open, so
-	// the EOF wait is BOUNDED: if EOF has not arrived within grace, SIGKILL the
-	// whole group to force every holder off the slave. Run must never block
-	// forever.
+	// Block until the agent (group leader) is reaped.
 	waitErr := cmd.Wait()
-	if !waitClosed(drainDone, cfg.GraceTimeout) {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		waitClosed(drainDone, cfg.GraceTimeout)
-	}
 
-	// Release the master first: closing it unblocks the drain's Read and any
-	// in-flight reply write (freeing the ptyWriter lock), so neither the reply
-	// pump nor the drain can be stuck when we tear them down. This also forces
-	// the drain to terminate even if a pathological out-of-group holder kept the
-	// slave open past the KILL.
+	// Bound the wait for the PTY to reach EOF: a descendant can hold the slave
+	// open after the leader is reaped. We do not kill here — finishEscalation
+	// issues the single containment KILL below, and closing the master then
+	// guarantees the drain terminates — so this wait only gives in-flight output
+	// a bounded chance to drain before the group is reaped, and Run never blocks.
+	waitClosed(drainDone, cfg.GraceTimeout)
+
+	// Cancel and join the TERM escalation worker, then issue exactly one final
+	// synchronous group KILL: containment is guaranteed here (a descendant that
+	// ignored TERM — whether or not it held the PTY — is reaped now, not by a
+	// timer) and no escalation goroutine survives Run to fire a stray signal.
+	srv.finishEscalation()
+
+	// Release the master: closing it unblocks the drain's Read and any in-flight
+	// reply write (freeing the ptyWriter lock), so neither the reply pump nor the
+	// drain can be stuck when we tear them down — even if a pathological
+	// out-of-group holder kept the slave open past the KILL.
 	ptmx.Close()
 	srv.ptyIn.close()
 	replies.close()
