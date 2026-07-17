@@ -131,13 +131,18 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// the AGENT's working directory. m.Cwd above already captured the caller's
 	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,
 	// not the persisted meta. Nothing has touched disk yet, so on error dropping
-	// the reservation is a clean abort — no orphan.
+	// the reservation is a clean abort — no orphan. preLaunchOK tracks whether the
+	// hook actually ran and succeeded: every later rollback in this function must
+	// compensate via PreDelete when it did (F2), since dropReserved erases the
+	// meta and no future Delete() could otherwise ever reach this id again.
+	preLaunchOK := false
 	if d.cfg.PreLaunch != nil {
 		cwd, err := d.cfg.PreLaunch(id, spec)
 		if err != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: pre-launch hook for %s: %w", id, err)
 		}
+		preLaunchOK = true
 		if cwd != "" {
 			spec.Cwd = cwd
 		}
@@ -145,17 +150,17 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 
 	dir := d.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 
 	// Phase 1 — reserve: persist the running meta before any shim exists.
 	if err := d.saveMeta(m); err != nil {
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 	if probe != nil {
@@ -169,12 +174,12 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	sock := shimSocketPath(d.cfg.StateDir, id)
 	token, terr := newHookToken()
 	if terr != nil {
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
 	cmd, err := d.spawnShim(id, spec, sock, dir, token)
 	if err != nil {
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 	m.ShimPID = cmd.Process.Pid
@@ -194,7 +199,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
@@ -202,7 +207,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
-		d.dropReserved(id)
+		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
 	}
 	d.wg.Add(1)
@@ -366,4 +371,20 @@ func (d *Daemon) dropReserved(id string) {
 	delete(d.sessions, id)
 	d.mu.Unlock()
 	_ = d.store.Delete(id)
+}
+
+// rollbackReserved is dropReserved plus a compensating PreDelete when a
+// successful PreLaunch may have created something to undo (Epic 12 F2). Once
+// dropReserved erases the meta, no future Delete() can ever look this id up
+// again, so any hook side effect (e.g. a git worktree) must be undone HERE or
+// it leaks permanently. preLaunchOK is false when PreLaunch was never called or
+// itself failed, in which case it created nothing and there is nothing to
+// compensate — this degrades to a plain dropReserved.
+func (d *Daemon) rollbackReserved(id string, m persist.Meta, preLaunchOK bool) {
+	if preLaunchOK && d.cfg.PreDelete != nil {
+		if err := d.cfg.PreDelete(m); err != nil {
+			d.logf("launch %s: rollback pre-delete hook: %v", id, err)
+		}
+	}
+	d.dropReserved(id)
 }
