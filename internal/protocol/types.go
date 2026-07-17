@@ -106,16 +106,6 @@ type SessionStream interface {
 	Close() error
 }
 
-// reSnapshotter is an optional SessionStream capability: a stream that can
-// re-fetch a FRESH snapshot of the session's CURRENT grid (the shim emulator
-// always holds it). On supersede the Server re-snapshots through this so the new
-// controller sees the current screen, not the snapshot captured when the stream
-// was first opened (F1/ADR-002). A stream that does not implement it falls back
-// to Snapshot().
-type reSnapshotter interface {
-	ReSnapshot() ([]byte, error)
-}
-
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so
 // tests stub it; FromDaemon adapts a real *daemon.Daemon to it.
 type DaemonAPI interface {

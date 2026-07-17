@@ -112,13 +112,6 @@ type shimStream struct {
 	writeMu   sync.Mutex
 	closeOnce sync.Once
 	done      chan struct{}
-
-	// resnap coordinates a re-snapshot request with readLoop: ReSnapshot installs a
-	// one-shot channel here and re-sends attach; readLoop routes the NEXT TSnapshot
-	// frame to it (instead of discarding it) so a superseding controller gets the
-	// shim's CURRENT grid (F1). Buffered (cap 1) so readLoop never blocks delivering.
-	resnapMu sync.Mutex
-	resnapCh chan []byte
 }
 
 // newShimStream sends the attach request over an already-helloed shim connection
@@ -185,16 +178,6 @@ func (st *shimStream) readLoop() {
 			case <-st.done:
 				return
 			}
-		case wire.TSnapshot:
-			// A fresh snapshot from a re-attach (ReSnapshot): route it to the waiting
-			// requester if any; an unrequested snapshot is otherwise ignored (F1).
-			st.resnapMu.Lock()
-			ch := st.resnapCh
-			st.resnapCh = nil
-			st.resnapMu.Unlock()
-			if ch != nil {
-				ch <- payload // buffered cap 1: never blocks
-			}
 		case wire.TControl:
 			c, derr := shimwire.Decode(payload)
 			if derr == nil && c.Type == shimwire.TypeExitReport {
@@ -202,51 +185,6 @@ func (st *shimStream) readLoop() {
 			}
 		}
 	}
-}
-
-// ReSnapshot re-requests a fresh snapshot of the shim's CURRENT grid over the same
-// connection: it re-sends attach (the shim re-snapshots on a repeated attach) and
-// returns the next TSnapshot frame, routed by readLoop. Used on supersede so the
-// new controller sees the live screen, not the snapshot captured at stream open
-// (F1). Bounded by shimAttachTimeout; never blocks forever.
-func (st *shimStream) ReSnapshot() ([]byte, error) {
-	ch := make(chan []byte, 1)
-	st.resnapMu.Lock()
-	st.resnapCh = ch
-	st.resnapMu.Unlock()
-
-	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeAttach})
-	if err != nil {
-		st.clearResnap(ch)
-		return nil, err
-	}
-	st.writeMu.Lock()
-	werr := wire.WriteFrame(st.conn, wire.TControl, body)
-	st.writeMu.Unlock()
-	if werr != nil {
-		st.clearResnap(ch)
-		return nil, werr
-	}
-
-	select {
-	case snap := <-ch:
-		return snap, nil
-	case <-st.done:
-		return nil, errors.New("protocol: stream closed during re-snapshot")
-	case <-time.After(shimAttachTimeout):
-		st.clearResnap(ch)
-		return nil, errors.New("protocol: re-snapshot timed out")
-	}
-}
-
-// clearResnap uninstalls ch as the pending re-snapshot sink if it is still current
-// (a readLoop delivery may have already claimed and cleared it).
-func (st *shimStream) clearResnap(ch chan []byte) {
-	st.resnapMu.Lock()
-	if st.resnapCh == ch {
-		st.resnapCh = nil
-	}
-	st.resnapMu.Unlock()
 }
 
 func (st *shimStream) Snapshot() []byte      { return st.snap }

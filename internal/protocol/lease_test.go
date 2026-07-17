@@ -59,8 +59,18 @@ func TestLease_FirstAttachGetsGeneration(t *testing.T) {
 }
 
 // TestLease_SecondAttachSupersedesWithHigherGeneration asserts a concurrent
-// second attach wins a strictly higher generation over the SAME underlying
-// session, and reuses the single upstream stream (no second DaemonAPI.Attach).
+// second attach wins a strictly higher generation over the same session, releases
+// the prior controller's stream, and gives the new controller a fresh current-grid
+// snapshot then live frames.
+//
+// ARCH REVISION (audit-006 re-review, orchestrator-authorized): the original
+// assertion required supersede to REUSE the single upstream stream (streamCount
+// == 1). That reuse forced a racy daemon-side re-snapshot splice into a live
+// stream. A supersede now RE-ATTACHES via a fresh shim connection instead: the
+// shim delivers snapshot-then-stream atomically (Epic 4, S10), so the new
+// controller sees the current grid with no daemon-side splice. This test now
+// asserts the supersede SEMANTICS (higher generation, prior stream released, fresh
+// snapshot + live) rather than single-stream reuse.
 func TestLease_SecondAttachSupersedesWithHigherGeneration(t *testing.T) {
 	stub := oneRunningSession()
 	sock := serveStub(t, stub)
@@ -80,8 +90,20 @@ func TestLease_SecondAttachSupersedesWithHigherGeneration(t *testing.T) {
 	if !(b.Generation() > a.Generation()) {
 		t.Fatalf("supersede generations: B=%d not > A=%d", b.Generation(), a.Generation())
 	}
-	if got := stub.streamCount(); got != 1 {
-		t.Fatalf("DaemonAPI.Attach opened %d streams; want 1 (supersede reuses the one pipe)", got)
+	// Supersede re-attaches: a fresh stream is opened and the prior one released.
+	if got := stub.streamCount(); got != 2 {
+		t.Fatalf("DaemonAPI.Attach opened %d streams; want 2 (supersede re-attaches a fresh pipe)", got)
+	}
+	if st0 := stub.streamAt(0); st0 == nil || !st0.waitClosed(recvTimeout) {
+		t.Fatalf("supersede did not release (close) the prior upstream stream (L3)")
+	}
+	// The new controller sees the fresh stream's snapshot, then live frames.
+	if !bytes.Equal(b.Snapshot(), []byte("SNAPSHOT")) {
+		t.Fatalf("superseding controller snapshot = %q, want the fresh stream's snapshot", b.Snapshot())
+	}
+	stub.lastStream().frames <- []byte("live-after-supersede")
+	if got, ok := recvFrame(t, b.Frames(), recvTimeout); !ok || !bytes.Equal(got, []byte("live-after-supersede")) {
+		t.Fatalf("new controller did not receive live frames after supersede (got %q ok=%v)", got, ok)
 	}
 }
 

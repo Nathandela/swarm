@@ -6,7 +6,6 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,13 +24,18 @@ import (
 // fixDaemon / fixStream — a controllable DaemonAPI for the fix-round tests.
 // ---------------------------------------------------------------------------
 
+// fixDaemon is a controllable DaemonAPI whose Attach opens a FRESH stream on every
+// call (matching the re-attach supersede model): each attach/supersede yields a new
+// upstream stream, and the i-th attach's snapshot is snaps[i] (the last repeats).
+// custom[i], if set, overrides the i-th stream (e.g. a blocking one).
 type fixDaemon struct {
-	mu       sync.Mutex
-	stream   SessionStream
-	attaches int
+	mu     sync.Mutex
+	snaps  [][]byte
+	custom []SessionStream
+	opened []SessionStream
 }
 
-func newFixDaemon(stream SessionStream) *fixDaemon { return &fixDaemon{stream: stream} }
+func newFixDaemon(snaps ...[]byte) *fixDaemon { return &fixDaemon{snaps: snaps} }
 
 func (d *fixDaemon) List() []persist.Meta {
 	return []persist.Meta{{
@@ -48,23 +52,51 @@ func (d *fixDaemon) Kill(string) error   { return nil }
 func (d *fixDaemon) Delete(string) error { return nil }
 func (d *fixDaemon) Attach(id string) (SessionStream, error) {
 	d.mu.Lock()
-	d.attaches++
-	d.mu.Unlock()
-	return d.stream, nil
+	defer d.mu.Unlock()
+	i := len(d.opened)
+	var st SessionStream
+	if i < len(d.custom) && d.custom[i] != nil {
+		st = d.custom[i]
+	} else {
+		var snap []byte
+		if i < len(d.snaps) {
+			snap = d.snaps[i]
+		} else if len(d.snaps) > 0 {
+			snap = d.snaps[len(d.snaps)-1]
+		}
+		st = newFixStream(snap)
+	}
+	d.opened = append(d.opened, st)
+	return st, nil
 }
 func (d *fixDaemon) Events() <-chan persist.Meta { return make(chan persist.Meta) }
-func (d *fixDaemon) attachCount() int            { d.mu.Lock(); defer d.mu.Unlock(); return d.attaches }
+func (d *fixDaemon) attachCount() int            { d.mu.Lock(); defer d.mu.Unlock(); return len(d.opened) }
+func (d *fixDaemon) openedFixAt(i int) *fixStream {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if i < 0 || i >= len(d.opened) {
+		return nil
+	}
+	fs, _ := d.opened[i].(*fixStream)
+	return fs
+}
+func (d *fixDaemon) lastOpenedFix() *fixStream {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.opened) == 0 {
+		return nil
+	}
+	fs, _ := d.opened[len(d.opened)-1].(*fixStream)
+	return fs
+}
 
-// fixStream is a controllable SessionStream. When fresh != nil it also implements
-// the re-snapshot capability, returning fresh on supersede (F1).
+// fixStream is a controllable SessionStream that records its close.
 type fixStream struct {
 	snap   []byte
-	fresh  []byte
 	frames chan []byte
 
 	closeOnce sync.Once
 	closed    chan struct{}
-	resnaps   int32
 }
 
 func newFixStream(snap []byte) *fixStream {
@@ -80,14 +112,7 @@ func (s *fixStream) Close() error {
 	return nil
 }
 
-// ReSnapshot makes fixStream a reSnapshotter when fresh is set; the Server calls
-// it on supersede to fetch the CURRENT grid (F1).
-func (s *fixStream) ReSnapshot() ([]byte, error) {
-	atomic.AddInt32(&s.resnaps, 1)
-	return s.fresh, nil
-}
-
-// serveFix stands up a Server over a fixDaemon and returns the socket + handle.
+// serveFix stands up a Server over a DaemonAPI and returns the socket + handle.
 func serveFix(t *testing.T, d DaemonAPI) (string, *Server) {
 	t.Helper()
 	sock := tmpSock(t)
@@ -104,9 +129,8 @@ func serveFix(t *testing.T, d DaemonAPI) (string, *Server) {
 // ---------------------------------------------------------------------------
 
 func TestFix_SupersedeSendsFreshSnapshot(t *testing.T) {
-	st := newFixStream([]byte("STALE-GRID"))
-	st.fresh = []byte("FRESH-GRID-AFTER-OUTPUT")
-	d := newFixDaemon(st)
+	// snaps[0] is the first attach's grid; snaps[1] the current grid at supersede.
+	d := newFixDaemon([]byte("STALE-GRID"), []byte("FRESH-GRID-AFTER-OUTPUT"))
 	sock, _ := serveFix(t, d)
 
 	ca := dialClient(t, sock, []string{"attach"})
@@ -115,7 +139,7 @@ func TestFix_SupersedeSendsFreshSnapshot(t *testing.T) {
 		t.Fatalf("first Attach: %v", err)
 	}
 	if !bytes.Equal(a.Snapshot(), []byte("STALE-GRID")) {
-		t.Fatalf("first attach snapshot = %q, want the fresh-stream snapshot", a.Snapshot())
+		t.Fatalf("first attach snapshot = %q, want the first stream's snapshot", a.Snapshot())
 	}
 
 	cb := dialClient(t, sock, []string{"attach"})
@@ -124,13 +148,14 @@ func TestFix_SupersedeSendsFreshSnapshot(t *testing.T) {
 		t.Fatalf("supersede Attach: %v", err)
 	}
 	if !bytes.Equal(b.Snapshot(), []byte("FRESH-GRID-AFTER-OUTPUT")) {
-		t.Fatalf("supersede snapshot = %q, want the RE-snapshotted current grid (F1)", b.Snapshot())
+		t.Fatalf("supersede snapshot = %q, want the fresh re-attach current grid (F1)", b.Snapshot())
 	}
-	if d.attachCount() != 1 {
-		t.Fatalf("DaemonAPI.Attach called %d times; supersede must reuse the one stream", d.attachCount())
+	// Supersede RE-ATTACHES: a fresh stream is opened and the old one closed.
+	if d.attachCount() != 2 {
+		t.Fatalf("DaemonAPI.Attach called %d times; supersede must open a FRESH stream (re-attach)", d.attachCount())
 	}
-	if atomic.LoadInt32(&st.resnaps) != 1 {
-		t.Fatalf("ReSnapshot called %d times; supersede must re-snapshot exactly once", st.resnaps)
+	if st0 := d.openedFixAt(0); st0 == nil || !waitClosedFix(st0, recvTimeout) {
+		t.Fatalf("supersede did not close the old upstream stream (F1 re-attach)")
 	}
 }
 
@@ -143,7 +168,7 @@ func TestFix_LargeSnapshotChunkedRoundTrips(t *testing.T) {
 	for i := range big {
 		big[i] = byte('A' + i%26)
 	}
-	d := newFixDaemon(newFixStream(big))
+	d := newFixDaemon(big)
 	sock, _ := serveFix(t, d)
 
 	c := dialClient(t, sock, []string{"attach"})
@@ -162,7 +187,7 @@ func TestFix_LargeSnapshotChunkedRoundTrips(t *testing.T) {
 
 func TestFix_SnapshotWriteFailureNoDeadlock(t *testing.T) {
 	big := bytes.Repeat([]byte("Z"), 2*wire.MaxFrame)
-	d := newFixDaemon(newFixStream(big))
+	d := newFixDaemon(big)
 	sock, srv := serveFix(t, d)
 
 	// Attach at the wire level, then drop the connection so the server's snapshot
@@ -191,23 +216,30 @@ func TestFix_SnapshotWriteFailureNoDeadlock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFix_WedgedControllerSupersededWithinBound(t *testing.T) {
-	// Short pump write timeout so a wedged controller is evicted fast.
 	old := pumpWriteTimeoutNS.Load()
-	pumpWriteTimeoutNS.Store(int64(300 * time.Millisecond))
+	pumpWriteTimeoutNS.Store(int64(200 * time.Millisecond))
 	defer pumpWriteTimeoutNS.Store(old)
 
-	st := newFixStream([]byte("SNAP"))
-	d := newFixDaemon(st)
+	d := newFixDaemon([]byte("SNAP"))
 	sock, _ := serveFix(t, d)
 
-	// Wedged controller A: attach raw, then never read again.
+	// Wedged controller A: attach raw, then never read again, while frames flood its
+	// upstream so its pump has to write to a socket it never drains.
 	a := rawDial(t, sock)
 	ah := a.hello(Version, []string{"attach"})
 	a.writeControl(Control{Op: OpList, EndpointID: ah.EndpointID})
-	alist := a.readControl()
-	sid := alist.Sessions[0].ID
+	sid := a.readControl().Sessions[0].ID
 	a.writeControl(Control{Op: OpAttach, EndpointID: ah.EndpointID, SessionID: sid})
-	// Flood live frames so A's socket buffer fills and its pump wedges on write.
+	var astream *fixStream
+	for i := 0; i < 200 && astream == nil; i++ {
+		astream = d.openedFixAt(0)
+		if astream == nil {
+			sleepMS(5)
+		}
+	}
+	if astream == nil {
+		t.Fatalf("A's upstream stream never opened")
+	}
 	stop := make(chan struct{})
 	go func() {
 		blob := bytes.Repeat([]byte("x"), 32<<10)
@@ -215,33 +247,41 @@ func TestFix_WedgedControllerSupersededWithinBound(t *testing.T) {
 			select {
 			case <-stop:
 				return
-			case st.frames <- blob:
-			case <-time.After(50 * time.Millisecond):
+			case astream.frames <- blob:
+			case <-time.After(20 * time.Millisecond):
 			}
 		}
 	}()
 	defer close(stop)
 
-	// B supersedes; its attach must complete within a bound despite A being wedged.
+	// B supersedes the wedged A: the supersede must complete within a bound (never
+	// blocked on A's wedged pump), and B's fresh lease must work — proving A was
+	// evicted from the lease and the daemon is unaffected (F3/S9 liveness).
 	cb := dialClient(t, sock, []string{"attach"})
 	bid := onlyViewID(t, cb)
-	attached := make(chan error, 1)
+	type attachRes struct {
+		b   *Attachment
+		err error
+	}
+	attached := make(chan attachRes, 1)
 	go func() {
-		_, err := cb.Attach(bid)
-		attached <- err
+		b, err := cb.Attach(bid)
+		attached <- attachRes{b, err}
 	}()
+	var b *Attachment
 	select {
-	case err := <-attached:
-		if err != nil {
-			t.Fatalf("superseding attach failed: %v", err)
+	case res := <-attached:
+		if res.err != nil {
+			t.Fatalf("superseding attach failed: %v", res.err)
 		}
-	case <-time.After(4 * time.Second):
+		b = res.b
+	case <-time.After(5 * time.Second):
 		t.Fatalf("supersede blocked on a wedged controller (F3/S9 liveness)")
 	}
-
-	// A is evicted: its socket eventually reports closed.
-	if !a.eventuallyClosed(3 * time.Second) {
-		t.Fatalf("wedged controller not evicted within bound (F3)")
+	bStream := d.lastOpenedFix()
+	bStream.frames <- []byte("b-live")
+	if got, ok := recvFrame(t, b.Frames(), recvTimeout); !ok || !bytes.Equal(got, []byte("b-live")) {
+		t.Fatalf("superseding controller's lease not working after evicting the wedged one (got %q ok=%v)", got, ok)
 	}
 }
 
@@ -297,9 +337,7 @@ func TestFix_SecondAttachSameConnDetachesFirst(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFix_StaleGenerationDetachIgnored(t *testing.T) {
-	st := newFixStream([]byte("SNAP"))
-	st.fresh = []byte("SNAP2")
-	d := newFixDaemon(st)
+	d := newFixDaemon([]byte("SNAP"), []byte("SNAP2"))
 	sock, _ := serveFix(t, d)
 
 	ca := dialClient(t, sock, []string{"attach"})
@@ -318,15 +356,20 @@ func TestFix_StaleGenerationDetachIgnored(t *testing.T) {
 		t.Fatalf("A.Detach: %v", err)
 	}
 
-	// B still holds the lease: its live frames still flow, and its stream is open.
-	st.frames <- []byte("after-stale-detach")
+	// B still holds the lease: its live frames still flow, and its (fresh) stream
+	// stays open.
+	bStream := d.lastOpenedFix()
+	if bStream == nil {
+		t.Fatalf("B's upstream stream not found")
+	}
+	bStream.frames <- []byte("after-stale-detach")
 	got, ok := recvFrame(t, b.Frames(), recvTimeout)
 	if !ok || !bytes.Equal(got, []byte("after-stale-detach")) {
 		t.Fatalf("current controller lost its lease to a stale-generation detach (F11): got %q ok=%v", got, ok)
 	}
 	select {
-	case <-st.closed:
-		t.Fatalf("upstream stream closed by a stale-generation detach (F11)")
+	case <-bStream.closed:
+		t.Fatalf("current upstream stream closed by a stale-generation detach (F11)")
 	default:
 	}
 }
@@ -357,7 +400,10 @@ func TestFix_InputInFlightSerializesSupersede(t *testing.T) {
 		enter:     make(chan struct{}),
 		release:   make(chan struct{}),
 	}
-	d := newFixDaemon(bs)
+	// The first attach uses the blocking stream; the supersede's fresh re-attach
+	// uses a normal stream.
+	d := newFixDaemon([]byte("SNAP2"))
+	d.custom = []SessionStream{bs}
 	sock, _ := serveFix(t, d)
 
 	ca := dialClient(t, sock, []string{"attach"})
@@ -495,6 +541,253 @@ func TestFix_DeleteDropsLeaseAndDetachesController(t *testing.T) {
 	if st := stub.streamAt(0); st == nil || !st.waitClosed(recvTimeout) {
 		t.Fatalf("upstream stream not closed after delete (F13)")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW HIGH — untrusted snapshot_len: reject negative/huge/overshoot, never OOM.
+// ---------------------------------------------------------------------------
+
+// rawLeaseServer stands up a minimal server that completes the hello, then on the
+// first attach replies with a lease carrying snapshotLen and the given raw
+// TSnapshot chunk frames. Used to feed the client malformed snapshot framing.
+func rawLeaseServer(t *testing.T, snapshotLen int, chunks [][]byte) string {
+	t.Helper()
+	sock := tmpSock(t)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(netTimeout))
+		typ, payload, err := wire.ReadFrame(conn) // client hello
+		if err != nil || typ != wire.TControl {
+			return
+		}
+		hello, _ := DecodeControl(payload)
+		ep := "ep-1"
+		hb, _ := EncodeControl(Control{Op: OpHello, EndpointID: ep, ProtocolVersion: Version, Capabilities: hello.Capabilities})
+		if err := wire.WriteFrame(conn, wire.TControl, hb); err != nil {
+			return
+		}
+		for {
+			typ, payload, err := wire.ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			if typ != wire.TControl {
+				continue
+			}
+			c, _ := DecodeControl(payload)
+			if c.Op != OpAttach {
+				continue
+			}
+			lb, _ := EncodeControl(Control{Op: OpLease, EndpointID: ep, SessionID: c.SessionID, Generation: 1, SnapshotLen: snapshotLen})
+			_ = wire.WriteFrame(conn, wire.TControl, lb)
+			for _, ch := range chunks {
+				_ = wire.WriteFrame(conn, wire.TSnapshot, ch)
+			}
+			return
+		}
+	}()
+	return sock
+}
+
+func TestFix_InvalidSnapshotLenRejected(t *testing.T) {
+	cases := []struct {
+		name    string
+		snapLen int
+		chunks  [][]byte
+	}{
+		{"negative", -1, nil},
+		{"huge", (16 << 20) + 1, nil},
+		{"overshoot", 4, [][]byte{bytes.Repeat([]byte("x"), 9)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := rawLeaseServer(t, tc.snapLen, tc.chunks)
+			c, err := Dial(sock, []string{"attach"})
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			if _, err := c.Attach(NamespacedID(c.EndpointID(), "sess1")); err == nil {
+				t.Fatalf("Attach accepted an invalid snapshot_len (%d) — want an error, not a panic/OOM", tc.snapLen)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F11 — detach generation 0 is invalid; a same-connection stale-generation detach
+// does not release the current lease.
+// ---------------------------------------------------------------------------
+
+func TestFix_DetachGenerationZeroRejected(t *testing.T) {
+	d := newFixDaemon([]byte("SNAP"))
+	sock, _ := serveFix(t, d)
+
+	r := rawDial(t, sock)
+	h := r.hello(Version, []string{"attach"})
+	r.writeControl(Control{Op: OpList, EndpointID: h.EndpointID})
+	sid := r.readControl().Sessions[0].ID
+	r.writeControl(Control{Op: OpAttach, EndpointID: h.EndpointID, SessionID: sid})
+	readLease(t, r) // lease + snapshot
+
+	// A detach with generation 0 is rejected as invalid (not a wildcard).
+	r.writeControl(Control{Op: OpDetach, EndpointID: h.EndpointID, SessionID: sid, Generation: 0})
+	if got := r.readControl(); got.Op != OpError {
+		t.Fatalf("detach gen 0 reply op = %q, want %q (F11)", got.Op, OpError)
+	}
+	// The lease survives: a live frame still reaches this controller.
+	d.lastOpenedFix().frames <- []byte("still-attached")
+	if !rawReceivesDataOut(t, r, []byte("still-attached")) {
+		t.Fatalf("gen-0 detach released the current lease (F11)")
+	}
+}
+
+func TestFix_SameConnStaleGenerationDetachIgnored(t *testing.T) {
+	d := newFixDaemon([]byte("SNAP1"), []byte("SNAP2"))
+	sock, _ := serveFix(t, d)
+
+	r := rawDial(t, sock)
+	h := r.hello(Version, []string{"attach"})
+	r.writeControl(Control{Op: OpList, EndpointID: h.EndpointID})
+	sid := r.readControl().Sessions[0].ID
+
+	// Attach (gen1), then re-attach on the SAME connection (self-supersede -> gen2).
+	r.writeControl(Control{Op: OpAttach, EndpointID: h.EndpointID, SessionID: sid})
+	gen1 := readLease(t, r)
+	r.writeControl(Control{Op: OpAttach, EndpointID: h.EndpointID, SessionID: sid})
+	gen2 := readLease(t, r)
+	if gen2 <= gen1 {
+		t.Fatalf("self-supersede generation: gen2=%d not > gen1=%d", gen2, gen1)
+	}
+	current := d.lastOpenedFix() // the gen2 upstream stream
+
+	// A delayed detach carrying the STALE gen1 must NOT release the gen2 lease. Follow
+	// it with a list request as a barrier: the server's per-connection loop processes
+	// the detach BEFORE the list reply, so once we read the list reply the detach has
+	// definitely been handled and we can check the lease state without a race.
+	r.writeControl(Control{Op: OpDetach, EndpointID: h.EndpointID, SessionID: sid, Generation: gen1})
+	r.writeControl(Control{Op: OpList, EndpointID: h.EndpointID})
+	readUntilOp(t, r, OpList)
+
+	select {
+	case <-current.closed:
+		t.Fatalf("same-connection stale-generation detach released the current lease (F11)")
+	default:
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F3 / publication race — a supersede during a slow attach's snapshot send is not
+// blocked.
+// ---------------------------------------------------------------------------
+
+func TestFix_SupersedeDuringSlowSnapshotNotBlocked(t *testing.T) {
+	old := pumpWriteTimeoutNS.Load()
+	pumpWriteTimeoutNS.Store(int64(300 * time.Millisecond))
+	defer pumpWriteTimeoutNS.Store(old)
+
+	// Large snapshot to a non-reading controller: its pump wedges mid snapshot send.
+	d := newFixDaemon(bytes.Repeat([]byte("Z"), 4*wire.MaxFrame))
+	sock, _ := serveFix(t, d)
+
+	a := rawDial(t, sock)
+	ah := a.hello(Version, []string{"attach"})
+	a.writeControl(Control{Op: OpList, EndpointID: ah.EndpointID})
+	sid := a.readControl().Sessions[0].ID
+	a.writeControl(Control{Op: OpAttach, EndpointID: ah.EndpointID, SessionID: sid})
+	// Do NOT read A's snapshot, so A's pump wedges while sending the chunks.
+
+	cb := dialClient(t, sock, []string{"attach"})
+	bid := onlyViewID(t, cb)
+	attached := make(chan error, 1)
+	go func() { _, e := cb.Attach(bid); attached <- e }()
+	select {
+	case err := <-attached:
+		if err != nil {
+			t.Fatalf("superseding attach failed: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatalf("supersede blocked on a controller wedged mid snapshot send (F3/publication race)")
+	}
+}
+
+// readLease reads control/snapshot frames until the OpLease grant, consuming its
+// snapshot chunks, and returns the lease generation.
+func readLease(t *testing.T, r *rawConn) uint64 {
+	t.Helper()
+	var gen uint64
+	var haveLease bool
+	var need, got int
+	for i := 0; i < 64; i++ {
+		typ, payload, err := r.readFrame()
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		switch typ {
+		case wire.TControl:
+			c, derr := DecodeControl(payload)
+			if derr == nil && c.Op == OpLease {
+				gen, need, haveLease = c.Generation, c.SnapshotLen, true
+				if need == 0 {
+					return gen
+				}
+			}
+		case wire.TSnapshot:
+			if haveLease {
+				got += len(payload)
+				if got >= need {
+					return gen
+				}
+			}
+		}
+	}
+	t.Fatalf("no lease grant within the frame budget")
+	return 0
+}
+
+// readUntilOp reads frames until a TControl carrying op arrives (skipping data /
+// snapshot frames), failing if it does not appear within the frame budget.
+func readUntilOp(t *testing.T, r *rawConn, op string) Control {
+	t.Helper()
+	for i := 0; i < 64; i++ {
+		typ, payload, err := r.readFrame()
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		if typ != wire.TControl {
+			continue
+		}
+		if c, derr := DecodeControl(payload); derr == nil && c.Op == op {
+			return c
+		}
+	}
+	t.Fatalf("op %q not seen within the frame budget", op)
+	return Control{}
+}
+
+// rawReceivesDataOut reports whether want arrives as a TDataOut frame within a
+// bound (skipping intervening control frames).
+func rawReceivesDataOut(t *testing.T, r *rawConn, want []byte) bool {
+	t.Helper()
+	for i := 0; i < 16; i++ {
+		typ, payload, err := r.readFrame()
+		if err != nil {
+			return false
+		}
+		if typ == wire.TDataOut && bytes.Equal(payload, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

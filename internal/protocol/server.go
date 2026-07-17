@@ -37,7 +37,12 @@ const (
 	maxDim         = 1000    // cols/rows upper bound (matches the shim's resizeMax)
 	maxAgentLen    = 256     // agent-name length cap
 	maxOptionValue = 4 << 10 // per-option value cap (a few KiB; well under the wire cap)
-	eventQueueCap  = 64      // bounded per-subscriber event queue (S9)
+	// eventQueueCap bounds the per-subscriber event queue (S9). It is generous
+	// enough to absorb a legitimate status-change burst (e.g. many sessions
+	// transitioning at once on a daemon reconnect) without evicting a healthy
+	// subscriber, while still far below any flood a genuinely wedged subscriber
+	// produces — so a wedged subscriber is still disconnected within a bound.
+	eventQueueCap = 64
 
 	// snapshotChunkSize is the largest snapshot slice carried in one TSnapshot
 	// frame. A grid snapshot can exceed wire.MaxFrame (maxDim=1000 → far over
@@ -99,6 +104,12 @@ type sessionLease struct {
 	// generation N can never reach the shim once a supersede to N+1 has begun
 	// (F5/S2). It is a per-lease lock, so no shim I/O is ever done under s.mu.
 	inMu sync.Mutex
+
+	// attachMu serializes the whole attach operation per session (claim -> tear
+	// down prior -> close old shim conn -> open fresh conn -> start pump). It closes
+	// the publication race (pump channels are published only with a started pump)
+	// and enforces close-old-before-open-new for the one-connection shim.
+	attachMu sync.Mutex
 }
 
 // Serve binds the client socket and starts accepting connections and fanning out
@@ -220,11 +231,21 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Unlock()
 }
 
-// attach installs cc as the controller of local, superseding any prior controller
-// (S2). It opens the upstream stream on the 0->1 transition, reuses it on
-// supersede, and starts the pump that writes the lease grant + snapshot (S10) and
-// then streams live frames. On supersede the snapshot is RE-fetched so the new
-// controller sees the current grid, not the stale one captured at stream open (F1).
+// attach installs cc as the controller of local at a new, higher generation (S2),
+// superseding any prior controller. Rather than splice a fresh snapshot into a
+// reused stream, a supersede RE-ATTACHES: it tears down the prior controller,
+// CLOSES the old upstream shim connection, and opens a FRESH one. The shim serves
+// one connection at a time and delivers snapshot-then-frames atomically (Epic 4,
+// S10) — so the new controller always sees the CURRENT grid with no daemon-side
+// splice (F1). A fresh-attach failure is a HARD error: the supersede fails cleanly
+// and never shows a stale screen.
+//
+// The whole attach is serialized per session by attachMu: this closes the
+// publication race (the controller + pump channels are published ONLY once a real
+// pump is started, so a concurrent supersede/detach never waits on a not-yet-
+// started pump) and guarantees the close-old-before-open-new ordering the shim
+// needs. A supersede's own blocking is bounded by the shim dial; it never waits on
+// a wedged pump (evicted here within the pump's write bound).
 func (s *Server) attach(cc *clientConn, local string) error {
 	s.mu.Lock()
 	if s.closed {
@@ -238,8 +259,14 @@ func (s *Server) attach(cc *clientConn, local string) error {
 	}
 	s.mu.Unlock()
 
-	// inMu serializes the generation bump with in-flight input (F5). Lock order is
-	// always inMu -> s.mu; forwardInput/forwardResize use the same order.
+	ls.attachMu.Lock()
+	defer ls.attachMu.Unlock()
+
+	// Phase 1 — claim the lease at a NEW generation and capture the prior state.
+	// inMu serializes the generation bump with in-flight input (F5); lock order is
+	// always attachMu -> inMu -> s.mu. The controller is published with a nil
+	// stream/pump until Phase 4 installs a real pump, so stale/own input is dropped
+	// (stream == nil) meanwhile.
 	ls.inMu.Lock()
 	s.mu.Lock()
 	if s.closed || s.leases[local] != ls {
@@ -247,61 +274,85 @@ func (s *Server) attach(cc *clientConn, local string) error {
 		ls.inMu.Unlock()
 		return fmt.Errorf("protocol: session %q no longer attachable", local)
 	}
-	freshStream := false
-	if ls.stream == nil {
-		st, aerr := s.d.Attach(local)
-		if aerr != nil {
-			s.mu.Unlock()
-			ls.inMu.Unlock()
-			return aerr
-		}
-		ls.stream = st
-		freshStream = true
-	}
-	stream := ls.stream
 	prev := ls.controller
 	prevStop, prevDone := ls.pumpStop, ls.pumpDone
+	oldStream := ls.stream
 	ls.genCounter++
-	gen := ls.genCounter
+	myGen := ls.genCounter
 	ls.controller = cc
-	ls.pumpStop = make(chan struct{})
-	ls.pumpDone = make(chan struct{})
-	newStop, newDone := ls.pumpStop, ls.pumpDone
+	ls.stream = nil
+	ls.pumpStop = nil
+	ls.pumpDone = nil
 	s.mu.Unlock()
 	ls.inMu.Unlock()
 
+	cc.setAttach(local, myGen)
+
+	// Phase 2 — tear down the prior controller and FREE its shim connection so the
+	// fresh attach below can be served (the shim handles one connection at a time).
 	if prev != nil {
-		close(prevStop)
-		<-prevDone
-		prev.sendDetach(local) // superseded controller's Frames() closes (client side)
-		prev.clearAttach(local)
-	}
-
-	cc.setAttach(local, gen)
-
-	// A freshly opened stream's Snapshot() is current; a reused (supersede) one is
-	// stale, so re-snapshot the CURRENT grid when the stream supports it (F1).
-	snap := stream.Snapshot()
-	if !freshStream {
-		if rs, ok := stream.(reSnapshotter); ok {
-			if fresh, rerr := rs.ReSnapshot(); rerr == nil {
-				snap = fresh
-			}
+		if prevStop != nil {
+			close(prevStop)
+			<-prevDone
+		}
+		if prev != cc { // self re-attach must not clear its own new claim
+			prev.sendDetach(local)
+			prev.clearAttach(local)
 		}
 	}
+	if oldStream != nil {
+		_ = oldStream.Close()
+	}
 
-	// The pump owns the lease grant + snapshot writes AND the live stream, so its
-	// done channel is ALWAYS closed on exit: a write failure can never strand a
-	// dangling pumpDone that Close/releaseLease/supersede waits on forever (F2).
+	// Phase 3 — open a FRESH upstream stream: its snapshot is the shim's CURRENT
+	// grid, atomic with its first live frame (S10). A failure is a HARD error (F1).
+	newStream, aerr := s.d.Attach(local)
+	if aerr != nil {
+		s.abandonClaim(cc, local, myGen)
+		return aerr
+	}
+	snap := newStream.Snapshot()
+
+	// Phase 4 — install the fresh stream + pump IF still the current controller.
+	// Publishing the pump channels together with the started pump keeps done always
+	// closable, so no supersede/detach ever waits on a dangling pumpDone (F2).
+	ls.inMu.Lock()
+	s.mu.Lock()
+	if s.closed || s.leases[local] != ls || ls.controller != cc || ls.genCounter != myGen {
+		s.mu.Unlock()
+		ls.inMu.Unlock()
+		_ = newStream.Close() // superseded/released while opening: a newer attach owns it
+		return nil
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	ls.stream = newStream
+	ls.pumpStop = stop
+	ls.pumpDone = done
 	s.wg.Add(1)
-	go s.pump(cc, local, stream, gen, snap, newStop, newDone)
+	go s.pump(cc, local, newStream, myGen, snap, stop, done)
+	s.mu.Unlock()
+	ls.inMu.Unlock()
 	return nil
 }
 
-// pump writes one controller's lease grant + snapshot (S10), then streams its
-// live output frames until superseded/detached (stop) or the upstream ends. Every
-// controller-facing write is deadline-bounded, so a wedged controller is evicted
-// within a bound and never blocks supersede/detach (F3).
+// abandonClaim clears a lease claim whose fresh-stream open failed, if this
+// connection still holds it (no stream/pump were installed for it).
+func (s *Server) abandonClaim(cc *clientConn, local string, gen uint64) {
+	s.mu.Lock()
+	if ls := s.leases[local]; ls != nil && ls.controller == cc && ls.genCounter == gen {
+		ls.controller = nil
+	}
+	s.mu.Unlock()
+	cc.clearAttach(local)
+}
+
+// pump writes one controller's lease grant + snapshot (S10), then streams its live
+// output frames until superseded/detached (stop) or the upstream ends. The lease +
+// snapshot chunks share a single TOTAL write deadline and the loop checks stop
+// BETWEEN chunks, so a supersede/detach during a slow snapshot send is never
+// blocked; each live frame gets its own write deadline. A wedged controller is
+// evicted within a bound and never blocks supersede/detach (F3).
 func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen uint64, snap []byte, stop, done chan struct{}) {
 	defer s.wg.Done()
 	defer close(done)
@@ -319,13 +370,30 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 		s.evictPump(cc, local)
 		return
 	}
-	if werr := cc.writeFrameDeadline(wire.TControl, body); werr != nil {
+	deadline := time.Now().Add(pumpWriteTimeout()) // TOTAL bound for lease + all chunks
+	select {
+	case <-stop:
+		return
+	default:
+	}
+	if werr := cc.writeFrameBy(wire.TControl, body, deadline); werr != nil {
 		s.evictPump(cc, local)
 		return
 	}
-	if werr := cc.writeSnapshot(snap); werr != nil {
-		s.evictPump(cc, local)
-		return
+	for off := 0; off < len(snap); off += snapshotChunkSize {
+		select {
+		case <-stop:
+			return // supersede/detach during the snapshot send: stop promptly, don't evict
+		default:
+		}
+		end := off + snapshotChunkSize
+		if end > len(snap) {
+			end = len(snap)
+		}
+		if werr := cc.writeFrameBy(wire.TSnapshot, snap[off:end], deadline); werr != nil {
+			s.evictPump(cc, local)
+			return
+		}
 	}
 
 	frames := stream.Frames()
@@ -382,14 +450,15 @@ func (s *Server) evictPump(cc *clientConn, local string) {
 }
 
 // releaseLease releases cc's lease on local (self-detach or client EOF): it stops
-// the pump and closes the single upstream stream (1->0, L3). A non-zero gen is
-// validated against the current lease generation, so a delayed old-generation
-// detach cannot release the current lease (F11). notify sends the client an
-// OpDetach so its Frames() closes on an orderly detach.
-func (s *Server) releaseLease(cc *clientConn, local string, gen uint64, notify bool) {
+// the pump and closes the fresh upstream stream (1->0, L3). When matchGen is set
+// the detach's gen MUST equal the current lease generation, so a delayed
+// old-generation detach cannot release the current lease (F11); the EOF path uses
+// matchGen=false to release whatever this connection holds. notify sends the
+// client an OpDetach so its Frames() closes on an orderly detach.
+func (s *Server) releaseLease(cc *clientConn, local string, gen uint64, matchGen, notify bool) {
 	s.mu.Lock()
 	ls := s.leases[local]
-	if ls == nil || ls.controller != cc || (gen != 0 && ls.genCounter != gen) {
+	if ls == nil || ls.controller != cc || (matchGen && ls.genCounter != gen) {
 		s.mu.Unlock()
 		return
 	}
@@ -684,7 +753,7 @@ func (cc *clientConn) handleAttach(c Control) {
 	prev, prevGen := cc.attSession, cc.attGen
 	cc.attMu.Unlock()
 	if prev != "" && prev != local {
-		cc.srv.releaseLease(cc, prev, prevGen, true)
+		cc.srv.releaseLease(cc, prev, prevGen, false, true) // release this conn's first lease
 	}
 	if err := cc.srv.attach(cc, local); err != nil {
 		cc.replyError("attach: " + err.Error())
@@ -697,9 +766,14 @@ func (cc *clientConn) handleDetach(c Control) {
 		cc.replyError("invalid session id")
 		return
 	}
-	// Validate the detach's generation so a delayed old-generation detach cannot
-	// release the current lease (F11).
-	cc.srv.releaseLease(cc, local, c.Generation, true)
+	// The detach MUST carry the current lease generation: generation 0 is not a
+	// wildcard, and a delayed old-generation detach cannot release the current
+	// lease (F11).
+	if c.Generation == 0 {
+		cc.replyError("detach: invalid generation")
+		return
+	}
+	cc.srv.releaseLease(cc, local, c.Generation, true, true)
 }
 
 func (cc *clientConn) handleResize(c Control) {
@@ -711,22 +785,15 @@ func (cc *clientConn) handleResize(c Control) {
 }
 
 func (cc *clientConn) handleSubscribe() {
-	first := false
+	cc.replyOK("")
 	cc.subOnce.Do(func() {
 		cc.eventQ = make(chan Control, eventQueueCap)
-		// Register BEFORE the ack so no status change between the ack and
-		// registration is lost; events buffer in eventQ until the writer starts
-		// below (F4/L1).
-		cc.srv.subMu.Lock()
-		cc.srv.subs[cc] = struct{}{}
-		cc.srv.subMu.Unlock()
-		first = true
-	})
-	cc.replyOK("") // ack; the writer starts after, so the ack still precedes any event on the wire
-	if first {
 		cc.srv.wg.Add(1)
 		go cc.eventWriter()
-	}
+	})
+	cc.srv.subMu.Lock()
+	cc.srv.subs[cc] = struct{}{}
+	cc.srv.subMu.Unlock()
 }
 
 func (cc *clientConn) handleDataIn(payload []byte) {
@@ -761,7 +828,7 @@ func (cc *clientConn) cleanup() {
 	local := cc.attSession
 	cc.attMu.Unlock()
 	if local != "" {
-		cc.srv.releaseLease(cc, local, 0, false) // client EOF releases the lease regardless of gen (P-4/L3)
+		cc.srv.releaseLease(cc, local, 0, false, false) // client EOF releases the lease regardless of gen (P-4/L3)
 	}
 	cc.srv.removeConn(cc)
 	cc.close()
@@ -844,33 +911,24 @@ func (cc *clientConn) writeFrame(typ wire.Type, payload []byte) error {
 	return wire.WriteFrame(cc.conn, typ, payload)
 }
 
-// writeFrameDeadline writes one frame under pumpWriteTimeout, then clears the
-// deadline so other writers on the connection are unaffected. A wedged controller
-// fails here at the deadline, so the pump/supersede/detach never block (F3).
-func (cc *clientConn) writeFrameDeadline(typ wire.Type, payload []byte) error {
+// writeFrameBy writes one frame under an absolute deadline, then clears the
+// deadline so other writers on the connection are unaffected. A shared deadline
+// across a chunked snapshot bounds the whole send (not per-chunk); a wedged
+// controller fails here at the deadline, so the pump/supersede/detach never block
+// (F3).
+func (cc *clientConn) writeFrameBy(typ wire.Type, payload []byte, deadline time.Time) error {
 	cc.writeMu.Lock()
 	defer cc.writeMu.Unlock()
-	_ = cc.conn.SetWriteDeadline(time.Now().Add(pumpWriteTimeout()))
+	_ = cc.conn.SetWriteDeadline(deadline)
 	err := wire.WriteFrame(cc.conn, typ, payload)
 	_ = cc.conn.SetWriteDeadline(time.Time{})
 	return err
 }
 
-// writeSnapshot writes the snapshot as one or more TSnapshot chunk frames (a full
-// grid snapshot can exceed wire.MaxFrame). The client reassembles the chunks up to
-// the lease's SnapshotLen before painting (F2). A snapshot that fits in one frame
-// is sent as a single raw TSnapshot frame (the common case).
-func (cc *clientConn) writeSnapshot(snap []byte) error {
-	for off := 0; off < len(snap); off += snapshotChunkSize {
-		end := off + snapshotChunkSize
-		if end > len(snap) {
-			end = len(snap)
-		}
-		if err := cc.writeFrameDeadline(wire.TSnapshot, snap[off:end]); err != nil {
-			return err
-		}
-	}
-	return nil
+// writeFrameDeadline writes one frame under a fresh pumpWriteTimeout (used for
+// each independent live frame).
+func (cc *clientConn) writeFrameDeadline(typ wire.Type, payload []byte) error {
+	return cc.writeFrameBy(typ, payload, time.Now().Add(pumpWriteTimeout()))
 }
 
 func (cc *clientConn) replyError(msg string) {

@@ -193,6 +193,10 @@ func (c *Client) Attach(id string) (*Attachment, error) {
 
 	select {
 	case <-att.snapReady:
+		if att.snapFailed {
+			c.clearAttachment(att)
+			return nil, errors.New("protocol: invalid snapshot framing from daemon")
+		}
 	case <-c.done:
 		return nil, errors.New("protocol: connection closed during attach")
 	case <-time.After(clientTimeout):
@@ -363,12 +367,15 @@ type Attachment struct {
 	snapOnce  sync.Once
 
 	// Snapshot reassembly, driven only by the read-loop goroutine: chunk frames
-	// accumulate into snapBuf until it reaches snapLen bytes, then the whole
-	// snapshot is delivered (F2). No lock is needed — beginSnapshot,
-	// deliverSnapshotChunk and closeFrames are all read-loop-serialized.
-	snapLen  int
-	snapBuf  []byte
-	snapDone bool
+	// accumulate into snapBuf until it reaches EXACTLY snapLen bytes, then the whole
+	// snapshot is delivered (F2). An invalid declared length or an overshooting
+	// chunk stream fails the attach (snapFailed) rather than allocating/over-reading.
+	// No lock is needed — beginSnapshot, deliverSnapshotChunk and closeFrames are all
+	// read-loop-serialized.
+	snapLen    int
+	snapBuf    []byte
+	snapDone   bool
+	snapFailed bool
 
 	frames    chan []byte
 	closed    chan struct{}
@@ -428,24 +435,40 @@ func (a *Attachment) Detach() error {
 	return nil
 }
 
+// maxSnapshotBytes caps a reassembled snapshot: larger than any real grid, small
+// enough not to OOM. A declared snapshot_len outside [0, max] is rejected without
+// allocation (untrusted length hardening).
+const maxSnapshotBytes = 16 << 20 // 16 MiB
+
 // beginSnapshot starts snapshot reassembly for a lease whose snapshot is n bytes
-// total. An empty snapshot is delivered immediately. Read-loop goroutine only.
+// total. A negative or oversized length is rejected (no allocation); an empty
+// snapshot is delivered immediately. Read-loop goroutine only.
 func (a *Attachment) beginSnapshot(n int) {
+	if n < 0 || n > maxSnapshotBytes {
+		a.failSnapshot()
+		return
+	}
 	a.snapLen = n
 	a.snapBuf = make([]byte, 0, n)
-	if n <= 0 {
+	if n == 0 {
 		a.finishSnapshot()
 	}
 }
 
 // deliverSnapshotChunk appends one snapshot chunk, delivering the whole snapshot
-// once snapLen bytes have arrived (F2). Read-loop goroutine only.
+// once EXACTLY snapLen bytes have arrived. A chunk stream that overshoots the
+// declared length fails the attach rather than growing unbounded (F2). Read-loop
+// goroutine only.
 func (a *Attachment) deliverSnapshotChunk(p []byte) {
 	if a.snapDone {
 		return
 	}
+	if len(a.snapBuf)+len(p) > a.snapLen {
+		a.failSnapshot()
+		return
+	}
 	a.snapBuf = append(a.snapBuf, p...)
-	if len(a.snapBuf) >= a.snapLen {
+	if len(a.snapBuf) == a.snapLen {
 		a.finishSnapshot()
 	}
 }
@@ -456,6 +479,15 @@ func (a *Attachment) finishSnapshot() {
 		a.snapshot = a.snapBuf
 		close(a.snapReady)
 	})
+}
+
+// failSnapshot aborts the attach on invalid snapshot framing: it unblocks Attach
+// (which returns an error on snapFailed) and closes the attachment. Read-loop only.
+func (a *Attachment) failSnapshot() {
+	a.snapDone = true
+	a.snapFailed = true
+	a.snapOnce.Do(func() { close(a.snapReady) })
+	a.closeFrames()
 }
 
 // deliverFrame delivers one live frame. It is only ever called from the client

@@ -11,11 +11,12 @@ import (
 // supersede re-snapshot over the real shim (F1) and no-silent-loss status delivery
 // through FromDaemon's roster poller (F4).
 
-// TestFix_SupersedeReSnapshotRealShim drives F1 end-to-end: the superseding
-// controller's snapshot is re-fetched from the live shim (a valid, non-empty grid),
-// proving the real re-snapshot path (fromdaemon shimStream.ReSnapshot) works and
-// never deadlocks or returns an empty snapshot.
-func TestFix_SupersedeReSnapshotRealShim(t *testing.T) {
+// TestFix_SupersedeReAttachRealShim drives F1 end-to-end: a supersede re-attaches
+// via a fresh shim connection, and the new controller's snapshot is the live shim's
+// current grid (a valid, non-empty snapshot), proving the real re-attach path works
+// end to end (fresh DialSession + atomic shim snapshot) without deadlock or an empty
+// snapshot.
+func TestFix_SupersedeReAttachRealShim(t *testing.T) {
 	d := realDaemon(t)
 	launchRealSession(t, d)
 
