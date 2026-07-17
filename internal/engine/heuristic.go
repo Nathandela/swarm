@@ -68,21 +68,37 @@ func lineText(line vt.Line) string {
 	return b.String()
 }
 
-// hasSpinner reports whether text carries a spinner glyph: any braille pattern
-// (U+2800..U+28FF, the dominant modern spinner), or a classic ASCII frame as an
-// isolated leading token.
+// hasSpinner reports whether text carries a spinner glyph in an ANIMATION
+// position, so ordinary content is not misread as activity. A braille pattern
+// (U+2800..U+28FF, the dominant modern spinner) counts only as the LEADING or
+// TRAILING glyph of the line — the "⠋ Working" / "Working ⠋" posture — never a
+// braille rune buried mid-prose. A classic ASCII frame (|/-\) counts only as a
+// lone leading animation token: the whole line, or the frame followed by a space
+// with no further occurrence of that same frame, so a "| a | b |" markdown table
+// row or a "----" rule never trips it.
 func hasSpinner(text string) bool {
-	for _, r := range text {
-		if r >= 0x2800 && r <= 0x28FF {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) == 0 {
+		return false
+	}
+	if isBraille(runes[0]) || isBraille(runes[len(runes)-1]) {
+		return true
+	}
+	first := runes[0]
+	if strings.ContainsRune(asciiSpinnerFrames, first) {
+		if len(runes) == 1 {
+			return true
+		}
+		if runes[1] == ' ' && !strings.ContainsRune(string(runes[1:]), first) {
 			return true
 		}
 	}
-	runes := []rune(text)
-	if len(runes) > 0 && strings.ContainsRune(asciiSpinnerFrames, runes[0]) {
-		return len(runes) == 1 || runes[1] == ' '
-	}
 	return false
 }
+
+// isBraille reports whether r is a braille pattern glyph (U+2800..U+28FF), the
+// near-universal modern spinner animation frame.
+func isBraille(r rune) bool { return r >= 0x2800 && r <= 0x28FF }
 
 // endsWithSentinel reports whether text ends with a settled prompt sentinel.
 func endsWithSentinel(text string) bool {

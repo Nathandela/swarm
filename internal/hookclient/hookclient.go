@@ -18,7 +18,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
+	"strings"
+	"syscall"
 
 	"github.com/Nathandela/swarm/internal/engine"
 )
@@ -30,7 +33,16 @@ const (
 	// EnvSocket intentionally reuses the daemon's socket variable
 	// (daemon.EnvSocket == "SWARM_DAEMON_SOCK") so the hook dials the same socket
 	// the daemon serves.
-	EnvSocket   = "SWARM_DAEMON_SOCK"
+	EnvSocket = "SWARM_DAEMON_SOCK"
+	// EnvSequenceFile names the per-session monotonic counter FILE the daemon
+	// injects at spawn (G5). Each `swarm hook` invocation atomically increments it
+	// to obtain a strictly increasing sequence, so per-event callbacks are never
+	// rejected as replays. This is the production sequence source.
+	EnvSequenceFile = "SWARM_HOOK_SEQ_FILE"
+	// EnvSequence is the LEGACY fixed sequence integer. It is a fallback used only
+	// when no counter file is injected (it cannot satisfy G5 on its own, being
+	// constant across a session's invocations); production always injects
+	// EnvSequenceFile, which takes precedence.
 	EnvSequence = "SWARM_HOOK_SEQ"
 )
 
@@ -43,10 +55,9 @@ func FromEnv(getenv func(string) string, event string, payload map[string]string
 	if token == "" {
 		return engine.Callback{}, errors.New("hookclient: missing session token in environment")
 	}
-	seqStr := getenv(EnvSequence)
-	seq, err := strconv.ParseUint(seqStr, 10, 64)
+	seq, err := sequenceFromEnv(getenv)
 	if err != nil {
-		return engine.Callback{}, fmt.Errorf("hookclient: invalid sequence %q: %w", seqStr, err)
+		return engine.Callback{}, err
 	}
 	return engine.Callback{
 		SessionID: getenv(EnvSessionID),
@@ -55,6 +66,64 @@ func FromEnv(getenv func(string) string, event string, payload map[string]string
 		Event:     event,
 		Payload:   payload,
 	}, nil
+}
+
+// sequenceFromEnv obtains this invocation's monotonic sequence. When the daemon
+// injects a per-session counter file (EnvSequenceFile, the production path), the
+// sequence is that file's atomically-incremented next value, so every per-event
+// invocation gets a strictly increasing number (G5). Absent a counter file it
+// falls back to the legacy fixed SWARM_HOOK_SEQ integer.
+func sequenceFromEnv(getenv func(string) string) (uint64, error) {
+	if path := getenv(EnvSequenceFile); path != "" {
+		return nextSequence(path)
+	}
+	seqStr := getenv(EnvSequence)
+	seq, err := strconv.ParseUint(seqStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("hookclient: invalid sequence %q: %w", seqStr, err)
+	}
+	return seq, nil
+}
+
+// nextSequence atomically increments the decimal counter stored at path and
+// returns the new value. An exclusive advisory lock (flock) serializes concurrent
+// `swarm hook` processes for the same session, so every invocation observes a
+// distinct, strictly increasing sequence even under concurrency — the property a
+// naive append-then-stat cannot guarantee. The counter starts at 0 (a fresh file
+// reads empty), so the first invocation returns 1.
+func nextSequence(path string) (uint64, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return 0, fmt.Errorf("hookclient: open sequence file %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return 0, fmt.Errorf("hookclient: lock sequence file %s: %w", path, err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return 0, fmt.Errorf("hookclient: read sequence file %s: %w", path, err)
+	}
+	var cur uint64
+	if trimmed := strings.TrimSpace(string(data)); trimmed != "" {
+		if cur, err = strconv.ParseUint(trimmed, 10, 64); err != nil {
+			return 0, fmt.Errorf("hookclient: parse sequence file %s: %w", path, err)
+		}
+	}
+	next := cur + 1
+	out := []byte(strconv.FormatUint(next, 10))
+	if _, err := f.WriteAt(out, 0); err != nil {
+		return 0, fmt.Errorf("hookclient: write sequence file %s: %w", path, err)
+	}
+	// The counter only grows, so the new text is at least as long as the old; the
+	// truncate is a cheap guard against any shorter successor leaving stale digits.
+	if err := f.Truncate(int64(len(out))); err != nil {
+		return 0, fmt.Errorf("hookclient: truncate sequence file %s: %w", path, err)
+	}
+	return next, nil
 }
 
 // Post dials the daemon's unix socket and writes cb, then closes the connection.

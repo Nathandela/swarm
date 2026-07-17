@@ -21,10 +21,15 @@
 // Every side effect (clock, CPU sampling, emission) is injected via Config, so
 // the whole engine is deterministic under test. Emit is called synchronously on
 // the goroutine that observed the change, and only when a status dimension
-// actually changed (L1 is per-dimension-change).
+// actually changed (L1 is per-dimension-change). A status mutation is committed
+// under the global mutex (single writer, G6), but Emit itself runs OUTSIDE that
+// mutex, serialized per session by a per-session emit lock — so a slow, blocking,
+// or reentrant subscriber for one session can never stall the engine for another
+// (L1/P-3), while one session's emits stay strictly ordered.
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -94,6 +99,12 @@ type session struct {
 	sources []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
 	alive   bool
 
+	// emitMu serializes this session's commit→emit so its emits stay ordered (G6)
+	// without holding the global e.mu across Emit. It is acquired BEFORE e.mu and
+	// held across the emit, so a wedged subscriber blocks only this session, never
+	// the whole engine (F3, L1/P-3).
+	emitMu sync.Mutex
+
 	status status.Status
 
 	lastSeq      uint64    // last accepted callback sequence; 0 = none yet (first valid >=1)
@@ -156,44 +167,77 @@ func (e *Engine) EndSession(id string) {
 
 // HandleCallback authenticates and applies a typed status signal (S6/G5). It
 // rejects — with an error and NO emit — any callback that is tokenless, carries a
-// foreign token, targets an unregistered or ended session, or replays a
-// non-increasing sequence. An accepted callback updates only the dimensions its
-// payload names and emits only if a dimension actually changed.
+// foreign token, targets an unregistered or ended session, replays a
+// non-increasing sequence, or names a status value outside the vocabulary (F2).
+// A rejected callback advances nothing (not even the sequence). An accepted
+// callback updates only the dimensions its payload names and emits only if a
+// dimension actually changed. Emit runs outside e.mu, serialized per session by
+// s.emitMu (F3).
 func (e *Engine) HandleCallback(cb Callback) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	s, ok := e.sessions[cb.SessionID]
-	if !ok || !s.alive {
+	e.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("engine: callback for unregistered or ended session %q", cb.SessionID)
+	}
+
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+
+	e.mu.Lock()
+	// Re-validate under e.mu: the session may have been ended or replaced between
+	// the lookup above and acquiring its emit lock.
+	if cur, ok := e.sessions[cb.SessionID]; !ok || cur != s || !s.alive {
+		e.mu.Unlock()
 		return fmt.Errorf("engine: callback for unregistered or ended session %q", cb.SessionID)
 	}
 	if cb.Token == "" || cb.Token != s.token {
+		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
 	// Strictly increasing from a first valid sequence >= 1. lastSeq starts at 0,
 	// so seq 0 (or any replay/reorder) is rejected without a separate guard.
 	if cb.Sequence <= s.lastSeq {
+		e.mu.Unlock()
 		return fmt.Errorf("engine: callback sequence %d not greater than last accepted %d", cb.Sequence, s.lastSeq)
 	}
-
+	next, err := applyPayload(s.status, cb.Payload)
+	if err != nil {
+		e.mu.Unlock()
+		return err // out-of-vocabulary payload: reject like an auth failure, advance nothing
+	}
 	now := e.now()
 	s.lastSeq = cb.Sequence
 	s.lastTypedAt = now
 	s.lastSignalAt = now
-	e.applyStatus(cb.SessionID, s, applyPayload(s.status, cb.Payload))
+	changed := commit(s, next)
+	e.mu.Unlock()
+
+	if changed {
+		e.emit(cb.SessionID, next)
+	}
 	return nil
 }
 
 // OnOutput re-evaluates a session's status from a fresh screen snapshot (the grid
 // heuristic, T-3). A still-fresh typed signal outranks the heuristic (S7
 // precedence), so the read is discarded in that window; otherwise the heuristic
-// result — including turn=unknown for an inconclusive grid — is applied.
+// result — including turn=unknown for an inconclusive grid — is applied. Emit runs
+// outside e.mu, serialized per session by s.emitMu (F3).
 func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	s, ok := e.sessions[id]
-	if !ok || !s.alive {
+	e.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+
+	e.mu.Lock()
+	if cur, ok := e.sessions[id]; !ok || cur != s || !s.alive {
+		e.mu.Unlock()
 		return
 	}
 	// Any output is evidence the session is not silent, so it refreshes the
@@ -201,13 +245,19 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	now := e.now()
 	s.lastSignalAt = now
 	if now.Sub(s.lastTypedAt) < e.staleness {
+		e.mu.Unlock()
 		return // a fresher typed signal outranks the heuristic
 	}
 	turn, interaction := evaluateGrid(snap)
 	next := s.status
 	next.Turn = turn
 	next.Interaction = interaction
-	e.applyStatus(id, s, next)
+	changed := commit(s, next)
+	e.mu.Unlock()
+
+	if changed {
+		e.emit(id, next)
+	}
 }
 
 // Tick is the low-frequency, daemon-driven fallback poll. It samples each live
@@ -220,16 +270,15 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 // applied under the lock against the session's live state.
 func (e *Engine) Tick() {
 	e.mu.Lock()
-	jobs := make([]struct {
+	type job struct {
 		id  string
 		pid int
-	}, 0, len(e.sessions))
+		s   *session
+	}
+	jobs := make([]job, 0, len(e.sessions))
 	for id, s := range e.sessions {
 		if s.alive {
-			jobs = append(jobs, struct {
-				id  string
-				pid int
-			}{id, s.pid})
+			jobs = append(jobs, job{id, s.pid, s})
 		}
 	}
 	e.mu.Unlock()
@@ -238,38 +287,97 @@ func (e *Engine) Tick() {
 		cpu, err := e.sampler(j.pid)
 		busy := err == nil && cpu > 0
 
+		j.s.emitMu.Lock()
 		e.mu.Lock()
-		s, ok := e.sessions[j.id]
-		if ok && s.alive && s.status.Turn == status.TurnActive && !busy &&
-			e.now().Sub(s.lastSignalAt) >= e.staleness {
-			next := s.status
+		cur, ok := e.sessions[j.id]
+		changed := false
+		var next status.Status
+		if ok && cur == j.s && j.s.alive && j.s.status.Turn == status.TurnActive && !busy &&
+			e.now().Sub(j.s.lastSignalAt) >= e.staleness {
+			next = j.s.status
 			next.Turn = status.TurnUnknown
-			e.applyStatus(j.id, s, next)
+			changed = commit(j.s, next)
 		}
 		e.mu.Unlock()
+
+		if changed {
+			e.emit(j.id, next)
+		}
+		j.s.emitMu.Unlock()
 	}
 }
 
-// applyStatus commits next as s's status and emits iff a dimension changed. It is
-// the single choke point through which every status mutation and emission passes.
-// Caller holds e.mu.
-func (e *Engine) applyStatus(id string, s *session, next status.Status) {
-	if next == s.status {
+// Run drives the fallback poll (E10.8): it calls Tick every Config.PollInterval
+// until ctx is cancelled, then returns. This is the ONLY periodic driver — the
+// engine never self-polls — and it does no busy work: between ticks it blocks on a
+// ticker, so an idle system consumes nothing beyond one wakeup per interval. With
+// a non-positive PollInterval there is no cadence to drive, so Run blocks until
+// ctx is cancelled. Run adds no goroutines of its own beyond the ticker, so it
+// leaks nothing once it returns.
+func (e *Engine) Run(ctx context.Context) {
+	if e.poll <= 0 {
+		<-ctx.Done()
 		return
 	}
+	t := time.NewTicker(e.poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			e.Tick()
+		}
+	}
+}
+
+// commit writes next as s's status and reports whether a dimension changed. It is
+// the single choke point through which every status mutation passes (G6). The
+// caller holds e.mu; emission is the caller's job, done AFTER e.mu is released and
+// under the session's emit lock (F3, L1/P-3).
+func commit(s *session, next status.Status) bool {
+	if next == s.status {
+		return false
+	}
 	s.status = next
-	e.emit(id, next)
+	return true
 }
 
 // applyPayload returns cur with only the dimensions named in payload overwritten,
 // leaving unnamed dimensions untouched (so a turn-only signal never disturbs
-// interaction).
-func applyPayload(cur status.Status, payload map[string]string) status.Status {
+// interaction). A named dimension whose value is outside the status vocabulary is
+// an error: an authenticated-but-malformed callback must not store a bogus
+// dimension a downstream Derive would then have to interpret (F2).
+func applyPayload(cur status.Status, payload map[string]string) (status.Status, error) {
 	if v, ok := payload[PayloadKeyTurn]; ok {
+		if !validTurn(v) {
+			return status.Status{}, fmt.Errorf("engine: callback turn %q is not in the status vocabulary", v)
+		}
 		cur.Turn = status.Turn(v)
 	}
 	if v, ok := payload[PayloadKeyInteraction]; ok {
+		if !validInteraction(v) {
+			return status.Status{}, fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", v)
+		}
 		cur.Interaction = status.Interaction(v)
 	}
-	return cur
+	return cur, nil
+}
+
+// validTurn / validInteraction gate a payload's dimension values to the status
+// vocabulary (status.Turn / status.Interaction constants).
+func validTurn(v string) bool {
+	switch status.Turn(v) {
+	case status.TurnActive, status.TurnIdle, status.TurnUnknown:
+		return true
+	}
+	return false
+}
+
+func validInteraction(v string) bool {
+	switch status.Interaction(v) {
+	case status.InteractionNone, status.InteractionPrompt, status.InteractionPermission, status.InteractionUnknown:
+		return true
+	}
+	return false
 }

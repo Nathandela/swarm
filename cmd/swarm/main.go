@@ -22,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/transcript"
+	"golang.org/x/sys/unix"
 )
 
 // defaultMaxSessions caps concurrent sessions for a production daemon.
@@ -247,7 +248,7 @@ func ensureSession() (exitCode int, reexeced bool, err error) {
 	}
 	// EPERM: we are already a process-group leader. If we already lead the
 	// session, that is fine; otherwise we must re-exec to acquire one.
-	if sid, gerr := syscall.Getsid(0); gerr == nil && sid == os.Getpid() {
+	if sid, gerr := unix.Getsid(0); gerr == nil && sid == os.Getpid() {
 		return 0, false, nil
 	}
 	if os.Getenv(shimSessionEnv) == "1" {

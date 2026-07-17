@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -145,9 +148,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		}
 	}
 
-	// Phase 2 — spawn: launch the shim with the deterministic socket + filtered env.
+	// Phase 2 — spawn: launch the shim with the deterministic socket + filtered env,
+	// plus a fresh per-session hook token injected into the agent env (E10.1/G4).
 	sock := shimSocketPath(d.cfg.StateDir, id)
-	cmd, err := d.spawnShim(id, spec, sock, dir)
+	token, terr := newHookToken()
+	if terr != nil {
+		d.dropReserved(id)
+		return persist.Meta{}, terr
+	}
+	cmd, err := d.spawnShim(id, spec, sock, dir, token)
 	if err != nil {
 		d.dropReserved(id)
 		return persist.Meta{}, err
@@ -209,12 +218,12 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // --config` process. It sets no process group, so the shim setsids in place (a
 // stable PID that reconcile can match) and detaches itself; the shim's stdio goes
 // to the daemon log while the AGENT's env is the filtered set in the config.
-func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir string) (*exec.Cmd, error) {
+func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (*exec.Cmd, error) {
 	lc := shimSpawnConfig{
 		SessionID:  id,
 		Argv:       spec.Argv,
 		Cwd:        spec.Cwd,
-		Env:        persist.FilterEnv(spec.ClientEnv),
+		Env:        injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir)),
 		SocketPath: sock,
 		SessionDir: dir,
 		Cols:       spec.Cols,
@@ -243,6 +252,42 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir string) (*exec.
 		return nil, startErr
 	}
 	return cmd, nil
+}
+
+// hookSeqFilePath is the per-session monotonic counter file injected as
+// SWARM_HOOK_SEQ_FILE; each `swarm hook` invocation atomically increments it for a
+// strictly increasing callback sequence (G5).
+func hookSeqFilePath(dir string) string {
+	return filepath.Join(dir, "hook.seq")
+}
+
+// newHookToken mints a fresh per-session hook-authentication token (crypto/rand).
+// It is injected into the agent env and (Epic 8) registered with the engine, so a
+// callback bearing it authenticates; it is never persisted, so no other local
+// process can spoof the session's hooks (ADR-004).
+func newHookToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("daemon: generate hook token: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// injectHookEnv appends the four per-session hook variables — session id, token,
+// daemon socket, and monotonic counter file — to the already allowlist-filtered
+// agent env (E10.1/G4). They are added POST-filter deliberately: FilterEnv (S-2)
+// would strip them, but the agent's `swarm hook` needs them to reach and
+// authenticate to the daemon.
+func injectHookEnv(filtered []string, id, token, sock, seqFile string) []string {
+	out := make([]string, 0, len(filtered)+4)
+	out = append(out, filtered...)
+	out = append(out,
+		hookclient.EnvSessionID+"="+id,
+		hookclient.EnvToken+"="+token,
+		hookclient.EnvSocket+"="+sock,
+		hookclient.EnvSequenceFile+"="+seqFile,
+	)
+	return out
 }
 
 // superviseLaunched reaps the shim child and finalizes the session when it exits

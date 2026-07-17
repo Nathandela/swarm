@@ -5,8 +5,6 @@ package engine
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -36,34 +34,14 @@ func SampleCPU(pid int) (float64, error) {
 	return float64(t1-t0) / clkTck / cpuSampleWindow.Seconds() * 100.0, nil
 }
 
-// procCPUTicks returns pid's cumulative utime+stime in clock ticks. It parses
-// /proc/<pid>/stat by locating the ')' that closes the comm field (which may
-// itself contain spaces or parentheses) and counting fields from there — the
-// canonical robust parse, matching internal/daemon's start-time reader.
+// procCPUTicks returns pid's cumulative utime+stime in clock ticks. The syscall
+// (reading /proc/<pid>/stat) lives here; the robust field parse — which locates
+// the ')' closing the comm field even when comm holds spaces or parentheses — is
+// the pure, unit-tested parseLinuxCPUTicks.
 func procCPUTicks(pid int) (uint64, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return 0, err
 	}
-	s := string(data)
-	rparen := strings.LastIndexByte(s, ')')
-	if rparen < 0 || rparen+2 > len(s) {
-		return 0, fmt.Errorf("engine: malformed /proc/%d/stat", pid)
-	}
-	// After "(comm) " the fields resume at state (field 3) as index 0, so field N
-	// is index N-3: utime (14) -> 11, stime (15) -> 12.
-	fields := strings.Fields(s[rparen+1:])
-	const utimeIdx, stimeIdx = 11, 12
-	if len(fields) <= stimeIdx {
-		return 0, fmt.Errorf("engine: /proc/%d/stat has too few fields", pid)
-	}
-	utime, err := strconv.ParseUint(fields[utimeIdx], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("engine: parse utime: %w", err)
-	}
-	stime, err := strconv.ParseUint(fields[stimeIdx], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("engine: parse stime: %w", err)
-	}
-	return utime + stime, nil
+	return parseLinuxCPUTicks(data)
 }
