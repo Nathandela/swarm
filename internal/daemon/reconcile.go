@@ -127,6 +127,10 @@ func (d *Daemon) handleShimExit(id string) {
 	if err := d.saveMeta(m); err != nil {
 		d.logf("exit-merge: persist meta for %s: %v", id, err)
 	}
+	// The session has ended: retire its engine registration and token (S6).
+	if d.cfg.OnSessionEnd != nil {
+		d.cfg.OnSessionEnd(id)
+	}
 }
 
 // putMem inserts or updates a session in the registry without writing to disk,

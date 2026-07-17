@@ -121,6 +121,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Env:           persist.FilterEnv(spec.ClientEnv),
 		CreatedAt:     now,
 		LastActivity:  now,
+		ResumedFrom:   spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
 		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
 	s := &session{meta: m, stop: make(chan struct{})}
@@ -212,6 +213,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	}
 	d.wg.Add(1)
 	go d.superviseLaunched(id, cmd, s.stop)
+
+	// Register the session with the status engine (Epic 11 seam a): the assembly's
+	// OnSessionStart hook installs the session's per-session hook token so an
+	// authenticated `swarm hook` callback can drive its status. The token is never
+	// persisted, so this synchronous hand-off is the sole path by which the engine
+	// learns it. Fired after the shim identity is persisted, so the meta carries the
+	// shim PID the engine samples CPU from (S7).
+	if d.cfg.OnSessionStart != nil {
+		d.cfg.OnSessionStart(m, token)
+	}
 
 	// Wait for the shim to actually serve its socket before declaring the spawn phase
 	// reached. We never kill on failure here (crash-safe): the identity is already

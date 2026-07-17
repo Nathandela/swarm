@@ -55,6 +55,11 @@ func (d *Daemon) Delete(id string) error {
 	d.tombstoneID(id)
 	d.mu.Unlock()
 
+	// The session is being removed: retire its engine registration and token (S6).
+	if d.cfg.OnSessionEnd != nil {
+		d.cfg.OnSessionEnd(id)
+	}
+
 	var preDeleteErr error
 	if ok {
 		close(s.stop) // stop this session's monitor WITHOUT finalizing it

@@ -68,6 +68,20 @@ type Config struct {
 	// error is logged and returned, but never blocks the mandatory teardown.
 	PreDelete func(m persist.Meta) error
 
+	// OnSessionStart and OnSessionEnd are optional status-engine wiring hooks (Epic
+	// 11). Both are nil by default (opt-in; pre-Epic-11 configs are unchanged).
+	//
+	// OnSessionStart fires once per successful launch, after the shim identity is
+	// persisted, with the new session's meta and its freshly-minted per-session hook
+	// token. It is the ONLY path by which the engine learns that token (it is never
+	// written to meta.json), so the assembly registers the session with the engine
+	// here so an authenticated hook callback can drive its status.
+	//
+	// OnSessionEnd fires when a session ends (its shim exits, or it is deleted), so
+	// the assembly retires the engine session and its token (S6).
+	OnSessionStart func(m persist.Meta, token string)
+	OnSessionEnd   func(id string)
+
 	// ConnHandler, when non-nil, REPLACES the daemon's minimal 4-byte version
 	// handshake (serveClient) as the handler for every connection accepted on the
 	// singleton socket (Epic 8 assembly). The daemon still owns the socket —
@@ -91,6 +105,11 @@ type LaunchSpec struct {
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string
+	// ResumedFrom, when non-empty, is the LOCAL id of a prior session this launch
+	// resumes (Epic 11 / R-2). The daemon stamps it into the new session's
+	// meta.ResumedFrom, linking the two; resolving the reference and composing the
+	// adapter's resume argv is the assembly's job (the daemon only carries the link).
+	ResumedFrom string
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a
@@ -195,6 +214,33 @@ func (d *Daemon) Get(id string) (persist.Meta, bool) {
 		return persist.Meta{}, false
 	}
 	return s.meta, true
+}
+
+// SetStatus routes an engine-derived status change through the daemon's single
+// meta writer (G6), making it durable and observable in List — the write seam the
+// status engine's Emit uses (Epic 11 seam c). Only the ACTIVITY dimensions
+// (turn/interaction) are applied: the daemon stays the sole authority on the
+// lifecycle dimension (process), so a late engine emit can never resurrect an
+// exited or lost session. It is a no-op for an unchanged status and an error for
+// an unknown session; a tombstoned (deleted) session is dropped by saveMeta.
+func (d *Daemon) SetStatus(id string, s status.Status) error {
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	if !ok {
+		d.mu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	m := sess.meta
+	d.mu.Unlock()
+
+	next := m.Status
+	next.Turn = s.Turn
+	next.Interaction = s.Interaction
+	if next == m.Status {
+		return nil // no activity change to persist
+	}
+	m.Status = next
+	return d.saveMeta(m)
 }
 
 // Close is a clean shutdown: stop serving and release the singleton (flock +

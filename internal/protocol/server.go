@@ -21,6 +21,14 @@ import (
 // (value "true"); the assembly (skeleton) reads it to gate worktree isolation.
 const OptionWorktree = "worktree"
 
+// OptionResumeFrom is the reserved launch-option key through which a resume-as-new-
+// session request (Epic 11 / R-2) carries the SOURCE session's namespaced id. Like
+// OptionWorktree it travels in Options rather than a dedicated wire field, so the
+// frozen protocol schema is unchanged; the assembly (skeleton) resolves it to the
+// source's local id, links the new session's meta.ResumedFrom, and composes the
+// adapter's resume argv from the source conversation id.
+const OptionResumeFrom = "resume_from"
+
 // daemonLaunchSpec builds the DaemonAPI launch spec from a validated request,
 // applying the server-side env allowlist (S-6). Argv composition is the adapter's
 // job (Epic 9), so it is left empty here.

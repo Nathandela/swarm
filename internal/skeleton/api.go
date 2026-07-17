@@ -61,7 +61,19 @@ func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 // "fake" to the swarm-fake-agent binary + its script option (the argv the Epic 9
 // adapter will otherwise compose). Every other agent's argv is the adapter's job;
 // the core rejects an unresolved (empty-argv) launch, so a real agent needs Epic 9.
+//
+// Resume-as-new-session (Epic 11 / R-2): a launch carrying the reserved
+// OptionResumeFrom option resumes a prior session. The option value is the SOURCE
+// session's namespaced id; its local part becomes the new session's ResumedFrom
+// link, which the daemon stamps into meta.ResumedFrom. Composing the adapter's
+// resume argv from the source conversation id is the adapter's job (the fake agent
+// has no resume, so it relaunches fresh while still carrying the link).
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
+		if _, local, ok := protocol.ParseID(src); ok {
+			spec.ResumedFrom = local
+		}
+	}
 	if spec.AgentType == "fake" && a.fakeAgentBin != "" && len(spec.Argv) == 0 {
 		spec.Argv = []string{a.fakeAgentBin, spec.Options["script"]}
 	}
@@ -77,20 +89,26 @@ func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
 	return newShimStream(conn)
 }
 
-// emitStatus fans an engine-derived status change out to subscribers by overlaying
-// it on the session's current roster meta. This is the engine.Emit -> protocol
-// fan-out half of Epic 10's status wiring. The PERSIST half (writing engine status
-// back through the daemon as the G6 single writer) needs a daemon status-write
-// seam the core does not expose and is the documented carry-forward — so
-// engine-derived status is not yet persisted across a restart. It is also inert
-// until the Epic 11 adapter registers sessions with the engine (it holds no
-// per-session tokens today), so this path is wired but unexercised.
+// emitStatus routes an engine-derived status change through both halves of Epic
+// 10's status wiring (the Epic 11 carry-forward, now wired):
+//
+//   - PERSIST (G6): SetStatus writes the change back through the daemon's sole meta
+//     writer, so it is durable and a reconnecting client's List reflects it.
+//   - FAN OUT (Epic 6): the updated meta is pushed to the roster event channel the
+//     protocol Server fans out, so Subscribe delivers it immediately (L1) rather
+//     than waiting for the next roster poll.
+//
+// SetStatus is the choke point that also guards the process dimension (the daemon
+// stays its sole authority), so an unknown/ended session persists nothing and is
+// dropped here.
 func (a *coreAPI) emitStatus(id string, s status.Status) {
+	if err := a.core.SetStatus(id, s); err != nil {
+		return // unknown/ended session: nothing to persist or fan out
+	}
 	m, ok := a.core.Get(id)
 	if !ok {
 		return
 	}
-	m.Status = s
 	select {
 	case a.events <- m:
 	case <-a.stop:

@@ -32,6 +32,8 @@ import (
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/worktree"
 )
 
@@ -80,15 +82,17 @@ func Serve(cfg Config) (*Daemon, error) {
 	// (Epic 12 toggle wiring). handleConn blocks on d.ready, so nothing is served
 	// until the assembly below is fully wired.
 	core, err := daemon.Open(daemon.Config{
-		StateDir:    cfg.StateDir,
-		SocketPath:  cfg.SocketPath,
-		LockPath:    cfg.LockPath,
-		LogPath:     cfg.LogPath,
-		ShimBinary:  cfg.ShimBinary,
-		MaxSessions: cfg.MaxSessions,
-		ConnHandler: d.handleConn,
-		PreLaunch:   preLaunchWorktree,
-		PreDelete:   preDeleteWorktree,
+		StateDir:       cfg.StateDir,
+		SocketPath:     cfg.SocketPath,
+		LockPath:       cfg.LockPath,
+		LogPath:        cfg.LogPath,
+		ShimBinary:     cfg.ShimBinary,
+		MaxSessions:    cfg.MaxSessions,
+		ConnHandler:    d.handleConn,
+		PreLaunch:      preLaunchWorktree,
+		PreDelete:      preDeleteWorktree,
+		OnSessionStart: d.registerSession,
+		OnSessionEnd:   d.endSession,
 	})
 	if err != nil {
 		return nil, err
@@ -109,10 +113,80 @@ func Serve(cfg Config) (*Daemon, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
-	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
+	go d.eng.Run(ctx)  // the ONLY periodic driver (E10.8); idle when PollInterval<=0
+	go d.tapGrids(ctx) // the shim->engine output tap (seam b)
 
 	close(d.ready) // assembly complete: the ConnHandler may now serve
 	return d, nil
+}
+
+// registerSession is the daemon's OnSessionStart hook (Epic 11 seam a): it
+// registers a freshly-launched session with the status engine under its
+// per-session hook token, so an authenticated callback (S6) can drive the
+// session's status. The token arrives here privately from the daemon launch path
+// and is never persisted. Signal sources are left nil: the generic grid heuristic
+// (seam b) and typed hooks need none; a real adapter (Epic 11) supplies them.
+func (d *Daemon) registerSession(m persist.Meta, token string) {
+	if d.eng != nil {
+		d.eng.RegisterSession(m.ID, token, m.ShimPID, nil)
+	}
+}
+
+// endSession is the daemon's OnSessionEnd hook: it retires an ended session's
+// engine registration and token (S6). Ending an unregistered session (e.g. one
+// adopted by reconcile, never registered) is a harmless no-op.
+func (d *Daemon) endSession(id string) {
+	if d.eng != nil {
+		d.eng.EndSession(id)
+	}
+}
+
+// gridPoll is how often the assembly samples each running session's shim grid and
+// feeds it to the engine's grid heuristic (seam b). It is well within the L1 <=1s
+// bound and mirrors the roster event cadence.
+const gridPoll = 200 * time.Millisecond
+
+// tapGrids is the shim->engine output tap (Epic 11 seam b): on a low-frequency
+// cadence it samples each running session's current shim grid and feeds it to
+// engine.OnOutput, so the CLI-agnostic grid heuristic runs even for a session that
+// emits no typed hook signal (T-3). It stops when ctx is cancelled (Close).
+func (d *Daemon) tapGrids(ctx context.Context) {
+	t := time.NewTicker(gridPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			for _, m := range d.core.List() {
+				if m.Status.Process == status.ProcessRunning {
+					d.sampleGrid(m.ID)
+				}
+			}
+		}
+	}
+}
+
+// sampleGrid grabs one session's current shim grid and feeds it to the engine's
+// grid heuristic. The attach is closed IMMEDIATELY after the snapshot is read, so
+// it holds the shim's single serve slot only for the few milliseconds of the
+// snapshot round-trip — a racing client attach simply waits that long rather than
+// failing. Every failure is a silent skip: a session a client is actively attached
+// to holds the shim (so the sample's dial times out and is ignored), a gone shim
+// or undecodable snapshot is retried next poll, and a session not registered with
+// the engine makes OnOutput a no-op.
+func (d *Daemon) sampleGrid(id string) {
+	stream, err := d.api.Attach(id)
+	if err != nil {
+		return
+	}
+	snapBytes := stream.Snapshot()
+	_ = stream.Close()
+	snap, err := vt.DecodeSnapshot(snapBytes)
+	if err != nil {
+		return
+	}
+	d.eng.OnOutput(id, snap)
 }
 
 // SocketPath is the path clients dial (the daemon's singleton socket).
