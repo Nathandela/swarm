@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
@@ -24,15 +23,20 @@ var ErrMaxSessions = errors.New("daemon: max sessions reached")
 var procStartTimeFn = processStartTime
 
 // killSpawnedShim tears down a just-spawned shim whose launch is aborting before
-// its supervisor started (F2/N2). The AGENT runs in its OWN process group (the
-// shim setsids it — Epic 4), so a bare kill(-shimPID) never reaches it and would
-// orphan the agent. Instead the shim is told to KILL its agent's group over the
-// socket; only if the socket is not serving yet (the agent has not been spawned)
-// do we fall back to a best-effort group kill of the shim. Finally the shim
-// process itself is killed and reaped (no supervisor is running yet).
-func (d *Daemon) killSpawnedShim(cmd *exec.Cmd, id string, pid int) {
-	if err := signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigKill); err != nil && pid > 0 {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+// its supervisor started (F2/N2). The AGENT runs in its OWN process group (the shim
+// setsids it — Epic 4), and right after cmd.Start the shim may not have setsid'd
+// yet, so a bare kill(-shimPID) can miss the agent OR race the shim's setsid +
+// agent-spawn. Instead we wait (bounded) for the shim to serve its socket. The shim
+// binds its UDS BEFORE it spawns the agent (internal/shim/shim.go: listen() precedes
+// pty.StartWithSize — the load-bearing cross-epic ordering invariant), so:
+//   - once it serves, the agent may exist in its own group and the shim KILLs that
+//     group over the socket (reliable — no race); and
+//   - if it never serves, no agent was ever spawned, so killing the shim suffices.
+//
+// Then the shim process itself is killed and reaped (no supervisor is running yet).
+func (d *Daemon) killSpawnedShim(cmd *exec.Cmd, sock string) {
+	if d.waitShimServing(sock, launchConfirmTimeout) {
+		_ = signalShim(sock, shimwire.SigKill)
 	}
 	_ = cmd.Process.Kill()
 	_, _ = cmd.Process.Wait()
@@ -139,31 +143,36 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, err
 	}
 	m.ShimPID = cmd.Process.Pid
+
+	// Record the shim identity as EARLY as possible — before the shim spawns its
+	// agent — so a daemon crash any time after the agent exists still leaves a
+	// reconnectable meta (S1/L2: reconcile matches by (PID, start-time)). Deferring
+	// this until after waitShimServing would open a window where a LIVE agent has no
+	// persisted identity and is wrongly marked lost on the next Open.
+	//
+	// A read/persist failure makes the shim un-trackable (persisting ShimStartTime=0
+	// would let a later Open mark this live shim lost), so we abort and clean up. The
+	// cleanup is race-free even this early: killSpawnedShim waits for the shim to
+	// serve, then KILLs the agent's own process group over the socket (F2/N2).
 	st, sterr := procStartTimeFn(m.ShimPID)
 	if sterr != nil {
-		// A shim whose start-time we cannot record is un-trackable: reconcile matches
-		// by (PID, start-time), so persisting ShimStartTime=0 would let a later Open
-		// mark this LIVE shim lost. This is a setup failure, not a crash, so we DO
-		// clean up: kill the just-spawned shim (and its agent, over the socket) and
-		// abort (F2/N2). No supervisor is running yet, so we reap it here.
-		d.killSpawnedShim(cmd, id, m.ShimPID)
+		d.killSpawnedShim(cmd, sock)
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
 	if err := d.saveMeta(m); err != nil {
-		d.killSpawnedShim(cmd, id, m.ShimPID)
+		d.killSpawnedShim(cmd, sock)
 		d.dropReserved(id)
 		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
 	}
 	d.wg.Add(1)
 	go d.superviseLaunched(id, cmd, s.stop)
 
-	// Wait for the shim to actually serve its socket before declaring the spawn
-	// phase reached, so a crash injected at this boundary deterministically leaves
-	// a live, SERVING shim for reconcile to adopt (the S11 spawn window) — never a
-	// half-started process the test would race. We never kill on failure here
-	// (crash-safe): a shim that fails to serve is left for reconcile to reap.
+	// Wait for the shim to actually serve its socket before declaring the spawn phase
+	// reached. We never kill on failure here (crash-safe): the identity is already
+	// persisted, so a shim that fails to serve is left for reconcile to reconnect or
+	// reap.
 	if !d.waitShimServing(sock, launchConfirmTimeout) {
 		return m, fmt.Errorf("daemon: shim for session %s did not confirm serving", id)
 	}

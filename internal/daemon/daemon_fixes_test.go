@@ -260,6 +260,30 @@ func TestLaunch_IdentityReadFailure_KillsShimNoPhantom(t *testing.T) {
 	}
 }
 
+// TestShimInvariant_SocketServesWhenAgentExists guards the cross-epic ordering that
+// launch's abort cleanup (killSpawnedShim) now relies on (N2): the shim binds its
+// UDS BEFORE it spawns the agent (internal/shim/shim.go: listen() precedes
+// pty.StartWithSize). The observable consequence — asserted here — is that whenever
+// the agent process exists, the shim socket is already serving. Contrapositive: a
+// socket that never serves means no agent was ever spawned, so when cleanup waits
+// for serving and the socket never comes up, killing the shim alone cannot orphan a
+// (separately-grouped) agent. Epic 14's failure-injection suite (agents-tracker-a7d)
+// should assert the ordering directly.
+func TestShimInvariant_SocketServesWhenAgentExists(t *testing.T) {
+	stateDir := shortStateDir(t)
+	id := "bindorder1"
+	// spawnRealShim returns only after BOTH the socket file and the agent pidfile
+	// exist — i.e. the agent process is confirmed running.
+	_, agentPID := spawnRealShim(t, stateDir, id)
+	if !processAlive(agentPID) {
+		t.Fatalf("agent %d not alive; test setup failed", agentPID)
+	}
+	if !confirmShimServing(shimSocketPath(stateDir, id)) {
+		t.Fatalf("agent %d exists but the shim socket is not serving; the bind-before-spawn "+
+			"invariant is violated and launch's timeout cleanup would be unsafe (N2)", agentPID)
+	}
+}
+
 // waitPIDFileValue polls path for a positive PID, returning it or 0 on timeout. It
 // is non-fatal (safe to call from inside an injected seam that runs within Launch).
 func waitPIDFileValue(path string, timeout time.Duration) int {
