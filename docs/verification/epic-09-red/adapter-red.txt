@@ -1,0 +1,38 @@
+==============================================================================
+Epic 9 (adapter contract + characterization harness) — RED run
+FAILING-FIRST tests, delivered state (test files + testdata only)
+Date: Fri Jul 17 06:35:37 CEST 2026
+Go: go version go1.26.1 darwin/amd64
+==============================================================================
+
+### PINNED RED COMMAND ###
+### go test ./internal/adapter/ ./cmd/swarm-char/   (expect: undefined symbols ONLY) ###
+
+# github.com/Nathandela/swarm/cmd/swarm-char [github.com/Nathandela/swarm/cmd/swarm-char.test]
+cmd/swarm-char/char_test.go:83:13: undefined: characterize
+cmd/swarm-char/char_test.go:83:26: undefined: charSpec
+cmd/swarm-char/char_test.go:116:15: undefined: characterize
+cmd/swarm-char/char_test.go:116:28: undefined: charSpec
+cmd/swarm-char/char_test.go:126:13: undefined: characterize
+cmd/swarm-char/char_test.go:126:26: undefined: charSpec
+# github.com/Nathandela/swarm/internal/adapter [github.com/Nathandela/swarm/internal/adapter.test]
+internal/adapter/adapter_test.go:23:4: undefined: Adapter
+internal/adapter/adapter_test.go:24:4: undefined: Adapter
+internal/adapter/capability_test.go:37:41: undefined: SignalSource
+internal/adapter/capability_test.go:40:30: undefined: ResumeSpec
+internal/adapter/fixture_test.go:45:22: undefined: Fixture
+internal/adapter/stubs_test.go:39:30: undefined: Detection
+internal/adapter/stubs_test.go:43:40: undefined: VersionConstraint
+internal/adapter/stubs_test.go:47:33: undefined: LaunchSpec
+internal/adapter/stubs_test.go:55:32: undefined: OptionSpec
+internal/adapter/stubs_test.go:63:38: undefined: SignalSource
+internal/adapter/stubs_test.go:63:38: too many errors
+FAIL	github.com/Nathandela/swarm/internal/adapter [build failed]
+FAIL	github.com/Nathandela/swarm/cmd/swarm-char [build failed]
+FAIL
+
+### Non-undefined build errors in the pinned scope? (must be EMPTY) ###
+(none — undefined-only confirmed)
+
+### Distinct undefined symbols the implementer must define ###
+undef
