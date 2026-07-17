@@ -81,7 +81,7 @@ const (
 	modeDSR           = "dsr"              // emit DSR, read reply, print DSR_OK/DSR_TIMEOUT (emulator-replies carry-forward)
 	modeWinsize       = "winsize"          // print PTY winsize at start + on each SIGWINCH, block (E4.2 resize)
 	modeStreamBlock   = "stream-block"     // phase1, block on stdin, phase2, exit (E4.3/S10 deterministic boundary)
-	modeStreamActive  = "stream-active"    // stream an increasing sequence continuously, then block (E4.3/S10 under load)
+	modeStreamActive  = "stream-active"    // stream a contiguous integer sequence continuously until killed (E4.3/S10 under load)
 	modeTermStubborn  = "term-stubborn"    // ignore TERM, spawn same-group child, print both PIDs, block (E4.4/S5)
 	modeChildStubborn = "child-stubborn"   // ignore TERM, print PID, block (child of term-stubborn)
 	modeTermCooperate = "term-cooperative" // default TERM disposition (dies on TERM), print PID, block (E4.4/S5)
@@ -237,15 +237,15 @@ func helperStreamBlock() {
 }
 
 func helperStreamActive() {
+	// Emit a dense, contiguous integer sequence forever (until killed), paced so a
+	// tight-loop consumer always keeps up and the shim's bounded queue never
+	// drops — the precondition for the strict-contiguity check in the active-load
+	// S10 test. Running until killed (rather than a fixed count) guarantees the
+	// stream is still live throughout the client's observation window.
 	for i := 0; ; i++ {
 		fmt.Printf("N%d\n", i)
-		if i >= 4000 {
-			break
-		}
 		time.Sleep(150 * time.Microsecond)
 	}
-	fmt.Printf("STREAM_DONE\n")
-	park() // stay alive until killed
 }
 
 func helperTermStubborn() {

@@ -152,10 +152,16 @@ func NewEmulator(cols, rows int) *Emulator {
 	// field (its Read checks a closed bool that its Close sets, with no lock),
 	// so this wrapper never calls term.Close() while the drain goroutine might
 	// be blocked in term.Read() — see Close below and ADR-005 "Known
-	// limitations". The goroutine therefore captures only the inner terminal,
-	// not e, so e stays collectable; a finalizer closes the terminal as a last
-	// resort if Close is never called. By the time Close returns, the drain
-	// goroutine has exited, so a later finalizer run never overlaps it either.
+	// limitations". The goroutine captures e (via e.reply and e.isClosed), so e
+	// stays reachable for as long as the goroutine runs; it exits only when
+	// Close provokes it or term.Read returns an error. The finalizer is a
+	// best-effort fallback for the path where Close is never called: it can run
+	// only once the goroutine has already exited on its own (e.g. term.Read
+	// errored) and e has become unreachable, closing the inner terminal that
+	// would otherwise leak. It is not a substitute for Close — a goroutine
+	// parked forever in term.Read keeps e alive and the finalizer never fires.
+	// By the time Close returns, the drain goroutine has exited, so a later
+	// finalizer run never overlaps it either.
 	term := e.term
 	go func() {
 		defer close(e.drainDone)

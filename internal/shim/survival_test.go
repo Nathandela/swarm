@@ -7,6 +7,7 @@ package shim
 
 import (
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -97,5 +98,82 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	}
 
 	fresh.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
+	waitRun(t, ch, 10*time.Second)
+}
+
+// E4.6 (soak) — under a real >=30s soak with a wedged consumer and continuous
+// output, the shim (a) keeps draining the whole time — FramesDropped climbs at
+// every sample, proving the drain never stalls behind the stuck consumer (S1/S9)
+// — and (b) holds memory bounded by the queue cap, NOT proportional to the many
+// megabytes produced: heap growth between two forced-GC samples stays within a
+// small bound (S9, N-3 "bounded queue"). Gated behind -short so the everyday
+// `go test -short` skips the 30s cost while CI (no -short) runs it in full.
+func TestSurvival_SoakBoundedMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("soak test runs >=30s; skipped under -short (CI runs it without -short)")
+	}
+	const soak = 30 * time.Second
+	// The bound is the shim's live working set under load — the bounded per-conn
+	// queue (subQueueCap=256 frames x up to drainReadSize=32 KiB ~= 8 MiB) plus
+	// the fixed-size emulator grid and misc allocation slack — and is deliberately
+	// tiny next to the hundreds of MiB the flood produces over the soak. If memory
+	// tracked total bytes drained, growth would blow past this by orders of
+	// magnitude.
+	const heapGrowthBound = 24 << 20 // 24 MiB
+
+	cfg := helperConfig(t, modeFloodIdle, nil, nil)
+	ch := runShimAsync(cfg)
+
+	// Wedged consumer: attach, never read — exercises the bounded-queue drop path
+	// (and thus the memory bound) for the whole soak.
+	wedged := dialShim(t, cfg.SocketPath)
+	wedged.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
+	wedged.writeControl(shimwire.Control{Type: shimwire.TypeAttach})
+
+	// Wait until draining is demonstrably underway (the queue has overflowed at
+	// least once) before taking the baseline heap sample.
+	dropDeadline := time.Now().Add(20 * time.Second)
+	for cfg.Metrics.FramesDropped.Load() == 0 {
+		if time.Now().After(dropDeadline) {
+			t.Fatalf("drops never started within 20s — the drain did not engage")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	runtime.GC()
+	var start runtime.MemStats
+	runtime.ReadMemStats(&start)
+	startDropped := cfg.Metrics.FramesDropped.Load()
+
+	// Soak: at each sample the drop counter must have advanced, proving the drain
+	// kept running (never blocked on the wedged consumer) across the full window.
+	const samples = 10
+	interval := soak / samples
+	last := startDropped
+	for i := 0; i < samples; i++ {
+		time.Sleep(interval)
+		cur := cfg.Metrics.FramesDropped.Load()
+		if cur <= last {
+			t.Errorf("FramesDropped stalled at %d (was %d) at sample %d/%d — draining halted mid-soak (S9)", cur, last, i+1, samples)
+		}
+		last = cur
+	}
+
+	runtime.GC()
+	var end runtime.MemStats
+	runtime.ReadMemStats(&end)
+
+	growth := int64(end.HeapAlloc) - int64(start.HeapAlloc)
+	t.Logf("soak %s: FramesDropped %d -> %d; HeapAlloc %.1f MiB -> %.1f MiB (growth %.2f MiB, bound %.0f MiB)",
+		soak, startDropped, last,
+		float64(start.HeapAlloc)/(1<<20), float64(end.HeapAlloc)/(1<<20),
+		float64(growth)/(1<<20), float64(heapGrowthBound)/(1<<20))
+	if growth > heapGrowthBound {
+		t.Errorf("heap grew %d bytes over the soak (bound %d) — memory is not bounded by the queue cap (S9)", growth, heapGrowthBound)
+	}
+
+	// End the flood. The wedged conn can still write control frames even though it
+	// never reads, so the kill reaches the shim.
+	wedged.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 	waitRun(t, ch, 10*time.Second)
 }

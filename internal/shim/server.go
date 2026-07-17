@@ -21,6 +21,16 @@ const (
 	// subQueueCap bounds a subscriber's outbound queue in frames. A wedged
 	// consumer causes drops here rather than unbounded buffering (S9).
 	subQueueCap = 256
+	// replyQueueCap bounds the emulator-reply queue in frames. An agent that
+	// floods terminal queries while not reading stdin fills this; further
+	// replies are dropped rather than blocking the drain (S9). Query replies
+	// are non-essential and self-limited to the session.
+	replyQueueCap = 256
+	// resizeMin/resizeMax bound resize dimensions from the untrusted socket. A
+	// resize outside the range is ignored, so no negative or absurd size ever
+	// reaches the emulator (panic/OOM guard).
+	resizeMin = 1
+	resizeMax = 1000
 )
 
 // server owns the socket, the emulator/transcript pipeline, and the PTY master
@@ -33,29 +43,34 @@ type server struct {
 	pgid         int        // agent process-group id (== agent pid; it leads its own group)
 	graceTimeout time.Duration
 
-	listener net.Listener
-	exited   chan struct{} // closed when the agent process has been reaped
+	socketPath string
+	listener   net.Listener
 
 	mu      sync.Mutex
 	curConn net.Conn // the connection currently being served, or nil
 }
 
-func newServer(l net.Listener, emu *vt.Emulator, tr *transcript.Writer, ptmx *os.File, pgid int, grace time.Duration, m *Metrics) *server {
+func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcript.Writer, ptmx *os.File, pgid int, grace time.Duration, m *Metrics) *server {
 	return &server{
 		hub:          &hub{emu: emu, tr: tr, metrics: m},
 		ptmx:         ptmx,
 		ptyIn:        &ptyWriter{f: ptmx},
 		pgid:         pgid,
 		graceTimeout: grace,
+		socketPath:   socketPath,
 		listener:     l,
-		exited:       make(chan struct{}),
 	}
 }
 
-// listen unlinks any stale socket, binds the UDS, and tightens its mode to 0600.
+// listen unlinks any stale socket, binds the UDS with the socket created
+// private (0600) from the start, and re-tightens its mode as a fallback. A
+// tight umask around the bind closes the TOCTOU window in which a chmod-after-
+// bind would leave the socket briefly group/other-accessible.
 func listen(path string) (net.Listener, error) {
 	_ = os.Remove(path) // clear a stale socket from a prior crash
+	old := syscall.Umask(0o177)
 	l, err := net.Listen("unix", path)
+	syscall.Umask(old)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +119,7 @@ func (s *server) serveConn(conn net.Conn) {
 	s.mu.Unlock()
 
 	var sub *subscriber
+	var helloed bool // gate: no op is honored until a hello frame arrives
 	defer func() {
 		if sub != nil {
 			s.hub.detach(sub)
@@ -126,12 +142,18 @@ func (s *server) serveConn(conn net.Conn) {
 			if derr != nil {
 				continue // tolerate malformed control payloads (shimwire contract)
 			}
-			switch ctrl.Type {
-			case shimwire.TypeHello:
+			if ctrl.Type == shimwire.TypeHello {
+				helloed = true
 				writeControl(conn, shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
+				continue
+			}
+			if !helloed {
+				continue // ignore attach/resize/signal until the client has said hello
+			}
+			switch ctrl.Type {
 			case shimwire.TypeAttach:
 				if sub != nil {
 					s.hub.detach(sub)
@@ -144,21 +166,30 @@ func (s *server) serveConn(conn net.Conn) {
 				s.onSignal(ctrl.Sig)
 			}
 		case wire.TDataIn:
+			if !helloed {
+				continue // ignore input until the client has said hello
+			}
 			_, _ = s.ptyIn.Write(payload)
 		}
 	}
 }
 
 // resize propagates a new size to both the PTY kernel winsize (delivers SIGWINCH
-// to the agent) and the emulator grid.
+// to the agent) and the emulator grid. An out-of-range size from the untrusted
+// socket is ignored rather than passed to the emulator.
 func (s *server) resize(cols, rows int) {
+	if cols < resizeMin || cols > resizeMax || rows < resizeMin || rows > resizeMax {
+		return
+	}
 	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	s.hub.emu.Resize(cols, rows)
 }
 
 // onSignal terminates the session process group. kill is immediate; term sends
-// SIGTERM, then SIGKILL after the grace window unless the agent has already
-// exited.
+// SIGTERM, then ALWAYS SIGKILLs the group at the grace deadline. The escalation
+// is keyed to the grace window, not the leader's reap: a TERM-ignoring
+// descendant that outlives the leader must still be killed (S5). Killing an
+// already-empty group is a harmless ESRCH no-op.
 func (s *server) onSignal(sig string) {
 	switch sig {
 	case shimwire.SigKill:
@@ -166,11 +197,8 @@ func (s *server) onSignal(sig string) {
 	case shimwire.SigTerm:
 		go func() {
 			_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
-			select {
-			case <-s.exited:
-			case <-time.After(s.graceTimeout):
-				_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
-			}
+			time.Sleep(s.graceTimeout)
+			_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 		}()
 	}
 }
@@ -195,6 +223,11 @@ func (s *server) shutdown(rep shimwire.Control) {
 	}
 
 	s.listener.Close()
+	// net.UnixListener unlinks the socket on Close; remove it explicitly too so
+	// the session dir is left clean even if that ever changes (idempotent).
+	if s.socketPath != "" {
+		_ = os.Remove(s.socketPath)
+	}
 	s.mu.Lock()
 	conn := s.curConn
 	s.mu.Unlock()
@@ -316,6 +349,64 @@ func writeControl(conn net.Conn, ctrl shimwire.Control) {
 func exitReport(code int, signal string) shimwire.Control {
 	c := code
 	return shimwire.Control{Type: shimwire.TypeExitReport, ExitCode: &c, ExitSignal: signal}
+}
+
+// replyPump is the non-blocking bridge from the emulator's query-reply drain to
+// the PTY master. The emulator's drain writes replies through Write, which only
+// ever enqueues into a bounded channel (dropping when full); a dedicated writer
+// goroutine is the sole caller that may block on the PTY master. This keeps a
+// query-flooding agent that never reads its stdin from wedging the vt drain —
+// and therefore the whole PTY drain — behind a full PTY input buffer (S9).
+type replyPump struct {
+	out       *ptyWriter
+	queue     chan []byte
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func newReplyPump(out *ptyWriter) *replyPump {
+	p := &replyPump{
+		out:   out,
+		queue: make(chan []byte, replyQueueCap),
+		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
+	}
+	go p.run()
+	return p
+}
+
+// Write never blocks: it enqueues a copy of b, or drops it when the queue is
+// full or the pump is closing. It always reports the full length written so the
+// emulator's reply drain treats every reply as consumed.
+func (p *replyPump) Write(b []byte) (int, error) {
+	cp := append([]byte(nil), b...)
+	select {
+	case p.queue <- cp:
+	case <-p.stop:
+	default:
+	}
+	return len(b), nil
+}
+
+func (p *replyPump) run() {
+	defer close(p.done)
+	for {
+		select {
+		case b := <-p.queue:
+			_, _ = p.out.Write(b) // may block on a full PTY; only this goroutine does
+		case <-p.stop:
+			return
+		}
+	}
+}
+
+// close stops the writer goroutine and waits for it to exit. It never closes
+// the queue channel, so a late reply provoked during emulator teardown can be
+// enqueued or dropped by Write without a send-on-closed-channel panic.
+func (p *replyPump) close() {
+	p.closeOnce.Do(func() { close(p.stop) })
+	<-p.done
 }
 
 // ptyWriter serializes writes to the PTY master and becomes a silent no-op once

@@ -215,10 +215,19 @@ func TestContinuity_SnapshotThenStream_Boundary(t *testing.T) {
 	waitRun(t, ch, 10*time.Second)
 }
 
-// E4.3 / S10 (under active output load) — attaching mid-stream still yields
-// exactly one snapshot first, then only DataOut frames, and the live sequence is
-// strictly increasing (no duplication/reordering) and starts strictly after the
-// last number already in the snapshot (no overlap).
+// E4.3 / S10 (under active output load) — attaching mid-stream yields exactly one
+// snapshot first, then only DataOut frames. With a HEALTHY consumer (one that
+// keeps up, so the shim's bounded queue never drops — asserted via
+// FramesDropped==0), the streamed integer sequence must be strictly CONTIGUOUS:
+// every value from the first live number onward appears exactly once, in order,
+// with no gap and no duplicate. Strict contiguity (not merely "increasing")
+// catches a silently lost middle frame — N10 then N12 — which an increasing-only
+// check would wave through. The sequence also starts strictly after the last
+// number already in the snapshot (no overlap).
+//
+// The agent is paced so a tight-loop reader always keeps up; if backpressure ever
+// did drop a frame the FramesDropped==0 precondition would fail first, telling us
+// the gap came from deliberate drop rather than silent loss.
 func TestContinuity_ActiveLoadOrdering(t *testing.T) {
 	cfg := helperConfig(t, modeStreamActive, nil, nil)
 	ch := runShimAsync(cfg)
@@ -236,19 +245,28 @@ func TestContinuity_ActiveLoadOrdering(t *testing.T) {
 	assertSnapshotOrdering(t, c)
 	snapMax := maxSeq(gridText(snap))
 
-	// Collect a run of live frames, then stop the agent.
+	// Collect a healthy run of live frames (a bounded window we can require to be
+	// fully contiguous), then stop the agent.
 	c.waitOutput("N", 3*time.Second)
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(700 * time.Millisecond)
 	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 	waitRun(t, ch, 10*time.Second)
 
-	live := parseSeq(string(c.dataOut()))
-	if len(live) < 2 {
-		t.Fatalf("too few complete live sequence lines to assess continuity: %v", live)
+	// Precondition: the consumer kept up, so nothing was dropped by backpressure.
+	// Any gap below is therefore silent loss, not a deliberate bounded-queue drop.
+	if dropped := cfg.Metrics.FramesDropped.Load(); dropped != 0 {
+		t.Fatalf("FramesDropped = %d, want 0 — the consumer fell behind, so this run cannot test contiguity (slow the producer)", dropped)
 	}
+
+	live := parseSeq(string(c.dataOut()))
+	if len(live) < 30 {
+		t.Fatalf("too few complete live sequence lines (%d) to meaningfully assess contiguity: %v", len(live), live)
+	}
+	// Every consecutive pair must differ by exactly 1: no gap (missing value), no
+	// duplicate, no reordering.
 	for i := 1; i < len(live); i++ {
-		if live[i] <= live[i-1] {
-			t.Errorf("live sequence not strictly increasing at %d: %d then %d (duplication or reordering)", i, live[i-1], live[i])
+		if live[i] != live[i-1]+1 {
+			t.Errorf("live sequence not contiguous at index %d: %d then %d (gap, duplicate, or reorder — a frame was silently lost or repeated mid-stream)", i, live[i-1], live[i])
 		}
 	}
 	if snapMax >= 0 && live[0] <= snapMax {

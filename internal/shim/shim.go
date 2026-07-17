@@ -69,6 +69,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	if cfg.Metrics == nil {
 		cfg.Metrics = &Metrics{}
 	}
+	if len(cfg.Argv) == 0 {
+		return 0, errors.New("shim: empty Argv (no program to exec)")
+	}
 
 	emu := vt.NewEmulator(cfg.Cols, cfg.Rows)
 	defer emu.Close()
@@ -101,10 +104,13 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, fmt.Errorf("shim: start agent: %w", err)
 	}
 
-	srv := newServer(listener, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
+	srv := newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
 	// Route emulator query replies (DSR/DA/...) back into the PTY master so the
-	// agent receives them on stdin. The writer discards after PTY close.
-	emu.SetReplyWriter(srv.ptyIn)
+	// agent receives them on stdin. A bounded async pump does the actual writes,
+	// so a query-flooding agent that never reads stdin can never block the
+	// emulator's reply drain (and thus the PTY drain) on a full PTY (S9).
+	replies := newReplyPump(srv.ptyIn)
+	emu.SetReplyWriter(replies)
 
 	acceptDone := make(chan struct{})
 	go func() {
@@ -117,43 +123,97 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv.drain()
 	}()
 
-	// Block until the agent exits, then finish draining whatever the PTY still
-	// holds before deciding the final grid/transcript state.
+	// Block until the agent (group leader) is reaped, then finish draining
+	// whatever the PTY still holds before deciding the final grid/transcript
+	// state. A descendant can outlive the leader and hold the PTY slave open, so
+	// the EOF wait is BOUNDED: if EOF has not arrived within grace, SIGKILL the
+	// whole group to force every holder off the slave. Run must never block
+	// forever.
 	waitErr := cmd.Wait()
-	close(srv.exited)
-	<-drainDone
+	if !waitClosed(drainDone, cfg.GraceTimeout) {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		waitClosed(drainDone, cfg.GraceTimeout)
+	}
 
-	// PTY fully drained: stop reply writes and release the master.
-	srv.ptyIn.close()
+	// Release the master first: closing it unblocks the drain's Read and any
+	// in-flight reply write (freeing the ptyWriter lock), so neither the reply
+	// pump nor the drain can be stuck when we tear them down. This also forces
+	// the drain to terminate even if a pathological out-of-group holder kept the
+	// slave open past the KILL.
 	ptmx.Close()
+	srv.ptyIn.close()
+	replies.close()
+	<-drainDone
 
 	exitCode, exitSignal := interpretExit(waitErr)
 
-	// Transcript: flush the tail durable, then close under a timeout so a wedged
-	// disk cannot hang the shim (Epic 3 binding).
-	_ = tr.Flush()
+	// Transcript: flush the tail durable, then close — both under a timeout so a
+	// wedged disk cannot hang the shim's exit path (Epic 3 binding, S9).
+	flushTranscript(tr)
 	closeTranscript(tr)
 
-	// Side-files: snapshot first (fsync'd), then exit.json, so exit.json's
-	// presence implies a complete snapshot (G3 ordering).
-	if snap, serr := emu.Snapshot(); serr == nil {
-		_ = writeFileAtomic(cfg.SessionDir, SnapshotFile, snap)
-	}
-	if data, jerr := json.Marshal(ExitInfo{
-		ExitCode:   exitCode,
-		ExitSignal: exitSignal,
-		FinishedAt: time.Now(),
-	}); jerr == nil {
-		_ = writeFileAtomic(cfg.SessionDir, ExitFile, data)
-	}
+	// Persist the side-files (snapshot first, then exit.json, then fsync the
+	// dir). A persistence failure is surfaced as Run's err while the agent's
+	// exit code is still returned.
+	persistErr := persistSideFiles(cfg.SessionDir, emu, exitCode, exitSignal)
 
 	// Flush buffered DataOut, emit exit_report to any connected client, then
 	// tear the socket down.
-	code := exitCode
 	srv.shutdown(exitReport(exitCode, exitSignal))
 	<-acceptDone
 
-	return code, nil
+	return exitCode, persistErr
+}
+
+// waitClosed reports whether ch is closed within d.
+func waitClosed(ch <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// persistSideFiles writes the G3 side-files: the final grid snapshot (fsync'd),
+// then exit.json, then an fsync of the session dir so the temp+rename of both
+// files is durable. If the snapshot cannot be produced or written, exit.json is
+// NOT written, preserving the invariant that exit.json's presence implies a
+// complete snapshot. Any failure is returned so Run can surface it.
+func persistSideFiles(dir string, emu *vt.Emulator, exitCode int, exitSignal string) error {
+	snap, err := emu.Snapshot()
+	if err != nil {
+		return fmt.Errorf("shim: snapshot: %w", err)
+	}
+	if err := writeFileAtomic(dir, SnapshotFile, snap); err != nil {
+		return fmt.Errorf("shim: write snapshot: %w", err)
+	}
+	data, err := json.Marshal(ExitInfo{
+		ExitCode:   exitCode,
+		ExitSignal: exitSignal,
+		FinishedAt: time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("shim: marshal exit info: %w", err)
+	}
+	if err := writeFileAtomic(dir, ExitFile, data); err != nil {
+		return fmt.Errorf("shim: write exit info: %w", err)
+	}
+	if err := fsyncDir(dir); err != nil {
+		return fmt.Errorf("shim: fsync session dir: %w", err)
+	}
+	return nil
+}
+
+// fsyncDir fsyncs a directory so a prior temp+rename of a file within it is
+// durable across a crash.
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // buildEnv returns env unchanged except that a TERM is injected when the caller
@@ -239,6 +299,25 @@ func writeFileAtomic(dir, name string, data []byte) error {
 	return os.Rename(tmpName, filepath.Join(dir, name))
 }
 
+// finalizeStepTimeout bounds each disk-facing finalization step (transcript
+// Flush and Close) so a stalled or wedged disk cannot hang the shim's exit path
+// (S9 carry-forward from Epic 3). It is a var so tests can shorten it.
+var finalizeStepTimeout = 5 * time.Second
+
+// flushTranscript flushes the transcript tail under a timeout so a wedged disk
+// cannot hang finalization before the timeout-protected Close ever runs (S9).
+func flushTranscript(tr *transcript.Writer) {
+	done := make(chan struct{})
+	go func() {
+		_ = tr.Flush()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(finalizeStepTimeout):
+	}
+}
+
 // closeTranscript closes tr under a timeout so a stalled disk cannot hang the
 // shim's exit path (S9 carry-forward from Epic 3).
 func closeTranscript(tr *transcript.Writer) {
@@ -249,6 +328,6 @@ func closeTranscript(tr *transcript.Writer) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(finalizeStepTimeout):
 	}
 }

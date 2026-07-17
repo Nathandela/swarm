@@ -26,10 +26,10 @@ func TestDispatch(t *testing.T) {
 			wantStderr: "daemon: not implemented",
 		},
 		{
-			name:       "shim subcommand routes to stub",
+			name:       "shim subcommand without --config prints usage",
 			args:       []string{"shim"},
-			wantExit:   1,
-			wantStderr: "shim: not implemented",
+			wantExit:   2,
+			wantStderr: "usage",
 		},
 		{
 			name:       "hook subcommand routes to stub",
