@@ -87,7 +87,8 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	lm := &m.launch
 	switch {
 	case k.Code == tea.KeyEsc:
-		m.screen = screenGeneral
+		cmd := m.enterGeneral()
+		return m, cmd
 	case k.Code == tea.KeyEnter:
 		return m.submitLaunch()
 	case k.Code == tea.KeyTab:
@@ -172,9 +173,11 @@ func (m *launchModel) cycleOption(specIdx int, forward bool) {
 	m.options[spec.Key] = spec.Choices[next]
 }
 
-// submitLaunch validates the form and, if the cwd exists, composes and fires the
+// submitLaunch validates the form and, if it passes, composes and fires the
 // LaunchReq (agent, expanded cwd, schema options, initial prompt) then returns to
-// the general view. An invalid cwd is refused inline with no launch (L-3).
+// the general view. An invalid cwd (L-3) or an unusable agent (L-2) is refused
+// inline with no launch, so the client never composes a request against a
+// missing or out-of-range agent.
 func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	lm := &m.launch
 	expanded := expandTilde(strings.TrimSpace(lm.cwd))
@@ -187,23 +190,23 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 		lm.errMsg = "directory " + expanded + " does not exist"
 		return m, nil
 	}
-
-	agent := ""
-	if lm.agentIdx >= 0 && lm.agentIdx < len(lm.agents) {
-		agent = lm.agents[lm.agentIdx].Name
+	if lm.agentIdx < 0 || lm.agentIdx >= len(lm.agents) || !lm.agents[lm.agentIdx].usable() {
+		lm.errMsg = "no installed, supported agent selected"
+		return m, nil
 	}
+
 	opts := make(map[string]string, len(lm.options))
 	for k, v := range lm.options {
 		opts[k] = v
 	}
 	req := protocol.LaunchReq{
-		Agent:         agent,
+		Agent:         lm.agents[lm.agentIdx].Name,
 		Cwd:           expanded,
 		Options:       opts,
 		InitialPrompt: lm.prompt,
 	}
-	m.screen = screenGeneral
-	return m, launchCmd(m.client, req)
+	cmd := m.enterGeneral()
+	return m, tea.Batch(launchCmd(m.client, req), cmd)
 }
 
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {

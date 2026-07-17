@@ -66,13 +66,27 @@ const (
 // eventMsg carries one Subscribe status-change into the update loop.
 type eventMsg struct{ ev protocol.Event }
 
-// repaintMsg drives the periodic full-frame repaint (see repaintTick).
+// repaintMsg drives the periodic re-render that refreshes the live elapsed-time
+// column (see repaintTick).
 type repaintMsg struct{}
 
-// repaintInterval is how often the general view refreshes its live elapsed-time
-// column. It also keeps the render stream flowing so an observer always sees the
-// current frame.
-const repaintInterval = 200 * time.Millisecond
+// repaintInterval is how often the general view re-emits its frame to refresh the
+// live elapsed-time column. Elapsed granularity is seconds and coarser, so a
+// one-second cadence suffices (down from the former 200 ms, cutting the idle
+// redraw rate 5x per N-3), and the tick only runs on the general view — never on
+// the launch/attach screens.
+//
+// F2 note: a repaint MUST re-emit the whole frame so a static board refreshes its
+// elapsed column (and so the frozen TestLiveness_EventMovesRowGroup, which drains
+// the teatest output between its two pre-event waits, sees the board on the second
+// wait). In charm.land/bubbletea v2's renderer this needs BOTH: the SGR nonce
+// (bumped each tick, consumed in View) to make the frame content differ so the
+// renderer does not early-return on an unchanged View, AND tea.ClearScreen to
+// force a full redraw rather than an empty cell diff. They are complementary, not
+// redundant — dropping either yields zero re-emission and regresses that frozen
+// test. The achievable N-3 wins here are the slower cadence and general-view-only
+// scope, not removing the periodic clear.
+const repaintInterval = time.Second
 
 func repaintTick() tea.Cmd {
 	return tea.Tick(repaintInterval, func(time.Time) tea.Msg { return repaintMsg{} })
@@ -93,13 +107,16 @@ type rootModel struct {
 	attach  attachModel
 
 	events   <-chan protocol.Event
-	repaintN int
+	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
+	ticking  bool // whether a repaint tick is in flight (only on the general view)
 }
 
 // New builds the router. It eagerly lists sessions (N-1: the first paint must
 // already show them) and opens the subscribe stream so Init can wire live
 // updates. Errors from the stub are non-fatal — the model still renders.
 func New(c Client, detect DetectFunc) tea.Model {
+	// Epic 8 (the real client) must give this initial List a bounded dial/List
+	// timeout so a hung daemon cannot stall first paint; the stub returns at once.
 	sessions, _ := c.List()
 	events, _ := c.Subscribe()
 	return rootModel{
@@ -108,6 +125,7 @@ func New(c Client, detect DetectFunc) tea.Model {
 		screen:  screenGeneral,
 		general: newGeneralModel(sessions),
 		events:  events,
+		ticking: true, // Init arms the first repaint tick
 	}
 }
 
@@ -142,17 +160,24 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		// A status change updates the affected row in place and, on a transition
-		// into needs_input/ready_for_review, prints a notification banner. Re-arm
-		// the stream so the next event is delivered too.
+		// into needs_input/ready_for_review, prints a notification banner (V-5).
+		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
 		return m, tea.Batch(banner, waitForEvent(m.events))
 
 	case repaintMsg:
-		// Periodic repaint: the elapsed-time column is relative to now, so the
-		// board is redrawn on a timer. Bumping the nonce (consumed in View) forces
-		// the renderer to treat the frame as changed and ClearScreen makes it
-		// re-emit the whole frame rather than a cell diff — both together, the
-		// render stream always carries the current frame.
+		if m.screen != screenGeneral {
+			// The live elapsed column only shows on the general view, so let the
+			// timer lapse elsewhere (N-3: no idle repaints on the launch/attach
+			// screens). It restarts on return to the general view (enterGeneral).
+			m.ticking = false
+			return m, nil
+		}
+		// The elapsed-time column is relative to now, so the board is redrawn on
+		// the timer. Bumping the nonce (consumed in View) makes the frame differ
+		// so the renderer does not skip it, and tea.ClearScreen forces a full
+		// re-emit rather than an empty cell diff — both are needed (see the F2 note
+		// on repaintInterval). Runs at repaintInterval and only on the general view.
 		m.repaintN++
 		return m, tea.Batch(repaintTick(), tea.ClearScreen)
 
@@ -179,12 +204,24 @@ func (m rootModel) View() tea.View {
 	default:
 		content = m.general.view()
 	}
-	// A trailing nonce of reset-SGR sequences makes each repaint's content
-	// distinct so the renderer re-emits the frame (see repaintMsg). It is a
-	// no-op for the terminal and is stripped by every ANSI-stripping reader, so
-	// it never reaches the visible screen or the golden files.
+	// A trailing nonce of reset-SGR sequences makes each repaint's content distinct
+	// so the renderer re-emits the frame (see repaintMsg). It is a no-op for the
+	// terminal and is stripped by every ANSI-stripping reader, so it never reaches
+	// the visible screen or the golden files.
 	content += strings.Repeat("\x1b[m", m.repaintN%8+1)
 	return tea.NewView(content)
+}
+
+// enterGeneral switches to the general view and restarts the repaint timer if it
+// has lapsed. The timer runs only on the general view (N-3); guarding on ticking
+// keeps at most one tick in flight across repeated screen switches.
+func (m *rootModel) enterGeneral() tea.Cmd {
+	m.screen = screenGeneral
+	if m.ticking {
+		return nil
+	}
+	m.ticking = true
+	return repaintTick()
 }
 
 // ---------------------------------------------------------------------------

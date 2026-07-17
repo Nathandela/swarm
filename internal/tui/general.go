@@ -32,8 +32,12 @@ const (
 type generalModel struct {
 	sessions []protocol.SessionView // in arrival order; grouped at render time
 	sel      int                    // flat selection index across visible rows
-	confirm  bool                   // a kill/delete confirm is pending on the selection
-	width    int
+
+	confirm     bool   // a kill/delete confirm is pending
+	confirmID   string // session the confirm targets, captured by identity when it opened
+	confirmKill bool   // whether that target was running (kill) vs. completed (delete) at open
+
+	width int
 }
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
@@ -65,6 +69,42 @@ func (m generalModel) selected() (protocol.SessionView, bool) {
 	return flat[m.sel], true
 }
 
+// selectedID is the id of the selected session, or "" when the board is empty.
+func (m generalModel) selectedID() string {
+	if s, ok := m.selected(); ok {
+		return s.ID
+	}
+	return ""
+}
+
+// sessionByID returns the session with the given id, or (zero, false) if none
+// matches. Used to resolve a pending confirm against the captured target rather
+// than a possibly-shifted selection index.
+func (m generalModel) sessionByID(id string) (protocol.SessionView, bool) {
+	for _, s := range m.sessions {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return protocol.SessionView{}, false
+}
+
+// restoreSel re-points the selection at the row whose session id is id, so the
+// same session stays selected by identity across a regroup (apply reorders the
+// flat list on every event). If that session is gone, the index is clamped to
+// stay in range.
+func (m *generalModel) restoreSel(id string) {
+	if id != "" {
+		for i, s := range m.flat() {
+			if s.ID == id {
+				m.sel = i
+				return
+			}
+		}
+	}
+	m.clampSel()
+}
+
 // clampSel keeps the selection within the visible rows.
 func (m *generalModel) clampSel() {
 	n := len(m.sessions)
@@ -90,10 +130,14 @@ func (m *generalModel) move(delta int) {
 }
 
 // apply folds one status-change event into the board: it updates the matching
-// row in place (moving its group, never duplicating), or appends a new one. It
-// returns a command that prints the notification banner when the session
+// row in place (moving its group, never duplicating), or appends a new one. The
+// selection is preserved by session identity across the regroup (not by index).
+// It returns a command that prints the notification banner when the session
 // transitions INTO needs_input or ready_for_review (V-5), else nil.
 func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
+	// Remember what is selected before the regroup shifts the flat indices.
+	selID := m.selectedID()
+
 	var oldGroup status.Group
 	found := false
 	for i := range m.sessions {
@@ -107,12 +151,16 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	if !found {
 		m.sessions = append(m.sessions, s)
 	}
-	m.clampSel()
+	m.restoreSel(selID)
 
 	if bannerGroup(s.Group) && (!found || oldGroup != s.Group) {
 		// tea.Printf writes above the program (never into View content), so the
 		// notification is observable in the output stream yet leaves the
-		// persistent render — and its row count — untouched.
+		// persistent render — and its row count — untouched. NOTE (Epic 8): under
+		// the alt-screen this becomes a no-op; V-5's transient in-view banner must
+		// move into View().Content THEN, together with updating the frozen
+		// TestLiveness row-count assertion (which currently assumes the banner is
+		// not part of the rendered frame).
 		return tea.Printf("%s %s", s.Agent, statusToken(s.Group))
 	}
 	return nil
@@ -138,6 +186,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyUp || (k.Text == "k"):
 		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
+		// Route the attach at the selection captured now (this keypress).
 		if s, ok := m.general.selected(); ok {
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
@@ -146,8 +195,12 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.launch = newLaunchModel(m.detect(), m.width)
 		m.screen = screenLaunch
 	case isCtrlX(k):
-		if _, ok := m.general.selected(); ok {
+		// Capture the confirm target by identity (and its kill-vs-delete state)
+		// so a concurrent status event cannot shift a different row under it.
+		if s, ok := m.general.selected(); ok {
 			m.general.confirm = true
+			m.general.confirmID = s.ID
+			m.general.confirmKill = s.Status.Process == status.ProcessRunning
 		}
 	case k.Code == tea.KeyEsc:
 		return m, tea.Quit
@@ -155,22 +208,30 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateConfirm handles the pending kill/delete confirm on the selection (R-3):
-// `y` or a second Ctrl+X resolves it, `n` or Esc cancels it.
+// updateConfirm handles the pending kill/delete confirm (R-3): `y` or a second
+// Ctrl+X resolves it, `n` or Esc cancels it. Resolution targets the session
+// captured when the confirm opened, looked up fresh by identity — never the
+// current selection index, which a concurrent event may have shifted.
 func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	s, ok := m.general.selected()
 	switch {
 	case k.Text == "y" || isCtrlX(k):
+		id, wantKill := m.general.confirmID, m.general.confirmKill
 		m.general.confirm = false
+		m.general.confirmID = ""
+		s, ok := m.general.sessionByID(id)
 		if !ok {
-			return m, nil
+			return m, nil // target vanished — do nothing
 		}
-		if s.Status.Process == status.ProcessRunning {
+		if running := s.Status.Process == status.ProcessRunning; running != wantKill {
+			return m, nil // target flipped kill<->delete state — do nothing
+		}
+		if wantKill {
 			return m, killCmd(m.client, s.ID)
 		}
 		return m, deleteCmd(m.client, s.ID)
 	case k.Text == "n" || k.Code == tea.KeyEsc:
 		m.general.confirm = false
+		m.general.confirmID = ""
 	}
 	return m, nil
 }
