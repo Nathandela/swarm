@@ -42,6 +42,7 @@ type coreAPI struct {
 	endpointID   string // this daemon's stable federation id (resume source validation)
 
 	events   chan persist.Meta
+	nudge    chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -53,6 +54,7 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 		fakeAgentBin: fakeAgentBin,
 		endpointID:   endpointID,
 		events:       make(chan persist.Meta, eventsBuffer),
+		nudge:        make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 	}
 	a.wg.Add(1)
@@ -60,11 +62,17 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	return a
 }
 
-func (a *coreAPI) List() []persist.Meta         { return a.core.List() }
-func (a *coreAPI) Kill(id string) error         { return a.core.Kill(id) }
-func (a *coreAPI) Delete(id string) error       { return a.core.Delete(id) }
-func (a *coreAPI) Rename(id, name string) error { return a.core.Rename(id, name) }
-func (a *coreAPI) Events() <-chan persist.Meta  { return a.events }
+func (a *coreAPI) List() []persist.Meta   { return a.core.List() }
+func (a *coreAPI) Kill(id string) error   { return a.core.Kill(id) }
+func (a *coreAPI) Delete(id string) error { return a.core.Delete(id) }
+func (a *coreAPI) Rename(id, name string) error {
+	err := a.core.Rename(id, name)
+	if err == nil {
+		a.pokeWatch() // fan the new name out now, not at the next poll tick
+	}
+	return err
+}
+func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and
@@ -277,13 +285,23 @@ func (a *coreAPI) emitStatus(id string, s status.Status) {
 	if err := a.core.SetStatus(id, s); err != nil {
 		return // unknown/ended session: nothing to persist or fan out
 	}
-	m, ok := a.core.Get(id)
-	if !ok {
-		return
-	}
+	// FAN OUT happens via the poller, which is the SOLE snapshot producer: a
+	// direct Get-then-send here could capture meta, lose the CPU to a concurrent
+	// Rename, and queue its stale snapshot AFTER the poller queued the newer one
+	// - the client's row would revert and the seen-map would never repair it
+	// (the codex v0.5 audit interleaving). The nudge keeps L1 immediacy: the
+	// poller samples now, not at the next tick, and emits the CURRENT meta under
+	// its own seen discipline.
+	a.pokeWatch()
+}
+
+// pokeWatch wakes the roster poller for an immediate sample. Non-blocking and
+// coalescing: a nudge while one is already pending is a no-op (the pending sample
+// will observe both changes).
+func (a *coreAPI) pokeWatch() {
 	select {
-	case a.events <- m:
-	case <-a.stop:
+	case a.nudge <- struct{}{}:
+	default:
 	}
 }
 
@@ -311,6 +329,34 @@ type rosterSnap struct {
 func (a *coreAPI) watch() {
 	defer a.wg.Done()
 	seen := map[string]rosterSnap{}
+	// sample diffs the roster against seen and queues every change; it reports
+	// false when the assembly is stopping. It is the ONLY writer to a.events, so
+	// no stale snapshot from a second producer can ever trail a newer one.
+	sample := func() bool {
+		present := map[string]struct{}{}
+		for _, m := range a.core.List() {
+			present[m.ID] = struct{}{}
+			cur := rosterSnap{status: m.Status, name: m.Name}
+			if prev, ok := seen[m.ID]; ok && prev == cur {
+				continue
+			}
+			select {
+			case a.events <- m:
+				seen[m.ID] = cur // mark seen ONLY once the change is queued
+			case <-a.stop:
+				return false
+			default:
+				// Queue momentarily full: leave seen unadvanced so this change is
+				// retried on the next poll rather than lost.
+			}
+		}
+		for id := range seen {
+			if _, ok := present[id]; !ok {
+				delete(seen, id)
+			}
+		}
+		return true
+	}
 	t := time.NewTicker(eventPoll)
 	defer t.Stop()
 	for {
@@ -318,28 +364,10 @@ func (a *coreAPI) watch() {
 		case <-a.stop:
 			return
 		case <-t.C:
-			present := map[string]struct{}{}
-			for _, m := range a.core.List() {
-				present[m.ID] = struct{}{}
-				cur := rosterSnap{status: m.Status, name: m.Name}
-				if prev, ok := seen[m.ID]; ok && prev == cur {
-					continue
-				}
-				select {
-				case a.events <- m:
-					seen[m.ID] = cur // mark seen ONLY once the change is queued
-				case <-a.stop:
-					return
-				default:
-					// Queue momentarily full: leave seen unadvanced so this change is
-					// retried on the next poll rather than lost.
-				}
-			}
-			for id := range seen {
-				if _, ok := present[id]; !ok {
-					delete(seen, id)
-				}
-			}
+		case <-a.nudge: // an emitStatus/Rename wants immediate fan-out (L1)
+		}
+		if !sample() {
+			return
 		}
 	}
 }

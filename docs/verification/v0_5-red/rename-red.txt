@@ -29,3 +29,11 @@ symbols (the repo's "undefined-only" red, per harness_test.go):
   - internal/tui:      undefined renameDoneMsg (inline-edit commit message)
 Test scaffolding (fake/stub Rename recorders, renameCall types) compiles; only the
 product code is missing. Implementing it turns these green (see v0_5 green gates).
+
+=== rename-race RED note (codex re-confirm HIGH-2, Sat Jul 18 19:13:09 CEST 2026) ===
+TestFanout_RenameNeverRevertedByConcurrentStatus passes 3/3 against the
+two-producer code: the losing window (between emitStatus's Get and its
+channel send, skeleton/api.go:280-284) is a few instructions wide and does
+not trip under a 120-round hammer. The race stands on codex's control-flow
+derivation; the fix is structural (poller becomes the sole snapshot
+producer) and the test remains as the permanent convergence guard.
