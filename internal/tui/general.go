@@ -212,13 +212,18 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyUp || (k.Text == "k"):
 		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
-		// Route the attach at the selection captured now (this keypress). With an
-		// injected runner this is the raw passthrough (completed/lost rows go
-		// read-only, G3); without one it is the Epic 7 identify-only placeholder.
+		// Route the attach at the selection captured now (this keypress).
 		if s, ok := m.general.selected(); ok {
+			// An ended/lost row cannot be attached: the daemon refuses any attach to a
+			// non-running session (internal/daemon attach.go). Rather than dial a doomed
+			// attach and swallow the error (the field-test silent no-op), surface an
+			// actionable banner and never attempt it.
+			if s.Status.Process != status.ProcessRunning {
+				return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
+			}
 			if m.attachRunner != nil {
-				readOnly := s.Group == status.GroupCompleted
-				return m, runAttach(m.attachRunner, s, readOnly)
+				// Only running rows reach here, so the passthrough is always read-write.
+				return m, runAttach(m.attachRunner, s, false)
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
@@ -286,8 +291,41 @@ func isCtrlX(k tea.KeyPressMsg) bool {
 	return k.Code == 'x' && k.Mod == tea.ModCtrl
 }
 
+// deleteDoneMsg carries a delete's outcome so a success can optimistically drop the
+// row (and acknowledge it) and a failure can be surfaced, instead of relying on the
+// eventual daemon event (the field-test "nothing happens - looks stale").
+type deleteDoneMsg struct {
+	id  string
+	err error
+}
+
+// killDoneMsg carries a kill's outcome so a failure is surfaced rather than silently
+// discarded. A success is a no-op on the board: the daemon event transitions the row
+// to completed (it is not removed).
+type killDoneMsg struct {
+	id  string
+	err error
+}
+
 func killCmd(c Client, id string) tea.Cmd {
-	return func() tea.Msg { _ = c.Kill(id); return nil }
+	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
+}
+
+// remove drops the session with id from the board (the optimistic removal on a
+// successful delete), keeping the selection pinned to its session by identity.
+func (m *generalModel) remove(id string) {
+	selID := m.selectedID()
+	kept := make([]protocol.SessionView, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		if s.ID != id {
+			kept = append(kept, s)
+		}
+	}
+	m.sessions = kept
+	if selID == id {
+		selID = "" // the selected row is gone; restoreSel clamps into range
+	}
+	m.restoreSel(selID)
 }
 
 // defaultResumeCols/Rows size a resume launch when the window size is not yet known.
@@ -333,7 +371,7 @@ func (m *generalModel) setBanner(text string) tea.Cmd {
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {
-	return func() tea.Msg { _ = c.Delete(id); return nil }
+	return func() tea.Msg { return deleteDoneMsg{id: id, err: c.Delete(id)} }
 }
 
 // ---------------------------------------------------------------------------

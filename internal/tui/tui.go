@@ -22,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/version"
 )
 
 // Client is the narrow, stub-friendly daemon surface the TUI needs. Attach is
@@ -133,6 +134,12 @@ type rootModel struct {
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
 	ticking  bool // whether a repaint tick is in flight (only on the general view)
+
+	// Build identities for the version-skew notice (E13.2): the daemon's build,
+	// reported on the hello (via the optional Client.BuildVersion surface), and this
+	// client's own build. A persistent notice shows while they differ (see skewNotice).
+	daemonVersion string
+	clientVersion string
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -149,12 +156,19 @@ const listDialTimeout = time.Second
 func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	events, _ := c.Subscribe()
 	m := rootModel{
-		client:  c,
-		detect:  detect,
-		screen:  screenGeneral,
-		general: newGeneralModel(boundedList(c)),
-		events:  events,
-		ticking: true, // Init arms the first repaint tick
+		client:        c,
+		detect:        detect,
+		screen:        screenGeneral,
+		general:       newGeneralModel(boundedList(c)),
+		events:        events,
+		ticking:       true, // Init arms the first repaint tick
+		clientVersion: version.Version,
+	}
+	// The daemon's build version rides the hello handshake. The narrow tui.Client
+	// interface stays free of it (Attach-style optional surface): the production
+	// *protocol.Client reports it; a fake that does not simply yields no notice.
+	if bv, ok := c.(interface{ BuildVersion() string }); ok {
+		m.daemonVersion = bv.BuildVersion()
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -264,8 +278,31 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case attachDoneMsg:
 		// The passthrough returned (detached / session ended / error); come back to
-		// the general board and re-arm its repaint tick.
-		return m, m.enterGeneral()
+		// the general board and re-arm its repaint tick. A FAILURE is surfaced on the
+		// banner rather than silently dropping the user back on the board.
+		cmd := m.enterGeneral()
+		if msg.err != nil {
+			return m, tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
+		}
+		return m, cmd
+
+	case deleteDoneMsg:
+		// A delete succeeded: drop the row immediately (optimistic removal — the later
+		// daemon event is then a no-op) and acknowledge it, so the board never looks
+		// stale. A failure is surfaced instead of silently discarded.
+		if msg.err != nil {
+			return m, m.general.setBanner("delete failed: " + msg.err.Error())
+		}
+		m.general.remove(msg.id)
+		return m, m.general.setBanner("session deleted")
+
+	case killDoneMsg:
+		// A kill failure is surfaced; a success is a no-op here — the daemon event
+		// transitions the (still-listed) row to completed.
+		if msg.err != nil {
+			return m, m.general.setBanner("kill failed: " + msg.err.Error())
+		}
+		return m, nil
 
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the
@@ -344,10 +381,26 @@ func (m rootModel) generalStatus() string {
 	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit"
 }
 
+// skewNotice returns the persistent version-skew notice line, or "" when there is
+// nothing to warn about: the builds match, either build is a local dev build (which
+// would always mismatch), or no daemon version was reported. It nudges the safe
+// `swarm daemon restart` that reconciles a daemon that outlived a client upgrade (the
+// daemon-outlives-upgrade design makes this state common right after every upgrade).
+func skewNotice(daemonVer, clientVer string) string {
+	if daemonVer == "" || clientVer == "" || daemonVer == "dev" || clientVer == "dev" {
+		return ""
+	}
+	if daemonVer == clientVer {
+		return ""
+	}
+	return "daemon " + daemonVer + " differs from swarm " + clientVer + " - run: swarm daemon restart"
+}
+
 // composeBoard anchors a one-line status bar on the bottom row of a full-screen
 // board: the body fills the rows above it — padded with blank rows, or clipped if it
-// would overflow — and the dim bar occupies the final row. Before the first
-// WindowSizeMsg (height unknown) the bar simply follows the body.
+// would overflow — and the dim bar occupies the final row. A version-skew notice, when
+// present, takes the row directly above the bar (persistent, distinct from a session
+// row). Before the first WindowSizeMsg (height unknown) the tail simply follows the body.
 func (m rootModel) composeBoard(body, status string) string {
 	// Clamp the status text to the terminal width (less its 2-cell indent) so the bar
 	// can never wrap onto a second row and break the fixed-height board contract. The
@@ -356,16 +409,33 @@ func (m rootModel) composeBoard(body, status string) string {
 		status = clampCells(status, m.width-2)
 	}
 	bar := "  " + styleDim.Render(status)
+
+	// The version-skew notice reserves its own row above the bar. It is clamped and
+	// styled the same way, so it likewise cannot wrap and break the fixed height.
+	tail := bar
+	rows := 1
+	if notice := skewNotice(m.daemonVersion, m.clientVersion); notice != "" {
+		if m.width > 2 {
+			notice = clampCells(notice, m.width-2)
+		}
+		tail = "  " + styleTitle.Render(notice) + "\n" + bar
+		rows = 2
+	}
+
 	if m.height <= 0 {
-		return body + "\n" + bar
+		return body + "\n" + tail
 	}
 	lines := strings.Split(body, "\n")
-	if target := m.height - 1; len(lines) > target {
+	target := m.height - rows
+	if target < 0 {
+		target = 0 // a terminal too short for the notice row + bar; never slice negative
+	}
+	if len(lines) > target {
 		lines = lines[:target]
 	} else {
 		lines = append(lines, make([]string, target-len(lines))...)
 	}
-	return strings.Join(lines, "\n") + "\n" + bar
+	return strings.Join(lines, "\n") + "\n" + tail
 }
 
 // enterGeneral switches to the general view and restarts the repaint timer if it
