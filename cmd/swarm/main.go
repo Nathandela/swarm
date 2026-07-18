@@ -127,7 +127,12 @@ func runTUI(stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	client, err := dialClient()
+	cc, err := clientConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		return 1
+	}
+	client, err := dialClient(cc)
 	if err != nil {
 		fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
@@ -148,7 +153,8 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)), tui.WithAttachRunner(runner))
+	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)),
+		tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)))
 
 	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
 	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {
@@ -175,32 +181,57 @@ func interactiveTTY(stdout io.Writer, stdin *os.File) (out *os.File, ok bool) {
 	return f, true
 }
 
-// dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
-// protocol client to it. The SWARM_DAEMON_* environment overrides the default home
-// (the same knobs `swarm daemon` reads), so a test can point the client at a
-// controlled daemon; EnsureDaemon only spawns one when the socket does not answer.
-func dialClient() (*protocol.Client, error) {
+// clientConfig builds the daemon.ClientConfig the client roles share (TUI dial,
+// auto-start, and the `swarm daemon restart` reuse) from the SWARM_DAEMON_*
+// environment, falling back to the default state dir. The SWARM_DAEMON_* knobs (the
+// same ones `swarm daemon` reads) let a test point the client at a controlled daemon.
+// DaemonBin is this executable, since the client auto-starts (and restarts) the daemon
+// from its own binary.
+func clientConfig() (daemon.ClientConfig, error) {
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
 		var err error
 		if stateDir, err = persist.DefaultDir(); err != nil {
-			return nil, err
+			return daemon.ClientConfig{}, err
 		}
 	}
 	exe, _ := os.Executable()
-	cc := daemon.ClientConfig{
+	return daemon.ClientConfig{
 		StateDir:   stateDir,
 		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
 		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
 		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
 		DaemonBin:  exe,
-	}
+	}, nil
+}
+
+// dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
+// protocol client to it. EnsureDaemon only spawns one when the socket does not answer.
+func dialClient(cc daemon.ClientConfig) (*protocol.Client, error) {
 	conn, err := daemon.EnsureDaemon(cc)
 	if err != nil {
 		return nil, err
 	}
 	_ = conn.Close() // EnsureDaemon proved the daemon is live; the TUI speaks the full client protocol on its own dial
 	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+}
+
+// daemonRestarter is the client-side reuse of `swarm daemon restart` injected into the
+// TUI (bd agents-tracker-5jl): it performs the D-8 safe restart of an outdated daemon
+// and reconnects to the replacement. Its shims survive the handoff (they own the PTYs)
+// and are reconnected by the replacement — the same guarantee `swarm daemon restart`
+// gives, now driven automatically when the client is newer than the daemon it reached.
+func daemonRestarter(cc daemon.ClientConfig) tui.DaemonRestarter {
+	return func() (tui.Client, error) {
+		if err := daemon.Restart(cc); err != nil {
+			return nil, err
+		}
+		c, err := protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
 }
 
 // detectAgents builds the launch-form agent detector. It probes the host for every
@@ -213,6 +244,7 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 	return func() []tui.AgentInfo {
 		var agents []tui.AgentInfo
 		host := detect.Host{}
+		translated := rosettaTranslated() // probed once: swarm x86_64 under Rosetta (bead 8c0)
 		for _, name := range registry.Names() {
 			if name == "reference" {
 				continue // the reference adapter is a test harness, not an installable CLI
@@ -226,7 +258,7 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 				Name:      name,
 				Installed: det.Found,
 				InRange:   det.InRange,
-				Reason:    unavailabilityReason(det),
+				Reason:    archAugmentedReason(unavailabilityReason(det), det, translated),
 				Options:   ad.Options(),
 			})
 		}
@@ -252,12 +284,36 @@ func unavailabilityReason(det adapter.Detection) string {
 	case !det.Found:
 		return "" // not installed: existing install-hint behavior
 	case det.Version == "":
+		// A crashed probe carries the CLI's own first error line; show that real cause
+		// (e.g. codex's "Missing optional dependency ... Reinstall Codex") rather than
+		// the generic hint (bead 8c0).
+		if det.ProbeErr != "" {
+			return det.ProbeErr
+		}
 		return "version probe failed - reinstall?"
 	case !det.InRange:
 		return "unsupported version " + det.Version
 	default:
 		return ""
 	}
+}
+
+// rosettaRebuildHint is appended to a found-but-crashed agent's reason when swarm
+// itself is an x86_64 binary under Rosetta on Apple Silicon (bead 8c0): the crash
+// is almost always that codex's env-node then resolves the x64 CLI package npm
+// never installs on arm64. Rebuilding swarm native arm64 fixes it.
+const rosettaRebuildHint = "(swarm is x86_64 under Rosetta; rebuild native: CGO_ENABLED=0 GOARCH=arm64 go build ./cmd/swarm)"
+
+// archAugmentedReason appends the Rosetta rebuild hint to a found-but-crashed
+// agent's reason when this swarm process is running translated (bead 8c0). A
+// usable agent (empty base reason), a not-installed agent, and a plainly
+// out-of-range agent (which reports a version, so is not an arch symptom) are
+// left untouched.
+func archAugmentedReason(base string, det adapter.Detection, translated bool) string {
+	if base == "" || !translated || !det.Found || det.Version != "" {
+		return base
+	}
+	return base + " " + rosettaRebuildHint
 }
 
 // runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the
@@ -314,21 +370,10 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 // runDaemonRestart stops the running daemon and spawns a fresh one (D-8). Its
 // shims survive the handoff and are reconnected by the replacement.
 func runDaemonRestart(stderr io.Writer) int {
-	stateDir := os.Getenv(daemon.EnvStateDir)
-	if stateDir == "" {
-		var err error
-		if stateDir, err = persist.DefaultDir(); err != nil {
-			fmt.Fprintf(stderr, "daemon restart: %v\n", err)
-			return 1
-		}
-	}
-	exe, _ := os.Executable()
-	cc := daemon.ClientConfig{
-		StateDir:   stateDir,
-		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
-		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
-		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
-		DaemonBin:  exe,
+	cc, err := clientConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+		return 1
 	}
 	if err := daemon.Restart(cc); err != nil {
 		fmt.Fprintf(stderr, "daemon restart: %v\n", err)

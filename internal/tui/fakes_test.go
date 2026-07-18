@@ -215,6 +215,34 @@ func detectEditable() DetectFunc {
 	}
 }
 
+// codexSchema mirrors the real codex option schema shape: an editable "Model"
+// string plus a "Sandbox mode" CHOICE whose 12-char label exercises the label
+// column (bead 41b: a label as wide as the column must still keep a separating
+// space before its value, not jam into "Sandbox modeworkspace-write").
+func codexSchema() []adapter.OptionSpec {
+	return []adapter.OptionSpec{
+		{Key: "model", Label: "Model", Type: "string"},
+		{Key: "sandbox", Label: "Sandbox mode", Type: "choice",
+			Choices: []string{"read-only", "workspace-write", "danger-full-access"}, Default: "workspace-write"},
+	}
+}
+
+// detectCodexSchema mirrors the production field case (bead 41b): claude is usable
+// and carries a one-option schema (Model); codex is INSTALLED but out of range
+// (unusable) yet still carries its FULL declarative schema (Model + Sandbox mode)
+// — exactly what adapter detection does, populating ad.Options() regardless of
+// usability. The two agents' option sets differ, so cycling between them
+// exercises the schema swap, the wide label, and the selected-dot marker on an
+// unusable-but-selected agent.
+func detectCodexSchema() DetectFunc {
+	return func() []AgentInfo {
+		return []AgentInfo{
+			{Name: "claude", Installed: true, InRange: true, Options: claudeSchema()},
+			{Name: "codex", Installed: true, InRange: false, Reason: "version probe failed - reinstall?", Options: codexSchema()},
+		}
+	}
+}
+
 // launchOf exposes the router's launch sub-model so form-field tests can assert on
 // its collected values (cwd, options). The router returns rootModel by value.
 func launchOf(m tea.Model) launchModel { return m.(rootModel).launch }

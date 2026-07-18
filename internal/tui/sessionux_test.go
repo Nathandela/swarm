@@ -197,13 +197,17 @@ func TestAttach_CleanReturnDoesNotBanner(t *testing.T) {
 // Item 4 — version-skew notice.
 // ---------------------------------------------------------------------------
 
+// Re-pointed for bd agents-tracker-5jl: the passive notice is now kept ONLY for the
+// downgrade direction (daemon NEWER than client), which the client cannot self-heal.
+// The client-newer direction auto-restarts instead (asserted in flow_test.go's
+// TestSkewNotice_ShownOnlyWhenDaemonNewer).
 func TestSkewNotice_ShownOnMismatch(t *testing.T) {
-	got := skewNotice("0.1.0", "0.2.0")
-	if !strings.Contains(got, "daemon 0.1.0") || !strings.Contains(got, "swarm 0.2.0") {
-		t.Fatalf("skewNotice(mismatch) must name both versions; got %q", got)
+	got := skewNotice("0.3.0", "0.2.0") // daemon newer than client
+	if !strings.Contains(got, "daemon 0.3.0") || !strings.Contains(got, "swarm 0.2.0") {
+		t.Fatalf("skewNotice(daemon newer) must name both versions; got %q", got)
 	}
 	if !strings.Contains(got, "swarm daemon restart") {
-		t.Fatalf("skewNotice(mismatch) must nudge the restart; got %q", got)
+		t.Fatalf("skewNotice(daemon newer) must nudge the restart; got %q", got)
 	}
 }
 
@@ -241,14 +245,15 @@ func TestNew_CapturesDaemonBuildVersion(t *testing.T) {
 	}
 }
 
-// The board shows the persistent notice when the daemon and client builds differ.
+// The board shows the persistent notice when the daemon is NEWER than the client (the
+// direction the client cannot self-heal; bd agents-tracker-5jl).
 func TestBoard_ShowsSkewNotice(t *testing.T) {
 	gm := newGeneralModel([]protocol.SessionView{sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute)})
 	gm.width = testCols
-	m := rootModel{general: gm, width: testCols, height: testRows, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+	m := rootModel{general: gm, width: testCols, height: testRows, daemonVersion: "0.3.0", clientVersion: "0.2.0"}
 
 	v := stripANSI(m.View().Content)
-	if !strings.Contains(v, "daemon 0.1.0 differs from swarm 0.2.0") {
+	if !strings.Contains(v, "daemon 0.3.0 differs from swarm 0.2.0") {
 		t.Fatalf("the board must show a persistent version-skew notice; view:\n%s", v)
 	}
 	if !strings.Contains(v, "swarm daemon restart") {
@@ -257,9 +262,10 @@ func TestBoard_ShowsSkewNotice(t *testing.T) {
 }
 
 // A terminal too short for the notice row + status bar must not panic (the notice
-// reserves a second bottom row, so a height of 1 would otherwise slice negative).
+// reserves a second bottom row, so a height of 1 would otherwise slice negative). Uses
+// the daemon-newer direction so the notice is actually present (bd agents-tracker-5jl).
 func TestComposeBoard_SkewNoticeShortTerminalDoesNotPanic(t *testing.T) {
-	m := rootModel{width: 30, height: 1, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+	m := rootModel{width: 30, height: 1, daemonVersion: "0.3.0", clientVersion: "0.2.0"}
 	_ = m.composeBoard("body", m.generalStatus()) // must not panic
 }
 

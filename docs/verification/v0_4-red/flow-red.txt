@@ -1,0 +1,29 @@
+=== bd agents-tracker-stc + agents-tracker-5jl — v0.4 flow RED evidence ===
+Date: 2026-07-18T11:23:54Z
+
+Failing-first: the new flow tests reference API the implementation does not yet
+provide (launchResultMsg id/agent, DaemonRestarter/WithDaemonRestarter, classifySkew,
+skew states, shouldAutoUpgrade, beginUpgradeMsg, daemonRestartedMsg, daemonRestarter).
+Standard undefined-RED (see epic8_test.go's frozen-API precedent).
+
+### go test ./internal/tui/ (build failed — undefined symbols):
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/flow_test.go:82:38: unknown field id in struct literal of type launchResultMsg
+internal/tui/flow_test.go:82:60: unknown field agent in struct literal of type launchResultMsg
+internal/tui/flow_test.go:124:30: unknown field id in struct literal of type launchResultMsg
+internal/tui/flow_test.go:124:52: unknown field agent in struct literal of type launchResultMsg
+internal/tui/flow_test.go:142:38: unknown field id in struct literal of type launchResultMsg
+internal/tui/flow_test.go:142:60: unknown field agent in struct literal of type launchResultMsg
+internal/tui/flow_test.go:212:18: undefined: skew
+internal/tui/flow_test.go:215:22: undefined: skewUpgrade
+internal/tui/flow_test.go:216:22: undefined: skewUpgrade
+internal/tui/flow_test.go:217:22: undefined: skewNotify
+internal/tui/flow_test.go:217:22: too many errors
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
+### go test ./cmd/swarm/ (build failed — undefined daemonRestarter):
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/daemon_upgrade_test.go:70:17: undefined: daemonRestarter
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

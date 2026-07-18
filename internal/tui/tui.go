@@ -13,6 +13,7 @@ package tui
 import (
 	"image/color"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,8 +74,26 @@ type eventMsg struct{ ev protocol.Event }
 type repaintMsg struct{}
 
 // launchResultMsg carries the outcome of an async launch/resume so a FAILURE is
-// surfaced to the user (the transient banner) instead of silently discarded (B1).
-type launchResultMsg struct{ err error }
+// surfaced to the user (the transient banner) instead of silently discarded (B1),
+// and a SUCCESS carries the daemon-returned session id + agent so the router can
+// auto-attach straight into the new session (bd agents-tracker-stc).
+type launchResultMsg struct {
+	id    string // namespaced id of the new session on success ("" if the producer omits it)
+	agent string // the new session's agent, for the attach chrome label
+	err   error
+}
+
+// beginUpgradeMsg kicks the daemon auto-restart from Init through Update (which owns
+// model mutation), so the once-per-process guard and the upgrade banner are set in one
+// place (bd agents-tracker-5jl).
+type beginUpgradeMsg struct{}
+
+// daemonRestartedMsg carries the result of an auto-restart + reconnect: the fresh
+// client on success, or the error to surface.
+type daemonRestartedMsg struct {
+	client Client
+	err    error
+}
 
 // detectMsg carries the result of an async agent-detection probe. Detection runs
 // off the Update hot path (a Cmd from Init and again on each form open) and is
@@ -140,6 +159,12 @@ type rootModel struct {
 	// client's own build. A persistent notice shows while they differ (see skewNotice).
 	daemonVersion string
 	clientVersion string
+
+	// Auto-restart of an outdated daemon (bd agents-tracker-5jl): when this client is
+	// newer than the daemon it reached, restarter restarts the daemon and reconnects.
+	// restartAttempted is the once-per-process guard against restart loops.
+	restarter        DaemonRestarter
+	restartAttempted bool
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -198,7 +223,13 @@ func boundedList(c Client) []protocol.SessionView {
 // probe runs asynchronously (detectCmd) so a slow prober never delays first paint
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen))
+	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen)}
+	if m.shouldAutoUpgrade() {
+		// An older daemon than this client: kick the auto-restart through Update, which
+		// owns model mutation (the banner + once-per-process guard live there).
+		cmds = append(cmds, func() tea.Msg { return beginUpgradeMsg{} })
+	}
+	return tea.Batch(cmds...)
 }
 
 // detectCmd probes for agent CLIs off the Update hot path and delivers the result
@@ -245,12 +276,52 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
-		// (B1 — never a silent failure). A success is a no-op; the new session arrives
-		// via the subscribe stream.
+		// (B1 — never a silent failure) and stay on the board.
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
 		}
+		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
+		// reusing the exact attach path Enter uses on a running row (the session is
+		// freshly launched, so read-write). A result with no id (a producer that does
+		// not carry it) stays on the board — the pre-stc behavior.
+		if msg.id != "" {
+			s := protocol.SessionView{ID: msg.id, Agent: msg.agent}
+			if m.attachRunner != nil {
+				return m, runAttach(m.attachRunner, s, false)
+			}
+			m.attach = attachModel{session: s, hasSession: true, width: m.width}
+			m.screen = screenAttach
+		}
 		return m, nil
+
+	case beginUpgradeMsg:
+		// The hello revealed an older daemon than this client (bd agents-tracker-5jl):
+		// auto-restart it instead of asking the user. Guard once per process against
+		// restart loops. Banner the upgrade, then fire the restart+reconnect command.
+		if m.restartAttempted || m.restarter == nil {
+			return m, nil
+		}
+		m.restartAttempted = true
+		banner := m.general.setBanner("upgrading daemon " + m.daemonVersion + " -> " + m.clientVersion + "...")
+		return m, tea.Batch(banner, restartDaemonCmd(m.restarter))
+
+	case daemonRestartedMsg:
+		// The restart+reconnect resolved. A failure banners the reason (never silent).
+		if msg.err != nil {
+			return m, m.general.setBanner("daemon upgrade failed: " + msg.err.Error())
+		}
+		// Swap to the fresh client and re-read its (now matching) build version, which
+		// clears the skew. Sessions survive the restart (shims own the PTYs), so the
+		// board stays accurate; we only re-subscribe for future events. The old client's
+		// pending waitForEvent is left blocked on its dead stream — a one-time,
+		// process-lifetime cost of the once-per-process upgrade.
+		m.client = msg.client
+		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
+			m.daemonVersion = bv.BuildVersion()
+		}
+		events, _ := msg.client.Subscribe()
+		m.events = events
+		return m, tea.Batch(m.general.setBanner("daemon upgraded"), waitForEvent(m.events))
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
@@ -382,19 +453,115 @@ func (m rootModel) generalStatus() string {
 	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit"
 }
 
-// skewNotice returns the persistent version-skew notice line, or "" when there is
-// nothing to warn about: the builds match, either build is a local dev build (which
-// would always mismatch), or no daemon version was reported. It nudges the safe
-// `swarm daemon restart` that reconciles a daemon that outlived a client upgrade (the
-// daemon-outlives-upgrade design makes this state common right after every upgrade).
-func skewNotice(daemonVer, clientVer string) string {
-	if daemonVer == "" || clientVer == "" || daemonVer == "dev" || clientVer == "dev" {
-		return ""
+// DaemonRestarter restarts the daemon and returns a freshly-connected client to the
+// replacement (which reports its new build version via BuildVersion). It is the
+// client-side reuse of `swarm daemon restart` (cmd/swarm wires daemon.Restart +
+// protocol.Dial). A nil restarter disables auto-upgrade — the notice/no-op path.
+type DaemonRestarter func() (Client, error)
+
+// WithDaemonRestarter injects the auto-restart seam used when this client is newer
+// than the daemon it reached (bd agents-tracker-5jl). Without it the client only shows
+// the passive notice (and only for the direction it can self-heal — see classifySkew).
+func WithDaemonRestarter(r DaemonRestarter) Option {
+	return func(m *rootModel) { m.restarter = r }
+}
+
+// restartDaemonCmd runs the injected restart+reconnect off the update loop and reports
+// its outcome as a daemonRestartedMsg.
+func restartDaemonCmd(r DaemonRestarter) tea.Cmd {
+	return func() tea.Msg {
+		c, err := r()
+		return daemonRestartedMsg{client: c, err: err}
 	}
-	if daemonVer == clientVer {
+}
+
+// shouldAutoUpgrade reports whether Init should auto-restart the daemon: a restarter is
+// injected, no restart has been attempted this process (the loop guard), and the daemon
+// is OLDER than this client (the direction the client can self-heal — see classifySkew).
+func (m rootModel) shouldAutoUpgrade() bool {
+	return m.restarter != nil && !m.restartAttempted && classifySkew(m.daemonVersion, m.clientVersion) == skewUpgrade
+}
+
+// skew classifies a daemon/client build-version pair into the reconciliation action.
+type skew int
+
+const (
+	skewNone    skew = iota // builds match, or either is a dev/empty build (always mismatch)
+	skewNotify              // daemon NEWER than client: passive notice (the client cannot self-heal)
+	skewUpgrade             // daemon OLDER than client: auto-restart to reconcile (bd agents-tracker-5jl)
+)
+
+// classifySkew compares the daemon and client build versions. It suppresses when either
+// side is a dev/unstamped build or no daemon version was reported (those always
+// mismatch). Otherwise the direction decides: a client newer than the daemon can restart
+// the daemon into its own (newer) build, so it auto-upgrades; a daemon newer than the
+// client is a state the client cannot fix by restarting, so it only warns.
+func classifySkew(daemonVer, clientVer string) skew {
+	if daemonVer == "" || clientVer == "" || daemonVer == "dev" || clientVer == "dev" {
+		return skewNone
+	}
+	switch compareSemver(daemonVer, clientVer) {
+	case 0:
+		return skewNone
+	case 1:
+		return skewNotify // daemon newer
+	default:
+		return skewUpgrade // daemon older
+	}
+}
+
+// skewNotice returns the persistent version-skew notice line, or "" when there is
+// nothing to warn about. It is now kept ONLY for the downgrade direction (daemon NEWER
+// than client): the client-newer direction auto-restarts the daemon (bd
+// agents-tracker-5jl), so it no longer nudges the manual restart there.
+func skewNotice(daemonVer, clientVer string) string {
+	if classifySkew(daemonVer, clientVer) != skewNotify {
 		return ""
 	}
 	return "daemon " + daemonVer + " differs from swarm " + clientVer + " - run: swarm daemon restart"
+}
+
+// compareSemver compares two dotted-numeric version strings, returning -1, 0, or +1. A
+// leading "v" and any pre-release/build suffix are ignored; a non-numeric component
+// compares as 0. Mirrors internal/adapter's proven versionInRange helper (kept local so
+// the tui does not depend on that package's unexported surface). Pure and total.
+func compareSemver(a, b string) int {
+	an := semverParts(a)
+	bn := semverParts(b)
+	for i := 0; i < len(an) || i < len(bn); i++ {
+		var av, bv int
+		if i < len(an) {
+			av = an[i]
+		}
+		if i < len(bn) {
+			bv = bn[i]
+		}
+		switch {
+		case av < bv:
+			return -1
+		case av > bv:
+			return 1
+		}
+	}
+	return 0
+}
+
+// semverParts splits a version into its leading dotted numeric components, tolerating a
+// leading "v" and stopping at the first non-numeric component (e.g. a "-rc1" suffix).
+func semverParts(v string) []int {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	var parts []int
+	for _, seg := range strings.Split(v, ".") {
+		if i := strings.IndexAny(seg, "-+"); i >= 0 {
+			seg = seg[:i]
+		}
+		n, err := strconv.Atoi(seg)
+		if err != nil {
+			break
+		}
+		parts = append(parts, n)
+	}
+	return parts
 }
 
 // composeBoard anchors a one-line status bar on the bottom row of a full-screen

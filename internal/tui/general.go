@@ -398,8 +398,10 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		Rows:    rows,
 	}
 	return func() tea.Msg {
-		_, err := c.Launch(req)
-		return launchResultMsg{err: err}
+		id, err := c.Launch(req)
+		// Carry the new session id + agent so a successful resume auto-attaches into it
+		// (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
+		return launchResultMsg{id: id, agent: s.Agent, err: err}
 	}
 }
 

@@ -80,10 +80,11 @@ type Adapter interface {
 
 // Detection is the result of probing the host for the CLI.
 type Detection struct {
-	Found   bool   // the CLI binary was located
-	Path    string // absolute path to the binary, when Found
-	Version string // detected version string, when Found
-	InRange bool   // Version falls within SupportedVersions
+	Found    bool   // the CLI binary was located
+	Path     string // absolute path to the binary, when Found
+	Version  string // detected version string, when Found
+	InRange  bool   // Version falls within SupportedVersions
+	ProbeErr string // first line of the version probe's output when it errored/exited non-zero (the CLI's own diagnostic, e.g. codex's "Reinstall Codex"); empty on success
 }
 
 // HostProber is the host-I/O capability the CORE Detect function needs: locate a
@@ -113,6 +114,10 @@ func Detect(a Adapter, h HostProber) Detection {
 	det := Detection{Found: true, Path: path}
 	out, err := h.Run(path, a.VersionArgs())
 	if err != nil {
+		// A crashed/non-zero probe still returns whatever it printed; keep the first
+		// line as the diagnostic so the picker can show the CLI's own cause instead of
+		// a generic reinstall hint (bead 8c0: codex's "Reinstall Codex" line).
+		det.ProbeErr = firstLine(out)
 		return det
 	}
 	version, ok := a.ParseVersion(out)
@@ -122,6 +127,18 @@ func Detect(a Adapter, h HostProber) Detection {
 	det.Version = version
 	det.InRange = versionInRange(a.SupportedVersions(), version)
 	return det
+}
+
+// firstLine returns the first non-empty, trimmed line of s (a version probe's
+// captured diagnostic), or "" if it has none. It is pure and total, so a
+// multi-line crash collapses to a single-line reason for the picker.
+func firstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // versionInRange reports whether version lies within the inclusive [Min, Max]

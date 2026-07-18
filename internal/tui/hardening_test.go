@@ -62,7 +62,7 @@ func TestComposeBoard_NeverExceedsHeight(t *testing.T) {
 		if got := lineCount(plain.composeBoard(body, "status keys")); got != h {
 			t.Fatalf("height %d without notice: %d lines, want exactly %d", h, got, h)
 		}
-		withNotice := rootModel{width: 40, height: h, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+		withNotice := rootModel{width: 40, height: h, daemonVersion: "0.3.0", clientVersion: "0.2.0"} // daemon-newer keeps the notice (5jl)
 		if got := lineCount(withNotice.composeBoard(body, "status keys")); got != h {
 			t.Fatalf("height %d WITH notice: %d lines, want exactly %d", h, got, h)
 		}
@@ -72,7 +72,7 @@ func TestComposeBoard_NeverExceedsHeight(t *testing.T) {
 // item 7 — at height 1 the status bar is the last-resort row: the skew notice is
 // dropped so the single row carries the context keys, not the notice.
 func TestComposeBoard_StatusBarWinsAtHeightOne(t *testing.T) {
-	m := rootModel{width: 40, height: 1, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+	m := rootModel{width: 40, height: 1, daemonVersion: "0.3.0", clientVersion: "0.2.0"} // daemon-newer keeps the notice (5jl)
 	out := stripANSI(m.composeBoard("body", "status keys here"))
 	lines := strings.Split(out, "\n")
 	if len(lines) != 1 {
@@ -92,7 +92,7 @@ func lineCount(s string) int { return len(strings.Split(s, "\n")) }
 // notice, then body, bar last-resort), so the user sees a body row + the bar, not a
 // notice that evicts the entire body.
 func TestComposeBoard_Height2DropsNoticeNotBody(t *testing.T) {
-	m := rootModel{width: 40, height: 2, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+	m := rootModel{width: 40, height: 2, daemonVersion: "0.3.0", clientVersion: "0.2.0"} // daemon-newer keeps the notice (5jl)
 	got := m.composeBoard("bodyline", "status keys")
 	if strings.Contains(got, "daemon") {
 		t.Fatalf("height 2 must drop the skew notice before the body; got %q", got)

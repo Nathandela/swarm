@@ -398,8 +398,8 @@ func launchDims(w, h int) (int, int) {
 
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Launch(req)
-		return launchResultMsg{err: err}
+		id, err := c.Launch(req)
+		return launchResultMsg{id: id, agent: req.Agent, err: err}
 	}
 }
 
@@ -498,7 +498,20 @@ func (m launchModel) fieldLine(label, value string, focused bool) string {
 	if focused {
 		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
 	}
-	return prefix + styleDim.Render(padRight(label, launchLabelW)) + value + "\n"
+	return prefix + styleDim.Render(padLabel(label)) + value + "\n"
+}
+
+// padLabel pads a field label to the label column, always keeping at least one
+// separating space before the value. padRight leaves a label as wide as (or wider
+// than) the column flush against its value, which jammed codex's 12-char "Sandbox
+// mode" into "Sandbox modeworkspace-write" (bead 41b); a sub-column label already
+// ends in padding, so this only affects the wide-label case.
+func padLabel(label string) string {
+	padded := padRight(label, launchLabelW)
+	if !strings.HasSuffix(padded, " ") {
+		padded += " "
+	}
+	return padded
 }
 
 func (m launchModel) dirValue() string {
@@ -517,14 +530,12 @@ func (m launchModel) agentValue() string {
 	for i, a := range m.agents {
 		var mark, text string
 		switch {
-		case a.usable() && i == m.agentIdx:
-			mark = "●"
-		case a.usable():
-			mark = "○"
+		case i == m.agentIdx:
+			mark = "●" // selected: the filled dot marks the cursor, usable or not (bead 41b)
 		case !a.Installed:
 			mark = "✕"
 		default:
-			mark = "○" // installed but out of supported range
+			mark = "○" // installed (usable or out of supported range) but not the selection
 		}
 		text = mark + " " + a.Name
 		if r := agentReason(a); !a.usable() && r != "" {
@@ -545,10 +556,13 @@ func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
 	v := m.options[spec.Key]
 	switch spec.Type {
 	case "bool":
+		box := "[ ]"
 		if v == "true" {
-			return "[x]"
+			box = "[x]"
 		}
-		return "[ ]"
+		// Show the toggle affordance inline so it is discoverable on the row itself,
+		// not only in the focused-field hint bar (bead 3sr).
+		return box + " " + styleDim.Render("space")
 	case "choice":
 		return v + " " + styleDim.Render("▾")
 	default: // editable string (possibly with curated suggestions)
@@ -578,5 +592,6 @@ func (m launchModel) worktreeValue() string {
 	if m.worktree {
 		box = "[x]"
 	}
-	return box + " " + styleDim.Render("isolate in a git worktree")
+	// The worktree checkbox is a bool row: show its toggle affordance inline (bead 3sr).
+	return box + " " + styleDim.Render("space · isolate in a git worktree")
 }
