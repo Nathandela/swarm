@@ -2,8 +2,9 @@ package protocol
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
+
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
 // EncodeControl serializes a Control to the JSON body of a wire.TControl frame.
@@ -45,16 +46,10 @@ func ParseID(namespaced string) (endpointID, localID string, ok bool) {
 	return endpointID, localID, true
 }
 
-// localIDRE mirrors the persist package's path-safe id pattern (ADR-004): the
+// validLocalID reports whether local is a path-safe session id (ADR-004): the
 // server re-validates a client-supplied local id against it before any DaemonAPI
-// call, so a traversal/NUL/oversized id never reaches the store (E6.6/P-6).
-var localIDRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
-
-// validLocalID reports whether local is a path-safe session id: it matches the
-// pattern and is not ".", "..", or a leading-dash (flag-like) id.
+// call, so a traversal/NUL/oversized id never reaches the store (E6.6/P-6). It
+// delegates to persist.ValidID, the single source of truth for the pattern.
 func validLocalID(local string) bool {
-	if !localIDRE.MatchString(local) || local == "." || local == ".." || strings.HasPrefix(local, "-") {
-		return false
-	}
-	return true
+	return persist.ValidID(local)
 }

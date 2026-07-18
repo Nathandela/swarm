@@ -86,6 +86,21 @@ func TestTraversalCreatesNothingOutsideRoot(t *testing.T) {
 	}
 }
 
+// R3.4.6: ValidID is the single exported path-safe-id predicate; protocol and
+// worktree delegate to it instead of each duplicating the regex.
+func TestValidID(t *testing.T) {
+	for _, id := range invalidIDs() {
+		if ValidID(id) {
+			t.Errorf("ValidID(%q) = true, want false", id)
+		}
+	}
+	for _, id := range []string{"a", "A0", "a.b_c-d", "with.dots", strings.Repeat("z", 128)} {
+		if !ValidID(id) {
+			t.Errorf("ValidID(%q) = false, want true", id)
+		}
+	}
+}
+
 // Boundary-valid ids (single char, dots/underscores/dashes not leading, the
 // 128-char cap) round-trip through Save/Load.
 func TestValidBoundaryIDsAccepted(t *testing.T) {

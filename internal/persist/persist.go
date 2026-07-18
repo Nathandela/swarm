@@ -73,14 +73,22 @@ func NewStore(dir string) (*Store, error) {
 // idRE is the path-safe session-id pattern (ADR-004).
 var idRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
-// validateID enforces the orchestrator-pinned id contract per ADR-004: ids are
-// path-safe by validation. An id must match idRE and must not be ".", "..", or
-// start with "-", so it can never escape the store root or be mistaken for a flag.
+// ValidID reports whether id is path-safe per ADR-004: it must match idRE and
+// must not be ".", "..", or start with "-", so it can never escape a store root,
+// traverse a path, or be mistaken for a flag. This is the single source of truth
+// for the path-safe id pattern; internal/protocol and internal/worktree both
+// delegate to it instead of duplicating the regex.
+func ValidID(id string) bool {
+	return idRE.MatchString(id) && id != "." && id != ".." && !strings.HasPrefix(id, "-")
+}
+
+// validateID enforces the orchestrator-pinned id contract per ADR-004 (see
+// ValidID), returning a descriptive error for the invalid case.
 //
 // Case-collisions on case-insensitive filesystems are avoided by the id generator
 // (lowercase-only, Epic 5), not by validation.
 func validateID(id string) error {
-	if !idRE.MatchString(id) || id == "." || id == ".." || strings.HasPrefix(id, "-") {
+	if !ValidID(id) {
 		return fmt.Errorf("invalid session id %q: must match %s and not be %q, %q, or start with %q",
 			id, idRE.String(), ".", "..", "-")
 	}
