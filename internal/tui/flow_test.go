@@ -200,6 +200,78 @@ func TestResume_SuccessAutoAttachesIntoNewSession(t *testing.T) {
 	}
 }
 
+// End-to-end: submitting a valid launch FORM flows straight into the attach path for
+// the daemon-returned session, proving the launch producer (launchCmd carries the id)
+// and the auto-attach consumer are wired together.
+func TestLaunchForm_SubmitAutoAttachesIntoNewSession(t *testing.T) {
+	f := newFakeClient()
+	f.launchID = "endpoint/launched-1"
+	r := &recordingRunner{}
+	m := New(f, detectMixed(), WithAttachRunner(r.run))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
+	m = send(m, detectMsg{agents: detectMixed()()}) // seed detection so an agent is usable
+	m = send(m, keyRune('n'))                       // open the launch form
+
+	// Clear the prefilled cwd and type a real, existing directory so submit is valid.
+	for launchOf(m).cwd != "" {
+		m = send(m, keyBackspace)
+	}
+	m = sendType(m, t.TempDir())
+
+	_, cmd := m.Update(keyEnter) // submit
+	if cmd == nil {
+		t.Fatal("submitting a valid form issued no command")
+	}
+	// Submit batches launchCmd with an (idempotent) enterGeneral. Walk the batch, feed
+	// the launch result back so the auto-attach fires, then settle the attach.
+	m2 := m
+	for _, msg := range drainBatch(cmd) {
+		if _, ok := msg.(launchResultMsg); !ok {
+			continue
+		}
+		var acmd tea.Cmd
+		m2, acmd = m2.Update(msg)
+		if acmd != nil {
+			if amsg := acmd(); amsg != nil {
+				m2, _ = m2.Update(amsg)
+			}
+		}
+	}
+
+	calls := r.recorded()
+	if len(calls) != 1 {
+		t.Fatalf("submitting a valid form must auto-attach into the new session; runner called %d times", len(calls))
+	}
+	if calls[0].session.ID != "endpoint/launched-1" {
+		t.Fatalf("auto-attach session = %q, want endpoint/launched-1", calls[0].session.ID)
+	}
+	if calls[0].readOnly {
+		t.Fatal("a freshly launched session must attach read-write")
+	}
+}
+
+// drainBatch runs a (possibly batched) command one level deep and returns the messages
+// its children produced, so a test can feed a specific one back into Update.
+func drainBatch(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	var out []tea.Msg
+	for _, c := range batch {
+		if c != nil {
+			if m := c(); m != nil {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // 5jl — skew classification (pure) + the direction-sensitive passive notice.
 // ---------------------------------------------------------------------------
