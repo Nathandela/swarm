@@ -37,12 +37,6 @@ const (
 // can shorten it to exercise the termination-timeout path quickly.
 var deleteWait = 10 * time.Second
 
-// Registry is the read view of the session roster (frozen API).
-type Registry interface {
-	List() []persist.Meta
-	Get(id string) (persist.Meta, bool)
-}
-
 // Config configures a daemon instance.
 type Config struct {
 	StateDir    string
