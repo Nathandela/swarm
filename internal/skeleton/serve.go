@@ -26,9 +26,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -84,6 +86,13 @@ type Daemon struct {
 	// skips such a session so its stream is not stolen every poll (R1.3.7). It is
 	// d.srv.IsControlled in production, overridable in tests.
 	controlled func(id string) bool
+
+	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
+	// read a session's snapshot is OBSERVABLE rather than a silent heuristic death
+	// (R1.2.6 — the pre-1.2 oversized-snapshot bug failed exactly here). tapLastLog
+	// rate-limits the accompanying log line to tapLogInterval.
+	tapFailures atomic.Uint64
+	tapLastLog  atomic.Int64
 
 	closeOnce sync.Once
 }
@@ -291,20 +300,41 @@ func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
 // shim serves connections concurrently, so this brief tap attach coexists with any
 // other connection; tapOnce only calls sampleGrid for a session with NO live
 // controller (R1.3.7), so the tap never supersedes a controller's subscriber.
-// Every failure is a silent skip: a gone shim or undecodable snapshot is retried
-// next poll, and a session not registered with the engine makes OnOutput a no-op.
+// A failed attach (a gone shim, or — before item 1.2 — an oversized snapshot the
+// shim could not send in one frame) or an undecodable snapshot is retried next poll,
+// but it is COUNTED and rate-limit-logged via noteTapFailure so the heuristic can no
+// longer die silently (R1.2.6). A session not registered with the engine makes
+// OnOutput a no-op.
 func (d *Daemon) sampleGrid(id string) {
 	stream, err := d.api.Attach(id)
 	if err != nil {
+		d.noteTapFailure(id, err)
 		return
 	}
 	snapBytes := stream.Snapshot()
 	_ = stream.Close()
 	snap, err := vt.DecodeSnapshot(snapBytes)
 	if err != nil {
+		d.noteTapFailure(id, err)
 		return
 	}
 	d.eng.OnOutput(id, snap)
+}
+
+// tapLogInterval rate-limits the grid-tap snapshot-failure log so a persistently
+// failing session cannot flood the daemon log; every failure is still counted.
+const tapLogInterval = 30 * time.Second
+
+// noteTapFailure records a grid-tap attach/snapshot failure: it bumps the observable
+// counter and emits a rate-limited log line, so a tap that can no longer read a
+// session's snapshot is never silent (R1.2.6). Safe for concurrent samplers.
+func (d *Daemon) noteTapFailure(id string, err error) {
+	n := d.tapFailures.Add(1)
+	now := time.Now().UnixNano()
+	last := d.tapLastLog.Load()
+	if now-last >= int64(tapLogInterval) && d.tapLastLog.CompareAndSwap(last, now) {
+		log.Printf("skeleton: grid-tap snapshot failed for session %s (%d total): %v", id, n, err)
+	}
 }
 
 // convTailBytes bounds the transcript tail read for conversation-id extraction.

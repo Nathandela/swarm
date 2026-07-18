@@ -31,6 +31,10 @@ const (
 	// reaches the emulator (panic/OOM guard).
 	resizeMin = 1
 	resizeMax = 1000
+	// snapshotChunkMax is the largest snapshot slice carried in one TSnapshot frame
+	// on the chunked shim->daemon hop (mirrors the daemon->client snapshotChunkSize):
+	// a payload of MaxFrame-1 is the biggest wire.WriteFrame accepts.
+	snapshotChunkMax = wire.MaxFrame - 1
 )
 
 // server owns the socket, the emulator/transcript pipeline, and the PTY master
@@ -183,7 +187,13 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if ctrl.Type == shimwire.TypeHello {
 				helloed = true
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
+				// Record whether the daemon advertised snapshot chunking (per-connection),
+				// and advertise the shim's own support in the reply. Both are OPTIONAL hello
+				// fields; a peer that sets neither degrades to the single-frame path (G-D).
+				// cw.chunkSnapshot is written and read only in this read-loop goroutine
+				// (hub.attach reads it), so it never races the attach writer goroutine.
+				cw.chunkSnapshot = ctrl.SnapshotChunking
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -371,6 +381,10 @@ func (h *hub) feed(data []byte) {
 // snapshot then the exit_report and exits, so a late attach still sees a final
 // screen without being left waiting on the drain.
 func (h *hub) attach(cw *connWriter) *subscriber {
+	// Read the per-connection chunking flag in the caller's (serveConn read-loop)
+	// goroutine and hand a copy to the writer goroutine, so the writer never races a
+	// later hello that might rewrite cw.chunkSnapshot.
+	chunk := cw.chunkSnapshot
 	h.mu.Lock()
 	if h.sub != nil {
 		h.sub.closeQueue() // supersede: terminate the prior writer, free h.sub
@@ -387,7 +401,7 @@ func (h *hub) attach(cw *connWriter) *subscriber {
 
 	go func() {
 		defer close(sub.done)
-		if err := cw.writeFrame(wire.TSnapshot, snap); err != nil {
+		if err := cw.sendSnapshot(snap, chunk); err != nil {
 			h.drainQueue(sub)
 			return
 		}
@@ -476,6 +490,37 @@ func (w *connWriter) writeControl(ctrl shimwire.Control) {
 		return
 	}
 	_ = w.writeFrame(wire.TControl, b)
+}
+
+// sendSnapshot writes the attach snapshot to the connection, first (S10 — before any
+// live TDataOut the caller streams afterward). When the peer negotiated chunking it
+// emits a snapshot_info preamble declaring the total length up front, then the
+// snapshot as <= snapshotChunkMax TSnapshot chunk frames (an empty snapshot is the
+// preamble alone, so the reader completes without waiting for a chunk). Otherwise it
+// emits today's single TSnapshot frame — which wire.WriteFrame rejects past MaxFrame-1,
+// so an oversized grid still fails for a non-chunking (old-daemon) peer, no worse than
+// today (G-D). It returns the first write error so the caller can drain the queue.
+func (w *connWriter) sendSnapshot(snap []byte, chunk bool) error {
+	if !chunk {
+		return w.writeFrame(wire.TSnapshot, snap)
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSnapshotInfo, SnapshotLen: len(snap)})
+	if err != nil {
+		return err
+	}
+	if err := w.writeFrame(wire.TControl, body); err != nil {
+		return err
+	}
+	for off := 0; off < len(snap); off += snapshotChunkMax {
+		end := off + snapshotChunkMax
+		if end > len(snap) {
+			end = len(snap)
+		}
+		if err := w.writeFrame(wire.TSnapshot, snap[off:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // exitReport builds the exit_report control from the agent's exit outcome.

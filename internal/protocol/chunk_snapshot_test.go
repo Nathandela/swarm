@@ -143,10 +143,9 @@ func TestReadSnapshot_BoundsAndCorruption(t *testing.T) {
 			_ = wire.WriteFrame(w, wire.TSnapshot, deterministicSnap(chunkMax))
 			_ = wire.WriteFrame(w, wire.TDataOut, []byte("live")) // live frame before the snapshot completes
 		}},
-		{"overshoot / extra chunk", func(w net.Conn) {
-			writePreamble(w, chunkMax) // declares one full chunk...
-			_ = wire.WriteFrame(w, wire.TSnapshot, deterministicSnap(chunkMax))
-			_ = wire.WriteFrame(w, wire.TSnapshot, []byte("extra")) // ...but sends more
+		{"overshoot (chunk exceeds declared length)", func(w net.Conn) {
+			writePreamble(w, 100)                                          // declares 100 bytes...
+			_ = wire.WriteFrame(w, wire.TSnapshot, deterministicSnap(150)) // ...but a chunk crosses that bound
 		}},
 		{"short stream", func(w net.Conn) {
 			writePreamble(w, chunkMax*2)

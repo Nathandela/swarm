@@ -104,16 +104,23 @@ func TestHubAttach_SingleFrameWhenNotNegotiated(t *testing.T) {
 
 	waitFrameCount(t, sink, wire.TSnapshot, 1)
 	sink.mu.Lock()
-	defer sink.mu.Unlock()
+	sawPreamble, snapFrames := false, 0
 	for _, f := range sink.frames {
-		if f.typ == wire.TControl {
+		switch f.typ {
+		case wire.TControl:
 			if c, err := shimwire.Decode(f.payload); err == nil && c.Type == shimwire.TypeSnapshotInfo {
-				t.Fatal("non-negotiated attach sent a snapshot_info preamble; want a single-frame snapshot")
+				sawPreamble = true
 			}
+		case wire.TSnapshot:
+			snapFrames++
 		}
 	}
-	if n := sink.count(wire.TSnapshot); n != 1 {
-		t.Fatalf("non-negotiated attach sent %d TSnapshot frames, want exactly 1", n)
+	sink.mu.Unlock()
+	if sawPreamble {
+		t.Fatal("non-negotiated attach sent a snapshot_info preamble; want a single-frame snapshot")
+	}
+	if snapFrames != 1 {
+		t.Fatalf("non-negotiated attach sent %d TSnapshot frames, want exactly 1", snapFrames)
 	}
 }
 
@@ -158,10 +165,10 @@ func (c *shimClient) snapshotInfo() (shimwire.Control, bool) {
 	return shimwire.Control{}, false
 }
 
-// reassembleChunked concatenates the client's chunk frames and returns them once the
-// declared length has arrived (mirrors the daemon reader), or fails after timeout.
-func (c *shimClient) reassembleChunked(timeout time.Duration) []byte {
-	c.t.Helper()
+// reassembleChunked waits for the snapshot_info preamble, then concatenates the chunk
+// frames and returns them once the declared length has arrived (mirrors the daemon
+// reader). ok is false if no complete chunked snapshot arrived within timeout.
+func (c *shimClient) reassembleChunked(timeout time.Duration) ([]byte, bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if info, ok := c.snapshotInfo(); ok {
@@ -172,13 +179,12 @@ func (c *shimClient) reassembleChunked(timeout time.Duration) []byte {
 				}
 			}
 			if len(data) >= info.SnapshotLen {
-				return data[:info.SnapshotLen]
+				return data[:info.SnapshotLen], true
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	c.t.Fatalf("chunked snapshot did not complete within %s", timeout)
-	return nil
+	return nil, false
 }
 
 // TestShim_SnapshotChunkingNegotiation is the capability matrix at the shim boundary
@@ -216,8 +222,8 @@ func TestShim_SnapshotChunkingNegotiation(t *testing.T) {
 			c.startReader()
 			c.helloChunking(true)
 			c.attach()
-			if _, ok := c.snapshotInfo(); ok {
-				snap = c.reassembleChunked(3 * time.Second)
+			if got, ok := c.reassembleChunked(2 * time.Second); ok {
+				snap = got
 			}
 			_ = c.conn.Close()
 			if len(snap) > wire.MaxFrame-1 {
@@ -248,6 +254,9 @@ func TestShim_SnapshotChunkingNegotiation(t *testing.T) {
 		if n := c.snapshotFrameCount(); n != 0 {
 			t.Fatalf("non-advertising peer received %d TSnapshot frames for an oversized grid; want 0 (single-frame write rejected, degrades as today)", n)
 		}
+		// Kill the agent so shim.Run returns for the cleanup waitRun (the styled agent
+		// idles otherwise).
+		c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 	})
 
 	t.Run("small grid: not-advertised single frame", func(t *testing.T) {

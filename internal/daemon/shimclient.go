@@ -20,7 +20,12 @@ func dialShimHello(sock string) (net.Conn, error) {
 	}
 	_ = conn.SetDeadline(time.Now().Add(helloIO))
 
-	hello, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
+	// Advertise snapshot chunking (an OPTIONAL hello field; WireVersion stays 1) so a
+	// chunking-capable shim chunks its snapshot on this connection — the daemon reader
+	// (protocol.readSnapshot) reassembles it. An old shim ignores the field and sends a
+	// single frame, which this daemon still reads on the single-frame path (G-D). The
+	// signal/confirm paths also send it; it is harmless there (no attach follows).
+	hello, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true})
 	if err != nil {
 		conn.Close()
 		return nil, err

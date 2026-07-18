@@ -161,22 +161,86 @@ func newShimStream(conn net.Conn) (*shimStream, error) {
 	return st, nil
 }
 
-// readSnapshot reads frames until the shim's single TSnapshot arrives.
+var (
+	errDataBeforeSnapshot = errors.New("protocol: shim sent a live frame before the snapshot completed")
+	errSnapshotLen        = errors.New("protocol: shim declared an invalid snapshot length")
+	errSnapshotOvershoot  = errors.New("protocol: shim sent more snapshot bytes than it declared")
+	errDuplicatePreamble  = errors.New("protocol: shim sent a duplicate snapshot preamble")
+)
+
+// readSnapshot reads the shim's snapshot before the live stream. It accepts two
+// on-wire encodings and completes the moment the snapshot is whole — without waiting
+// on a following frame, so an idle session never hangs (R1.2.2):
+//
+//   - CHUNKED (snapshot chunking negotiated at hello): a shimwire snapshot_info
+//     control preamble declares the total length up front, then that many bytes arrive
+//     across one or more TSnapshot chunk frames. Only a shim that advertised chunking
+//     in its hello reply ever sends the preamble, so reassembling on its receipt is
+//     exactly "the daemon reassembles only when the shim's reply advertised support".
+//   - SINGLE-FRAME (old shim, or chunking not negotiated): one bare TSnapshot frame,
+//     exactly today's behavior (R1.1.4 carried forward).
+//
+// A live TDataOut before the snapshot completes violates S10 and is an error. The
+// caller sets a TOTAL read deadline (shimAttachTimeout) covering the preamble and
+// every chunk, so a short or stalled stream fails within a bound (R1.2.4).
 func readSnapshot(conn net.Conn) ([]byte, error) {
 	for {
 		typ, payload, err := wire.ReadFrame(conn)
 		if err != nil {
 			return nil, err
 		}
-		if typ == wire.TSnapshot {
+		switch typ {
+		case wire.TSnapshot:
 			return payload, nil
-		}
-		// Ignore any pre-snapshot control frame; a data frame before the snapshot
-		// would violate the shim's S10 guarantee, so treat it as an error.
-		if typ == wire.TDataOut {
-			return nil, errors.New("protocol: shim sent a live frame before the snapshot")
+		case wire.TDataOut:
+			return nil, errDataBeforeSnapshot
+		case wire.TControl:
+			c, derr := shimwire.Decode(payload)
+			if derr != nil {
+				continue // tolerate a malformed control frame (shimwire contract)
+			}
+			if c.Type == shimwire.TypeSnapshotInfo {
+				return readChunkedSnapshot(conn, c.SnapshotLen)
+			}
+			// ignore any other pre-snapshot control frame
 		}
 	}
+}
+
+// readChunkedSnapshot reassembles a chunked snapshot of EXACTLY n bytes, arriving as
+// TSnapshot chunk frames after the snapshot_info preamble. It bounds n by the same cap
+// the client<->daemon hop uses (maxSnapshotBytes), so a bogus/huge declared length is
+// rejected before any allocation — a hostile shim cannot OOM the daemon (R1.2.1).
+// Overshoot, a live frame before completion, and a duplicate preamble are protocol
+// errors; a short/stalled stream fails via the caller's total read deadline. n==0
+// completes immediately (an empty snapshot never waits for a chunk frame).
+func readChunkedSnapshot(conn net.Conn, n int) ([]byte, error) {
+	if n < 0 || n > maxSnapshotBytes {
+		return nil, errSnapshotLen
+	}
+	buf := make([]byte, 0, n)
+	for len(buf) < n {
+		typ, payload, err := wire.ReadFrame(conn)
+		if err != nil {
+			return nil, err
+		}
+		switch typ {
+		case wire.TSnapshot:
+			if len(buf)+len(payload) > n {
+				return nil, errSnapshotOvershoot
+			}
+			buf = append(buf, payload...)
+		case wire.TDataOut:
+			return nil, errDataBeforeSnapshot
+		case wire.TControl:
+			c, derr := shimwire.Decode(payload)
+			if derr == nil && c.Type == shimwire.TypeSnapshotInfo {
+				return nil, errDuplicatePreamble
+			}
+			// ignore any other control frame interleaved in the chunk stream
+		}
+	}
+	return buf, nil
 }
 
 func (st *shimStream) readLoop() {
