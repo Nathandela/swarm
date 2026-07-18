@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,14 +13,16 @@ import (
 )
 
 // launchModel is the new-session form. Fields are collected in the L-1 order:
-// directory, agent, options..., prompt, worktree. The cwd is free text with "~"
-// expansion; an invalid cwd is refused inline (L-3).
+// directory, name, agent, options..., prompt, worktree. The cwd is free text with
+// "~" expansion; an invalid cwd is refused inline (L-3). The name is an optional
+// label; left empty it defaults to "<agent>-<base cwd>" at submit (P2).
 type launchModel struct {
 	agents   []AgentInfo
 	agentIdx int  // index into agents of the chosen agent
 	detected bool // whether detection has landed (else the picker shows "checking...")
 
 	cwd      string
+	name     string               // optional session label; empty defaults to "<agent>-<base cwd>" at submit (P2)
 	optSpecs []adapter.OptionSpec // the chosen agent's declarative schema
 	options  map[string]string    // option key -> current value
 	prompt   string
@@ -61,6 +64,7 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	// down, so keeping the raw focus index would re-index the focused field and
 	// misroute typed runes/Space (L3/Opus MEDIUM).
 	wasDir := m.isDir()
+	wasName := m.isName()
 	wasAgent := m.isAgent()
 	wasPrompt := m.isPrompt()
 	wasWorktree := m.isWorktree()
@@ -82,14 +86,16 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	}
 
 	// Re-anchor focus onto the same semantic field after the re-index. Directory,
-	// agent, prompt and worktree map to their new indices; an option focus (the field
-	// most likely to have moved or vanished as the list changed beneath it) clamps to
-	// the directory field.
+	// name, agent, prompt and worktree map to their new indices; an option focus (the
+	// field most likely to have moved or vanished as the list changed beneath it)
+	// clamps to the directory field.
 	switch {
 	case wasDir:
 		m.focus = 0
-	case wasAgent:
+	case wasName:
 		m.focus = 1
+	case wasAgent:
+		m.focus = 2
 	case wasPrompt:
 		m.focus = m.promptIndex()
 	case wasWorktree:
@@ -142,19 +148,21 @@ func (m *launchModel) loadAgentOptions() {
 }
 
 // ---------------------------------------------------------------------------
-// Field indexing: directory, agent, [options...], prompt, worktree.
+// Field indexing: directory, name, agent, [options...], prompt, worktree.
 // ---------------------------------------------------------------------------
 
-func (m launchModel) fieldCount() int    { return 4 + len(m.optSpecs) }
+func (m launchModel) fieldCount() int    { return 5 + len(m.optSpecs) }
 func (m launchModel) isDir() bool        { return m.focus == 0 }
-func (m launchModel) isAgent() bool      { return m.focus == 1 }
-func (m launchModel) promptIndex() int   { return 2 + len(m.optSpecs) }
-func (m launchModel) worktreeIndex() int { return 3 + len(m.optSpecs) }
+func (m launchModel) isName() bool       { return m.focus == 1 }
+func (m launchModel) agentIndex() int    { return 2 }
+func (m launchModel) isAgent() bool      { return m.focus == m.agentIndex() }
+func (m launchModel) promptIndex() int   { return 3 + len(m.optSpecs) }
+func (m launchModel) worktreeIndex() int { return 4 + len(m.optSpecs) }
 func (m launchModel) isPrompt() bool     { return m.focus == m.promptIndex() }
 func (m launchModel) isWorktree() bool   { return m.focus == m.worktreeIndex() }
 func (m launchModel) optionFocus() (int, bool) {
-	if m.focus >= 2 && m.focus < 2+len(m.optSpecs) {
-		return m.focus - 2, true
+	if m.focus >= 3 && m.focus < 3+len(m.optSpecs) {
+		return m.focus - 3, true
 	}
 	return 0, false
 }
@@ -197,6 +205,8 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case lm.isDir():
 			lm.cwd = dropLast(lm.cwd)
 			lm.errMsg = ""
+		case lm.isName():
+			lm.name = dropLast(lm.name)
 		case lm.isPrompt():
 			lm.prompt = dropLast(lm.prompt)
 		default:
@@ -218,6 +228,8 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case lm.isDir():
 			lm.cwd += k.Text
 			lm.errMsg = ""
+		case lm.isName():
+			lm.name += k.Text
 		case lm.isPrompt():
 			lm.prompt += k.Text
 		default:
@@ -257,6 +269,8 @@ func (m *launchModel) paste(s string) {
 	case m.isDir():
 		m.cwd += s
 		m.errMsg = ""
+	case m.isName():
+		m.name += s
 	case m.isPrompt():
 		m.prompt += s
 	default:
@@ -291,7 +305,7 @@ func (m *launchModel) cycleAgent(forward bool) {
 		step = -1
 	}
 	m.agentIdx = ((m.agentIdx+step)%n + n) % n
-	m.focus = 1 // stay on the agent field
+	m.focus = m.agentIndex() // stay on the agent field
 	m.loadAgentOptions()
 }
 
@@ -369,9 +383,11 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	for k, v := range lm.options {
 		opts[k] = v
 	}
+	agent := lm.agents[lm.agentIdx].Name
 	cols, rows := launchDims(m.width, m.height)
 	req := protocol.LaunchReq{
-		Agent:         lm.agents[lm.agentIdx].Name,
+		Agent:         agent,
+		Name:          launchName(lm.name, agent, expanded),
 		Cwd:           expanded,
 		Options:       opts,
 		InitialPrompt: lm.prompt,
@@ -381,6 +397,16 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	}
 	cmd := m.enterGeneral()
 	return m, tea.Batch(launchCmd(m.client, req), cmd)
+}
+
+// launchName resolves the submitted session label: the user's typed name (trimmed)
+// when present, else the default "<agent>-<base cwd>" so every session gets a
+// disambiguating label (P2). Composed at submit — the empty field never travels.
+func launchName(typed, agent, cwd string) string {
+	if n := strings.TrimSpace(typed); n != "" {
+		return n
+	}
+	return agent + "-" + filepath.Base(cwd)
 }
 
 // launchDims resolves the session terminal size from the current UI size, falling
@@ -399,7 +425,7 @@ func launchDims(w, h int) (int, int) {
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 	return func() tea.Msg {
 		id, err := c.Launch(req)
-		return launchResultMsg{id: id, agent: req.Agent, err: err}
+		return launchResultMsg{id: id, agent: req.Agent, name: req.Name, err: err}
 	}
 }
 
@@ -437,9 +463,10 @@ func (m launchModel) view() string {
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
 	b.WriteString(m.fieldLine("directory", m.dirValue(), m.isDir()))
+	b.WriteString(m.fieldLine("name", m.nameValue(), m.isName()))
 	b.WriteString(m.fieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
-		focused := m.focus == 2+i
+		focused := m.focus == 3+i
 		b.WriteString(m.fieldLine(spec.Label, m.optionValue(spec, focused), focused))
 	}
 	b.WriteString(m.fieldLine("prompt", m.promptValue(), m.isPrompt()))
@@ -574,6 +601,17 @@ func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
 		}
 		return v
 	}
+}
+
+func (m launchModel) nameValue() string {
+	v := m.name
+	if m.isName() {
+		return v + "█" // cursor on the focused text field
+	}
+	if v == "" {
+		return styleDim.Render("(optional · defaults to agent-dir)")
+	}
+	return v
 }
 
 func (m launchModel) promptValue() string {

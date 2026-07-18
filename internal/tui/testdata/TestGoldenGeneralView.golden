@@ -1,16 +1,16 @@
 swarm                                                                                            3 running · 1 needs you
 
   NEEDS INPUT
-▌ ● claude   ~/Code/quanthome-api    needs input      <t>   Permission: run db migration?
+▌ ● db-migration          ~/Code/quanthome-api    needs input      <t>   Permission: run db migration?
 
   WORKING
-  ◐ codex    ~/Code/agents-tracker   working          <t>    Writing adapter fixture tests
+  ◐ codex                 ~/Code/agents-tracker   working          <t>    Writing adapter fixture tests
 
   READY FOR REVIEW
-  ✓ claude   ~/Code/mcp-soml         ready for review <t>    Turn finished, review the diff
+  ✓ soml-review           ~/Code/mcp-soml         ready for review <t>    Turn finished, review the diff
 
   COMPLETED
-  ─ gemini   ~/Code/scratch          completed        <t>    exit 0
+  ─ gemini                ~/Code/scratch          completed        <t>    exit 0
 
 
 

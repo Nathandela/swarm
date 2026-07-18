@@ -84,6 +84,7 @@ alongside the group.
 | `endpoint_id`   | string          | the receiving connection's endpoint id                        |
 | `id`            | string          | namespaced session id `<endpoint_id>/<local>`                 |
 | `agent`         | string          | agent type (e.g. `claude`, `codex`)                           |
+| `name`          | string          | user-provided session label; empty/absent falls back to `agent` (P2) |
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
 | `group`         | `status.Group`  | the daemon-computed display group (E6.9)                      |
@@ -103,6 +104,7 @@ and unrelated secrets are dropped.
 | JSON key         | Go type             | Meaning                                                    |
 | ---------------- | ------------------- | ---------------------------------------------------------- |
 | `agent`          | string              | agent type to launch                                       |
+| `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
 | `cwd`            | string              | working directory (must exist and be a directory)          |
 | `options`        | map[string]string   | declarative adapter options (each value length-capped)     |
 | `env`            | []string            | `KEY=VALUE` launch env (allowlist-filtered server-side)    |

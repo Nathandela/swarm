@@ -80,6 +80,7 @@ type repaintMsg struct{}
 type launchResultMsg struct {
 	id    string // namespaced id of the new session on success ("" if the producer omits it)
 	agent string // the new session's agent, for the attach chrome label
+	name  string // the new session's label (P2); carried into the auto-attach chrome hint
 	err   error
 }
 
@@ -285,7 +286,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// freshly launched, so read-write). A result with no id (a producer that does
 		// not carry it) stays on the board — the pre-stc behavior.
 		if msg.id != "" {
-			s := protocol.SessionView{ID: msg.id, Agent: msg.agent}
+			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
 			if m.attachRunner != nil {
 				return m, runAttach(m.attachRunner, s, false)
 			}
@@ -700,6 +701,17 @@ func statusToken(g status.Group) string {
 
 // padRight pads s with spaces to a minimum display width; it never truncates, so
 // callers can rely on the original text surviving intact.
+// displayName is the identity shown for a session: its user-provided label when set,
+// else the bare agent name. The fallback keeps the identity column non-blank when a
+// session carries no name — an older, name-unaware daemon, or one launched before the
+// field existed (P2 / version-skew safety).
+func displayName(s protocol.SessionView) string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Agent
+}
+
 func padRight(s string, n int) string {
 	if w := lipgloss.Width(s); w < n {
 		return s + strings.Repeat(" ", n-w)

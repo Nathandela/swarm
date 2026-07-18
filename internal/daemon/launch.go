@@ -122,6 +122,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	m := persist.Meta{
 		ID:            id,
 		AgentType:     spec.AgentType,
+		Name:          spec.Name, // user-provided label (P2); "" falls back to the agent name at display
 		Cwd:           spec.Cwd,
 		LaunchOptions: spec.Options,
 		Env:           persist.FilterEnv(spec.ClientEnv),

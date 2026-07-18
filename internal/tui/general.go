@@ -23,7 +23,10 @@ var groupOrder = []status.Group{
 
 // Row column widths for the general view (display cells).
 const (
-	colAgent   = 9
+	// colName is the identity column: the session name, or the agent name when a
+	// session carries no name (P2). Wide enough for the default "<agent>-<base cwd>"
+	// label; longer names are clamped so the columns stay aligned.
+	colName    = 22
 	colCwd     = 24
 	colStatus  = 17
 	colElapsed = 6
@@ -186,7 +189,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 		// where the former tea.Printf (which writes to scrollback above the program)
 		// was a no-op. It auto-expires after bannerDuration; the tick re-emits the
 		// frame at expiry so the banner disappears on time.
-		m.bannerText = s.Agent + " " + statusToken(s.Group)
+		m.bannerText = displayName(s) + " " + statusToken(s.Group)
 		m.bannerExpiry = time.Now().Add(bannerDuration)
 		return bannerTick()
 	}
@@ -391,6 +394,7 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 	}
 	req := protocol.LaunchReq{
 		Agent:   s.Agent,
+		Name:    s.Name, // a resumed session keeps its label (P2); "" degrades to the agent name
 		Cwd:     s.Cwd,
 		Options: map[string]string{protocol.OptionResumeFrom: s.ID},
 		Env:     os.Environ(),
@@ -399,9 +403,9 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 	}
 	return func() tea.Msg {
 		id, err := c.Launch(req)
-		// Carry the new session id + agent so a successful resume auto-attaches into it
-		// (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
-		return launchResultMsg{id: id, agent: s.Agent, err: err}
+		// Carry the new session id + agent + name so a successful resume auto-attaches into
+		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
+		return launchResultMsg{id: id, agent: s.Agent, name: s.Name, err: err}
 	}
 }
 
@@ -476,7 +480,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	gc := groupColor(g)
 	icon := lipgloss.NewStyle().Foreground(gc).Render(groupIcon(g))
 	fields := icon + " " +
-		styleAgent.Render(padRight(s.Agent, colAgent)) +
+		styleAgent.Render(padRight(clampCells(displayName(s), colName-1), colName)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		lipgloss.NewStyle().Foreground(gc).Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)

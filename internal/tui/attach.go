@@ -82,7 +82,7 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			// row — so it can no longer overdraw snapshot/agent content the way the v0.2
 			// top-row banner did. The output pump self-heals full-screen damage.
 			Chrome: true,
-			Name:   s.Agent,
+			Name:   displayName(s), // P2: identify the session by its label (falls back to the agent)
 		})
 		return err
 	}

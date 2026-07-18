@@ -1,11 +1,11 @@
 swarm · new session
 
 ▌ directory   <cwd>█
+  name        (optional · defaults to agent-dir)
   agent       ◂ ● claude   ○ codex (upgrade codex to >= 1.2.0)   ✕ gemini (install: npm i -g @google/gemini-cli) ▸
   Model       opus ▾
   prompt      (optional)
   worktree    [ ] space · isolate in a git worktree
-
 
 
 

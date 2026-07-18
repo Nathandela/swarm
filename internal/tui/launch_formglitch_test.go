@@ -18,7 +18,8 @@ func openCodexForm(t *testing.T) tea.Model {
 	if v := view(m); !strings.Contains(v, "new session") {
 		t.Fatalf("expected the launch form after `n`, got:\n%s", v)
 	}
-	m = send(m, keyDown) // directory -> agent
+	m = send(m, keyDown) // directory -> name
+	m = send(m, keyDown) // name -> agent
 	return m
 }
 

@@ -104,6 +104,10 @@ type LaunchSpec struct {
 	ClientEnv  []string
 	Cols, Rows int
 	Options    map[string]string
+	// Name is the optional user-provided session label. The daemon only stamps it
+	// into the session meta; an empty name falls back to the agent name at display
+	// time (P2 / bd agents-tracker-4e2).
+	Name string
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string

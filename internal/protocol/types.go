@@ -72,6 +72,7 @@ type SessionView struct {
 	EndpointID   string        `json:"endpoint_id"`
 	ID           string        `json:"id"` // namespaced: <endpoint_id>/<local>
 	Agent        string        `json:"agent"`
+	Name         string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
 	Cwd          string        `json:"cwd"`
 	Status       status.Status `json:"status"` // the three raw dims
 	Group        status.Group  `json:"group"`  // precomputed server-side (E6.9)
@@ -84,6 +85,7 @@ type SessionView struct {
 // re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
 	Agent         string            `json:"agent"`
+	Name          string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
 	Cwd           string            `json:"cwd"`
 	Options       map[string]string `json:"options"`
 	Env           []string          `json:"env"`

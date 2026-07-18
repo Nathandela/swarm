@@ -1,0 +1,60 @@
+=== v0.4 P2 session-naming RED evidence (bd agents-tracker-4e2) ===
+Captured: 2026-07-18T11:59:46Z on darwin/amd64
+
+Failing-first across the layers touched. Go's failing-first RED is 'undefined-only': the
+new tests reference production symbols that do not yet exist (LaunchReq.Name, SessionView.Name,
+persist.Meta.Name, daemon.LaunchSpec.Name, launchModel.name/isName(), displayName,
+launchResultMsg.name), so each package fails to compile — no assertion logic runs until the
+implementer defines them.
+
+### internal/protocol
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/naming_test.go:20:97: unknown field Name in struct literal of type LaunchReq
+internal/protocol/naming_test.go:29:37: got.Launch.Name undefined (type *LaunchReq has no field or method Name)
+internal/protocol/naming_test.go:36:101: unknown field Name in struct literal of type SessionView
+internal/protocol/naming_test.go:45:47: got.Sessions[0].Name undefined (type SessionView has no field or method Name)
+internal/protocol/naming_test.go:59:47: got.Sessions[0].Name undefined (type SessionView has no field or method Name)
+internal/protocol/naming_test.go:72:6: req.Name undefined (type LaunchReq has no field or method Name)
+internal/protocol/naming_test.go:80:18: specs[0].Name undefined (type daemon.LaunchSpec has no field or method Name)
+internal/protocol/naming_test.go:99:47: unknown field Name in struct literal of type persist.Meta
+internal/protocol/naming_test.go:116:19: byLocal["s1"].Name undefined (type SessionView has no field or method Name)
+internal/protocol/naming_test.go:117:68: byLocal["s1"].Name undefined (type SessionView has no field or method Name)
+internal/protocol/naming_test.go:117:68: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL
+
+### internal/persist
+# github.com/Nathandela/swarm/internal/persist [github.com/Nathandela/swarm/internal/persist.test]
+internal/persist/naming_test.go:20:4: m.Name undefined (type Meta has no field or method Name)
+internal/persist/naming_test.go:41:9: got.Name undefined (type Meta has no field or method Name)
+internal/persist/naming_test.go:42:51: got.Name undefined (type Meta has no field or method Name)
+internal/persist/naming_test.go:52:4: m.Name undefined (type Meta has no field or method Name)
+internal/persist/naming_test.go:78:9: got.Name undefined (type Meta has no field or method Name)
+internal/persist/naming_test.go:79:60: got.Name undefined (type Meta has no field or method Name)
+FAIL	github.com/Nathandela/swarm/internal/persist [build failed]
+FAIL
+
+### internal/daemon
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/naming_test.go:20:7: spec.Name undefined (type LaunchSpec has no field or method Name)
+internal/daemon/naming_test.go:33:14: reserved.Name undefined (type persist.Meta has no field or method Name)
+internal/daemon/naming_test.go:34:83: reserved.Name undefined (type persist.Meta has no field or method Name)
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL
+
+### internal/tui
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/naming_test.go:42:18: launchOf(m).isName undefined (type launchModel has no field or method isName)
+internal/tui/naming_test.go:46:24: launchOf(m).name undefined (type launchModel has no field or method name)
+internal/tui/naming_test.go:50:24: launchOf(m).name undefined (type launchModel has no field or method name)
+internal/tui/naming_test.go:54:24: launchOf(m).name undefined (type launchModel has no field or method name)
+internal/tui/naming_test.go:79:13: reqs[0].Name undefined (type protocol.LaunchReq has no field or method Name)
+internal/tui/naming_test.go:80:50: reqs[0].Name undefined (type protocol.LaunchReq has no field or method Name)
+internal/tui/naming_test.go:104:13: reqs[0].Name undefined (type protocol.LaunchReq has no field or method Name)
+internal/tui/naming_test.go:105:56: reqs[0].Name undefined (type protocol.LaunchReq has no field or method Name)
+internal/tui/naming_test.go:112:12: undefined: displayName
+internal/tui/naming_test.go:112:62: unknown field Name in struct literal of type protocol.SessionView
+internal/tui/naming_test.go:112:62: too many errors
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
