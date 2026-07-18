@@ -1,0 +1,2 @@
+[2026-07-18T14:57:24.533462+02:00] ARRIVAL(mcp) pid=33684 delay=5s params={"name":"approval_prompt","arguments":{"tool_name":"Bash","input":{"command":"kill -0 99999","description":"Check if process 99999 exists"},"tool_use_id":"toolu_01GxBsRvXQp8efGfwoxvwnNp"},"_meta":{"claudecode/toolUseId":"toolu_01GxBsRvXQp8efGfwoxvwnNp","progressToken":2}}
+[2026-07-18T14:57:29.53548+02:00] DEPARTURE(mcp) pid=33684 actual_wait=5.00186775s
