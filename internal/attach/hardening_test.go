@@ -200,3 +200,40 @@ func TestPassthrough_PanicWithChromeResetsRegion(t *testing.T) {
 		t.Fatalf("panic with chrome engaged must best-effort reset the region; out=%q", term.outBytes())
 	}
 }
+
+// codex re-confirm blocker — the RESIZE path must obey the same ground-state gate as
+// the frame and heal paths: a resize landing while the agent's stream is mid escape
+// sequence must defer its region/hint bytes to the next safe boundary, never splice
+// them into the sequence.
+func TestPassthrough_ChromeResizeDefersMidSequence(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession(mustSnap(t, "GRID"))
+	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, Name: "claude"})
+
+	waitOut(t, term, func(b []byte) bool { return bytes.Count(b, []byte("\x1b[1;23r")) == 1 })
+
+	// The agent's frame ends mid CSI (an incomplete SGR).
+	sess.pushFrame([]byte("x\x1b[3"))
+	// A resize arrives while the sequence is open. The PTY resize itself may proceed
+	// (it writes no terminal bytes) — wait for it so the winCh branch has run.
+	term.setSize(120, 40)
+	eventually(t, func() bool {
+		for _, r := range sess.resizeCalls() {
+			if r == [2]int{120, 39} {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Only now does the completing half arrive.
+	sess.pushFrame([]byte("8;5;42mtail"))
+
+	out := waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("\x1b[1;39r")) })
+	if !bytes.Contains(out, []byte("\x1b[38;5;42m")) {
+		t.Fatalf("resize re-establishment must not split the agent's CSI; \\x1b[38;5;42m must stay contiguous. out=%q", out)
+	}
+
+	sess.endSession()
+	_ = waitResult(t, ch)
+}

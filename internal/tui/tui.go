@@ -436,7 +436,9 @@ func (m rootModel) composeBoard(body, status string) string {
 	// status bar is the last-resort row (kept whenever height >= 1); the body fills what
 	// remains above it.
 	tail := []string{bar}
-	if noticeRow != "" && m.height >= 2 {
+	// The notice needs height >= 3 so it never evicts the entire body: below that the
+	// notice is dropped FIRST (policy: notice, then body; the bar is the last resort).
+	if noticeRow != "" && m.height >= 3 {
 		tail = []string{noticeRow, bar}
 	}
 	target := m.height - len(tail)

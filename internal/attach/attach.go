@@ -315,6 +315,11 @@ func Run(cfg Config) (reason Reason, err error) {
 	// pendingReassert remembers that a re-assert is OWED (damage was seen) but could not be
 	// injected because the parser was mid-sequence; the next safe boundary flushes it.
 	var pendingReassert bool
+	// pendingResize remembers that a resize's region/hint bytes are OWED but the parser was
+	// mid-sequence when the resize arrived; the next safe boundary applies them at the
+	// CURRENT size (the same ground-state gate as the frame and heal paths — a resize must
+	// never splice bytes into the agent's escape sequence either).
+	var pendingResize bool
 	// healCh delivers the trailing-heal timer's fire into the main loop (the sole writer to
 	// out); the timer goroutine only nudges, never writes. armHeal (re)arms the one-shot
 	// after each frame batch so damage in the LAST frame of a burst self-heals with no
@@ -345,6 +350,21 @@ func Run(cfg Config) (reason Reason, err error) {
 		lastAssert = time.Now()
 		pendingReassert = false
 	}
+	// applyResizeChrome emits the resize's chrome bytes for the CURRENT size — establish at
+	// the new dimensions, or release the region when the terminal shrank below the reserve
+	// threshold (only if chrome had actually ENGAGED, keeping never-engaged small terminals
+	// byte-identical to Chrome:false). The caller has verified the parser is in GROUND.
+	applyResizeChrome := func() {
+		if chromeActive(curRows) {
+			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+			chromeEngaged = true
+			lastAssert = time.Now()
+		} else if chromeEngaged {
+			writeAll(out, []byte("\x1b[r"))
+			chromeEngaged = false
+		}
+		pendingResize = false
+	}
 
 	for {
 		select {
@@ -354,6 +374,12 @@ func Run(cfg Config) (reason Reason, err error) {
 			}
 			writeAll(out, f)
 			parser.feedAll(f)
+			// An owed resize (one that arrived mid-sequence) is applied first, at the current
+			// size, once the boundary is safe — outside the chromeActive gate below because
+			// the release case (terminal shrank under the threshold) must drain too.
+			if pendingResize && parser.inGround() {
+				applyResizeChrome()
+			}
 			// The agent's own output can damage the reserved row — a full reset (ESC c), an
 			// ED2/ED0 clear, an alt-screen swap, or a bare CSI r region reset. Re-assert
 			// region+hint after the frame: on a damage signature (owed via pendingReassert)
@@ -371,15 +397,17 @@ func Run(cfg Config) (reason Reason, err error) {
 				armHeal()
 			}
 		case <-healCh:
-			// The trailing heal fired: re-assert if chrome is engaged and the parser is at a
-			// safe boundary; otherwise re-arm and try again next interval (never inject mid
-			// escape sequence).
-			if chromeActive(curRows) {
-				if parser.inGround() {
+			// The trailing heal fired: apply an owed resize first, then re-assert if chrome
+			// is engaged — both only at a safe boundary (parser in GROUND); otherwise re-arm
+			// and try again next interval (never inject mid escape sequence).
+			if parser.inGround() {
+				if pendingResize {
+					applyResizeChrome()
+				} else if chromeActive(curRows) {
 					reassertChrome()
-				} else {
-					armHeal()
 				}
+			} else if pendingResize || chromeActive(curRows) {
+				armHeal()
 			}
 		case <-detachCh:
 			return finish(ReasonDetached)
@@ -393,13 +421,14 @@ func Run(cfg Config) (reason Reason, err error) {
 			// terminal emits nothing, staying byte-identical to Chrome:false).
 			if c, r, e := cfg.Term.Size(); e == nil {
 				curCols, curRows = c, r
-				if chromeActive(r) {
-					writeAll(out, chromeHint(cfg.Name, detachKey, c, r))
-					chromeEngaged = true
-					lastAssert = time.Now()
-				} else if chromeEngaged {
-					writeAll(out, []byte("\x1b[r"))
-					chromeEngaged = false
+				if parser.inGround() {
+					applyResizeChrome()
+				} else {
+					// Mid-sequence: defer the bytes to the next safe boundary (the PTY was
+					// already resized by the pump; only the terminal writes wait). armHeal
+					// guarantees a boundary check even if the stream goes silent.
+					pendingResize = true
+					armHeal()
 				}
 			}
 		}

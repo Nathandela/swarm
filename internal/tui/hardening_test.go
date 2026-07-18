@@ -87,3 +87,17 @@ func TestComposeBoard_StatusBarWinsAtHeightOne(t *testing.T) {
 }
 
 func lineCount(s string) int { return len(strings.Split(s, "\n")) }
+
+// codex re-confirm finding — at height 2 the notice must be dropped FIRST (policy:
+// notice, then body, bar last-resort), so the user sees a body row + the bar, not a
+// notice that evicts the entire body.
+func TestComposeBoard_Height2DropsNoticeNotBody(t *testing.T) {
+	m := rootModel{width: 40, height: 2, daemonVersion: "0.1.0", clientVersion: "0.2.0"}
+	got := m.composeBoard("bodyline", "status keys")
+	if strings.Contains(got, "daemon") {
+		t.Fatalf("height 2 must drop the skew notice before the body; got %q", got)
+	}
+	if !strings.Contains(got, "bodyline") || !strings.Contains(got, "status keys") {
+		t.Fatalf("height 2 must keep a body row and the status bar; got %q", got)
+	}
+}
