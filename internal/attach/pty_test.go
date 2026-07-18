@@ -123,7 +123,7 @@ func waitRaw(t *testing.T, fd uintptr, want bool) {
 	t.Fatalf("terminal raw=%v not reached within 3s", want)
 }
 
-// E8.2 — a normal detach (the user presses Ctrl+\) restores the terminal.
+// E8.2 — a normal detach (the user presses Ctrl+q) restores the terminal.
 func TestPTY_RestoreOnNormalDetach(t *testing.T) {
 	ptmx, tty, cmd := spawnPTYHelper(t, "detach")
 

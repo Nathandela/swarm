@@ -105,7 +105,7 @@ Derived view groups:
 ### Attach (A)
 
 - **A-1** (Event) WHEN the user attaches, the TUI SHALL enter raw mode (IXON off) full-screen passthrough: every keystroke forwarded except the detach key; ANSI output rendered untouched (alternate screen, colors, cursor control — N-6).
-- **A-2** (Ubiquitous) The detach key SHALL default to `Ctrl+\` (configurable; Ctrl+Q rejected: XON collision and CLI conflicts), returning to the general view while the session continues.
+- **A-2** (Ubiquitous) The detach key SHALL default to `Ctrl+q` (configurable), returning to the general view while the session continues. (Revised from `Ctrl+\` per ADR-006: `Ctrl+\` is near-untypeable on Swiss/QWERTZ/AZERTY layouts; `Ctrl+q` is layout-friendly and, since raw mode clears IXON per A-1, its XON byte carries no flow-control collision.)
 - **A-3** (Event) WHEN the controlling client's terminal resizes, the daemon SHALL propagate the size to the session PTY (resize authority follows the attach lease, P-5).
 - **A-4** (Event) WHEN attaching, the client SHALL receive a **serialized grid snapshot** (current emulated screen, both buffers, cursor, modes) followed by the live stream — never raw historical bytes, never a blank screen.
 - **A-5** (Ubiquitous) Attach chrome SHALL be at most one thin line (session name + detach hint), toggleable off.
@@ -217,7 +217,7 @@ sequenceDiagram
   U->>T: keystrokes (raw mode)
   T->>D: input frames (lease id checked)
   D->>S: write PTY
-  U->>T: Ctrl+\
+  U->>T: Ctrl+q
   T->>D: detach — lease released
   Note over S,A: session continues under shim
 ```
@@ -233,7 +233,7 @@ sequenceDiagram
 | 5 | Codex session running | Turn lifecycle event fires | Status from typed event, not parsing | T-2 |
 | 6 | Any session, no typed signal | CLI idle at prompt | Grid heuristic flags idle; staleness guard prevents false working | T-3, T-4 |
 | 7 | Session selected | Enter | Grid snapshot painted instantly, typing reaches agent | A-1, A-4, P-5 |
-| 8 | Attached | Ctrl+\ | Back to general view; session continues | A-2 |
+| 8 | Attached | Ctrl+q | Back to general view; session continues | A-2 |
 | 9 | Attached | Terminal resized | Agent reflows (lease holds resize authority) | A-3, P-5 |
 | 10 | Sessions running | Daemon killed -9, restarted | Shims kept agents alive; daemon reconnects; nothing lost | D-4, D-5 |
 | 11 | Sessions running | `brew upgrade swarm` + daemon restart | Same as 10 — upgrade is safe and says so | D-5, D-8 |

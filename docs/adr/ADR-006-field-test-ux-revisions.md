@@ -64,6 +64,12 @@ the spec.
   supported agent CLIs).
 - Alt-screen hides the board from terminal scrollback; scrollback of agent
   output remains available inside sessions via the transcript.
+- The attach chrome bar is painted once at attach time, not composited on every
+  frame, so a full-screen agent (e.g. Claude Code's own TUI) that repaints the
+  whole terminal can overdraw it. A truly persistent overlay would require
+  client-side compositing of each agent frame, which the raw-passthrough latency
+  decision (ADR-002) rules out for v1.0; the detach key stays in effect regardless
+  of whether its hint is currently visible.
 
 ## Alternatives Considered
 

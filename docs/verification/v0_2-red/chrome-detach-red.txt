@@ -1,0 +1,27 @@
+=== TDD RED evidence: Ctrl+q detach key (bkn) + full-screen board/status bar (qes) ===
+Captured: 2026-07-18T07:44:19Z
+State: DefaultDetachKey still 0x1c; View has no alt-screen / anchored status bar.
+
+### go test ./internal/attach/ -run 'DetachKey|ChromeLineNamesCtrlQ' -count=1
+--- expect: FAIL (default key is 0x1c / label Ctrl+backslash) ---
+--- FAIL: TestDefaultDetachKeyIsCtrlQ (0.00s)
+    detachkey_test.go:15: DefaultDetachKey = 0x1c, want 0x11 (Ctrl+q, ADR-006)
+--- FAIL: TestChromeLineNamesCtrlQ (0.00s)
+    detachkey_test.go:27: chrome line must name Ctrl+Q as the detach key; got "\x1b7\x1b[1;1H[ claude  Ctrl+\\ to detach ]\x1b[K\x1b8"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/attach	0.754s
+FAIL
+
+### go test ./internal/tui/ -run 'View_UsesAltScreen|StatusBar_' -count=1
+--- expect: FAIL (no alt-screen, footer not anchored to window height) ---
+--- FAIL: TestView_UsesAltScreen (0.01s)
+    statusbar_test.go:16: the board must run in the alternate screen (ADR-006 full-screen board)
+--- FAIL: TestStatusBar_AnchoredOnGeneral (0.00s)
+    statusbar_test.go:27: full-screen view must be 40 rows tall, got 6
+--- FAIL: TestStatusBar_AnchoredOnLaunch (0.00s)
+    statusbar_test.go:41: launch form must be 40 rows tall, got 8
+--- FAIL: TestStatusBar_ConfirmContext (0.00s)
+    statusbar_test.go:55: confirm status bar must show y confirm / n cancel, got last line "  ↑↓ navigate   ⏎ attach   n new   ctrl+x kill   esc quit"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.792s
+FAIL

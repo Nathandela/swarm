@@ -407,7 +407,8 @@ func (m launchModel) view() string {
 	if m.errMsg != "" {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(colNeedsInput).Render(m.errMsg) + "\n\n")
 	}
-	b.WriteString("  " + styleDim.Render(m.hint()))
+	// The contextual field hint is promoted to the router's persistent bottom bar
+	// (composeBoard uses m.hint()), so it is no longer rendered inline here.
 	return b.String()
 }
 

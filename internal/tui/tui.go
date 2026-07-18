@@ -293,18 +293,54 @@ func (m rootModel) View() tea.View {
 	var content string
 	switch m.screen {
 	case screenLaunch:
-		content = m.launch.view()
+		content = m.composeBoard(m.launch.view(), m.launch.hint())
 	case screenAttach:
+		// The attach placeholder keeps its own minimal body; the real passthrough
+		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
 		content = m.attach.view()
 	default:
-		content = m.general.view()
+		content = m.composeBoard(m.general.view(), m.generalStatus())
 	}
 	// A trailing nonce of reset-SGR sequences makes each repaint's content distinct
 	// so the renderer re-emits the frame (see repaintMsg). It is a no-op for the
 	// terminal and is stripped by every ANSI-stripping reader, so it never reaches
 	// the visible screen or the golden files.
 	content += strings.Repeat("\x1b[m", m.repaintN%8+1)
-	return tea.NewView(content)
+	// The board is a full-screen alternate-screen app (ADR-006): it stays off the
+	// terminal scrollback and gives the status bar a fixed bottom row. In
+	// charm.land/bubbletea/v2 the alternate screen is requested through the View
+	// (there is no WithAltScreen program option), so it is set here, not in cmd.
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+// generalStatus is the context-key line for the general board — or, during a pending
+// kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
+// (general.view) to the persistent bottom bar (A-5, ADR-006).
+func (m rootModel) generalStatus() string {
+	if m.general.confirm {
+		return "y confirm   n cancel"
+	}
+	return "↑↓ navigate   ⏎ attach   n new   ctrl+x kill   esc quit"
+}
+
+// composeBoard anchors a one-line status bar on the bottom row of a full-screen
+// board: the body fills the rows above it — padded with blank rows, or clipped if it
+// would overflow — and the dim bar occupies the final row. Before the first
+// WindowSizeMsg (height unknown) the bar simply follows the body.
+func (m rootModel) composeBoard(body, status string) string {
+	bar := "  " + styleDim.Render(status)
+	if m.height <= 0 {
+		return body + "\n" + bar
+	}
+	lines := strings.Split(body, "\n")
+	if target := m.height - 1; len(lines) > target {
+		lines = lines[:target]
+	} else {
+		lines = append(lines, make([]string, target-len(lines))...)
+	}
+	return strings.Join(lines, "\n") + "\n" + bar
 }
 
 // enterGeneral switches to the general view and restarts the repaint timer if it

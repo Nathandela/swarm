@@ -64,7 +64,7 @@
 | ID | Requirement (short) | Coverage |
 |---|---|---|
 | A-1 | Attach = raw mode (IXON off), full passthrough, ANSI untouched | `attach/passthrough_test.go:TestPassthrough_KeystrokesForwardedToSession`, `attach/pty_test.go:TestPTY_IXONOffWhileRaw` |
-| A-2 | Detach key defaults to Ctrl+\\, configurable | `attach/passthrough_test.go:TestPassthrough_DetachKeyDetachesAndIsNotForwarded`, `TestPassthrough_ConfigurableDetachKey` |
+| A-2 | Detach key defaults to Ctrl+q (ADR-006; was Ctrl+\\ pre-v0.2), configurable | `attach/passthrough_test.go:TestPassthrough_DetachKeyDetachesAndIsNotForwarded`, `TestPassthrough_ConfigurableDetachKey` |
 | A-3 | Resize propagates to PTY, following the attach lease | `attach/passthrough_test.go:TestPassthrough_ResizePropagatesCurrentSize` |
 | A-4 | Attach delivers a serialized grid snapshot then the live stream — never raw history, never blank | `attach/passthrough_test.go:TestPassthrough_SnapshotPaintedBeforeLiveFrames`, `protocol/ordering_test.go:TestOrdering_ExactlyOneSnapshotPrecedesLiveFramesRaw`, `TestOrdering_SnapshotDeliveredThroughAttachmentAPI`, `shim/socket_test.go:TestContinuity_SnapshotThenStream_Boundary` |
 | A-5 | Chrome at most one thin line, toggleable off | `attach/passthrough_test.go:TestPassthrough_ChromeToggle` |

@@ -325,7 +325,7 @@ stateDiagram-v2
   </ul></div></details>
   <details><summary>A — Attach <span class="count">5 reqs</span></summary><div><ul>
     <li><b>A-1</b> Raw mode (IXON off) full-screen passthrough; every key forwarded except detach.</li>
-    <li><b>A-2</b> Ctrl+\ detaches (configurable; Ctrl+Q rejected — XON collision); session continues.</li>
+    <li><b>A-2</b> Ctrl+q detaches (configurable; layout-friendly, ADR-006); session continues.</li>
     <li><b>A-3</b> Controlling client's resize propagates to the session PTY (lease authority).</li>
     <li><b>A-4</b> Attach paints a serialized VT-grid snapshot, then the live stream — never raw byte replay, never blank.</li>
     <li><b>A-5</b> Chrome ≤ one thin line, toggleable off.</li>

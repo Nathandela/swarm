@@ -94,7 +94,7 @@ func TestPassthrough_KeystrokesForwardedToSession(t *testing.T) {
 	_ = waitResult(t, ch)
 }
 
-// E8.2 / A-2 — the detach key (default Ctrl+\ = 0x1c) detaches: Run returns
+// E8.2 / A-2 — the detach key (default Ctrl+q = 0x11) detaches: Run returns
 // ReasonDetached, the key is NOT forwarded to the session, and the terminal is
 // restored.
 func TestPassthrough_DetachKeyDetachesAndIsNotForwarded(t *testing.T) {
@@ -105,7 +105,7 @@ func TestPassthrough_DetachKeyDetachesAndIsNotForwarded(t *testing.T) {
 	term.feed([]byte("ab"))
 	eventually(t, func() bool { return bytes.Equal(sess.inputBytes(), []byte("ab")) })
 
-	term.feed([]byte{DefaultDetachKey}) // Ctrl+\
+	term.feed([]byte{DefaultDetachKey}) // Ctrl+q
 
 	res := waitResult(t, ch)
 	if res.reason != ReasonDetached {

@@ -58,7 +58,7 @@ type Session interface {
 type Config struct {
 	Term      TermControl
 	Session   Session
-	DetachKey byte   // default DefaultDetachKey (0x1c, Ctrl+\) when zero
+	DetachKey byte   // default DefaultDetachKey (0x11, Ctrl+q) when zero
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
 	Chrome    bool   // show the one-line chrome (name + detach hint) (A-5)
 	Name      string // session label rendered in the chrome line
@@ -74,8 +74,11 @@ const (
 	ReasonError                    // a fault was recovered; the terminal was still restored
 )
 
-// DefaultDetachKey is Ctrl+\ (0x1c) — the FS (file separator) control byte.
-const DefaultDetachKey = 0x1c
+// DefaultDetachKey is Ctrl+q (0x11) — the DC1 control byte. It is layout-friendly
+// (the Q position is identical on US/Swiss/QWERTZ/AZERTY, unlike the near-untypeable
+// Ctrl+\), and although 0x11 is XON, raw mode clears IXON (A-1) so it is delivered as
+// a plain byte with no flow-control collision (ADR-006).
+const DefaultDetachKey = 0x11
 
 // inputBufSize bounds one raw read of keystrokes. A single keypress arrives as a
 // short read well under this; the size only caps a paste burst per read.
@@ -234,7 +237,7 @@ func chromeLine(name string, detachKey byte) []byte {
 	return []byte(fmt.Sprintf("\x1b7\x1b[1;1H[ %s  %s to detach ]\x1b[K\x1b8", name, keyLabel(detachKey)))
 }
 
-// keyLabel renders a control byte as a "Ctrl+X" hint (0x1c -> "Ctrl+\").
+// keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q").
 func keyLabel(b byte) string {
 	if b < 0x20 || b == 0x7f {
 		return "Ctrl+" + string(rune(b|0x40))

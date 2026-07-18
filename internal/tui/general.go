@@ -363,7 +363,8 @@ func (m generalModel) view() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("  " + styleDim.Render("↑↓ navigate   ⏎ attach   n new   ctrl+x kill   esc quit"))
+	// The context-key footer is promoted to the router's persistent bottom bar
+	// (generalStatus / composeBoard), so it is no longer rendered inline here.
 	return b.String()
 }
 

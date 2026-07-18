@@ -31,14 +31,14 @@
 //	type Config struct {
 //	    Term      TermControl
 //	    Session   Session
-//	    DetachKey byte   // default DefaultDetachKey (0x1c, Ctrl+\) when zero
+//	    DetachKey byte   // default DefaultDetachKey (0x11, Ctrl+q) when zero
 //	    ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
 //	    Chrome    bool   // show the one-line chrome (name + detach hint), toggleable (A-5)
 //	    Name      string // session label rendered in the chrome line
 //	}
 //	type Reason int
 //	const ( ReasonDetached Reason = iota; ReasonSessionEnd; ReasonError )
-//	const DefaultDetachKey = 0x1c
+//	const DefaultDetachKey = 0x11
 //	func Run(cfg Config) (Reason, error)          // blocking; ALWAYS restores termios
 //	func NewTermControl(in, out *os.File) (TermControl, error) // production impl over real fds
 package attach
