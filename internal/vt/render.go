@@ -28,6 +28,8 @@ package vt
 import (
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // RenderSnapshotClipped converts a decoded snapshot into ANSI bytes that repaint
@@ -37,9 +39,12 @@ import (
 // the bottom row scrolls the screen. Clipping to the client bounds keeps the
 // repaint inside the visible grid:
 //   - rows beyond the client height are skipped;
-//   - each row is truncated once its accumulated Run.Width would cross the client
-//     width — a wide (2-cell) grapheme straddling the edge is dropped whole, never
-//     split into a lone spacer;
+//   - a row is truncated at the client width. A run that fits whole is emitted
+//     whole; a run that would cross the edge is clipped INTRA-run to the longest
+//     grapheme-cluster prefix that still fits (runs are style-merged spans since
+//     item 4.3, so a straddling run may be many cells wide). A wide (2-cell)
+//     grapheme straddling the edge is dropped whole, never split into a lone
+//     spacer;
 //   - the final cursor is clamped into the clipped bounds.
 //
 // cols<=0 or rows<=0 disables clipping on that axis; (0, 0) renders unclipped. A
@@ -77,7 +82,21 @@ func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 		acc := 0
 		for _, r := range line.Runs {
 			if cols > 0 && acc+r.Width > cols {
-				break // clip: this run (and the rest) would cross the client edge
+				// This run straddles the client edge. Emit the fitting prefix
+				// (grapheme-aware) instead of dropping the whole run, then stop:
+				// nothing after a straddling run can fit. A prefix that fits zero
+				// cells (e.g. a wide grapheme with one column of room) emits
+				// nothing, matching the old whole-run-drop at that boundary.
+				if prefix, w := clipRunPrefix(r.Text, acc, cols); prefix != "" {
+					sgr := runSGR(r)
+					if sgr != last {
+						b.WriteString(sgr)
+						last = sgr
+					}
+					b.WriteString(stripControls(prefix))
+					acc += w
+				}
+				break
 			}
 			sgr := runSGR(r)
 			if sgr != last {
@@ -123,6 +142,41 @@ func clampCursor(v, limit int) int {
 		v = 0
 	}
 	return v
+}
+
+// clipRunPrefix returns the longest grapheme-cluster prefix of a straddling
+// merged run whose display width, added to acc (the row width already emitted),
+// stays within cols, together with that prefix's width. A cluster that would
+// cross cols stops the walk, so a wide grapheme straddling the edge is dropped
+// whole — matching the per-cell clip behavior of the pre-merge renderer.
+//
+// Width authority: it walks with ansi.FirstGraphemeCluster under
+// ansi.GraphemeWidth, the SAME segmentation + width the in-shim emulator used to
+// assign each cell's Width (charm x/vt utf8.go flushGrapheme). Because the merged
+// run's Width is those per-cell widths summed, re-walking the concatenated text
+// reproduces the identical cell boundaries and widths, so clipping a merged run
+// yields byte-identical output to clipping the equivalent one-run-per-cell row.
+//
+// Strip interaction: the walk runs on the RAW run text (as the snapshot carries
+// it), and stripControls is applied by the caller to the RESULTING prefix, not
+// before the walk. stripControls replaces a control rune with a space, and a
+// space is a grapheme-cluster boundary — stripping first could re-segment the
+// text and desync the walk's widths from the declared Run.Width. On a well-
+// behaved snapshot (producer-sanitized, no control runes in run text) the two
+// orders are identical; walking raw keeps column parity in the hostile/skewed
+// case too, which is exactly the pre-existing edge stripControls documents.
+func clipRunPrefix(text string, acc, cols int) (string, int) {
+	var w int
+	rest := text
+	for len(rest) > 0 {
+		cluster, cw := ansi.FirstGraphemeCluster(rest, ansi.GraphemeWidth)
+		if acc+w+cw > cols {
+			break
+		}
+		w += cw
+		rest = rest[len(cluster):]
+	}
+	return text[:len(text)-len(rest)], w
 }
 
 // stripControls REPLACES C0 control runes (0x00-0x1f, including the ESC that

@@ -104,3 +104,84 @@ Command: `go test -v -run TestFirstPaintGate ./internal/tui/`
 Result: `TestFirstPaintGate_RealDaemon_FiftySessions_P95` — PASS.
 First-paint p95 over 25 runs @ 50 real sessions: **3.179417ms** (raceEnabled=false),
 against the N-1 budget of 100ms.
+
+## Addendum — item 4.3 snapshot run-merging (agents-tracker-ut0)
+
+Appended, not rewriting the 1.4 baseline above. `buildLine` now coalesces adjacent
+cells that share every style field into one Run (text concatenated, width summed);
+`RenderSnapshotClipped` clips a straddling merged run intra-run to the fitting
+grapheme-cluster prefix. Schema unchanged (SnapshotVersion still 1), so old-shim
+single-run-per-cell snapshots still decode and render identically — merging is a
+value-level change (fewer, larger runs), proven by the merged-vs-unmerged byte-parity
+tests in `internal/vt/render_clip_test.go`.
+
+### Snapshot build+Marshal and DecodeSnapshot (R4.3.5)
+
+"Before" = the 1.4 baseline table above (one-run-per-cell, commit 632d5c1, same
+`genStyledFrame` = SGR every 4 cells). "After" = current HEAD with merging. B/op and
+allocs/op are deterministic and are the primary evidence; **ns/op is NOT compared —
+these runs share the machine with other agents (Rosetta), so wall-clock is too noisy
+to attribute.** The `genStyledFrame` fixture merges in groups of 4 (each 4-cell color
+span), so the expected run-length factor is ~4x.
+
+| Benchmark | B/op before | B/op after | allocs before | allocs after |
+|---|---:|---:|---:|---:|
+| Snapshot_80x24 (build+Marshal) | 218,594 | 141,976 | 1,867 | 2,447 |
+| Snapshot_200x50 (build+Marshal) | 1,143,208 | ~663,000 | 9,853 | 12,603 |
+| DecodeSnapshot_80x24 | 473,072 | 111,224 | 2,048 | 1,076 |
+| DecodeSnapshot_200x50 | 2,056,753 | 498,136 | 10,267 | 5,262 |
+
+- **Decode is the first-paint hot path (client-side, per attach): B/op −76% and
+  allocs −47/49%**, tracking the ~4x fewer runs to unmarshal.
+- **Snapshot build B/op drops −35/−42%** (smaller JSON: one styled Run's fixed fields
+  per span instead of per cell). Build **allocs rise +28/+31%**: a multi-cell merged
+  run must allocate one string for its concatenated text (a `strings.Builder`,
+  amortized-growth, one buffer per merged run), where the pre-merge path aliased each
+  cell's text with no allocation. This is inherent to producing merged text and is
+  offset by the far cheaper decode and the size drop below; build is a one-time
+  shim-side cost, decode+size is the repeated first-paint cost. The Builder is
+  DEFERRED (promoted only when a second same-style cell joins), so the no-merge worst
+  case — every adjacent cell a different style — keeps aliasing and adds ZERO build
+  allocs versus pre-merge.
+
+### New typical snapshot byte sizes (R4.3.5)
+
+Decoded via `Emulator.Snapshot()` at HEAD with merging; "before" is the one-run-per-
+cell size for the same feed.
+
+| Fixture | dims | before bytes | after bytes | factor | runs after |
+|---|---|---:|---:|---:|---:|
+| plain (`x`-fill) | 80x24 | 44,531 | 2,843 | 15.7x | 24 |
+| plain (`x`-fill) | 200x50 | 230,658 | 11,858 | 19.5x | 50 |
+| genStyled (SGR/4 cells) | 80x24 | 72,131 | 19,334 | 3.7x | 461 |
+| genStyled (SGR/4 cells) | 200x50 | 377,658 | 101,332 | 3.7x | 2,451 |
+| heavyStyled (uniform SGR/row) | 80x24 | 207,651 | 4,882 | 42.5x | 24 |
+| heavyStyled (uniform SGR/row) | 200x50 | 1,096,058 | 16,185 | 67.7x | 50 |
+| blank grid | 200x50 | ~230,000 | 11,857 | ~19x | 50 |
+
+The styled `genStyled` case shrinks by the ~3.7x run-length factor as expected; plain
+and uniform-per-row content (one run per row) shrink far more. The heavyStyled 200x50
+snapshot falls from 1.05 MiB to 16 KiB — this is why it no longer exceeds
+`wire.MaxFrame` and no longer exercises the item-1.2 chunked path (flagged to the
+coordinator; the 1.2 oversized fixtures need per-cell-varying styling to stay above
+`MaxFrame`, since they paint each row with a single uniform style).
+
+### Decode reassembly cap (R4.3.5)
+
+`internal/protocol/client.go` `maxSnapshotBytes` is unchanged. Its comment is updated
+to state the one-run-per-cell size as the WORST case (reached only when no two
+adjacent cells share a style) rather than an invariant: merging replaces N per-cell
+runs' fixed JSON with a single copy and carries the same per-cell-clamped text
+concatenated, so a merged snapshot never exceeds the one-run-per-cell bound the cap is
+sized for. The cap stays a valid upper bound; only real (smaller) snapshots change.
+
+### Width authority for intra-run clipping
+
+`RenderSnapshotClipped` walks a straddling merged run with
+`ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)` — the SAME grapheme segmentation
+and display-width (`clipperhouse/displaywidth`) the in-shim emulator (`charm x/vt`
+`utf8.go flushGrapheme`) used to assign each cell's Width. Re-walking the concatenated
+text therefore reproduces the identical cell boundaries and widths, giving
+byte-identical clipped output to the equivalent one-run-per-cell row. `x/ansi` was
+already in the build graph (transitive via `x/vt`); it is now a direct require (no new
+module added; `go mod tidy` only moved the existing line out of the indirect block).
