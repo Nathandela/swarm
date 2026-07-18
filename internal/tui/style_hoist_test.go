@@ -65,10 +65,12 @@ func buildPin(t *testing.T, name string) string {
 		m = send(m, keyCtrlX)
 		return m.View().Content
 	case "general_banner":
-		// general.go:192 transition banner (colAmber, bold).
+		// general.go:192 transition banner (colAmber, bold). ago is minutes-scale
+		// (not 0) so the elapsed column's display bucket ("5m") is immune to the
+		// suite's own wall-clock jitter between capture and assertion.
 		fw := newFakeClient(sWorking("endpoint/s1", "claude", "~/Code/x", "building", 2*time.Minute))
 		m := newModel(t, fw, detectMixed())
-		m = send(m, eventMsg{ev: protocol.Event{Session: sNeedsInput("endpoint/s1", "claude", "~/Code/x", "Permission: run tests?", 0)}})
+		m = send(m, eventMsg{ev: protocol.Event{Session: sNeedsInput("endpoint/s1", "claude", "~/Code/x", "Permission: run tests?", 5*time.Minute)}})
 		return m.View().Content
 	case "launch_form":
 		// launch.go:499 focused-field bar, launch.go:534 selected-agent highlight.
@@ -107,7 +109,7 @@ const pinGeneralBoard = "\x1b[1;38;2;255;207;95mswarm\x1b[m                     
 
 const pinGeneralConfirm = "\x1b[1;38;2;255;207;95mswarm\x1b[m                                                                                            \x1b[38;2;138;138;138m3 running · 1 needs you\x1b[m\n\n  \x1b[1;38;2;255;95;95mNEEDS INPUT\x1b[m\n\x1b[38;2;255;95;95mkill? y/n\x1b[m \x1b[38;2;255;95;95m●\x1b[m \x1b[1mclaude   \x1b[m\x1b[38;2;138;138;138m~/Code/quanthome-api    \x1b[m\x1b[38;2;255;95;95mneeds input      \x1b[m\x1b[38;2;138;138;138m12m   Permission: run db migration?\x1b[m\n\n  \x1b[1;38;2;95;175;255mWORKING\x1b[m\n  \x1b[38;2;95;175;255m◐\x1b[m \x1b[1mcodex    \x1b[m\x1b[38;2;138;138;138m~/Code/agents-tracker   \x1b[m\x1b[38;2;95;175;255mworking          \x1b[m\x1b[38;2;138;138;138m3m    Writing adapter fixture tests\x1b[m\n\n  \x1b[1;38;2;95;215;95mREADY FOR REVIEW\x1b[m\n  \x1b[38;2;95;215;95m✓\x1b[m \x1b[1mclaude   \x1b[m\x1b[38;2;138;138;138m~/Code/mcp-soml         \x1b[m\x1b[38;2;95;215;95mready for review \x1b[m\x1b[38;2;138;138;138m1h    Turn finished, review the diff\x1b[m\n\n  \x1b[1;38;2;138;138;138mCOMPLETED\x1b[m\n  \x1b[38;2;138;138;138m─\x1b[m \x1b[1mgemini   \x1b[m\x1b[38;2;138;138;138m~/Code/scratch          \x1b[m\x1b[38;2;138;138;138mcompleted        \x1b[m\x1b[38;2;138;138;138m2h    exit 0\x1b[m\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n  \x1b[38;2;138;138;138my confirm   n cancel\x1b[m\x1b[m"
 
-const pinGeneralBanner = "\x1b[1;38;2;255;207;95mswarm\x1b[m                                                                                            \x1b[38;2;138;138;138m1 running · 1 needs you\x1b[m\n\n  \x1b[1;38;2;255;207;95m● claude needs input\x1b[m\n\n  \x1b[1;38;2;255;95;95mNEEDS INPUT\x1b[m\n\x1b[38;2;255;207;95m▌\x1b[m \x1b[38;2;255;95;95m●\x1b[m \x1b[1mclaude   \x1b[m\x1b[38;2;138;138;138m~/Code/x                \x1b[m\x1b[38;2;255;95;95mneeds input      \x1b[m\x1b[38;2;138;138;138m0s    Permission: run tests?\x1b[m\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n  \x1b[38;2;138;138;138m↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit\x1b[m\x1b[m"
+const pinGeneralBanner = "\x1b[1;38;2;255;207;95mswarm\x1b[m                                                                                            \x1b[38;2;138;138;138m1 running · 1 needs you\x1b[m\n\n  \x1b[1;38;2;255;207;95m● claude needs input\x1b[m\n\n  \x1b[1;38;2;255;95;95mNEEDS INPUT\x1b[m\n\x1b[38;2;255;207;95m▌\x1b[m \x1b[38;2;255;95;95m●\x1b[m \x1b[1mclaude   \x1b[m\x1b[38;2;138;138;138m~/Code/x                \x1b[m\x1b[38;2;255;95;95mneeds input      \x1b[m\x1b[38;2;138;138;138m5m    Permission: run tests?\x1b[m\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n  \x1b[38;2;138;138;138m↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit\x1b[m\x1b[m"
 
 const pinLaunchForm = "\x1b[1;38;2;255;207;95mswarm\x1b[m\x1b[38;2;138;138;138m · new session\x1b[m\n\n\x1b[38;2;255;207;95m▌\x1b[m \x1b[38;2;138;138;138mdirectory   \x1b[m/tmp/swarm-pin-test█\n  \x1b[38;2;138;138;138magent       \x1b[m\x1b[38;2;138;138;138m◂ \x1b[m\x1b[38;2;255;207;95m● claude\x1b[m   \x1b[38;2;138;138;138m○ codex (upgrade codex to >= 1.2.0)\x1b[m   \x1b[38;2;138;138;138m✕ gemini (install: npm i -g @google/gemini-cli)\x1b[m\x1b[38;2;138;138;138m ▸\x1b[m\n  \x1b[38;2;138;138;138mModel       \x1b[mopus \x1b[38;2;138;138;138m▾\x1b[m\n  \x1b[38;2;138;138;138mprompt      \x1b[m\x1b[38;2;138;138;138m(optional)\x1b[m\n  \x1b[38;2;138;138;138mworktree    \x1b[m[ ] \x1b[38;2;138;138;138misolate in a git worktree\x1b[m\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n  \x1b[38;2;138;138;138mtype or paste · tab/↑↓ next · enter launch · esc cancel\x1b[m\x1b[m"
 

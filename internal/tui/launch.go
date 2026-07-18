@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -451,7 +450,7 @@ func (m launchModel) view() string {
 
 	b.WriteString("\n")
 	if m.errMsg != "" {
-		b.WriteString("  " + lipgloss.NewStyle().Foreground(colNeedsInput).Render(m.errMsg) + "\n\n")
+		b.WriteString("  " + styleError.Render(m.errMsg) + "\n\n")
 	}
 	// The contextual field hint is promoted to the router's persistent bottom bar
 	// (composeBoard uses m.hint()), so it is no longer rendered inline here.
@@ -489,14 +488,14 @@ func (m launchModel) authLine() string {
 	if !m.apiKeyInEnv || m.currentAgentName() != "claude" {
 		return ""
 	}
-	return "  " + lipgloss.NewStyle().Foreground(colAmber).Render("auth: ANTHROPIC_API_KEY from env (API billing)")
+	return "  " + styleAmber.Render("auth: ANTHROPIC_API_KEY from env (API billing)")
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.
 func (m launchModel) fieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
-		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
+		prefix = styleAmber.Render("▌") + " "
 	}
 	return prefix + styleDim.Render(padRight(label, launchLabelW)) + value + "\n"
 }
@@ -531,7 +530,7 @@ func (m launchModel) agentValue() string {
 			text += " (" + r + ")"
 		}
 		if a.usable() && i == m.agentIdx {
-			text = lipgloss.NewStyle().Foreground(colAmber).Render(text)
+			text = styleAmber.Render(text)
 		} else if !a.usable() {
 			text = styleDim.Render(text)
 		}

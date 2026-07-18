@@ -189,7 +189,7 @@ func (m generalModel) bannerLine() string {
 	if m.bannerText == "" || !time.Now().Before(m.bannerExpiry) {
 		return ""
 	}
-	return "  " + lipgloss.NewStyle().Foreground(colAmber).Bold(true).Render("● "+m.bannerText)
+	return "  " + styleTitle.Render("● "+m.bannerText)
 }
 
 // bannerGroup reports whether a transition into g raises a notification banner.
@@ -356,7 +356,7 @@ func (m generalModel) view() string {
 		if len(rows) == 0 {
 			continue // empty groups are omitted (V-1)
 		}
-		hdr := lipgloss.NewStyle().Foreground(groupColor(g)).Bold(true).Render(groupHeader(g))
+		hdr := groupHeaderStyle(g).Render(groupHeader(g))
 		b.WriteString("  " + hdr + "\n")
 		for _, s := range rows {
 			b.WriteString(m.renderRow(s, g, idx == m.sel) + "\n")
@@ -392,12 +392,12 @@ func (m generalModel) header() string {
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
-	gc := groupColor(g)
-	icon := lipgloss.NewStyle().Foreground(gc).Render(groupIcon(g))
+	gs := groupStyle(g)
+	icon := gs.Render(groupIcon(g))
 	fields := icon + " " +
 		styleAgent.Render(padRight(s.Agent, colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
-		lipgloss.NewStyle().Foreground(gc).Render(padRight(statusToken(g), colStatus)) +
+		gs.Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
 
 	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
@@ -407,9 +407,9 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	var prefix string
 	switch {
 	case m.confirm && s.ID == m.confirmID:
-		prefix = lipgloss.NewStyle().Foreground(colNeedsInput).Render(confirmPrompt(s)) + " "
+		prefix = styleError.Render(confirmPrompt(s)) + " "
 	case selected:
-		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
+		prefix = styleAmber.Render("▌") + " "
 	default:
 		prefix = "  "
 	}

@@ -11,7 +11,6 @@
 package tui
 
 import (
-	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -386,6 +385,12 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 
 // Group palette (matches docs/design/ui-preview.html). Colors degrade to plain
 // text without a TTY, so unit tests — which strip ANSI — never see them.
+//
+// Every Style below is a package-level var (R4.1.1): general.go/launch.go's
+// render paths reuse these instead of constructing a fresh lipgloss.NewStyle()
+// on every render. styleGroup*/styleGroupHeader* mirror groupStyle/
+// groupHeaderStyle's switch so a per-group color+bold combination is built once
+// at init, not once per row per frame.
 var (
 	colNeedsInput = lipgloss.Color("#ff5f5f")
 	colWorking    = lipgloss.Color("#5fafff")
@@ -396,18 +401,46 @@ var (
 	styleTitle = lipgloss.NewStyle().Foreground(colAmber).Bold(true)
 	styleDim   = lipgloss.NewStyle().Foreground(colCompleted)
 	styleAgent = lipgloss.NewStyle().Bold(true)
+	styleAmber = lipgloss.NewStyle().Foreground(colAmber)
+	styleError = lipgloss.NewStyle().Foreground(colNeedsInput)
+
+	styleGroupNeedsInput = styleError
+	styleGroupWorking    = lipgloss.NewStyle().Foreground(colWorking)
+	styleGroupReview     = lipgloss.NewStyle().Foreground(colReview)
+	styleGroupCompleted  = styleDim
+
+	styleGroupHeaderNeedsInput = styleGroupNeedsInput.Bold(true)
+	styleGroupHeaderWorking    = styleGroupWorking.Bold(true)
+	styleGroupHeaderReview     = styleGroupReview.Bold(true)
+	styleGroupHeaderCompleted  = styleGroupCompleted.Bold(true)
 )
 
-func groupColor(g status.Group) color.Color {
+// groupStyle returns the pre-built plain per-group color style (mirrors the
+// group->color mapping formerly in groupColor, now folded in here directly).
+func groupStyle(g status.Group) lipgloss.Style {
 	switch g {
 	case status.GroupNeedsInput:
-		return colNeedsInput
+		return styleGroupNeedsInput
 	case status.GroupWorking:
-		return colWorking
+		return styleGroupWorking
 	case status.GroupReadyForReview:
-		return colReview
+		return styleGroupReview
 	default:
-		return colCompleted
+		return styleGroupCompleted
+	}
+}
+
+// groupHeaderStyle returns the pre-built bold per-group header style.
+func groupHeaderStyle(g status.Group) lipgloss.Style {
+	switch g {
+	case status.GroupNeedsInput:
+		return styleGroupHeaderNeedsInput
+	case status.GroupWorking:
+		return styleGroupHeaderWorking
+	case status.GroupReadyForReview:
+		return styleGroupHeaderReview
+	default:
+		return styleGroupHeaderCompleted
 	}
 }
 
