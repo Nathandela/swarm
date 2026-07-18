@@ -146,6 +146,13 @@ const composerMarkers = ">›❯"
 // claude print in their status region while working.
 const escToInterrupt = "esc to interrupt"
 
+// codexApprovalHint is the standing footer of Codex's modal approval dialog
+// ("Would you like to run the following command?" and kin). Codex hides the
+// cursor and drops the busy hint while the dialog is up, so without this marker
+// the frame reads inconclusive and ADR-007 preserves "working" for the whole
+// wait. When the hint is visible, Codex is waiting on the user's decision.
+const codexApprovalHint = "Press enter to confirm or esc to cancel"
+
 // evaluateGridSig reads snap under the named per-adapter grid signature, returning
 // (turn, interaction, conclusive). A conclusive read (active or idle) is applied
 // by the engine; an inconclusive one (conclusive=false) is preserved (ADR-007).
@@ -164,11 +171,17 @@ func evaluateGridSig(snap *vt.Snap, sig string) (status.Turn, status.Interaction
 
 // evaluateCodexGrid reads Codex's real screen (q65). Codex has no typed signal in
 // v1 (D1), so the grid is its SOLE driver and its idle screen MUST read idle, not
-// inconclusive. A busy marker anywhere in the bottom region is active; a composer
-// prompt on the parked-cursor row with no busy marker is idle; else inconclusive.
+// inconclusive. The approval dialog is checked FIRST: it is modal, so it outranks
+// any busy remnant in the region (including one quoted inside the command under
+// approval). Then a busy marker anywhere in the bottom region is active; a
+// composer prompt on the parked-cursor row with no busy marker is idle; else
+// inconclusive.
 func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if snap == nil {
 		return status.TurnUnknown, status.InteractionUnknown, false
+	}
+	if regionContains(snap, codexApprovalHint) {
+		return status.TurnIdle, status.InteractionPermission, true
 	}
 	if hasBusyMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
@@ -212,6 +225,21 @@ func hasBusyMarker(snap *vt.Snap) bool {
 			if isBraille(r) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// regionContains reports whether any row in the bottom region contains the
+// literal substring.
+func regionContains(snap *vt.Snap, literal string) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	for y := last; y >= 0 && y > last-gridRegionRows; y-- {
+		if strings.Contains(lineText(snap.Lines[y]), literal) {
+			return true
 		}
 	}
 	return false

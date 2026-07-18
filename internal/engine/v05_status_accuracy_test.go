@@ -88,6 +88,65 @@ func claudeBusyScreen() *vt.Snap {
 	})
 }
 
+// codexApprovalScreen: Codex's modal command-approval dialog, reconstructed from a
+// live field-test transcript (session 3yqctfbyjwuoqd6w replayed through the
+// production vt emulator). The cursor is HIDDEN while the dialog is up, the busy
+// hint ("esc to interrupt") is gone, and the standing footer is the confirm hint —
+// pre-fix this frame read inconclusive and ADR-007 preserved "working" forever.
+func codexApprovalScreen() *vt.Snap {
+	return snapFromLines(80, 0, 0, false, []string{
+		"◦ Running find Downloads -maxdepth 1 -type f | wc -l",
+		"",
+		"  Would you like to run the following command?",
+		"",
+		"  Environment: local",
+		"",
+		"  $ find Downloads -maxdepth 1 -type f | wc -l",
+		"",
+		"› 1. Yes, proceed (y)",
+		"  2. Yes, and don't ask again for commands that start with `find Downloads` (p)",
+		"  3. No, and tell Codex what to do differently (esc)",
+		"",
+		"  Press enter to confirm or esc to cancel",
+	})
+}
+
+// TestOnOutput_CodexApprovalDialogMapsToNeedsInput (field test 5): Codex has no
+// typed permission signal, so its approval dialog must be readable from the grid.
+// The dialog frame commits idle+permission (Derive -> Needs input); the idle and
+// busy screens must NOT read as permission.
+func TestOnOutput_CodexApprovalDialogMapsToNeedsInput(t *testing.T) {
+	clk := newClock()
+	rec := &emitRecorder{}
+	e := newEngine(clk, constCPU(0), rec, time.Minute, time.Second)
+	e.RegisterSession("s1", "tok1", 1, gridSig("codex"))
+
+	e.OnOutput("s1", codexApprovalScreen())
+	got, ok := rec.last()
+	if !ok {
+		t.Fatal("approval dialog emitted no status change from the unknown seed")
+	}
+	if got.s.Turn != status.TurnIdle || got.s.Interaction != status.InteractionPermission {
+		t.Fatalf("approval dialog -> turn=%s interaction=%s, want idle+permission", got.s.Turn, got.s.Interaction)
+	}
+	if g := status.Derive(got.s); g != status.GroupNeedsInput {
+		t.Fatalf("approval dialog derives group %s, want needs_input", g)
+	}
+
+	for _, tc := range []struct {
+		name string
+		snap *vt.Snap
+	}{
+		{"idle", codexIdleScreen()},
+		{"busy", codexBusyScreen()},
+	} {
+		turn, inter, conclusive := evaluateCodexGrid(tc.snap)
+		if conclusive && inter == status.InteractionPermission {
+			t.Fatalf("codex %s screen misread as permission (turn=%s)", tc.name, turn)
+		}
+	}
+}
+
 // TestOnOutput_InconclusivePreservesCommittedTurn (ADR-007): an inconclusive grid
 // tap is absence of evidence, not evidence of change — it must PRESERVE the prior
 // committed turn (from active AND from idle), never overwrite it with unknown.
