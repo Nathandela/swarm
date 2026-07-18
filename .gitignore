@@ -19,3 +19,6 @@
 
 # build artifacts
 /swarm
+
+# Session-local Claude Code worktrees (parallel sessions), never committable
+.claude/worktrees/
