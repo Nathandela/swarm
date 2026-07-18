@@ -80,12 +80,31 @@ type Daemon struct {
 	sampleMu sync.Mutex
 	sampling map[string]struct{}
 	sampleWG sync.WaitGroup // in-flight per-session grid samples
-	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG Adder)
+	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG/captureWG Adder)
 	sampleFn func(id string)
 	// controlled reports whether a session has a live controller lease; the tap
 	// skips such a session so its stream is not stolen every poll (R1.3.7). It is
 	// d.srv.IsControlled in production, overridable in tests.
 	controlled func(id string) bool
+
+	// captureMu/capturing/captureWG dispatch conversation-id capture in its OWN
+	// per-session goroutine, the same dedup mechanism as sampleGridAsync (R2.1.2):
+	// a slow disk read for one uncaptured session must not delay the tap loop
+	// reaching the next session. Unlike grid sampling, capture is attach-
+	// independent, so it runs for EVERY running session regardless of controlled
+	// status (C1/R1.3.7 gates only the grid sample). captureFn is
+	// d.captureConversationID in production (lazily defaulted so a test Daemon
+	// literal need not set it), overridable in tests.
+	captureMu sync.Mutex
+	capturing map[string]struct{}
+	captureWG sync.WaitGroup
+	captureFn func(id string)
+
+	// convScanMu/convScan back the growth-gated re-read in captureConversationID
+	// (R2.1.3): a session's transcript tail is re-read only when the file's size
+	// has changed (grown, or shrunk/rotated) since the last scan.
+	convScanMu sync.Mutex
+	convScan   map[string]convScanState
 
 	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
 	// read a session's snapshot is OBSERVABLE rather than a silent heuristic death
@@ -114,6 +133,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		ready:      make(chan struct{}),
 		closing:    make(chan struct{}),
 		sampling:   make(map[string]struct{}),
+		capturing:  make(map[string]struct{}),
 	}
 	d.sampleFn = d.sampleGrid // the per-session grid sample (overridable in tests)
 
@@ -216,15 +236,20 @@ func (d *Daemon) endSession(id string) {
 	// released writeMu before firing OnSessionEnd — so SetConversationID's writeMu is
 	// never nested (no deadlock).
 	d.captureConversationID(id)
+	d.convScanMu.Lock()
+	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
+	d.convScanMu.Unlock()
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
 }
 
 // gridPoll is how often the assembly samples each running session's shim grid and
-// feeds it to the engine's grid heuristic (seam b). It is well within the L1 <=1s
-// bound and mirrors the roster event cadence.
-const gridPoll = 200 * time.Millisecond
+// feeds it to the engine's grid heuristic (seam b). R2.1.1 (committee-ruled): 500ms,
+// a 2.5x cut from the former 200ms — NOT the 1s that would spend the whole L1
+// change->delivery<=1s budget on the poll cadence alone and leave no headroom for
+// fan-out (see TestTapLatency_GridChangeReachesSubscriberWithin1s).
+const gridPoll = 500 * time.Millisecond
 
 // tapGrids is the shim->engine output tap (Epic 11 seam b): on a low-frequency
 // cadence it samples each running session's current shim grid and feeds it to
@@ -247,7 +272,9 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 // controller lease so the tap never steals its stream (R1.3.7 — the shim now serves
 // connections concurrently, so a tap attach on a controlled session would supersede
 // the controller's subscriber every poll). Conversation-id capture reads the
-// transcript on disk (no shim attach), so it runs regardless of the controller (C1).
+// transcript on disk (no shim attach), so it runs regardless of the controller
+// (C1), dispatched in its own per-session goroutine so a slow disk read for one
+// session cannot delay reaching the next (R2.1.2).
 func (d *Daemon) tapOnce(ctx context.Context) {
 	for _, m := range d.core.List() {
 		if m.Status.Process != status.ProcessRunning {
@@ -256,7 +283,7 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 		if d.controlled == nil || !d.controlled(m.ID) {
 			d.sampleGridAsync(ctx, m.ID)
 		}
-		d.captureConversationID(m.ID) // attach-independent id capture (C1)
+		d.captureConversationIDAsync(ctx, m.ID) // attach-independent id capture (C1)
 	}
 }
 
@@ -264,34 +291,62 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 // cannot stall the sampling CADENCE of other sessions (L1, no head-of-line
 // blocking: the former serial loop blocked every later session behind a busy
 // shim's dial/hello). tapOnce already skips a controlled session (R1.3.7), so this
-// only ever runs for a session with no live controller. It is deduped per session:
-// at most one in-flight sample each, so a persistently slow shim never piles up a
-// fresh goroutine every poll. The goroutine is tracked so Close can drain in-flight
-// samples (bounded by the shim dial/hello timeouts).
+// only ever runs for a session with no live controller. It is deduped per session
+// via asyncOnce: at most one in-flight sample each, so a persistently slow shim
+// never piles up a fresh goroutine every poll.
 func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
-	d.sampleMu.Lock()
-	if _, busy := d.sampling[id]; busy {
-		d.sampleMu.Unlock()
-		return // a sample for this session is already in flight
+	d.asyncOnce(ctx, &d.sampleMu, d.sampling, &d.sampleWG, id, d.sampleFn)
+}
+
+// captureConversationIDAsync dispatches captureConversationID for one session in
+// its own goroutine via asyncOnce (R2.1.2): a slow disk read for one uncaptured
+// session cannot delay the tap loop reaching the next session. captureFn defaults
+// to the real captureConversationID when unset, so a test Daemon literal that
+// never sets it (most existing tests) still gets correct behavior.
+func (d *Daemon) captureConversationIDAsync(ctx context.Context, id string) {
+	fn := d.captureFn
+	if fn == nil {
+		fn = d.captureConversationID
+	}
+	d.captureMu.Lock()
+	if d.capturing == nil {
+		d.capturing = make(map[string]struct{})
+	}
+	d.captureMu.Unlock()
+	d.asyncOnce(ctx, &d.captureMu, d.capturing, &d.captureWG, id, fn)
+}
+
+// asyncOnce runs fn(id) in its own goroutine, deduped against inFlight (at most
+// one fn per id in flight at a time) and tracked in wg so Close can drain it. It
+// is the shared per-session async-dispatch mechanism behind both grid sampling and
+// conversation-id capture: a slow shim or a slow disk read for one session must
+// never delay dispatching the next session's op (L1, no head-of-line blocking).
+// ctx cancellation before dispatch is a no-op — Close is already tearing things
+// down and nothing new should start.
+func (d *Daemon) asyncOnce(ctx context.Context, mu *sync.Mutex, inFlight map[string]struct{}, wg *sync.WaitGroup, id string, fn func(string)) {
+	mu.Lock()
+	if _, busy := inFlight[id]; busy {
+		mu.Unlock()
+		return // an op for this session is already in flight
 	}
 	select {
 	case <-ctx.Done():
-		d.sampleMu.Unlock()
+		mu.Unlock()
 		return
 	default:
 	}
-	d.sampling[id] = struct{}{}
-	d.sampleMu.Unlock()
+	inFlight[id] = struct{}{}
+	mu.Unlock()
 
-	d.sampleWG.Add(1)
+	wg.Add(1)
 	go func() {
-		defer d.sampleWG.Done()
+		defer wg.Done()
 		defer func() {
-			d.sampleMu.Lock()
-			delete(d.sampling, id)
-			d.sampleMu.Unlock()
+			mu.Lock()
+			delete(inFlight, id)
+			mu.Unlock()
 		}()
-		d.sampleFn(id)
+		fn(id)
 	}()
 }
 
@@ -340,21 +395,34 @@ func (d *Daemon) noteTapFailure(id string, err error) {
 // convTailBytes bounds the transcript tail read for conversation-id extraction.
 const convTailBytes = 64 << 10
 
+// convScanState is one session's transcript-scan bookkeeping for the growth-gated
+// re-read in captureConversationID (R2.1.3).
+type convScanState struct {
+	size    int64 // transcript size as of the last scan
+	errOnce bool  // a disk error has already been logged for this session (log-once)
+}
+
 // captureConversationID recovers a session's native conversation id from its output
 // and persists it ONCE (Epic 11 / R-2, the id a later resume replays). It reads the
 // session's TRANSCRIPT tail on disk (bounded) and feeds it to the session's adapter
 // — INDEPENDENT of any live attach (C1). Because it reads the transcript file rather
 // than attaching, it runs even for a session with a live controller (which the grid
 // tap skips, R1.3.7) and for a session left attached until exit — both of which
-// would otherwise never be sampled and end non-resumable. Driving capture off the
-// continuously-written transcript file means an attached-until-exit or short-lived
-// session still gets its id — on the poll cadence and again at session end. On a
-// successful extraction it persists
-// Meta.ConversationID through the daemon's sole meta writer (write-once, G6). Cheap
-// no-op once captured, for an adapterless agent (the reserved fake), or when nothing
-// extracts yet. SetConversationID takes writeMu, so it is never called nested inside
-// another writeMu holder (finalizeTerminal has already released it before endSession
-// runs).
+// would otherwise never be sampled and end non-resumable.
+//
+// The tail is re-read only when the transcript's size has CHANGED since the last
+// scan — grown, or shrunk (a rotation) — not on every poll (R2.1.3): a session that
+// has gone quiet costs no further disk reads once its tail has already been
+// scanned at its current size. A late-appearing id (the marker was not yet
+// present at an earlier, smaller size) is still captured on the growth that
+// introduces it — there is no permanent give-up while the session runs. A disk
+// error (missing/unreadable transcript) is logged ONCE per session, never panics,
+// and never wedges the loop: the next poll simply tries again. On a successful
+// extraction it persists Meta.ConversationID through the daemon's sole meta writer
+// (write-once, G6). Cheap no-op once captured, for an adapterless agent (the
+// reserved fake), or when nothing extracts yet. SetConversationID takes writeMu,
+// so it is never called nested inside another writeMu holder (finalizeTerminal has
+// already released it before endSession runs).
 func (d *Daemon) captureConversationID(id string) {
 	m, ok := d.core.Get(id)
 	if !ok || m.ConversationID != "" {
@@ -364,7 +432,30 @@ func (d *Daemon) captureConversationID(id string) {
 	if !ok {
 		return
 	}
-	tail := readTranscriptTail(filepath.Join(d.stateDir, id, shim.TranscriptFile), convTailBytes)
+	path := filepath.Join(d.stateDir, id, shim.TranscriptFile)
+	fi, err := os.Stat(path)
+	if err != nil {
+		d.noteConvScanError(id)
+		return
+	}
+	size := fi.Size()
+
+	d.convScanMu.Lock()
+	if d.convScan == nil {
+		d.convScan = make(map[string]convScanState)
+	}
+	if d.convScan[id].size == size {
+		d.convScanMu.Unlock()
+		return // unchanged since the last scan: nothing new to extract
+	}
+	d.convScanMu.Unlock()
+
+	tail := readTail(path, convTailBytes)
+
+	d.convScanMu.Lock()
+	d.convScan[id] = convScanState{size: size} // also clears errOnce: the error cleared
+	d.convScanMu.Unlock()
+
 	if len(tail) == 0 {
 		return
 	}
@@ -374,6 +465,32 @@ func (d *Daemon) captureConversationID(id string) {
 	}
 	_ = d.core.SetConversationID(id, convID)
 }
+
+// noteConvScanError log-once's a transcript-scan disk error for a session
+// (R2.1.3): repeated failures stay silent after the first so a persistently
+// unreadable transcript cannot flood the log. The next poll retries regardless —
+// scan state is left untouched, so a later successful stat is still treated as a
+// fresh change.
+func (d *Daemon) noteConvScanError(id string) {
+	d.convScanMu.Lock()
+	defer d.convScanMu.Unlock()
+	if d.convScan == nil {
+		d.convScan = make(map[string]convScanState)
+	}
+	st := d.convScan[id]
+	if st.errOnce {
+		return
+	}
+	st.errOnce = true
+	d.convScan[id] = st
+	log.Printf("skeleton: conversation-id transcript scan failed for session %s", id)
+}
+
+// readTail is the transcript-tail reader captureConversationID calls on a growth-
+// gated re-read; production points it at readTranscriptTail, tests substitute a
+// call-counting wrapper to verify an unchanged transcript size skips the read
+// entirely (R2.1.3).
+var readTail = readTranscriptTail
 
 // readTranscriptTail returns up to the last n bytes of the file at path — the raw
 // agent output the adapter's ExtractConversationID scans. A missing/short file
@@ -413,9 +530,10 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
-		d.cancel()         // stops tapGrids + engine.Run: no NEW grid samples start
-		d.tapWG.Wait()     // tapGrids returned: no more sampleWG.Add can race the Wait (F7)
+		d.cancel()         // stops tapGrids + engine.Run: no NEW grid samples/captures start
+		d.tapWG.Wait()     // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
 		d.sampleWG.Wait()  // drain in-flight grid samples (bounded by shim timeouts)
+		d.captureWG.Wait() // drain in-flight conversation-id captures
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
 		d.api.close()      // stops the roster poller
