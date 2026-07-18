@@ -1,0 +1,811 @@
+<title>swarm remote — interactive mock</title>
+<style>
+  :root {
+    --bg: #0e0f13;
+    --ink: #e9e7e1;
+    --ink-dim: #9a978f;
+    --panel: #16181f;
+    --panel-edge: #262a35;
+    --accent: #e2a33b;
+    --accent-ink: #14100a;
+    --tag-exist: #30d158;
+    --tag-gate: #64d2ff;
+    --tag-proto: #bf5af2;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f5f1; --ink:#1d1c19; --ink-dim:#6d6a62; --panel:#ffffff; --panel-edge:#e3e1da; }
+  }
+  :root[data-theme="dark"]  { --bg:#0e0f13; --ink:#e9e7e1; --ink-dim:#9a978f; --panel:#16181f; --panel-edge:#262a35; }
+  :root[data-theme="light"] { --bg:#f6f5f1; --ink:#1d1c19; --ink-dim:#6d6a62; --panel:#ffffff; --panel-edge:#e3e1da; }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { display: flex; gap: 48px; max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; }
+  .rail { flex: 1 1 420px; min-width: 0; }
+  .stage { flex: 0 0 auto; position: sticky; top: 32px; align-self: flex-start; }
+  @media (max-width: 900px) {
+    .wrap { flex-direction: column-reverse; align-items: center; }
+    .stage { position: static; }
+    .rail { width: 100%; }
+  }
+
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 6px; text-wrap: balance; }
+  .sub { color: var(--ink-dim); font-size: 14px; line-height: 1.5; margin: 0 0 28px; max-width: 60ch; }
+  .sub code { font-family: var(--mono); font-size: 12px; }
+
+  .railsec { border: 1px solid var(--panel-edge); background: var(--panel); border-radius: 14px; padding: 18px 20px; margin-bottom: 18px; }
+  .railsec h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-dim); margin: 0 0 12px; }
+
+  .scen { display: flex; flex-wrap: wrap; gap: 8px; }
+  .scen button {
+    font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    color: var(--ink); background: transparent; border: 1px solid var(--panel-edge);
+    border-radius: 9px; padding: 9px 12px; cursor: pointer;
+  }
+  .scen button:hover { border-color: var(--accent); color: var(--accent); }
+  .scen button:focus-visible, .phone :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .scen button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  #notes { min-height: 180px; }
+  #notes .screen-name { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+  #notes ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+  #notes li { font-size: 13px; line-height: 1.5; color: var(--ink); padding-left: 0; }
+  #notes li .t {
+    font: 600 10px/1 var(--mono); letter-spacing: 0.04em; border-radius: 5px; padding: 3px 6px;
+    margin-right: 7px; white-space: nowrap; vertical-align: 1px;
+  }
+  .t.exist { color: var(--tag-exist); border: 1px solid color-mix(in srgb, var(--tag-exist) 45%, transparent); }
+  .t.gate  { color: var(--tag-gate);  border: 1px solid color-mix(in srgb, var(--tag-gate) 45%, transparent); }
+  .t.proto { color: var(--tag-proto); border: 1px solid color-mix(in srgb, var(--tag-proto) 45%, transparent); }
+  .legend { display: flex; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-edge); font-size: 11px; color: var(--ink-dim); flex-wrap: wrap; }
+
+  .opts { display: grid; gap: 12px; }
+  .opt { border: 1px solid var(--panel-edge); border-radius: 10px; padding: 12px 14px; }
+  .opt.reco { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .opt h3 { font-size: 13px; margin: 0 0 4px; display: flex; align-items: baseline; gap: 8px; }
+  .opt h3 .pill { font: 600 10px/1 var(--mono); color: var(--accent); }
+  .opt p { font-size: 12.5px; line-height: 1.5; color: var(--ink-dim); margin: 0; }
+
+  /* ---------- phone ---------- */
+  .phone {
+    width: 386px; height: 812px; border-radius: 54px; background: #000; position: relative;
+    border: 1px solid #3a3d46; box-shadow: 0 24px 80px rgba(0,0,0,0.5), inset 0 0 0 10px #101014;
+    overflow: hidden; color: #f2f2f7;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  }
+  @media (max-width: 440px) { .phone { width: 100%; height: 780px; border-radius: 40px; } }
+  .island { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); width: 118px; height: 32px; background: #000; border-radius: 20px; z-index: 40; border: 1px solid #17171a; }
+  .sbar { position: absolute; top: 0; left: 0; right: 0; height: 58px; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 30px 6px; font-size: 14px; font-weight: 600; z-index: 30; pointer-events: none; }
+  .screen { position: absolute; inset: 0; padding: 64px 0 84px; overflow-y: auto; scrollbar-width: none; }
+  .screen::-webkit-scrollbar { display: none; }
+
+  .tabbar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 82px; z-index: 30;
+    background: rgba(18,18,20,0.86); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border-top: 0.5px solid rgba(84,84,88,0.5); display: flex; padding-bottom: 16px;
+  }
+  .tabbar button { flex: 1; background: none; border: none; color: #8e8e93; font: 500 10px/1.2 inherit; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; }
+  .tabbar button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+  .tabbar button.on { color: var(--accent); }
+  .tabbar .badge { position: relative; }
+  .tabbar .badge::after { content: attr(data-n); position: absolute; top: -4px; right: 24%; background: #ff453a; color: #fff; font: 700 10px/1 inherit; border-radius: 9px; padding: 3px 6px; }
+
+  .navhead { padding: 6px 20px 12px; display: flex; align-items: center; gap: 10px; }
+  .navhead .big { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+  .navhead .back { background: none; border: none; color: var(--accent); font: 400 16px/1 inherit; cursor: pointer; padding: 4px 4px 4px 0; display: flex; align-items: center; }
+  .navhead .title2 { font-size: 16px; font-weight: 700; }
+  .navhead .spacer { flex: 1; }
+
+  .scopebar { margin: 0 20px 14px; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+  .scopebar button { flex: 0 0 auto; font: 600 12px/1 inherit; color: #d1d1d6; background: #1c1c1e; border: 1px solid #2c2c2e; padding: 8px 13px; border-radius: 16px; cursor: pointer; }
+  .scopebar button.on { background: var(--accent); color: #14100a; border-color: var(--accent); }
+  .scopebar .dotp { display: inline-block; width: 6px; height: 6px; border-radius: 3px; background: #30d158; margin-right: 5px; vertical-align: 1px; }
+  .scopebar .dotp.off { background: #636366; }
+
+  .seclabel { font: 600 12px/1 inherit; letter-spacing: 0.06em; text-transform: uppercase; color: #8e8e93; padding: 14px 20px 8px; }
+  .cards { padding: 0 14px; display: flex; flex-direction: column; gap: 8px; }
+  .srow { background: #1c1c1e; border-radius: 14px; padding: 12px 14px; cursor: pointer; border: none; text-align: left; color: inherit; font: inherit; width: 100%; display: block; }
+  .srow:active { background: #2c2c2e; }
+  .srow .top { display: flex; align-items: center; gap: 8px; }
+  .srow .agent { font: 600 11px/1 var(--mono); color: #8e8e93; }
+  .srow .proj { font-size: 15px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srow .mach { font: 500 11px/1 var(--mono); color: #636366; }
+  .srow .line { font-size: 13px; color: #aeaeb2; margin-top: 5px; line-height: 1.35; }
+  .srow .line b { color: #f2f2f7; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; flex: 0 0 auto; }
+  .g-needs  { background: #ff9f0a; box-shadow: 0 0 8px rgba(255,159,10,0.7); }
+  .g-work   { background: #64d2ff; animation: pulse 1.6s ease-in-out infinite; }
+  .g-ready  { background: #bf5af2; }
+  .g-done   { background: #30d158; }
+  .g-off    { background: #636366; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .g-work, .banner, .sheet, .stream-caret { animation: none !important; transition: none !important; } }
+
+  .empty { text-align: center; padding: 60px 30px; color: #8e8e93; font-size: 14px; }
+
+  /* chat */
+  .chat { padding: 0 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 86%; border-radius: 16px; padding: 10px 13px; font-size: 14px; line-height: 1.45; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #14100a; border-bottom-right-radius: 5px; }
+  .msg.agent { align-self: flex-start; background: #1c1c1e; border-bottom-left-radius: 5px; }
+  .stream-caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: pulse 0.9s steps(2) infinite; }
+  .card { align-self: stretch; background: #1c1c1e; border: 1px solid #2c2c2e; border-radius: 12px; overflow: hidden; }
+  .card .chead { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font: 600 12px/1 var(--mono); color: #8e8e93; border-bottom: 1px solid #2c2c2e; }
+  .card .cbody { padding: 10px 12px; font: 12px/1.55 var(--mono); overflow-x: auto; white-space: pre; }
+  .card .cbody .add { color: #30d158; } .card .cbody .del { color: #ff453a; }
+  .card.approval { border-color: rgba(255,159,10,0.5); }
+  .card.approval .chead { color: #ff9f0a; border-color: rgba(255,159,10,0.3); }
+  .card .cfoot { display: flex; gap: 8px; padding: 10px 12px; }
+  .card .cfoot button { flex: 1; font: 600 13px/1 inherit; padding: 10px; border-radius: 9px; border: none; cursor: pointer; }
+  .btn-ok { background: #30d158; color: #06280f; }
+  .btn-no { background: rgba(255,69,58,0.15); color: #ff453a; }
+  .composer { position: absolute; bottom: 82px; left: 0; right: 0; padding: 8px 14px; display: flex; gap: 8px; align-items: center; background: rgba(18,18,20,0.86); backdrop-filter: blur(18px); border-top: 0.5px solid rgba(84,84,88,0.5); z-index: 25; }
+  .composer input { flex: 1; background: #1c1c1e; border: 1px solid #2c2c2e; border-radius: 18px; color: #f2f2f7; font: 14px inherit; padding: 9px 14px; min-width: 0; }
+  .composer button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px; }
+  .composer button svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .stopbtn { color: #ff453a !important; }
+  .qchips { position: absolute; bottom: 136px; left: 0; right: 0; display: flex; gap: 8px; padding: 0 14px; z-index: 24; overflow-x: auto; scrollbar-width: none; }
+  .qchips button { flex: 0 0 auto; font: 500 12px/1 inherit; color: #d1d1d6; background: rgba(28,28,30,0.9); border: 1px solid #2c2c2e; border-radius: 14px; padding: 8px 12px; cursor: pointer; }
+
+  /* terminal peek */
+  .term { margin: 0 14px; background: #0a0a0c; border: 1px solid #2c2c2e; border-radius: 10px; padding: 12px; font: 11.5px/1.5 var(--mono); color: #c8c8cd; overflow-x: auto; white-space: pre; }
+  .term .dim { color: #636366; } .term .ok { color: #30d158; } .term .warn { color: #ff9f0a; }
+  .ro-note { margin: 10px 20px 0; font-size: 12px; color: #8e8e93; text-align: center; }
+  .ro-note button { background: none; border: none; color: var(--accent); font: 600 12px inherit; cursor: pointer; }
+
+  /* machines */
+  .mrow { background: #1c1c1e; border-radius: 14px; padding: 13px 14px; }
+  .mrow .top { display: flex; align-items: center; gap: 9px; }
+  .mrow .name { font-size: 15px; font-weight: 600; flex: 1; }
+  .mrow .eid { font: 500 10px/1 var(--mono); color: #636366; }
+  .mrow .meta { font-size: 12.5px; color: #8e8e93; margin-top: 4px; }
+  .toggle { width: 46px; height: 28px; border-radius: 14px; background: #39393d; border: none; position: relative; cursor: pointer; flex: 0 0 auto; transition: background 0.15s; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 12px; background: #fff; transition: left 0.15s; }
+  .toggle.on { background: #30d158; } .toggle.on::after { left: 20px; }
+  .kills { border: 1px solid rgba(255,69,58,0.4); border-radius: 14px; margin: 8px 14px 0; padding: 13px 14px; display: flex; align-items: center; gap: 10px; }
+  .kills .tt { flex: 1; } .kills .tt b { font-size: 14px; color: #ff453a; display: block; }
+  .kills .tt span { font-size: 12px; color: #8e8e93; }
+  .devrow { display: flex; align-items: center; gap: 10px; background: #1c1c1e; border-radius: 14px; padding: 12px 14px; }
+  .devrow .dn { flex: 1; font-size: 14px; font-weight: 600; }
+  .devrow .dfp { font: 500 10px/1 var(--mono); color: #636366; }
+  .devrow .rev { background: none; border: 1px solid rgba(255,69,58,0.5); color: #ff453a; font: 600 12px inherit; border-radius: 8px; padding: 7px 11px; cursor: pointer; }
+
+  /* activity + settings */
+  .arow { display: flex; gap: 10px; background: #1c1c1e; border-radius: 12px; padding: 11px 13px; font-size: 13px; line-height: 1.4; }
+  .arow .when { font: 500 11px/1.6 var(--mono); color: #636366; flex: 0 0 52px; }
+  .setrow { display: flex; align-items: center; gap: 10px; background: #1c1c1e; border-radius: 12px; padding: 12px 14px; }
+  .setrow .sl { flex: 1; font-size: 14px; }
+  .setrow .sl span { display: block; font-size: 11.5px; color: #8e8e93; margin-top: 2px; }
+
+  /* overlays */
+  .banner {
+    position: absolute; top: 60px; left: 10px; right: 10px; z-index: 60;
+    background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); border: 0.5px solid rgba(84,84,88,0.6);
+    border-radius: 18px; padding: 12px 14px; display: none; cursor: pointer;
+    transform: translateY(-130px); transition: transform 0.35s cubic-bezier(0.32,0.72,0,1);
+  }
+  .banner.show { display: block; transform: translateY(0); }
+  .banner .bt { display: flex; gap: 8px; align-items: center; font-size: 12px; color: #8e8e93; }
+  .banner .bapp { font-weight: 700; color: #f2f2f7; }
+  .banner .bmsg { font-size: 14px; margin-top: 4px; }
+  .scrim { position: absolute; inset: 0; z-index: 70; background: rgba(0,0,0,0.5); display: none; }
+  .scrim.show { display: block; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 80; display: none;
+    background: #1c1c1e; border-radius: 22px 22px 0 0; padding: 18px 18px 34px;
+    transform: translateY(100%); transition: transform 0.35s cubic-bezier(0.32,0.72,0,1);
+  }
+  .sheet.show { display: block; transform: translateY(0); }
+  .sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: #48484a; margin: 0 auto 14px; }
+  .sheet h4 { margin: 0 0 3px; font-size: 17px; }
+  .sheet .ctx { font: 500 11.5px/1.5 var(--mono); color: #8e8e93; margin-bottom: 12px; }
+  .sheet .cmd { background: #0a0a0c; border: 1px solid #2c2c2e; border-radius: 10px; padding: 11px 12px; font: 12.5px/1.5 var(--mono); overflow-x: auto; white-space: pre; margin-bottom: 8px; }
+  .sheet .bind { font: 500 10.5px/1.6 var(--mono); color: #636366; margin-bottom: 14px; }
+  .sheet .bind .exp { color: #ff9f0a; }
+  .sheet .acts { display: flex; flex-direction: column; gap: 8px; }
+  .sheet .acts button { font: 600 15px/1 inherit; padding: 14px; border-radius: 12px; border: none; cursor: pointer; }
+  .sheet .a-ok { background: #30d158; color: #06280f; }
+  .sheet .a-no { background: rgba(255,69,58,0.14); color: #ff453a; }
+  .sheet .a-more { background: #2c2c2e; color: #f2f2f7; font-weight: 500; }
+  .sheet.stale .a-ok { background: #39393d; color: #8e8e93; pointer-events: none; }
+  .stale-note { display: none; font-size: 12px; color: #ff9f0a; text-align: center; margin-top: 10px; }
+  .sheet.stale .stale-note { display: block; }
+  .toast {
+    position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 90;
+    background: rgba(28,28,30,0.95); border: 0.5px solid rgba(84,84,88,0.6); border-radius: 12px;
+    padding: 10px 16px; font-size: 12.5px; white-space: nowrap; display: none;
+  }
+  .toast .m { font-family: var(--mono); color: #8e8e93; font-size: 11px; }
+
+  .lock { position: absolute; inset: 0; z-index: 100; background: linear-gradient(160deg, #1b2030, #090a10 70%); display: none; flex-direction: column; align-items: center; padding-top: 90px; }
+  .lock.show { display: flex; }
+  .lock .lt { font-size: 74px; font-weight: 200; letter-spacing: -0.02em; }
+  .lock .ld { font-size: 16px; color: #d1d1d6; margin-top: 2px; }
+  .lock .notif { margin: 40px 14px 0; background: rgba(40,40,44,0.85); backdrop-filter: blur(20px); border-radius: 18px; padding: 13px 15px; cursor: pointer; align-self: stretch; }
+  .lock .hint { position: absolute; bottom: 26px; font-size: 12px; color: #8e8e93; }
+
+  /* pairing */
+  .pair { padding: 10px 24px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .pair h3 { font-size: 21px; margin: 18px 0 8px; }
+  .pair p { font-size: 13.5px; color: #aeaeb2; line-height: 1.5; margin: 0 0 18px; max-width: 30ch; }
+  .qr { width: 180px; height: 180px; background: #fff; border-radius: 12px; padding: 12px; }
+  .sas { display: flex; gap: 14px; font-size: 34px; margin: 10px 0 4px; }
+  .pair .cmdline { font: 12px var(--mono); color: #8e8e93; background: #1c1c1e; border-radius: 8px; padding: 9px 12px; margin-bottom: 16px; }
+  .pair .go { background: var(--accent); color: #14100a; border: none; font: 600 15px inherit; padding: 13px 26px; border-radius: 12px; cursor: pointer; }
+  .pair .waiting { font-size: 12.5px; color: #8e8e93; margin-top: 12px; }
+</style>
+
+<div class="wrap">
+  <div class="rail">
+    <h1>swarm remote — interactive mock</h1>
+    <p class="sub">A working simulation of the phone app for swarm's V2 remote control. Tap around the phone; every screen's integration notes appear below, tagged by whether the underlying piece <b>exists today</b> in swarm, lives in the <b>new gateway</b>, or needs a <b>protocol change</b>. Companion doc: <code>docs/research/remote-control-design.md</code>.</p>
+
+    <div class="railsec">
+      <h2>Simulate</h2>
+      <div class="scen">
+        <button class="primary" data-sim="approval">Agent needs approval</button>
+        <button data-sim="complete">Task completes</button>
+        <button data-sim="offline">Machine drops offline</button>
+        <button data-sim="lock">Lock-screen push</button>
+        <button data-sim="pairing">Pairing flow</button>
+        <button data-sim="reset">Reset demo</button>
+      </div>
+    </div>
+
+    <div class="railsec">
+      <h2>Integration notes — current screen</h2>
+      <div id="notes"></div>
+      <div class="legend">
+        <span><span class="t exist" style="padding:2px 5px">exists</span> shipped in swarm v1</span>
+        <span><span class="t gate" style="padding:2px 5px">gateway</span> new remote gateway</span>
+        <span><span class="t proto" style="padding:2px 5px">protocol</span> daemon/protocol change</span>
+      </div>
+    </div>
+
+    <div class="railsec">
+      <h2>How the phone reaches your computers</h2>
+      <div class="opts">
+        <div class="opt reco">
+          <h3><span class="pill">A</span> Self-hosted E2EE relay <span style="font:600 10px var(--mono);color:var(--accent)">RECOMMENDED</span></h3>
+          <p>Daemons and phone dial out TLS/443 to a small relay you run; every payload end-to-end encrypted, relay stores ciphertext only. Push rides through as ciphertext, decrypted on-device. Works anywhere, app killed or not. Cost: one VPS + owning the crypto (Noise XX; Happy Coder is the working precedent).</p>
+        </div>
+        <div class="opt">
+          <h3><span class="pill">D</span> Tailscale transport + blind push broker</h3>
+          <p>The audit committee's honest challenger: phone talks straight to daemons over your tailnet (WireGuard E2EE, identity and revocation handled by Tailscale); a tiny stateless broker only signs and forwards opaque wake-up pushes. Less custom crypto; requires the Tailscale app and tolerates VPN reconnect lag when opening.</p>
+        </div>
+        <div class="opt">
+          <h3><span class="pill">B/C</span> Pure Tailscale / WebRTC</h3>
+          <p>Pure tailnet fails the core requirement — nothing can wake the phone. WebRTC adds signaling + TURN infra for latency the terminal-text workload can't feel. Both rejected for v1.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="phone" id="phone">
+      <div class="island"></div>
+      <div class="sbar"><span>9:41</span><span>&#9679;&#9679;&#9679;&#9679;&#65039;</span></div>
+      <div class="screen" id="screen"></div>
+      <div class="qchips" id="qchips" style="display:none"></div>
+      <div class="composer" id="composer" style="display:none"></div>
+      <nav class="tabbar" id="tabbar"></nav>
+      <div class="banner" id="banner"></div>
+      <div class="scrim" id="scrim"></div>
+      <div class="sheet" id="sheet"></div>
+      <div class="toast" id="toast"></div>
+      <div class="lock" id="lock"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------- data ---------------- */
+
+const MACHINES = [
+  { id: "mbp",    name: "nathans-mbp", eid: "a3f2", online: true },
+  { id: "studio", name: "mac-studio",  eid: "7c91", online: true },
+];
+
+const SESSIONS = [
+  { id: "s2", agent: "claude", proj: "quanthome/api", mach: "mbp",    group: "needs",
+    line: "Wants to run: <b>git push --force-with-lease</b>" },
+  { id: "s1", agent: "claude", proj: "swarm",         mach: "mbp",    group: "work",
+    line: "Writing pairing tests for the remote gateway" },
+  { id: "s4", agent: "claude", proj: "naef-mcp",      mach: "studio", group: "work",
+    line: "Refactoring auth middleware, 3 files so far" },
+  { id: "s3", agent: "codex",  proj: "swarm",         mach: "mbp",    group: "ready",
+    line: "Diff ready: attach hint row, <b>+42 &minus;18</b> in internal/attach" },
+  { id: "s5", agent: "codex",  proj: "blog",          mach: "studio", group: "done",
+    line: "Build green &middot; 34 tests passed &middot; 12 min ago" },
+  { id: "s6", agent: "claude", proj: "dotfiles",      mach: "studio", group: "done",
+    line: "Completed &middot; brew bundle updated &middot; 1 h ago" },
+];
+
+const GROUPS = [
+  { key: "needs", label: "Needs you" },
+  { key: "work",  label: "Working" },
+  { key: "ready", label: "Ready for review" },
+  { key: "done",  label: "Done" },
+];
+
+const APPROVAL = {
+  tool: "Bash", session: "s2",
+  cmd: "git push --force-with-lease origin main",
+  reqId: "req_7f3a", hash: "sha256:91be&hellip;04d2",
+};
+
+const NOTES = {
+  inbox: { name: "Triage inbox", items: [
+    ["exist", "The four sections are swarm's server-derived <b>status.Group</b> (NeedsInput / Working / ReadyForReview / Completed) &mdash; the phone renders them verbatim, it never re-derives status."],
+    ["exist", "Rows aggregate across machines because session ids are already namespaced <b>&lt;endpoint_id&gt;/&lt;local&gt;</b> (protocol F-1)."],
+    ["gate", "Presence dots and the machine chips come from relay presence, reported by each daemon's outbound connection."],
+    ["gate", "The one-line &ldquo;what it needs&rdquo; summary is emitted by the gateway's typed-event encoder."],
+  ]},
+  detail: { name: "Session detail (chat + artifacts)", items: [
+    ["gate", "Chat view renders <b>transcript_delta</b> typed events &mdash; the committee flagged this as the hardest feature: deriving clean text from a PTY needs a per-CLI parse layer and a spike gate before it's promised. Fallback is always the terminal peek."],
+    ["proto", "The approval card is an <b>interaction_request</b> bound to (machine, session, request-id, content-hash); a delayed tap can never approve whatever is on screen later. Spike-gated: the CLI's permission prompt is a synchronous in-terminal menu, so whether a minutes-later approval can be applied at all (blocking hook? MCP prompt tool?) must be proven first &mdash; fallback is deep-linking into terminal peek."],
+    ["exist", "Interrupt maps to the existing kill/signal path; input uses the existing attach data plane once the phone holds the controller lease."],
+    ["gate", "Queue-while-busy: composer stays live during a turn; queued messages are idempotency-keyed."],
+  ]},
+  term: { name: "Terminal peek", items: [
+    ["exist", "This grid is swarm's escape-filtered <b>VT snapshot</b> (N-6 filter, OSC-52 safe) &mdash; already structurally safe to ship to a remote renderer. Raw PTY bytes never leave the machine."],
+    ["proto", "Watching live while the desktop TUI stays attached needs the new <b>observer attach</b> &mdash; the committee sized this as a real fan-out epic (shim is single-connection today), not a flag."],
+    ["exist", "&ldquo;Take control&rdquo; is the existing lease supersede: a new generation displaces the desktop controller cleanly."],
+  ]},
+  machines: { name: "Machines & security", items: [
+    ["gate", "Each machine's gateway dials out to the relay; nothing listens on your network. Offline = relay lost the daemon's connection."],
+    ["gate", "Paired devices hold their own keypairs; <b>revoke rotates the machine key</b> &mdash; deliberately stronger than Happy's single shared account seed."],
+    ["gate", "The kill switch severs remote access at the daemon (<b>swarm remote off</b>), without needing the phone or the relay."],
+    ["gate", "Every remote-originated mutation lands in the audit log with device id + request id."],
+  ]},
+  activity: { name: "Activity", items: [
+    ["gate", "The while-you-were-away feed replays the per-session <b>event log</b> from your device's cursor &mdash; the reconnect mechanism doubles as history."],
+    ["exist", "Entries are Group transitions the daemon already emits to subscribers; the gateway journals them durably."],
+  ]},
+  settings: { name: "Settings", items: [
+    ["gate", "Two coarse toggles, copied from Anthropic's remote control: <b>needs your decision</b> and <b>task done</b>. No per-event noise."],
+    ["gate", "Push payloads are ciphertext end-to-end; the iOS Notification Service Extension decrypts on-device. The relay and Apple see routing metadata only."],
+  ]},
+  pairing: { name: "Pairing", items: [
+    ["gate", "<b>swarm remote pair</b> shows a single-use, short-lived QR; the secret inside never touches the relay."],
+    ["gate", "SAS emoji check + <b>confirm on the Mac</b> defeats a photographed QR &mdash; pairing fails closed unless approved locally (committee amendment)."],
+    ["gate", "Keys pin on first use; every later connection is mutually authenticated (Noise XX)."],
+  ]},
+};
+
+/* ---------------- state ---------------- */
+
+let state = {
+  tab: "inbox", view: "inbox", scope: "all",
+  sessions: JSON.parse(JSON.stringify(SESSIONS)),
+  machines: JSON.parse(JSON.stringify(MACHINES)),
+  killed: false, detailId: null, pairStep: 0,
+  chat: [], streamTimer: null, sheetTimer: null, sheetExpire: 0,
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s;
+
+function sess(id) { return state.sessions.find((s) => s.id === id); }
+
+/* ---------------- render ---------------- */
+
+const TABS = [
+  ["inbox", "Inbox", "M4 12l8-8 8 8M6 10v10h12V10"],
+  ["machines", "Machines", "M3 5h18v10H3zM8 19h8M12 15v4"],
+  ["activity", "Activity", "M3 12h4l3-8 4 16 3-8h4"],
+  ["settings", "Settings", "M12 8a4 4 0 110 8 4 4 0 010-8zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"],
+];
+
+function render() {
+  renderTabbar();
+  const v = state.view;
+  $("composer").style.display = v === "detail" ? "flex" : "none";
+  $("qchips").style.display = v === "detail" ? "flex" : "none";
+  if (v === "inbox") renderInbox();
+  else if (v === "detail") renderDetail();
+  else if (v === "term") renderTerm();
+  else if (v === "machines") renderMachines();
+  else if (v === "activity") renderActivity();
+  else if (v === "settings") renderSettings();
+  else if (v === "pairing") renderPairing();
+  renderNotes(v === "detail" || v === "term" ? v : v);
+}
+
+function renderTabbar() {
+  const needs = state.sessions.filter((s) => s.group === "needs").length;
+  $("tabbar").innerHTML = TABS.map(([id, label, path]) => `
+    <button data-tab="${id}" class="${state.tab === id ? "on" : ""} ${id === "inbox" && needs ? "badge" : ""}" ${id === "inbox" && needs ? `data-n="${needs}"` : ""} aria-label="${label}">
+      <svg viewBox="0 0 24 24"><path d="${path}"/></svg>${label}
+    </button>`).join("");
+}
+
+function machChip(m) {
+  return `<button data-scope="${m.id}" class="${state.scope === m.id ? "on" : ""}">
+    <span class="dotp ${m.online && !state.killed ? "" : "off"}"></span>${m.name}</button>`;
+}
+
+function renderInbox() {
+  const visible = state.sessions.filter((s) => state.scope === "all" || s.mach === state.scope);
+  const offline = state.killed;
+  let html = `<div class="navhead"><span class="big">Inbox</span></div>
+    <div class="scopebar">
+      <button data-scope="all" class="${state.scope === "all" ? "on" : ""}">All machines</button>
+      ${state.machines.map(machChip).join("")}
+    </div>`;
+  if (offline) {
+    html += `<div class="empty">Remote access is switched off.<br>Flip the kill switch back on under Machines.</div>`;
+  } else {
+    for (const g of GROUPS) {
+      const rows = visible.filter((s) => s.group === g.key && (s.mach !== "studio" || machineOnline("studio")));
+      if (!rows.length) continue;
+      html += `<div class="seclabel">${g.label}</div><div class="cards">` + rows.map((s) => `
+        <button class="srow" data-open="${s.id}">
+          <div class="top"><span class="dot g-${s.group}"></span>
+            <span class="proj">${s.proj}</span>
+            <span class="agent">${s.agent}</span><span class="mach">${s.mach === "mbp" ? "nathans-mbp" : "mac-studio"}</span></div>
+          <div class="line">${s.line}</div>
+        </button>`).join("") + `</div>`;
+    }
+    const hidden = state.sessions.length - visible.length;
+    if (!visible.length) html += `<div class="empty">No sessions on this machine yet.<br>Launch one from the composer or the desktop.</div>`;
+    else if (state.scope === "all" && !machineOnline("studio")) html += `<div class="empty" style="padding:24px">mac-studio is offline &mdash; its sessions will reappear when its daemon reconnects to the relay.</div>`;
+  }
+  $("screen").innerHTML = html;
+}
+
+function machineOnline(id) { return state.machines.find((m) => m.id === id).online; }
+
+function renderDetail() {
+  const s = sess(state.detailId);
+  let html = `<div class="navhead">
+      <button class="back" data-nav="inbox">&#8249; Inbox</button><span class="spacer"></span>
+      <span class="title2">${s.proj}</span><span class="spacer"></span>
+      <button class="back" data-nav="term" style="font-size:13px">Terminal</button>
+    </div><div class="chat" id="chatlog"></div><div style="height:130px"></div>`;
+  $("screen").innerHTML = html;
+  $("chatlog").innerHTML = state.chat.map((m) => m.html).join("");
+  $("composer").innerHTML = `
+    <button aria-label="Voice input"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 013 3v5a3 3 0 01-6 0V6a3 3 0 013-3zM6 11a6 6 0 0012 0M12 17v4"/></svg></button>
+    <input placeholder="Message ${s.agent}&hellip;" aria-label="Message input">
+    <button class="stopbtn" data-act="stop" aria-label="Stop turn"><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>`;
+  $("qchips").innerHTML = ["Looks good, continue", "Explain that diff", "Run the tests first", "Hold on — use a worktree"].map(
+    (q) => `<button data-chip="${q}">${q}</button>`).join("");
+  $("screen").scrollTop = 1e6;
+}
+
+function renderTerm() {
+  const s = sess(state.detailId);
+  $("screen").innerHTML = `<div class="navhead">
+      <button class="back" data-nav="detail">&#8249; Chat</button><span class="spacer"></span>
+      <span class="title2">${s.proj} &middot; grid</span><span class="spacer"></span><span style="width:44px"></span>
+    </div>
+    <div class="term"><span class="dim">&#9484;&#9472; claude &middot; ${s.proj} &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9490;</span>
+
+  <span class="ok">&#10003;</span> Read internal/attach/attach.go
+  <span class="ok">&#10003;</span> Edit hintrow_test.go <span class="dim">(+38)</span>
+  <span class="warn">&#9679;</span> Bash: go test ./internal/attach/
+    <span class="dim">running&hellip; 2 of 5 packages</span>
+
+  <span class="dim">esc to interrupt &middot; ctrl+q detach</span>
+<span class="dim">&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9498;</span></div>
+    <p class="ro-note">Read-only &middot; escape-filtered VT snapshot<br><button data-act="take">Take control</button> to send keys (desktop TUI is superseded)</p>`;
+}
+
+function renderMachines() {
+  let html = `<div class="navhead"><span class="big">Machines</span></div><div class="cards">`;
+  html += state.machines.map((m) => `
+    <div class="mrow"><div class="top">
+      <span class="dot ${m.online && !state.killed ? "g-done" : "g-off"}"></span>
+      <span class="name">${m.name}</span><span class="eid">endpoint ${m.eid}</span></div>
+      <div class="meta">${m.online && !state.killed
+        ? `${state.sessions.filter((s) => s.mach === m.id).length} sessions &middot; relay connected &middot; outbound only`
+        : "offline &mdash; will reconnect to relay"}</div></div>`).join("");
+  html += `</div>
+    <div class="kills"><div class="tt"><b>Remote access</b><span>Kill switch lives on the daemon: <span style="font-family:var(--mono)">swarm remote off</span></span></div>
+      <button class="toggle ${state.killed ? "" : "on"}" data-act="kill" aria-label="Toggle remote access"></button></div>
+    <div class="seclabel">Paired devices</div><div class="cards">
+      <div class="devrow"><span class="dn">Nathan's iPhone <span class="dfp">key e7c2&hellip;9f31 &middot; this device</span></span>
+        <button class="rev" data-act="revoke">Revoke</button></div></div>
+    <div class="seclabel">Audit log</div><div class="cards">
+      <div class="arow"><span class="when">09:41</span><span>approve <b>req_7f3a</b> &middot; quanthome/api &middot; this device</span></div>
+      <div class="arow"><span class="when">09:12</span><span>input &middot; swarm &middot; this device</span></div>
+      <div class="arow"><span class="when">08:55</span><span>pair &middot; Nathan's iPhone &middot; confirmed on nathans-mbp</span></div>
+    </div>`;
+  $("screen").innerHTML = html;
+}
+
+function renderActivity() {
+  $("screen").innerHTML = `<div class="navhead"><span class="big">Activity</span></div>
+    <div class="seclabel">While you were away</div><div class="cards">
+      <div class="arow"><span class="when">09:38</span><span><b>quanthome/api</b> needs a decision &mdash; force push approval</span></div>
+      <div class="arow"><span class="when">09:24</span><span><b>blog</b> completed &middot; build green, 34 tests</span></div>
+      <div class="arow"><span class="when">09:10</span><span><b>swarm</b> (codex) ready for review &middot; +42 &minus;18</span></div>
+      <div class="arow"><span class="when">08:57</span><span><b>naef-mcp</b> started &middot; refactor auth middleware</span></div>
+    </div>
+    <div class="seclabel">Informative</div><div class="cards">
+      <div class="arow"><span class="when">08:55</span><span>mac-studio reconnected to relay after sleep</span></div>
+      <div class="arow"><span class="when">08:31</span><span>dotfiles completed quietly (notifications off for this project)</span></div>
+    </div>`;
+}
+
+function renderSettings() {
+  $("screen").innerHTML = `<div class="navhead"><span class="big">Settings</span></div>
+    <div class="seclabel">Notifications</div><div class="cards">
+      <div class="setrow"><span class="sl">Needs your decision<span>Approvals and blocked prompts</span></span><button class="toggle on" aria-label="Toggle decision notifications"></button></div>
+      <div class="setrow"><span class="sl">Task done<span>Completions and failures</span></span><button class="toggle on" aria-label="Toggle done notifications"></button></div>
+      <div class="setrow"><span class="sl">Quiet hours<span>23:00 &ndash; 07:30</span></span><button class="toggle" aria-label="Toggle quiet hours"></button></div>
+    </div>
+    <div class="seclabel">Security</div><div class="cards">
+      <div class="setrow"><span class="sl">Require Face ID to approve<span>Biometric gate on every approval sheet</span></span><button class="toggle on" aria-label="Toggle Face ID"></button></div>
+      <div class="setrow"><span class="sl">End-to-end encryption<span>Noise XX &middot; relay sees ciphertext only</span></span><span style="font:600 12px var(--mono);color:#30d158">active</span></div>
+    </div>`;
+}
+
+function renderPairing() {
+  const step = state.pairStep;
+  let inner = "";
+  if (step === 0) {
+    inner = `<h3>Pair a computer</h3>
+      <p>See the moment an agent needs you &mdash; from anywhere.</p>
+      <div class="cmdline">$ swarm remote pair</div>
+      <svg class="qr" viewBox="0 0 29 29" aria-label="Pairing QR code">${fakeQR()}</svg>
+      <p style="margin-top:16px">Single-use code, expires in 60 s.<br>The secret inside never reaches the relay.</p>
+      <button class="go" data-act="pair-next">Simulate scan</button>`;
+  } else if (step === 1) {
+    inner = `<h3>Check both screens</h3>
+      <div class="sas" aria-label="Verification emoji">&#129417;&#128300;&#127756;&#9875;</div>
+      <p>Your Mac shows the same four symbols. Confirm there to finish &mdash; pairing fails closed without it.</p>
+      <div class="cmdline">nathans-mbp: Allow "Nathan's iPhone"? [y/N]</div>
+      <button class="go" data-act="pair-next">Simulate desktop confirm</button>
+      <div class="waiting">waiting for nathans-mbp&hellip;</div>`;
+  } else {
+    inner = `<h3>Paired with nathans-mbp</h3>
+      <p>Keys pinned. Every future connection is mutually authenticated end-to-end.</p>
+      <div class="sas">&#128274;</div>
+      <button class="go" data-act="pair-done">Open inbox</button>`;
+  }
+  $("screen").innerHTML = `<div class="pair">${inner}</div>`;
+}
+
+function fakeQR() {
+  let cells = "";
+  let seed = 41;
+  for (let y = 0; y < 29; y++) for (let x = 0; x < 29; x++) {
+    seed = (seed * 73 + x * 7 + y * 13 + 3) % 97;
+    const finder = (x < 8 && y < 8) || (x > 20 && y < 8) || (x < 8 && y > 20);
+    const on = finder ? ((x % 7 === 0 || y % 7 === 0 || (x > 1 && x < 6 && y > 1 && y < 6)) && x < 7 && y < 7)
+      || ((x - 22) % 7 === 0 || y % 7 === 0 || (x > 23 && x < 28 && y > 1 && y < 6)) && x > 21 && y < 7
+      || (x % 7 === 0 || (y - 22) % 7 === 0 || (x > 1 && x < 6 && y > 23 && y < 28)) && x < 7 && y > 21
+      : seed < 44;
+    if (on) cells += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
+  }
+  return `<g fill="#000">${cells}</g>`;
+}
+
+function renderNotes(key) {
+  const n = NOTES[key] || NOTES.inbox;
+  $("notes").innerHTML = `<p class="screen-name">${n.name}</p><ul>` +
+    n.items.map(([t, txt]) => `<li><span class="t ${t}">${t === "exist" ? "exists" : t === "gate" ? "gateway" : "protocol"}</span>${txt}</li>`).join("") + "</ul>";
+}
+
+/* ---------------- chat scripting ---------------- */
+
+function seedChat() {
+  state.chat = [
+    { html: `<div class="msg user">Ship the hint row change &mdash; run the attach tests first and push if green.</div>` },
+    { html: `<div class="msg agent">Running the attach suite before touching the remote. Tests are in <b>internal/attach/hintrow_test.go</b> &mdash; 5 packages total.</div>` },
+    { html: `<div class="card"><div class="chead">Bash &middot; exit 0</div><div class="cbody">$ go test ./internal/attach/
+ok  internal/attach  1.24s  <span class="add">38 passed</span></div></div>` },
+    { html: `<div class="card"><div class="chead">Edit &middot; internal/attach/attach.go</div><div class="cbody"><span class="del">- hint := "ctrl+\\\\ detach"</span>
+<span class="add">+ hint := "ctrl+q detach &middot; esc interrupt"</span></div></div>` },
+  ];
+}
+
+function pushApprovalCard() {
+  state.chat.push({ html: `
+    <div class="card approval" id="apprcard"><div class="chead">Permission &middot; ${APPROVAL.reqId}</div>
+      <div class="cbody">$ ${APPROVAL.cmd}</div>
+      <div class="cfoot"><button class="btn-ok" data-act="approve">Approve</button><button class="btn-no" data-act="deny">Deny</button></div>
+    </div>` });
+}
+
+function streamAgentReply(text, after) {
+  const chatlog = $("chatlog");
+  if (!chatlog) return;
+  const el = document.createElement("div");
+  el.className = "msg agent";
+  chatlog.appendChild(el);
+  let i = 0;
+  clearInterval(state.streamTimer);
+  state.streamTimer = setInterval(() => {
+    i += 2 + Math.floor(i / 18);
+    if (i >= text.length) {
+      clearInterval(state.streamTimer);
+      el.innerHTML = text;
+      state.chat.push({ html: el.outerHTML });
+      if (after) after();
+    } else {
+      el.innerHTML = text.slice(0, i) + '<span class="stream-caret"></span>';
+    }
+    $("screen").scrollTop = 1e6;
+  }, 40);
+}
+
+/* ---------------- overlays ---------------- */
+
+function showBanner() {
+  $("banner").innerHTML = `<div class="bt"><span class="bapp">swarm</span><span>nathans-mbp &middot; now</span></div>
+    <div class="bmsg"><b>quanthome/api</b> needs your decision</div>`;
+  $("banner").classList.add("show");
+  setTimeout(() => $("banner").classList.remove("show"), 6000);
+}
+
+function openSheet() {
+  const sheet = $("sheet");
+  sheet.classList.remove("stale");
+  state.sheetExpire = 60;
+  sheet.innerHTML = `<div class="grab"></div>
+    <h4>Claude wants to run Bash</h4>
+    <div class="ctx">nathans-mbp &middot; quanthome/api &middot; claude</div>
+    <div class="cmd">$ ${APPROVAL.cmd}</div>
+    <div class="bind">bound to ${APPROVAL.reqId} &middot; ${APPROVAL.hash}<br>valid <span class="exp" id="exp">60 s</span> &mdash; stale approvals are rejected by the daemon</div>
+    <div class="acts">
+      <button class="a-ok" data-act="approve">Approve once</button>
+      <button class="a-no" data-act="deny">Deny</button>
+      <button class="a-more" data-act="close-sheet">View session first</button>
+    </div>
+    <div class="stale-note">This request expired on the daemon. Pull to refresh state.</div>`;
+  $("scrim").classList.add("show");
+  requestAnimationFrame(() => sheet.classList.add("show"));
+  clearInterval(state.sheetTimer);
+  state.sheetTimer = setInterval(() => {
+    state.sheetExpire -= 1;
+    const exp = $("exp");
+    if (exp) exp.textContent = state.sheetExpire + " s";
+    if (state.sheetExpire <= 0) { clearInterval(state.sheetTimer); sheet.classList.add("stale"); }
+  }, 1000);
+}
+
+function closeSheet() {
+  clearInterval(state.sheetTimer);
+  $("sheet").classList.remove("show");
+  $("scrim").classList.remove("show");
+}
+
+function toast(msg, mono) {
+  const t = $("toast");
+  t.innerHTML = msg + (mono ? ` <span class="m">${mono}</span>` : "");
+  t.style.display = "block";
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.style.display = "none"; }, 3200);
+}
+
+function showLock() {
+  $("lock").innerHTML = `<div class="lt">9:41</div><div class="ld">Friday, July 18</div>
+    <div class="notif" data-act="unlock">
+      <div class="bt" style="display:flex;gap:8px;font-size:12px;color:#8e8e93"><span style="font-weight:700;color:#f2f2f7">swarm</span><span>now</span></div>
+      <div style="font-size:14px;margin-top:4px"><b>quanthome/api</b> needs your decision</div>
+      <div style="font-size:12px;color:#8e8e93;margin-top:2px">Decrypted on-device &middot; relay saw ciphertext</div>
+    </div>
+    <div class="hint">Tap the notification</div>`;
+  $("lock").classList.add("show");
+}
+
+/* ---------------- simulations ---------------- */
+
+function simApproval() {
+  const s = sess("s2");
+  s.group = "needs";
+  s.line = "Wants to run: <b>git push --force-with-lease</b>";
+  showBanner();
+  if (state.view === "inbox") render();
+}
+
+function simComplete() {
+  const s = sess("s4");
+  s.group = "done";
+  s.line = "Completed &middot; auth middleware refactored &middot; just now";
+  toast("naef-mcp finished", "task done");
+  if (state.view === "inbox" || state.view === "machines") render();
+}
+
+function simOffline() {
+  state.machines.find((m) => m.id === "studio").online = false;
+  toast("mac-studio dropped off the relay");
+  render();
+}
+
+function resetDemo() {
+  state.sessions = JSON.parse(JSON.stringify(SESSIONS));
+  state.machines = JSON.parse(JSON.stringify(MACHINES));
+  state.killed = false; state.scope = "all"; state.tab = "inbox"; state.view = "inbox";
+  closeSheet(); $("lock").classList.remove("show");
+  render();
+}
+
+/* ---------------- events ---------------- */
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-sim],[data-tab],[data-open],[data-nav],[data-scope],[data-act],[data-chip]");
+  if (!el) return;
+
+  if (el.dataset.sim) {
+    const s = el.dataset.sim;
+    if (s === "approval") simApproval();
+    else if (s === "complete") simComplete();
+    else if (s === "offline") simOffline();
+    else if (s === "lock") showLock();
+    else if (s === "pairing") { state.view = "pairing"; state.pairStep = 0; render(); }
+    else if (s === "reset") resetDemo();
+    return;
+  }
+  if (el.dataset.tab) { state.tab = el.dataset.tab; state.view = el.dataset.tab; render(); return; }
+  if (el.dataset.scope) { state.scope = el.dataset.scope; render(); return; }
+  if (el.dataset.open) {
+    state.detailId = el.dataset.open; state.view = "detail";
+    seedChat();
+    if (el.dataset.open === "s2") pushApprovalCard();
+    render();
+    if (el.dataset.open !== "s2") setTimeout(() => streamAgentReply("Hint row is in. Now checking the render sanitizer handles C1 controls in the new string before I commit…"), 500);
+    return;
+  }
+  if (el.dataset.nav) { state.view = el.dataset.nav; if (el.dataset.nav === "inbox") state.tab = "inbox"; render(); return; }
+  if (el.dataset.chip) {
+    state.chat.push({ html: `<div class="msg user">${el.dataset.chip}</div>` });
+    render();
+    setTimeout(() => streamAgentReply("Got it — queued behind the current step. I'll pick it up as soon as the test run finishes."), 400);
+    return;
+  }
+
+  const act = el.dataset.act;
+  if (act === "approve") {
+    closeSheet();
+    const s = sess("s2");
+    s.group = "work"; s.line = "Pushing to origin — approved from this device";
+    const card = $("apprcard");
+    if (card) card.querySelector(".cfoot").innerHTML = `<span style="font:600 12px var(--mono);color:#30d158;padding:4px">approved &middot; logged</span>`;
+    toast("Approved &middot; audit log", APPROVAL.reqId);
+    if (state.view === "inbox") render();
+  } else if (act === "deny") {
+    closeSheet();
+    const s = sess("s2");
+    s.group = "work"; s.line = "Denied — asking for an alternative approach";
+    toast("Denied &middot; audit log", APPROVAL.reqId);
+    if (state.view !== "detail") render();
+  } else if (act === "close-sheet") {
+    closeSheet();
+    state.detailId = "s2"; state.view = "detail"; state.tab = "inbox";
+    seedChat(); pushApprovalCard(); render();
+  } else if (act === "kill") {
+    state.killed = !state.killed;
+    toast(state.killed ? "Remote access severed at the daemon" : "Remote access restored");
+    render();
+  } else if (act === "revoke") {
+    toast("Device revoked — machine key rotated");
+  } else if (act === "take") {
+    toast("Controller lease taken", "generation 7 → 8");
+  } else if (act === "stop") {
+    toast("Interrupt sent");
+  } else if (act === "unlock") {
+    $("lock").classList.remove("show");
+    state.tab = "inbox"; openSheet();
+  } else if (act === "pair-next") {
+    state.pairStep += 1; render();
+  } else if (act === "pair-done") {
+    state.view = "inbox"; state.tab = "inbox"; render();
+  }
+});
+
+$("banner").addEventListener("click", () => { $("banner").classList.remove("show"); openSheet(); });
+$("scrim").addEventListener("click", closeSheet);
+
+render();
+</script>
