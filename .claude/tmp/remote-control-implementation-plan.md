@@ -444,10 +444,13 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
   as first post-handshake message, carrying `epoch_id`; a device never gets a grant for an epoch
   it was not active in. Verify: `TestEpochGrant_SealOpenRoundTrip`, `TestEpochGrant_LibsodiumKAT`,
   `TestEpochGrant_WrongKeyFails`. Deps: R-CRY.2, R-PAIR.7, R-DEV.4/.5.
-- **R-CRY.11 Async AEAD, AAD binding, nonce rules.** XChaCha20-Poly1305 under `K_epoch`, 24-byte
-  fresh crypto/rand nonce per envelope; full header (version..sender_key_id) passed as AAD so any
-  header tamper fails the tag. XChaCha mandated (K_epoch reused across events; 96-bit random would
-  risk collision). Verify: `TestEnvelope_TamperRejected`, `TestEnvelope_NonceUniqueAndXChaCha`.
+- **R-CRY.11 Async AEAD, AAD binding, nonce rules.** [amended: D.0-A5 — AAD EXCLUDES `recipient_key_id`
+  (and the AEAD nonce), so the ciphertext is identical for every recipient.] XChaCha20-Poly1305 under
+  `K_epoch`, 24-byte fresh crypto/rand nonce per envelope; AAD = `version || type || epoch_id || seq ||
+  sender_key_id` (the header EXCEPT `recipient_key_id`, which is a routing hint outside the AEAD) so any
+  header tamper fails the tag while recipient routing stays fan-out-identical. XChaCha mandated (K_epoch
+  reused across events; 96-bit random would risk collision). Verify: `TestEnvelope_TamperRejected`,
+  `TestEnvelope_NonceUniqueAndXChaCha`, `TestEnvelope_IdenticalCiphertextAcrossRecipients`.
 - **R-CRY.12 Authenticated per-epoch sequence numbers.** Each mailbox event carries strictly
   increasing `seq` per `(machine, epoch_id)`, authenticated as AAD; device tracks highest seq per
   `(sender_key_id, epoch_id)`, rejects dup/lower, surfaces gaps — end-to-end relay reorder/dup/

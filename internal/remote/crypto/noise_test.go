@@ -138,7 +138,11 @@ func TestNoiseXX_KnownAnswer(t *testing.T) {
 
 // wantChannelBinding is a derive-and-pin KAT (fixed statics + fixed ephemeral
 // randomness above); filled by the implementer at first green.
-var wantChannelBinding []byte
+var wantChannelBinding = []byte{
+	0x66, 0x6c, 0x23, 0x58, 0xd2, 0x33, 0x86, 0x55, 0x26, 0xf7, 0x8b, 0x1b,
+	0x84, 0x94, 0x70, 0x10, 0x24, 0x40, 0xc1, 0xbf, 0x6b, 0x2d, 0x03, 0x6a,
+	0xe2, 0x0b, 0x32, 0xea, 0x24, 0x38, 0xc5, 0x2b,
+}
 
 // TestNoise_PrologueMismatchAborts pins R-CRY.5: differing prologues abort the
 // handshake at the first MAC (downgrade protection), before any transport byte.

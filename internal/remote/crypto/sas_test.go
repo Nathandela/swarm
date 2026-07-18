@@ -99,4 +99,4 @@ func TestSAS_KnownAnswer(t *testing.T) {
 
 // wantSAS is a derive-and-pin cross-language KAT for the fixed channel binding
 // above; filled by the implementer at first green.
-var wantSAS [4]string
+var wantSAS = [4]string{"🐷", "🐧", "🐰", "🦉"}
