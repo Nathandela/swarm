@@ -93,7 +93,7 @@ Derived view groups:
 - **V-2** (Event) WHEN a status event arrives, the general view SHALL reflect it within 1 second without user action.
 - **V-3** (Ubiquitous) Navigation SHALL be keyboard-only: ↑/↓ (and j/k) move selection across groups, Enter attaches, Esc backs out/quits, Ctrl+X kills (one-key confirm), `n` opens the launch form.
 - **V-4** (Ubiquitous) Each row SHALL show: agent name, working directory (shortened), status, elapsed/last-activity time, and a one-line last-output summary derived heuristically from the grid (no LLM call).
-- **V-5** (Event) WHEN a session enters Needs input or Ready for review, the general view SHALL surface an in-TUI notification (highlight + transient banner). OS notifications are v1.x.
+- **V-5** (Event) WHEN a session enters Needs input or Ready for review as observed in the delivered status stream, the general view SHALL surface an in-TUI notification (highlight + transient banner). A state coalesced away before delivery (held for less than one sampling window, ADR-008) does not banner; both banner-worthy states are human-paced waits, so in practice they always persist to delivery. OS notifications are v1.x.
 - **V-6** (Ubiquitous) The aesthetic SHALL be minimal, Claude Code-like: no mouse required, subtle color, no decoration without information.
 
 ### Launch flow (L)

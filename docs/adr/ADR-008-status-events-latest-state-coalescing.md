@@ -57,7 +57,10 @@ latest-state latency bound, hook to rendered TUI, under PTY load).
 - A status held for less than one sampling window may never be delivered as an
   event. Consequently a V-5 banner fires only for states that persist long
   enough to be sampled — which is exactly the set worth interrupting a human
-  for. This is the accepted residual.
+  for (both banner-worthy states are human-paced waits, so in practice they
+  always persist to delivery). This is the accepted residual; V-5, E7.2, and
+  the matrix V-5 row are amended to "as observed in the delivered status
+  stream" in the same change.
 - Any future feature that needs true edge semantics server-side (e.g. a
   notification/webhook on every transition, or V2 remote clients replaying
   history) reopens this decision and needs the versioned mutation stream P-3
