@@ -34,8 +34,10 @@ const (
 )
 
 // server owns the socket, the emulator/transcript pipeline, and the PTY master
-// for one session. Exactly one client connection is served at a time (v1 shim
-// pin).
+// for one session. Connections are served CONCURRENTLY (one goroutine each), so a
+// controller's held attach never blocks a fresh signal/hello connection (R1.3.2);
+// the hub still couples the pipeline to at most one live subscriber (S10), so a
+// later attach supersedes an earlier one.
 type server struct {
 	hub          *hub
 	ptmx         *os.File
@@ -56,8 +58,14 @@ type server struct {
 	escStop    chan struct{}
 	escDone    chan struct{}
 
-	mu      sync.Mutex
-	curConn net.Conn // the connection currently being served, or nil
+	// mu guards the connection set + closing flag; handlers tracks every in-flight
+	// serveConn so shutdown can close each connection AND join its handler (no leak,
+	// R1.3.2c). Once closing is set (by shutdown) acceptLoop refuses to serve any
+	// newly-accepted connection, so no handler is ever added after the join begins.
+	mu       sync.Mutex
+	conns    map[net.Conn]struct{}
+	closing  bool
+	handlers sync.WaitGroup
 }
 
 func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcript.Writer, ptmx *os.File, pgid int, grace time.Duration, m *Metrics) *server {
@@ -71,6 +79,7 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 		listener:     l,
 		escStop:      make(chan struct{}),
 		escDone:      make(chan struct{}),
+		conns:        make(map[net.Conn]struct{}),
 	}
 }
 
@@ -114,25 +123,40 @@ func (s *server) drain() {
 	}
 }
 
-// acceptLoop serves connections one at a time until the listener is closed.
+// acceptLoop serves connections concurrently until the listener is closed: each
+// accepted connection gets its own serveConn goroutine, tracked so shutdown can
+// close it and join its handler. A connection accepted after shutdown began
+// (closing set) is closed immediately and never served (its handler is not
+// tracked), so the shutdown join can never race a late Add.
 func (s *server) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			return
 		}
-		s.serveConn(conn)
+		s.mu.Lock()
+		if s.closing {
+			s.mu.Unlock()
+			conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
+		s.handlers.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.handlers.Done()
+			s.serveConn(conn)
+		}()
 	}
 }
 
 // serveConn drives one client connection to completion: it reads frames and
-// dispatches them, tearing down any active subscription when the connection
-// ends.
+// dispatches them, tearing down any active subscription when the connection ends.
+// All writes to the connection — this loop's hello replies and the attach writer
+// goroutine's snapshot/frames — go through one connWriter, so concurrent writers
+// on the same connection can never interleave a frame (R1.3.2b/e).
 func (s *server) serveConn(conn net.Conn) {
-	s.mu.Lock()
-	s.curConn = conn
-	s.mu.Unlock()
-
+	cw := &connWriter{conn: conn}
 	var sub *subscriber
 	var helloed bool // gate: no op is honored until a hello frame arrives
 	defer func() {
@@ -141,7 +165,7 @@ func (s *server) serveConn(conn net.Conn) {
 			<-sub.done
 		}
 		s.mu.Lock()
-		s.curConn = nil
+		delete(s.conns, conn)
 		s.mu.Unlock()
 		conn.Close()
 	}()
@@ -159,7 +183,7 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if ctrl.Type == shimwire.TypeHello {
 				helloed = true
-				writeControl(conn, shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -174,7 +198,7 @@ func (s *server) serveConn(conn net.Conn) {
 					s.hub.detach(sub)
 					<-sub.done
 				}
-				sub = s.hub.attach(conn)
+				sub = s.hub.attach(cw)
 			case shimwire.TypeResize:
 				s.resize(ctrl.Cols, ctrl.Rows)
 			case shimwire.TypeSignal:
@@ -252,10 +276,14 @@ func (s *server) finishEscalation() {
 	_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 }
 
-// shutdown flushes buffered DataOut to a connected client, emits the exit_report
-// control after it, then tears down the socket. It is called once, after the
-// agent has exited and the side-files are written.
+// shutdown flushes buffered DataOut to the attached client, emits the exit_report
+// control after it, then tears down the socket and EVERY connection. It is called
+// once, after the agent has exited and the side-files are written. It closes every
+// tracked connection and joins every serveConn handler, so no connection or
+// goroutine is left behind (R1.3.2c).
 func (s *server) shutdown(rep shimwire.Control) {
+	// 1. Publish the exit_report to the attached subscriber (if any) and let its
+	//    writer drain + emit it before we tear the connections down.
 	s.hub.mu.Lock()
 	s.hub.shutdown = true
 	s.hub.exitReport = rep
@@ -271,18 +299,29 @@ func (s *server) shutdown(rep shimwire.Control) {
 		}
 	}
 
+	// 2. Stop accepting, refuse any newly-accepted connection, and snapshot the set
+	//    of live connections to close.
+	s.mu.Lock()
+	s.closing = true
+	conns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+
 	s.listener.Close()
 	// net.UnixListener unlinks the socket on Close; remove it explicitly too so
 	// the session dir is left clean even if that ever changes (idempotent).
 	if s.socketPath != "" {
 		_ = os.Remove(s.socketPath)
 	}
-	s.mu.Lock()
-	conn := s.curConn
-	s.mu.Unlock()
-	if conn != nil {
-		conn.Close() // unblock a reader still parked on this connection
+
+	// 3. Close every connection to unblock its parked reader, then join every
+	//    handler so Run never returns with a serveConn still running.
+	for _, c := range conns {
+		c.Close()
 	}
+	s.handlers.Wait()
 }
 
 // hub couples the emulator/transcript pipeline to at most one live subscriber.
@@ -319,34 +358,56 @@ func (h *hub) feed(data []byte) {
 }
 
 // attach atomically snapshots the grid and installs a fresh subscriber, then
-// spawns the connection's writer goroutine: it sends exactly that snapshot
-// first, then streams queued live frames, and emits the exit_report on a
-// shutdown-triggered close.
-func (h *hub) attach(conn net.Conn) *subscriber {
+// spawns the connection's writer goroutine: it sends exactly that snapshot first,
+// then streams queued live frames, and emits the exit_report on a shutdown-
+// triggered close.
+//
+// It tears down any EXISTING subscriber under h.mu before installing the new one:
+// the superseded subscriber's queue is closed so its writer exits (rather than
+// blocking forever on a never-closed queue) and the superseded client stops
+// receiving frames (R1.3.3). feed publishes under the same h.mu, so it never sends
+// to the closed queue (no send-on-closed race). If the hub is already shutting
+// down, the new subscriber is NOT installed as h.sub: its writer sends the
+// snapshot then the exit_report and exits, so a late attach still sees a final
+// screen without being left waiting on the drain.
+func (h *hub) attach(cw *connWriter) *subscriber {
 	h.mu.Lock()
+	if h.sub != nil {
+		h.sub.closeQueue() // supersede: terminate the prior writer, free h.sub
+		h.sub = nil
+	}
 	snap, _ := h.emu.Snapshot()
+	shuttingDown := h.shutdown
+	rep := h.exitReport
 	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}
-	h.sub = sub
+	if !shuttingDown {
+		h.sub = sub
+	}
 	h.mu.Unlock()
 
 	go func() {
 		defer close(sub.done)
-		if err := wire.WriteFrame(conn, wire.TSnapshot, snap); err != nil {
+		if err := cw.writeFrame(wire.TSnapshot, snap); err != nil {
+			h.drainQueue(sub)
+			return
+		}
+		if shuttingDown {
+			cw.writeControl(rep) // agent already gone: snapshot then exit_report
 			h.drainQueue(sub)
 			return
 		}
 		for data := range sub.queue {
-			if err := wire.WriteFrame(conn, wire.TDataOut, data); err != nil {
+			if err := cw.writeFrame(wire.TDataOut, data); err != nil {
 				h.drainQueue(sub)
 				break
 			}
 		}
 		h.mu.Lock()
-		shuttingDown := h.shutdown
-		rep := h.exitReport
+		shuttingDownNow := h.shutdown
+		repNow := h.exitReport
 		h.mu.Unlock()
-		if shuttingDown {
-			writeControl(conn, rep)
+		if shuttingDownNow {
+			cw.writeControl(repNow)
 		}
 	}()
 	return sub
@@ -384,14 +445,29 @@ func (s *subscriber) closeQueue() {
 	s.closeOnce.Do(func() { close(s.queue) })
 }
 
+// connWriter serializes every frame write to one client connection under a mutex,
+// so the reader loop's hello replies and the attach writer goroutine's snapshot/
+// frames can run concurrently without ever interleaving a frame on the wire
+// (R1.3.2b/e).
+type connWriter struct {
+	mu   sync.Mutex
+	conn net.Conn
+}
+
+func (w *connWriter) writeFrame(typ wire.Type, payload []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return wire.WriteFrame(w.conn, typ, payload)
+}
+
 // writeControl encodes and sends a shimwire.Control as a TControl frame,
 // best-effort (a broken connection is handled by the reader path).
-func writeControl(conn net.Conn, ctrl shimwire.Control) {
+func (w *connWriter) writeControl(ctrl shimwire.Control) {
 	b, err := shimwire.Encode(ctrl)
 	if err != nil {
 		return
 	}
-	_ = wire.WriteFrame(conn, wire.TControl, b)
+	_ = w.writeFrame(wire.TControl, b)
 }
 
 // exitReport builds the exit_report control from the agent's exit outcome.
