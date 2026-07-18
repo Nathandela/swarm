@@ -10,10 +10,11 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [004](ADR-004-security-baseline.md) | v1 security baseline: filesystem permissions, argv-only spawning, server-side revalidation | Accepted | 2026-07-16 |
 | [005](ADR-005-vt-emulator-library.md) | VT emulator library — `github.com/charmbracelet/x/vt` (E2.1 risk gate) | Accepted | 2026-07-17 |
 | [006](ADR-006-field-test-ux-revisions.md) | Field-test UX revisions — detach key Ctrl+q, full-screen chrome, auth inheritance | Accepted | 2026-07-18 |
+| [007](ADR-007-inconclusive-heuristic-preserves-status.md) | An inconclusive grid heuristic preserves the committed status (per-adapter grid signatures) | Accepted | 2026-07-18 |
 
 ## Adding a new ADR
 
-1. Next sequential number (the next is ADR-006).
+1. Next sequential number (the next is ADR-008).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

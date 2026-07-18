@@ -10,8 +10,10 @@
 //     the session's live token and a per-dimension monotonic sequence (S6/G5).
 //     These are authoritative: a fresh typed signal outranks the heuristic.
 //   - Grid heuristics (OnOutput) — a deterministic read of the emulated screen on
-//     each output event. It only applies when no fresh typed signal outranks it,
-//     and an inconclusive read maps to turn=unknown, never a confident guess.
+//     each output event, under the session's declared per-adapter grid signature.
+//     It only applies when no fresh typed signal outranks it; a conclusive read is
+//     applied, and an inconclusive read PRESERVES the committed status rather than
+//     committing unknown — absence of evidence is not evidence of change (ADR-007).
 //   - The fallback poll (Tick) — a low-frequency, daemon-driven re-evaluation.
 //     The engine NEVER self-polls; all periodic work happens only when the daemon
 //     calls Tick, so an idle system does no work (E10.8). Tick samples CPU once
@@ -269,9 +271,14 @@ func (e *Engine) HandleCallback(cb Callback) error {
 }
 
 // OnOutput re-evaluates a session's status from a fresh screen snapshot (the grid
-// heuristic, T-3). A still-fresh typed signal outranks the heuristic (S7
-// precedence), so the read is discarded in that window; otherwise the heuristic
-// result — including turn=unknown for an inconclusive grid — is applied. Emit runs
+// heuristic, T-3), under the session's declared per-adapter grid signature. A
+// still-fresh typed signal outranks the heuristic (S7 precedence), so the read is
+// discarded in that window. Otherwise a CONCLUSIVE reading (active or idle) is
+// applied; an INCONCLUSIVE reading is absence of evidence, not evidence of change,
+// so it PRESERVES the committed status rather than committing unknown (ADR-007) —
+// this is what stops an unreadable frame from clobbering a known idle/active into
+// Working. The output still refreshes the staleness clock (the session is alive);
+// the Tick guard, not this tap, downgrades a truly silent active turn. Emit runs
 // outside e.mu, serialized per session by s.emitMu (F3).
 func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	e.mu.Lock()
@@ -297,7 +304,11 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 		e.mu.Unlock()
 		return // a fresher typed signal outranks the heuristic
 	}
-	turn, interaction := evaluateGrid(snap)
+	turn, interaction, conclusive := evaluateGridSig(snap, gridSignature(s.sources))
+	if !conclusive {
+		e.mu.Unlock()
+		return // inconclusive grid tap: preserve the committed status (ADR-007)
+	}
 	next := s.status
 	next.Turn = turn
 	next.Interaction = interaction
@@ -307,6 +318,17 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	if changed {
 		e.emit(id, next)
 	}
+}
+
+// gridSignature returns the grid-signature name the session's heuristic
+// SignalSource declares (Descriptor["grid"]), or "" for the generic reader.
+func gridSignature(sources []adapter.SignalSource) string {
+	for _, s := range sources {
+		if s.Kind == "heuristic" {
+			return s.Descriptor["grid"]
+		}
+	}
+	return ""
 }
 
 // Tick is the low-frequency, daemon-driven fallback poll. It samples each live

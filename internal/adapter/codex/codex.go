@@ -91,7 +91,10 @@ func (codexAdapter) Options() []adapter.OptionSpec {
 }
 
 // SignalSources declares Codex's typed status events with their mapping, plus the
-// generic grid heuristic as the T-3 fallback. Codex uses events, never hooks.
+// codex grid signature as the T-3 fallback (ADR-007) — and, since Codex's typed
+// event producer is deferred (D1), the runtime status driver. Codex uses events,
+// never hooks. The heuristic Descriptor names the "codex" signature; the engine
+// interprets it (the adapter stays I/O-free, ADR-001).
 func (codexAdapter) SignalSources() []adapter.SignalSource {
 	sources := make([]adapter.SignalSource, 0, len(eventSources)+1)
 	for _, e := range eventSources {
@@ -106,7 +109,7 @@ func (codexAdapter) SignalSources() []adapter.SignalSource {
 	}
 	sources = append(sources, adapter.SignalSource{
 		Kind:       "heuristic",
-		Descriptor: map[string]string{"grid": "prompt-marker"},
+		Descriptor: map[string]string{"grid": "codex"},
 	})
 	return sources
 }

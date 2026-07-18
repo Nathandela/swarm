@@ -116,7 +116,9 @@ func (claudeAdapter) Options() []adapter.OptionSpec {
 }
 
 // SignalSources declares Claude Code's six hook events with their status mapping,
-// plus the generic grid heuristic as the T-3 fallback.
+// plus the claude grid signature as the T-3 fallback (ADR-007). The heuristic
+// Descriptor names the "claude" signature; the engine interprets it (the adapter
+// stays I/O-free, ADR-001).
 func (claudeAdapter) SignalSources() []adapter.SignalSource {
 	sources := make([]adapter.SignalSource, 0, len(hookEvents)+1)
 	for _, h := range hookEvents {
@@ -136,7 +138,7 @@ func (claudeAdapter) SignalSources() []adapter.SignalSource {
 	}
 	sources = append(sources, adapter.SignalSource{
 		Kind:       "heuristic",
-		Descriptor: map[string]string{"grid": "prompt-marker"},
+		Descriptor: map[string]string{"grid": "claude"},
 	})
 	return sources
 }
