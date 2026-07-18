@@ -154,14 +154,31 @@ privilege-separated from the daemon (5.7).
 The ADR specifies both, including how a device's long-term key is provisioned at pairing and
 stored (Secure Enclave).
 
-### 5.3 Pairing (audit item 11)
+### 5.3 Pairing (audit item 11; protocol pinned)
 
-`swarm remote pair` displays a single-use, short-lived (60 s) QR carrying a pairing secret
-that never touches the relay. Completing the pairing requires explicit confirmation on the
-machine (fail closed) — this, not SAS, is the anti-photographed-QR control; a short visual
-code is shown on both screens as a cheap cross-check. Result: the machine pins the device's
-public key; every later connection is mutually authenticated. Pairing attempts are
-rate-limited relay-side and daemon-side.
+User flow: (1) `swarm remote pair` on the machine shows a single-use QR, 60 s TTL; (2) phone
+scans it and displays four verification emoji; (3) the machine TUI shows the same emoji and
+asks `Allow "<device>"? [y/N]`; (4) done — no further ceremony ever.
+
+Protocol: at `swarm remote init` the machine generates a long-term identity keypair
+(Keychain/0600); the phone generates its device keypair in the Secure Enclave. The QR
+carries a random 32-byte single-use pairing secret that never touches the relay — the
+camera is the out-of-band physical-presence channel. Phone and machine meet through an
+opaque ephemeral rendezvous mailbox on the relay and run Noise XX with the pairing secret
+mixed in as PSK: the relay carries the handshake but cannot MITM it. The emoji SAS is
+derived from the handshake transcript (match = no MITM exists); the mandatory local desktop
+confirm is the independent second gate that defeats a photographed/leaked QR (an attacker's
+attempt surfaces as an unexpected prompt and fails closed; the secret burns on first use or
+TTL). Outcome: mutual static-key pinning — authenticated first contact, stronger than TOFU.
+Live sessions thereafter run Noise XX over pinned keys (mutual auth, forward secrecy,
+replay protection); offline mailbox events and push payloads are sealed-box encrypted to
+the device long-term key (5.2). Pairing mode listens only while the command runs,
+auto-exits on TTL or first completion, and is rate-limited daemon- and relay-side.
+
+Deliberate contrast with Happy (source-confirmed): their QR transfers the raw account seed
+(single shared key, unrevocable if photographed) and push title/body transit Apple in
+plaintext; ours transfers a disposable secret, keeps per-device revocable keys, and pushes
+ciphertext only.
 
 ### 5.4 Device lifecycle (audit item 11)
 
