@@ -2,8 +2,9 @@
 
 **Epic**: agy + opencode adapter integration (issue agents-tracker-5gv), plan
 `.claude/tmp/cli-duo-implementation-plan.md` v6.
-**Status**: Phase B (characterization fixtures) complete. This file grows one
-section per phase; later phases append rather than replace.
+**Status**: Phases A-G complete and closed out (R-H2, below); gates green at
+HEAD (R-H3); R-H4 (audit-committee pass) pending at orchestrator close. This
+file grows one section per phase; later phases append rather than replace.
 
 ## Phase B: fixture provenance and marker memo
 
@@ -598,3 +599,264 @@ From `internal/skeleton/serve.go` (`sampleGrid`, `tapGrids`,
 - codex's version-banner parsing failure in the R-G2 detection sweep (found,
   unversioned, out of range) is pre-existing and unrelated to the agy/opencode
   work; not investigated as out of this phase's scope.
+
+## Phase H: requirement-by-requirement closeout (R-H2)
+
+Every requirement ID below is enumerated from `.claude/tmp/cli-duo-implementation-plan.md`
+v6 (R-A1..R-H4). Phase commit SHAs: A=`12e2f5a`, B=`7ce3f15`, C=`7141409`,
+D=`8148997`, E=`46cf216`, F=`141bea0`, G=`a1705ae`, H (R-H1)=`2765805`. Every
+Evidence cell below was checked directly against `git show --stat <sha>` and
+the named file/test at HEAD; `go build ./...` and `go vet ./...` were re-run
+at HEAD while writing this section and are clean (not a full `-race` +
+`golangci-lint` pass — that is R-H3's job, see below).
+
+### Phase A — core prerequisites
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-A1 probeTimeout 2s->5s | Met | `12e2f5a`; `internal/adapter/detect/detect.go` (`probeTimeout = 5*time.Second`); `TestHostRun_ToleratesA3sProbe` (`internal/adapter/detect/detect_test.go:150`) proves a ~3s probe now succeeds. |
+| R-A2 parallel detection probes | Met | `12e2f5a`; `cmd/swarm/main.go` (`detectAgentsWith`, injected probe func, `registry.IsProduction` filter); `TestDetectAgentsWith_ProbesRunConcurrently`, `TestDetectAgentsWith_SortedOrderAndCompleteness`, `TestDetectAgentsWith_SkipsNonProductionByRegistryFlag` (`cmd/swarm/main_test.go:59,90,108`), barrier-based, `-race` clean. |
+| R-A3 swarm-char registry resolution + fixture-only mode | Met | `12e2f5a`; `cmd/swarm-char/main.go`; `TestRun_AdapterFlagResolvesRegisteredProductionAdapter` (`cmd/swarm-char/char_test.go:484`, asserts `Hooks=true, Options=2` for `-adapter claude`, matching plan (a)), `TestRun_AdapterNoneIsFixtureOnly` (`char_test.go:515`, matching plan (b): fixture-only, no capability output), `TestRun_UnknownAdapterListsBothSources` (`char_test.go:547`). |
+
+### Phase B — characterization fixtures
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-B1 obtain fixtures (promote-first) | Met | `7ce3f15`; `internal/adapter/agy/testdata/agy.json`, `internal/adapter/opencode/testdata/opencode.json` (both load-verified via `fixtureio.LoadFixture`); provenance documented in this file's "Provenance" section (lines 10-51) — promotion from `docs/verification/cli-trio-exploration/fx_{agy,opencode}.json`, no re-record needed so the auto-updater-disable mechanism path was not exercised (documented, not a gap — see Deferrals). |
+| R-B2 fixture content verification | Met | This file, "Union-coverage proof (R-B2b)" (agy 72-byte gap at [6228,6299] documented and shown benign; opencode zero gaps across 34240 bytes), "Negative evidence (R-B2c)" and "Idle corroboration (R-B2d)" sections (lines 102-193); byte offsets recorded per the requirement's own demand. |
+| R-B3 sanitization before commit | Met | This file, "Sanitization" + "Sanitized-fixture re-verification" sections (lines 22-41, 241-263): the 27-byte email string replaced at offsets 1760/7929, same-length, re-verified byte-identical against the committed fixtures post-sanitization. |
+| R-B4 marker memo | Met | This file, "Frozen marker table" + "Phase-window byte offsets" sections (lines 53-100) — binding input consumed verbatim by `internal/adapter/agy/agy_test.go:264` (`TestSignalSources_MatchMemoTable`) and the opencode equivalent (`opencode_test.go:200`). |
+
+### Phase C — descriptor-driven grid rules (internal/engine)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-C1 descriptor contract (busy-contains / idle-line-equals / precedence) | Met | `7141409`; `internal/engine/gridrules.go`; contract exercised by `TestEvaluateGridWithRules_BusyContains_*` (6 cases), `_IdleLineEquals_*` (8 cases incl. `_BrailleSuppressesIdle`, `_NoCursorRequirement`), `_Precedence_BusyBeatsIdle`, `_DuplicateRulesHarmless` (`internal/engine/gridrules_test.go:109-343`). |
+| R-C2 engine wiring | Met | `7141409`; `internal/engine/engine.go` diff: `RegisterSession` now stores `rules: parseGridRules(sources)` (parsed once, immutable), `OnOutput` calls `evaluateGridWithRules(snap, s.rules)` in place of `evaluateGrid(snap)`; `TestEngine_OnOutput_UsesDeclaredGridRules`, `TestEngine_RegisterSession_DescriptorMapMutationAfterRegisterHasNoEffect` (`gridrules_test.go:410,428`). |
+| R-C3 unit battery | Met | `internal/engine/gridrules_test.go` — 35 `Test*` functions covering match/no-match, bottom-K boundaries, blank-row skipping, trim semantics, unicode, nil/zero snaps, empty/unknown rule, precedence, declaration order, determinism (`TestEvaluateGridWithRules_Determinism`). |
+| R-C4 regression freeze | Met | `internal/engine/gridrules_regression_test.go:20` `TestGridRulesRegressionFreeze_ClaudeAndCodexFixtures` — byte-by-byte old-generic-path vs new-rules-path replay of the committed claude/codex fixtures, identical verdicts asserted at every step. |
+| R-C5 fixture-backed full-timeline replay | Met-with-deviation | `internal/engine/gridrules_fixture_test.go:25,106` `TestGridRulesFullTimeline_{Agy,Opencode}`, driven by `internal/engine/timelinestep_norace_test.go`/`timelinestep_race_test.go`. Agy is byte-exact (`timelineFineStepAgy=1`) in normal builds as the plan requires (safety property: agy has an idle rule, so every prefix must be checked for false-idle). **Deviation**: opencode uses 64-byte steps in normal builds (`timelineFineStepOpencode=64`) and both fixtures coarsen further under `-race` (32/256) — not the plan's literal "every byte prefix evaluated" for both fixtures. Disclosed and justified in-code (`gridrules_fixture_test.go:127-132`): opencode declares no idle rule, so false-idle is structurally impossible regardless of sampling granularity, and Phase B's throwaway analysis already proved byte-exact zero-gap busy coverage for opencode twice (documented in this file's Phase B section) — the permanent regression test regression-checks busy coverage at coarser granularity rather than repeating an ~8-minute-under-`-race` byte-exact sweep for no added safety. The explicit hard-frame offsets (6150, 6260) remain byte-exact regardless of sweep step. |
+
+### Phase D — agy adapter (internal/adapter/agy)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-D1 identity | Met | `8148997`; `internal/adapter/agy/agy.go`; `TestParseVersion_RealBanner`, `TestBinaryAndVersionArgs` (`agy_test.go:76,89`). |
+| R-D2 command composition | Met | `TestCommand_NoOptions`, `TestCommand_AllOptions`, `TestCommand_InitialPrompt` (`agy_test.go:146,161,189`). |
+| R-D3 options schema | Met | `TestOptions_Schema` (`agy_test.go:214`) — model/mode/dangerously-skip-permissions. |
+| R-D4 SignalSources match R-B4 memo | Met | `TestSignalSources_MatchMemoTable` (`agy_test.go:264`) — cross-checked against the frozen memo values verbatim. |
+| R-D5 resume | Met | `TestResume_CarriesConversationID` (`agy_test.go:295`). |
+| R-D6 hardened ExtractConversationID | Met | `TestExtractConversationID_Adversarial` (`agy_test.go:318`, 8 subtests: last-wins, malformed-then-valid, multiple redraws, `\x1b[K`-butted, UTF-8 C1-butted, malformed-only-rejected, EOF-truncated-rejected, tail-invalid/grid-valid fallback) — all 8 subtests PASS at HEAD (re-run directly during this write: `go test ./internal/adapter/agy/... -run TestExtractConversationID_Adversarial -v`, `--- PASS`). |
+| R-D7 fixture-derived capability baseline | Met | `TestExtractConversationID_FromFixture`, `TestCapability_FromFixture` (`agy_test.go:409,428`) — asserts exactly `Resume=true, ConversationID=true, Hooks=false, Options=3, Signals=["heuristic"]`, matching the plan's stated baseline. |
+| R-D8 suite (conformance, detect greying, import boundary, no-IO) | Met | `TestConformance`, `TestDetect_VersionGreying_L2`, `TestImportBoundary_T5`, `TestStateless_NoIOInSource` (`agy_test.go:122,457,471,487`); red-first evidence in `.claude/tmp/phase-d-red-evidence.txt` (two-stage: compile red, then targeted logic red on an under-hardened extractor). |
+| R-D9 engine-path integration test | Met-with-deviation | `141bea0`; `internal/adapter/agy/engine_test.go:55` `TestEnginePath_BusyAndSettled`, registers `a.SignalSources()` (not a hand-copied rule list) against a real `engine.New/RegisterSession/OnOutput`. Red evidence via the plan's disclosed "inverted-assertion" technique (implementation pre-existed at merge time per the plan's own sequencing note) in `.claude/tmp/phase-f-red-evidence.txt`. **Deviation** (disclosed in that file): the test defines its own 100x30 `snapAtOffset` helper rather than reusing the package's pre-existing 80x24 `helpers_test.go` `renderGrid` — flagged by the implementer as a pre-existing-file discrepancy, left untouched per "never weaken an existing test," not fixed. |
+
+### Phase E — opencode adapter (internal/adapter/opencode)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-E1 identity | Met | `46cf216`; `internal/adapter/opencode/opencode.go`; `TestParseVersion_RealBanner`, `TestBinaryAndVersionArgs` (`opencode_test.go:53,65`). |
+| R-E2 command composition | Met | `TestCommand_NoOptions`, `TestCommand_AllOptions`, `TestCommand_InitialPrompt` (`opencode_test.go:119,131,148`). |
+| R-E3 options schema | Met | `TestOptions_Schema` (`opencode_test.go:165`) — model/agent. |
+| R-E4 SignalSources — heuristics only, no invented events | Met | `TestSignalSources_MatchMemoTable_HeuristicsOnly` (`opencode_test.go:200`); the "no invented event names" design judgment is additionally truth-up'd in `system-spec.md` T-2 (R-F2, verified below) rather than merely asserted in a unit test. |
+| R-E5 resume | Met | `TestResume_CarriesConversationID` (`opencode_test.go:234`). |
+| R-E6 hardened extraction (left word boundary) | Met | `TestExtractConversationID_WordBoundary_RejectsProseToken`, `_MinLength_RejectsShortToken`, `_LastOccurrenceWins`, `_TruncatedAtEOF_Rejected`, `_ControlByteTerminator` (`extract_test.go:17,26,36,48,58`). |
+| R-E7 fixture-derived capability baseline | Met | `TestExtractConversationID_FromFixture`, `TestCapability_FromFixture` (`opencode_test.go:258,284`) — asserts exactly `Hooks=false, Resume=true, ConversationID=true, Options=2, Signals=["heuristic"]`, matching the plan's stated baseline. |
+| R-E8 suite | Met | `TestConformance`, `TestDetect_VersionGreying_L2`, `TestImportBoundary_T5`, `TestStateless_NoIOInSource` (`opencode_test.go:88,273,312,327`); red-first evidence in `.claude/tmp/phase-e-red-evidence.txt` (compile red only — `New` undefined — no targeted-logic-red stage was needed for this package). |
+| R-E9 engine-path integration test | Met | `141bea0`; `internal/adapter/opencode/engine_test.go:30` `TestEnginePath_BusyAndSettled`; reuses the package's existing 100x30 `helpers_test.go` `renderGrid` directly on a sliced capture prefix (no geometry discrepancy, unlike R-D9); settled subtest seeds `RegisterSession`'s initial status to `TurnActive` so busy->unknown is an observable transition rather than a silent no-op. Red evidence via the same inverted-assertion technique in `.claude/tmp/phase-f-red-evidence.txt`. |
+
+### Phase F — registration, spec truth-up, form smoke
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-F1 registry | Met | `141bea0`; `internal/adapter/registry/registry.go` (agy/opencode added to both constructors and production maps); `TestNew_KnownAdapters`, `TestIsProduction`, `TestNames_SortedAndComplete` (`registry_test.go:37,61,77`), red-then-green captured in `.claude/tmp/phase-f-red-evidence.txt`. |
+| R-F2 spec amendment (T-7, T-2, architecture diagram) | Met | `141bea0`; `docs/specifications/system-spec.md` — T-7 rewritten ("v1.1 ships agy... and OpenCode adapters. vibe (Mistral) was evaluated and dropped..."), T-2's OpenCode clause replaced with the verified `session.status` SSE + request-object reality (typed wiring noted as future work) and an agy typed-sources note; architecture diagram's adapter list updated to `claude, codex (v1) · agy, opencode (v1.1)`. Confirmed current at HEAD via `grep -n "T-7" docs/specifications/system-spec.md` (still reads as quoted; no later commit touched this file). |
+| R-F3 form smoke | Met | `TestDetectAgentsWith_SurfacesProductionAdaptersWithOptionSchemas` (`cmd/swarm/main_test.go:127`) pins the literal 4-adapter production set with option schemas; `.claude/tmp/phase-f-red-evidence.txt` records that a grep of `internal/tui`, `cmd/swarm`, `cmd/swarm-char`, `internal/skeleton` found no hardcoded 2-CLI assumption to fix — the detection pipeline already derived its expected set from `registry.Names()`/`registry.IsProduction()`. |
+| R-F4 authLine out of scope (evidence note) | Met | `internal/tui/launch.go:488` `authLine()` confirmed still claude-only at HEAD (unchanged by this epic); documented as an explicit, intentional deferral in `docs/design/cli-trio-adapters.md:107` ("Optional cosmetic: ... `authLine()` is claude-only; agy..."). The requirement asks only for the deferral to be recorded, which it is. |
+
+### Phase G — verification: production path + real binaries
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-G1 production-path e2e with replay binaries | Met | `a1705ae`; `internal/e2e/replay_e2e_test.go:348` `TestE2E_ReplayProductionPath_AgyOpencode`; full mechanics, segment table, and assertions documented in this file's "R-G1" section (lines 291-378); red-first evidence in `.claude/tmp/phase-g-red-evidence.txt` (stubbed segments, real stack correctly failed on the missing settle). |
+| R-G2 real-CLI user snippets | Met | This file's "R-G2" section (lines 380-533): detection table, agy round-trip (busy marker at rendered byte 3488/3424, id `0ce8720a-256f-47f7-b145-2e2ba103cb44` extracted and verified on resume), opencode round-trip (busy marker at byte 24704, id `ses_089cb3878ffeUL81NnKWbOp1La`), both automated retention assertions PASS, both within the 2-turn-per-CLI bound. |
+| R-G3 attached-vs-detached sampling note | Met | This file's "R-G3" section (lines 535-582), sourced from `internal/shim/server.go:37-38` and `internal/skeleton/serve.go` (`sampleGrid`, `tapGrids`), corroborated by the pre-existing `TestE2E_ConversationCapture_DuringHeldAttach_C1` (`internal/e2e/capture_c1_e2e_test.go`). No new regression test was written for the freeze behavior itself — disclosed as a documentation-only deliverable in this file's Phase G "Deferred / carried forward" section, matching what the plan asked for ("Document ... in the evidence file"). |
+
+### Phase H — cleanup, evidence, audit, ship
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| R-H1 delete exploration-phase artifacts | Met | `2765805`; `internal/adapter/trioproto/` and `internal/engine/trio_exploration_test.go` confirmed absent at HEAD (`ls` returns "No such file or directory" for both); `docs/verification/cli-trio-exploration/` confirmed still present (`drive_agy.txt`, `drive_oc.txt`, `drive_vibe.txt`, `fx_agy.json`, `fx_opencode.json`, `fx_vibe.json`, `README.md`). |
+| R-H2 evidence file | Met | This document, including this section. |
+| R-H3 gates green at HEAD | Met | Full gate set run at HEAD (post-R-H1, 2026-07-18): `go build ./...` clean, `go vet ./...` clean, `go test ./... -race -count=1` all 28 test packages ok (engine 57.7s, e2e 35.0s, shim 80.7s among the heaviest), `golangci-lint run` clean. One prior whole-suite run had a single failure: `internal/shim` `TestSocket_AttachDeliversSnapshot` (attach snapshot sampled before the fake agent's output rendered, empty grid) — a load-induced flake in a package this branch never touched (last shim commits are pre-existing S9 work); it passed 3/3 in isolation under `-race` and passed in the full re-run recorded here. |
+| R-H4 final audit-committee pass | Pending | Completed by orchestrator at close. **[ORCHESTRATOR: paste committee verdict here.]** |
+
+### TDD red-run evidence snippets (phases A-G)
+
+**Phase A** (`.claude/tmp/phase-a-red-evidence.txt`, R-A1):
+
+```
+=== RUN   TestHostRun_ToleratesA3sProbe
+    detect_test.go:163: Version = "", want 7.8.9 (a ~3s probe must complete
+    within the raised probeTimeout, not be abandoned at the old 2s bound)
+--- FAIL: TestHostRun_ToleratesA3sProbe (3.02s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/detect	3.639s
+```
+
+**Phase B** (`.claude/tmp/phase-b-evidence.txt`): Phase B has no failing-test
+red run in the usual sense — R-B1/B2 are fixture characterization and
+verification, not implementation against a spec. Its load-bearing "proof of a
+real check" is the byte-transition scan the analysis program produced (the
+raw input to the R-B2b/c union-coverage and negative-evidence claims above):
+
+```
+=== agy capture ===
+capture length: 10092 bytes
+busy transitions (offset, busy, marker):
+  off=1       busy=false marker=""
+  off=3802    busy=true  marker="Generating..."
+  off=6228    busy=false marker=""
+  off=6300    busy=true  marker="Generating..."
+  off=7262    busy=false marker=""
+```
+
+The analysis transcript also records a real bug caught and fixed before any
+numbers were relied on (the coarse-refine step's window bound used the
+previous transition's offset instead of the current chunk's start) —
+evidence the verification was actually run, not asserted.
+
+**Phase C** (`.claude/tmp/phase-c-red-evidence.txt`, R-C1..R-C3, tests written
+before `gridRules`/`parseGridRules`/`evaluateGridWithRules` existed):
+
+```
+--- go vet ./internal/engine/ ---
+vet: internal/engine/fixturereplay_test.go:54:56: undefined: gridRules
+
+--- go test ./internal/engine/ -race -count=1 ---
+internal/engine/fixturereplay_test.go:54:56: undefined: gridRules
+internal/engine/gridrules_fixture_test.go:34:11: undefined: parseGridRules
+internal/engine/gridrules_regression_test.go:45:26: undefined: evaluateGridWithRules
+FAIL	github.com/Nathandela/swarm/internal/engine [build failed]
+```
+
+**Phase D** (`.claude/tmp/phase-d-red-evidence.txt`, R-D6, "RED 2": targeted
+logic red on a deliberately under-hardened extractor, after the R-D1 compile
+red had already been cleared):
+
+```
+=== RUN   TestExtractConversationID_Adversarial/utf8_C1_control_butted_against_id
+    agy_test.go:365: ExtractConversationID = ("", false); want ("fb5e3e02-e5ef-4d25-b398-aead20366441", true)
+--- FAIL: TestExtractConversationID_Adversarial (0.01s)
+    --- FAIL: TestExtractConversationID_Adversarial/utf8_C1_control_butted_against_id (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/agy	0.720s
+```
+
+**Phase E** (`.claude/tmp/phase-e-red-evidence.txt`, R-E1..R-E6, compile red
+only — no `New` constructor existed yet):
+
+```
+internal/adapter/opencode/extract_test.go:18:7: undefined: New
+internal/adapter/opencode/opencode_test.go:38:44: undefined: New
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode [build failed]
+FAIL
+EXIT CODE: 1
+```
+
+**Phase F** (`.claude/tmp/phase-f-red-evidence.txt`, R-D9): the plan sequences
+R-D9/R-E9 to land after Phase C already merged, so the honest first-run result
+against the already-complete implementation is green. Red evidence was
+produced instead via the disclosed "inverted-assertion" technique — expected
+verdicts temporarily flipped, confirmed to fail, then reverted:
+
+```
+=== R-D9 agy RED (inverted assertions, proves test discriminates) ===
+=== RUN   TestEnginePath_BusyAndSettled/busy_offset_classifies_active
+    engine_test.go:82: busy offset 5000 classified turn="active"; want active
+=== RUN   TestEnginePath_BusyAndSettled/settled_offset_classifies_idle
+    engine_test.go:106: settled offset 7262 classified turn="idle"; want idle
+--- FAIL: TestEnginePath_BusyAndSettled (0.05s)
+FAIL
+```
+
+**Phase G** (`.claude/tmp/phase-g-red-evidence.txt`, R-G1, both replay
+segment schedules temporarily stubbed to their startup slice only; sample log
+elided below for length — the full per-sample dump is in the file):
+
+```
+=== RUN   TestE2E_ReplayProductionPath_AgyOpencode
+    replay_e2e_test.go:394: agy: turn=idle never observed after active
+    (the settled hold [7262,10035) never classified idle; samples=[...elided...])
+--- FAIL: TestE2E_ReplayProductionPath_AgyOpencode (6.05s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/e2e	7.027s
+FAIL
+```
+
+### Deferrals register
+
+- **authLine remains claude-only** (R-F4). `internal/tui/launch.go:488`.
+  Documented in `docs/design/cli-trio-adapters.md:107` as an "optional
+  cosmetic" deferral; not blocking.
+- **opencode has no idle rule by design** (R-B4, R-E4, R-C5). Settled state
+  reads `unknown`, never `idle` — the honest T-4 outcome given R-B2b/c could
+  not jointly establish a stable idle substring for opencode within this
+  phase's scope. Proven as a whole-stream invariant in both R-G1 (e2e replay)
+  and R-G2 (real CLI).
+- **opencode typed-event (SSE `session.status`) wiring is future work**
+  (R-E4, R-F2). v1.1 is heuristics-only for opencode; the real wire schema
+  (one `session.status` event with a busy/idle/retry payload, plus separate
+  permission/question request objects) cannot be expressed by the engine's
+  current exact-event-name + static-turn mapping. Documented in
+  `system-spec.md` T-2 and the design doc as requiring a payload-to-turn
+  subtype contract of its own.
+- **R-G3 attach-freeze behavior is documented but has no dedicated regression
+  test.** The attached-vs-detached grid-sampling freeze is derived from
+  source inspection (`internal/shim/server.go`, `internal/skeleton/serve.go`)
+  plus the pre-existing `TestE2E_ConversationCapture_DuringHeldAttach_C1` as
+  corroboration, not a test written specifically for this property. Follow-up
+  work if it ever needs to become a regression-tested guarantee.
+- **codex detection reports unversioned** (R-G2). Pre-existing, unrelated to
+  the agy/opencode work; not investigated as out of this phase's scope.
+- **opencode's `OPENCODE_DISABLE_AUTOUPDATE` re-record mechanism is
+  documented but untested** (R-B1). Promotion succeeded so no re-record was
+  needed this phase; the mechanism (env var, confirmed via `strings` on the
+  installed binary, plus a file-based fallback) must be re-verified against
+  whatever opencode version is current at the time of any future re-record.
+- **R-C5's opencode sweep is not byte-exact in the permanent regression test**
+  (see the R-C5 row above) — a disclosed, justified deviation from the plan's
+  literal wording, not a silent gap.
+- **R-D9's engine-path test uses its own 100x30 helper instead of the
+  package's existing 80x24 `renderGrid`** (see the R-D9 row above) — flagged
+  by the implementer, left as-is per "never weaken an existing test."
+- **vibe (Mistral) was evaluated and dropped** (pre-Phase-A decision,
+  2026-07-18, "too shitty for now"). Out of this epic's scope entirely, but
+  its prototype and fixture remain retained under
+  `docs/verification/cli-trio-exploration/` (`fx_vibe.json`, `drive_vibe.txt`)
+  per `system-spec.md` T-7 and the design doc appendix, for a possible future
+  re-evaluation.
+
+### How to re-verify
+
+Run the four mandated gates from the repo root:
+
+```
+go build ./...
+go vet ./...
+go test ./... -race
+golangci-lint run
+```
+
+For the production-path e2e specifically (R-G1, the strongest single proof
+that the registry -> daemon -> shim -> engine -> client wiring is correct for
+both new adapters):
+
+```
+go test ./internal/e2e/ -run TestE2E_ReplayProductionPath_AgyOpencode -v -race
+```
+
+R-G2's real-CLI round-trips are not part of CI (env-gated, requires installed
++ authenticated `agy` and `opencode` binaries and network access); they were
+run interactively in this session and are not reproducible by `go test`
+alone — see this file's "R-G2" section for the exact commands and transcripts.
