@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -352,5 +353,57 @@ func TestDelete_ConcurrentSameIDClosesStopOnce(t *testing.T) {
 
 	if _, ok := d.Get(id); ok {
 		t.Fatal("session still present after concurrent Delete")
+	}
+}
+
+// Sibling of TestDelete_ConcurrentSameIDClosesStopOnce (reviewer optional
+// hardening, agents-tracker-445): PreDelete must be winner-gated the same way
+// close(sess.stop) is. Pre-fix, PreDelete ran on both concurrent Deletes of the
+// SAME id because it was gated on Phase 1's stale `ok` (true for both racers)
+// instead of Phase 2's `present` winner check — a worktree-teardown hook would
+// fire twice for one deleted session.
+func TestDelete_ConcurrentSameIDRunsPreDeleteOnce(t *testing.T) {
+	cfg := daemonConfig(t)
+	var preDeleteCount atomic.Int32
+	cfg.PreDelete = func(persist.Meta) error {
+		preDeleteCount.Add(1)
+		return nil
+	}
+	d := openDaemon(t, cfg)
+
+	const id = "concurrent-del-predelete"
+	if err := os.MkdirAll(filepath.Join(cfg.StateDir, id), 0o700); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	d.mu.Lock()
+	d.sessions[id] = &session{
+		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
+		stop: make(chan struct{}),
+	}
+	d.mu.Unlock()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	orig := terminateForDeleteFn
+	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool {
+		started <- struct{}{}
+		<-release
+		return true
+	}
+	t.Cleanup(func() { terminateForDeleteFn = orig })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = d.Delete(id) }()
+	}
+	<-started
+	<-started      // both are past Phase 1, both hold the same session pointer
+	close(release) // release both into Phase 2 concurrently
+
+	wg.Wait()
+
+	if got := preDeleteCount.Load(); got != 1 {
+		t.Fatalf("PreDelete ran %d times on concurrent Delete of the same id; want exactly 1 (winner-gated)", got)
 	}
 }

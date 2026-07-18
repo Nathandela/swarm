@@ -93,10 +93,13 @@ func (d *Daemon) Delete(id string) error {
 	}
 
 	var preDeleteErr error
-	if ok && d.cfg.PreDelete != nil {
+	if present && d.cfg.PreDelete != nil {
 		// Epic 12: an optional pre-delete hook (e.g. worktree teardown) runs before
 		// the session directory is removed below. Its error is logged here and
 		// returned below, but never skips the mandatory directory teardown (R-3).
+		// Gated on Phase 2's `present` winner check, same as close(sess.stop) above
+		// (ok is Phase 1's stale read: both racers of a concurrent same-id Delete
+		// see it true, but only the winner sees present, so only it runs the hook).
 		if preDeleteErr = d.cfg.PreDelete(meta); preDeleteErr != nil {
 			d.logf("delete %s: pre-delete hook: %v", id, preDeleteErr)
 		}
