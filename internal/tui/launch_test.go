@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -9,12 +10,15 @@ import (
 )
 
 // openLaunch drives the router from the general view into the launch form (`n`).
-// Per the launch-form pins: the cwd field starts EMPTY and focused; Tab moves
-// through fields in L-1 order (directory, agent, options..., prompt, worktree);
-// Enter submits the form from any field.
+// Detection is async (delivered as a detectMsg off the hot path), so the helper
+// seeds it before opening so the form renders against the detected agents rather
+// than the transient "checking..." state. The directory field is prefilled with
+// the client cwd and focused; Tab moves through fields in L-1 order (directory,
+// agent, options..., prompt, worktree); Enter submits the form from any field.
 func openLaunch(t *testing.T, f *fakeClient) tea.Model {
 	t.Helper()
 	m := newModel(t, f, detectMixed())
+	m = send(m, detectMsg{agents: detectMixed()()})
 	m = send(m, keyRune('n'))
 	if v := view(m); !strings.Contains(v, "new session") {
 		t.Fatalf("expected the launch form after `n`, got:\n%s", v)
@@ -84,6 +88,11 @@ func TestLaunch_TildeExpansionAndSubmit(t *testing.T) {
 	f := newFakeClient()
 	m := openLaunch(t, f)
 
+	// The directory field is prefilled with the client cwd (ADR-006 field-test
+	// revision); clear it so this test's own path is what submits.
+	for launchOf(m).cwd != "" {
+		m = send(m, keyBackspace)
+	}
 	m = sendType(m, "~") // expands to $HOME, which exists
 	_, cmd := m.Update(keyEnter)
 	execCmd(cmd)
@@ -108,6 +117,10 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 	m := openLaunch(t, f)
 
 	dir := t.TempDir() // a real, existing directory
+	// Clear the cwd prefill (ADR-006) so dir is the exact submitted path.
+	for launchOf(m).cwd != "" {
+		m = send(m, keyBackspace)
+	}
 	m = sendType(m, dir)
 	// Field order: directory -> agent -> (Model option) -> prompt. Tab three times.
 	m = send(m, keyTab) // agent (leave default claude)
@@ -141,11 +154,19 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 // with `go test ./internal/tui/ -update`.
 
 func TestGoldenLaunchForm(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "") // deterministic: golden captures the no-auth baseline
 	tm := startTM(t, New(newFakeClient(), detectMixed()))
-	waitContains(t, tm, "new") // general footer painted first
+	waitContains(t, tm, "new")                  // general footer painted first
+	tm.Send(detectMsg{agents: detectMixed()()}) // deliver async detection so agents render (not "checking...")
 	tm.Send(keyRune('n'))
 	waitContains(t, tm, "new session")
 	quitTM(t, tm)
 
-	teatest.RequireEqualOutput(t, []byte(finalView(t, tm)))
+	// The directory field is prefilled with the client cwd (machine-specific), so
+	// normalize it to keep the golden portable across dev/CI checkouts.
+	got := finalView(t, tm)
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		got = strings.ReplaceAll(got, wd, "<cwd>")
+	}
+	teatest.RequireEqualOutput(t, []byte(got))
 }

@@ -16,7 +16,8 @@ import (
 // expansion; an invalid cwd is refused inline (L-3).
 type launchModel struct {
 	agents   []AgentInfo
-	agentIdx int // index into agents of the chosen agent
+	agentIdx int  // index into agents of the chosen agent
+	detected bool // whether detection has landed (else the picker shows "checking...")
 
 	cwd      string
 	optSpecs []adapter.OptionSpec // the chosen agent's declarative schema
@@ -24,18 +25,61 @@ type launchModel struct {
 	prompt   string
 	worktree bool
 
+	apiKeyInEnv bool // ANTHROPIC_API_KEY present in the client env (auth indicator)
+
 	focus  int    // field focus index (see field-index helpers below)
 	errMsg string // inline validation error (e.g. cwd does not exist)
 	width  int
 }
 
-// newLaunchModel builds a fresh form, defaulting the agent to the first usable
-// (installed and in-range) one and seeding options from that agent's schema.
-func newLaunchModel(agents []AgentInfo, width int) launchModel {
-	m := launchModel{agents: agents, width: width}
+// newLaunchModel builds a fresh form from the cached agent detection, defaulting
+// the agent to the first usable (installed and in-range) one and seeding options
+// from that agent's schema. The directory is prefilled with the client's working
+// directory (os.Getwd) so a bare Enter launches in the current directory, and the
+// inherited ANTHROPIC_API_KEY is noted for the auth indicator. detected reports
+// whether detection has landed yet; a cold form shows "checking..." for the agent.
+func newLaunchModel(agents []AgentInfo, detected bool, width int) launchModel {
+	m := launchModel{agents: agents, detected: detected, width: width}
+	if wd, err := os.Getwd(); err == nil {
+		m.cwd = wd
+	}
+	m.apiKeyInEnv = os.Getenv("ANTHROPIC_API_KEY") != ""
 	m.agentIdx = firstUsable(agents)
 	m.loadAgentOptions()
 	return m
+}
+
+// refreshAgents folds a fresh detection result into an open form, so agent
+// availability greys/ungreys live. It preserves the selected agent by name and
+// carries over any values the user has already typed, so a background refresh
+// never jumps the picker or clobbers the form.
+func (m *launchModel) refreshAgents(agents []AgentInfo) {
+	prevName := m.currentAgentName()
+	prevOpts := m.options
+
+	m.agents = agents
+	m.detected = true
+	m.agentIdx = firstUsable(agents)
+	for i, a := range agents {
+		if a.Name == prevName {
+			m.agentIdx = i
+			break
+		}
+	}
+	m.loadAgentOptions()
+	for k := range m.options {
+		if v, ok := prevOpts[k]; ok {
+			m.options[k] = v // keep what the user already entered for a still-present key
+		}
+	}
+}
+
+// currentAgentName is the selected agent's name, or "" when none is selected.
+func (m launchModel) currentAgentName() string {
+	if m.agentIdx >= 0 && m.agentIdx < len(m.agents) {
+		return m.agents[m.agentIdx].Name
+	}
+	return ""
 }
 
 func firstUsable(agents []AgentInfo) int {
@@ -79,6 +123,15 @@ func (m launchModel) optionFocus() (int, bool) {
 	return 0, false
 }
 
+// focusedOptionOfType returns the focused option's schema index when it is of the
+// given Type (e.g. "string", "bool"), else ok=false.
+func (m launchModel) focusedOptionOfType(typ string) (int, bool) {
+	if si, ok := m.optionFocus(); ok && m.optSpecs[si].Type == typ {
+		return si, true
+	}
+	return 0, false
+}
+
 // ---------------------------------------------------------------------------
 // Router glue: keyboard handling for the launch screen.
 // ---------------------------------------------------------------------------
@@ -96,11 +149,17 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			lm.focus = (lm.focus + 1) % n
 		}
 	case k.Code == tea.KeyBackspace:
-		if lm.isDir() {
+		switch {
+		case lm.isDir():
 			lm.cwd = dropLast(lm.cwd)
 			lm.errMsg = ""
-		} else if lm.isPrompt() {
+		case lm.isPrompt():
 			lm.prompt = dropLast(lm.prompt)
+		default:
+			if si, ok := lm.focusedOptionOfType("string"); ok {
+				key := lm.optSpecs[si].Key
+				lm.options[key] = dropLast(lm.options[key])
+			}
 		}
 	case k.Code == tea.KeyLeft:
 		lm.cycleField(false)
@@ -110,14 +169,57 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case lm.isWorktree() && k.Text == " ":
 			lm.worktree = !lm.worktree
+		case k.Text == " " && lm.toggleBoolOption():
+			// handled: Space toggled the focused bool option
 		case lm.isDir():
 			lm.cwd += k.Text
 			lm.errMsg = ""
 		case lm.isPrompt():
 			lm.prompt += k.Text
+		default:
+			if si, ok := lm.focusedOptionOfType("string"); ok {
+				lm.options[lm.optSpecs[si].Key] += k.Text
+			}
 		}
 	}
 	return m, nil
+}
+
+// toggleBoolOption flips the focused bool option ("true"/"false") and reports
+// whether it did so, generalizing the worktree checkbox to any Type "bool" option.
+func (m *launchModel) toggleBoolOption() bool {
+	si, ok := m.focusedOptionOfType("bool")
+	if !ok {
+		return false
+	}
+	key := m.optSpecs[si].Key
+	if m.options[key] == "true" {
+		m.options[key] = "false"
+	} else {
+		m.options[key] = "true"
+	}
+	return true
+}
+
+// paste delivers bracketed-paste content into the focused text field (directory,
+// prompt, or an editable string option), stripping the CR/LF that single-line
+// fields must never carry.
+func (m *launchModel) paste(s string) {
+	s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	if s == "" {
+		return
+	}
+	switch {
+	case m.isDir():
+		m.cwd += s
+		m.errMsg = ""
+	case m.isPrompt():
+		m.prompt += s
+	default:
+		if si, ok := m.focusedOptionOfType("string"); ok {
+			m.options[m.optSpecs[si].Key] += s
+		}
+	}
 }
 
 // cycleField steps a choice option or the agent picker (left/right).
@@ -152,25 +254,47 @@ func (m *launchModel) cycleAgent(forward bool) {
 	}
 }
 
-// cycleOption advances a choice option's value; non-choice options are untouched.
+// cycleOption advances a choice option through its Choices, or an editable string
+// option through its curated Suggest values; other options are untouched. For a
+// string option whose current value is not among the suggestions, the first
+// forward step lands on the first suggestion (last on a backward step).
 func (m *launchModel) cycleOption(specIdx int, forward bool) {
 	spec := m.optSpecs[specIdx]
-	if spec.Type != "choice" || len(spec.Choices) == 0 {
-		return
+	switch {
+	case spec.Type == "choice" && len(spec.Choices) > 0:
+		m.options[spec.Key] = cycleValue(spec.Choices, m.options[spec.Key], forward)
+	case spec.Type == "string" && len(spec.Suggest) > 0:
+		m.options[spec.Key] = cycleValue(spec.Suggest, m.options[spec.Key], forward)
 	}
-	cur := 0
-	for i, c := range spec.Choices {
-		if c == m.options[spec.Key] {
-			cur = i
+}
+
+// cycleValue returns the value one step from cur within values (wrapping). When
+// cur is absent, a forward step yields the first value and a backward step the
+// last, so cycling from free text enters the suggestion list at a sensible end.
+func cycleValue(values []string, cur string, forward bool) string {
+	idx := -1
+	for i, v := range values {
+		if v == cur {
+			idx = i
 			break
 		}
 	}
-	step := 1
-	if !forward {
-		step = -1
+	var next int
+	switch {
+	case idx < 0:
+		if forward {
+			next = 0
+		} else {
+			next = len(values) - 1
+		}
+	default:
+		step := 1
+		if !forward {
+			step = -1
+		}
+		next = ((idx+step)%len(values) + len(values)) % len(values)
 	}
-	next := ((cur+step)%len(spec.Choices) + len(spec.Choices)) % len(spec.Choices)
-	m.options[spec.Key] = spec.Choices[next]
+	return values[next]
 }
 
 // submitLaunch validates the form and, if it passes, composes and fires the
@@ -269,17 +393,56 @@ func (m launchModel) view() string {
 	b.WriteString(m.fieldLine("directory", m.dirValue(), m.isDir()))
 	b.WriteString(m.fieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
-		b.WriteString(m.fieldLine(spec.Label, m.optionValue(spec), m.focus == 2+i))
+		focused := m.focus == 2+i
+		b.WriteString(m.fieldLine(spec.Label, m.optionValue(spec, focused), focused))
 	}
 	b.WriteString(m.fieldLine("prompt", m.promptValue(), m.isPrompt()))
 	b.WriteString(m.fieldLine("worktree", m.worktreeValue(), m.isWorktree()))
+
+	if auth := m.authLine(); auth != "" {
+		b.WriteString("\n" + auth + "\n")
+	}
 
 	b.WriteString("\n")
 	if m.errMsg != "" {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(colNeedsInput).Render(m.errMsg) + "\n\n")
 	}
-	b.WriteString("  " + styleDim.Render("⏎ launch   tab next field   esc cancel"))
+	b.WriteString("  " + styleDim.Render(m.hint()))
 	return b.String()
+}
+
+// hint is the contextual footer for the focused field: text fields prompt to type
+// or paste, the agent and choice pickers to use the arrows, and bool options to
+// toggle with Space. The tab/enter/esc tail is constant across fields.
+func (m launchModel) hint() string {
+	const tail = " · tab next · enter launch · esc cancel"
+	if m.isAgent() || m.isChoiceFocused() {
+		return "arrows change" + tail
+	}
+	if m.isWorktree() {
+		return "space toggle" + tail
+	}
+	if _, ok := m.focusedOptionOfType("bool"); ok {
+		return "space toggle" + tail
+	}
+	return "type or paste" + tail
+}
+
+// isChoiceFocused reports whether the focused field is a choice option.
+func (m launchModel) isChoiceFocused() bool {
+	_, ok := m.focusedOptionOfType("choice")
+	return ok
+}
+
+// authLine surfaces which auth a claude launch will inherit from the client env.
+// It is neutral and purely informational: swarm mirrors the launching terminal
+// (spec scenario 18) and never alters the env, so it states the fact without any
+// advice. Shown only when the selected agent is claude and the key is present.
+func (m launchModel) authLine() string {
+	if !m.apiKeyInEnv || m.currentAgentName() != "claude" {
+		return ""
+	}
+	return "  " + lipgloss.NewStyle().Foreground(colAmber).Render("auth: ANTHROPIC_API_KEY from env (API billing)")
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.
@@ -300,6 +463,9 @@ func (m launchModel) dirValue() string {
 }
 
 func (m launchModel) agentValue() string {
+	if !m.detected {
+		return styleDim.Render("checking...")
+	}
 	parts := make([]string, 0, len(m.agents))
 	for i, a := range m.agents {
 		var mark, text string
@@ -324,15 +490,29 @@ func (m launchModel) agentValue() string {
 		}
 		parts = append(parts, text)
 	}
-	return strings.Join(parts, "   ")
+	// Flank the list with arrow affordances so left/right cycling is discoverable.
+	return styleDim.Render("◂ ") + strings.Join(parts, "   ") + styleDim.Render(" ▸")
 }
 
-func (m launchModel) optionValue(spec adapter.OptionSpec) string {
+func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
 	v := m.options[spec.Key]
-	if spec.Type == "choice" {
+	switch spec.Type {
+	case "bool":
+		if v == "true" {
+			return "[x]"
+		}
+		return "[ ]"
+	case "choice":
 		return v + " " + styleDim.Render("▾")
+	default: // editable string (possibly with curated suggestions)
+		if focused {
+			return v + "█" // cursor on the focused text field
+		}
+		if v == "" {
+			return styleDim.Render("(default)")
+		}
+		return v
 	}
-	return v
 }
 
 func (m launchModel) promptValue() string {

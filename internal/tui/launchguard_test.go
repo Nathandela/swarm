@@ -24,11 +24,19 @@ func TestLaunch_SubmitRefusedWhenNoUsableAgent(t *testing.T) {
 	f := newFakeClient()
 	m := newModel(t, f, detectNoneUsable())
 
+	// Seed the async detection result (detection is off the hot path since the
+	// v0.2 perf fix) so the form sees "agents present but none usable" rather
+	// than the cold not-yet-detected state.
+	m = send(m, detectMsg{agents: detectNoneUsable()()})
 	m = send(m, keyRune('n')) // open the launch form
 	if v := view(m); !strings.Contains(v, "new session") {
 		t.Fatalf("expected the launch form after `n`, got:\n%s", v)
 	}
 
+	// Clear the cwd prefill (ADR-006) so this test's path is the one submitted.
+	for launchOf(m).cwd != "" {
+		m = send(m, keyBackspace)
+	}
 	m = sendType(m, t.TempDir()) // a real, existing directory — cwd check passes
 	m2, cmd := m.Update(keyEnter)
 	execCmd(cmd)

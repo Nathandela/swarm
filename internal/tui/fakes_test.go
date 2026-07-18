@@ -194,6 +194,31 @@ func detectMixed() DetectFunc {
 	}
 }
 
+// editableSchema mirrors the real claude schema shape the form-UX tests drive: an
+// EDITABLE string "model" carrying curated Suggest values, followed by a BOOL
+// "dangerously-skip-permissions". Field order (L-1): directory, agent, model,
+// skip, prompt, worktree.
+func editableSchema() []adapter.OptionSpec {
+	return []adapter.OptionSpec{
+		{Key: "model", Label: "Model", Type: "string", Suggest: []string{"sonnet", "opus", "haiku"}},
+		{Key: "dangerously-skip-permissions", Label: "Skip permission prompts", Type: "bool", Default: "false"},
+	}
+}
+
+// detectEditable exposes one usable claude carrying editableSchema, so the form-UX
+// tests can exercise string-option editing, suggestion cycling, and bool toggling.
+func detectEditable() DetectFunc {
+	return func() []AgentInfo {
+		return []AgentInfo{
+			{Name: "claude", Installed: true, InRange: true, Options: editableSchema()},
+		}
+	}
+}
+
+// launchOf exposes the router's launch sub-model so form-field tests can assert on
+// its collected values (cwd, options). The router returns rootModel by value.
+func launchOf(m tea.Model) launchModel { return m.(rootModel).launch }
+
 // ---------------------------------------------------------------------------
 // Direct-model helpers (deterministic, no goroutines).
 // ---------------------------------------------------------------------------
@@ -206,12 +231,15 @@ const (
 // Keys are bubbletea v2 KeyPressMsg values. Special keys carry a Code constant;
 // printable runes carry Code+Text; Ctrl+X carries the ctrl modifier.
 var (
-	keyDown  = tea.KeyPressMsg{Code: tea.KeyDown}
-	keyUp    = tea.KeyPressMsg{Code: tea.KeyUp}
-	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
-	keyEsc   = tea.KeyPressMsg{Code: tea.KeyEsc}
-	keyTab   = tea.KeyPressMsg{Code: tea.KeyTab}
-	keyCtrlX = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
+	keyDown      = tea.KeyPressMsg{Code: tea.KeyDown}
+	keyUp        = tea.KeyPressMsg{Code: tea.KeyUp}
+	keyEnter     = tea.KeyPressMsg{Code: tea.KeyEnter}
+	keyEsc       = tea.KeyPressMsg{Code: tea.KeyEsc}
+	keyTab       = tea.KeyPressMsg{Code: tea.KeyTab}
+	keyLeft      = tea.KeyPressMsg{Code: tea.KeyLeft}
+	keyRight     = tea.KeyPressMsg{Code: tea.KeyRight}
+	keyBackspace = tea.KeyPressMsg{Code: tea.KeyBackspace}
+	keyCtrlX     = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
 )
 
 func keyRune(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }

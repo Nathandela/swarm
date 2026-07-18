@@ -74,6 +74,12 @@ type repaintMsg struct{}
 // surfaced to the user (the transient banner) instead of silently discarded (B1).
 type launchResultMsg struct{ err error }
 
+// detectMsg carries the result of an async agent-detection probe. Detection runs
+// off the Update hot path (a Cmd from Init and again on each form open) and is
+// cached on the model, so opening the launch form never blocks on a slow prober
+// (the P0 field-test freeze). It updates a live form's picker in place.
+type detectMsg struct{ agents []AgentInfo }
+
 // repaintInterval is how often the general view re-emits its frame to refresh the
 // live elapsed-time column. Elapsed granularity is seconds and coarser, so a
 // one-second cadence suffices (down from the former 200 ms, cutting the idle
@@ -111,6 +117,9 @@ type rootModel struct {
 	attach  attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
+
+	agents   []AgentInfo // cached agent detection (async; empty until the first detectMsg)
+	detected bool        // whether a detectMsg has landed (else the form shows "checking...")
 
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
@@ -162,10 +171,21 @@ func boundedList(c Client) []protocol.SessionView {
 	}
 }
 
-// Init wires the Subscribe stream. It returns a command that blocks on the event
-// channel and re-arms itself after each event, so status changes flow in without
-// polling (V-2/L1).
-func (m rootModel) Init() tea.Cmd { return tea.Batch(waitForEvent(m.events), repaintTick()) }
+// Init wires the Subscribe stream and kicks the first agent-detection probe. The
+// probe runs asynchronously (detectCmd) so a slow prober never delays first paint
+// or the launch form; its result is cached via detectMsg (V-2/L1).
+func (m rootModel) Init() tea.Cmd {
+	return tea.Batch(waitForEvent(m.events), repaintTick(), detectCmd(m.detect))
+}
+
+// detectCmd probes for agent CLIs off the Update hot path and delivers the result
+// as a detectMsg. A nil detector yields no command.
+func detectCmd(detect DetectFunc) tea.Cmd {
+	if detect == nil {
+		return nil
+	}
+	return func() tea.Msg { return detectMsg{agents: detect()} }
+}
 
 // waitForEvent reads one event from the stream. A nil channel (no subscription)
 // yields no command.
@@ -204,6 +224,24 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// via the subscribe stream.
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
+		}
+		return m, nil
+
+	case detectMsg:
+		// Cache the probe result. If the launch form is open, refresh its picker in
+		// place so agent availability greys/ungreys live without discarding the form.
+		m.agents = msg.agents
+		m.detected = true
+		if m.screen == screenLaunch {
+			m.launch.refreshAgents(msg.agents)
+		}
+		return m, nil
+
+	case tea.PasteMsg:
+		// Bracketed paste routes into the launch form's focused text field (newlines
+		// stripped for the single-line fields); elsewhere it is ignored.
+		if m.screen == screenLaunch {
+			m.launch.paste(msg.Content)
 		}
 		return m, nil
 

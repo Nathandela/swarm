@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 )
@@ -82,6 +83,33 @@ func (stderrVersionAdapter) ParseVersion(out string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// hangAdapter names a version probe that never returns (`sh -c 'sleep 30'`), so
+// Host.Run must abandon it at probeTimeout rather than block the caller — the P0
+// launch-form freeze was an unbounded version exec on the UI hot path.
+type hangAdapter struct{ goAdapter }
+
+func (hangAdapter) Binary() string        { return "sh" }
+func (hangAdapter) VersionArgs() []string { return []string{"-c", "sleep 30"} }
+
+func TestHostRun_BoundsAHangingProbe(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH; cannot exercise the timeout path")
+	}
+	start := time.Now()
+	det := adapter.Detect(hangAdapter{}, Host{})
+	elapsed := time.Since(start)
+
+	if elapsed > probeTimeout+3*time.Second {
+		t.Fatalf("a hanging version probe was not bounded: took %s (probeTimeout %s)", elapsed, probeTimeout)
+	}
+	if !det.Found {
+		t.Error("the binary resolves on PATH, so it must be Found even when the version probe times out")
+	}
+	if det.Version != "" {
+		t.Errorf("a timed-out probe must yield no version, got %q", det.Version)
+	}
 }
 
 func TestHostRun_CapturesStderrVersion(t *testing.T) {

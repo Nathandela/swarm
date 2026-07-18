@@ -194,6 +194,7 @@ type OptionSpec struct {
 	Type     string   // "string" | "bool" | "choice"
 	Default  string   // default value; for a choice it must be "" or one of Choices
 	Choices  []string // permitted values when Type == "choice"
+	Suggest  []string // optional curated values an editable string option cycles (left/right); empty = free text only
 	Required bool     // the form must collect a value
 }
 

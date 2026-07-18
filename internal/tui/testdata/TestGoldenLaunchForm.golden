@@ -1,9 +1,9 @@
 swarm · new session
 
-▌ directory   █
-  agent       ● claude   ○ codex (upgrade codex to >= 1.2.0)   ✕ gemini (install: npm i -g @google/gemini-cli)
+▌ directory   <cwd>█
+  agent       ◂ ● claude   ○ codex (upgrade codex to >= 1.2.0)   ✕ gemini (install: npm i -g @google/gemini-cli) ▸
   Model       opus ▾
   prompt      (optional)
   worktree    [ ] isolate in a git worktree
 
-  ⏎ launch   tab next field   esc cancel
+  type or paste · tab next · enter launch · esc cancel

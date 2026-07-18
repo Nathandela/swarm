@@ -1,0 +1,20 @@
+=== TDD RED evidence: form-perf + detect timeout (agents-tracker-3it P0, agents-tracker-0cx P1) ===
+=== date: Sat Jul 18 07:15:52 UTC 2026 ===
+
+### go test ./internal/tui/ (new form_perf_test.go + seeded openLaunch) ###
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/fakes_test.go:203:50: unknown field Suggest in struct literal of type adapter.OptionSpec
+internal/tui/form_perf_test.go:73:14: undefined: detectMsg
+internal/tui/form_perf_test.go:105:14: undefined: detectMsg
+internal/tui/form_perf_test.go:128:14: undefined: detectMsg
+internal/tui/form_perf_test.go:154:14: undefined: detectMsg
+internal/tui/form_perf_test.go:218:14: undefined: detectMsg
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
+### go test ./internal/adapter/detect/ (probe timeout) ###
+# github.com/Nathandela/swarm/internal/adapter/detect [github.com/Nathandela/swarm/internal/adapter/detect.test]
+internal/adapter/detect/detect_test.go:104:15: undefined: probeTimeout
+internal/adapter/detect/detect_test.go:105:91: undefined: probeTimeout
+FAIL	github.com/Nathandela/swarm/internal/adapter/detect [build failed]
+FAIL

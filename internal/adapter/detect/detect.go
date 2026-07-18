@@ -6,7 +6,18 @@
 // form / Epic 11) build a Host and hand it to adapter.Detect.
 package detect
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+	"time"
+)
+
+// probeTimeout bounds a single version probe. A version banner returns in
+// milliseconds; a Node-based CLI that cold-starts or wedges could otherwise hang
+// indefinitely, and detection runs on the launch-form path, so an unbounded exec
+// froze the whole UI (the P0 field-test bug). Detection is best-effort: a probe
+// that overruns is abandoned and the binary is reported Found-but-unversioned.
+const probeTimeout = 2 * time.Second
 
 // Host is the real adapter.HostProber: it resolves binaries on PATH and runs
 // them, owning the fds and child process that the pure adapter contract must
@@ -21,9 +32,12 @@ func (Host) LookPath(name string) (string, error) {
 // Run executes path with args and returns its combined stdout+stderr. Many CLIs
 // print their version banner to STDERR, so capturing only stdout would find the
 // binary but leave it unversioned; CombinedOutput captures both. A non-zero exit
-// or a spawn failure is returned as the error (output captured so far still
-// comes back for best-effort parsing).
+// or a spawn failure is returned as the error (output captured so far still comes
+// back for best-effort parsing). The exec is bounded by probeTimeout so a hanging
+// CLI is abandoned rather than blocking the caller.
 func (Host) Run(path string, args []string) (string, error) {
-	out, err := exec.Command(path, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
 	return string(out), err
 }

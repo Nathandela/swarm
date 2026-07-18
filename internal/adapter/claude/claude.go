@@ -108,7 +108,9 @@ func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 // Options is the declarative launch-option schema the launch form renders.
 func (claudeAdapter) Options() []adapter.OptionSpec {
 	return []adapter.OptionSpec{
-		{Key: "model", Label: "Model", Type: "string"},
+		// Editable free text; left/right cycle these aliases the claude CLI accepts.
+		// Empty value = the CLI's own default model.
+		{Key: "model", Label: "Model", Type: "string", Suggest: []string{"sonnet", "opus", "haiku"}},
 		{Key: "dangerously-skip-permissions", Label: "Skip permission prompts", Type: "bool", Default: "false"},
 	}
 }

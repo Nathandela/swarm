@@ -224,8 +224,12 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenAttach
 		}
 	case k.Text == "n":
-		m.launch = newLaunchModel(m.detect(), m.width)
+		// Open INSTANTLY against cached detection (never call the prober on the Update
+		// hot path — the P0 freeze), and kick an async refresh so availability updates
+		// live while the form is open.
+		m.launch = newLaunchModel(m.agents, m.detected, m.width)
 		m.screen = screenLaunch
+		return m, detectCmd(m.detect)
 	case k.Text == "r":
 		// Resume an ended/lost session as a NEW linked session (R-2): offered only on
 		// a non-running row (a running session has nothing to resume). The daemon
