@@ -32,7 +32,7 @@
 
 ## Liveness properties (must eventually happen)
 
-**L1**: A status-dimension change reaches every still-connected subscriber within 1 s (or that subscriber is disconnected for slowness). [V-2, P-3]
+**L1**: After any status-dimension change, the session's latest committed state reaches every still-connected subscriber within 1 s (or that subscriber is disconnected for slowness). Intermediate states MAY coalesce to the latest (ADR-008). [V-2, P-3]
 
 **L2**: After a daemon restart, every still-live shim is eventually reconnected and re-registered. [D-4, D-5]
 

@@ -82,7 +82,7 @@ Derived view groups:
 
 - **P-1** (Ubiquitous) Client-daemon communication SHALL use one UDS connection carrying two planes: a **control plane** (newline-delimited JSON-RPC-style messages, versioned, capability-negotiated at handshake) and a **data plane** (length-prefixed binary frames for PTY bytes), multiplexed with defined framing and a max frame size.
 - **P-2** (Ubiquitous) Control operations: handshake, list, launch, kill, delete, attach/detach, resize, subscribe. Data frames: PTY input, PTY output, grid snapshot.
-- **P-3** (Event) WHEN a session's status dimensions change, the daemon SHALL push an event to all subscribed clients; a slow or dead subscriber SHALL be disconnected (bounded outbound queue), never blocking PTY draining or persistence.
+- **P-3** (Event) WHEN a session's status dimensions change, the daemon SHALL push the session's latest committed state to all subscribed clients as a full-state snapshot event; consecutive changes MAY coalesce to the latest state (level-triggered, ADR-008 — was per-change edge delivery pre-v0.5). A slow or dead subscriber SHALL be disconnected (bounded outbound queue), never blocking PTY draining or persistence.
 - **P-4** (Unwanted) IF a client disconnects mid-attach, THEN the session continues and the daemon releases the stream and lease cleanly.
 - **P-5** (Ubiquitous) Attach SHALL use an **exclusive controller lease** (input + resize authority, lease generation id on every input/resize message; stale-lease messages rejected). One controller per session in v1; observer mode is a later capability.
 - **P-6** (Ubiquitous) The daemon SHALL re-validate every client-supplied input server-side (paths, options, ids) regardless of client checks.
