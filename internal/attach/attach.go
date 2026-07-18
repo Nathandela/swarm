@@ -183,6 +183,14 @@ func Run(cfg Config) (reason Reason, err error) {
 		buf := make([]byte, inputBufSize)
 		for {
 			n, e := in.Read(buf)
+			// Detach recognition is deliberately solo-byte (D4 RULED,
+			// agents-tracker-rs8): only a read that yields the detach key ALONE
+			// (n==1) detaches. The pump has no bracketed-paste state machine, so
+			// scanning every read for the byte would risk detaching mid-paste on
+			// any input that happens to carry it; solo-read is overwhelmingly the
+			// common case for a real keypress, and a missed detach under an input
+			// flood is rare and recoverable by pressing again. Documented
+			// limitation, not a bug: revisit only on field evidence.
 			if n == 1 && buf[0] == detachKey {
 				signalDetach()
 				return
