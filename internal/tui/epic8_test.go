@@ -152,10 +152,10 @@ func (b *blockingClient) List() ([]protocol.SessionView, error) {
 	<-b.release // never released in this test
 	return nil, nil
 }
-func (b *blockingClient) Launch(protocol.LaunchReq) (string, error) { return "", nil }
-func (b *blockingClient) Kill(string) error                         { return nil }
-func (b *blockingClient) Delete(string) error                       { return nil }
-func (b *blockingClient) Subscribe() (<-chan protocol.Event, error) { return nil, nil }
+func (b *blockingClient) Launch(protocol.LaunchReq) (string, string, error) { return "", "", nil }
+func (b *blockingClient) Kill(string) error                                 { return nil }
+func (b *blockingClient) Delete(string) error                               { return nil }
+func (b *blockingClient) Subscribe() (<-chan protocol.Event, error)         { return nil, nil }
 
 // E8 (bounded-dial carry-forward) — New must bound its eager List so a hung daemon
 // cannot stall the first paint. New returns promptly with an (empty) usable board.

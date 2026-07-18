@@ -424,8 +424,11 @@ func launchDims(w, h int) (int, int) {
 
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 	return func() tea.Msg {
-		id, err := c.Launch(req)
-		return launchResultMsg{id: id, agent: req.Agent, name: req.Name, err: err}
+		id, name, err := c.Launch(req)
+		if name == "" {
+			name = req.Name // skew fallback: an older daemon's reply carries no canonical name
+		}
+		return launchResultMsg{id: id, agent: req.Agent, name: name, err: err}
 	}
 }
 
@@ -457,6 +460,16 @@ func dropLast(s string) string {
 // ---------------------------------------------------------------------------
 
 const launchLabelW = 12
+
+// agentRowIndent is the cell offset at which the agent picker VALUE is rendered on its
+// field line: the 2-cell focus prefix plus the padded label column. The value must fit
+// the remaining form width (m.width - agentRowIndent) or it wraps and pushes the
+// selected agent off-screen (item 5).
+const agentRowIndent = 2 + launchLabelW
+
+// reasonWrapCells is the fixed cell cost of the " (…)" wrapper the picker draws around
+// an agent's reason, subtracted when budgeting the selected agent's clamped reason.
+const reasonWrapCells = len(" ()")
 
 func (m launchModel) view() string {
 	var b strings.Builder
@@ -553,9 +566,39 @@ func (m launchModel) agentValue() string {
 	if !m.detected {
 		return styleDim.Render("checking...")
 	}
+	full := m.buildAgentRow(true, -1)
+	if m.width <= agentRowIndent {
+		return full // width unknown / too narrow to budget: leave the row unclamped
+	}
+	budget := m.width - agentRowIndent
+	if lipgloss.Width(full) <= budget {
+		return full // fits: byte-identical to the pre-clamp row (the golden stays valid)
+	}
+	// Overflow (item 5): a crashing agent's long reason must not wrap the row and push the
+	// selected agent off-screen. Shed the OTHER agents' reasons first, keeping every
+	// dot+name and the selected agent's own reason.
+	if trimmed := m.buildAgentRow(false, -1); lipgloss.Width(trimmed) <= budget {
+		return trimmed
+	}
+	// The selected agent's own reason still overflows: clamp just that reason to the space
+	// left after the fixed parts (dots, names, flanks, separators, and the "(…)" wrapper).
+	noReason := m.buildAgentRow(false, 0)
+	selBudget := budget - lipgloss.Width(noReason) - reasonWrapCells
+	if selBudget < 1 {
+		return clampCells(noReason, budget) // no room for any reason: fit the dots+names alone
+	}
+	return m.buildAgentRow(false, selBudget)
+}
+
+// buildAgentRow renders the agent picker row: each agent as "<mark> <name>[ (reason)]",
+// joined and flanked with the cycle-arrow affordances. showOtherReasons includes the
+// non-selected agents' reasons; selReasonBudget controls the SELECTED agent's reason
+// (<0 = full, >=0 = clamp the reason text to that many cells before wrapping it). This
+// lets agentValue shed reasons by priority when the row would overflow the form width.
+func (m launchModel) buildAgentRow(showOtherReasons bool, selReasonBudget int) string {
 	parts := make([]string, 0, len(m.agents))
 	for i, a := range m.agents {
-		var mark, text string
+		var mark string
 		switch {
 		case i == m.agentIdx:
 			mark = "●" // selected: the filled dot marks the cursor, usable or not (bead 41b)
@@ -564,9 +607,18 @@ func (m launchModel) agentValue() string {
 		default:
 			mark = "○" // installed (usable or out of supported range) but not the selection
 		}
-		text = mark + " " + a.Name
+		text := mark + " " + a.Name
 		if r := agentReason(a); !a.usable() && r != "" {
-			text += " (" + r + ")"
+			if i == m.agentIdx {
+				if selReasonBudget >= 0 {
+					r = clampCells(r, selReasonBudget) // plain reason clamped before styling (ANSI-safe)
+				}
+				if r != "" {
+					text += " (" + r + ")"
+				}
+			} else if showOtherReasons {
+				text += " (" + r + ")"
+			}
 		}
 		if a.usable() && i == m.agentIdx {
 			text = lipgloss.NewStyle().Foreground(colAmber).Render(text)

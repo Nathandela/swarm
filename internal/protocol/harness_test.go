@@ -252,6 +252,7 @@ func (s *stubDaemon) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	m := persist.Meta{
 		ID:        "sess" + itoa(s.nextID),
 		AgentType: spec.AgentType,
+		Name:      spec.Name, // echo the (already server-sanitized) canonical name back on the launch reply
 		Cwd:       spec.Cwd,
 		Env:       spec.ClientEnv,
 		Status:    status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},

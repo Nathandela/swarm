@@ -402,10 +402,13 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		Rows:    rows,
 	}
 	return func() tea.Msg {
-		id, err := c.Launch(req)
+		id, name, err := c.Launch(req)
+		if name == "" {
+			name = s.Name // skew fallback: an older daemon's reply carries no canonical name
+		}
 		// Carry the new session id + agent + name so a successful resume auto-attaches into
 		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
-		return launchResultMsg{id: id, agent: s.Agent, name: s.Name, err: err}
+		return launchResultMsg{id: id, agent: s.Agent, name: name, err: err}
 	}
 }
 

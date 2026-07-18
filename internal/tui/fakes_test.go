@@ -5,7 +5,7 @@
 //
 //	type Client interface {                       // narrow, stub-friendly (Attach is Epic 8)
 //	    List() ([]protocol.SessionView, error)
-//	    Launch(protocol.LaunchReq) (string, error)
+//	    Launch(protocol.LaunchReq) (id, name string, err error) // name: daemon canonical label
 //	    Kill(id string) error
 //	    Delete(id string) error
 //	    Subscribe() (<-chan protocol.Event, error)
@@ -51,11 +51,12 @@ type fakeClient struct {
 	events   chan protocol.Event
 	listErr  error
 
-	launched  []protocol.LaunchReq
-	killed    []string
-	deleted   []string
-	launchID  string
-	launchErr error // when set, Launch returns it (B1 error-surfacing tests)
+	launched   []protocol.LaunchReq
+	killed     []string
+	deleted    []string
+	launchID   string
+	launchName string // canonical name the daemon returns on the launch reply ("" = older daemon)
+	launchErr  error  // when set, Launch returns it (B1 error-surfacing tests)
 }
 
 func newFakeClient(sessions ...protocol.SessionView) *fakeClient {
@@ -77,14 +78,14 @@ func (f *fakeClient) List() ([]protocol.SessionView, error) {
 	return out, nil
 }
 
-func (f *fakeClient) Launch(r protocol.LaunchReq) (string, error) {
+func (f *fakeClient) Launch(r protocol.LaunchReq) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launched = append(f.launched, r)
 	if f.launchErr != nil {
-		return "", f.launchErr
+		return "", "", f.launchErr
 	}
-	return f.launchID, nil
+	return f.launchID, f.launchName, nil
 }
 
 func (f *fakeClient) Kill(id string) error {

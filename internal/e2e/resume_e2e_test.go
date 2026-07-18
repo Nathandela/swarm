@@ -54,7 +54,7 @@ func TestE2E_ResumeAsNewSession_R2(t *testing.T) {
 	agentEnv := []string{"PATH=" + binDir + ":" + os.Getenv("PATH")}
 	srcCwd := t.TempDir()
 
-	srcID, err := c.Launch(protocol.LaunchReq{
+	srcID, _, err := c.Launch(protocol.LaunchReq{
 		Agent: "reference", Cwd: srcCwd, Options: map[string]string{},
 		Env: agentEnv, Cols: 80, Rows: 24,
 	})
@@ -78,7 +78,7 @@ func TestE2E_ResumeAsNewSession_R2(t *testing.T) {
 	}
 
 	// Resume it → a NEW session whose argv is the adapter RESUME argv carrying the id.
-	newID, err := c.Launch(protocol.LaunchReq{
+	newID, _, err := c.Launch(protocol.LaunchReq{
 		Agent: "reference", Cwd: srcCwd,
 		Options: map[string]string{protocol.OptionResumeFrom: srcID},
 		Env:     agentEnv, Cols: 80, Rows: 24,

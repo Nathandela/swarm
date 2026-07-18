@@ -164,7 +164,7 @@ func gateLaunch50(t *testing.T, sk *skeleton.Daemon) {
 			t.Fatalf("chmod script %d: %v", i, err)
 		}
 
-		if _, err := c.Launch(protocol.LaunchReq{
+		if _, _, err := c.Launch(protocol.LaunchReq{
 			Agent:   "fake",
 			Cwd:     t.TempDir(),
 			Options: map[string]string{"script": spath},

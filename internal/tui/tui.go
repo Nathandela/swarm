@@ -31,7 +31,10 @@ import (
 // in-memory fake.
 type Client interface {
 	List() ([]protocol.SessionView, error)
-	Launch(protocol.LaunchReq) (string, error)
+	// Launch returns the new session's namespaced id and the daemon's CANONICAL
+	// (sanitized/truncated) name for it; an older daemon whose reply predates naming
+	// returns an empty name, and the producer falls back to the request name.
+	Launch(protocol.LaunchReq) (id, name string, err error)
 	Kill(id string) error
 	Delete(id string) error
 	Subscribe() (<-chan protocol.Event, error)
@@ -320,7 +323,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
 			m.daemonVersion = bv.BuildVersion()
 		}
-		events, _ := msg.client.Subscribe()
+		events, serr := msg.client.Subscribe()
+		if serr != nil {
+			// The reconnect succeeded but re-subscribing did not: surface it instead of
+			// silently leaving m.events nil (a live-looking board that never updates —
+			// codex+Fable item 3). Events stay nil, but the user is told, not left dark.
+			return m, m.general.setBanner("daemon upgraded but event stream failed: " + serr.Error())
+		}
 		m.events = events
 		return m, tea.Batch(m.general.setBanner("daemon upgraded"), waitForEvent(m.events))
 
@@ -522,13 +531,18 @@ func skewNotice(daemonVer, clientVer string) string {
 	return "daemon " + daemonVer + " differs from swarm " + clientVer + " - run: swarm daemon restart"
 }
 
-// compareSemver compares two dotted-numeric version strings, returning -1, 0, or +1. A
-// leading "v" and any pre-release/build suffix are ignored; a non-numeric component
-// compares as 0. Mirrors internal/adapter's proven versionInRange helper (kept local so
-// the tui does not depend on that package's unexported surface). Pure and total.
+// compareSemver compares two version strings by SemVer precedence, returning -1, 0, or
+// +1. A leading "v" and any build ("+...") metadata are ignored. The dotted-numeric core
+// is compared first; when the cores are equal a version WITH a pre-release ("-...") sorts
+// BEFORE the same version without one (0.4.0-rc.1 < 0.4.0), and two pre-releases compare
+// by their suffix string (rc.1 < rc.2). This is what lets a client on the final build
+// recognize an rc daemon as OLDER and auto-upgrade it. A non-numeric core component
+// compares as 0. Pure and total.
 func compareSemver(a, b string) int {
-	an := semverParts(a)
-	bn := semverParts(b)
+	aCore, aPre := splitSemver(a)
+	bCore, bPre := splitSemver(b)
+	an := semverParts(aCore)
+	bn := semverParts(bCore)
 	for i := 0; i < len(an) || i < len(bn); i++ {
 		var av, bv int
 		if i < len(an) {
@@ -544,18 +558,38 @@ func compareSemver(a, b string) int {
 			return 1
 		}
 	}
-	return 0
+	// Numeric cores are equal: apply SemVer pre-release precedence.
+	switch {
+	case aPre == "" && bPre == "":
+		return 0
+	case aPre == "": // a is the release, b a pre-release of it -> a is greater
+		return 1
+	case bPre == "":
+		return -1
+	default:
+		return strings.Compare(aPre, bPre)
+	}
 }
 
-// semverParts splits a version into its leading dotted numeric components, tolerating a
-// leading "v" and stopping at the first non-numeric component (e.g. a "-rc1" suffix).
-func semverParts(v string) []int {
+// splitSemver trims a leading "v" and any build metadata, then splits a version into its
+// numeric core and its pre-release suffix (everything after the first "-").
+func splitSemver(v string) (core, pre string) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i] // drop build metadata (never part of precedence)
+	}
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
+}
+
+// semverParts splits a version core (already stripped of its "v" prefix and any
+// pre-release/build suffix by splitSemver) into its dotted numeric components, stopping
+// at the first non-numeric component.
+func semverParts(core string) []int {
 	var parts []int
-	for _, seg := range strings.Split(v, ".") {
-		if i := strings.IndexAny(seg, "-+"); i >= 0 {
-			seg = seg[:i]
-		}
+	for _, seg := range strings.Split(core, ".") {
 		n, err := strconv.Atoi(seg)
 		if err != nil {
 			break

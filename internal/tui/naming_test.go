@@ -159,6 +159,35 @@ func TestBanner_UsesSessionNameOnTransition(t *testing.T) {
 	quitTM(t, tm)
 }
 
+// v0.4 committee fix wave — item 4 (codex): the launch producer must carry the
+// daemon's CANONICAL (sanitized/truncated) name — the one the daemon persisted — into
+// the auto-attach, not the raw client-side label.
+func TestLaunchCmd_UsesDaemonCanonicalName(t *testing.T) {
+	f := newFakeClient()
+	f.launchName = "canonical-sanitized" // what the daemon returns on the launch reply
+
+	msg := launchCmd(f, protocol.LaunchReq{Agent: "claude", Name: "raw-client-label"})()
+	res, ok := msg.(launchResultMsg)
+	if !ok {
+		t.Fatalf("launchCmd produced %T, want launchResultMsg", msg)
+	}
+	if res.name != "canonical-sanitized" {
+		t.Fatalf("auto-attach name = %q, want the daemon canonical name", res.name)
+	}
+}
+
+// Skew fallback: an older daemon whose reply carries no name leaves the producer with
+// the client-side request name (the pre-fix behavior), never a blank identity.
+func TestLaunchCmd_FallsBackToReqNameWhenDaemonOmitsName(t *testing.T) {
+	f := newFakeClient() // launchName == "" (older daemon, name-less reply)
+
+	msg := launchCmd(f, protocol.LaunchReq{Agent: "claude", Name: "my-label"})()
+	res := msg.(launchResultMsg)
+	if res.name != "my-label" {
+		t.Fatalf("absent canonical name must fall back to the request name; got %q", res.name)
+	}
+}
+
 // A successful launch carries the composed name into the auto-attach, so the attach
 // chrome hint identifies the new session by its name (not the bare agent).
 func TestLaunchResult_AutoAttachCarriesName(t *testing.T) {

@@ -117,20 +117,24 @@ func (c *Client) List() ([]SessionView, error) {
 	return resp.Sessions, nil
 }
 
-// Launch requests a new session and returns its namespaced id.
-func (c *Client) Launch(req LaunchReq) (string, error) {
+// Launch requests a new session and returns its namespaced id AND the daemon's
+// CANONICAL name for it (the server-sanitized/truncated label from the reply's
+// SessionView). Callers that only need the id can discard the name; the auto-attach
+// chrome uses the canonical name so the label matches what the daemon persisted (an
+// older daemon whose reply predates naming returns an empty name).
+func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 	r := req
 	resp, err := c.request(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if resp.Op == OpError {
-		return "", errors.New(resp.Error)
+		return "", "", errors.New(resp.Error)
 	}
 	if resp.Session == nil {
-		return "", errors.New("protocol: launch reply carried no session")
+		return "", "", errors.New("protocol: launch reply carried no session")
 	}
-	return resp.Session.ID, nil
+	return resp.Session.ID, resp.Session.Name, nil
 }
 
 // Kill terminates a session.

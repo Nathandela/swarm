@@ -39,11 +39,14 @@ func runAttach(r AttachRunner, s protocol.SessionView, readOnly bool) tea.Cmd {
 	}
 }
 
-// AttachDialer opens a controller attach for a session id, yielding the attach
-// Session the passthrough drives. Production passes protocol.Client.Attach; the
-// tui.Client interface omits Attach on purpose (it is the Epic 8 surface), so the
-// dialer is injected alongside the runner.
-type AttachDialer func(sessionID string) (attach.Session, error)
+// AttachDialer opens a controller attach for a session id, yielding the attach Session
+// the passthrough drives AND a cleanup that releases the per-attach resources. Production
+// (cmd's attachDialer) dials a FRESH connection per attach and returns its Close as the
+// cleanup, so an attach never multiplexes on a long-lived client conn that a daemon
+// auto-upgrade may have replaced (item 1, the blocker). The tui.Client interface omits
+// Attach on purpose (it is the Epic 8 surface), so the dialer is injected alongside the
+// runner.
+type AttachDialer func(sessionID string) (sess attach.Session, cleanup func(), err error)
 
 // TerminalHandoff releases the hosting program's hold on the terminal for the
 // duration of the raw passthrough and restores it after. Production passes the
@@ -59,9 +62,15 @@ type TerminalHandoff struct {
 // bubbletea-side adapter; cmd wires the dialer and terminal handoff.
 func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 	return func(s protocol.SessionView, readOnly bool) error {
-		sess, err := dial(s.ID)
+		sess, cleanup, err := dial(s.ID)
 		if err != nil {
 			return err
+		}
+		if cleanup != nil {
+			// Release the per-attach connection once the passthrough returns, on every
+			// exit path (detach, session end, or a recovered fault — attach.Run does not
+			// propagate panics), so a fresh per-attach conn is never leaked (item 1).
+			defer cleanup()
 		}
 		if hand.Release != nil {
 			_ = hand.Release()

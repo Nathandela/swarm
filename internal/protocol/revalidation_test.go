@@ -25,7 +25,7 @@ func TestRevalidate_LaunchRejectsNonexistentCwd(t *testing.T) {
 
 	req := validLaunch(t)
 	req.Cwd = filepath.Join(t.TempDir(), "does", "not", "exist")
-	if _, err := c.Launch(req); err == nil {
+	if _, _, err := c.Launch(req); err == nil {
 		t.Fatalf("Launch with nonexistent cwd: err = nil, want rejection (L-3/P-6)")
 	}
 	if len(stub.launchSpecs()) != 0 {
@@ -43,7 +43,7 @@ func TestRevalidate_LaunchRejectsCwdThatIsNotADirectory(t *testing.T) {
 	}
 	req := validLaunch(t)
 	req.Cwd = file
-	if _, err := c.Launch(req); err == nil {
+	if _, _, err := c.Launch(req); err == nil {
 		t.Fatalf("Launch with a file (not dir) cwd: err = nil, want rejection")
 	}
 	if len(stub.launchSpecs()) != 0 {
@@ -57,7 +57,7 @@ func TestRevalidate_LaunchRejectsUnknownOrEmptyAgent(t *testing.T) {
 		c := dialClient(t, serveStub(t, stub), nil)
 		req := validLaunch(t)
 		req.Agent = agent
-		if _, err := c.Launch(req); err == nil {
+		if _, _, err := c.Launch(req); err == nil {
 			t.Fatalf("Launch with invalid agent (len=%d): err = nil, want rejection", len(agent))
 		}
 		if len(stub.launchSpecs()) != 0 {
@@ -75,7 +75,7 @@ func TestRevalidate_LaunchRejectsOversizedOptions(t *testing.T) {
 	// wire frame (so this exercises SERVER policy, not the envelope cap), but must
 	// exceed the server's per-field option bound.
 	req.Options = map[string]string{"blob": strings.Repeat("A", 128<<10)}
-	if _, err := c.Launch(req); err == nil {
+	if _, _, err := c.Launch(req); err == nil {
 		t.Fatalf("Launch with oversized options: err = nil, want rejection (P-6)")
 	}
 	if len(stub.launchSpecs()) != 0 {
@@ -89,7 +89,7 @@ func TestRevalidate_LaunchRejectsHugeDimensions(t *testing.T) {
 
 	req := validLaunch(t)
 	req.Cols, req.Rows = 100000, 100000
-	if _, err := c.Launch(req); err == nil {
+	if _, _, err := c.Launch(req); err == nil {
 		t.Fatalf("Launch with absurd cols/rows: err = nil, want rejection (panic/OOM guard, P-6)")
 	}
 	if len(stub.launchSpecs()) != 0 {

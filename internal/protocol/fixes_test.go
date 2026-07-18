@@ -499,7 +499,7 @@ func TestFix_InitialPromptReachesDaemonSpec(t *testing.T) {
 	c := dialClient(t, sock, nil)
 
 	dir := t.TempDir()
-	if _, err := c.Launch(LaunchReq{Agent: "claude", Cwd: dir, Cols: 80, Rows: 24, InitialPrompt: "do-the-thing"}); err != nil {
+	if _, _, err := c.Launch(LaunchReq{Agent: "claude", Cwd: dir, Cols: 80, Rows: 24, InitialPrompt: "do-the-thing"}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	specs := stub.launchSpecs()

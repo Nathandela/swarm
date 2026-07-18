@@ -70,7 +70,7 @@ func TestRevalidate_LaunchSanitizesName(t *testing.T) {
 
 	req := validLaunch(t)
 	req.Name = "bad\x00\tname" + strings.Repeat("x", 100)
-	if _, err := c.Launch(req); err != nil {
+	if _, _, err := c.Launch(req); err != nil {
 		t.Fatalf("a cosmetic name must not fail the launch: %v", err)
 	}
 	specs := stub.launchSpecs()
@@ -88,6 +88,38 @@ func TestRevalidate_LaunchSanitizesName(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "badname") {
 		t.Fatalf("sanitization dropped visible content: %q", got)
+	}
+}
+
+// v0.4 committee fix wave — item 4 (codex): Client.Launch must return the daemon's
+// CANONICAL (server-sanitized + capped) name from the launch reply's SessionView, so
+// the auto-attach chrome labels the session by the name the daemon actually persisted
+// rather than the raw, unsanitized client label.
+func TestClient_LaunchReturnsCanonicalName(t *testing.T) {
+	stub := newStubDaemon()
+	c := dialClient(t, serveStub(t, stub), nil)
+
+	req := validLaunch(t)
+	raw := "raw\tlabel-" + strings.Repeat("x", 100) // control char + > 64 runes: forced to differ from the canonical
+	req.Name = raw
+
+	id, name, err := c.Launch(req)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if id == "" {
+		t.Fatal("launch returned no id")
+	}
+	if name == raw {
+		t.Fatalf("Launch must return the daemon's canonical name, not the raw client label: %q", name)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			t.Fatalf("canonical name still carries a control character: %q", name)
+		}
+	}
+	if n := len([]rune(name)); n == 0 || n > 64 {
+		t.Fatalf("canonical name must be non-empty and capped to 64 runes; len=%d (%q)", n, name)
 	}
 }
 

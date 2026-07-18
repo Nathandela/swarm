@@ -142,14 +142,7 @@ func runTUI(stdout, stderr io.Writer) int {
 	// prog is captured by the attach runner's terminal handoff; it is assigned just
 	// before Run, so the closures see the live program when an attach fires.
 	var prog *tea.Program
-	dialAttach := func(id string) (attach.Session, error) {
-		att, aerr := client.Attach(id)
-		if aerr != nil {
-			return nil, aerr
-		}
-		return att, nil
-	}
-	runner := tui.NewAttachRunner(dialAttach, tui.TerminalHandoff{
+	runner := tui.NewAttachRunner(attachDialer(cc), tui.TerminalHandoff{
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
@@ -214,6 +207,29 @@ func dialClient(cc daemon.ClientConfig) (*protocol.Client, error) {
 	}
 	_ = conn.Close() // EnsureDaemon proved the daemon is live; the TUI speaks the full client protocol on its own dial
 	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+}
+
+// attachDialer builds the per-attach dialer the TUI's attach runner uses: it dials a
+// FRESH protocol client to the daemon socket for EACH attach and returns that client's
+// Close as the cleanup. Dialing per attach — rather than multiplexing the TUI's
+// long-lived client connection — keeps attach working across a daemon auto-upgrade, which
+// swaps that long-lived client out from under the runner (bd agents-tracker-5jl); the old
+// code closed over the original client and, after the swap, attached on its dead conn
+// (item 1, the blocker). The fresh conn is closed by the returned cleanup once the
+// passthrough returns; on a dial/attach failure it is closed before returning the error.
+func attachDialer(cc daemon.ClientConfig) tui.AttachDialer {
+	return func(id string) (attach.Session, func(), error) {
+		c, err := protocol.Dial(cc.SocketPath, []string{"attach"})
+		if err != nil {
+			return nil, nil, err
+		}
+		att, err := c.Attach(id)
+		if err != nil {
+			_ = c.Close()
+			return nil, nil, err
+		}
+		return att, func() { _ = c.Close() }, nil
+	}
 }
 
 // daemonRestarter is the client-side reuse of `swarm daemon restart` injected into the
