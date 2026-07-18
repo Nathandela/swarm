@@ -144,7 +144,15 @@ func Run(cfg Config) (reason Reason, err error) {
 	if sizeErr != nil {
 		cols, rows = 0, 0
 	}
+	// wasAlt records whether the snapshot paint entered the alternate screen
+	// (render.go's RenderSnapshotClipped writes CSI ?1049h when the snapshot was
+	// captured there). It is the ONLY source of truth teardownAlt uses: the
+	// client never parses the live passthrough stream (R4.2.2), so it has no way
+	// to know whether the agent's own output already exited alt by the time Run
+	// tears down.
+	var wasAlt bool
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
+		wasAlt = snap.AltScreen
 		writeAll(out, vt.RenderSnapshotClipped(snap, cols, rows))
 	} else {
 		// A snapshot that fails to decode paints a single plain notice instead of
@@ -216,6 +224,19 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 	}()
 
+	// teardownAlt undoes the alt-screen entry the initial snapshot paint made
+	// (R4.2.2, agents-tracker-rs8). It is idempotent on a terminal already back
+	// in the main buffer — exit-alt (CSI ?1049l) is a no-op there, and
+	// cursor-show/SGR-reset are always safe — so emitting it unconditionally
+	// whenever wasAlt is true is safe regardless of whether the live stream
+	// already exited alt itself. wasAlt false (never entered alt) emits nothing,
+	// so a main-buffer session's terminal is never touched here.
+	teardownAlt := func() {
+		if wasAlt {
+			writeAll(out, []byte("\x1b[?1049l\x1b[?25h\x1b[0m"))
+		}
+	}
+
 	// Termination signals (registered above, before raw mode) restore the terminal
 	// before the loop tears down, so a raw-mode client killed by SIGINT/SIGTERM/
 	// SIGHUP never leaves a wrecked terminal behind (E8.2).
@@ -225,16 +246,19 @@ func Run(cfg Config) (reason Reason, err error) {
 		case f, ok := <-frames:
 			if !ok {
 				_ = cfg.Session.Detach()
+				teardownAlt()
 				restore()
 				return ReasonSessionEnd, nil
 			}
 			writeAll(out, f)
 		case <-detachCh:
 			_ = cfg.Session.Detach()
+			teardownAlt()
 			restore()
 			return ReasonDetached, nil
 		case <-sigCh:
 			_ = cfg.Session.Detach()
+			teardownAlt()
 			restore()
 			return ReasonDetached, nil
 		}
