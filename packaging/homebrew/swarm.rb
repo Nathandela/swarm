@@ -7,6 +7,12 @@
 # goreleaser regenerates and pushes the real file itself — never hand-edit a
 # copy in the tap repo.
 #
+# macOS is served by a SINGLE universal (fat) Mach-O artifact (darwin_all): the
+# .goreleaser.yaml universal_binaries: stanza lipos the arm64 and x86_64 builds
+# into one binary that runs natively on both Apple Silicon and Intel, so the
+# on_macos block has one url with no on_intel/on_arm split. Linux keeps its
+# per-arch artifacts.
+#
 # Note on the sha256 values below: a goreleaser build embeds a build
 # timestamp (the {{.Date}} ldflag), so re-running the same snapshot command
 # against identical source produces DIFFERENT archive checksums every time —
@@ -16,27 +22,21 @@
 # Once the tap repo exists, install with:
 #   brew install --cask Nathandela/swarm/swarm
 cask "swarm" do
-  version "0.0.0-SNAPSHOT-1a5ec97"
+  version "0.3.0-SNAPSHOT-d52057e"
 
   on_macos do
-    on_intel do
-      sha256 "06e5f15886cc490b4ddd8d3f3ffefc509cf47a4aa7663174b2032d0f3acc31ea"
-      url "https://github.com/Nathandela/swarm/releases/download/v0.0.0/swarm_#{version}_darwin_amd64.tar.gz"
-    end
-    on_arm do
-      sha256 "1455a37f053aa6e702c018c380f5a4c74eaf51bea9cd674466887c33844cfa9a"
-      url "https://github.com/Nathandela/swarm/releases/download/v0.0.0/swarm_#{version}_darwin_arm64.tar.gz"
-    end
+    sha256 "4e22c595bb83064b5cc813cf73aced00f231dd2c462d0389471cd685d5753ec7"
+    url "https://github.com/Nathandela/swarm/releases/download/v0.3.0/swarm_#{version}_darwin_all.tar.gz"
   end
 
   on_linux do
     on_intel do
-      sha256 "87c32d802501d20b22bcb0c5885d0cebaaa6300049b22d2abf9ad0d8935fceca"
-      url "https://github.com/Nathandela/swarm/releases/download/v0.0.0/swarm_#{version}_linux_amd64.tar.gz"
+      sha256 "fd73abeae0649260a7255b7f1a65ec1db16de89e4cbcb6abf26e101b8a1af540"
+      url "https://github.com/Nathandela/swarm/releases/download/v0.3.0/swarm_#{version}_linux_amd64.tar.gz"
     end
     on_arm do
-      sha256 "04f1ed66e89b8afe7f85b5eb1dfd30b36292b08098410f9c6eff87eb00c48fd8"
-      url "https://github.com/Nathandela/swarm/releases/download/v0.0.0/swarm_#{version}_linux_arm64.tar.gz"
+      sha256 "c62b96bca92633181386cd59e60da0ecf247dcea2668948f47deea3d41a022df"
+      url "https://github.com/Nathandela/swarm/releases/download/v0.3.0/swarm_#{version}_linux_arm64.tar.gz"
     end
   end
 

@@ -454,7 +454,7 @@ func writeAll(w io.Writer, p []byte) {
 
 // chromeHint reserves the real bottom row (ADR-006 v0.3): it sets the DECSTBM scroll
 // region to rows 1..rows-1 so normal-mode scrolling never drags the hint row, then
-// paints the reverse-video return hint on the real bottom row. The whole sequence is
+// paints the faint/dim return hint on the real bottom row. The whole sequence is
 // wrapped in DECSC/DECRC so the agent's (or the snapshot's) cursor position and pen
 // survive both the region change (DECSTBM homes the cursor) and the paint. The caller
 // guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
@@ -468,8 +468,10 @@ func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 	b.WriteByte('r') // DECSTBM: scroll region 1..rows-1
 	b.WriteString("\x1b[")
 	b.WriteString(strconv.Itoa(rows))
-	b.WriteString(";1H")     // CUP to the reserved bottom row
-	b.WriteString("\x1b[7m") // reverse video
+	b.WriteString(";1H") // CUP to the reserved bottom row
+	// v0.4 P2 (dim not reverse): a faint default-colored hint, not the harsh full-width
+	// reverse-video bar that read as a white strip on dark terminals.
+	b.WriteString("\x1b[2m") // faint/dim
 	b.WriteString(hintText(name, detachKey, cols))
 	b.WriteString("\x1b[0m") // reset pen
 	b.WriteString("\x1b[K")  // clear to end of the reserved row

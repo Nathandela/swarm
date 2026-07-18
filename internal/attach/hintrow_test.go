@@ -7,7 +7,7 @@ package attach
 //
 //   - Chrome-on attach reserves the REAL terminal's bottom row: the session PTY is
 //     resized to (cols, rows-1), a DECSTBM scroll region of rows 1..rows-1 is set,
-//     and a single reverse-video hint (session name + "ctrl+q returns to swarm") is
+//     and a single faint/dim hint (session name + "ctrl+q returns to swarm") is
 //     painted on the real bottom row with DECSC/CUP/EL/DECRC so the cursor survives.
 //   - The output pump re-asserts region+hint after frame batches, throttled to at
 //     most once per ~250ms and always immediately after a damage signature
@@ -65,7 +65,7 @@ func TestPassthrough_ChromeReservesBottomRowPTY(t *testing.T) {
 	_ = waitResult(t, ch)
 }
 
-// Chrome sets a DECSTBM scroll region of 1..rows-1 and paints the reverse-video hint
+// Chrome sets a DECSTBM scroll region of 1..rows-1 and paints the faint/dim hint
 // on the real bottom row, cursor-preserved (DECSC/DECRC).
 func TestPassthrough_ChromeSetsScrollRegionAndHint(t *testing.T) {
 	term := newFakeTerm(80, 24)
@@ -79,13 +79,18 @@ func TestPassthrough_ChromeSetsScrollRegionAndHint(t *testing.T) {
 		[]byte("\x1b[24;1H"), // hint painted on the real bottom row
 		[]byte("\x1b7"),      // DECSC: cursor saved before the hint
 		[]byte("\x1b8"),      // DECRC: cursor restored after the hint
-		[]byte("\x1b[7m"),    // reverse video
+		[]byte("\x1b[2m"),    // faint/dim (v0.4 P2: subtle hint, not a harsh reverse-video bar)
 		[]byte("claude"),     // session name
 		[]byte("returns to swarm"),
 	} {
 		if !bytes.Contains(out, want) {
 			t.Fatalf("chrome hint must contain %q; got %q", want, out)
 		}
+	}
+	// v0.4 P2 (dim not reverse): the hint is faint default-colored text, never the harsh
+	// reverse-video bar that painted a full-width white strip on dark terminals.
+	if bytes.Contains(out, []byte("\x1b[7m")) {
+		t.Fatalf("chrome hint must use faint (SGR 2), not reverse video (SGR 7); got %q", out)
 	}
 	// The hint must NOT be painted on the top row (v0.2 overdraw regression).
 	if bytes.Contains(out, []byte("\x1b7\x1b[1;1H")) {
