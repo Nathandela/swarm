@@ -22,17 +22,23 @@ import (
 )
 
 // styledScript builds a fakeagent script that paints every cell of a rows x cols grid
-// with a fully-styled (truecolor fg+bg, bold/italic/underline/reverse) run, so the
-// emulator snapshot exceeds wire.MaxFrame and must be chunked. It then idles so the
-// grid stays populated for the attach.
+// with rich attributes (bold/italic/underline/reverse + a truecolor bg, set once per
+// line) plus a truecolor fg DISTINCT from its neighbors, so the emulator snapshot
+// exceeds wire.MaxFrame and must be chunked. Per-cell-distinct styling is required
+// post item 4.3 run-merging: a uniform-per-row grid would coalesce to one run per row
+// and drop below MaxFrame, whereas a per-cell-varying grid is merging's worst case and
+// keeps the snapshot oversized. Only the fg varies per cell (attrs+bg persist), which
+// keeps the script small so the grid paints quickly — the attach loop below reads live
+// frames only implicitly, so a slow paint would flood an oversized styled grid's
+// output and trip the S9 wedged-subscriber eviction before the grid finishes. It then
+// idles so the grid stays populated for the attach.
 func styledScript(rows, cols int) string {
 	var b strings.Builder
 	for y := 0; y < rows; y++ {
-		fg := (y * 5) % 256
-		bg := (y*7 + 40) % 256
-		b.WriteString("print ")
-		fmt.Fprintf(&b, "\x1b[1;3;4;7;38;2;%d;%d;%d;48;2;%d;%d;%dm", fg, 128, 255-fg, bg, 64, 120)
+		b.WriteString("print \x1b[1;3;4;7;48;2;40;64;120m") // rich attrs + bg once per line
 		for x := 0; x < cols; x++ {
+			fg := (x*3 + y*5) % 256 // odd x-step -> adjacent cells never share fg
+			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm", fg, 128, 255-fg)
 			b.WriteByte(byte('A' + (x+y)%26))
 		}
 		b.WriteByte('\n')

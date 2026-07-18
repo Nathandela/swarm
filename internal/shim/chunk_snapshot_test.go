@@ -20,15 +20,23 @@ import (
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
-// heavyStyled paints every cell of a rows x cols grid with a fully-styled run so the
-// emulator snapshot exceeds wire.MaxFrame and must be chunked.
+// heavyStyled paints a rows x cols grid where every cell carries rich attributes
+// (bold/italic/underline/reverse + a truecolor bg, set once per line) plus a
+// truecolor fg that is DISTINCT from its horizontal neighbors, so the emulator
+// snapshot exceeds wire.MaxFrame and must be chunked. Per-cell-distinct styling is
+// deliberate: item 4.3 run-merging coalesces adjacent same-style cells, so a
+// uniform-per-row grid would collapse to one run per row and fall far below
+// MaxFrame; a per-cell-varying grid is merging's worst case (no coalescing) and
+// therefore the correct post-merging fixture for exercising the chunked hop. Only
+// the fg varies via a short per-cell SGR (attrs+bg persist), which keeps the byte
+// stream small enough that a real shim paints the grid quickly.
 func heavyStyled(rows, cols int) []byte {
 	var b bytes.Buffer
 	for y := 0; y < rows; y++ {
-		fg := (y * 5) % 256
-		bg := (y*7 + 40) % 256
-		fmt.Fprintf(&b, "\x1b[1;3;4;7;38;2;%d;%d;%d;48;2;%d;%d;%dm", fg, 128, 255-fg, bg, 64, 120)
+		b.WriteString("\x1b[1;3;4;7;48;2;40;64;120m") // rich attrs + bg once per line
 		for x := 0; x < cols; x++ {
+			fg := (x*3 + y*5) % 256 // odd x-step -> adjacent cells never share fg
+			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm", fg, 128, 255-fg)
 			b.WriteByte(byte('A' + (x+y)%26))
 		}
 		b.WriteString("\r\n")
@@ -124,16 +132,17 @@ func TestHubAttach_SingleFrameWhenNotNegotiated(t *testing.T) {
 	}
 }
 
-// styledFakeAgentConfig runs the fake agent painting a cols x rows styled grid.
+// styledFakeAgentConfig runs the fake agent painting a cols x rows styled grid with
+// per-cell-distinct styling (see heavyStyled) so the snapshot stays above MaxFrame
+// after item 4.3 run-merging.
 func styledFakeAgentConfig(t *testing.T, cols, rows int) Config {
 	t.Helper()
 	var b bytes.Buffer
 	for y := 0; y < rows; y++ {
-		fg := (y * 5) % 256
-		bg := (y*7 + 40) % 256
-		b.WriteString("print ")
-		fmt.Fprintf(&b, "\x1b[1;3;4;7;38;2;%d;%d;%d;48;2;%d;%d;%dm", fg, 128, 255-fg, bg, 64, 120)
+		b.WriteString("print \x1b[1;3;4;7;48;2;40;64;120m") // rich attrs + bg once per line
 		for x := 0; x < cols; x++ {
+			fg := (x*3 + y*5) % 256
+			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm", fg, 128, 255-fg)
 			b.WriteByte(byte('A' + (x+y)%26))
 		}
 		b.WriteByte('\n')
