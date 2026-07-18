@@ -10,7 +10,6 @@ package vt
 //     the correct buffer).
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 )
@@ -136,21 +135,6 @@ func TestRenderSnapshotClipped_ClampsCursorIntoBounds(t *testing.T) {
 	// Clamped to the last visible cell: row 5, col 10 (1-based CUP).
 	if !strings.Contains(out, "\x1b[5;10H") {
 		t.Fatalf("cursor must be clamped into the clipped bounds (row 5, col 10); got %q", out)
-	}
-}
-
-// item 2 — 0,0 disables clipping: RenderSnapshotClipped(s, 0, 0) is byte-identical to
-// the unclipped RenderSnapshot, so existing callers are unaffected.
-func TestRenderSnapshotClipped_ZeroZeroMatchesUnclipped(t *testing.T) {
-	s := &Snap{
-		Version: SnapshotVersion, Cols: 3, Rows: 2, CursorX: 1, CursorY: 1, CursorVisible: true,
-		Lines: []Line{
-			{Runs: []Run{{Text: "a", Width: 1}, {Text: "b", Width: 1}, {Text: "c", Width: 1}}},
-			{Runs: []Run{{Text: " ", Width: 1}, {Text: " ", Width: 1}, {Text: " ", Width: 1}}},
-		},
-	}
-	if !bytes.Equal(RenderSnapshotClipped(s, 0, 0), RenderSnapshot(s)) {
-		t.Fatalf("clipping disabled (0,0) must be byte-identical to the unclipped RenderSnapshot")
 	}
 }
 

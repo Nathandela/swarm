@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func render(s *Snap) string { return string(RenderSnapshot(s)) }
+func render(s *Snap) string { return string(RenderSnapshotClipped(s, 0, 0)) }
 
 // A snapshot renders to a full repaint: reset+clear+home first, the grid text
 // with each row absolutely positioned, a final cursor placement from the
@@ -122,7 +122,7 @@ func TestRenderSnapshot_WideGraphemeRenderedOnce(t *testing.T) {
 // A nil snapshot renders to nothing (defensive: the caller skips a failed decode,
 // but the renderer never panics on a nil).
 func TestRenderSnapshot_NilIsEmpty(t *testing.T) {
-	if b := RenderSnapshot(nil); len(b) != 0 {
+	if b := RenderSnapshotClipped(nil, 0, 0); len(b) != 0 {
 		t.Fatalf("nil snapshot must render to nothing; got %q", b)
 	}
 }

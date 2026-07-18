@@ -3,10 +3,10 @@ package vt
 // render.go turns a decoded snapshot back into ANSI bytes that faithfully
 // repaint a terminal. It is the consumer half of the Snap projection: the
 // snapshot is a structured, escape-free description of the visible screen
-// (emulator.go), and RenderSnapshot replays exactly that description as escape
-// sequences — optional alt-screen entry, clear + home, each row's runs with their
-// SGR styling, a trailing reset, cursor visibility, then the recorded cursor
-// position. It invents nothing beyond what the Snap records.
+// (emulator.go), and RenderSnapshotClipped replays exactly that description as
+// escape sequences — optional alt-screen entry, clear + home, each row's runs
+// with their SGR styling, a trailing reset, cursor visibility, then the
+// recorded cursor position. It invents nothing beyond what the Snap records.
 //
 // Scope (deliberate):
 //   - AltScreen IS acted on: when the Snap records the emulator in the alternate
@@ -30,29 +30,22 @@ import (
 	"strings"
 )
 
-// RenderSnapshot converts a decoded snapshot into ANSI bytes that repaint the
-// screen without clipping to any client size. It is RenderSnapshotClipped with
-// clipping disabled (0, 0); see there for the full contract. A nil snapshot
-// renders to nothing.
-func RenderSnapshot(s *Snap) []byte {
-	return RenderSnapshotClipped(s, 0, 0)
-}
-
-// RenderSnapshotClipped is RenderSnapshot clipped to a live terminal of cols x rows
-// cells. A snapshot captured on a terminal larger than the attaching client would
-// otherwise pile the excess rows onto the bottom line, and a wider row would wrap —
-// a wrap on the bottom row scrolls the screen. Clipping to the client bounds keeps
-// the repaint inside the visible grid:
+// RenderSnapshotClipped converts a decoded snapshot into ANSI bytes that repaint
+// the screen, clipped to a live terminal of cols x rows cells. A snapshot
+// captured on a terminal larger than the attaching client would otherwise pile
+// the excess rows onto the bottom line, and a wider row would wrap — a wrap on
+// the bottom row scrolls the screen. Clipping to the client bounds keeps the
+// repaint inside the visible grid:
 //   - rows beyond the client height are skipped;
 //   - each row is truncated once its accumulated Run.Width would cross the client
 //     width — a wide (2-cell) grapheme straddling the edge is dropped whole, never
 //     split into a lone spacer;
 //   - the final cursor is clamped into the clipped bounds.
 //
-// cols<=0 or rows<=0 disables clipping on that axis; (0, 0) is exactly the unclipped
-// behavior RenderSnapshot exposes (byte-identical). It writes: optional alt-screen
-// entry, reset SGR, clear+home, each surviving row absolutely positioned with per-run
-// SGR, a trailing reset, cursor visibility, then the clamped cursor position.
+// cols<=0 or rows<=0 disables clipping on that axis; (0, 0) renders unclipped. A
+// nil snapshot renders to nothing. It writes: optional alt-screen entry, reset
+// SGR, clear+home, each surviving row absolutely positioned with per-run SGR, a
+// trailing reset, cursor visibility, then the clamped cursor position.
 func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 	if s == nil {
 		return nil
