@@ -5,7 +5,10 @@ package shim
 // survives (descendants included), and the exit outcome is reported.
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"syscall"
@@ -15,36 +18,55 @@ import (
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
-var pidRE = map[string]*regexp.Regexp{
-	"PARENT_PID": regexp.MustCompile(`PARENT_PID\t(\d+)`),
-	"CHILD_PID":  regexp.MustCompile(`CHILD_PID\t(\d+)`),
-}
-
+// waitPID reads a "<label>\t<pid>" line the agent printed. The label and pid are
+// tab-separated in the live stream but space-separated in a snapshot grid (the
+// emulator expands the tab), and the marker may land in either depending on the
+// attach/first-output race — so match \s+ across the union of both.
 func waitPID(t *testing.T, c *shimClient, label string, timeout time.Duration) int {
 	t.Helper()
-	out := c.waitOutput(label+"\t", timeout)
-	m := pidRE[label].FindSubmatch(out)
-	if m == nil {
-		t.Fatalf("could not parse %s from output:\n%s", label, out)
-	}
-	pid, err := strconv.Atoi(string(m[1]))
+	m := c.waitObservedRE(regexp.MustCompile(label+`\s+(\d+)`), timeout)
+	pid, err := strconv.Atoi(m[1])
 	if err != nil {
 		t.Fatalf("bad %s value %q: %v", label, m[1], err)
 	}
 	return pid
 }
 
-// processGone reports whether pid is gone (kill(pid,0) => ESRCH), polling up to
-// timeout to allow for reaping.
+// processGone reports whether pid has terminated, polling up to timeout. A pid
+// counts as gone when it no longer exists (kill(pid,0) => ESRCH: reaped or never
+// existed) OR it is a zombie: a killed process whose exit status has not yet been
+// reaped. An orphaned same-group descendant reparents to PID 1 when the group is
+// killed; in a container PID namespace PID 1 (the go-test process) does not reap
+// orphans, so the killed descendant lingers as an unreaped zombie and kill(pid,0)
+// still succeeds. A zombie is terminated, not a survivor, so counting it as gone
+// keeps the S5 containment assertion faithful (it never masks a genuinely live
+// process — those are in state R/S/D, not Z).
 func processGone(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+	for {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) || processIsZombie(pid) {
 			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+}
+
+// processIsZombie reports whether pid is a Linux zombie (state 'Z' in
+// /proc/<pid>/stat). On platforms without /proc (darwin) it returns false —
+// there launchd reaps orphaned children promptly, so a killed process reaches
+// the kill(pid,0)==ESRCH state without lingering.
+func processIsZombie(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// Format: "pid (comm) state ...". comm can contain ')' and spaces, so key off
+	// the LAST ')': the state letter is two bytes past it.
+	i := bytes.LastIndexByte(b, ')')
+	return i >= 0 && i+2 < len(b) && b[i+2] == 'Z'
 }
 
 // E4.4 / S5 — a signal-ignoring agent AND its same-group child are both killed
@@ -143,7 +165,7 @@ func TestSignal_KillIsImmediate(t *testing.T) {
 	c.startReader()
 	c.hello(shimwire.Version)
 	c.attach()
-	c.waitOutput("IDLING", 5*time.Second)
+	c.waitObserved("IDLING", 5*time.Second)
 
 	sent := time.Now()
 	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})

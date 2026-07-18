@@ -52,6 +52,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -638,6 +639,63 @@ func (c *shimClient) waitOutput(sub string, timeout time.Duration) []byte {
 		time.Sleep(5 * time.Millisecond)
 	}
 	c.t.Fatalf("output %q not seen within %s; got:\n%s", sub, timeout, c.dataOut())
+	return nil
+}
+
+// observedText returns everything the client has observed, rendered as text: the
+// live TDataOut byte stream (where the agent's tab-separated fields survive
+// verbatim) concatenated with the grid of every attach snapshot (where the
+// emulator has expanded tabs to spaces). A marker the agent prints during
+// startup races the client's attach — captured in the snapshot when printed
+// before attach, arriving as a live frame when printed after — and BOTH are
+// correct shim behavior (the snapshot/stream boundary is gapless, S10). A wait
+// that must not depend on that race therefore inspects the union of the two.
+func (c *shimClient) observedText() string {
+	var b strings.Builder
+	for _, f := range c.frames() {
+		switch f.typ {
+		case wire.TDataOut:
+			b.Write(f.payload)
+		case wire.TSnapshot:
+			if s, err := vt.DecodeSnapshot(f.payload); err == nil {
+				b.WriteString(gridText(s))
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return b.String()
+}
+
+// waitObserved blocks until sub appears in observedText (live stream ∪ snapshot
+// grids), returning the accumulated text, or fails on timeout. Use it for a
+// plain-token marker; for a tab-separated field use waitObservedRE with \s in the
+// pattern so it matches both the live tab and the snapshot's expanded spaces.
+func (c *shimClient) waitObserved(sub string, timeout time.Duration) string {
+	c.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := c.observedText(); strings.Contains(got, sub) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := c.observedText()
+	c.t.Fatalf("marker %q not observed within %s (live+snapshot):\n%s", sub, timeout, got)
+	return ""
+}
+
+// waitObservedRE blocks until re matches observedText, returning its submatches,
+// or fails on timeout.
+func (c *shimClient) waitObservedRE(re *regexp.Regexp, timeout time.Duration) []string {
+	c.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if m := re.FindStringSubmatch(c.observedText()); m != nil {
+			return m
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.t.Fatalf("pattern %s not observed within %s (live+snapshot):\n%s", re, timeout, c.observedText())
 	return nil
 }
 

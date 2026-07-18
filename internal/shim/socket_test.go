@@ -144,12 +144,14 @@ func TestSocket_ResizePropagatesToPTYWinsize(t *testing.T) {
 	c.startReader()
 	c.hello(shimwire.Version)
 	c.attach()
-	// Initial PTY winsize comes from cfg.Cols/Rows.
-	c.waitOutput("WINSIZE\t24x80", 3*time.Second)
-	c.waitOutput("WINSIZE_READY", 3*time.Second)
+	// Initial PTY winsize comes from cfg.Cols/Rows. The marker may land in the
+	// attach snapshot (tab expanded to spaces) or the live stream (tab verbatim)
+	// depending on the attach/first-output race, so match \s across both.
+	c.waitObservedRE(regexp.MustCompile(`WINSIZE\s+24x80`), 3*time.Second)
+	c.waitObserved("WINSIZE_READY", 3*time.Second)
 
 	c.writeControl(shimwire.Control{Type: shimwire.TypeResize, Cols: 100, Rows: 30})
-	c.waitOutput("WINSIZE\t30x100", 3*time.Second)
+	c.waitObservedRE(regexp.MustCompile(`WINSIZE\s+30x100`), 3*time.Second)
 
 	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 }

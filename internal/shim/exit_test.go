@@ -80,7 +80,7 @@ func TestExit_KilledBySignalRecorded(t *testing.T) {
 	c.startReader()
 	c.hello(shimwire.Version)
 	c.attach()
-	c.waitOutput("IDLING", 5*time.Second)
+	c.waitObserved("IDLING", 5*time.Second)
 	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 	r := waitRun(t, ch, 10*time.Second)
 
