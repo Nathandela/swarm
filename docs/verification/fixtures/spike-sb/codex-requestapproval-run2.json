@@ -1,0 +1,37 @@
+{
+  "method": "item/commandExecution/requestApproval",
+  "id": 0,
+  "params": {
+    "threadId": "019f754d-f48c-73a1-a35e-a473a6087773",
+    "turnId": "019f754d-fa5d-7113-bc7b-3e9c358da651",
+    "itemId": "exec-af1b6f1f-9bd3-4987-b697-114bbe16b34b",
+    "startedAtMs": 1784379479984,
+    "environmentId": "local",
+    "command": "/bin/bash -lc 'echo codex-spike-run2 > out2.txt'",
+    "cwd": "/Users/Nathan/.claude/jobs/6878515f/tmp/spike-sb/codex-workdir2",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "echo codex-spike-run2 > out2.txt"
+      }
+    ],
+    "proposedExecpolicyAmendment": [
+      "/bin/bash",
+      "-lc",
+      "echo codex-spike-run2 > out2.txt"
+    ],
+    "availableDecisions": [
+      "accept",
+      {
+        "acceptWithExecpolicyAmendment": {
+          "execpolicy_amendment": [
+            "/bin/bash",
+            "-lc",
+            "echo codex-spike-run2 > out2.txt"
+          ]
+        }
+      },
+      "cancel"
+    ]
+  }
+}

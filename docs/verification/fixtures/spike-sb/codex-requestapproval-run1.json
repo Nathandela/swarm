@@ -1,0 +1,35 @@
+{
+  "method": "item/commandExecution/requestApproval",
+  "id": 0,
+  "params": {
+    "threadId": "019f754d-7234-7122-9ea5-e35cc8eaa11b",
+    "turnId": "019f754d-780a-76a3-a6b1-60325b5b9297",
+    "itemId": "exec-ce472af0-dc88-4c99-ba4e-0b6f4e6e5100",
+    "startedAtMs": 1784379444437,
+    "environmentId": "local",
+    "command": "/bin/bash -lc 'touch codex-approval-test.txt'",
+    "cwd": "/Users/Nathan/.claude/jobs/6878515f/tmp/spike-sb/codex-workdir",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "touch codex-approval-test.txt"
+      }
+    ],
+    "proposedExecpolicyAmendment": [
+      "touch",
+      "codex-approval-test.txt"
+    ],
+    "availableDecisions": [
+      "accept",
+      {
+        "acceptWithExecpolicyAmendment": {
+          "execpolicy_amendment": [
+            "touch",
+            "codex-approval-test.txt"
+          ]
+        }
+      },
+      "cancel"
+    ]
+  }
+}
