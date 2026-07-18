@@ -138,6 +138,12 @@ type rootModel struct {
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
 	ticking  bool // whether a repaint tick is in flight (only on the general view)
+
+	// connectionLost is PERSISTENT (unlike the transient V-5 banner): once the
+	// daemon connection is gone for good, the roster is frozen forever for the
+	// life of this process, so the indicator must survive past bannerDuration
+	// instead of fading while the freeze remains (agents-tracker-1uq).
+	connectionLost bool
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -237,9 +243,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(banner, waitForEvent(m.events))
 
 	case connectionLostMsg:
-		// The daemon connection is gone for good: surface it and stop polling the
-		// stream — waitForEvent is deliberately NOT re-armed, since the channel is
-		// closed forever (agents-tracker-1uq).
+		// The daemon connection is gone for good: set the PERSISTENT indicator (see
+		// generalStatus) so it survives past the transient banner's bannerDuration —
+		// a 4s banner would fade while the roster stays frozen, looking like false
+		// liveness. The transient banner still fires too, for immediacy. waitForEvent
+		// is deliberately NOT re-armed here, and the next repaintMsg halts its own
+		// tick (see repaintMsg case) — there is nothing left to wait on or refresh
+		// (agents-tracker-1uq).
+		m.connectionLost = true
 		return m, m.general.setBanner("connection to daemon lost - restart swarm to reconnect")
 
 	case launchResultMsg:
@@ -297,6 +308,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case repaintMsg:
+		if m.connectionLost {
+			// The roster is frozen forever once the connection is lost — halt the
+			// timer for good so the elapsed-time column stops advancing over data
+			// that will never update again (false liveness, agents-tracker-1uq).
+			m.ticking = false
+			return m, nil
+		}
 		if m.screen != screenGeneral {
 			// The live elapsed column only shows on the general view, so let the
 			// timer lapse elsewhere (N-3: no idle repaints on the launch/attach
@@ -353,8 +371,13 @@ func (m rootModel) View() tea.View {
 
 // generalStatus is the context-key line for the general board — or, during a pending
 // kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
-// (general.view) to the persistent bottom bar (A-5, ADR-006).
+// (general.view) to the persistent bottom bar (A-5, ADR-006). A lost connection
+// (agents-tracker-1uq) takes priority over both: the roster is frozen and staying
+// frozen, which outranks a mid-confirm prompt or the normal keymap.
 func (m rootModel) generalStatus() string {
+	if m.connectionLost {
+		return "daemon connection lost - restart swarm"
+	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}

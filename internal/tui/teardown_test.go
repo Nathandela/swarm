@@ -31,25 +31,49 @@ func TestWaitForEvent_ChannelClosed_EmitsConnectionLostMsg(t *testing.T) {
 	}
 }
 
-// TestUpdate_ConnectionLost_SetsBannerAndDoesNotReArm drives connectionLostMsg
-// through Update and asserts the banner is set and no waitForEvent command is
-// returned (there is nothing left to wait on: the channel is closed forever).
-func TestUpdate_ConnectionLost_SetsBannerAndDoesNotReArm(t *testing.T) {
+// TestUpdate_ConnectionLost_SetsBannerAndPersistentState drives connectionLostMsg
+// through Update and asserts both the immediate transient banner AND the
+// persistent connectionLost state are set. The persistent state is what survives
+// past bannerDuration (see TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick)
+// — a transient banner alone would fade while the roster stays frozen, looking
+// like false liveness. This does not invoke the returned command: setBanner's cmd
+// is a real bannerDuration (4s) tea.Tick, and calling it would block the test
+// wall-clock for no assertion value (waitForEvent is not called from this case at
+// all — checked by inspection, not execution).
+func TestUpdate_ConnectionLost_SetsBannerAndPersistentState(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute))
 	m := newModel(t, f, detectMixed())
 
-	m2, cmd := m.Update(connectionLostMsg{})
+	m2, _ := m.Update(connectionLostMsg{})
 
+	if !m2.(rootModel).connectionLost {
+		t.Fatal("connectionLostMsg must set the persistent connectionLost state")
+	}
 	v := view(m2)
 	if !strings.Contains(v, "connection to daemon lost") {
-		t.Fatalf("connectionLostMsg must set a banner naming the lost connection; view:\n%s", v)
+		t.Fatalf("connectionLostMsg must set the transient banner; view:\n%s", v)
 	}
+}
+
+// TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick proves the persistent
+// indicator shows in generalStatus (so it survives past the transient banner's
+// bannerDuration) and that the elapsed-time repaint tick is not re-armed once the
+// connection is lost — an honest freeze instead of the elapsed column advancing
+// over a roster that will never update again.
+func TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick(t *testing.T) {
+	f := newFakeClient(sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute))
+	m := newModel(t, f, detectMixed())
+
+	m, _ = m.Update(connectionLostMsg{})
+
+	status := m.(rootModel).generalStatus()
+	if !strings.Contains(status, "daemon connection lost") {
+		t.Fatalf("generalStatus must persistently show the connection-lost indicator, got %q", status)
+	}
+
+	_, cmd := m.Update(repaintMsg{})
 	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			if _, ok := msg.(eventMsg); ok {
-				t.Fatal("connectionLostMsg must not re-arm waitForEvent")
-			}
-		}
+		t.Fatal("repaintMsg must not re-arm the timer once the connection is lost (false liveness)")
 	}
 }
 
