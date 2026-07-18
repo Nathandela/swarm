@@ -161,6 +161,9 @@ func TestTickRecoversPanickingSampler(t *testing.T) {
 	if rec.count() != before+1 {
 		t.Fatalf("Tick emitted %d change(s), want exactly 1 (healthy only; panicky session skipped)", rec.count()-before)
 	}
+	if got := e.metrics.SamplerPanics.Load(); got != 1 {
+		t.Fatalf("SamplerPanics = %d, want 1", got)
+	}
 
 	// The engine keeps working on a later tick despite the earlier panic.
 	clk.advance(2 * staleness)
