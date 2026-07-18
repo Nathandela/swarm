@@ -131,17 +131,18 @@ func clampCursor(v, limit int) int {
 	return v
 }
 
-// stripControls removes C0 control bytes (0x00-0x1f, including the ESC that
-// introduces any sequence) and DEL (0x7f) from run text, keeping the ASCII space
-// and every multi-byte UTF-8 rune (whose bytes are all >= 0x80, never in the
-// stripped range). It is the render-time N-6 backstop: a skewed or compromised peer
+// stripControls removes C0 control runes (0x00-0x1f, including the ESC that
+// introduces any sequence), DEL (0x7f), and the C1 control range (U+0080-U+009F,
+// whose UTF-8-encoded CSI/OSC forms xterm-family terminals honor as controls)
+// from run text, keeping the ASCII space and every other multi-byte UTF-8 rune.
+// It is the render-time N-6 backstop: a skewed or compromised peer
 // cannot smuggle ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned
 // snapshot, because the control bytes are dropped before the text reaches the real
 // terminal. Clean single-grapheme run text (the overwhelming common case) passes
 // through unchanged.
 func stripControls(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
 		}
 		return r

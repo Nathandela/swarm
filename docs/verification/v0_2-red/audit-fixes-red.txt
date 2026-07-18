@@ -55,3 +55,8 @@ ok  	github.com/Nathandela/swarm/internal/attach	0.624s
 ok  	github.com/Nathandela/swarm/internal/tui	0.730s
 --- gates ---
 gofmt -l internal cmd: (empty=pass)
+
+=== C1-range widening (agents-tracker-9p5, post-v0.2.0) ===
+RED at 7c9a343+worktree: TestRenderSnapshot_StripsC1ControlRunes failed:
+  render must strip C1 control rune U+009B/U+009D/U+009C from run text
+GREEN after widening stripControls to [0x7f,0x9f].

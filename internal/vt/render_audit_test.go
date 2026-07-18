@@ -183,3 +183,30 @@ func TestRenderSnapshot_NonAltScreenDoesNotEnterAltBuffer(t *testing.T) {
 		t.Fatalf("a non-alt-screen snapshot must not enter the alternate buffer")
 	}
 }
+
+// Fable re-confirm residual (agents-tracker-9p5): C1 control runes
+// (U+0080-U+009F) are honored as controls by xterm-family terminals in UTF-8
+// mode, so the render-time backstop must strip them like C0+DEL — otherwise a
+// UTF-8-encoded CSI (U+009B) or OSC (U+009D) in a hostile snapshot reaches the
+// real terminal.
+func TestRenderSnapshot_StripsC1ControlRunes(t *testing.T) {
+	s := &Snap{
+		Version: SnapshotVersion, Cols: 8, Rows: 1, CursorVisible: true,
+		Lines: []Line{{Runs: []Run{
+			{Text: "a31mb", Width: 1},  // UTF-8 C1 CSI injection
+			{Text: "52;cc", Width: 1}, // UTF-8 C1 OSC + ST
+		}}},
+	}
+	out := render(s)
+
+	for _, r := range []rune{0x9b, 0x9d, 0x9c} {
+		if strings.ContainsRune(out, r) {
+			t.Errorf("render must strip C1 control rune %U from run text (U+0080-U+009F); got %q", r, out)
+		}
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printable %q lost by the C1 strip", want)
+		}
+	}
+}
