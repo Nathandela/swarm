@@ -133,7 +133,7 @@ func (s *Store) Save(m Meta) error {
 	}
 	m.Env = FilterEnv(m.Env)
 	m.SchemaVersion = SchemaVersion
-	data, err := json.MarshalIndent(m, "", "  ")
+	data, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
