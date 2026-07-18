@@ -19,6 +19,14 @@ func TestDefaultDetachKeyIsCtrlQ(t *testing.T) {
 	}
 }
 
+// item 9 — keyLabel renders DEL (0x7f) as "DEL", not a bogus "Ctrl+<char>" (0x7f
+// has no sensible Ctrl+letter form: 0x7f|0x40 is 0x7f itself).
+func TestKeyLabel_DELRendersAsDEL(t *testing.T) {
+	if got := keyLabel(0x7f); got != "DEL" {
+		t.Fatalf("keyLabel(0x7f) = %q, want \"DEL\"", got)
+	}
+}
+
 // The one-line chrome names the detach key so it is discoverable (A-5); after the
 // change it must read "Ctrl+Q", never the old "Ctrl+\".
 func TestChromeLineNamesCtrlQ(t *testing.T) {

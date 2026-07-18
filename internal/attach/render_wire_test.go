@@ -1,8 +1,10 @@
 package attach
 
 // Failing-first wiring tests for the P0 fix (agents-tracker-a6f): the one attach
-// snapshot must reach the terminal as RENDERED ANSI, never as raw snapshot JSON,
-// and a snapshot that fails to decode must paint nothing rather than dump garbage.
+// snapshot must reach the terminal as RENDERED ANSI, never as raw snapshot JSON.
+// A snapshot that fails to decode paints a single visible notice (v0.2 audit item 3)
+// rather than nothing — even for an idle agent with no live frames — so an attach is
+// never a silent blank screen, while still never dumping raw JSON.
 
 import (
 	"bytes"
@@ -49,9 +51,9 @@ func TestPassthrough_SnapshotRenderedNotRawJSON(t *testing.T) {
 	_ = waitResult(t, ch)
 }
 
-// A snapshot that fails to decode is skipped silently: no raw bytes reach the
-// terminal, and live frames still paint.
-func TestPassthrough_MalformedSnapshotPaintsNothing(t *testing.T) {
+// A snapshot that fails to decode paints a single visible notice (never nothing,
+// never raw bytes), and live frames still paint after it.
+func TestPassthrough_MalformedSnapshotShowsNotice(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession([]byte(`{"runs": not-valid-json`))
 	ch := runInBackground(Config{Term: term, Session: sess})
@@ -59,9 +61,27 @@ func TestPassthrough_MalformedSnapshotPaintsNothing(t *testing.T) {
 	sess.pushFrame([]byte("LIVE"))
 	eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("LIVE")) })
 
-	if bytes.Contains(term.outBytes(), []byte("runs")) {
-		t.Fatalf("a malformed snapshot must not leak raw bytes to the terminal; got %q", term.outBytes())
+	out := term.outBytes()
+	if bytes.Contains(out, []byte("runs")) {
+		t.Fatalf("a malformed snapshot must not leak raw bytes to the terminal; got %q", out)
 	}
+	if !bytes.Contains(out, []byte("snapshot unavailable")) {
+		t.Fatalf("a malformed snapshot must paint a visible notice, not nothing; got %q", out)
+	}
+
+	sess.endSession()
+	_ = waitResult(t, ch)
+}
+
+// An idle agent (malformed snapshot AND no live frames ever) must STILL show the
+// notice, so an attach is never a silent blank screen (codex A-4 never-blank).
+func TestPassthrough_MalformedSnapshotIdleAgentShowsNotice(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte(`{bad`))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	// No frames are ever pushed: the notice must appear from the snapshot path alone.
+	eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("snapshot unavailable")) })
 
 	sess.endSession()
 	_ = waitResult(t, ch)

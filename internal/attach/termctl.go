@@ -16,7 +16,8 @@ import (
 // realTerm is the production TermControl over the real controlling terminal fds.
 // In() is a cancelable reader so the input pump can be unblocked on teardown (the
 // restore func cancels it), and MakeRaw drives the termios into raw mode with a
-// cfmakeraw-equivalent flag set, IXON cleared so Ctrl+S/Ctrl+Q reach the agent.
+// cfmakeraw-equivalent flag set, IXON cleared so Ctrl+S reaches the agent and Ctrl+Q
+// arrives as a plain byte (consumed as the detach key by default, not XON/XOFF).
 type realTerm struct {
 	in  *os.File
 	out *os.File
@@ -47,7 +48,8 @@ func (t *realTerm) MakeRaw() (func() error, error) {
 	raw := *old
 	// cfmakeraw-equivalent: canonical/echo/signal input processing off, output
 	// post-processing off, 8-bit clean. IXON (XON/XOFF) is in the Iflag clear so
-	// Ctrl+S / Ctrl+Q reach the agent rather than freezing the local terminal (A-1).
+	// Ctrl+S reaches the agent rather than freezing the local terminal, and Ctrl+Q
+	// arrives as a byte (consumed as the detach key by default) rather than XON (A-1).
 	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP |
 		unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
 	raw.Oflag &^= unix.OPOST

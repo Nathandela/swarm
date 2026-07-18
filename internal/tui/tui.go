@@ -78,7 +78,14 @@ type launchResultMsg struct{ err error }
 // off the Update hot path (a Cmd from Init and again on each form open) and is
 // cached on the model, so opening the launch form never blocks on a slow prober
 // (the P0 field-test freeze). It updates a live form's picker in place.
-type detectMsg struct{ agents []AgentInfo }
+//
+// gen is the dispatch generation the probe was stamped with (see detectGen): an
+// older slow probe landing after a newer dispatch carries a stale generation and is
+// dropped, so it cannot restore stale availability (the Init/form-open ordering race).
+type detectMsg struct {
+	gen    uint64
+	agents []AgentInfo
+}
 
 // repaintInterval is how often the general view re-emits its frame to refresh the
 // live elapsed-time column. Elapsed granularity is seconds and coarser, so a
@@ -118,8 +125,9 @@ type rootModel struct {
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
 
-	agents   []AgentInfo // cached agent detection (async; empty until the first detectMsg)
-	detected bool        // whether a detectMsg has landed (else the form shows "checking...")
+	agents    []AgentInfo // cached agent detection (async; empty until the first detectMsg)
+	detected  bool        // whether a detectMsg has landed (else the form shows "checking...")
+	detectGen uint64      // latest dispatched detection generation; a detectMsg with an older gen is stale
 
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
@@ -175,16 +183,18 @@ func boundedList(c Client) []protocol.SessionView {
 // probe runs asynchronously (detectCmd) so a slow prober never delays first paint
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.events), repaintTick(), detectCmd(m.detect))
+	return tea.Batch(waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen))
 }
 
 // detectCmd probes for agent CLIs off the Update hot path and delivers the result
-// as a detectMsg. A nil detector yields no command.
-func detectCmd(detect DetectFunc) tea.Cmd {
+// as a detectMsg stamped with gen (the generation captured at dispatch), so a stale
+// probe can be recognized and dropped when it resolves after a newer one. A nil
+// detector yields no command.
+func detectCmd(detect DetectFunc, gen uint64) tea.Cmd {
 	if detect == nil {
 		return nil
 	}
-	return func() tea.Msg { return detectMsg{agents: detect()} }
+	return func() tea.Msg { return detectMsg{gen: gen, agents: detect()} }
 }
 
 // waitForEvent reads one event from the stream. A nil channel (no subscription)
@@ -228,6 +238,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case detectMsg:
+		// Drop a stale probe: one dispatched before the latest generation that only
+		// now resolved. Applying it would restore stale availability over the newer
+		// result (the Init/form-open ordering race — item 6).
+		if msg.gen != m.detectGen {
+			return m, nil
+		}
 		// Cache the probe result. If the launch form is open, refresh its picker in
 		// place so agent availability greys/ungreys live without discarding the form.
 		m.agents = msg.agents
@@ -322,7 +338,9 @@ func (m rootModel) generalStatus() string {
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
-	return "↑↓ navigate   ⏎ attach   n new   ctrl+x kill   esc quit"
+	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
+	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
+	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit"
 }
 
 // composeBoard anchors a one-line status bar on the bottom row of a full-screen
@@ -330,6 +348,12 @@ func (m rootModel) generalStatus() string {
 // would overflow — and the dim bar occupies the final row. Before the first
 // WindowSizeMsg (height unknown) the bar simply follows the body.
 func (m rootModel) composeBoard(body, status string) string {
+	// Clamp the status text to the terminal width (less its 2-cell indent) so the bar
+	// can never wrap onto a second row and break the fixed-height board contract. The
+	// PLAIN text is clamped before styling, so an ANSI escape is never cut mid-sequence.
+	if m.width > 2 {
+		status = clampCells(status, m.width-2)
+	}
 	bar := "  " + styleDim.Render(status)
 	if m.height <= 0 {
 		return body + "\n" + bar
@@ -427,6 +451,29 @@ func padRight(s string, n int) string {
 		return s + strings.Repeat(" ", n-w)
 	}
 	return s
+}
+
+// clampCells truncates s to at most n display cells (rune/width-aware), never
+// splitting a wide rune. It operates on plain (un-styled) text, so callers must clamp
+// before applying ANSI styling to avoid cutting an escape sequence mid-stream.
+func clampCells(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > n {
+			break
+		}
+		b.WriteString(string(r))
+		w += rw
+	}
+	return b.String()
 }
 
 // userHome resolves the current user's home directory, or "" if it cannot be

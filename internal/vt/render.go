@@ -4,15 +4,25 @@ package vt
 // repaint a terminal. It is the consumer half of the Snap projection: the
 // snapshot is a structured, escape-free description of the visible screen
 // (emulator.go), and RenderSnapshot replays exactly that description as escape
-// sequences — clear + home, each row's runs with their SGR styling, a trailing
-// reset, cursor visibility, then the recorded cursor position. It invents
-// nothing beyond what the Snap records.
+// sequences — optional alt-screen entry, clear + home, each row's runs with their
+// SGR styling, a trailing reset, cursor visibility, then the recorded cursor
+// position. It invents nothing beyond what the Snap records.
 //
-// Scope (deliberate): the Snap also carries AltScreen and Title, which the
-// renderer does NOT act on. It never enters/leaves the alternate screen and
-// never sets the window title — the live PTY stream that follows the paint owns
-// that terminal state, so switching modes here would fight it. The renderer only
-// paints the visible grid content and places the cursor.
+// Scope (deliberate):
+//   - AltScreen IS acted on: when the Snap records the emulator in the alternate
+//     screen, the preamble enters it (CSI ?1049h) so a later ?1049l from the live
+//     PTY stream restores the correct (primary) buffer instead of leaving a stale
+//     alt buffer on screen. A non-alt snapshot never touches the mode.
+//   - Title is NOT acted on: the live PTY stream that follows the paint owns the
+//     window title, so setting it here would fight that stream.
+//   - SGR pen state is NOT restored: the Snap records per-cell style but not the
+//     terminal's active pen, so the renderer cannot re-assert it — apps re-assert
+//     their SGR when they next draw, and the trailing reset leaves a clean pen.
+//   - Run text is sanitized at render time: even a validly-versioned but skewed or
+//     compromised peer cannot inject ESC/OSC (e.g. an OSC 52 clipboard write)
+//     because every C0 control byte and DEL is stripped from run text before it is
+//     written (see stripControls). This is the render-time backstop to the
+//     producer-side N-6 filter in emulator.go.
 
 import (
 	"strconv"
@@ -20,16 +30,38 @@ import (
 )
 
 // RenderSnapshot converts a decoded snapshot into ANSI bytes that repaint the
-// screen: reset SGR, clear the screen and home the cursor, write each line's
-// runs (absolutely positioning every row so a repaint never depends on wrap or
-// scroll) with per-run SGR, reset SGR after the grid, apply cursor visibility,
-// then place the cursor at the snapshot's recorded position. A nil snapshot
+// screen without clipping to any client size. It is RenderSnapshotClipped with
+// clipping disabled (0, 0); see there for the full contract. A nil snapshot
 // renders to nothing.
 func RenderSnapshot(s *Snap) []byte {
+	return RenderSnapshotClipped(s, 0, 0)
+}
+
+// RenderSnapshotClipped is RenderSnapshot clipped to a live terminal of cols x rows
+// cells. A snapshot captured on a terminal larger than the attaching client would
+// otherwise pile the excess rows onto the bottom line, and a wider row would wrap —
+// a wrap on the bottom row scrolls the screen. Clipping to the client bounds keeps
+// the repaint inside the visible grid:
+//   - rows beyond the client height are skipped;
+//   - each row is truncated once its accumulated Run.Width would cross the client
+//     width — a wide (2-cell) grapheme straddling the edge is dropped whole, never
+//     split into a lone spacer;
+//   - the final cursor is clamped into the clipped bounds.
+//
+// cols<=0 or rows<=0 disables clipping on that axis; (0, 0) is exactly the unclipped
+// behavior RenderSnapshot exposes (byte-identical). It writes: optional alt-screen
+// entry, reset SGR, clear+home, each surviving row absolutely positioned with per-run
+// SGR, a trailing reset, cursor visibility, then the clamped cursor position.
+func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 	if s == nil {
 		return nil
 	}
 	var b strings.Builder
+	// Enter the alternate screen first when the snapshot recorded it, so a later
+	// ?1049l from the live stream restores the correct buffer (item 4).
+	if s.AltScreen {
+		b.WriteString("\x1b[?1049h")
+	}
 	// Reset any inherited SGR BEFORE clearing so the cleared cells take the
 	// default background (terminals with background-color-erase fill the screen
 	// with the current SGR background otherwise), then home the cursor.
@@ -39,19 +71,27 @@ func RenderSnapshot(s *Snap) []byte {
 	// row of default-styled blanks) then reuse it instead of re-emitting.
 	last := ""
 	for y, line := range s.Lines {
+		if rows > 0 && y >= rows {
+			break // clip: rows beyond the client height are skipped
+		}
 		// Absolute 1-based CUP for each row. Positioning the next row also
 		// resolves any pending-wrap from the previous row's final cell, so
 		// writing the bottom-right cell never scrolls the screen.
 		b.WriteString("\x1b[")
 		b.WriteString(strconv.Itoa(y + 1))
 		b.WriteString(";1H")
+		acc := 0
 		for _, r := range line.Runs {
+			if cols > 0 && acc+r.Width > cols {
+				break // clip: this run (and the rest) would cross the client edge
+			}
 			sgr := runSGR(r)
 			if sgr != last {
 				b.WriteString(sgr)
 				last = sgr
 			}
-			b.WriteString(r.Text)
+			b.WriteString(stripControls(r.Text))
+			acc += r.Width
 		}
 	}
 	// Reset styling after the grid so the cursor and any later output are clean.
@@ -63,14 +103,49 @@ func RenderSnapshot(s *Snap) []byte {
 	} else {
 		b.WriteString("\x1b[?25l")
 	}
-	// Final cursor position. CUP is 1-based; snapshot coordinates are 0-based.
+	// Final cursor position, clamped into the clipped bounds. CUP is 1-based;
+	// snapshot coordinates are 0-based.
 	b.WriteString("\x1b[")
-	b.WriteString(strconv.Itoa(s.CursorY + 1))
+	b.WriteString(strconv.Itoa(clampCursor(s.CursorY, rows) + 1))
 	b.WriteByte(';')
-	b.WriteString(strconv.Itoa(s.CursorX + 1))
+	b.WriteString(strconv.Itoa(clampCursor(s.CursorX, cols) + 1))
 	b.WriteByte('H')
 
 	return []byte(b.String())
+}
+
+// clampCursor bounds a 0-based cursor coordinate into the clipped grid. limit is the
+// client dimension on that axis; limit<=0 disables clipping and returns v unchanged
+// so the unclipped path is byte-identical to the legacy renderer. Otherwise the
+// result is in [0, limit-1].
+func clampCursor(v, limit int) int {
+	if limit <= 0 {
+		return v
+	}
+	if v >= limit {
+		v = limit - 1
+	}
+	if v < 0 {
+		v = 0
+	}
+	return v
+}
+
+// stripControls removes C0 control bytes (0x00-0x1f, including the ESC that
+// introduces any sequence) and DEL (0x7f) from run text, keeping the ASCII space
+// and every multi-byte UTF-8 rune (whose bytes are all >= 0x80, never in the
+// stripped range). It is the render-time N-6 backstop: a skewed or compromised peer
+// cannot smuggle ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned
+// snapshot, because the control bytes are dropped before the text reaches the real
+// terminal. Clean single-grapheme run text (the overwhelming common case) passes
+// through unchanged.
+func stripControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // runSGR builds the SGR sequence for one run's style. It always starts from a

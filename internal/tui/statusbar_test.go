@@ -30,6 +30,11 @@ func TestStatusBar_AnchoredOnGeneral(t *testing.T) {
 	if !strings.Contains(last, "new") || !strings.Contains(last, "attach") {
 		t.Fatalf("bottom status bar must carry the general context keys, got last line %q", last)
 	}
+	// Chrome defaults off (ADR-006, item 5) so the board must teach the detach key:
+	// the attach hint carries "ctrl+q returns" for discoverability.
+	if !strings.Contains(last, "ctrl+q returns") {
+		t.Fatalf("bottom status bar must teach the detach key (ctrl+q returns), got last line %q", last)
+	}
 }
 
 // The launch form carries the same anchored bar, showing its contextual field hint.

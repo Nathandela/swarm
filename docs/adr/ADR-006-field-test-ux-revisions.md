@@ -70,6 +70,11 @@ the spec.
   client-side compositing of each agent frame, which the raw-passthrough latency
   decision (ADR-002) rules out for v1.0; the detach key stays in effect regardless
   of whether its hint is currently visible.
+- The attach chrome now defaults OFF (v0.2): it overwrote snapshot row 1 content
+  (DECSC/DECRC preserves the cursor, not the cells it drew over), so a session whose
+  first row carries content lost it to the bar. Snapshot fidelity wins by default;
+  the board's persistent bottom status bar carries the detach-key hint
+  ("ctrl+q returns") instead, and the Chrome seam remains for callers that want it.
 
 ## Alternatives Considered
 

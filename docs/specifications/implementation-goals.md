@@ -105,7 +105,7 @@ Goal: the approved look (ui-preview.html), keyboard-complete, event-live.
 ### Epic 8 — Attach path (walking skeleton milestone)
 Goal: full raw passthrough that always gives the terminal back.
 - E8.1 Attach = raw mode (IXON off), snapshot-paint-then-live, full passthrough.
-- E8.2 Detach on `Ctrl+\` (configurable). PTY-based integration test verifies termios restoration after: normal detach, Go panic, SIGINT, SIGTERM, SIGHUP. SIGKILL restoration is not claimed (impossible without a wrapper process — accepted limitation, documented).
+- E8.2 Detach on `Ctrl+q` (configurable; ADR-006). PTY-based integration test verifies termios restoration after: normal detach, Go panic, SIGINT, SIGTERM, SIGHUP. SIGKILL restoration is not claimed (impossible without a wrapper process — accepted limitation, documented).
 - E8.3 Resize propagation only under current lease generation.
 - E8.4 One-line toggleable chrome; completed rows render persisted final snapshot read-only (G3).
 - E8.5 Added latency: keystroke echo round-trip p95 < 10 ms over ≥1000 samples on the CI runner class, asserted (N-2); method recorded with the results.

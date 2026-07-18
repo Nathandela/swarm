@@ -102,7 +102,7 @@ Epics are ordered topologically; build top to bottom. Each epic is sized for one
 
 ## - [ ] Epic 8: Attach path — walking skeleton milestone
 
-**Scope IN**: attach sub-model: raw mode (IXON off) full passthrough; snapshot-paint-then-live; detach `Ctrl+\` (configurable) + termios restore on detach AND panic/signal; resize propagation under lease; one-line toggleable chrome; latency budget (<10 ms p95 added); completed-row read-only snapshot render (G3). End-to-end assembly: scenarios 2, 3, 7, 8, 9, 10, 16 green against the fake agent.
+**Scope IN**: attach sub-model: raw mode (IXON off) full passthrough; snapshot-paint-then-live; detach `Ctrl+q` (configurable; ADR-006) + termios restore on detach AND panic/signal; resize propagation under lease; one-line toggleable chrome; latency budget (<10 ms p95 added); completed-row read-only snapshot render (G3). End-to-end assembly: scenarios 2, 3, 7, 8, 9, 10, 16 green against the fake agent.
 **Scope OUT**: real adapters, detection.
 **EARS**: A-1..A-5, N-2, P-5 (client side).
 **Contracts**: composition across Epics 4-6-7 — this epic's tests ARE the cross-layer contract tests for the attach flow (S2, S10).

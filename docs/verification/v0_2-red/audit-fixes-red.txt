@@ -1,0 +1,57 @@
+==============================================================
+v0.2 committee audit-fixes — FAILING-FIRST (RED) evidence
+Captured: 2026-07-18T08:19:18Z
+HEAD: 7d8908c
+Items: 1 render-sanitizer, 2 snapshot-clipping, 3 malformed-notice,
+       4 alt-screen, 5 chrome-off+board-hint, 6 detect-generation,
+       7 focus-clamp, 8 stale-detach-refs (docs/comments), 9 polish
+==============================================================
+--- RED: internal/vt (items 1,2,4) ---
+# github.com/Nathandela/swarm/internal/vt [github.com/Nathandela/swarm/internal/vt.test]
+internal/vt/render_audit_test.go:73:16: undefined: RenderSnapshotClipped
+internal/vt/render_audit_test.go:96:16: undefined: RenderSnapshotClipped
+internal/vt/render_audit_test.go:117:16: undefined: RenderSnapshotClipped
+internal/vt/render_audit_test.go:134:16: undefined: RenderSnapshotClipped
+internal/vt/render_audit_test.go:152:18: undefined: RenderSnapshotClipped
+FAIL	github.com/Nathandela/swarm/internal/vt [build failed]
+FAIL
+
+--- RED: internal/attach (items 3,9a) ---
+--- FAIL: TestKeyLabel_DELRendersAsDEL (0.00s)
+    detachkey_test.go:26: keyLabel(0x7f) = "Ctrl+\x7f", want "DEL"
+--- FAIL: TestPassthrough_MalformedSnapshotShowsNotice (0.00s)
+    render_wire_test.go:69: a malformed snapshot must paint a visible notice, not nothing; got "LIVE"
+--- FAIL: TestPassthrough_MalformedSnapshotIdleAgentShowsNotice (2.00s)
+    render_wire_test.go:84: condition not met within 2s
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/attach	2.799s
+FAIL
+
+--- RED: internal/tui (items 5,6,7,9b) ---
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/audit_fixes_test.go:24:26: m.(rootModel).detectGen undefined (type rootModel has no field or method detectGen)
+internal/tui/audit_fixes_test.go:26:26: m.(rootModel).detectGen undefined (type rootModel has no field or method detectGen)
+internal/tui/audit_fixes_test.go:34:24: unknown field gen in struct literal of type detectMsg
+internal/tui/audit_fixes_test.go:35:24: unknown field gen in struct literal of type detectMsg
+internal/tui/audit_fixes_test.go:56:23: m.(rootModel).detectGen undefined (type rootModel has no field or method detectGen)
+internal/tui/audit_fixes_test.go:57:24: unknown field gen in struct literal of type detectMsg
+internal/tui/audit_fixes_test.go:79:23: m.(rootModel).detectGen undefined (type rootModel has no field or method detectGen)
+internal/tui/audit_fixes_test.go:80:24: unknown field gen in struct literal of type detectMsg
+internal/tui/form_perf_test.go:75:24: unknown field gen in struct literal of type detectMsg
+internal/tui/form_perf_test.go:75:43: m.(rootModel).detectGen undefined (type rootModel has no field or method detectGen)
+internal/tui/form_perf_test.go:75:24: too many errors
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
+==============================================================
+GREEN after implementation (same items)
+Captured: 2026-07-18T08:26:44Z
+==============================================================
+--- GREEN: internal/vt (items 1,2,4) ---
+ok  	github.com/Nathandela/swarm/internal/vt	0.708s
+--- GREEN: internal/attach (items 3,9a) ---
+ok  	github.com/Nathandela/swarm/internal/attach	0.624s
+--- GREEN: internal/tui (items 5,6,7,9b) ---
+ok  	github.com/Nathandela/swarm/internal/tui	0.730s
+--- gates ---
+gofmt -l internal cmd: (empty=pass)

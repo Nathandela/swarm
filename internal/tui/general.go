@@ -226,10 +226,12 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Text == "n":
 		// Open INSTANTLY against cached detection (never call the prober on the Update
 		// hot path — the P0 freeze), and kick an async refresh so availability updates
-		// live while the form is open.
+		// live while the form is open. Stamp the refresh with a newer generation so a
+		// slow Init-era probe landing afterwards is recognized as stale and dropped.
 		m.launch = newLaunchModel(m.agents, m.detected, m.width)
 		m.screen = screenLaunch
-		return m, detectCmd(m.detect)
+		m.detectGen++
+		return m, detectCmd(m.detect, m.detectGen)
 	case k.Text == "r":
 		// Resume an ended/lost session as a NEW linked session (R-2): offered only on
 		// a non-running row (a running session has nothing to resume). The daemon

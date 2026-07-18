@@ -56,6 +56,14 @@ func newLaunchModel(agents []AgentInfo, detected bool, width int) launchModel {
 func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	prevName := m.currentAgentName()
 	prevOpts := m.options
+	// Capture the user's SEMANTIC focus BEFORE the option schema (and thus the field
+	// indices) shifts under this re-detection. A grown optSpecs slides prompt/worktree
+	// down, so keeping the raw focus index would re-index the focused field and
+	// misroute typed runes/Space (L3/Opus MEDIUM).
+	wasDir := m.isDir()
+	wasAgent := m.isAgent()
+	wasPrompt := m.isPrompt()
+	wasWorktree := m.isWorktree()
 
 	m.agents = agents
 	m.detected = true
@@ -71,6 +79,23 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 		if v, ok := prevOpts[k]; ok {
 			m.options[k] = v // keep what the user already entered for a still-present key
 		}
+	}
+
+	// Re-anchor focus onto the same semantic field after the re-index. Directory,
+	// agent, prompt and worktree map to their new indices; an option focus (the field
+	// most likely to have moved or vanished as the list changed beneath it) clamps to
+	// the directory field.
+	switch {
+	case wasDir:
+		m.focus = 0
+	case wasAgent:
+		m.focus = 1
+	case wasPrompt:
+		m.focus = m.promptIndex()
+	case wasWorktree:
+		m.focus = m.worktreeIndex()
+	default:
+		m.focus = 0
 	}
 }
 

@@ -70,7 +70,9 @@ func TestLaunch_DetectionPopulatesFormLive(t *testing.T) {
 	if v := view(m); !strings.Contains(v, "checking") {
 		t.Fatalf("expected 'checking...' before detection lands, got:\n%s", v)
 	}
-	m = send(m, detectMsg{agents: detectMixed()()})
+	// Stamp the live probe with the form-open generation so the generation gate
+	// (item 6) accepts it rather than treating it as stale.
+	m = send(m, detectMsg{gen: m.(rootModel).detectGen, agents: detectMixed()()})
 	v := view(m)
 	if strings.Contains(v, "checking") {
 		t.Fatalf("detection landed; 'checking...' must be gone:\n%s", v)

@@ -84,6 +84,13 @@ const DefaultDetachKey = 0x11
 // short read well under this; the size only caps a paste burst per read.
 const inputBufSize = 4096
 
+// snapshotUnavailableNotice is the single plain line painted when the attach
+// snapshot fails to decode: a one-line heads-up beats a blank screen, and (unlike
+// raw JSON) it carries no escape bytes. It ends CRLF because the terminal is already
+// in raw mode (OPOST/ONLCR off), so a bare \n would drop a row without returning the
+// column.
+const snapshotUnavailableNotice = "[swarm: snapshot unavailable - live output follows]\r\n"
+
 // Run blocks driving the passthrough and ALWAYS restores the terminal before it
 // returns. It paints the snapshot exactly once (raw-then-paint), then streams live
 // frames to Out while forwarding keystrokes (except the detach key) and resizes to
@@ -126,11 +133,25 @@ func Run(cfg Config) (reason Reason, err error) {
 	//
 	// The snapshot is a structured projection, not raw replay bytes, so it must be
 	// decoded and rendered to ANSI before it can paint (P0 agents-tracker-a6f: raw
-	// JSON was reaching the terminal). A snapshot that fails to decode is skipped
-	// silently rather than dumped as garbage — the live frames still paint.
+	// JSON was reaching the terminal).
 	out := cfg.Term.Out()
+	// Fetch the client terminal size BEFORE painting so the snapshot can be clipped
+	// to it: a snapshot from a larger terminal would otherwise pile excess rows onto
+	// the bottom line, and a wider row would wrap (a bottom-row wrap scrolls). On a
+	// Size() error we fall back to an unclipped paint (0, 0). The same size drives the
+	// resize below, so Size() is queried once here rather than twice.
+	cols, rows, sizeErr := cfg.Term.Size()
+	if sizeErr != nil {
+		cols, rows = 0, 0
+	}
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
-		writeAll(out, vt.RenderSnapshot(snap))
+		writeAll(out, vt.RenderSnapshotClipped(snap, cols, rows))
+	} else {
+		// A snapshot that fails to decode paints a single plain notice instead of
+		// nothing, so an attach to a session with a skewed/corrupt snapshot is never
+		// a silent blank screen — even an idle agent with no live frames shows this
+		// line (A-4 never-blank). It carries no escape bytes; the live stream follows.
+		writeAll(out, []byte(snapshotUnavailableNotice))
 	}
 	// Chrome is drawn AFTER the grid paint, whose clear+home would otherwise wipe
 	// it; chromeLine saves/restores the cursor so the snapshot's cursor position
@@ -141,7 +162,7 @@ func Run(cfg Config) (reason Reason, err error) {
 
 	// Sync the PTY to the client's terminal size on attach (E8.3); further changes
 	// propagate via the resize pump.
-	if cols, rows, e := cfg.Term.Size(); e == nil {
+	if sizeErr == nil {
 		_ = cfg.Session.Resize(cols, rows)
 	}
 
@@ -237,9 +258,13 @@ func chromeLine(name string, detachKey byte) []byte {
 	return []byte(fmt.Sprintf("\x1b7\x1b[1;1H[ %s  %s to detach ]\x1b[K\x1b8", name, keyLabel(detachKey)))
 }
 
-// keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q").
+// keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q"). DEL (0x7f)
+// has no sensible Ctrl+<letter> form (0x7f|0x40 is 0x7f itself), so it is named "DEL".
 func keyLabel(b byte) string {
-	if b < 0x20 || b == 0x7f {
+	if b == 0x7f {
+		return "DEL"
+	}
+	if b < 0x20 {
 		return "Ctrl+" + string(rune(b|0x40))
 	}
 	return string(rune(b))

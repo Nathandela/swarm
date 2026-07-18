@@ -77,8 +77,13 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			Term:     tc,
 			Session:  sess,
 			ReadOnly: readOnly,
-			Chrome:   true,
-			Name:     s.Agent,
+			// Chrome defaults OFF: the one-line chrome overwrites snapshot row 1
+			// content (DECSC/DECRC preserves only the cursor, not the overdrawn cells),
+			// so a full-screen agent's top row would be clobbered. The board's status
+			// bar teaches the detach key instead (ADR-006 negative consequences); the
+			// Chrome seam stays for callers that want it.
+			Chrome: false,
+			Name:   s.Agent,
 		})
 		return err
 	}
@@ -109,7 +114,7 @@ func (m attachModel) view() string {
 	cwd := shortenCwd(m.session.Cwd)
 
 	top := styleDim.Render("[ ") + styleTitle.Render(agent) +
-		styleDim.Render(" · "+cwd) + m.rule(agent, cwd) + styleDim.Render(" ctrl+\\ detach ]")
+		styleDim.Render(" · "+cwd) + m.rule(agent, cwd) + styleDim.Render(" ctrl+q detach ]")
 
 	var b strings.Builder
 	b.WriteString(top + "\n\n")
@@ -119,7 +124,7 @@ func (m attachModel) view() string {
 
 // rule pads the top line out toward the detach hint with a horizontal rule.
 func (m attachModel) rule(agent, cwd string) string {
-	used := len("[ ") + len(agent) + len(" · ") + lenRunes(cwd) + len(" ctrl+\\ detach ]")
+	used := len("[ ") + len(agent) + len(" · ") + lenRunes(cwd) + len(" ctrl+q detach ]")
 	n := m.width - used - 1
 	if n < 1 {
 		n = 1

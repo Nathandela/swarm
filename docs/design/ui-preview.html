@@ -145,7 +145,7 @@
   <h2>The screens <span class="live-badge">LIVE MOCKUP</span></h2>
   <p class="lede">This mockup is interactive — click it, then drive it with your keyboard exactly as you will drive swarm.</p>
   <div class="kbd-hint">
-    <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp; <kbd>⏎</kbd> attach &nbsp; <kbd>n</kbd> new session &nbsp; <kbd>x</kbd> kill / delete &nbsp; <kbd>q</kbd> detach (real app: <kbd>ctrl+\</kbd>) &nbsp; <kbd>esc</kbd> back
+    <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp; <kbd>⏎</kbd> attach &nbsp; <kbd>n</kbd> new session &nbsp; <kbd>x</kbd> kill / delete &nbsp; <kbd>q</kbd> detach (real app: <kbd>ctrl+q</kbd>) &nbsp; <kbd>esc</kbd> back
   </div>
   <div class="term" id="mockup" tabindex="0" aria-label="Interactive swarm mockup. Use arrow keys, enter, n, x, q and escape."></div>
 
@@ -467,7 +467,7 @@ flowchart LR
     var s = sessions[Math.min(sel, sessions.length - 1)] || sessions[0];
     el.innerHTML =
       '<span class="dim">[</span><span class="amber">' + esc(s.agent) + '</span><span class="dim"> · ' + esc(s.dir) +
-      ' ──────────────────────────── ctrl+\\ detach]</span>\n\n' +
+      ' ──────────────────────────── ctrl+q detach]</span>\n\n' +
       '<span class="dim">&gt;</span> Fix the failing CI on branch feat/rates\n\n' +
       '<span class="amber">●</span> I found the failing job — the rates fixture is stale.\n\n' +
       '  Update <span class="green">tests/fixtures/rates_2026.json</span> with the new schema?\n\n' +
