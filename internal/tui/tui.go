@@ -35,15 +35,14 @@ type Client interface {
 }
 
 // AgentInfo describes one detected agent CLI for the launch-form picker: whether
-// it is installed and within the supported version range, the install/upgrade
-// hint shown when it is not usable (L-2), and its declarative option schema.
+// it is installed and within the supported version range, the reason shown when
+// it is not usable (L-2), and its declarative option schema.
 type AgentInfo struct {
-	Name        string
-	Installed   bool
-	InRange     bool
-	InstallHint string
-	Reason      string // human-readable cause when unusable (e.g. "unsupported version 3.0.0"); falls back to InstallHint
-	Options     []adapter.OptionSpec
+	Name      string
+	Installed bool
+	InRange   bool
+	Reason    string // human-readable cause when unusable (e.g. "unsupported version 3.0.0")
+	Options   []adapter.OptionSpec
 }
 
 // usable reports whether the agent can actually be launched (installed and in a

@@ -115,15 +115,11 @@ func firstUsable(agents []AgentInfo) int {
 	return 0
 }
 
-// agentReason is the human-readable cause an agent is unusable, preferring the
-// derived Reason and falling back to the legacy InstallHint. It is shown greyed in
-// the picker and quoted in the launch-guard refusal so the user learns why an agent
-// cannot launch (L-2).
+// agentReason is the human-readable cause an agent is unusable. It is shown
+// greyed in the picker and quoted in the launch-guard refusal so the user learns
+// why an agent cannot launch (L-2).
 func agentReason(a AgentInfo) string {
-	if a.Reason != "" {
-		return a.Reason
-	}
-	return a.InstallHint
+	return a.Reason
 }
 
 // loadAgentOptions resets the option schema/values to the currently chosen
