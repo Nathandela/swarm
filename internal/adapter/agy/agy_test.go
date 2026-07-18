@@ -39,7 +39,8 @@ const realVersionBanner = "1.1.4\n"
 const fixtureConversationID = "fb5e3e02-e5ef-4d25-b398-aead20366441"
 
 // agyModelSuggestions are the 8 `agy models` display names (design doc section
-// 3 / internal/adapter/trioproto's prototype, verified live against agy 1.1.4).
+// 3, verified live against agy 1.1.4 during the exploration phase —
+// docs/verification/cli-trio-exploration/).
 var agyModelSuggestions = []string{
 	"Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)",
 	"Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)",

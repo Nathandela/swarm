@@ -2,8 +2,7 @@ package engine
 
 // Shared byte-granularity fixture-replay scaffolding for R-C4 (regression
 // freeze) and R-C5 (full-timeline rule proof). Deliberately self-contained
-// (does not depend on trio_exploration_test.go's snapAt/lastLine/gridLines,
-// which is temporary exploration-phase code slated for deletion in Phase H).
+// (the exploration-phase scaffolding it once mirrored was deleted in Phase H).
 
 import (
 	"testing"
