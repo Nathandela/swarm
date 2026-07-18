@@ -264,7 +264,6 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	}
 	m.Status = next
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 	written, err := d.saveMetaLocked(m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -303,7 +302,6 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 	}
 	m.ConversationID = convID
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 	written, err := d.saveMetaLocked(m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -361,7 +359,6 @@ func (d *Daemon) abandon() {
 // the onMetaSave observer. Writes are serialized by writeMu.
 func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 
 	d.writeMu.Lock()
 	written, err := d.saveMetaLocked(m)
@@ -384,6 +381,15 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // can never recreate the session dir after it is removed (F3). It returns
 // written=false for a tombstoned id, leaving disk and memory untouched. Firing the
 // onMetaSave observer is the caller's job, done after writeMu is released.
+//
+// m.Env is NOT re-filtered here (R3.1.2 dedup): store.Save is the sole allowlist
+// enforcement point (persist.go, ADR-004), and every caller of saveMeta/
+// saveMetaLocked already carries pre-filtered Env — freshly filtered at Meta
+// construction (launch.go) or inherited unchanged from a previously-persisted,
+// already-filtered Meta (reconcile scan, sess.meta). A future caller that
+// constructs a Meta from a raw, unfiltered env source must filter before
+// reaching here, or the unfiltered value will reach the in-memory registry
+// (store.Save only protects disk, since it filters its own copy of m).
 func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
@@ -438,7 +444,6 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 		return false // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
-	next.Env = persist.FilterEnv(next.Env)
 	written, err := d.saveMetaLocked(next)
 	d.writeMu.Unlock()
 	if err != nil {
