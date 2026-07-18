@@ -335,7 +335,7 @@ func (s *server) shutdown(rep shimwire.Control) {
 }
 
 // hub couples the emulator/transcript pipeline to at most one live subscriber.
-// Its mutex is the single serialization point: the drain loop feeds + publishes
+// Its mutex is the single serialization point: the drain loop publishes + feeds
 // under it, and attach snapshots + subscribes under it, so the snapshot/stream
 // boundary is gapless and overlap-free (S10).
 type hub struct {
@@ -351,12 +351,23 @@ type hub struct {
 
 // feed advances the grid + transcript by one PTY chunk and publishes it to the
 // subscriber, dropping (and counting) the chunk if the bounded queue is full.
-// Feeding under mu keeps the grid state and the published byte stream in lock
-// step with attach's snapshot point.
+// The subscriber publish and transcript hand-off happen BEFORE the emulator
+// parse (R2.2.1/2.2): an attached client sees each raw chunk as soon as it
+// arrives rather than waiting behind emu.Feed's parse cost, which the S9
+// non-blocking drop-on-full send never depended on in the first place. This
+// does not change per-chunk throughput — the drain loop still holds h.mu for
+// the full duration of emu.Feed, so the ~3.7MB/s parse cap (R1.4.1(a))
+// remains the pipeline's aggregate bottleneck (R2.2.5 explicitly does not
+// decouple emu.Feed to its own goroutine); the reorder only removes parse
+// latency from what publish waits on. Feeding under mu keeps the grid state
+// and the published byte stream in lock step with attach's snapshot point:
+// attach's snapshot+install and feed's publish+parse each run under one
+// single h.mu hold, so per-chunk snapshot-inclusion XOR frame-delivery is
+// preserved regardless of which half of feed the boundary falls in (S10).
+// defer h.mu.Unlock() so a parser panic in emu.Feed cannot leak the hub mutex.
 func (h *hub) feed(data []byte) {
 	h.mu.Lock()
-	h.emu.Feed(data)
-	_, _ = h.tr.Write(data)
+	defer h.mu.Unlock()
 	if h.sub != nil {
 		select {
 		case h.sub.queue <- data:
@@ -364,7 +375,8 @@ func (h *hub) feed(data []byte) {
 			h.metrics.FramesDropped.Add(1)
 		}
 	}
-	h.mu.Unlock()
+	_, _ = h.tr.Write(data)
+	h.emu.Feed(data)
 }
 
 // attach atomically snapshots the grid and installs a fresh subscriber, then
