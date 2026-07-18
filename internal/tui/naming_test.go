@@ -170,7 +170,7 @@ func TestLaunchResult_AutoAttachCarriesName(t *testing.T) {
 	m2, cmd := m.Update(launchResultMsg{id: "endpoint/new-1", agent: "claude", name: "backend-refactor"})
 	if cmd != nil {
 		if msg := cmd(); msg != nil {
-			m2, _ = m2.Update(msg)
+			_, _ = m2.Update(msg) // settle; result deliberately unused
 		}
 	}
 	calls := r.recorded()

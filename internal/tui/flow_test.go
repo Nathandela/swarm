@@ -80,7 +80,7 @@ func TestLaunchResult_SuccessAutoAttachesIntoNewSession(t *testing.T) {
 	m2, cmd := m.Update(launchResultMsg{id: "endpoint/new-1", agent: "claude"})
 	if cmd != nil {
 		if msg := cmd(); msg != nil { // run the (fake) attach and settle
-			m2, _ = m2.Update(msg)
+			_, _ = m2.Update(msg) // settle; result deliberately unused
 		}
 	}
 
@@ -187,7 +187,7 @@ func TestResume_SuccessAutoAttachesIntoNewSession(t *testing.T) {
 	m2, acmd := m.Update(cmd()) // feed the launchResultMsg back
 	if acmd != nil {
 		if msg := acmd(); msg != nil {
-			m2, _ = m2.Update(msg)
+			_, _ = m2.Update(msg) // settle; result deliberately unused
 		}
 	}
 
