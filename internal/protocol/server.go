@@ -316,6 +316,19 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Unlock()
 }
 
+// IsControlled reports whether local currently has a controller lease — attached
+// or mid-attach (controller is set at claim, before the pump is installed, and
+// cleared on detach/eviction/release). The daemon's grid tap consults it to SKIP a
+// controlled session, so a tap attach never steals a live controller's stream
+// under concurrent shim serving (R1.3.7); this preserves exactly today's heuristic
+// blindness while a session is attached.
+func (s *Server) IsControlled(local string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ls := s.leases[local]
+	return ls != nil && ls.controller != nil
+}
+
 // attach installs cc as the controller of local at a new, higher generation (S2),
 // superseding any prior controller. Rather than splice a fresh snapshot into a
 // reused stream, a supersede RE-ATTACHES: it tears down the prior controller,

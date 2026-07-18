@@ -80,6 +80,10 @@ type Daemon struct {
 	sampleWG sync.WaitGroup // in-flight per-session grid samples
 	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG Adder)
 	sampleFn func(id string)
+	// controlled reports whether a session has a live controller lease; the tap
+	// skips such a session so its stream is not stolen every poll (R1.3.7). It is
+	// d.srv.IsControlled in production, overridable in tests.
+	controlled func(id string) bool
 
 	closeOnce sync.Once
 }
@@ -141,6 +145,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
 	d.srv = protocol.NewServer(d.api, epID)
+	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -224,24 +229,36 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, m := range d.core.List() {
-				if m.Status.Process == status.ProcessRunning {
-					d.sampleGridAsync(ctx, m.ID)
-					d.captureConversationID(m.ID) // attach-independent id capture (C1)
-				}
-			}
+			d.tapOnce(ctx)
 		}
 	}
 }
 
-// sampleGridAsync samples one session's grid in its OWN goroutine, so a session
-// whose shim is momentarily busy — a client controller holds its single serve slot,
-// or the shim is slow — cannot stall the sampling CADENCE of other sessions (L1, no
-// head-of-line blocking: the former serial loop blocked every later session behind a
-// busy shim's dial/hello). It is deduped per session: at most one in-flight sample
-// each, so a persistently slow shim never piles up a fresh goroutine every poll. The
-// goroutine is tracked so Close can drain in-flight samples (bounded by the shim
-// dial/hello timeouts).
+// tapOnce samples every running session once: it SKIPS a session that has a live
+// controller lease so the tap never steals its stream (R1.3.7 — the shim now serves
+// connections concurrently, so a tap attach on a controlled session would supersede
+// the controller's subscriber every poll). Conversation-id capture reads the
+// transcript on disk (no shim attach), so it runs regardless of the controller (C1).
+func (d *Daemon) tapOnce(ctx context.Context) {
+	for _, m := range d.core.List() {
+		if m.Status.Process != status.ProcessRunning {
+			continue
+		}
+		if d.controlled == nil || !d.controlled(m.ID) {
+			d.sampleGridAsync(ctx, m.ID)
+		}
+		d.captureConversationID(m.ID) // attach-independent id capture (C1)
+	}
+}
+
+// sampleGridAsync samples one session's grid in its OWN goroutine, so a slow shim
+// cannot stall the sampling CADENCE of other sessions (L1, no head-of-line
+// blocking: the former serial loop blocked every later session behind a busy
+// shim's dial/hello). tapOnce already skips a controlled session (R1.3.7), so this
+// only ever runs for a session with no live controller. It is deduped per session:
+// at most one in-flight sample each, so a persistently slow shim never piles up a
+// fresh goroutine every poll. The goroutine is tracked so Close can drain in-flight
+// samples (bounded by the shim dial/hello timeouts).
 func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
 	d.sampleMu.Lock()
 	if _, busy := d.sampling[id]; busy {
@@ -270,13 +287,12 @@ func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
 }
 
 // sampleGrid grabs one session's current shim grid and feeds it to the engine's
-// grid heuristic. The attach is closed IMMEDIATELY after the snapshot is read, so
-// it holds the shim's single serve slot only for the few milliseconds of the
-// snapshot round-trip — a racing client attach simply waits that long rather than
-// failing. Every failure is a silent skip: a session a client is actively attached
-// to holds the shim (so the sample's dial times out and is ignored), a gone shim
-// or undecodable snapshot is retried next poll, and a session not registered with
-// the engine makes OnOutput a no-op.
+// grid heuristic. The attach is closed IMMEDIATELY after the snapshot is read. The
+// shim serves connections concurrently, so this brief tap attach coexists with any
+// other connection; tapOnce only calls sampleGrid for a session with NO live
+// controller (R1.3.7), so the tap never supersedes a controller's subscriber.
+// Every failure is a silent skip: a gone shim or undecodable snapshot is retried
+// next poll, and a session not registered with the engine makes OnOutput a no-op.
 func (d *Daemon) sampleGrid(id string) {
 	stream, err := d.api.Attach(id)
 	if err != nil {
@@ -297,12 +313,13 @@ const convTailBytes = 64 << 10
 // captureConversationID recovers a session's native conversation id from its output
 // and persists it ONCE (Epic 11 / R-2, the id a later resume replays). It reads the
 // session's TRANSCRIPT tail on disk (bounded) and feeds it to the session's adapter
-// — INDEPENDENT of any live attach (C1). The shim serves connections serially, so
-// the grid tap cannot attach while a client holds the session, and a session left
-// attached until exit would otherwise never be sampled and end non-resumable.
-// Driving capture off the continuously-written transcript file instead means an
-// attached-until-exit or short-lived session still gets its id — on the poll cadence
-// and again at session end. On a successful extraction it persists
+// — INDEPENDENT of any live attach (C1). Because it reads the transcript file rather
+// than attaching, it runs even for a session with a live controller (which the grid
+// tap skips, R1.3.7) and for a session left attached until exit — both of which
+// would otherwise never be sampled and end non-resumable. Driving capture off the
+// continuously-written transcript file means an attached-until-exit or short-lived
+// session still gets its id — on the poll cadence and again at session end. On a
+// successful extraction it persists
 // Meta.ConversationID through the daemon's sole meta writer (write-once, G6). Cheap
 // no-op once captured, for an adapterless agent (the reserved fake), or when nothing
 // extracts yet. SetConversationID takes writeMu, so it is never called nested inside
