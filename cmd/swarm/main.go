@@ -302,7 +302,39 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 // options, and adapters with nothing discovered, are returned untouched. The
 // input specs are never mutated — a fresh slice is returned when anything changes.
 func overlayModelOptions(specs []adapter.OptionSpec, configured string, models []adapter.ModelChoice) []adapter.OptionSpec {
-	return specs
+	if configured == "" && len(models) == 0 {
+		return specs
+	}
+	out := make([]adapter.OptionSpec, len(specs))
+	copy(out, specs)
+	for i, spec := range out {
+		if spec.Key != "model" {
+			continue
+		}
+		if configured != "" {
+			spec.Default = configured
+		}
+		if len(models) > 0 {
+			// The CLI's own catalog replaces any curated aliases outright.
+			suggest := make([]string, len(models))
+			for j, m := range models {
+				suggest[j] = m.ID
+			}
+			spec.Suggest = suggest
+		} else if configured != "" {
+			// Default-only discovery (claude): the real default leads the curated
+			// aliases, deduplicated.
+			suggest := []string{configured}
+			for _, s := range spec.Suggest {
+				if s != configured {
+					suggest = append(suggest, s)
+				}
+			}
+			spec.Suggest = suggest
+		}
+		out[i] = spec
+	}
+	return out
 }
 
 // unavailabilityReason derives a short, human-readable cause an agent cannot launch

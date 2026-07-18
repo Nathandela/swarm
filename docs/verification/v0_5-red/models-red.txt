@@ -15,3 +15,10 @@ implementation (TDD order preserved). Failing output at stub state:
 FAIL	github.com/Nathandela/swarm/internal/adapter/detect
 
 GREEN after implementing modelprobe.go: ok internal/adapter/detect (race).
+
+=== overlayModelOptions RED (codex HIGH-1, Sat Jul 18 18:42:51 CEST 2026) ===
+--- FAIL: TestOverlayModelOptions (0.00s)
+    main_test.go:137: model Default = "", want the configured model
+    main_test.go:140: model Suggest = [], want discovered IDs [gpt-5.6-sol gpt-5.5]
+    main_test.go:154: claude Default = "", want fable
+    main_test.go:157: claude Suggest = [sonnet opus haiku], want default-first dedup [fable sonnet opus haiku]

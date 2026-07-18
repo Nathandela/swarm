@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -119,5 +120,50 @@ func TestDispatch(t *testing.T) {
 				t.Errorf("dispatch(%v) stderr = %q, want substring %q", tt.args, stderr.String(), tt.wantStderr)
 			}
 		})
+	}
+}
+
+// codex v0.5 audit HIGH-1: overlayModelOptions was an identity stub, so discovered
+// models never reached the form. These pin the integration seam.
+func TestOverlayModelOptions(t *testing.T) {
+	models := []adapter.ModelChoice{{ID: "gpt-5.6-sol", Display: "GPT-5.6-Sol"}, {ID: "gpt-5.5", Display: "GPT-5.5"}}
+	specs := []adapter.OptionSpec{
+		{Key: "model", Label: "Model", Type: "string"},
+		{Key: "sandbox", Label: "Sandbox mode", Type: "choice"},
+	}
+
+	out := overlayModelOptions(specs, "gpt-5.6-sol", models)
+	if out[0].Default != "gpt-5.6-sol" {
+		t.Errorf("model Default = %q, want the configured model", out[0].Default)
+	}
+	if want := []string{"gpt-5.6-sol", "gpt-5.5"}; !reflect.DeepEqual(out[0].Suggest, want) {
+		t.Errorf("model Suggest = %v, want discovered IDs %v", out[0].Suggest, want)
+	}
+	if out[1].Key != "sandbox" || out[1].Default != "" {
+		t.Errorf("non-model option must be untouched, got %+v", out[1])
+	}
+	if specs[0].Default != "" || specs[0].Suggest != nil {
+		t.Errorf("input specs mutated: %+v", specs[0])
+	}
+
+	// Claude shape: configured default, no enumeration - default prepended to the
+	// curated aliases, deduped.
+	claude := []adapter.OptionSpec{{Key: "model", Type: "string", Suggest: []string{"sonnet", "opus", "haiku"}}}
+	out = overlayModelOptions(claude, "fable", nil)
+	if out[0].Default != "fable" {
+		t.Errorf("claude Default = %q, want fable", out[0].Default)
+	}
+	if want := []string{"fable", "sonnet", "opus", "haiku"}; !reflect.DeepEqual(out[0].Suggest, want) {
+		t.Errorf("claude Suggest = %v, want default-first dedup %v", out[0].Suggest, want)
+	}
+	out = overlayModelOptions(claude, "opus", nil)
+	if want := []string{"opus", "sonnet", "haiku"}; !reflect.DeepEqual(out[0].Suggest, want) {
+		t.Errorf("dedup: Suggest = %v, want %v", out[0].Suggest, want)
+	}
+
+	// Nothing discovered: unchanged.
+	out = overlayModelOptions(specs, "", nil)
+	if !reflect.DeepEqual(out, specs) {
+		t.Errorf("nothing discovered must return specs unchanged")
 	}
 }
