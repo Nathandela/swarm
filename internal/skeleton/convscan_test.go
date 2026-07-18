@@ -300,6 +300,68 @@ func TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan(t *testing
 	}
 }
 
+// TestEndSession_CapturesConversationIDForShortLivedSession (HIGH regression,
+// C2 review of agents-tracker-vyd) — the session-end capture net (serve.go:
+// 232-234: endSession calls captureConversationID synchronously) exists so a
+// session that exits before any 500ms tap poll ever ran still gets its
+// conversation id captured (C1 resumability). The leak-race fix above added a
+// Running-status gate on the convScan write, but production ALWAYS commits a
+// terminal status before firing OnSessionEnd, so endSession's own call always
+// saw a terminal status too — the gate silently disabled this net for every
+// session it exists to protect. This pins the net's own contract directly: a
+// session fixtured as already-terminal (never touched by the tap, exactly the
+// short-lived case) with a valid marker in its transcript must still end up
+// with ConversationID set once endSession runs.
+func TestEndSession_CapturesConversationIDForShortLivedSession(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "swskconvend")
+	if err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	const id = "shortlived1"
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatalf("persist.NewStore: %v", err)
+	}
+	if err := store.Save(persist.Meta{
+		ID:           id,
+		AgentType:    "reference", // registry.New resolves the real refadapter, no live process needed
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+		Status:       status.Status{Process: status.ProcessExited}, // already terminal: the tap never ran for it
+	}); err != nil {
+		t.Fatalf("Save terminal meta: %v", err)
+	}
+	sessionDir := filepath.Join(dir, id)
+	if err := os.WriteFile(filepath.Join(sessionDir, shim.TranscriptFile), []byte("conv-id=short-lived-id\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	core, err := daemon.Open(daemon.Config{
+		StateDir:    dir,
+		SocketPath:  filepath.Join(dir, "d.sock"),
+		LockPath:    filepath.Join(dir, "d.lock"),
+		LogPath:     filepath.Join(dir, "d.log"),
+		MaxSessions: 8,
+	})
+	if err != nil {
+		t.Fatalf("daemon.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+
+	d := &Daemon{core: core, stateDir: dir}
+	d.endSession(id) // the daemon's OnSessionEnd hook: the C1 session-end net
+
+	m, ok := core.Get(id)
+	if !ok {
+		t.Fatalf("session %s not found after endSession", id)
+	}
+	if m.ConversationID != "short-lived-id" {
+		t.Fatalf("ConversationID = %q after endSession, want %q (the session-end net must still capture even though status is already terminal)", m.ConversationID, "short-lived-id")
+	}
+}
+
 func appendToFile(t *testing.T, path, s string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)

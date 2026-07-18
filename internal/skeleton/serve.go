@@ -234,8 +234,10 @@ func (d *Daemon) endSession(id string) {
 	// short-lived one still gets its id from the transcript tail on disk (C1). This
 	// is sequential with the daemon's terminal write — finalizeTerminal has already
 	// released writeMu before firing OnSessionEnd — so SetConversationID's writeMu is
-	// never nested (no deadlock).
-	d.captureConversationID(id)
+	// never nested (no deadlock). Uses the Final variant (not captureConversationID):
+	// this call always sees an already-terminal status, so the tap path's
+	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
+	d.captureConversationIDFinal(id)
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
 	d.convScanMu.Unlock()
@@ -423,7 +425,39 @@ type convScanState struct {
 // reserved fake), or when nothing extracts yet. SetConversationID takes writeMu,
 // so it is never called nested inside another writeMu holder (finalizeTerminal has
 // already released it before endSession runs).
+//
+// This is the tap-dispatched path (captureConversationIDAsync's default
+// captureFn): it gates its convScan write on the session still being Running,
+// which closes the LOW leak race where a delayed async write recreates
+// convScan[id] after endSession already deleted it (agents-tracker-vyd). Use
+// captureConversationIDFinal instead for endSession's OWN call — see there for
+// why gating that one too silently disables the session-end capture net.
 func (d *Daemon) captureConversationID(id string) {
+	d.captureConversationIDGated(id, true)
+}
+
+// captureConversationIDFinal is endSession's session-end capture net (serve.go
+// endSession, C1): it exists so a session that exits before any tap poll ever
+// ran (e.g. one left attached until exit, or a very short-lived one) still gets
+// its conversation id. Unlike captureConversationID, it does NOT gate its
+// convScan write on Running status: production always commits a session's
+// terminal status BEFORE firing OnSessionEnd, so that gate would ALWAYS see a
+// terminal status here too and silently skip the write on every call — which is
+// exactly the HIGH regression a C2 review caught (TestEndSession_
+// CapturesConversationIDForShortLivedSession pins it). This is still leak-safe:
+// endSession deletes convScan[id] immediately after this call returns (same
+// goroutine, sequential, serve.go:239-241), and it is captureConversationID's
+// OWN gate — evaluated at ITS write, against a status that is by then already
+// terminal regardless of interleaving — that keeps a stale async write from
+// recreating the entry afterward.
+func (d *Daemon) captureConversationIDFinal(id string) {
+	d.captureConversationIDGated(id, false)
+}
+
+// captureConversationIDGated is the shared body: gateRunning selects whether
+// the convScan write additionally requires the session to still be Running
+// (the tap path) or always proceeds (endSession's final call).
+func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	m, ok := d.core.Get(id)
 	if !ok || m.ConversationID != "" {
 		return
@@ -453,15 +487,15 @@ func (d *Daemon) captureConversationID(id string) {
 	tail := readTail(path, convTailBytes)
 
 	d.convScanMu.Lock()
-	// Re-check the session is still tracked as running: this read can finish
-	// after endSession already deleted convScan[id] (R2.1.3 hygiene), and a
-	// stale write here would resurrect the entry forever — nothing polls an
-	// ended session again (LOW leak race, agents-tracker-vyd). Production
-	// always sets a terminal status BEFORE firing endSession, so this check
-	// reliably detects the race regardless of which side wins it.
-	if m, ok := d.core.Get(id); !ok || m.Status.Process != status.ProcessRunning {
-		d.convScanMu.Unlock()
-		return
+	if gateRunning {
+		// This read can finish after endSession already deleted convScan[id]
+		// (R2.1.3 hygiene); a stale write here would resurrect the entry
+		// forever — nothing polls an ended session again (LOW leak race,
+		// agents-tracker-vyd).
+		if m, ok := d.core.Get(id); !ok || m.Status.Process != status.ProcessRunning {
+			d.convScanMu.Unlock()
+			return
+		}
 	}
 	d.convScan[id] = convScanState{size: size} // also clears errOnce: the error cleared
 	d.convScanMu.Unlock()
