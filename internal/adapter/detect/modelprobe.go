@@ -48,8 +48,13 @@ func ProbeModels(name string) (configured string, models []adapter.ModelChoice) 
 }
 
 // readCapped reads path up to maxConfigSize bytes. ok is false when the file is
-// absent or unreadable; a file over the cap is returned truncated to the cap.
+// absent, unreadable, or not a regular file (a FIFO or device planted at a config
+// path would block the detection goroutine forever - stat-and-reject before open);
+// a file over the cap is returned truncated to the cap.
 func readCapped(path string) (data []byte, ok bool) {
+	if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() {
+		return nil, false // Stat follows symlinks: a linked regular config passes, a FIFO/device target is rejected
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false

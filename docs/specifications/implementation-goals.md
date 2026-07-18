@@ -130,7 +130,7 @@ Goal: status that is authenticated, fresh, and never confidently wrong.
 - E10.5 Idempotent under duplicate and out-of-order hook deliveries.
 - E10.6 CPU sampling: Linux (/proc) and macOS (proc_pidinfo) paths BOTH unit-tested in CI (linux + macos runners); real-process integration test on each.
 - E10.7 Status changes reach Epic 6 subscribers ≤500 ms from signal arrival (server half of L1; composite ≤1 s asserted at E14).
-- E10.8 Grid-heuristic evaluator: runs on output events plus a low-frequency fallback poll at a stated bounded frequency; no busy-polling (idle-CPU assertion); inconclusive detection maps deterministically to `unknown` (T-3, T-4; positive-idle case = scenario 6).
+- E10.8 Grid-heuristic evaluator: runs on output events plus a low-frequency fallback poll at a stated bounded frequency; no busy-polling (idle-CPU assertion); an inconclusive evaluation preserves the previously committed turn (T-3, T-4 as revised by ADR-007; positive-idle case = scenario 6).
 
 ### Epic 11 — Claude Code + Codex adapters
 Goal: two real CLIs, each characterized first, proving the adapter boundary under two signal styles.

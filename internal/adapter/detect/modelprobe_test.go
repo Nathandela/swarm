@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 )
@@ -219,5 +221,28 @@ func TestProbeModels_UnknownName(t *testing.T) {
 	configured, models := ProbeModels("reference")
 	if configured != "" || models != nil {
 		t.Errorf("unknown adapter: got (%q, %+v), want (\"\", nil)", configured, models)
+	}
+}
+
+// codex v0.5 M5 / Fable LOW-4 (consensus): a non-regular file (FIFO/device) planted
+// at a config path must not block the detection goroutine - readCapped rejects
+// anything that is not a regular file.
+func TestReadCapped_RejectsNonRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, ok := readCapped(fifo); ok {
+			t.Error("readCapped(fifo) reported ok=true; non-regular files must be rejected")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readCapped blocked on a FIFO - it must stat-and-reject non-regular files without opening them")
 	}
 }

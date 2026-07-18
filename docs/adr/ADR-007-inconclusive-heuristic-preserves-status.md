@@ -88,7 +88,14 @@ The asymmetry lives only in the *trigger and the dimension*: `Tick` downgrades o
 rescue), while preserve applies to whatever dimension was committed. "Absence of
 evidence" (an unreadable frame) and "evidence of absence" (prolonged silence) are
 different inputs and correctly produce different outputs. Both uphold the same L1
-intent: never confidently wrong, never stale-forever.
+intent: never confidently wrong. One residual is accepted with eyes open: a session
+that emits CONTINUOUS but permanently inconclusive frames keeps refreshing the
+liveness clock, so a stale preserved turn is never Tick-downgraded in that state.
+For the supported adapters this requires a screen that is simultaneously busy
+enough to stream output and unreadable to its own signature for the whole period -
+codex's busy marker and claude's typed hooks make that pathological rather than
+expected. The per-adapter signatures, not the preserve rule, carry the burden of
+staying conclusive.
 
 ## Consequences
 
