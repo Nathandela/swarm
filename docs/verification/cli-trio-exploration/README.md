@@ -1,7 +1,10 @@
 # CLI Trio Exploration Evidence (2026-07-18)
 
-Raw characterization fixtures for the strategy phase of the agy/opencode/vibe
-adapter design (docs/design/cli-trio-adapters.md, issue agents-tracker-5gv).
+Raw characterization fixtures for the strategy phase of the CLI adapter design
+(docs/design/cli-trio-adapters.md, issue agents-tracker-5gv). Integration
+targets are agy and opencode; vibe was evaluated and DROPPED (2026-07-18, see
+the design doc appendix) — its fixture and drive script are retained here as
+the record of that evaluation.
 Recorded with the repo's own harness (`swarm-char -adapter reference`, PTY
 100x30, 45s bound) against the locally installed binaries: agy 1.1.4,
 opencode 1.17.9, vibe 2.15.0.

@@ -1,9 +1,9 @@
 // Package trioproto holds TEMPORARY prototype adapters for the cli-trio
-// integration strategy phase (agy / opencode / vibe). They exist to prove,
+// integration strategy phase (agy / opencode). They exist to prove,
 // against the frozen adapter contract and real recorded PTY captures, that each
 // CLI fits the Adapter interface — argv composition, version parsing, resume,
 // and conversation-id extraction. Delete this package before the implementation
-// epic; the real adapters will live in internal/adapter/{agy,opencode,vibe}
+// epic; the real adapters will live in internal/adapter/{agy,opencode}
 // with their own fixture corpus and full test suites.
 package trioproto
 
@@ -190,71 +190,6 @@ func lastSessionToken(s string) (string, bool) {
 
 func isAlnum(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-// ---- vibe (Mistral) ----
-
-type vibeAdapter struct{}
-
-func NewVibe() adapter.Adapter { return vibeAdapter{} }
-
-func (vibeAdapter) Name() string                           { return "vibe" }
-func (vibeAdapter) Binary() string                         { return "vibe" }
-func (vibeAdapter) VersionArgs() []string                  { return []string{"--version"} }
-func (vibeAdapter) ParseVersion(out string) (string, bool) { return firstDottedNumeric(out) }
-func (vibeAdapter) SupportedVersions() adapter.VersionConstraint {
-	return adapter.VersionConstraint{Min: "2.0.0", Max: "9999.0.0"}
-}
-
-// Command composes `vibe --trust [--agent A] [PROMPT]`. --trust is documented
-// as per-invocation only (not persisted to trusted_folders.toml) and skips the
-// blocking trust prompt — required for supervisor-driven launches. vibe has no
-// --model flag: model selection is config/env-only (VIBE_ACTIVE_MODEL), a
-// contract gap recorded in the design doc.
-func (vibeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
-	argv := []string{"vibe", "--trust"}
-	if a := spec.Options["agent"]; a != "" {
-		argv = append(argv, "--agent", a)
-	}
-	if spec.InitialPrompt != "" {
-		argv = append(argv, spec.InitialPrompt)
-	}
-	return argv, nil
-}
-
-func (vibeAdapter) Options() []adapter.OptionSpec {
-	return []adapter.OptionSpec{
-		{Key: "agent", Label: "Agent mode", Type: "choice",
-			Choices: []string{"default", "plan", "accept-edits", "auto-approve"}},
-	}
-}
-
-// SignalSources: heuristic only for v1. vibe's braille wave renders near the
-// header (not the last line) and its footer owns the bottom row, so the stock
-// heuristic reports unknown mid-session — the design doc's bottom-region rules
-// or a future vibe-acp event bridge are the paths to real signals.
-func (vibeAdapter) SignalSources() []adapter.SignalSource {
-	return []adapter.SignalSource{
-		{Kind: "heuristic", Descriptor: map[string]string{"grid": "prompt-marker"}},
-	}
-}
-
-// Resume composes `vibe --trust --resume <id>`; verified 2026-07-18 that a
-// resumed print-mode session retains context (full UUID from meta.json).
-func (vibeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
-	if spec.ConversationID == "" {
-		return nil, nil
-	}
-	return []string{"vibe", "--trust", "--resume", spec.ConversationID}, nil
-}
-
-// ExtractConversationID: vibe never writes its session id into the PTY stream
-// (verified against the recorded capture — the id lives only in
-// ~/.vibe/logs/session/<dir>/meta.json, which a pure adapter cannot read), so
-// extraction honestly reports no id. Resume-by-id still works when the id is
-// known from elsewhere; the capability matrix records ConversationID: false.
-func (vibeAdapter) ExtractConversationID(*vt.Snap, []byte) (string, bool) {
-	return "", false
 }
 
 // ---- shared helpers (each real adapter package will carry its own copies,

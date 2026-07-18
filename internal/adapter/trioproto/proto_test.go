@@ -21,7 +21,6 @@ func protos() map[string]adapter.Adapter {
 	return map[string]adapter.Adapter{
 		"agy":      NewAgy(),
 		"opencode": NewOpencode(),
-		"vibe":     NewVibe(),
 	}
 }
 
@@ -35,7 +34,6 @@ func TestParseVersion_RealBanners(t *testing.T) {
 	cases := []struct{ cli, banner, want string }{
 		{"agy", "1.1.4\n", "1.1.4"},
 		{"opencode", "1.17.9\n", "1.17.9"},
-		{"vibe", "vibe 2.15.0\n", "2.15.0"},
 	}
 	for _, c := range cases {
 		v, ok := protos()[c.cli].ParseVersion(c.banner)
@@ -86,7 +84,6 @@ func TestExtract_FromRecordedCaptures(t *testing.T) {
 	}{
 		"agy":      {"fb5e3e02-e5ef-4d25-b398-aead20366441", true},
 		"opencode": {"ses_08b642915ffeYL3T6ea1DnJZDd", true},
-		"vibe":     {"", false},
 	}
 	for name, a := range protos() {
 		t.Run(name, func(t *testing.T) {
@@ -115,7 +112,6 @@ func TestArgvShapes(t *testing.T) {
 	}{
 		{"agy", []string{"agy", "--model", "m", "--mode", "plan", "--dangerously-skip-permissions", "--prompt-interactive", "hi"}},
 		{"opencode", []string{"opencode", "--model", "m", "--agent", "plan", "--prompt", "hi"}},
-		{"vibe", []string{"vibe", "--trust", "--agent", "plan", "hi"}},
 	}
 	for _, c := range cases {
 		argv, err := protos()[c.cli].Command(spec)
@@ -136,7 +132,6 @@ func TestArgvShapes(t *testing.T) {
 	resumes := map[string][]string{
 		"agy":      {"agy", "--conversation", "X"},
 		"opencode": {"opencode", "--session", "X"},
-		"vibe":     {"vibe", "--trust", "--resume", "X"},
 	}
 	for cli, want := range resumes {
 		argv, err := protos()[cli].Resume(adapter.ResumeSpec{Cwd: "/w", ConversationID: "X"})
