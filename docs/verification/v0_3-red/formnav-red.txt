@@ -1,0 +1,14 @@
+=== RED evidence: v0.3 form-navigation + unusable-agent reasons ===
+Date: 2026-07-18T09:15:21Z
+
+### internal/tui: TestLaunch_ArrowsNavigateFields, TestLaunch_UnusableAgentSelectableAndRefusedWithReason
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/launch_test.go:196:53: unknown field Reason in struct literal of type AgentInfo
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
+### cmd/swarm: TestUnavailabilityReason
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/main_test.go:28:13: undefined: unavailabilityReason
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

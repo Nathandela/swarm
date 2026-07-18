@@ -4,7 +4,32 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/adapter"
 )
+
+// v0.3 — detectAgents derives a human-readable unavailability reason from the raw
+// Detection so the launch picker can explain why an agent cannot launch. A usable
+// (found + in-range) agent and a plainly not-installed one carry no reason (the
+// latter keeps the existing install-hint behavior); a found-but-unusable agent
+// carries the specific cause.
+func TestUnavailabilityReason(t *testing.T) {
+	cases := []struct {
+		name string
+		det  adapter.Detection
+		want string
+	}{
+		{"usable in-range", adapter.Detection{Found: true, Version: "1.5.0", InRange: true}, ""},
+		{"not installed", adapter.Detection{Found: false}, ""},
+		{"found but version probe failed", adapter.Detection{Found: true, Version: "", InRange: false}, "version probe failed - reinstall?"},
+		{"found but out of range", adapter.Detection{Found: true, Version: "3.0.0", InRange: false}, "unsupported version 3.0.0"},
+	}
+	for _, c := range cases {
+		if got := unavailabilityReason(c.det); got != c.want {
+			t.Errorf("%s: unavailabilityReason = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
 
 func TestDispatch(t *testing.T) {
 	tests := []struct {

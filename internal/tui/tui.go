@@ -43,6 +43,7 @@ type AgentInfo struct {
 	Installed   bool
 	InRange     bool
 	InstallHint string
+	Reason      string // human-readable cause when unusable (e.g. "unsupported version 3.0.0"); falls back to InstallHint
 	Options     []adapter.OptionSpec
 }
 

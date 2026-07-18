@@ -226,6 +226,7 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 				Name:      name,
 				Installed: det.Found,
 				InRange:   det.InRange,
+				Reason:    unavailabilityReason(det),
 				Options:   ad.Options(),
 			})
 		}
@@ -238,6 +239,24 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 			})
 		}
 		return agents
+	}
+}
+
+// unavailabilityReason derives a short, human-readable cause an agent cannot launch
+// from its Detection, so the launch picker greys the agent WITH an explanation
+// instead of an indistinguishable dot (the v0.3 field-test gap: a broken codex whose
+// version probe fails rendered like a usable one). A usable or plainly not-installed
+// agent has no reason — the latter keeps the existing install-hint behavior.
+func unavailabilityReason(det adapter.Detection) string {
+	switch {
+	case !det.Found:
+		return "" // not installed: existing install-hint behavior
+	case det.Version == "":
+		return "version probe failed - reinstall?"
+	case !det.InRange:
+		return "unsupported version " + det.Version
+	default:
+		return ""
 	}
 }
 

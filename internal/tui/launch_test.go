@@ -150,6 +150,92 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 	}
 }
 
+// v0.3 / form-nav — UP/DOWN move the field focus like Tab (down = next field, up =
+// previous), with the same wrap semantics; Tab still works. detectMixed carries one
+// option, so the L-1 field order is directory(0), agent(1), Model(2), prompt(3),
+// worktree(4).
+func TestLaunch_ArrowsNavigateFields(t *testing.T) {
+	m := openLaunch(t, newFakeClient())
+	if f := launchOf(m).focus; f != 0 {
+		t.Fatalf("form opens on the directory field, got focus %d", f)
+	}
+	m = send(m, keyDown) // 0 -> 1 (agent)
+	if f := launchOf(m).focus; f != 1 {
+		t.Fatalf("KeyDown from directory should focus agent (1), got %d", f)
+	}
+	m = send(m, keyDown) // 1 -> 2 (Model)
+	m = send(m, keyUp)   // 2 -> 1 (agent)
+	if f := launchOf(m).focus; f != 1 {
+		t.Fatalf("KeyUp should move to the previous field (agent=1), got %d", f)
+	}
+	// Wrap: Up from the first field lands on the last (worktree = fieldCount-1).
+	m = send(m, keyUp) // 1 -> 0
+	m = send(m, keyUp) // 0 -> last (wrap)
+	last := launchOf(m).fieldCount() - 1
+	if f := launchOf(m).focus; f != last {
+		t.Fatalf("KeyUp from the first field should wrap to the last (%d), got %d", last, f)
+	}
+	m = send(m, keyDown) // last -> 0 (wrap)
+	if f := launchOf(m).focus; f != 0 {
+		t.Fatalf("KeyDown from the last field should wrap to the first (0), got %d", f)
+	}
+	// The footer advertises the up/down affordance alongside tab.
+	if v := view(m); !strings.Contains(v, "↑↓") {
+		t.Fatalf("footer must advertise up/down field navigation:\n%s", v)
+	}
+}
+
+// detectBrokenCodex: claude usable, codex FOUND but unusable carrying a derived
+// reason (the field-test case: a codex whose npm wrapper crashes so the version
+// probe yields nothing). Exercises L-2 design (a): the arrows can LAND on the
+// unusable agent, and submitting on it is refused inline WITH the reason.
+func detectBrokenCodex() DetectFunc {
+	return func() []AgentInfo {
+		return []AgentInfo{
+			{Name: "claude", Installed: true, InRange: true, Options: claudeSchema()},
+			{Name: "codex", Installed: true, InRange: false, Reason: "version probe failed - reinstall?"},
+		}
+	}
+}
+
+// v0.3 / L-2 (design a) — an unusable agent is reachable by the arrows (never a
+// silent no-op), renders its reason in the picker, and submitting on it is refused
+// inline WITH that reason so the user learns why it cannot launch.
+func TestLaunch_UnusableAgentSelectableAndRefusedWithReason(t *testing.T) {
+	f := newFakeClient()
+	m := newModel(t, f, detectBrokenCodex())
+	m = send(m, detectMsg{agents: detectBrokenCodex()()})
+	m = send(m, keyRune('n'))
+
+	// The reason is visible in the picker regardless of which field is focused.
+	if v := view(m); !strings.Contains(v, "version probe failed - reinstall?") {
+		t.Fatalf("picker must show the unusable agent's reason:\n%s", v)
+	}
+
+	// Focus the agent field and cycle right onto the unusable codex; the arrow must
+	// land on it rather than skip back to the only usable agent.
+	m = send(m, keyDown)  // directory -> agent
+	m = send(m, keyRight) // claude -> codex (unusable)
+	if got := launchOf(m).currentAgentName(); got != "codex" {
+		t.Fatalf("right arrow must land on the unusable codex, got %q", got)
+	}
+
+	// Submitting on the unusable agent is refused inline, quoting the reason, with no
+	// launch attempted.
+	m2, cmd := m.Update(keyEnter)
+	execCmd(cmd)
+	if reqs := f.launchReqs(); len(reqs) != 0 {
+		t.Fatalf("submit on an unusable agent must not launch, got %v", reqs)
+	}
+	v := view(m2)
+	if !strings.Contains(v, "no installed, supported agent") {
+		t.Fatalf("refusal must keep the guard message:\n%s", v)
+	}
+	if !strings.Contains(v, "version probe failed - reinstall?") {
+		t.Fatalf("refusal must quote the agent's reason:\n%s", v)
+	}
+}
+
 // E7.5 — GOLDEN: the launch form matches the approved ui-preview look. Regenerate
 // with `go test ./internal/tui/ -update`.
 

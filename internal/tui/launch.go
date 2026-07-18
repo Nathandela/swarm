@@ -116,6 +116,17 @@ func firstUsable(agents []AgentInfo) int {
 	return 0
 }
 
+// agentReason is the human-readable cause an agent is unusable, preferring the
+// derived Reason and falling back to the legacy InstallHint. It is shown greyed in
+// the picker and quoted in the launch-guard refusal so the user learns why an agent
+// cannot launch (L-2).
+func agentReason(a AgentInfo) string {
+	if a.Reason != "" {
+		return a.Reason
+	}
+	return a.InstallHint
+}
+
 // loadAgentOptions resets the option schema/values to the currently chosen
 // agent's defaults.
 func (m *launchModel) loadAgentOptions() {
@@ -148,6 +159,14 @@ func (m launchModel) optionFocus() (int, bool) {
 	return 0, false
 }
 
+// moveFocus steps the field focus by delta (Tab/Down = +1, Up = -1) with wrapping,
+// so up/down navigate fields exactly like Tab.
+func (m *launchModel) moveFocus(delta int) {
+	if n := m.fieldCount(); n > 0 {
+		m.focus = ((m.focus+delta)%n + n) % n
+	}
+}
+
 // focusedOptionOfType returns the focused option's schema index when it is of the
 // given Type (e.g. "string", "bool"), else ok=false.
 func (m launchModel) focusedOptionOfType(typ string) (int, bool) {
@@ -169,10 +188,10 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case k.Code == tea.KeyEnter:
 		return m.submitLaunch()
-	case k.Code == tea.KeyTab:
-		if n := lm.fieldCount(); n > 0 {
-			lm.focus = (lm.focus + 1) % n
-		}
+	case k.Code == tea.KeyTab || k.Code == tea.KeyDown:
+		lm.moveFocus(1)
+	case k.Code == tea.KeyUp:
+		lm.moveFocus(-1)
 	case k.Code == tea.KeyBackspace:
 		switch {
 		case lm.isDir():
@@ -258,7 +277,10 @@ func (m *launchModel) cycleField(forward bool) {
 	}
 }
 
-// cycleAgent moves to the next/previous usable agent, reloading its options.
+// cycleAgent moves to the next/previous agent, reloading its options. The arrows
+// land on unusable agents too (L-2 design a): the picker greys them and shows the
+// reason, and submit is refused inline with that reason — so an arrow on a broken
+// agent is never a silent no-op, and the user learns why it cannot launch.
 func (m *launchModel) cycleAgent(forward bool) {
 	n := len(m.agents)
 	if n == 0 {
@@ -268,15 +290,9 @@ func (m *launchModel) cycleAgent(forward bool) {
 	if !forward {
 		step = -1
 	}
-	for i := 1; i <= n; i++ {
-		idx := ((m.agentIdx+step*i)%n + n) % n
-		if m.agents[idx].usable() {
-			m.agentIdx = idx
-			m.focus = 1 // stay on the agent field
-			m.loadAgentOptions()
-			return
-		}
-	}
+	m.agentIdx = ((m.agentIdx+step)%n + n) % n
+	m.focus = 1 // stay on the agent field
+	m.loadAgentOptions()
 }
 
 // cycleOption advances a choice option through its Choices, or an editable string
@@ -341,6 +357,11 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	}
 	if lm.agentIdx < 0 || lm.agentIdx >= len(lm.agents) || !lm.agents[lm.agentIdx].usable() {
 		lm.errMsg = "no installed, supported agent selected"
+		if lm.agentIdx >= 0 && lm.agentIdx < len(lm.agents) {
+			if r := agentReason(lm.agents[lm.agentIdx]); r != "" {
+				lm.errMsg += ": " + r
+			}
+		}
 		return m, nil
 	}
 
@@ -441,7 +462,7 @@ func (m launchModel) view() string {
 // or paste, the agent and choice pickers to use the arrows, and bool options to
 // toggle with Space. The tab/enter/esc tail is constant across fields.
 func (m launchModel) hint() string {
-	const tail = " · tab next · enter launch · esc cancel"
+	const tail = " · tab/↑↓ next · enter launch · esc cancel"
 	if m.isAgent() || m.isChoiceFocused() {
 		return "arrows change" + tail
 	}
@@ -506,8 +527,8 @@ func (m launchModel) agentValue() string {
 			mark = "○" // installed but out of supported range
 		}
 		text = mark + " " + a.Name
-		if !a.usable() && a.InstallHint != "" {
-			text += " (" + a.InstallHint + ")"
+		if r := agentReason(a); !a.usable() && r != "" {
+			text += " (" + r + ")"
 		}
 		if a.usable() && i == m.agentIdx {
 			text = lipgloss.NewStyle().Foreground(colAmber).Render(text)
