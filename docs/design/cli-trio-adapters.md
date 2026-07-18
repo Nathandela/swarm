@@ -73,7 +73,7 @@ the screen, so the stock last-line heuristic (internal/engine/heuristic.go)
 sees: agy = active-while-generating but never idle; opencode and vibe =
 permanently unknown. Timeline evidence: TestTrioExploration_HeuristicTimeline.
 
-v1 recommendation (decision pending): **descriptor-driven bottom-region grid
+v1 approach (DECIDED 2026-07-18): **descriptor-driven bottom-region grid
 rules**, read by the engine from the adapter's declared heuristic
 SignalSources — e.g. `busy-contains` (agy "Generating...", opencode "Thinking",
 vibe braille-wave frames) and `idle-prompt-in-box` (bare `>` line above a box
@@ -109,14 +109,13 @@ Typed events (v1.1+, per CLI, in order of payoff):
    wrappers so T-6 characterization is tool-assisted for the trio. (The
    fixtures here were recorded with `-adapter reference`, which works but
    derives a meaningless capability entry.)
-3. **Decision needed — vibe env injection**: vibe's model selection and
-   update-modal suppression are env-only (`VIBE_ACTIVE_MODEL`,
-   `VIBE_ENABLE_UPDATE_CHECKS`). Options: (a) ADR extending the adapter
-   contract with a pure `Env(spec) []string` descriptor the shim applies at
-   spawn (adds a method to the frozen interface — cheap now with 5 impls, but
-   needs an ADR); (b) ship vibe degraded (no model option; update modal visible
-   to the attached user, who can dismiss it interactively); (c) shim
-   unconditionally exports the vibe vars for every session (gross, rejected).
+3. **vibe env injection (DECIDED 2026-07-18: not needed)**: vibe's model
+   selection and update-modal suppression are env-only (`VIBE_ACTIVE_MODEL`,
+   `VIBE_ENABLE_UPDATE_CHECKS`), but vibe effectively runs one live model, so
+   a model option is not worth plumbing; vibe ships argv-only with its
+   config-default model, and the update modal (only appears when vibe is
+   outdated) is dismissed interactively by the attached user. No adapter
+   contract change; revisit only if this hurts in practice.
 4. Optional cosmetic: internal/tui/launch.go `authLine()` is claude-only; agy
    (Google OAuth), opencode (opencode.ai account), vibe (Mistral key/OAuth)
    could get equivalent auth-source hints later.
