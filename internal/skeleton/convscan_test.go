@@ -13,6 +13,7 @@ package skeleton
 // wrapper around the real reader so "did a re-read happen" is observed directly.
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -21,6 +22,9 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // convScanHarness assembles a real core with one long-idling "reference" session
@@ -193,6 +197,106 @@ func TestCaptureConversationID_DiskErrorToleratedThenRecovers(t *testing.T) {
 	d.captureConversationID(id)
 	if m, _ := d.core.Get(id); m.ConversationID != "recovered-id" {
 		t.Fatalf("ConversationID = %q after recovery, want the id captured once the file returned", m.ConversationID)
+	}
+}
+
+// TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan (LOW leak
+// race, agents-tracker-vyd) — endSession's convScan[id] delete (R2.1.3 hygiene,
+// serve.go:238-241) can be raced by an in-flight ASYNC capture the tap dispatched
+// before the session ended: if that capture's slow disk read finishes after
+// endSession's delete, its final convScan write recreates the entry, leaking it
+// forever (nothing polls an ended session again). readTail is blocked on its
+// FIRST call (the async capture's read) so endSession's own later, synchronous
+// captureConversationID call (its second, unblocked call) can run and delete
+// convScan[id] before the async call is released to finish.
+//
+// The session is fixtured directly on disk (a terminal meta.json + a transcript
+// file) rather than launched as a real shim/agent process and Kill()ed: the fix
+// under test only needs the session to be non-Running by the time the delayed
+// write fires, and a pre-terminal fixture gives that deterministically, without
+// depending on a monitor goroutine's real-time exit detection (avoids process
+// spawn/signal/poll timing entirely).
+func TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "swskconvrace")
+	if err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	const id = "ended1"
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatalf("persist.NewStore: %v", err)
+	}
+	if err := store.Save(persist.Meta{
+		ID:           id,
+		AgentType:    "reference", // registry.New resolves the real refadapter, no live process needed
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+		Status:       status.Status{Process: status.ProcessExited},
+	}); err != nil {
+		t.Fatalf("Save terminal meta: %v", err)
+	}
+	sessionDir := filepath.Join(dir, id)
+	if err := os.WriteFile(filepath.Join(sessionDir, shim.TranscriptFile), []byte("print booting\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	core, err := daemon.Open(daemon.Config{
+		StateDir:    dir,
+		SocketPath:  filepath.Join(dir, "d.sock"),
+		LockPath:    filepath.Join(dir, "d.lock"),
+		LogPath:     filepath.Join(dir, "d.log"),
+		MaxSessions: 8,
+	})
+	if err != nil {
+		t.Fatalf("daemon.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	if m, ok := core.Get(id); !ok || m.Status.Process != status.ProcessExited {
+		t.Fatalf("reconcile did not adopt the terminal fixture: %+v, ok=%v", m, ok)
+	}
+
+	d := &Daemon{core: core, stateDir: dir}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var claimed atomic.Bool // CAS, not sync.Once: Once.Do blocks a SECOND concurrent
+	// caller until the first's func returns, which would deadlock endSession's own
+	// (unblocked) call against the still-blocked async one.
+	orig := readTail
+	readTail = func(path string, max int64) []byte {
+		if claimed.CompareAndSwap(false, true) {
+			started <- struct{}{}
+			<-release
+		}
+		return orig(path, max)
+	}
+	t.Cleanup(func() { readTail = orig })
+
+	// Simulate the tap dispatching an async capture that is now mid-flight,
+	// blocked on its slow disk read — exactly captureConversationIDAsync's real
+	// dispatch mechanism (asyncOnce), production's only caller of captureFn.
+	d.captureConversationIDAsync(context.Background(), id)
+	<-started // the async capture is blocked inside its (first) readTail call
+
+	d.endSession(id) // the daemon's OnSessionEnd hook: captures, then deletes convScan[id]
+
+	d.convScanMu.Lock()
+	_, stillTracked := d.convScan[id]
+	d.convScanMu.Unlock()
+	if stillTracked {
+		t.Fatal("endSession did not clear convScan[id] before the racing async capture was released")
+	}
+
+	close(release) // let the blocked async capture resume past its slow read
+	d.captureWG.Wait()
+
+	d.convScanMu.Lock()
+	_, resurrected := d.convScan[id]
+	d.convScanMu.Unlock()
+	if resurrected {
+		t.Fatal("convScan entry resurrected after endSession's delete raced an in-flight capture (leak)")
 	}
 }
 

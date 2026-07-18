@@ -453,6 +453,16 @@ func (d *Daemon) captureConversationID(id string) {
 	tail := readTail(path, convTailBytes)
 
 	d.convScanMu.Lock()
+	// Re-check the session is still tracked as running: this read can finish
+	// after endSession already deleted convScan[id] (R2.1.3 hygiene), and a
+	// stale write here would resurrect the entry forever — nothing polls an
+	// ended session again (LOW leak race, agents-tracker-vyd). Production
+	// always sets a terminal status BEFORE firing endSession, so this check
+	// reliably detects the race regardless of which side wins it.
+	if m, ok := d.core.Get(id); !ok || m.Status.Process != status.ProcessRunning {
+		d.convScanMu.Unlock()
+		return
+	}
 	d.convScan[id] = convScanState{size: size} // also clears errOnce: the error cleared
 	d.convScanMu.Unlock()
 
