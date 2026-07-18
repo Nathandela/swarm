@@ -30,6 +30,7 @@ const (
 	OpLaunch    = "launch"
 	OpKill      = "kill"
 	OpDelete    = "delete"
+	OpRename    = "rename"
 	OpAttach    = "attach"
 	OpDetach    = "detach"
 	OpResize    = "resize"
@@ -53,16 +54,20 @@ type Control struct {
 	// unchanged by this field), a mismatch here is not fatal to the handshake — it
 	// lets a client notice it is talking to a different-build daemon and nudge
 	// `swarm daemon restart` even when the wire protocol still matches.
-	BuildVersion string        `json:"build_version,omitempty"`
-	Capabilities []string      `json:"capabilities,omitempty"`
-	Generation   uint64        `json:"generation,omitempty"`
-	SnapshotLen  int           `json:"snapshot_len,omitempty"`
-	Cols         int           `json:"cols,omitempty"`
-	Rows         int           `json:"rows,omitempty"`
-	Launch       *LaunchReq    `json:"launch,omitempty"`
-	Sessions     []SessionView `json:"sessions,omitempty"`
-	Session      *SessionView  `json:"session,omitempty"`
-	Error        string        `json:"error,omitempty"`
+	BuildVersion string   `json:"build_version,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	Generation   uint64   `json:"generation,omitempty"`
+	SnapshotLen  int      `json:"snapshot_len,omitempty"`
+	Cols         int      `json:"cols,omitempty"`
+	Rows         int      `json:"rows,omitempty"`
+	// Name is the new session label carried on a rename op (v0.5). It is re-validated
+	// and sanitized server-side (sanitizeName) before it reaches the daemon, exactly
+	// like the label in a launch request.
+	Name     string        `json:"name,omitempty"`
+	Launch   *LaunchReq    `json:"launch,omitempty"`
+	Sessions []SessionView `json:"sessions,omitempty"`
+	Session  *SessionView  `json:"session,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 // SessionView is one general-view row (V-4), stamped for the receiving client: a
@@ -127,6 +132,7 @@ type DaemonAPI interface {
 	Launch(daemon.LaunchSpec) (persist.Meta, error)
 	Kill(id string) error
 	Delete(id string) error
+	Rename(id, name string) error            // update a session's display label (v0.5)
 	Attach(id string) (SessionStream, error) // opened once per lease
 	Events() <-chan persist.Meta             // single status-change source; Server fans out
 }

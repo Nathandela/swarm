@@ -143,6 +143,22 @@ func (c *Client) Kill(id string) error { return c.simpleOp(OpKill, id) }
 // Delete removes a session.
 func (c *Client) Delete(id string) error { return c.simpleOp(OpDelete, id) }
 
+// Rename changes a session's user-provided display label (v0.5). The new name is
+// re-validated and sanitized server-side; the daemon updates the session meta,
+// persists it, and broadcasts a roster event so every client converges. An OLDER
+// daemon that predates the op replies with an error (unknown op), returned here so
+// the caller can surface it (skew-safe: banner the refusal, never crash).
+func (c *Client) Rename(id, name string) error {
+	resp, err := c.request(Control{Op: OpRename, EndpointID: c.endpointID, SessionID: id, Name: name})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 func (c *Client) simpleOp(op, id string) error {
 	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
 	if err != nil {

@@ -60,10 +60,11 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	return a
 }
 
-func (a *coreAPI) List() []persist.Meta        { return a.core.List() }
-func (a *coreAPI) Kill(id string) error        { return a.core.Kill(id) }
-func (a *coreAPI) Delete(id string) error      { return a.core.Delete(id) }
-func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
+func (a *coreAPI) List() []persist.Meta         { return a.core.List() }
+func (a *coreAPI) Kill(id string) error         { return a.core.Kill(id) }
+func (a *coreAPI) Delete(id string) error       { return a.core.Delete(id) }
+func (a *coreAPI) Rename(id, name string) error { return a.core.Rename(id, name) }
+func (a *coreAPI) Events() <-chan persist.Meta  { return a.events }
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and
@@ -293,14 +294,23 @@ func (a *coreAPI) close() {
 	a.wg.Wait()
 }
 
-// watch samples the roster and emits a meta whenever a session's status changes
-// (the core exposes no push source, so changes are observed by polling). It
-// mirrors protocol.FromDaemon's watcher: dedup by status, retry a momentarily-full
-// queue on the next poll (never drop a change), and prune vanished sessions so the
-// seen map stays bounded.
+// rosterSnap is the per-session change key the poller diffs on: the status the
+// board groups by PLUS the display label, so a rename (which changes only the name)
+// fans out live just like a status change. Both fields are comparable, so the whole
+// key compares with ==.
+type rosterSnap struct {
+	status status.Status
+	name   string
+}
+
+// watch samples the roster and emits a meta whenever a session's status OR display
+// label changes (the core exposes no push source, so changes are observed by
+// polling). It mirrors protocol.FromDaemon's watcher: dedup by status+name, retry a
+// momentarily-full queue on the next poll (never drop a change), and prune vanished
+// sessions so the seen map stays bounded.
 func (a *coreAPI) watch() {
 	defer a.wg.Done()
-	seen := map[string]status.Status{}
+	seen := map[string]rosterSnap{}
 	t := time.NewTicker(eventPoll)
 	defer t.Stop()
 	for {
@@ -311,12 +321,13 @@ func (a *coreAPI) watch() {
 			present := map[string]struct{}{}
 			for _, m := range a.core.List() {
 				present[m.ID] = struct{}{}
-				if prev, ok := seen[m.ID]; ok && prev == m.Status {
+				cur := rosterSnap{status: m.Status, name: m.Name}
+				if prev, ok := seen[m.ID]; ok && prev == cur {
 					continue
 				}
 				select {
 				case a.events <- m:
-					seen[m.ID] = m.Status // mark seen ONLY once the change is queued
+					seen[m.ID] = cur // mark seen ONLY once the change is queued
 				case <-a.stop:
 					return
 				default:

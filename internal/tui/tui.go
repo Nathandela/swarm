@@ -37,6 +37,9 @@ type Client interface {
 	Launch(protocol.LaunchReq) (id, name string, err error)
 	Kill(id string) error
 	Delete(id string) error
+	// Rename changes a session's display label (v0.5). An older daemon without the op
+	// returns an error, which the caller banners (skew-safe).
+	Rename(id, name string) error
 	Subscribe() (<-chan protocol.Event, error)
 }
 
@@ -350,10 +353,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.PasteMsg:
-		// Bracketed paste routes into the launch form's focused text field (newlines
-		// stripped for the single-line fields); elsewhere it is ignored.
-		if m.screen == screenLaunch {
+		// Bracketed paste routes into the launch form's focused text field, or into the
+		// general board's inline rename buffer when a rename is open (newlines stripped
+		// for these single-line fields); elsewhere it is ignored.
+		switch {
+		case m.screen == screenLaunch:
 			m.launch.paste(msg.Content)
+		case m.screen == screenGeneral && m.general.editing:
+			m.general.pasteEdit(msg.Content)
 		}
 		return m, nil
 
@@ -384,6 +391,17 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.general.setBanner("kill failed: " + msg.err.Error())
 		}
+		return m, nil
+
+	case renameDoneMsg:
+		// A rename failed (an older daemon's skew refusal, or a rejected id): surface
+		// it on the banner rather than silently swallowing it. On success, update the
+		// row's label immediately (optimistic); the daemon's roster event re-applies
+		// the same name so all clients converge through the normal event path.
+		if msg.err != nil {
+			return m, m.general.setBanner("rename failed: " + msg.err.Error())
+		}
+		m.general.applyName(msg.id, msg.name)
 		return m, nil
 
 	case bannerExpireMsg:
@@ -455,12 +473,15 @@ func (m rootModel) View() tea.View {
 // kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
 // (general.view) to the persistent bottom bar (A-5, ADR-006).
 func (m rootModel) generalStatus() string {
+	if m.general.editing {
+		return "type new name   ⏎ save   esc cancel"
+	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
 	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
 	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
-	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit"
+	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   ctrl+x kill   esc quit"
 }
 
 // DaemonRestarter restarts the daemon and returns a freshly-connected client to the

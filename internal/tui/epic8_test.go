@@ -155,6 +155,7 @@ func (b *blockingClient) List() ([]protocol.SessionView, error) {
 func (b *blockingClient) Launch(protocol.LaunchReq) (string, string, error) { return "", "", nil }
 func (b *blockingClient) Kill(string) error                                 { return nil }
 func (b *blockingClient) Delete(string) error                               { return nil }
+func (b *blockingClient) Rename(string, string) error                       { return nil }
 func (b *blockingClient) Subscribe() (<-chan protocol.Event, error)         { return nil, nil }
 
 // E8 (bounded-dial carry-forward) — New must bound its eager List so a hung daemon

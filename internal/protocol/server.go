@@ -750,6 +750,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleKill(c)
 	case OpDelete:
 		cc.handleDelete(c)
+	case OpRename:
+		cc.handleRename(c)
 	case OpAttach:
 		cc.handleAttach(c)
 	case OpDetach:
@@ -851,6 +853,24 @@ func (cc *clientConn) handleDelete(c Control) {
 		return
 	}
 	cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+	cc.replyOK(c.SessionID)
+}
+
+// handleRename updates a session's display label (v0.5). The id is validated like
+// any session-scoped op (endpoint + path-safe local id) and the new name is
+// RE-VALIDATED server-side with sanitizeName — the same cosmetic-label sanitizer
+// launch uses (control chars stripped, capped to maxNameRunes), so a hostile or
+// over-long value is sanitized, never rejected. The daemon persists the change and
+// its roster event fans out to every subscriber (all clients converge).
+func (cc *clientConn) handleRename(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	if err := cc.srv.d.Rename(local, sanitizeName(c.Name)); err != nil {
+		cc.replyError("rename: " + err.Error())
+		return
+	}
 	cc.replyOK(c.SessionID)
 }
 

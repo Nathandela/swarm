@@ -315,6 +315,44 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 	return nil
 }
 
+// Rename updates a session's user-provided display label (v0.5). The new name is
+// re-validated/sanitized server-side (the protocol layer) before it reaches here;
+// the daemon persists it through the SINGLE meta writer (G6) so the change is
+// durable and observable in List, and fires onMetaSave so a roster event fans out
+// to every client (all clients converge). It mirrors SetConversationID's RMW under
+// writeMu. An unknown session is an error; a no-op rename (same name) skips the
+// write; a tombstoned session is dropped by saveMetaLocked.
+func (d *Daemon) Rename(id, name string) error {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if m.Name == name {
+		d.writeMu.Unlock()
+		return nil // no label change to persist
+	}
+	m.Name = name
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
+}
+
 // Close is a clean shutdown: stop serving and release the singleton (flock +
 // socket). Running shims are independent and survive; their monitors are stopped
 // without finalizing them. The lock is released so a fresh daemon can take over.

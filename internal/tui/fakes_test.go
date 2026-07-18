@@ -54,9 +54,17 @@ type fakeClient struct {
 	launched   []protocol.LaunchReq
 	killed     []string
 	deleted    []string
+	renamed    []renameCall // (id, name) pairs passed to Rename, in order
 	launchID   string
 	launchName string // canonical name the daemon returns on the launch reply ("" = older daemon)
 	launchErr  error  // when set, Launch returns it (B1 error-surfacing tests)
+	renameErr  error  // when set, Rename returns it (skew-refusal banner tests)
+}
+
+// renameCall records one Client.Rename so a test can assert what the TUI committed.
+type renameCall struct {
+	id   string
+	name string
 }
 
 func newFakeClient(sessions ...protocol.SessionView) *fakeClient {
@@ -102,6 +110,13 @@ func (f *fakeClient) Delete(id string) error {
 	return nil
 }
 
+func (f *fakeClient) Rename(id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renamed = append(f.renamed, renameCall{id: id, name: name})
+	return f.renameErr
+}
+
 func (f *fakeClient) Subscribe() (<-chan protocol.Event, error) { return f.events, nil }
 
 // emit pushes a status-change event onto the subscribe stream (drives V-2/V-5).
@@ -123,6 +138,12 @@ func (f *fakeClient) deletedIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.deleted...)
+}
+
+func (f *fakeClient) renamedCalls() []renameCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]renameCall(nil), f.renamed...)
 }
 
 // ---------------------------------------------------------------------------

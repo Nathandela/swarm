@@ -219,6 +219,7 @@ type stubDaemon struct {
 	launched []daemon.LaunchSpec
 	killed   []string
 	deleted  []string
+	renamed  []renameCall  // (local id, name) pairs passed to Rename, in order
 	attached []string      // local ids passed to Attach, in order
 	streams  []*stubStream // one per Attach call (newest last)
 
@@ -226,7 +227,15 @@ type stubDaemon struct {
 	launchErr error
 	killErr   error
 	deleteErr error
+	renameErr error
 	attachErr error
+}
+
+// renameCall records one DaemonAPI.Rename forward so a test can assert the exact
+// (de-namespaced local id, server-sanitized name) the Server passed through.
+type renameCall struct {
+	id   string
+	name string
 }
 
 func newStubDaemon() *stubDaemon {
@@ -275,6 +284,13 @@ func (s *stubDaemon) Delete(id string) error {
 	return s.deleteErr
 }
 
+func (s *stubDaemon) Rename(id, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renamed = append(s.renamed, renameCall{id: id, name: name})
+	return s.renameErr
+}
+
 func (s *stubDaemon) Attach(id string) (SessionStream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -302,6 +318,11 @@ func (s *stubDaemon) deletedIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.deleted...)
+}
+func (s *stubDaemon) renames() []renameCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]renameCall(nil), s.renamed...)
 }
 func (s *stubDaemon) launchSpecs() []daemon.LaunchSpec {
 	s.mu.Lock()

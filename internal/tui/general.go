@@ -23,10 +23,14 @@ var groupOrder = []status.Group{
 
 // Row column widths for the general view (display cells).
 const (
-	// colName is the identity column: the session name, or the agent name when a
-	// session carries no name (P2). Wide enough for the default "<agent>-<base cwd>"
-	// label; longer names are clamped so the columns stay aligned.
-	colName    = 22
+	// colName is the session NAME column (the editable discussion name, v0.5). It is
+	// blank when a session carries no name — the separate agent column still
+	// identifies the row. Longer names are clamped so the columns stay aligned.
+	colName = 20
+	// colAgent is the agent-CLI column (claude/codex/gemini/opencode), split out from
+	// the name so the two are distinct fields (field test 4). Wide enough for the
+	// longest agent name.
+	colAgent   = 9
 	colCwd     = 24
 	colStatus  = 17
 	colElapsed = 6
@@ -40,6 +44,13 @@ type generalModel struct {
 	confirm     bool   // a kill/delete confirm is pending
 	confirmID   string // session the confirm targets, captured by identity when it opened
 	confirmKill bool   // whether that target was running (kill) vs. completed (delete) at open
+
+	// Inline rename edit (v0.5): 'e' opens a single-line edit of the selected row's
+	// name. editID captures the target by identity so a concurrent regroup cannot move
+	// the edit onto a neighbor; editBuf is the working buffer; editing gates the mode.
+	editing bool
+	editID  string
+	editBuf string
 
 	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
 	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
@@ -223,6 +234,9 @@ func bannerGroup(g status.Group) bool {
 // ---------------------------------------------------------------------------
 
 func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.general.editing {
+		return m.updateRename(k)
+	}
 	if m.general.confirm {
 		return m.updateConfirm(k)
 	}
@@ -266,6 +280,16 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if s, ok := m.general.selected(); ok && s.Status.Process != status.ProcessRunning {
 			return m, resumeCmd(m.client, s, m.width, m.height)
 		}
+	case k.Text == "e":
+		// Open an inline rename of the selected row (v0.5). Capture the target by
+		// identity so a concurrent regroup cannot move the edit onto a neighbor, and
+		// seed the buffer with the current name (editing an existing label, not
+		// starting blank).
+		if s, ok := m.general.selected(); ok {
+			m.general.editing = true
+			m.general.editID = s.ID
+			m.general.editBuf = s.Name
+		}
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
 		// so a concurrent status event cannot shift a different row under it.
@@ -308,6 +332,42 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateRename handles the inline single-line name edit (v0.5): Enter commits the
+// rename op, Esc cancels (the name reverts to its persisted value), Backspace drops
+// the last rune, and any printable key appends. The target is the session captured
+// when the edit opened (editID), not the live selection.
+func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEnter:
+		id, name := m.general.editID, m.general.editBuf
+		m.general.closeEdit()
+		return m, renameCmd(m.client, id, name)
+	case k.Code == tea.KeyEsc:
+		m.general.closeEdit()
+	case k.Code == tea.KeyBackspace:
+		m.general.editBuf = dropLast(m.general.editBuf)
+	case k.Text != "":
+		m.general.editBuf += k.Text
+	}
+	return m, nil
+}
+
+// closeEdit exits the inline rename mode and clears its buffer/target.
+func (m *generalModel) closeEdit() {
+	m.editing = false
+	m.editID = ""
+	m.editBuf = ""
+}
+
+// pasteEdit appends bracketed-paste content into the inline rename buffer, stripping
+// the CR/LF a single-line name must never carry (mirrors the launch form's paste).
+func (m *generalModel) pasteEdit(s string) {
+	if !m.editing {
+		return
+	}
+	m.editBuf += strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 func isCtrlX(k tea.KeyPressMsg) bool {
 	return k.Code == 'x' && k.Mod == tea.ModCtrl
 }
@@ -330,6 +390,19 @@ type killDoneMsg struct {
 
 func killCmd(c Client, id string) tea.Cmd {
 	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
+}
+
+// renameDoneMsg carries a rename's outcome so a failure (including an older daemon's
+// skew refusal) is surfaced on the banner, and a success updates the row's label
+// optimistically — the daemon's roster event then re-applies the same name (F-safe).
+type renameDoneMsg struct {
+	id   string
+	name string
+	err  error
+}
+
+func renameCmd(c Client, id, name string) tea.Cmd {
+	return func() tea.Msg { return renameDoneMsg{id: id, name: name, err: c.Rename(id, name)} }
 }
 
 // tombstone records id as client-deleted (with an expiry) so a late buffered event for
@@ -370,6 +443,18 @@ func (m *generalModel) remove(id string) {
 		selID = "" // the selected row is gone; restoreSel clamps into range
 	}
 	m.restoreSel(selID)
+}
+
+// applyName optimistically updates a renamed session's label on the board so the
+// change shows immediately; the daemon's roster event later re-applies it (a no-op
+// once the names already match).
+func (m *generalModel) applyName(id, name string) {
+	for i := range m.sessions {
+		if m.sessions[i].ID == id {
+			m.sessions[i].Name = name
+			return
+		}
+	}
 }
 
 // defaultResumeCols/Rows size a resume launch when the window size is not yet known.
@@ -482,8 +567,12 @@ func (m generalModel) header() string {
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
 	gc := groupColor(g)
 	icon := lipgloss.NewStyle().Foreground(gc).Render(groupIcon(g))
+	// Two identity columns (field test 4): the session NAME (bold, editable) then the
+	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
+	// so padRight always leaves a separating space (no jamming, width discipline).
 	fields := icon + " " +
-		styleAgent.Render(padRight(clampCells(displayName(s), colName-1), colName)) +
+		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
+		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		lipgloss.NewStyle().Foreground(gc).Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
@@ -502,6 +591,17 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		prefix = "  "
 	}
 	return prefix + fields
+}
+
+// nameCell is the text shown in the NAME column: the live inline-edit buffer plus a
+// cursor while THIS row is being renamed, else the session's name (blank when
+// unnamed — the agent column still identifies the row). The editing buffer is
+// clamped two cells short of the column so its cursor always fits within the width.
+func (m generalModel) nameCell(s protocol.SessionView) string {
+	if m.editing && s.ID == m.editID {
+		return clampCells(m.editBuf, colName-2) + "█"
+	}
+	return s.Name
 }
 
 // confirmPrompt is the confirm-specific token shown on the selected row: "kill?"
