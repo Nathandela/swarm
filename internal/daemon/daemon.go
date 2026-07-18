@@ -417,9 +417,9 @@ func processRank(p status.Process) int {
 // clobber each other (S1). compute derives the target meta from the CURRENT meta;
 // the write is applied ONLY if it advances the process rank (exited > lost >
 // running), so a late lost can never overwrite an authoritative exited+code and no
-// finalizer regresses a more-terminal state. Returns whether it wrote, and fires
-// the onMetaSave observer on a write (mirrors saveMeta).
-func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) bool {
+// finalizer regresses a more-terminal state. Fires the onMetaSave observer on a
+// write (mirrors saveMeta).
+func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) {
 	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
@@ -430,24 +430,23 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 	d.mu.Unlock()
 	if !ok {
 		d.writeMu.Unlock()
-		return false
+		return
 	}
 	next := compute(cur)
 	if processRank(next.Status.Process) <= processRank(cur.Status.Process) {
 		d.writeMu.Unlock()
-		return false // would not advance the terminal state: refuse (S1)
+		return // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
 	written, err := d.saveMetaLocked(next)
 	d.writeMu.Unlock()
 	if err != nil {
 		d.logf("finalize: persist terminal meta for %s: %v", id, err)
-		return false
+		return
 	}
 	if written && d.cfg.onMetaSave != nil {
 		d.cfg.onMetaSave(next)
 	}
-	return written
 }
 
 // isDeleted reports whether id has been tombstoned by Delete (F3).
