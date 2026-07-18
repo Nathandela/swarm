@@ -20,9 +20,10 @@ package vt
 //     their SGR when they next draw, and the trailing reset leaves a clean pen.
 //   - Run text is sanitized at render time: even a validly-versioned but skewed or
 //     compromised peer cannot inject ESC/OSC (e.g. an OSC 52 clipboard write)
-//     because every C0 control byte and DEL is stripped from run text before it is
-//     written (see stripControls). This is the render-time backstop to the
-//     producer-side N-6 filter in emulator.go.
+//     because every C0/C1 control byte and DEL is replaced with a space in run
+//     text before it is written (see stripControls) — replaced, not deleted, so a
+//     run's written character count keeps pace with its declared Width. This is
+//     the render-time backstop to the producer-side N-6 filter in emulator.go.
 
 import (
 	"strconv"
@@ -131,19 +132,29 @@ func clampCursor(v, limit int) int {
 	return v
 }
 
-// stripControls removes C0 control runes (0x00-0x1f, including the ESC that
+// stripControls REPLACES C0 control runes (0x00-0x1f, including the ESC that
 // introduces any sequence), DEL (0x7f), and the C1 control range (U+0080-U+009F,
 // whose UTF-8-encoded CSI/OSC forms xterm-family terminals honor as controls)
-// from run text, keeping the ASCII space and every other multi-byte UTF-8 rune.
-// It is the render-time N-6 backstop: a skewed or compromised peer
-// cannot smuggle ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned
-// snapshot, because the control bytes are dropped before the text reaches the real
-// terminal. Clean single-grapheme run text (the overwhelming common case) passes
-// through unchanged.
+// with an ASCII space, keeping every other rune (space included) unchanged. It is
+// the render-time N-6 backstop: a skewed or compromised peer cannot smuggle
+// ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned snapshot,
+// because the control bytes never reach the real terminal. Clean single-grapheme
+// run text (the overwhelming common case) passes through unchanged.
+//
+// A rune is substituted rather than deleted (agents-tracker-rs8) so the run's
+// rendered character count keeps pace with its declared Run.Width: the renderer
+// positions only the start of each row (one absolute CUP) and relies on the
+// terminal's own cursor auto-advance for every run after that, so dropping a
+// rune would shift every following run on the row one column left of where
+// Run.Width says it belongs. This is not a general width-accounting fix: a
+// space is always one column wide, so a control rune that a hostile/producer-
+// bypassed snapshot claimed as part of a wider (e.g. combining or wide-grapheme)
+// cluster can still leave that run's total column count short of its Run.Width —
+// a pre-existing hostile-input edge case, noted here rather than solved.
 func stripControls(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
-			return -1
+			return ' '
 		}
 		return r
 	}, s)
