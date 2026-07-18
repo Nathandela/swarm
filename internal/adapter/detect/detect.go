@@ -38,6 +38,13 @@ func (Host) LookPath(name string) (string, error) {
 func (Host) Run(path string, args []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, path, args...)
+	// WaitDelay closes the output pipes shortly after the context kill. Without
+	// it, CombinedOutput blocks until every pipe HOLDER exits: a probe that
+	// spawned a child (linux /bin/sh runs the command as a child; macOS bash
+	// execs it) leaves an orphan holding the pipe and the "bounded" probe hangs
+	// for the orphan's lifetime — the exact freeze this timeout exists to stop.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
