@@ -37,13 +37,8 @@ const (
 	// EnvSequenceFile names the per-session monotonic counter FILE the daemon
 	// injects at spawn (G5). Each `swarm hook` invocation atomically increments it
 	// to obtain a strictly increasing sequence, so per-event callbacks are never
-	// rejected as replays. This is the production sequence source.
+	// rejected as replays. This is the sole sequence source.
 	EnvSequenceFile = "SWARM_HOOK_SEQ_FILE"
-	// EnvSequence is the LEGACY fixed sequence integer. It is a fallback used only
-	// when no counter file is injected (it cannot satisfy G5 on its own, being
-	// constant across a session's invocations); production always injects
-	// EnvSequenceFile, which takes precedence.
-	EnvSequence = "SWARM_HOOK_SEQ"
 )
 
 // FromEnv composes a Callback from the injected environment plus the event name
@@ -68,21 +63,16 @@ func FromEnv(getenv func(string) string, event string, payload map[string]string
 	}, nil
 }
 
-// sequenceFromEnv obtains this invocation's monotonic sequence. When the daemon
-// injects a per-session counter file (EnvSequenceFile, the production path), the
-// sequence is that file's atomically-incremented next value, so every per-event
-// invocation gets a strictly increasing number (G5). Absent a counter file it
-// falls back to the legacy fixed SWARM_HOOK_SEQ integer.
+// sequenceFromEnv obtains this invocation's monotonic sequence from the daemon-
+// injected per-session counter file (EnvSequenceFile): the file's atomically-
+// incremented next value, so every per-event invocation gets a strictly
+// increasing number (G5).
 func sequenceFromEnv(getenv func(string) string) (uint64, error) {
-	if path := getenv(EnvSequenceFile); path != "" {
-		return nextSequence(path)
+	path := getenv(EnvSequenceFile)
+	if path == "" {
+		return 0, errors.New("hookclient: missing sequence file in environment")
 	}
-	seqStr := getenv(EnvSequence)
-	seq, err := strconv.ParseUint(seqStr, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("hookclient: invalid sequence %q: %w", seqStr, err)
-	}
-	return seq, nil
+	return nextSequence(path)
 }
 
 // nextSequence atomically increments the decimal counter stored at path and
