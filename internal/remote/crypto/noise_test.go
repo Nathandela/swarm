@@ -98,8 +98,9 @@ func TestNoiseXX_SuiteExact(t *testing.T) {
 }
 
 // TestNoiseXX_KnownAnswer pins a deterministic XX transcript (fixed statics +
-// fixed ephemeral randomness) — the cross-language KAT that keeps the Go and
-// Swift stacks byte-compatible. The channel binding is derive-and-pin: the
+// fixed ephemeral randomness). The channel binding is a derive-and-pin
+// REGRESSION pin (self-generated, not independent evidence); Go<->Swift
+// byte-compatibility is an explicit on-device release gate, not proven here:
 // implementer records the observed transcript/binding at first green (the KAT
 // cannot be computed by hand). The always-on assertions below still fail RED on
 // the undefined symbols.

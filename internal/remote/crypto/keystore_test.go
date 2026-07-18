@@ -149,8 +149,9 @@ func TestKeyStore_FileImplConformance(t *testing.T) {
 	if string(got) != "epoch-secret" {
 		t.Errorf("sealed-box round-trip = %q, want %q", got, "epoch-secret")
 	}
-	// The external libsodium crypto_box_seal interop KAT lives in epoch_test.go
-	// (TestEpochGrant_LibsodiumKAT), the canonical sealed-box user.
+	// The sealed-box regression KAT (self-generated, NOT external libsodium
+	// evidence) lives in epoch_test.go (TestCryptoBoxSeal_OpenKAT); real
+	// libsodium/Swift interop is an on-device release gate.
 }
 
 // TestRelayAuth_DistinctFromIdentity pins R-CRY.3: the Ed25519 relay-auth key

@@ -163,21 +163,21 @@ func TestNSE_WakeKeyDecryptsNoSessionContent(t *testing.T) {
 
 	wakeHdr := testHeader()
 	wakeHdr.Type = TypePushWake
-	wakeEnv, err := Seal(keys.WakeKey, wakeHdr, []byte("activity on machine X"))
+	wakeEnv, err := seal(keys.WakeKey, wakeHdr, []byte("activity on machine X"))
 	if err != nil {
-		t.Fatalf("Seal(wake): %v", err)
+		t.Fatalf("seal(wake): %v", err)
 	}
-	if _, err := wakeEnv.Open(keys.WakeKey); err != nil {
+	if _, err := wakeEnv.open(keys.WakeKey); err != nil {
 		t.Errorf("NSE wake key failed to open a push-wake payload: %v", err)
 	}
 
 	contentHdr := testHeader()
 	contentHdr.Type = TypeMailbox
-	contentEnv, err := Seal(keys.ContentKey, contentHdr, []byte("secret session transcript"))
+	contentEnv, err := seal(keys.ContentKey, contentHdr, []byte("secret session transcript"))
 	if err != nil {
-		t.Fatalf("Seal(content): %v", err)
+		t.Fatalf("seal(content): %v", err)
 	}
-	if _, err := contentEnv.Open(keys.WakeKey); err == nil {
+	if _, err := contentEnv.open(keys.WakeKey); err == nil {
 		t.Fatal("the NSE-readable wake key decrypted session content")
 	}
 }
@@ -196,12 +196,12 @@ func TestContentKey_BiometricGatedNotNSEReadable(t *testing.T) {
 	// relabels its type to 0x02 to fool the NSE.
 	h := testHeader()
 	h.Type = TypeMailbox
-	env, err := Seal(keys.ContentKey, h, []byte("transcript"))
+	env, err := seal(keys.ContentKey, h, []byte("transcript"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
 	env.Header.Type = TypePushWake
-	if _, err := env.Open(keys.WakeKey); err == nil {
+	if _, err := env.open(keys.WakeKey); err == nil {
 		t.Fatal("wake key opened relabelled content; content key is derivable/shared")
 	}
 }

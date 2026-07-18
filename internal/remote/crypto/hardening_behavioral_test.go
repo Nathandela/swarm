@@ -83,6 +83,38 @@ func TestNoiseStatic_NoPrivateInFormat(t *testing.T) {
 	}
 }
 
+// F2 — NoiseSession and NoiseConfig transitively hold private material (flynn's
+// HandshakeState/CipherStates, the static keypair, the PSK). No fmt verb may
+// print their contents; the PSK is the newly-added surface.
+func TestNoiseSessionAndConfig_NoPrivateInFormat(t *testing.T) {
+	a, _ := GenerateIdentity()
+	b, _ := GenerateIdentity()
+	psk := fill(0x77)
+	cfg := NoiseConfig{
+		Initiator: true, Static: a.NoiseStatic(), AllowUnpinnedPeer: true,
+		PSK: psk[:], Prologue: PairPrologue([]byte("rv")),
+	}
+	sess, _ := completedPair(t) // an established *NoiseSession with live keys
+	_ = b
+
+	pskNeedle := bytes.Repeat([]byte{0x77}, 16)
+	verbs := []string{"%v", "%+v", "%#v", "%s"}
+	for _, verb := range verbs {
+		for label, rep := range map[string]string{
+			"NoiseConfig":  fmt.Sprintf(verb, cfg),
+			"NoiseConfigP": fmt.Sprintf(verb, &cfg),
+			"NoiseSession": fmt.Sprintf(verb, sess),
+		} {
+			if strings.Contains(rep, "redacted") == false {
+				t.Errorf("%s %s not redacted: %q", label, verb, rep)
+			}
+			if bytes.Contains([]byte(rep), pskNeedle) {
+				t.Errorf("%s %s leaks PSK material: %q", label, verb, rep)
+			}
+		}
+	}
+}
+
 // F6 — no EXPORTED function may accept a caller-supplied 24-byte nonce; the
 // deterministic seal is a package-private KAT/fan-out helper only.
 func TestSeal_NoExportedCallerNonce(t *testing.T) {
@@ -178,18 +210,18 @@ func TestLivePrologue_NoFieldSplicing(t *testing.T) {
 // round-trip; ParseEnvelope's `<=` boundary rejected it.
 func TestEnvelope_EmptyPlaintextRoundTrips(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte{})
+	env, err := seal(key, testHeader(), []byte{})
 	if err != nil {
-		t.Fatalf("Seal(empty): %v", err)
+		t.Fatalf("seal(empty): %v", err)
 	}
 	raw := env.Marshal()
 	parsed, err := ParseEnvelope(raw)
 	if err != nil {
 		t.Fatalf("ParseEnvelope(empty-plaintext): %v", err)
 	}
-	pt, err := parsed.Open(key)
+	pt, err := parsed.open(key)
 	if err != nil {
-		t.Fatalf("Open(empty-plaintext): %v", err)
+		t.Fatalf("open(empty-plaintext): %v", err)
 	}
 	if len(pt) != 0 {
 		t.Errorf("empty-plaintext round-trip returned %d bytes, want 0", len(pt))
@@ -200,7 +232,7 @@ func TestEnvelope_EmptyPlaintextRoundTrips(t *testing.T) {
 // it fails Open. (This behavior is already correct; the test was missing.)
 func TestEnvelope_SenderKeyIDInAAD(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte("payload"))
+	env, err := seal(key, testHeader(), []byte("payload"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -210,7 +242,7 @@ func TestEnvelope_SenderKeyIDInAAD(t *testing.T) {
 	if err != nil {
 		return // a parse rejection is also acceptable
 	}
-	if _, err := bad.Open(key); err == nil {
+	if _, err := bad.open(key); err == nil {
 		t.Error("tampering sender_key_id (AAD-covered) was accepted by Open")
 	}
 }

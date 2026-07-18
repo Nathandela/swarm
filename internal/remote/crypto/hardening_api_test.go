@@ -23,20 +23,22 @@ func machineSigner(seed byte) (ed25519.PrivateKey, ed25519.PublicKey) {
 }
 
 // F1 — pairing explicitly opts into an unpinned peer (it learns the static via
-// the SAS-confirmed handshake); this is the ONLY unpinned path.
+// the SAS-confirmed handshake); this is the ONLY unpinned path, and it is
+// mechanically pairing-only because unpinned REQUIRES a 32-byte PSK.
 func TestPairing_UnpinnedPeerOptIn(t *testing.T) {
 	a, _ := GenerateIdentity()
 	b, _ := GenerateIdentity()
+	psk := fill(0x77)
 	ini, err := NewNoise(NoiseConfig{
 		Initiator: true, Static: a.NoiseStatic(), AllowUnpinnedPeer: true,
-		Prologue: PairPrologue([]byte("rv")),
+		PSK: psk[:], Prologue: PairPrologue([]byte("rv")),
 	})
 	if err != nil {
 		t.Fatalf("pairing initiator: %v", err)
 	}
 	resp, err := NewNoise(NoiseConfig{
 		Initiator: false, Static: b.NoiseStatic(), AllowUnpinnedPeer: true,
-		Prologue: PairPrologue([]byte("rv")),
+		PSK: psk[:], Prologue: PairPrologue([]byte("rv")),
 	})
 	if err != nil {
 		t.Fatalf("pairing responder: %v", err)
@@ -46,6 +48,20 @@ func TestPairing_UnpinnedPeerOptIn(t *testing.T) {
 	}
 	if !bytes.Equal(ini.PeerStatic(), b.NoiseStaticPublic()) {
 		t.Error("pairing initiator did not learn the peer static")
+	}
+}
+
+// F1 — an unpinned session WITHOUT a PSK is refused, so a live session (live
+// prologue, no PSK) can never opt out of static pinning. This is the negative
+// case that closes the "AllowUnpinnedPeer is not mechanically pairing-only" hole.
+func TestLive_UnpinnedWithoutPSKRefused(t *testing.T) {
+	a, _ := GenerateIdentity()
+	_, err := NewNoise(NoiseConfig{
+		Initiator: true, Static: a.NoiseStatic(), AllowUnpinnedPeer: true,
+		Prologue: LivePrologue([]byte("m"), []byte("d")),
+	})
+	if !errors.Is(err, ErrUnpinnedRequiresPSK) {
+		t.Fatalf("unpinned live session err = %v, want ErrUnpinnedRequiresPSK", err)
 	}
 }
 
@@ -143,6 +159,27 @@ func TestEpochGrant_ReplayRejected(t *testing.T) {
 	}
 }
 
+// F3 — grant anti-replay survives restart: a receiver reseeded from durable
+// (epoch_id, grant_seq) rejects a replayed old grant that a relay resends after
+// a phone/app restart, instead of accepting it as the first grant.
+func TestEpochGrant_ReplaySurvivesRestart(t *testing.T) {
+	priv, pub := machineSigner(0x31)
+	ks := devKeyStore(t, stdMaterial())
+
+	// Device previously accepted (epoch 5, seq 3); this is persisted.
+	old, _ := SealEpochGrant(priv, ks.RecipientPublic(), 5, 3, testEpochKeys())
+	// After restart, reseed the receiver from durable state.
+	rcv := NewGrantReceiverAt(5, 3)
+	if _, _, _, err := rcv.Accept(ks, pub, old); err == nil {
+		t.Error("replayed old grant accepted by a restart-reseeded receiver")
+	}
+	// A strictly newer grant still works.
+	newer, _ := SealEpochGrant(priv, ks.RecipientPublic(), 6, 4, testEpochKeys())
+	if _, _, _, err := rcv.Accept(ks, pub, newer); err != nil {
+		t.Errorf("a strictly newer grant was rejected after restart: %v", err)
+	}
+}
+
 // F4 — a seeded receiver surfaces a first-event gap relative to the snapshot
 // cursor, and rejects an at-or-below-cursor first event as stale.
 func TestMailbox_SeededFirstEventGap(t *testing.T) {
@@ -184,30 +221,35 @@ func TestMailbox_UnseededFirstEventNoGap(t *testing.T) {
 	}
 }
 
-// F7 — rekey is due once the per-direction byte budget is crossed, and Rekey()
-// resets the budget.
+// F7 — the byte budget is ENFORCED, not advisory: once a direction crosses it,
+// Encrypt refuses further traffic until a coordinated Rekey() resets the budget.
 func TestTransport_RekeyDueByBytes(t *testing.T) {
 	ini, resp := completedPair(t)
 	ini.rekeyBytes = 32
-	if ini.RekeyDue() {
-		t.Fatal("rekey due before any traffic")
-	}
-	for i := 0; i < 4; i++ {
-		ct, err := ini.Encrypt(bytes.Repeat([]byte{0x41}, 16))
+	msg := bytes.Repeat([]byte{0x41}, 16)
+	// Two 16-byte messages exactly reach the 32-byte budget.
+	for i := 0; i < 2; i++ {
+		ct, err := ini.Encrypt(msg)
 		if err != nil {
-			t.Fatalf("Encrypt: %v", err)
+			t.Fatalf("Encrypt %d before budget: %v", i, err)
 		}
 		if _, err := resp.Decrypt(ct); err != nil {
-			t.Fatalf("Decrypt: %v", err)
+			t.Fatalf("Decrypt %d: %v", i, err)
 		}
 	}
-	if !ini.RekeyDue() {
-		t.Fatal("rekey not due after crossing the byte budget")
+	// Enforcement: no more traffic flows on the old key.
+	if _, err := ini.Encrypt(msg); !errors.Is(err, ErrRekeyRequired) {
+		t.Fatalf("Encrypt past budget err = %v, want ErrRekeyRequired", err)
 	}
+	// A coordinated Rekey() resets both directions and traffic resumes.
 	ini.Rekey()
 	resp.Rekey()
-	if ini.RekeyDue() {
-		t.Error("rekey still due after Rekey() reset the counters")
+	ct, err := ini.Encrypt(msg)
+	if err != nil {
+		t.Fatalf("Encrypt after Rekey: %v", err)
+	}
+	if _, err := resp.Decrypt(ct); err != nil {
+		t.Fatalf("Decrypt after Rekey: %v", err)
 	}
 }
 
@@ -233,7 +275,7 @@ func TestEnvelope_IssuedAtInAAD(t *testing.T) {
 	key := fill(0x9c)
 	h := testHeader()
 	h.IssuedAt = time.Now().UnixMilli()
-	env, err := Seal(key, h, []byte("payload"))
+	env, err := seal(key, h, []byte("payload"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -243,7 +285,7 @@ func TestEnvelope_IssuedAtInAAD(t *testing.T) {
 	if err != nil {
 		return // parse rejection acceptable
 	}
-	if _, err := bad.Open(key); err == nil {
+	if _, err := bad.open(key); err == nil {
 		t.Error("tampering issued_at (AAD-covered) was accepted by Open")
 	}
 }
@@ -258,9 +300,9 @@ func TestMailbox_StaleByAgeRejected(t *testing.T) {
 	stale := testHeader()
 	stale.Seq = 1
 	stale.IssuedAt = base.Add(-10 * time.Minute).UnixMilli()
-	staleEnv, err := Seal(key, stale, []byte("stale"))
+	staleEnv, err := seal(key, stale, []byte("stale"))
 	if err != nil {
-		t.Fatalf("Seal(stale): %v", err)
+		t.Fatalf("seal(stale): %v", err)
 	}
 	if _, err := r.Accept(key, staleEnv); !errors.Is(err, ErrStaleAge) {
 		t.Fatalf("stale-by-age err = %v, want ErrStaleAge", err)
@@ -269,9 +311,9 @@ func TestMailbox_StaleByAgeRejected(t *testing.T) {
 	fresh := testHeader()
 	fresh.Seq = 2
 	fresh.IssuedAt = base.UnixMilli()
-	freshEnv, err := Seal(key, fresh, []byte("fresh"))
+	freshEnv, err := seal(key, fresh, []byte("fresh"))
 	if err != nil {
-		t.Fatalf("Seal(fresh): %v", err)
+		t.Fatalf("seal(fresh): %v", err)
 	}
 	if _, err := r.Accept(key, freshEnv); err != nil {
 		t.Fatalf("fresh event rejected by age: %v", err)
@@ -323,7 +365,7 @@ func TestTypedKeys_ContentNotOpenableWithWakeKey(t *testing.T) {
 // F12 — an unknown envelope type (not 0x01/0x02) is rejected at parse.
 func TestEnvelope_UnknownTypeRejected(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte("x"))
+	env, err := seal(key, testHeader(), []byte("x"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}

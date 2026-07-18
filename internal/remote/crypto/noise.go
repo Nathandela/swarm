@@ -38,6 +38,14 @@ var (
 	ErrHandshakeDone = errors.New("crypto: handshake already complete")
 	// ErrNotEstablished is returned by transport calls before completion.
 	ErrNotEstablished = errors.New("crypto: transport not established")
+	// ErrUnpinnedRequiresPSK forbids an unpinned session without a PSK: only
+	// pairing (which always carries a 32-byte PSK) may run unpinned, so a live
+	// session cannot opt out of static pinning (F1 — mechanically pairing-only).
+	ErrUnpinnedRequiresPSK = errors.New("crypto: AllowUnpinnedPeer requires a 32-byte PSK (pairing only)")
+	// ErrRekeyRequired is returned by Encrypt once a direction crosses its rekey
+	// threshold; the transport MUST perform a coordinated Rekey() before more
+	// traffic flows on the old key (R-CRY.7 / F7 — enforced, not advisory).
+	ErrRekeyRequired = errors.New("crypto: rekey required before further traffic")
 )
 
 // noiseSuite is the single shared cipher-suite instance for the package.
@@ -118,6 +126,17 @@ type NoiseSession struct {
 	rekeyDur    time.Duration
 }
 
+// String/GoString/Format redact NoiseSession and NoiseConfig: both transitively
+// hold private key material (flynn's HandshakeState and transport CipherStates,
+// the static keypair, and the PSK), so no fmt verb (%v %+v %#v %s) may print
+// their contents (F2). Value receivers so both a value and a pointer are covered.
+func (NoiseSession) String() string               { return "crypto.NoiseSession{redacted}" }
+func (s NoiseSession) GoString() string           { return s.String() }
+func (s NoiseSession) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+func (NoiseConfig) String() string                { return "crypto.NoiseConfig{redacted}" }
+func (c NoiseConfig) GoString() string            { return c.String() }
+func (c NoiseConfig) Format(f fmt.State, _ rune)  { _, _ = io.WriteString(f, c.String()) }
+
 // NewNoise starts an XX session. The pinned PeerStatic is held here and checked
 // against the value learned on the wire; flynn/noise itself is not given a
 // pre-message static (XX transmits it, and a preset value would be rejected).
@@ -135,6 +154,11 @@ func NewNoise(cfg NoiseConfig) (*NoiseSession, error) {
 	}
 	if cfg.PSK != nil && len(cfg.PSK) != 32 {
 		return nil, ErrBadPSK
+	}
+	// Unpinned is mechanically pairing-only: it requires a 32-byte PSK, so a live
+	// session (no PSK) can never establish against an unpinned/substituted static.
+	if cfg.AllowUnpinnedPeer && len(cfg.PSK) != 32 {
+		return nil, ErrUnpinnedRequiresPSK
 	}
 	rng := cfg.randReader
 	if rng == nil {
@@ -173,7 +197,9 @@ func (s *NoiseSession) WriteMessage(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	if cs0 != nil {
-		s.establish(cs0, cs1)
+		if err := s.establish(cs0, cs1); err != nil {
+			return nil, err
+		}
 	}
 	return msg, nil
 }
@@ -200,22 +226,24 @@ func (s *NoiseSession) ReadMessage(message []byte) ([]byte, error) {
 		}
 	}
 	if cs0 != nil {
-		s.establish(cs0, cs1)
+		if err := s.establish(cs0, cs1); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
 
 // establish captures the channel binding + peer static and splits transport
 // cipher states, then drops the handshake state (no resumption secret retained).
-func (s *NoiseSession) establish(cs0, cs1 *noise.CipherState) {
+func (s *NoiseSession) establish(cs0, cs1 *noise.CipherState) error {
 	s.peer = append([]byte(nil), s.hs.PeerStatic()...)
 	// Defense in depth (F1): a pinned session never reaches transport unless the
 	// peer static was actually transmitted (len 32) and matches. XX always
 	// transmits it before completion, so this only fires on a pattern/impl
-	// regression — and then it fails closed (complete stays false).
+	// regression — and then it fails closed with an explicit error.
 	if len(s.pinned) > 0 && (len(s.peer) != 32 || subtle.ConstantTimeCompare(s.peer, s.pinned) != 1) {
 		s.hs = nil
-		return
+		return ErrPeerStaticMismatch
 	}
 	s.binding = append([]byte(nil), s.hs.ChannelBinding()...)
 	if s.initiator {
@@ -226,6 +254,7 @@ func (s *NoiseSession) establish(cs0, cs1 *noise.CipherState) {
 	s.complete = true
 	s.established = s.clockNow()
 	s.hs = nil
+	return nil
 }
 
 // clockNow reads the injectable clock (time.Now when unset).
@@ -252,6 +281,11 @@ func (s *NoiseSession) Suite() string { return NoiseSuite }
 func (s *NoiseSession) Encrypt(plaintext []byte) ([]byte, error) {
 	if !s.complete {
 		return nil, ErrNotEstablished
+	}
+	// Enforce the rekey threshold (F7): once a direction is due, no more traffic
+	// flows on the old key until the transport performs a coordinated Rekey().
+	if s.RekeyDue() {
+		return nil, ErrRekeyRequired
 	}
 	ct, err := s.send.Encrypt(nil, nil, plaintext)
 	if err != nil {

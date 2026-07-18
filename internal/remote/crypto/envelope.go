@@ -84,7 +84,7 @@ func KeyID(pub []byte) [8]byte {
 
 // Seal encrypts plaintext under key with a fresh random 24-byte nonce
 // (XChaCha20-Poly1305 — mandatory because K_epoch is reused across events).
-func Seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error) {
+func seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error) {
 	var nonce [24]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
@@ -110,7 +110,7 @@ func sealDeterministic(key [32]byte, h EnvelopeHeader, nonce [24]byte, plaintext
 // via this API (A15 / F10).
 func SealMailbox(k ContentKey, h EnvelopeHeader, plaintext []byte) (*Envelope, error) {
 	h.Type = TypeMailbox
-	return Seal([32]byte(k), h, plaintext)
+	return seal([32]byte(k), h, plaintext)
 }
 
 // OpenMailbox opens type-0x01 session content under the content key; any other
@@ -119,13 +119,13 @@ func OpenMailbox(k ContentKey, e *Envelope) ([]byte, error) {
 	if e.Header.Type != TypeMailbox {
 		return nil, ErrWrongKeyType
 	}
-	return e.Open([32]byte(k))
+	return e.open([32]byte(k))
 }
 
 // SealWake seals a content-free wake (type 0x02) under the wake key (A15 / F10).
 func SealWake(k WakeKey, h EnvelopeHeader, plaintext []byte) (*Envelope, error) {
 	h.Type = TypePushWake
-	return Seal([32]byte(k), h, plaintext)
+	return seal([32]byte(k), h, plaintext)
 }
 
 // OpenWake opens a type-0x02 wake under the wake key; any other type is refused
@@ -134,13 +134,13 @@ func OpenWake(k WakeKey, e *Envelope) ([]byte, error) {
 	if e.Header.Type != TypePushWake {
 		return nil, ErrWrongKeyType
 	}
-	return e.Open([32]byte(k))
+	return e.open([32]byte(k))
 }
 
 // Open authenticates and decrypts under key. Any tamper to an AAD-covered
 // header field or to the ciphertext fails the tag; rewriting recipient_key_id
 // (outside the AAD) does not.
-func (e *Envelope) Open(key [32]byte) ([]byte, error) {
+func (e *Envelope) open(key [32]byte) ([]byte, error) {
 	aead, err := chacha20poly1305.NewX(key[:])
 	if err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func (r *MailboxReceiver) Accept(key [32]byte, e *Envelope) (*MailboxResult, err
 	if seen && e.Header.Seq <= hi {
 		return nil, ErrStaleSeq
 	}
-	pt, err := e.Open(key)
+	pt, err := e.open(key)
 	if err != nil {
 		return nil, err
 	}

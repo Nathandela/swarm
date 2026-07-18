@@ -164,6 +164,15 @@ type GrantReceiver struct {
 // NewGrantReceiver returns a receiver with no accepted grants yet.
 func NewGrantReceiver() *GrantReceiver { return &GrantReceiver{} }
 
+// NewGrantReceiverAt seeds the receiver with the highest (epoch_id, grant_seq)
+// already accepted, persisted across restart (F3). Without this, a relay could
+// replay an old correctly-signed grant after a phone/app restart and have it
+// accepted as the first grant — the same restart-replay hole SeedHighWater
+// closes for the mailbox. The gateway/phone MUST reseed from durable state.
+func NewGrantReceiverAt(epochID uint32, grantSeq uint64) *GrantReceiver {
+	return &GrantReceiver{hiEpoch: epochID, hiSeq: grantSeq, seen: true}
+}
+
 // Accept verifies and opens a grant (OpenEpochGrant) and then enforces strict
 // (epoch_id, grant_seq) monotonicity, rejecting replays and stale grants.
 func (r *GrantReceiver) Accept(ks KeyStore, machinePub ed25519.PublicKey, g *EpochGrant) (uint32, uint64, EpochKeys, error) {

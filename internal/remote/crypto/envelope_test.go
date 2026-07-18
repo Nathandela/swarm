@@ -16,9 +16,9 @@
 //	const ( VersionV1 uint8 = 0x01; TypeMailbox uint8 = 0x01; TypePushWake uint8 = 0x02 )
 //	type EnvelopeHeader struct { Version, Type uint8; EpochID uint32; Seq uint64; RecipientKeyID, SenderKeyID [8]byte }
 //	type Envelope struct { Header EnvelopeHeader; Nonce [24]byte; Ciphertext []byte }
-//	func Seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error)
+//	func seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error)
 //	func sealDeterministic(key [32]byte, h EnvelopeHeader, nonce [24]byte, plaintext []byte) (*Envelope, error)
-//	func (*Envelope) Open(key [32]byte) ([]byte, error)
+//	func (*Envelope) open(key [32]byte) ([]byte, error)
 //	func (*Envelope) Marshal() []byte
 //	func ParseEnvelope(b []byte) (*Envelope, error)
 //	func KeyID(pub []byte) [8]byte
@@ -99,7 +99,7 @@ func TestEnvelope_RoundTripKAT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEnvelope: %v", err)
 	}
-	got, err := parsed.Open(key)
+	got, err := parsed.open(key)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -127,7 +127,7 @@ var envelopeKATCiphertext = []byte{
 // (or missing the AEAD tag) is rejected, not silently accepted.
 func TestEnvelope_TruncatedRejected(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte("x"))
+	env, err := seal(key, testHeader(), []byte("x"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestEnvelope_TruncatedRejected(t *testing.T) {
 // rejected with ErrUnknownVersion.
 func TestEnvelope_UnknownVersionRejected(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte("x"))
+	env, err := seal(key, testHeader(), []byte("x"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestEnvelope_UnknownVersionRejected(t *testing.T) {
 // the routing-only recipient_key_id does NOT (it is outside the AAD).
 func TestEnvelope_TamperRejected(t *testing.T) {
 	key := fill(0x9c)
-	env, err := Seal(key, testHeader(), []byte("payload"))
+	env, err := seal(key, testHeader(), []byte("payload"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestEnvelope_TamperRejected(t *testing.T) {
 		if err != nil {
 			continue // a parse rejection is also acceptable
 		}
-		if _, err := bad.Open(key); err == nil {
+		if _, err := bad.open(key); err == nil {
 			t.Errorf("tamper at offset %d accepted by Open", off)
 		}
 	}
@@ -188,7 +188,7 @@ func TestEnvelope_TamperRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEnvelope(rerouted): %v", err)
 	}
-	if _, err := rerouted.Open(key); err != nil {
+	if _, err := rerouted.open(key); err != nil {
 		t.Errorf("changing recipient_key_id broke Open; it must be outside the AAD: %v", err)
 	}
 }
@@ -199,7 +199,7 @@ func TestEnvelope_NonceUniqueAndXChaCha(t *testing.T) {
 	key := fill(0x9c)
 	seen := map[[24]byte]bool{}
 	for i := 0; i < 256; i++ {
-		env, err := Seal(key, testHeader(), []byte("e"))
+		env, err := seal(key, testHeader(), []byte("e"))
 		if err != nil {
 			t.Fatalf("Seal: %v", err)
 		}
@@ -312,9 +312,9 @@ func sealSeq(t *testing.T, key [32]byte, seq uint64) *Envelope {
 	t.Helper()
 	h := testHeader()
 	h.Seq = seq
-	env, err := Seal(key, h, []byte("event"))
+	env, err := seal(key, h, []byte("event"))
 	if err != nil {
-		t.Fatalf("Seal(seq=%d): %v", seq, err)
+		t.Fatalf("seal(seq=%d): %v", seq, err)
 	}
 	return env
 }
