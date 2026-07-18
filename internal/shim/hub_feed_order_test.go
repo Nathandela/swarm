@@ -96,14 +96,33 @@ func TestHub_FeedPublishesBeforeParse(t *testing.T) {
 	recvDur := <-recv
 	feedDur := <-feedDone
 
-	const recvBudget = 20 * time.Millisecond
 	const parseFloor = 50 * time.Millisecond
 
 	if feedDur < parseFloor {
 		t.Fatalf("feed() returned in %v, want >= %v — payload too small to measure the reorder on this machine; increase largeStyledPayload reps", feedDur, parseFloor)
 	}
+
+	// recvBudget is relativized to the measured parse cost (half of feedDur,
+	// floored at parseFloor) rather than a fixed wall-clock constant. A fixed
+	// ~20ms budget flaked under GOMAXPROCS=2 -race (CI: ubuntu-latest 2-core,
+	// go test -race ./...): scheduler contention under -race occasionally
+	// pushed the receiver goroutine's actual delivery past 20ms even though
+	// publish still happened before the parse (a marginal 25-28ms cluster
+	// observed across ~170 runs, plus a rare full-starvation tail near
+	// feedDur). Under the pre-2.2 (buggy) order recvDur tracks feedDur — in
+	// this test's regime that is always far above feedDur/2 — so relativizing
+	// keeps a strong RED signal; it does not mask the reorder regression this
+	// test exists to catch. The rare full-starvation tail (receiver scheduled
+	// only at the very end of the parse window) is accepted as a residual
+	// black-box timing limit: the committee's v2 correction forbids a
+	// production test-double/interface here, so there is no way to observe
+	// "was published" independent of wall-clock scheduling.
+	recvBudget := feedDur / 2
+	if recvBudget < parseFloor {
+		recvBudget = parseFloor
+	}
 	if recvDur > recvBudget {
-		t.Errorf("subscriber received the chunk after %v, want < %v — publish is not happening before the parse (R2.2.1)", recvDur, recvBudget)
+		t.Errorf("subscriber received the chunk after %v, want < %v (feedDur/2, floored at %v) — publish is not happening before the parse (R2.2.1)", recvDur, recvBudget, parseFloor)
 	}
 	if recvDur >= feedDur {
 		t.Errorf("subscriber receipt (%v) did not precede feed() return (%v) — publish is ordered after parse, not before (R2.2.1)", recvDur, feedDur)
