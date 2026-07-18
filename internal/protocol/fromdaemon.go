@@ -101,8 +101,19 @@ func (a *daemonAdapter) watch() {
 }
 
 // ---------------------------------------------------------------------------
-// shimStream — a SessionStream backed by a live daemon->shim connection.
+// shimStream — a SessionStream backed by a live daemon->shim connection. This
+// is the SOLE implementation of the shim wire protocol on the daemon side:
+// FromDaemon's Attach uses it directly (same package); NewShimStream exports
+// it for the skeleton assembly's coreAPI.Attach, so exactly one copy talks the
+// shim wire.
 // ---------------------------------------------------------------------------
+
+// NewShimStream opens a SessionStream over an already-helloed shim connection:
+// it sends the attach request, reads the shim's single snapshot frame (S10),
+// then streams live frames. See newShimStream for the details.
+func NewShimStream(conn net.Conn) (SessionStream, error) {
+	return newShimStream(conn)
+}
 
 type shimStream struct {
 	conn   net.Conn
