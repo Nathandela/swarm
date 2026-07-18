@@ -1,0 +1,169 @@
+======================================================================
+Remote-control Phase 1 — RELAY SERVER (cmd/swarm-relay + internal/remote/relay) — RED RUN
+epic: agents-tracker-5h5 (remote-control)   beads: agents-tracker-7ek
+role: TEST-WRITER (TDD Phase 1 + Red, GG-5)   requirements: R-REL.1-.13 + rendezvous (R-PAIR.6)
+date: Sat Jul 18 18:46:58 CEST 2026
+go: go1.26.1
+command: go test ./internal/remote/relay/... ./cmd/swarm-relay/... 2>&1
+======================================================================
+
+### VERBATIM RED (default go test output) ###
+# github.com/Nathandela/swarm/cmd/swarm-relay [github.com/Nathandela/swarm/cmd/swarm-relay.test]
+cmd/swarm-relay/main_test.go:17:9: undefined: run
+cmd/swarm-relay/main_test.go:26:12: undefined: run
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harness_test.go:64:10: undefined: APNsPayload
+internal/remote/relay/harness_test.go:74:60: undefined: APNsPayload
+internal/remote/relay/harness_test.go:91:45: undefined: Config
+internal/remote/relay/harness_test.go:91:56: undefined: Server
+internal/remote/relay/harness_test.go:91:64: undefined: Config
+internal/remote/relay/harness_test.go:127:62: undefined: ClientAuth
+internal/remote/relay/harness_test.go:136:48: undefined: ClientAuth
+internal/remote/relay/harness_test.go:136:61: undefined: Client
+internal/remote/relay/harness_test.go:148:41: undefined: Conn
+internal/remote/relay/mailbox_test.go:18:40: undefined: Server
+internal/remote/relay/mailbox_test.go:18:40: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL	github.com/Nathandela/swarm/cmd/swarm-relay [build failed]
+FAIL
+
+======================================================================
+### UNCAPPED VERIFICATION (go test -gcflags=-e): every relay failure is an
+### undefined-symbol RED (the frozen contract the implementer supplies).
+### No test-bug, type, or build errors remain; only 'undefined: X' and the
+### expected 'no non-test Go files' (no production code exists yet).
+======================================================================
+
+--- internal/remote/relay ---
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harness_test.go:64:10: undefined: APNsPayload
+internal/remote/relay/harness_test.go:74:60: undefined: APNsPayload
+internal/remote/relay/harness_test.go:91:45: undefined: Config
+internal/remote/relay/harness_test.go:91:56: undefined: Server
+internal/remote/relay/harness_test.go:91:64: undefined: Config
+internal/remote/relay/harness_test.go:93:9: undefined: DefaultConfig
+internal/remote/relay/harness_test.go:102:14: undefined: New
+internal/remote/relay/harness_test.go:102:23: undefined: WithClock
+internal/remote/relay/harness_test.go:102:39: undefined: WithAPNsSink
+internal/remote/relay/harness_test.go:127:62: undefined: ClientAuth
+internal/remote/relay/harness_test.go:128:9: undefined: ClientAuth
+internal/remote/relay/harness_test.go:136:48: undefined: ClientAuth
+internal/remote/relay/harness_test.go:136:61: undefined: Client
+internal/remote/relay/harness_test.go:138:12: undefined: Dial
+internal/remote/relay/harness_test.go:148:41: undefined: Conn
+internal/remote/relay/harness_test.go:150:12: undefined: DialRaw
+internal/remote/relay/mailbox_test.go:18:40: undefined: Server
+internal/remote/relay/mailbox_test.go:18:82: undefined: Client
+internal/remote/relay/mailbox_test.go:27:11: undefined: RoutingID
+internal/remote/relay/push_test.go:16:37: undefined: Server
+internal/remote/relay/push_test.go:16:55: undefined: Client
+internal/remote/relay/push_test.go:29:18: undefined: RoutingID
+internal/remote/relay/push_test.go:55:26: undefined: GenericPushAlert
+internal/remote/relay/abuse_test.go:17:44: undefined: Config
+internal/remote/relay/abuse_test.go:28:75: undefined: ErrQuotaExceeded
+internal/remote/relay/abuse_test.go:36:46: undefined: Config
+internal/remote/relay/abuse_test.go:48:79: undefined: ErrQuotaExceeded
+internal/remote/relay/abuse_test.go:62:46: undefined: Config
+internal/remote/relay/abuse_test.go:75:74: undefined: ErrQuotaExceeded
+internal/remote/relay/abuse_test.go:83:46: undefined: Config
+internal/remote/relay/abuse_test.go:89:16: undefined: Dial
+internal/remote/relay/abuse_test.go:94:15: undefined: Dial
+internal/remote/relay/abuse_test.go:94:80: undefined: ErrQuotaExceeded
+internal/remote/relay/abuse_test.go:101:15: undefined: Dial
+internal/remote/relay/auth_test.go:24:33: undefined: RoutingID
+internal/remote/relay/auth_test.go:31:10: undefined: AuthChallengeMessage
+internal/remote/relay/auth_test.go:31:50: undefined: RoutingID
+internal/remote/relay/auth_test.go:32:10: undefined: AuthChallengeMessage
+internal/remote/relay/auth_test.go:32:50: undefined: RoutingID
+internal/remote/relay/auth_test.go:33:10: undefined: AuthChallengeMessage
+internal/remote/relay/auth_test.go:54:9: undefined: ClientAuth
+internal/remote/relay/auth_test.go:58:15: undefined: Dial
+internal/remote/relay/auth_test.go:63:10: undefined: ClientAuth
+internal/remote/relay/auth_test.go:67:15: undefined: Dial
+internal/remote/relay/auth_test.go:98:49: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:26:5: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:29:5: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:32:5: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:38:28: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:39:78: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:74:44: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:78:44: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:78:83: undefined: ErrNotAuthorized
+internal/remote/relay/lifecycle_test.go:83:48: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:83:88: undefined: ErrNotAuthorized
+internal/remote/relay/lifecycle_test.go:110:12: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:159:12: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:174:15: undefined: Dial
+internal/remote/relay/lifecycle_test.go:174:82: undefined: ErrRevoked
+internal/remote/relay/lifecycle_test.go:190:16: undefined: Dial
+internal/remote/relay/lifecycle_test.go:194:17: undefined: Dial
+internal/remote/relay/lifecycle_test.go:201:43: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:205:42: undefined: RoutingID
+internal/remote/relay/lifecycle_test.go:205:75: undefined: ErrDuplicateConnection
+internal/remote/relay/metadata_test.go:19:9: undefined: DefaultConfig
+internal/remote/relay/metadata_test.go:24:14: undefined: New
+internal/remote/relay/metadata_test.go:24:23: undefined: WithClock
+internal/remote/relay/metadata_test.go:24:39: undefined: WithAPNsSink
+internal/remote/relay/metadata_test.go:24:66: undefined: WithLogWriter
+internal/remote/relay/metadata_test.go:45:49: undefined: RoutingID
+internal/remote/relay/metadata_test.go:64:46: undefined: Config
+internal/remote/relay/ops_test.go:22:9: undefined: DefaultConfig
+internal/remote/relay/ops_test.go:26:12: undefined: WriteConfigFile
+internal/remote/relay/ops_test.go:30:17: undefined: LoadConfig
+internal/remote/relay/ops_test.go:38:14: undefined: New
+internal/remote/relay/ops_test.go:49:41: undefined: ProtocolVersion
+internal/remote/relay/ops_test.go:75:49: undefined: RoutingID
+internal/remote/relay/presence_test.go:18:49: undefined: Config
+internal/remote/relay/presence_test.go:36:16: undefined: RoutingID
+internal/remote/relay/presence_test.go:37:81: undefined: PresenceOnline
+internal/remote/relay/presence_test.go:55:81: undefined: PresenceOffline
+internal/remote/relay/presence_test.go:75:16: undefined: RoutingID
+internal/remote/relay/presence_test.go:79:81: undefined: PresenceOnline
+internal/remote/relay/presence_test.go:89:15: undefined: New
+internal/remote/relay/presence_test.go:89:24: undefined: WithClock
+internal/remote/relay/presence_test.go:89:40: undefined: WithAPNsSink
+internal/remote/relay/presence_test.go:100:80: undefined: PresenceUnknown
+internal/remote/relay/rendezvous_test.go:72:67: undefined: ErrRendezvousFull
+internal/remote/relay/rendezvous_test.go:80:46: undefined: Config
+internal/remote/relay/rendezvous_test.go:92:69: undefined: ErrRendezvousExpired
+internal/remote/relay/rendezvous_test.go:117:66: undefined: ErrRendezvousBurned
+internal/remote/relay/store_test.go:25:12: undefined: RoutingID
+internal/remote/relay/store_test.go:36:15: undefined: New
+internal/remote/relay/store_test.go:36:24: undefined: WithClock
+internal/remote/relay/store_test.go:36:40: undefined: WithAPNsSink
+internal/remote/relay/store_test.go:70:49: undefined: RoutingID
+internal/remote/relay/wire_test.go:24:37: undefined: MaxFrame
+internal/remote/relay/wire_test.go:26:15: undefined: ReadFrame
+internal/remote/relay/wire_test.go:27:21: undefined: ErrFrameTooLarge
+internal/remote/relay/wire_test.go:33:23: undefined: MaxFrame
+internal/remote/relay/wire_test.go:34:12: undefined: WriteFrame
+internal/remote/relay/wire_test.go:34:29: undefined: MsgRelay
+internal/remote/relay/wire_test.go:34:62: undefined: ErrFrameTooLarge
+internal/remote/relay/wire_test.go:47:12: undefined: WriteFrame
+internal/remote/relay/wire_test.go:47:29: undefined: MsgMailboxAppend
+internal/remote/relay/wire_test.go:50:19: undefined: ReadFrame
+internal/remote/relay/wire_test.go:54:12: undefined: MsgMailboxAppend
+internal/remote/relay/wire_test.go:60:18: undefined: ReadFrame
+internal/remote/relay/wire_test.go:71:26: undefined: MsgMailboxAppend
+internal/remote/relay/wire_test.go:78:12: undefined: MsgError
+internal/remote/relay/wire_test.go:83:41: undefined: ProtocolVersion
+internal/remote/relay/wire_test.go:95:43: undefined: ProtocolVersion
+internal/remote/relay/wire_test.go:99:12: undefined: ProtocolVersion
+internal/remote/relay/wire_test.go:100:56: undefined: ProtocolVersion
+internal/remote/relay/wire_test.go:112:42: undefined: ProtocolVersion
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+--- cmd/swarm-relay ---
+# github.com/Nathandela/swarm/cmd/swarm-relay [github.com/Nathandela/swarm/cmd/swarm-relay.test]
+cmd/swarm-relay/main_test.go:17:9: undefined: run
+cmd/swarm-relay/main_test.go:26:12: undefined: run
+FAIL	github.com/Nathandela/swarm/cmd/swarm-relay [build failed]
+FAIL
+
+======================================================================
+### PROOF: the ONLY non-'undefined' lines are informational build-graph
+### artifacts of the tests-only RED state (grep below should be empty of
+### type/test-bug errors):
+======================================================================
+(no non-undefined compiler errors — clean RED)
