@@ -24,6 +24,7 @@
     border: 1px solid var(--panel-edge); border-radius: 10px; padding: 11px 16px; cursor: pointer; }
   .tabs button .n { font: 600 10px var(--mono); color: var(--ink-dim); margin-right: 7px; }
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: #14100a; }
+  .tabs button.out { opacity: 0.45; }
   .tabs button.on .n { color: #14100a; }
   .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -129,14 +130,14 @@
   .d1 {
     --p-bg:#08090a; --p-card:#0f1011; --p-elev:#141516; --p-well:#060708;
     --p-hair:#23252a; --p-ink:#f7f8f8; --p-ink2:#8a8f98; --p-ink3:#62666d;
-    --p-hero:#7c7cff; --p-hero-ink:#0d0d21;
+    --p-hero:#53ce7c; --p-hero-ink:#06150c;
     --p-att:#f1a10d; --p-work:#00c2d7; --p-ok:#4cc38a; --p-err:#ff6369;
     --p-font:-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
     --p-mono:ui-monospace, "SF Mono", Menlo, monospace;
     --p-display-wt:650; --p-display-tr:-0.025em; --p-body-tr:-0.008em;
     --p-card-r:9px; --p-sheet-r:14px; --p-btn-r:9px; --p-chip-r:8px; --p-dot-r:4px;
     --p-card-fx:inset 0 1px 0 rgba(255,255,255,0.045);
-    --p-cta-bg:#5e6ad2; --p-cta-ink:#f2f3ff; --p-cta-fx:none;
+    --p-cta-bg:#53ce7c; --p-cta-ink:#06150c; --p-cta-fx:0 0 18px rgba(83,206,124,0.20);
     --p-tabbg:rgba(8,9,10,0.88); --p-grain:0.05;
     --p-workbar:linear-gradient(90deg, #00c2d7, transparent 85%);
   }
@@ -144,7 +145,7 @@
   .d2 {
     --p-bg:#000000; --p-card:#0a0f0c; --p-elev:#101613; --p-well:#050807;
     --p-hair:#1c231e; --p-ink:#e9fbef; --p-ink2:#8fa398; --p-ink3:#5c6b62;
-    --p-hero:#3ecf8e; --p-hero-ink:#03130b;
+    --p-hero:#42dd82; --p-hero-ink:#03130b;
     --p-att:#ffb224; --p-work:#00c2d7; --p-ok:#4cc38a; --p-err:#f2555a;
     --p-font:-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
     --p-mono:ui-monospace, "SF Mono", Menlo, monospace;
@@ -153,10 +154,10 @@
     --p-card-fx:none;
     --p-cta-bg:#ffffff; --p-cta-ink:#000000; --p-cta-fx:0 0 24px rgba(255,255,255,0.14);
     --p-tabbg:rgba(0,0,0,0.82); --p-grain:0.035;
-    --p-workbar:linear-gradient(90deg, #3ecf8e, transparent 85%);
+    --p-workbar:linear-gradient(90deg, #42dd82, transparent 85%);
   }
   .d2 .fx.bloom { display: block;
-    background: radial-gradient(52% 30% at 50% -4%, rgba(62,207,142,0.16) 0%, transparent 70%); }
+    background: radial-gradient(52% 30% at 50% -4%, rgba(66,221,130,0.16) 0%, transparent 70%); }
   .d2 .pnav .big { font-size: 30px; }
   /* ============ D3 SIGNAL ============ */
   .d3 {
@@ -208,13 +209,13 @@
 
 <div class="wrap">
   <h1>swarm remote — design directions</h1>
-  <p class="sub">Four visual skins over the exact same screens — design only, zero UX change. Grounded in extracted tokens from Linear, Raycast, Geist, Revolut Ultra, Stripe, Superhuman, teenage engineering and Radix/Primer dark methodology. Switch directions and the phone, approval sheet and chat fragment restyle instantly.</p>
+  <p class="sub">Four visual skins over the exact same screens — design only, zero UX change. Shortlist after review: <b>01 Substrate</b> and <b>02 Void</b>, purple retired, hero shifted to an elegant old-terminal phosphor green in both. 03/04 kept dimmed for reference. Switch directions and the phone, approval sheet and chat fragment restyle instantly.</p>
 
   <div class="tabs" id="tabs">
     <button data-d="d1" class="on"><span class="n">01</span>Substrate</button>
     <button data-d="d2"><span class="n">02</span>Void</button>
-    <button data-d="d3"><span class="n">03</span>Signal</button>
-    <button data-d="d4"><span class="n">04</span>Instrument Panel</button>
+    <button data-d="d3" class="out" title="Not retained"><span class="n">03</span>Signal</button>
+    <button data-d="d4" class="out" title="Not retained"><span class="n">04</span>Instrument Panel</button>
   </div>
 
   <div class="grid">
@@ -311,14 +312,14 @@
 
 const DIRS = {
   d1: {
-    why: `<b>Substrate.</b> The convergent language of serious dev tools (Linear, Raycast, Warp): tinted near-black surface ladder, 1px hairlines doing all the depth work, drop shadows banned, one reserved lavender accent. Status hues (Radix-11 band) live only in dots and rails. The premium reads through discipline &mdash; nothing glows unless it is alive.`,
-    recipe: `<b>Film grain 5%</b> soft-light over the whole screen. <b>1px top inset highlight</b> (white 4.5%) on every card &mdash; the key-light. Elevation = one ladder step lighter, never shadow. Working rows carry a 3px cyan fade bar. Display tracking &minus;0.025em, tabular numerals, mono for commands and ids.`,
-    sw: [["ground","#08090a"],["card","#0f1011"],["elevated","#141516"],["hairline","#23252a"],["hero","#7c7cff"],["attention","#f1a10d"],["working","#00c2d7"],["success","#4cc38a"],["error","#ff6369"]],
+    why: `<b>Substrate / Phosphor.</b> The convergent language of serious dev tools (Linear, Raycast, Warp): tinted near-black surface ladder, 1px hairlines doing all the depth work, drop shadows banned &mdash; and one reserved hero: an elegant old-terminal phosphor green, desaturated far below CRT intensity so it reads heritage, not neon. Hero and success share the green family on purpose; they are told apart by role &mdash; hero is brand, CTA and live glow, success is a small flat dot. Nothing glows unless it is alive.`,
+    recipe: `<b>Film grain 5%</b> soft-light over the whole screen. <b>1px top inset highlight</b> (white 4.5%) on every card &mdash; the key-light. Elevation = one ladder step lighter, never shadow. Working rows carry a 3px cyan fade bar (the one cool counterpoint that keeps the green calm). Approve CTA gets a faint 18px phosphor bloom. Display tracking &minus;0.025em, tabular numerals, mono for commands and ids.`,
+    sw: [["ground","#08090a"],["card","#0f1011"],["elevated","#141516"],["hairline","#23252a"],["hero","#53ce7c"],["attention","#f1a10d"],["working","#00c2d7"],["success","#4cc38a"],["error","#ff6369"]],
   },
   d2: {
-    why: `<b>Void.</b> True-black luxury in the Revolut Ultra register: pure #000 canvas as the statement, green-tinted panels floating in it, big radii, white-pill CTA, and one electric emerald hero reserved for life. The most dramatic of the four &mdash; OLED-native, the phone bezel dissolves into the app.`,
+    why: `<b>Void.</b> True-black luxury in the Revolut Ultra register: pure #000 canvas as the statement, green-tinted panels floating in it, big radii, white-pill CTA, and one phosphor-green hero reserved for life &mdash; the old-terminal signal, luminous but held well below neon. The most dramatic of the four &mdash; OLED-native, the phone bezel dissolves into the app.`,
     recipe: `<b>Emerald bloom</b> (16% radial, blurred) breathing from the top edge &mdash; the single light source. Grain at 3.5%, barely there. No borders doing drama: color-blocked surfaces and luminance carry depth. Display weight 500 at &minus;0.034em tracking, oversized. CTA glows white; everything else stays void.`,
-    sw: [["ground","#000000"],["card","#0a0f0c"],["elevated","#101613"],["hairline","#1c231e"],["hero","#3ecf8e"],["attention","#ffb224"],["working","#00c2d7"],["success","#4cc38a"],["error","#f2555a"]],
+    sw: [["ground","#000000"],["card","#0a0f0c"],["elevated","#101613"],["hairline","#1c231e"],["hero","#42dd82"],["attention","#ffb224"],["working","#00c2d7"],["success","#4cc38a"],["error","#f2555a"]],
   },
   d3: {
     why: `<b>Signal.</b> The 2026 tech register: zinc neutrals, dark glass cards over a blurred aurora that leaks violet&rarr;cyan&rarr;magenta from the top edge, and the gradient reserved <i>exclusively</i> for the working state &mdash; so color itself means activity. Stripe's mesh discipline applied to a monitoring surface.`,
