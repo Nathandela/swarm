@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -34,6 +33,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/testbin"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -42,41 +42,21 @@ import (
 const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 
 var (
-	buildOnce    sync.Once
+	testBins     testbin.Binaries
 	swarmBin     string
 	fakeAgentBin string
-	buildErr     error
 )
 
 func buildBinaries(t *testing.T) {
 	t.Helper()
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "swe2e-bin")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		swarmBin = filepath.Join(dir, "swarm")
-		fakeAgentBin = filepath.Join(dir, "swarm-fake-agent")
-		for _, b := range []struct{ out, pkg string }{
-			{swarmBin, "github.com/Nathandela/swarm/cmd/swarm"},
-			{fakeAgentBin, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
-		} {
-			cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				buildErr = err
-				return
-			}
-		}
-	})
-	if buildErr != nil {
+	testBins.Build(t, "swe2e-bin", func(t *testing.T, err error) {
 		// E14.1: a BUILD failure of our own binaries is a real error, never a
 		// silent skip — a required e2e test that cannot build its subject must fail
 		// loudly (fail-closed), not fail-open. Legitimate absent-dependency skips
 		// (e.g. git) live at their own call sites.
-		t.Fatalf("cannot build e2e binaries: %v", buildErr)
-	}
+		t.Fatalf("cannot build e2e binaries: %v", err)
+	})
+	swarmBin, fakeAgentBin = testBins.Swarm, testBins.FakeAgent
 }
 
 // daemonEnv holds the SWARM_DAEMON_* paths for one state dir (short-pathed under

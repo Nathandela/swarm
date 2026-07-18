@@ -2,15 +2,14 @@ package protocol
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // Integration: a FEW tests against a REAL daemon.Daemon (real shim + real fake
@@ -24,39 +23,19 @@ import (
 // detach/re-attach (L3) — goes through the protocol Server over FromDaemon(d).
 
 var (
-	buildOnce    sync.Once
+	testBins     testbin.Binaries
 	swarmBin     string
 	fakeAgentBin string
-	buildErr     error
 )
 
 // buildBinaries compiles the swarm binary (used as the shim) and the fake agent
 // once per test run. Integration tests skip if the toolchain is unavailable.
 func buildBinaries(t *testing.T) {
 	t.Helper()
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "swp-bin")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		swarmBin = filepath.Join(dir, "swarm")
-		fakeAgentBin = filepath.Join(dir, "swarm-fake-agent")
-		for _, b := range []struct{ out, pkg string }{
-			{swarmBin, "github.com/Nathandela/swarm/cmd/swarm"},
-			{fakeAgentBin, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
-		} {
-			cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				buildErr = err
-				return
-			}
-		}
+	testBins.Build(t, "swp-bin", func(t *testing.T, err error) {
+		t.Skipf("cannot build integration binaries: %v", err)
 	})
-	if buildErr != nil {
-		t.Skipf("cannot build integration binaries: %v", buildErr)
-	}
+	swarmBin, fakeAgentBin = testBins.Swarm, testBins.FakeAgent
 }
 
 // realDaemon opens a real daemon over a short-pathed state dir, with cleanup.

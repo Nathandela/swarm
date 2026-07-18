@@ -35,9 +35,7 @@ package skeleton
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -45,6 +43,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // ---------------------------------------------------------------------------
@@ -52,37 +51,17 @@ import (
 // ---------------------------------------------------------------------------
 
 var (
-	buildOnce    sync.Once
+	testBins     testbin.Binaries
 	swarmBin     string
 	fakeAgentBin string
-	buildErr     error
 )
 
 func buildBinaries(t *testing.T) {
 	t.Helper()
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "swsk-bin")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		swarmBin = filepath.Join(dir, "swarm")
-		fakeAgentBin = filepath.Join(dir, "swarm-fake-agent")
-		for _, b := range []struct{ out, pkg string }{
-			{swarmBin, "github.com/Nathandela/swarm/cmd/swarm"},
-			{fakeAgentBin, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
-		} {
-			cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				buildErr = err
-				return
-			}
-		}
+	testBins.Build(t, "swsk-bin", func(t *testing.T, err error) {
+		t.Skipf("cannot build integration binaries: %v", err)
 	})
-	if buildErr != nil {
-		t.Skipf("cannot build integration binaries: %v", buildErr)
-	}
+	swarmBin, fakeAgentBin = testBins.Swarm, testBins.FakeAgent
 }
 
 // assemble stands up the full in-process assembly over a short-pathed state dir
