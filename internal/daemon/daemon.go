@@ -30,8 +30,12 @@ const (
 	monitorPoll = 100 * time.Millisecond // liveness poll for reconnected shims
 	dialTimeout = 3 * time.Second        // dial a shim's per-session socket
 	helloIO     = 3 * time.Second        // per-op deadline on a shim handshake
-	deleteWait  = 10 * time.Second       // bound Delete's wait for a shim to exit
 )
+
+// deleteWait bounds Delete's wait for a shim to exit after termination, and
+// killSpawnedShim's wait for an aborting shim. It is a var (not a const) so a test
+// can shorten it to exercise the termination-timeout path quickly.
+var deleteWait = 10 * time.Second
 
 // Registry is the read view of the session roster (frozen API).
 type Registry interface {
