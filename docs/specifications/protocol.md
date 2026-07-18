@@ -209,8 +209,9 @@ input is dropped.
 The client sends `subscribe`. The daemon replies with `ok`, then streams `event`
 messages as session status changes. A subscriber that stops reading is
 disconnected within a bound; it never blocks the daemon's event loop or other
-subscribers (S9). A live status change reaches a healthy subscriber within one
-second (L1).
+subscribers (S9). Events are latest-state snapshots: consecutive changes may
+coalesce, and after any change the latest committed state reaches a healthy
+subscriber within one second (L1, ADR-008).
 
 ### `event`
 
