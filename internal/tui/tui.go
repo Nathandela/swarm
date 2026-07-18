@@ -66,6 +66,12 @@ const (
 // eventMsg carries one Subscribe status-change into the update loop.
 type eventMsg struct{ ev protocol.Event }
 
+// connectionLostMsg signals the Subscribe stream's channel closed: the daemon
+// connection is gone for good (pump eviction, daemon crash/restart all look the
+// same from here — protocol.Client closes eventsCh once its read loop dies).
+// waitForEvent deliberately does not re-arm after this (agents-tracker-1uq).
+type connectionLostMsg struct{}
+
 // repaintMsg drives the periodic re-render that refreshes the live elapsed-time
 // column (see repaintTick).
 type repaintMsg struct{}
@@ -198,7 +204,9 @@ func detectCmd(detect DetectFunc, gen uint64) tea.Cmd {
 }
 
 // waitForEvent reads one event from the stream. A nil channel (no subscription)
-// yields no command.
+// yields no command. A closed channel (the connection is gone for good) yields
+// connectionLostMsg instead of a bare nil, so Update can surface it (agents-
+// tracker-1uq) rather than the caller silently hanging or looping forever.
 func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -206,7 +214,7 @@ func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return nil
+			return connectionLostMsg{}
 		}
 		return eventMsg{ev}
 	}
@@ -227,6 +235,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
 		return m, tea.Batch(banner, waitForEvent(m.events))
+
+	case connectionLostMsg:
+		// The daemon connection is gone for good: surface it and stop polling the
+		// stream — waitForEvent is deliberately NOT re-armed, since the channel is
+		// closed forever (agents-tracker-1uq).
+		return m, m.general.setBanner("connection to daemon lost - restart swarm to reconnect")
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
@@ -263,8 +277,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case attachDoneMsg:
 		// The passthrough returned (detached / session ended / error); come back to
-		// the general board and re-arm its repaint tick.
-		return m, m.enterGeneral()
+		// the general board and re-arm its repaint tick. A non-nil error (e.g. the
+		// attach dial failing) is surfaced on the banner instead of being silently
+		// discarded (agents-tracker-1uq).
+		cmd := m.enterGeneral()
+		if msg.err != nil {
+			cmd = tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
+		}
+		return m, cmd
 
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the

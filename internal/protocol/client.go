@@ -326,15 +326,32 @@ func (c *Client) dispatchControl(ctrl Control) {
 }
 
 // closeReadLoop runs when the read loop exits: it closes any live attachment's
-// Frames() channel (from the read-loop goroutine, so no send races the close) and
-// closes the client.
+// Frames() channel and eventsCh (from the read-loop goroutine, so no send races
+// the close), then closes the client.
+//
+// This is the single convergence point for BOTH teardown paths (agents-tracker-
+// 1uq): an explicit Close() closes c.conn, which makes the read loop's
+// wire.ReadFrame error out and return, running this deferred call; a dead peer
+// (pump eviction, daemon crash/restart) makes wire.ReadFrame fail the same way.
+// Either way, closeReadLoop only runs once — it is the sole defer of the sole
+// invocation of readLoop (started once, in Dial) — and only after readLoop's for
+// loop has permanently exited. dispatchControl's OpEvent case, the only other
+// sender to eventsCh, runs synchronously inside that same for loop, so by the
+// time this method closes eventsCh no send can still be in flight: closer and
+// sender are the same goroutine, strictly sequenced by the loop's exit. No
+// sync.Once is needed beyond that ordering.
 func (c *Client) closeReadLoop() {
 	c.mu.Lock()
 	att := c.att
 	c.att = nil
+	ch := c.eventsCh
+	c.eventsCh = nil
 	c.mu.Unlock()
 	if att != nil {
 		att.closeFrames()
+	}
+	if ch != nil {
+		close(ch)
 	}
 	c.Close()
 }
