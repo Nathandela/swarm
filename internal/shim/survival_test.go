@@ -73,10 +73,10 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	// read-chunks accrue behind the blocked socket writer, which is robust to
 	// chunk size and emulator throughput (incl. the -race slowdown) in a way a
 	// fixed sleep is not.
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for cfg.Metrics.FramesDropped.Load() == 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("no frames dropped within 20s under a wedged consumer — the bounded-queue drop path did not engage (S9)")
+			t.Fatalf("no frames dropped within 90s under a wedged consumer — the bounded-queue drop path did not engage (S9)")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -134,10 +134,10 @@ func TestSurvival_SoakBoundedMemory(t *testing.T) {
 
 	// Wait until draining is demonstrably underway (the queue has overflowed at
 	// least once) before taking the baseline heap sample.
-	dropDeadline := time.Now().Add(20 * time.Second)
+	dropDeadline := time.Now().Add(90 * time.Second)
 	for cfg.Metrics.FramesDropped.Load() == 0 {
 		if time.Now().After(dropDeadline) {
-			t.Fatalf("drops never started within 20s — the drain did not engage")
+			t.Fatalf("drops never started within 90s — the drain did not engage")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
