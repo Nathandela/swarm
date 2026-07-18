@@ -114,6 +114,7 @@ type session struct {
 	token   string
 	pid     int
 	sources []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
+	rules   gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
 	alive   bool
 
 	// emitMu serializes this session's commit→emit so its emits stay ordered (G6)
@@ -188,6 +189,7 @@ func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.Si
 		token:   token,
 		pid:     pid,
 		sources: sources,
+		rules:   parseGridRules(sources),
 		alive:   true,
 		status:  st,
 	}
@@ -297,7 +299,7 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 		e.mu.Unlock()
 		return // a fresher typed signal outranks the heuristic
 	}
-	turn, interaction := evaluateGrid(snap)
+	turn, interaction := evaluateGridWithRules(snap, s.rules)
 	next := s.status
 	next.Turn = turn
 	next.Interaction = interaction
