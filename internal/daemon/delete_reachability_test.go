@@ -171,6 +171,142 @@ func TestDelete_UnterminableShimMutatesNothing(t *testing.T) {
 	}
 }
 
+// T1.3.g / R1.3.4 — a PID/start-time identity mismatch (the recorded shim's PID
+// was reused, or the shim exited) makes Delete send NO signal to that PID: the
+// pre-signal identity recheck (F6/S3) applies to Delete's termination step exactly
+// as it does to Kill's, not just when the socket happens to be unreachable. A fake
+// shim bound at the session socket proves it was never contacted; a live process
+// standing in for the reused PID proves it was never signalled either.
+func TestDelete_IdentityMismatch_NoSignal(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+
+	const id = "deletemismatch1"
+	sessionDir := filepath.Join(cfg.StateDir, id)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	// A rebound listener sits at the session socket; if Delete wrongly dialed it,
+	// it would register a connection / signal.
+	fs := startFakeShim(t, shimSocketPath(cfg.StateDir, id), shimwire.Version)
+
+	// A live PID stands in for the recorded shim, but with a WRONG start-time so
+	// the identity recheck fails (PID reuse).
+	pid := spawnCatchTermChild(t, filepath.Join(t.TempDir(), "sig"))
+	realStart, err := processStartTime(pid)
+	if err != nil {
+		t.Fatalf("processStartTime: %v", err)
+	}
+	d.putMem(persist.Meta{
+		ID:            id,
+		AgentType:     "fake",
+		Cwd:           "/tmp",
+		CreatedAt:     time.Now(),
+		LastActivity:  time.Now(),
+		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
+		ShimPID:       pid,
+		ShimStartTime: realStart + 1, // deliberately wrong
+	})
+
+	if err := d.Delete(id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if fs.connCount() != 0 {
+		t.Fatalf("Delete dialed the shim socket on an identity mismatch (%d conns); want zero (S3)", fs.connCount())
+	}
+	if fs.signalled() {
+		t.Fatalf("Delete delivered a signal to a rebound socket on an identity mismatch; want none (S3)")
+	}
+	if !processAlive(pid) {
+		t.Fatal("Delete killed the reused-PID stand-in process; want it left untouched (S3)")
+	}
+	if _, ok := d.Get(id); ok {
+		t.Fatal("session still present after Delete")
+	}
+	if _, statErr := os.Stat(sessionDir); !os.IsNotExist(statErr) {
+		t.Fatalf("session dir still present after Delete: stat err = %v", statErr)
+	}
+}
+
+// T1.3.g — Delete racing a natural shim exit (the monitor's own finalize path,
+// reconcile.go handleShimExit, firing concurrently with Delete) must not panic,
+// must leave the session cleanly gone, and must not resurrect the meta: once
+// Delete's tombstone lands, a racing finalize is a no-op rather than a second
+// write. d.writeMu is used directly (test is in-package) to force handleShimExit
+// to attempt its write only after Delete's registry removal + tombstone have
+// already landed (both happen before Delete's own writeMu-guarded store.Delete),
+// which is the interleaving where a resurrection bug would show up.
+func TestDelete_RacesNaturalShimExit(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+
+	const id = "race-natural-exit"
+	sessionDir := filepath.Join(cfg.StateDir, id)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	d.mu.Lock()
+	d.sessions[id] = &session{
+		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
+		stop: make(chan struct{}),
+	}
+	d.mu.Unlock()
+
+	// Identity mismatch stand-in: nothing to signal, Phase 1 passes trivially, so
+	// the only interesting race is Phase 2 (registry removal + tombstone) vs.
+	// handleShimExit's finalize.
+	orig := terminateForDeleteFn
+	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool { return true }
+	t.Cleanup(func() { terminateForDeleteFn = orig })
+
+	d.writeMu.Lock() // hold the write choke point so Delete blocks AFTER Phase 2
+
+	deleteDone := make(chan struct{})
+	go func() {
+		defer close(deleteDone)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("Delete panicked racing a natural shim exit: %v", r)
+			}
+		}()
+		_ = d.Delete(id)
+	}()
+
+	// Wait for Delete's Phase 2 (tombstone) to land — it happens before Delete's
+	// writeMu.Lock() attempt, which is currently blocked by the lock held above.
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.isDeleted(id) {
+		if time.Now().After(deadline) {
+			d.writeMu.Unlock()
+			t.Fatal("Delete's tombstone never landed within 3s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	exitDone := make(chan struct{})
+	go func() {
+		defer close(exitDone)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("handleShimExit panicked racing Delete: %v", r)
+			}
+		}()
+		d.handleShimExit(id) // the monitor's natural-exit path (reconcile.go), blocks on writeMu too
+	}()
+
+	d.writeMu.Unlock() // release both to contend for writeMu in whatever order
+	<-deleteDone
+	<-exitDone
+
+	if _, ok := d.Get(id); ok {
+		t.Fatal("session resurrected in the registry after Delete raced a natural shim exit")
+	}
+	if _, statErr := os.Stat(sessionDir); !os.IsNotExist(statErr) {
+		t.Fatalf("session dir resurrected after Delete raced a natural shim exit: stat err = %v", statErr)
+	}
+}
+
 // F1 (review regression) — two concurrent Deletes of the SAME id must not double-
 // close session.stop. The transactional Delete splits the read (Phase 1) from the
 // registry removal + close (Phase 2), so both goroutines capture the session
