@@ -53,29 +53,25 @@ func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
 }
 
-// flat returns the sessions in display order: by group (fixed order), then by
-// arrival order within each group. The selection index is a position in this
-// list.
-func (m generalModel) flat() []protocol.SessionView {
-	out := make([]protocol.SessionView, 0, len(m.sessions))
+// selected returns the currently-selected session, or (zero, false) when the
+// board is empty. It walks sessions in display order (by group, fixed order,
+// then arrival order within each group — the same order restoreSel searches)
+// without building a full copy of the board (R4.1.2): m.sel is a position in
+// that order, and finding one element at a position needs no allocation.
+func (m generalModel) selected() (protocol.SessionView, bool) {
+	i := 0
 	for _, g := range groupOrder {
 		for _, s := range m.sessions {
-			if s.Group == g {
-				out = append(out, s)
+			if s.Group != g {
+				continue
 			}
+			if i == m.sel {
+				return s, true
+			}
+			i++
 		}
 	}
-	return out
-}
-
-// selected returns the currently-selected session, or (zero, false) when the
-// board is empty.
-func (m generalModel) selected() (protocol.SessionView, bool) {
-	flat := m.flat()
-	if len(flat) == 0 || m.sel < 0 || m.sel >= len(flat) {
-		return protocol.SessionView{}, false
-	}
-	return flat[m.sel], true
+	return protocol.SessionView{}, false
 }
 
 // selectedID is the id of the selected session, or "" when the board is empty.
@@ -100,14 +96,22 @@ func (m generalModel) sessionByID(id string) (protocol.SessionView, bool) {
 
 // restoreSel re-points the selection at the row whose session id is id, so the
 // same session stays selected by identity across a regroup (apply reorders the
-// flat list on every event). If that session is gone, the index is clamped to
-// stay in range.
+// display order on every event). If that session is gone, the index is clamped
+// to stay in range. Walks in the same display order as selected (R4.1.2): no
+// full-board copy, and it stops as soon as id is found.
 func (m *generalModel) restoreSel(id string) {
 	if id != "" {
-		for i, s := range m.flat() {
-			if s.ID == id {
-				m.sel = i
-				return
+		i := 0
+		for _, g := range groupOrder {
+			for _, s := range m.sessions {
+				if s.Group != g {
+					continue
+				}
+				if s.ID == id {
+					m.sel = i
+					return
+				}
+				i++
 			}
 		}
 	}
