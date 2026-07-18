@@ -1,0 +1,23 @@
+=== TDD RED evidence: snapshot-to-ANSI renderer (P0 agents-tracker-a6f) ===
+Captured: 2026-07-18T07:11:46Z
+State: internal/vt/RenderSnapshot and the attach decode+render wiring do NOT exist yet.
+Long raw-JSON dumps are truncated to 300 cols for readability (the point is that
+literal snapshot JSON reached the terminal).
+
+### go test ./internal/vt/ -run TestRenderSnapshot -count=1
+--- expect: build failure, undefined RenderSnapshot (the renderer is unimplemented) ---
+# github.com/Nathandela/swarm/internal/vt [github.com/Nathandela/swarm/internal/vt.test]
+internal/vt/render_test.go:16:45: undefined: RenderSnapshot
+internal/vt/render_test.go:125:10: undefined: RenderSnapshot
+FAIL	github.com/Nathandela/swarm/internal/vt [build failed]
+FAIL
+
+### go test ./internal/attach/ -run "SnapshotRenderedNotRawJSON|MalformedSnapshotPaintsNothing" -count=1
+--- expect: both fail because attach.go still writes the raw snapshot JSON to the terminal ---
+--- FAIL: TestPassthrough_SnapshotRenderedNotRawJSON (0.02s)
+    render_wire_test.go:39: attach painted raw snapshot JSON to the terminal (P0 agents-tracker-a6f): "{\"version\":1,\"cols\":80,\"rows\":24,\"altScreen\":false,\"cursorX\":12,\"cursorY\":0,\"cursorVisible\":true,\"lines\":[{\"runs\":[{\"text\":\"H\",\"width\":1},{\"text\":\"E\",\"width\":1},{\"tex
+--- FAIL: TestPassthrough_MalformedSnapshotPaintsNothing (0.00s)
+    render_wire_test.go:63: a malformed snapshot must not leak raw bytes to the terminal; got "{\"runs\": not-valid-jsonLIVE"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/attach	0.627s
+FAIL

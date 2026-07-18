@@ -20,6 +20,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/Nathandela/swarm/internal/vt"
 )
 
 // TermControl is the injectable seam over the real controlling terminal, so the
@@ -118,11 +120,21 @@ func Run(cfg Config) (reason Reason, err error) {
 
 	// Raw-then-paint: the snapshot (and optional chrome) is the first thing written,
 	// exactly once, before any live frame reaches the terminal (S10/A-1/A-4).
+	//
+	// The snapshot is a structured projection, not raw replay bytes, so it must be
+	// decoded and rendered to ANSI before it can paint (P0 agents-tracker-a6f: raw
+	// JSON was reaching the terminal). A snapshot that fails to decode is skipped
+	// silently rather than dumped as garbage — the live frames still paint.
 	out := cfg.Term.Out()
+	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
+		writeAll(out, vt.RenderSnapshot(snap))
+	}
+	// Chrome is drawn AFTER the grid paint, whose clear+home would otherwise wipe
+	// it; chromeLine saves/restores the cursor so the snapshot's cursor position
+	// survives (A-5).
 	if cfg.Chrome {
 		writeAll(out, chromeLine(cfg.Name, detachKey))
 	}
-	writeAll(out, cfg.Session.Snapshot())
 
 	// Sync the PTY to the client's terminal size on attach (E8.3); further changes
 	// propagate via the resize pump.
@@ -215,9 +227,11 @@ func writeAll(w io.Writer, p []byte) {
 }
 
 // chromeLine renders the single toggleable chrome line: the session name and the
-// detach-key hint (A-5). Written in raw mode, so it ends CR+LF.
+// detach-key hint (A-5). It is drawn after the snapshot repaint, so it saves the
+// cursor (DECSC), homes to the top line, writes the banner and clears to line end,
+// then restores the cursor (DECRC) so the snapshot's cursor position is preserved.
 func chromeLine(name string, detachKey byte) []byte {
-	return []byte(fmt.Sprintf("[ %s  %s to detach ]\r\n", name, keyLabel(detachKey)))
+	return []byte(fmt.Sprintf("\x1b7\x1b[1;1H[ %s  %s to detach ]\x1b[K\x1b8", name, keyLabel(detachKey)))
 }
 
 // keyLabel renders a control byte as a "Ctrl+X" hint (0x1c -> "Ctrl+\").

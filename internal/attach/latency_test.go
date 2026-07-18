@@ -25,7 +25,7 @@ func TestPassthrough_KeystrokeEchoLatencyP95(t *testing.T) {
 	const samples = 1000
 
 	term := newFakeTerm(80, 24)
-	sess := newFakeSession([]byte("READY"))
+	sess := newFakeSession(mustSnap(t, "READY"))
 	sess.echo = true // round-trip: Input -> Frames
 
 	ch := runInBackground(Config{Term: term, Session: sess})

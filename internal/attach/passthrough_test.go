@@ -53,7 +53,7 @@ func eventually(t *testing.T, cond func() bool) {
 // snapshot is painted EXACTLY ONCE before any live frame reaches the terminal.
 func TestPassthrough_SnapshotPaintedBeforeLiveFrames(t *testing.T) {
 	term := newFakeTerm(80, 24)
-	sess := newFakeSession([]byte("SNAPSHOT-GRID"))
+	sess := newFakeSession(mustSnap(t, "SNAPSHOT-GRID"))
 	ch := runInBackground(Config{Term: term, Session: sess})
 
 	// The snapshot must be on the terminal before any frame is sent.
@@ -166,7 +166,7 @@ func TestPassthrough_ResizePropagatesCurrentSize(t *testing.T) {
 // snapshot is painted, but keystrokes are NOT forwarded as input.
 func TestPassthrough_ReadOnlyForwardsNoInput(t *testing.T) {
 	term := newFakeTerm(80, 24)
-	sess := newFakeSession([]byte("FINAL-SNAPSHOT"))
+	sess := newFakeSession(mustSnap(t, "FINAL-SNAPSHOT"))
 	ch := runInBackground(Config{Term: term, Session: sess, ReadOnly: true})
 
 	eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("FINAL-SNAPSHOT")) })
@@ -190,7 +190,7 @@ func TestPassthrough_ReadOnlyForwardsNoInput(t *testing.T) {
 // ReasonSessionEnd and restores the terminal.
 func TestPassthrough_SessionEndReturnsAndRestores(t *testing.T) {
 	term := newFakeTerm(80, 24)
-	sess := newFakeSession([]byte("S"))
+	sess := newFakeSession(mustSnap(t, "S"))
 	ch := runInBackground(Config{Term: term, Session: sess})
 
 	eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("S")) })
@@ -210,7 +210,7 @@ func TestPassthrough_SessionEndReturnsAndRestores(t *testing.T) {
 func TestPassthrough_ChromeToggle(t *testing.T) {
 	// Chrome on: name + detach hint present.
 	term := newFakeTerm(80, 24)
-	sess := newFakeSession([]byte("GRID"))
+	sess := newFakeSession(mustSnap(t, "GRID"))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, Name: "claude"})
 	eventually(t, func() bool {
 		out := term.outBytes()
@@ -221,7 +221,7 @@ func TestPassthrough_ChromeToggle(t *testing.T) {
 
 	// Chrome off: the name must not be painted as chrome (only the grid).
 	term2 := newFakeTerm(80, 24)
-	sess2 := newFakeSession([]byte("GRID"))
+	sess2 := newFakeSession(mustSnap(t, "GRID"))
 	ch2 := runInBackground(Config{Term: term2, Session: sess2, Chrome: false, Name: "claude"})
 	eventually(t, func() bool { return bytes.Contains(term2.outBytes(), []byte("GRID")) })
 	time.Sleep(50 * time.Millisecond)
@@ -238,7 +238,7 @@ func TestPassthrough_ChromeToggle(t *testing.T) {
 func TestPassthrough_PanicRestoresTerminalAndReturnsError(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	term.panicOnOut = true // the snapshot paint faults mid-write
-	sess := newFakeSession([]byte("SNAP"))
+	sess := newFakeSession(mustSnap(t, "SNAP"))
 
 	reason, err := Run(Config{Term: term, Session: sess})
 
@@ -256,7 +256,7 @@ func TestPassthrough_PanicRestoresTerminalAndReturnsError(t *testing.T) {
 func TestPassthrough_SignalRestoresTerminal(t *testing.T) {
 	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		term := newFakeTerm(80, 24)
-		sess := newFakeSession([]byte("S"))
+		sess := newFakeSession(mustSnap(t, "S"))
 		ch := runInBackground(Config{Term: term, Session: sess})
 		eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("S")) })
 
