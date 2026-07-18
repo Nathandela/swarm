@@ -73,6 +73,13 @@ type Config struct {
 // frame carrying a damage signature re-asserts immediately regardless (ADR-006 v0.3).
 const chromeReassertInterval = 250 * time.Millisecond
 
+// chromeHealInterval bounds how long reserved-row damage in the LAST frame of a burst
+// can persist: after each frame batch a one-shot timer is (re)armed, and if it fires with
+// no further output the main loop re-asserts region+hint (at a safe boundary only). It
+// also caps the window an absolute-addressing bottom-row stomp (CSI 999;1H, which DECSTBM
+// cannot clamp) stays visible to one interval (ADR-006 v0.3.0).
+const chromeHealInterval = 300 * time.Millisecond
+
 // Reason is why Run returned, so the caller knows whether to return to the general
 // view (detached / session ended) or surface an error.
 type Reason int
@@ -128,11 +135,28 @@ func Run(cfg Config) (reason Reason, err error) {
 	restore := func() { restoreOnce.Do(func() { _ = restoreFn() }) }
 	// Last line of defense: however Run unwinds, the terminal is handed back.
 	defer restore()
-	// A fault anywhere in the loop (e.g. a mid-render write panic) is recovered so
-	// the user lands back on a sane terminal and the general view, never a wrecked
-	// screen behind a crashed TUI (E8.2). The deferred restore above still runs.
+
+	out := cfg.Term.Out()
+	// State the panic handler reads for best-effort chrome teardown (item 8): if a fault
+	// unwinds Run while the reserved row was ENGAGED, reset the scroll region so the agent
+	// is not left confined and the hint row is not left dirty. curCols/curRows track the
+	// latest real terminal size (updated by the resize pump).
+	var (
+		chromeEngaged    bool
+		curCols, curRows int
+	)
+	// A fault anywhere in the loop (e.g. a mid-render write panic) is recovered so the user
+	// lands back on a sane terminal and the general view, never a wrecked screen behind a
+	// crashed TUI (E8.2). The deferred restore above still runs.
 	defer func() {
 		if r := recover(); r != nil {
+			if chromeEngaged {
+				// Best-effort: out may be mid-fault, so guard the write against a re-panic.
+				func() {
+					defer func() { _ = recover() }()
+					writeAll(out, chromeCleanup(curRows))
+				}()
+			}
 			reason, err = ReasonError, fmt.Errorf("attach: recovered panic: %v", r)
 		}
 	}()
@@ -143,7 +167,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// The snapshot is a structured projection, not raw replay bytes, so it must be
 	// decoded and rendered to ANSI before it can paint (P0 agents-tracker-a6f: raw
 	// JSON was reaching the terminal).
-	out := cfg.Term.Out()
+	//
 	// Fetch the client terminal size BEFORE painting so the snapshot can be clipped
 	// to it: a snapshot from a larger terminal would otherwise pile excess rows onto
 	// the bottom line, and a wider row would wrap (a bottom-row wrap scrolls). On a
@@ -168,24 +192,34 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 		return rows
 	}
+	// parser tracks the terminal-output parser's position across all agent bytes
+	// (snapshot + frames) so the pump only injects re-assert bytes at a safe boundary
+	// (GROUND) — never mid escape sequence (A-1, ADR-006 v0.3.0).
+	var parser outParser
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
 		// Clip the snapshot to the reserved area (rows-1 when chrome is on) so it never
 		// paints over the hint row.
-		writeAll(out, vt.RenderSnapshotClipped(snap, cols, ptyRows(rows)))
+		rendered := vt.RenderSnapshotClipped(snap, cols, ptyRows(rows))
+		writeAll(out, rendered)
+		parser.feedAll(rendered)
 	} else {
 		// A snapshot that fails to decode paints a single plain notice instead of
 		// nothing, so an attach to a session with a skewed/corrupt snapshot is never
 		// a silent blank screen — even an idle agent with no live frames shows this
 		// line (A-4 never-blank). It carries no escape bytes; the live stream follows.
-		writeAll(out, []byte(snapshotUnavailableNotice))
+		notice := []byte(snapshotUnavailableNotice)
+		writeAll(out, notice)
+		parser.feedAll(notice)
 	}
 	// Chrome is established AFTER the grid paint, whose clear+home would otherwise wipe
 	// it: chromeHint sets the scroll region and paints the hint on the reserved bottom
 	// row, saving/restoring the cursor (DECSC/DECRC) so the snapshot's cursor position
-	// survives (A-5). lastAssert seeds the output pump's re-assert throttle.
+	// survives (A-5). lastAssert seeds the output pump's re-assert throttle; chromeEngaged
+	// records that the region is ours to tear down.
 	var lastAssert time.Time
 	if chromeActive(rows) {
 		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows))
+		chromeEngaged = true
 		lastAssert = time.Now()
 	}
 
@@ -194,10 +228,10 @@ func Run(cfg Config) (reason Reason, err error) {
 	if sizeErr == nil {
 		_ = cfg.Session.Resize(cols, ptyRows(rows))
 	}
-	// curCols/curRows track the latest real terminal size (updated by the resize pump
-	// via winCh) so the output pump's re-assert and the detach cleanup target the
-	// current bottom row rather than the attach-time one.
-	curCols, curRows := cols, rows
+	// curCols/curRows (declared above for the panic handler) now hold the attach-time
+	// size; the resize pump keeps them current so the output pump's re-assert and the
+	// detach cleanup target the current bottom row rather than the attach-time one.
+	curCols, curRows = cols, rows
 
 	// Input pump: raw keystrokes -> Session.Input, tight so echo latency stays low
 	// (N-2). The detach key, recognized as a discrete single-byte keypress, is NOT
@@ -263,18 +297,55 @@ func Run(cfg Config) (reason Reason, err error) {
 	// SIGHUP never leaves a wrecked terminal behind (E8.2).
 	frames := cfg.Session.Frames()
 	// finish tears the loop down on the terminal paths: it releases the lease, and when
-	// chrome reserved a row it resets the scroll region to full and clears the hint row
-	// so the board repaint that follows starts on a clean full-height screen, then hands
-	// the terminal back. The panic path does not route through here — its deferred
-	// restore still runs, but out may be mid-fault, so chrome cleanup is best-effort.
+	// chrome actually ENGAGED a row it resets the scroll region to full and clears the hint
+	// row so the board repaint that follows starts on a clean full-height screen, then hands
+	// the terminal back. Keying on chromeEngaged (not cfg.Chrome) keeps a Chrome:true run on
+	// a too-small (rows<=2) terminal byte-identical to Chrome:false at teardown (item 4). The
+	// panic path does not route through here — its deferred restore still runs, but out may
+	// be mid-fault, so its chrome cleanup is best-effort.
 	finish := func(r Reason) (Reason, error) {
 		_ = cfg.Session.Detach()
-		if cfg.Chrome {
+		if chromeEngaged {
 			writeAll(out, chromeCleanup(curRows))
 		}
 		restore()
 		return r, nil
 	}
+
+	// pendingReassert remembers that a re-assert is OWED (damage was seen) but could not be
+	// injected because the parser was mid-sequence; the next safe boundary flushes it.
+	var pendingReassert bool
+	// healCh delivers the trailing-heal timer's fire into the main loop (the sole writer to
+	// out); the timer goroutine only nudges, never writes. armHeal (re)arms the one-shot
+	// after each frame batch so damage in the LAST frame of a burst self-heals with no
+	// further output.
+	healCh := make(chan struct{}, 1)
+	var healTimer *time.Timer
+	armHeal := func() {
+		if healTimer == nil {
+			healTimer = time.AfterFunc(chromeHealInterval, func() {
+				select {
+				case healCh <- struct{}{}:
+				default:
+				}
+			})
+			return
+		}
+		healTimer.Reset(chromeHealInterval)
+	}
+	defer func() {
+		if healTimer != nil {
+			healTimer.Stop()
+		}
+	}()
+	// reassertChrome re-emits region+hint at the current size and clears the owed re-assert.
+	// The caller has verified the parser is in GROUND (a safe boundary).
+	reassertChrome := func() {
+		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+		lastAssert = time.Now()
+		pendingReassert = false
+	}
+
 	for {
 		select {
 		case f, ok := <-frames:
@@ -282,14 +353,32 @@ func Run(cfg Config) (reason Reason, err error) {
 				return finish(ReasonSessionEnd)
 			}
 			writeAll(out, f)
-			// The agent's own output can damage the reserved row — a full reset (ESC c),
-			// an ED2 clear, an alt-screen swap, or a bare CSI r region reset. Re-assert
-			// region+hint after the frame: immediately on a damage signature, otherwise
-			// throttled so benign scrolling output is not amplified.
+			parser.feedAll(f)
+			// The agent's own output can damage the reserved row — a full reset (ESC c), an
+			// ED2/ED0 clear, an alt-screen swap, or a bare CSI r region reset. Re-assert
+			// region+hint after the frame: on a damage signature (owed via pendingReassert)
+			// or once the throttle elapses — but ONLY at a safe boundary (parser in GROUND),
+			// so injected bytes never split the agent's escape sequence (A-1). A trailing heal
+			// timer is (re)armed so damage in the burst's last frame heals with no further
+			// output.
 			if chromeActive(curRows) {
-				if hasDamageSignature(f) || time.Since(lastAssert) >= chromeReassertInterval {
-					writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
-					lastAssert = time.Now()
+				if hasDamageSignature(f) {
+					pendingReassert = true
+				}
+				if (pendingReassert || time.Since(lastAssert) >= chromeReassertInterval) && parser.inGround() {
+					reassertChrome()
+				}
+				armHeal()
+			}
+		case <-healCh:
+			// The trailing heal fired: re-assert if chrome is engaged and the parser is at a
+			// safe boundary; otherwise re-arm and try again next interval (never inject mid
+			// escape sequence).
+			if chromeActive(curRows) {
+				if parser.inGround() {
+					reassertChrome()
+				} else {
+					armHeal()
 				}
 			}
 		case <-detachCh:
@@ -297,18 +386,21 @@ func Run(cfg Config) (reason Reason, err error) {
 		case <-sigCh:
 			return finish(ReasonDetached)
 		case <-winCh:
-			// A resize arrived (chrome only): re-read the current size and re-establish
-			// the reserved row at the new dimensions. If the terminal shrank below the
-			// reserve threshold, release the scroll region so the now-full-height agent
-			// is not confined.
+			// A resize arrived (chrome only): re-read the current size and re-establish the
+			// reserved row at the new dimensions. If the terminal shrank below the reserve
+			// threshold, release the scroll region so the now-full-height agent is not
+			// confined — but only if chrome had actually ENGAGED (a never-engaged small
+			// terminal emits nothing, staying byte-identical to Chrome:false).
 			if c, r, e := cfg.Term.Size(); e == nil {
 				curCols, curRows = c, r
 				if chromeActive(r) {
 					writeAll(out, chromeHint(cfg.Name, detachKey, c, r))
-				} else {
+					chromeEngaged = true
+					lastAssert = time.Now()
+				} else if chromeEngaged {
 					writeAll(out, []byte("\x1b[r"))
+					chromeEngaged = false
 				}
-				lastAssert = time.Now()
 			}
 		}
 	}
@@ -340,7 +432,8 @@ func writeAll(w io.Writer, p []byte) {
 // CSI r region reset from the agent is repaired by the next re-assert).
 func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 	var b strings.Builder
-	b.WriteString("\x1b7") // DECSC: save cursor + pen
+	b.WriteString("\x1b7")    // DECSC: save cursor + pen + origin mode
+	b.WriteString("\x1b[?6l") // DECOM off: make the reserved-row CUP absolute even if the agent enabled origin mode; DECRC below restores the agent's DECOM
 	b.WriteString("\x1b[1;")
 	b.WriteString(strconv.Itoa(rows - 1))
 	b.WriteByte('r') // DECSTBM: scroll region 1..rows-1
@@ -386,16 +479,108 @@ func chromeCleanup(rows int) []byte {
 }
 
 // hasDamageSignature reports whether a live frame carries an escape sequence that
-// damages the reserved row — a full reset (ESC c), an ED2 screen clear, an alt-screen
-// swap (?1049h/l), or a bare CSI r scroll-region reset — so the output pump re-asserts
-// region+hint immediately instead of waiting for the throttle. It is a cheap byte scan,
-// not a full parse; a rare false positive costs only one extra re-assert.
+// damages the reserved row — a full reset (ESC c), an ED2 or ED0 screen clear, an
+// alt-screen swap (?1049/?1047/?47), or a bare CSI r scroll-region reset — so the output
+// pump re-asserts region+hint immediately instead of waiting for the throttle. It is a
+// cheap per-frame byte scan, not a full parse; a rare false positive costs only one extra
+// re-assert. Residual: a damage signature SPLIT across two frames is not caught here (the
+// scan is per-frame), but the trailing heal timer re-asserts within one interval regardless.
 func hasDamageSignature(f []byte) bool {
-	return bytes.Contains(f, []byte("\x1bc")) ||
-		bytes.Contains(f, []byte("[2J")) ||
-		bytes.Contains(f, []byte("?1049")) ||
-		bytes.Contains(f, []byte("\x1b[r"))
+	return bytes.Contains(f, []byte("\x1bc")) || // RIS full reset
+		bytes.Contains(f, []byte("[2J")) || // ED2: full-screen clear
+		bytes.Contains(f, []byte("[J")) || // ED0: clear to end of screen (default param)
+		bytes.Contains(f, []byte("[0J")) || // ED0 explicit
+		bytes.Contains(f, []byte("?1049")) || // alt-screen swap (save/restore cursor)
+		bytes.Contains(f, []byte("?1047")) || // alt-screen swap (no cursor save)
+		bytes.Contains(f, []byte("?47")) || // legacy alt-screen swap
+		bytes.Contains(f, []byte("\x1b[r")) // bare DECSTBM reset
 }
+
+// outParser is a minimal, allocation-free tracker of the terminal-output parser's
+// position in the byte stream, so re-assert bytes are injected ONLY at a safe boundary
+// (GROUND) — never mid escape sequence, where they would abort the agent's pending
+// sequence and make its continuation render as literal text (A-1 purity, ADR-006 v0.3.0).
+// It is fed every OUTPUT byte from the agent (snapshot + frames) in order. It errs toward
+// "still in a sequence": a false non-ground only defers an injection (safe), whereas a
+// false ground could split a sequence (unsafe).
+type outParser struct{ st ptState }
+
+type ptState uint8
+
+const (
+	ptGround ptState = iota // between sequences: a safe injection point
+	ptEsc                   // ESC seen, awaiting the sequence type
+	ptCSI                   // CSI (ESC [): params/intermediates until a final 0x40-0x7e
+	ptNF                    // nF escape (ESC + intermediate): until a final 0x30-0x7e
+	ptStr                   // string (OSC/DCS/APC/PM/SOS): until ST (ESC \) or BEL
+	ptStrEsc                // ESC inside a string: awaiting the '\' of ST
+)
+
+// feed advances the tracker by one output byte.
+func (p *outParser) feed(b byte) {
+	switch p.st {
+	case ptGround:
+		if b == 0x1b {
+			p.st = ptEsc
+		}
+	case ptEsc:
+		switch {
+		case b == '[':
+			p.st = ptCSI
+		case b == ']' || b == 'P' || b == '_' || b == '^' || b == 'X': // OSC/DCS/APC/PM/SOS
+			p.st = ptStr
+		case b >= 0x20 && b <= 0x2f: // nF intermediate (e.g. ESC ( B)
+			p.st = ptNF
+		case b == 0x1b: // ESC ESC: restart the escape
+			p.st = ptEsc
+		default: // a two-byte escape completes (ESC 7/8/c/=/> M ...)
+			p.st = ptGround
+		}
+	case ptCSI:
+		switch {
+		case b == 0x1b: // aborted; a new escape begins
+			p.st = ptEsc
+		case b >= 0x40 && b <= 0x7e: // CSI final byte
+			p.st = ptGround
+		default: // params (0x30-0x3f), intermediates (0x20-0x2f), or stray: keep consuming
+		}
+	case ptNF:
+		switch {
+		case b == 0x1b:
+			p.st = ptEsc
+		case b >= 0x30 && b <= 0x7e: // nF final byte
+			p.st = ptGround
+		default: // more intermediates
+		}
+	case ptStr:
+		switch {
+		case b == 0x07: // BEL terminates (OSC)
+			p.st = ptGround
+		case b == 0x1b: // possible ST (ESC \)
+			p.st = ptStrEsc
+		default: // string payload
+		}
+	case ptStrEsc:
+		switch {
+		case b == '\\': // ST completes the string
+			p.st = ptGround
+		case b == 0x1b: // another ESC: keep awaiting '\'
+			p.st = ptStrEsc
+		default: // ESC + other inside a string: treat as string body
+			p.st = ptStr
+		}
+	}
+}
+
+// feedAll advances the tracker by every byte of p, in order.
+func (p *outParser) feedAll(b []byte) {
+	for _, c := range b {
+		p.feed(c)
+	}
+}
+
+// inGround reports whether the parser is between sequences — a safe injection point.
+func (p *outParser) inGround() bool { return p.st == ptGround }
 
 // keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q"). DEL (0x7f)
 // has no sensible Ctrl+<letter> form (0x7f|0x40 is 0x7f itself), so it is named "DEL".

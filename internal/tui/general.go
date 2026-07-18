@@ -41,6 +41,13 @@ type generalModel struct {
 	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
 	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
 
+	// tombstones records ids removed by a client-side delete, each with an expiry, so a
+	// late buffered status event (one already queued on the subscribe stream before the
+	// delete landed) cannot re-append the row. The daemon tombstones server-side too; this
+	// closes the client-side remainder. Expiry is checked in apply (the Update path), never
+	// in a view, so no wall-clock read reaches rendering.
+	tombstones map[string]time.Time
+
 	width int
 }
 
@@ -48,6 +55,11 @@ type generalModel struct {
 // auto-expires. Long enough to be read (and to still be present for the coordinated
 // TestLiveness in-view assertion), short enough to stay transient.
 const bannerDuration = 4 * time.Second
+
+// tombstoneTTL is how long a client-deleted id is remembered so a late buffered event
+// for it is dropped. It only needs to outlast the drain of events already queued on the
+// subscribe stream at delete time; a few seconds is ample.
+const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
@@ -144,6 +156,12 @@ func (m *generalModel) move(delta int) {
 // It returns a command that prints the notification banner when the session
 // transitions INTO needs_input or ready_for_review (V-5), else nil.
 func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
+	// A client-deleted session must not reappear from a late buffered event that was
+	// already in flight when the delete landed (item 6). The tombstone is checked here on
+	// the Update path, so no wall-clock read reaches a view.
+	if m.isTombstoned(s.ID) {
+		return nil
+	}
 	// Remember what is selected before the regroup shifts the flat indices.
 	selID := m.selectedID()
 
@@ -309,6 +327,29 @@ type killDoneMsg struct {
 
 func killCmd(c Client, id string) tea.Cmd {
 	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
+}
+
+// tombstone records id as client-deleted (with an expiry) so a late buffered event for
+// it is dropped by apply. Called alongside remove on a successful delete.
+func (m *generalModel) tombstone(id string) {
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]time.Time)
+	}
+	m.tombstones[id] = time.Now().Add(tombstoneTTL)
+}
+
+// isTombstoned reports whether id was recently client-deleted, purging the entry once it
+// expires (so a later, legitimately new session reusing the id is not blocked forever).
+func (m *generalModel) isTombstoned(id string) bool {
+	exp, ok := m.tombstones[id]
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(exp) {
+		delete(m.tombstones, id)
+		return false
+	}
+	return true
 }
 
 // remove drops the session with id from the board (the optimistic removal on a

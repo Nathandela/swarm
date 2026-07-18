@@ -72,10 +72,11 @@ type fakeTerm struct {
 	rows  int
 	sizeN int // number of Size() calls (resize path reads current size)
 
-	rawCalls     int
-	restoreCalls int
-	rawBeforeOut bool // set true if MakeRaw happened before the first Out write
-	panicOnOut   bool // Out().Write panics, to exercise the panic-restore path
+	rawCalls      int
+	restoreCalls  int
+	rawBeforeOut  bool   // set true if MakeRaw happened before the first Out write
+	panicOnOut    bool   // Out().Write panics, to exercise the panic-restore path
+	panicSentinel []byte // when non-empty, an Out().Write whose payload contains it panics ONCE-per-write (the panic happens before the buffer write), so a panic can be triggered AFTER chrome is engaged
 
 	resizeCh chan struct{}
 	sigCh    chan os.Signal
@@ -121,6 +122,9 @@ func (f *fakeTerm) Out() io.Writer {
 	if f.panicOnOut {
 		return panicWriter{}
 	}
+	if len(f.panicSentinel) > 0 {
+		return sentinelPanicWriter{buf: f.out, sentinel: f.panicSentinel}
+	}
 	return f.out
 }
 
@@ -129,6 +133,23 @@ func (f *fakeTerm) Out() io.Writer {
 type panicWriter struct{}
 
 func (panicWriter) Write([]byte) (int, error) { panic("attach: simulated render panic") }
+
+// sentinelPanicWriter panics only on a Write whose payload contains the sentinel,
+// so a fault can be injected AFTER the snapshot+chrome are established (e.g. on a
+// specific live frame) — exercising the panic-path chrome cleanup. Writes that do
+// not carry the sentinel pass through to the buffer, so the best-effort cleanup the
+// recover emits (which does not carry the sentinel) is observable.
+type sentinelPanicWriter struct {
+	buf      *lockedBuffer
+	sentinel []byte
+}
+
+func (w sentinelPanicWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, w.sentinel) {
+		panic("attach: simulated render panic on sentinel")
+	}
+	return w.buf.Write(p)
+}
 
 func (f *fakeTerm) Resizes() (<-chan struct{}, func())  { return f.resizeCh, func() {} }
 func (f *fakeTerm) Signals() (<-chan os.Signal, func()) { return f.sigCh, func() {} }

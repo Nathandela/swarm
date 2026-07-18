@@ -294,6 +294,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.general.setBanner("delete failed: " + msg.err.Error())
 		}
 		m.general.remove(msg.id)
+		m.general.tombstone(msg.id) // a late buffered event must not resurrect the row (item 6)
 		return m, m.general.setBanner("session deleted")
 
 	case killDoneMsg:
@@ -410,32 +411,45 @@ func (m rootModel) composeBoard(body, status string) string {
 	}
 	bar := "  " + styleDim.Render(status)
 
-	// The version-skew notice reserves its own row above the bar. It is clamped and
-	// styled the same way, so it likewise cannot wrap and break the fixed height.
-	tail := bar
-	rows := 1
-	if notice := skewNotice(m.daemonVersion, m.clientVersion); notice != "" {
+	// The version-skew notice reserves its own row above the bar, clamped and styled the
+	// same way so it likewise cannot wrap.
+	notice := skewNotice(m.daemonVersion, m.clientVersion)
+	var noticeRow string
+	if notice != "" {
 		if m.width > 2 {
 			notice = clampCells(notice, m.width-2)
 		}
-		tail = "  " + styleTitle.Render(notice) + "\n" + bar
-		rows = 2
+		noticeRow = "  " + styleTitle.Render(notice)
 	}
 
 	if m.height <= 0 {
-		return body + "\n" + tail
+		// Height unknown (before the first WindowSizeMsg): the tail simply follows the body.
+		out := body
+		if noticeRow != "" {
+			out += "\n" + noticeRow
+		}
+		return out + "\n" + bar
+	}
+
+	// Build the tail within the height budget, dropping the notice FIRST when there is not
+	// room for both it and the bar, so the composed board never exceeds m.height. The
+	// status bar is the last-resort row (kept whenever height >= 1); the body fills what
+	// remains above it.
+	tail := []string{bar}
+	if noticeRow != "" && m.height >= 2 {
+		tail = []string{noticeRow, bar}
+	}
+	target := m.height - len(tail)
+	if target < 0 {
+		target = 0
 	}
 	lines := strings.Split(body, "\n")
-	target := m.height - rows
-	if target < 0 {
-		target = 0 // a terminal too short for the notice row + bar; never slice negative
-	}
 	if len(lines) > target {
 		lines = lines[:target]
 	} else {
 		lines = append(lines, make([]string, target-len(lines))...)
 	}
-	return strings.Join(lines, "\n") + "\n" + tail
+	return strings.Join(append(lines, tail...), "\n")
 }
 
 // enterGeneral switches to the general view and restarts the repaint timer if it

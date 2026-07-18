@@ -168,8 +168,19 @@ func TestPassthrough_ChromeSmallTerminalDisablesHint(t *testing.T) {
 		}
 	}
 
-	sess.endSession()
-	_ = waitResult(t, ch)
+	// Teardown must also be chrome-free (item 4): chrome never ENGAGED, so a resize
+	// that stays small and the final teardown must emit no scroll-region reset and no
+	// bottom-row clear — byte-for-byte as if Chrome:false.
+	term.setSize(80, 2)
+	eventually(t, func() bool { return len(sess.resizeCalls()) >= 2 })
+	term.feed([]byte{DefaultDetachKey})
+	res := waitResult(t, ch)
+	if res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+	if bytes.Contains(term.outBytes(), []byte("\x1b[r")) {
+		t.Fatalf("a never-engaged (rows<=2) run must emit no scroll-region reset through resize+detach; got %q", term.outBytes())
+	}
 }
 
 // A frame carrying a damage signature (ED2 clear here) re-asserts the region+hint
