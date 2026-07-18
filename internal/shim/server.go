@@ -449,9 +449,17 @@ func (s *subscriber) closeQueue() {
 // so the reader loop's hello replies and the attach writer goroutine's snapshot/
 // frames can run concurrently without ever interleaving a frame on the wire
 // (R1.3.2b/e).
+//
+// chunkSnapshot records whether THIS connection's peer (the daemon) advertised
+// snapshot chunking in its hello: it is set once by serveConn from the hello frame
+// and read once by hub.attach (both in the connection's read-loop goroutine, so it
+// never races the attach writer goroutine, which uses a captured copy). It defaults
+// false, so a connection whose peer did not advertise chunking — an old daemon, or
+// any direct connWriter{} construction — uses today's single-frame snapshot path.
 type connWriter struct {
-	mu   sync.Mutex
-	conn net.Conn
+	mu            sync.Mutex
+	conn          net.Conn
+	chunkSnapshot bool
 }
 
 func (w *connWriter) writeFrame(typ wire.Type, payload []byte) error {

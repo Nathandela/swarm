@@ -17,9 +17,13 @@ const (
 	// eventPoll is how often FromDaemon samples the daemon roster for status
 	// changes (well within the L1 <=1 s bound).
 	eventPoll = 200 * time.Millisecond
-	// shimAttachTimeout bounds waiting for the shim's snapshot on attach.
-	shimAttachTimeout = 10 * time.Second
 )
+
+// shimAttachTimeout is the TOTAL deadline for reading the shim's snapshot on attach
+// — one bound covering the preamble AND every chunk of a chunked transfer, so a
+// stalled or short chunk stream cannot hang the attach (R1.2.4). It is a var only so
+// tests can shorten it; production never reassigns it.
+var shimAttachTimeout = 10 * time.Second
 
 // FromDaemon adapts a real *daemon.Daemon to the DaemonAPI the Server wraps:
 // list/launch/kill/delete forward directly; Attach opens a real SessionStream
