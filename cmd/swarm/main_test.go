@@ -115,6 +115,47 @@ func TestDetectAgentsWith_SkipsNonProductionByRegistryFlag(t *testing.T) {
 	}
 }
 
+// TestDetectAgentsWith_SurfacesProductionAdaptersWithOptionSchemas — R-F3
+// (Phase F form smoke): the launch pipeline surfaces exactly the pinned v1.1
+// production set {agy, claude, codex, opencode}, sorted, each carrying its
+// REAL registry adapter's option schema (not a stub) — proof that R-F1's
+// registry additions reach the picker without a hardcoded CLI count anywhere
+// in this pipeline. Complements TestDetectAgentsWith_SortedOrderAndCompleteness
+// (which tracks whatever the registry currently holds) with a literal pinned
+// expectation, so an accidental un-registration of a v1.1 CLI is caught here
+// even if the registry-driven tests would silently adjust to it.
+func TestDetectAgentsWith_SurfacesProductionAdaptersWithOptionSchemas(t *testing.T) {
+	wantNames := []string{"agy", "claude", "codex", "opencode"}
+	got := prodAdapterNames()
+	if len(got) != len(wantNames) {
+		t.Fatalf("production adapter set = %v; want exactly %v (v1.1 CLI duo)", got, wantNames)
+	}
+	for i, name := range wantNames {
+		if got[i] != name {
+			t.Fatalf("production adapter set = %v; want exactly %v (v1.1 CLI duo)", got, wantNames)
+		}
+	}
+
+	stub := func(adapter.Adapter) adapter.Detection { return adapter.Detection{Found: true, InRange: true} }
+	agents := detectAgentsWith("", stub)()
+	if len(agents) != len(wantNames) {
+		t.Fatalf("got %d agents, want %d", len(agents), len(wantNames))
+	}
+	for i, name := range wantNames {
+		if agents[i].Name != name {
+			t.Fatalf("agents[%d].Name = %q, want %q", i, agents[i].Name, name)
+		}
+		ad, ok := registry.New(name)
+		if !ok {
+			t.Fatalf("registry.New(%q) failed", name)
+		}
+		wantOpts := ad.Options()
+		if len(agents[i].Options) != len(wantOpts) {
+			t.Errorf("%s: AgentInfo.Options has %d entries, want %d (the registry adapter's real Options() schema)", name, len(agents[i].Options), len(wantOpts))
+		}
+	}
+}
+
 // TestDetectAgentsWith_AppendsFakeAgent — the SWARM_FAKE_AGENT_BIN dev/test knob
 // still appends the reserved "fake" agent last, unchanged by the R-A2 refactor.
 func TestDetectAgentsWith_AppendsFakeAgent(t *testing.T) {

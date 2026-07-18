@@ -113,12 +113,12 @@ Derived view groups:
 ### Adapters and status detection (T)
 
 - **T-1** (Ubiquitous) Each supported agent SHALL be described by an adapter implementing one interface: binary detection + version range, launch-arg composition, declarative options schema (so the TUI renders options without code changes, keeping T-5 honest), status signal sources, resume capability + native conversation-id extraction.
-- **T-2** (Ubiquitous) Status detection SHALL prefer **typed signals** wherever the CLI offers them: Claude Code hooks (PermissionRequest/Notification/Stop), Codex app-server / typed events, Gemini CLI structured hooks, OpenCode plugin events (`permission.asked`, `session.idle`). Hook/callback delivery to the daemon SHALL be authenticated with a per-session token; hook installation SHALL be per-invocation (flags/env/project-local), never a non-atomic mutation of the user's global config.
+- **T-2** (Ubiquitous) Status detection SHALL prefer **typed signals** wherever the CLI offers them: Claude Code hooks (PermissionRequest/Notification/Stop), Codex app-server / typed events. OpenCode exposes an HTTP+SSE server (`opencode serve`, `GET /event`) carrying a single `session.status` event with a busy/idle/retry payload, plus separate permission/question request objects — not the per-transition typed events this engine's exact-event-name mapping expects today; v1.1 drives OpenCode via adapter-declared grid heuristics (T-3) instead, with typed-event wiring left as future work requiring a payload-to-turn subtype contract of its own. agy's future typed sources are print-mode `--output-format stream-json` (not usable for interactive sessions) and the file-configured `.agents/hooks.json` (not argv-injectable — wiring it would mutate workspace config, out of scope for v1.1); both are unimplemented in the v1.1 adapter, which is heuristic-only. Hook/callback delivery to the daemon SHALL be authenticated with a per-session token; hook installation SHALL be per-invocation (flags/env/project-local), never a non-atomic mutation of the user's global config.
 - **T-3** (Ubiquitous) Grid-based heuristics (reading the emulated screen, never the raw byte stream) SHALL be the fallback for CLIs or states without typed signals; evaluated on output events with a low-frequency fallback poll.
 - **T-4** (Unwanted) IF detection is inconclusive, or no output AND no process CPU activity occurs for a threshold while turn=`active`, THEN turn SHALL become `unknown` (staleness guard: never confidently wrong).
 - **T-5** (Ubiquitous) Adding a new adapter SHALL require no changes to daemon core, protocol, or TUI.
 - **T-6** (Ubiquitous) BEFORE an adapter is built, a **characterization harness** SHALL record the CLI's real behavior (PTY fixtures per state, hook/event payloads, version) into the fixture corpus; the adapter's capability-matrix entry (signals, resume, options) is the harness's output and the adapter's acceptance baseline.
-- **T-7** (Ubiquitous) v1.0 ships Claude Code and Codex adapters; Gemini CLI, OpenCode, and AGY follow (AGY only after characterization — currently unscoped).
+- **T-7** (Ubiquitous) v1.0 shipped Claude Code and Codex adapters. v1.1 ships agy (Antigravity CLI, Google's Gemini CLI successor — Gemini CLI itself stops serving non-Enterprise requests 2026-06-18) and OpenCode adapters. vibe (Mistral) was evaluated and dropped by decision (2026-07-18); see docs/design/cli-trio-adapters.md appendix for the rationale.
 
 ### Persistence (R) (ADR-003)
 
@@ -155,7 +155,7 @@ flowchart TB
     API["protocol server: NDJSON control + binary data frames"]
     REG["registry (rebuildable)"]
     DET["status engine"]
-    ADP["adapters: claude, codex (v1) · gemini, opencode, agy (v1.1)"]
+    ADP["adapters: claude, codex (v1) · agy, opencode (v1.1)"]
   end
   subgraph shims["per-session shims (survive daemon)"]
     SH1["shim: PTY + VT grid + transcript"]
@@ -239,7 +239,7 @@ sequenceDiagram
 | 11 | Sessions running | `brew upgrade swarm` + daemon restart | Same as 10 — upgrade is safe and says so | D-5, D-8 |
 | 12 | Machine rebooted | swarm reopened | Sessions marked lost, transcripts intact, resume offered where supported | D-4, R-2 |
 | 13 | Launch form | Nonexistent dir | Inline error; daemon re-validates too | L-3, P-6 |
-| 14 | gemini not installed | Launch form opened | Greyed with install hint | L-2 |
+| 14 | agy not installed | Launch form opened | Greyed with install hint | L-2 |
 | 15 | Spinner runs overnight | — | Transcript capped/rotated; near-zero client-idle CPU | S-5, N-3 |
 | 16 | Second client attaches | — | Lease refused/transferred explicitly; stale input rejected | P-5 |
 | 17 | Agent spawns MCP servers | Kill session | Whole process group terminated, nothing leaks | S-4 |
