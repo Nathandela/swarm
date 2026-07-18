@@ -12,6 +12,14 @@ var ErrBadCommandKey = errors.New("crypto: command-signing public key must be 32
 // ErrCommandSig is returned when a command signature does not verify.
 var ErrCommandSig = errors.New("crypto: command signature verification failed")
 
+// ErrBadCommand is returned when a command is missing a mandatory identifier, an
+// oversized field, or a content hash that is neither absent nor exactly 32 bytes.
+var ErrBadCommand = errors.New("crypto: malformed command")
+
+// maxCommandField caps each variable-length field so a length prefix cannot
+// overflow uint32 and a hostile command cannot balloon the signing input.
+const maxCommandField = 1 << 16
+
 // commandDomain domain-separates command signatures from any other Ed25519 use
 // of the same key.
 const commandDomain = "swarm-remote/1 cmd\x00"
@@ -29,10 +37,24 @@ type Command struct {
 	ContentHash []byte
 }
 
-// Canonical is the unambiguous, length-prefixed signing input. Length prefixes
-// make every field boundary explicit, so no two distinct commands share an
-// encoding (and a nil content hash differs from an empty one).
-func (c Command) Canonical() []byte {
+// Canonical is the unambiguous, length-prefixed signing input, or an error if
+// the command is malformed (F13). Length prefixes make every field boundary
+// explicit, so no two distinct well-formed commands share an encoding. A nil
+// and an empty content hash canonicalize identically (both encode as length 0):
+// "no content hash". The mandatory identifiers must be present and no field may
+// exceed maxCommandField; the content hash is absent or exactly 32 bytes.
+func (c Command) Canonical() ([]byte, error) {
+	if c.Action == "" || c.Machine == "" || c.Session == "" || c.OperationID == "" {
+		return nil, ErrBadCommand
+	}
+	if len(c.ContentHash) != 0 && len(c.ContentHash) != 32 {
+		return nil, ErrBadCommand
+	}
+	for _, f := range []string{c.Action, c.Machine, c.Session, c.OperationID} {
+		if len(f) > maxCommandField {
+			return nil, ErrBadCommand
+		}
+	}
 	b := []byte(commandDomain)
 	b = appendField(b, []byte(c.Action))
 	b = appendField(b, []byte(c.Machine))
@@ -40,7 +62,7 @@ func (c Command) Canonical() []byte {
 	b = appendField(b, []byte(c.OperationID))
 	b = binary.BigEndian.AppendUint64(b, uint64(c.ExpiresAt))
 	b = appendField(b, c.ContentHash)
-	return b
+	return b, nil
 }
 
 func appendField(b, f []byte) []byte {

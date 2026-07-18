@@ -1,9 +1,11 @@
 package crypto
 
 import (
-	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -26,6 +28,12 @@ var (
 	ErrPeerStaticMismatch = errors.New("crypto: peer static key does not match pinned value")
 	// ErrNoStatic is returned when a config omits the required static keypair.
 	ErrNoStatic = errors.New("crypto: noise config requires a static keypair")
+	// ErrNoPin is returned when a LIVE session is constructed without a valid
+	// 32-byte peer-static pin. "Unpinned" is an explicit opt-in (AllowUnpinnedPeer)
+	// used only by pairing, never by a live session (F1 — no fail-open).
+	ErrNoPin = errors.New("crypto: live session requires a 32-byte peer-static pin")
+	// ErrBadPSK is returned when a supplied PSK is not exactly 32 bytes.
+	ErrBadPSK = errors.New("crypto: preshared key must be 32 bytes")
 	// ErrHandshakeDone is returned by handshake calls after completion.
 	ErrHandshakeDone = errors.New("crypto: handshake already complete")
 	// ErrNotEstablished is returned by transport calls before completion.
@@ -36,7 +44,8 @@ var (
 var noiseSuite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
 // NoiseStatic is an opaque handshake handle for an X25519 static keypair. It
-// carries the private scalar for the DH but exposes no accessor that returns it.
+// carries the private scalar for the DH but exposes no accessor that returns it,
+// and redacts the private scalar under every fmt verb (F2 — see Format/String).
 type NoiseStatic struct {
 	dh noise.DHKey
 }
@@ -48,13 +57,40 @@ func newNoiseStatic(priv, pub [32]byte) *NoiseStatic {
 	}}
 }
 
+// String is a redacted representation: the public-key fingerprint only, never
+// the private scalar. Value receiver so an embedded NoiseStatic (value or
+// pointer) is covered too.
+func (s NoiseStatic) String() string {
+	return fmt.Sprintf("crypto.NoiseStatic{pub:%s}", fingerprint(s.dh.Public))
+}
+
+// GoString backs %#v so it cannot dump the private field.
+func (s NoiseStatic) GoString() string { return s.String() }
+
+// Format routes EVERY fmt verb (%v %+v %#v %s %x %q) through the redacted
+// String, so no verb can spill the DH private scalar.
+func (s NoiseStatic) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+
 // NoiseConfig parameterises a single live/pairing XX session.
 type NoiseConfig struct {
-	Initiator  bool
-	Static     *NoiseStatic
-	PeerStatic []byte    // pinned peer static; the handshake aborts on mismatch
-	Prologue   []byte    // binds protocol/role/route (R-CRY.5)
-	Rand       io.Reader // ephemeral source; crypto/rand when nil
+	Initiator bool
+	Static    *NoiseStatic
+	// PeerStatic is the pinned peer static. A live session (AllowUnpinnedPeer
+	// false) requires exactly 32 bytes; the handshake aborts on mismatch.
+	PeerStatic []byte
+	// AllowUnpinnedPeer opts into learning the peer static instead of pinning
+	// it. This is the ONLY path that may run without a pin and is used solely by
+	// pairing (the SAS + desktop confirm are the out-of-band gate). A live
+	// session never sets it.
+	AllowUnpinnedPeer bool
+	// PSK, when set, configures Noise XXpsk0 (PresharedKeyPlacement 0). This is
+	// the pairing seam (R-PAIR.3); a live session leaves it nil.
+	PSK      []byte
+	Prologue []byte // binds protocol/role/route (R-CRY.5)
+
+	// randReader is a TEST-ONLY ephemeral source (crypto/rand when nil). It is
+	// unexported so no production caller can override the RNG (F6).
+	randReader io.Reader
 }
 
 // NoiseSession is one Noise_XX session: handshake first (WriteMessage/
@@ -70,6 +106,16 @@ type NoiseSession struct {
 	peer     []byte
 	binding  []byte
 	complete bool
+
+	// Rekey accounting (R-CRY.7 / F7): bytes moved per direction and the time
+	// transport was established. now/rekeyBytes/rekeyDur are test seams (nil/0
+	// select the real clock and the RekeyAfter* thresholds).
+	sendBytes   uint64
+	recvBytes   uint64
+	established time.Time
+	now         func() time.Time
+	rekeyBytes  uint64
+	rekeyDur    time.Duration
 }
 
 // NewNoise starts an XX session. The pinned PeerStatic is held here and checked
@@ -79,18 +125,34 @@ func NewNoise(cfg NoiseConfig) (*NoiseSession, error) {
 	if cfg.Static == nil {
 		return nil, ErrNoStatic
 	}
-	rng := cfg.Rand
+	// A live session MUST pin a valid 32-byte peer static before the handshake;
+	// only pairing may run unpinned, and then explicitly (F1).
+	if !cfg.AllowUnpinnedPeer && len(cfg.PeerStatic) != 32 {
+		return nil, ErrNoPin
+	}
+	if len(cfg.PeerStatic) != 0 && len(cfg.PeerStatic) != 32 {
+		return nil, ErrNoPin
+	}
+	if cfg.PSK != nil && len(cfg.PSK) != 32 {
+		return nil, ErrBadPSK
+	}
+	rng := cfg.randReader
 	if rng == nil {
 		rng = rand.Reader
 	}
-	hs, err := noise.NewHandshakeState(noise.Config{
+	ncfg := noise.Config{
 		CipherSuite:   noiseSuite,
 		Random:        rng,
 		Pattern:       noise.HandshakeXX,
 		Initiator:     cfg.Initiator,
 		Prologue:      cfg.Prologue,
 		StaticKeypair: cfg.Static.dh,
-	})
+	}
+	if len(cfg.PSK) > 0 {
+		ncfg.PresharedKey = cfg.PSK
+		ncfg.PresharedKeyPlacement = 0
+	}
+	hs, err := noise.NewHandshakeState(ncfg)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +180,7 @@ func (s *NoiseSession) WriteMessage(payload []byte) ([]byte, error) {
 
 // ReadMessage consumes the next handshake message. As soon as the peer static
 // is learned it is compared to the pinned value; a mismatch aborts before the
-// session reaches transport mode (R-CRY.6).
+// session reaches transport mode (R-CRY.6). The comparison is constant-time.
 func (s *NoiseSession) ReadMessage(message []byte) ([]byte, error) {
 	if s.hs == nil {
 		return nil, ErrHandshakeDone
@@ -127,9 +189,15 @@ func (s *NoiseSession) ReadMessage(message []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ps := s.hs.PeerStatic(); len(ps) > 0 && len(s.pinned) > 0 && !bytes.Equal(ps, s.pinned) {
-		s.hs = nil // fail closed: never reach transport mode
-		return nil, ErrPeerStaticMismatch
+	// XX transmits the peer static in msg2 (to the initiator) / msg3 (to the
+	// responder), so PeerStatic() is empty on earlier reads. Compare only once
+	// it is actually present; the establish() guard below guarantees a pinned
+	// session cannot complete without a match, so this is not fail-open.
+	if len(s.pinned) > 0 {
+		if ps := s.hs.PeerStatic(); len(ps) == 32 && subtle.ConstantTimeCompare(ps, s.pinned) != 1 {
+			s.hs = nil // fail closed: never reach transport mode
+			return nil, ErrPeerStaticMismatch
+		}
 	}
 	if cs0 != nil {
 		s.establish(cs0, cs1)
@@ -141,6 +209,14 @@ func (s *NoiseSession) ReadMessage(message []byte) ([]byte, error) {
 // cipher states, then drops the handshake state (no resumption secret retained).
 func (s *NoiseSession) establish(cs0, cs1 *noise.CipherState) {
 	s.peer = append([]byte(nil), s.hs.PeerStatic()...)
+	// Defense in depth (F1): a pinned session never reaches transport unless the
+	// peer static was actually transmitted (len 32) and matches. XX always
+	// transmits it before completion, so this only fires on a pattern/impl
+	// regression — and then it fails closed (complete stays false).
+	if len(s.pinned) > 0 && (len(s.peer) != 32 || subtle.ConstantTimeCompare(s.peer, s.pinned) != 1) {
+		s.hs = nil
+		return
+	}
 	s.binding = append([]byte(nil), s.hs.ChannelBinding()...)
 	if s.initiator {
 		s.send, s.recv = cs0, cs1
@@ -148,7 +224,16 @@ func (s *NoiseSession) establish(cs0, cs1 *noise.CipherState) {
 		s.send, s.recv = cs1, cs0
 	}
 	s.complete = true
+	s.established = s.clockNow()
 	s.hs = nil
+}
+
+// clockNow reads the injectable clock (time.Now when unset).
+func (s *NoiseSession) clockNow() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // HandshakeComplete reports whether transport mode has been reached.
@@ -168,7 +253,12 @@ func (s *NoiseSession) Encrypt(plaintext []byte) ([]byte, error) {
 	if !s.complete {
 		return nil, ErrNotEstablished
 	}
-	return s.send.Encrypt(nil, nil, plaintext)
+	ct, err := s.send.Encrypt(nil, nil, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	s.sendBytes += uint64(len(plaintext))
+	return ct, nil
 }
 
 // Decrypt opens a transport frame under the receiving cipher state. A replayed
@@ -177,10 +267,38 @@ func (s *NoiseSession) Decrypt(ciphertext []byte) ([]byte, error) {
 	if !s.complete {
 		return nil, ErrNotEstablished
 	}
-	return s.recv.Decrypt(nil, nil, ciphertext)
+	pt, err := s.recv.Decrypt(nil, nil, ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	s.recvBytes += uint64(len(pt))
+	return pt, nil
 }
 
-// Rekey rotates both directions' key streams; peers must rekey in coordination.
+// RekeyDue reports whether either direction has crossed its byte budget or the
+// session has crossed its time budget (R-CRY.7). The live transport MUST check
+// this and drive a COORDINATED rekey (both ends call Rekey) before continuing;
+// the crypto layer cannot rekey unilaterally without desyncing the peer.
+func (s *NoiseSession) RekeyDue() bool {
+	if !s.complete {
+		return false
+	}
+	limitBytes := s.rekeyBytes
+	if limitBytes == 0 {
+		limitBytes = RekeyAfterBytes
+	}
+	limitDur := s.rekeyDur
+	if limitDur == 0 {
+		limitDur = RekeyAfterDuration
+	}
+	if s.sendBytes >= limitBytes || s.recvBytes >= limitBytes {
+		return true
+	}
+	return s.clockNow().Sub(s.established) >= limitDur
+}
+
+// Rekey rotates both directions' key streams and resets the rekey accounting;
+// peers must rekey in coordination.
 func (s *NoiseSession) Rekey() {
 	if s.send != nil {
 		s.send.Rekey()
@@ -188,17 +306,29 @@ func (s *NoiseSession) Rekey() {
 	if s.recv != nil {
 		s.recv.Rekey()
 	}
+	s.sendBytes = 0
+	s.recvBytes = 0
+	s.established = s.clockNow()
 }
 
-// LivePrologue binds the live protocol tag and both routing ids (R-CRY.5).
+// appendLenField appends a 4-byte big-endian length prefix then the field, so
+// no two distinct (field, field) pairs share an encoding (F11 — no splicing).
+func appendLenField(b, f []byte) []byte {
+	b = binary.BigEndian.AppendUint32(b, uint32(len(f)))
+	return append(b, f...)
+}
+
+// LivePrologue binds the live protocol tag and both routing ids (R-CRY.5). Each
+// routing id is length-prefixed so ("a","bc") cannot collide with ("ab","c").
 func LivePrologue(machineRoutingID, deviceRoutingID []byte) []byte {
 	b := []byte("swarm-remote/1 live")
-	b = append(b, machineRoutingID...)
-	b = append(b, deviceRoutingID...)
+	b = appendLenField(b, machineRoutingID)
+	b = appendLenField(b, deviceRoutingID)
 	return b
 }
 
-// PairPrologue binds the pairing protocol tag and the 16-byte rendezvous id.
+// PairPrologue binds the pairing protocol tag and the length-prefixed
+// rendezvous id.
 func PairPrologue(rendezvousID []byte) []byte {
-	return append([]byte("swarm-remote/1 pair"), rendezvousID...)
+	return appendLenField([]byte("swarm-remote/1 pair"), rendezvousID)
 }

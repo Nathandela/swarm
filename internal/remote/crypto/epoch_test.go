@@ -9,12 +9,12 @@
 // key (A14), delivered via the relay mailbox so an offline-at-rotation device
 // receives it on reconnect (A5).
 //
-// FROZEN CONTRACT (subset):
+// CONTRACT (subset; F3-authenticated grant):
 //
-//	type EpochKeys struct { WakeKey, ContentKey [32]byte }
-//	type EpochGrant struct { EpochID uint32; GrantSeq uint64; Sealed []byte }
-//	func SealEpochGrant(recipientPub []byte, epochID uint32, grantSeq uint64, keys EpochKeys) (*EpochGrant, error)
-//	func OpenEpochGrant(ks KeyStore, g *EpochGrant) (uint32, uint64, EpochKeys, error)
+//	type EpochKeys struct { WakeKey WakeKey; ContentKey ContentKey }  // distinct named types (F10)
+//	type EpochGrant struct { EpochID uint32; GrantSeq uint64; Sealed, Sig []byte }
+//	func SealEpochGrant(machinePriv ed25519.PrivateKey, recipientPub []byte, epochID uint32, grantSeq uint64, keys EpochKeys) (*EpochGrant, error)
+//	func OpenEpochGrant(ks KeyStore, machinePub ed25519.PublicKey, g *EpochGrant) (uint32, uint64, EpochKeys, error)
 //	func SealToRecipient(recipientPub, plaintext []byte) ([]byte, error)  // crypto_box_seal
 package crypto
 
@@ -24,7 +24,12 @@ import (
 )
 
 func testEpochKeys() EpochKeys {
-	return EpochKeys{WakeKey: fill(0xE1), ContentKey: fill(0xC2)}
+	return EpochKeys{WakeKey: WakeKey(fill(0xE1)), ContentKey: ContentKey(fill(0xC2))}
+}
+
+func sealedBoxKATPlain() []byte {
+	w, c := fill(0x9a), fill(0x9b)
+	return append(append([]byte(nil), w[:]...), c[:]...)
 }
 
 // TestEpochGrant_SealOpenRoundTrip pins R-CRY.10: a grant sealed to a device's
@@ -33,8 +38,9 @@ func testEpochKeys() EpochKeys {
 func TestEpochGrant_SealOpenRoundTrip(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	keys := testEpochKeys()
+	mPriv, mPub := machineSigner(0x31)
 
-	grant, err := SealEpochGrant(ks.RecipientPublic(), 5, 1, keys)
+	grant, err := SealEpochGrant(mPriv, ks.RecipientPublic(), 5, 1, keys)
 	if err != nil {
 		t.Fatalf("SealEpochGrant: %v", err)
 	}
@@ -42,7 +48,7 @@ func TestEpochGrant_SealOpenRoundTrip(t *testing.T) {
 		t.Error("sealed grant exposes an epoch key in cleartext")
 	}
 
-	epochID, grantSeq, got, err := OpenEpochGrant(ks, grant)
+	epochID, grantSeq, got, err := OpenEpochGrant(ks, mPub, grant)
 	if err != nil {
 		t.Fatalf("OpenEpochGrant: %v", err)
 	}
@@ -63,11 +69,12 @@ func TestEpochGrant_WrongKeyFails(t *testing.T) {
 		CommandSignSeed: fill(0x53), RelayAuthSeed: fill(0x54),
 	})
 
-	grant, err := SealEpochGrant(target.RecipientPublic(), 5, 1, testEpochKeys())
+	mPriv, mPub := machineSigner(0x31)
+	grant, err := SealEpochGrant(mPriv, target.RecipientPublic(), 5, 1, testEpochKeys())
 	if err != nil {
 		t.Fatalf("SealEpochGrant: %v", err)
 	}
-	if _, _, _, err := OpenEpochGrant(other, grant); err == nil {
+	if _, _, _, err := OpenEpochGrant(other, mPub, grant); err == nil {
 		t.Fatal("a non-recipient device opened the epoch grant")
 	}
 }
@@ -78,16 +85,22 @@ func TestEpochGrant_WrongKeyFails(t *testing.T) {
 func TestEpochGrant_DeliveredViaMailboxToOfflineDevice(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	keys := testEpochKeys()
+	mPriv, mPub := machineSigner(0x31)
 
-	grant, err := SealEpochGrant(ks.RecipientPublic(), 9, 3, keys)
+	grant, err := SealEpochGrant(mPriv, ks.RecipientPublic(), 9, 3, keys)
 	if err != nil {
 		t.Fatalf("SealEpochGrant: %v", err)
 	}
 	// Simulate mailbox transit: the relay stores and later forwards the opaque
-	// sealed bytes unchanged.
-	transited := &EpochGrant{EpochID: grant.EpochID, GrantSeq: grant.GrantSeq, Sealed: append([]byte(nil), grant.Sealed...)}
+	// sealed bytes + signature unchanged.
+	transited := &EpochGrant{
+		EpochID:  grant.EpochID,
+		GrantSeq: grant.GrantSeq,
+		Sealed:   append([]byte(nil), grant.Sealed...),
+		Sig:      append([]byte(nil), grant.Sig...),
+	}
 
-	epochID, grantSeq, got, err := OpenEpochGrant(ks, transited)
+	epochID, grantSeq, got, err := OpenEpochGrant(ks, mPub, transited)
 	if err != nil {
 		t.Fatalf("OpenEpochGrant after transit: %v", err)
 	}
@@ -96,32 +109,38 @@ func TestEpochGrant_DeliveredViaMailboxToOfflineDevice(t *testing.T) {
 	}
 }
 
-// TestEpochGrant_LibsodiumKAT pins crypto_box_seal interop: an EpochGrant sealed
-// by an external libsodium under a fixed recipient key opens to the known epoch
-// keys. Derive-and-pin — the implementer records libsodiumGrantSealed +
-// libsodiumGrantKeys from a real libsodium at first green (not from our own
-// impl, which would be circular).
-func TestEpochGrant_LibsodiumKAT(t *testing.T) {
-	if len(libsodiumGrantSealed) == 0 {
-		t.Skip("TODO(impl): pin libsodiumGrantSealed (external crypto_box_seal KAT) at first green")
+// TestCryptoBoxSeal_OpenKAT pins the crypto_box_seal PRIMITIVE (SealToRecipient/
+// OpenSealedBox), which the EpochGrant wrapper is built on. F3 wraps grants with
+// coordinates + a machine signature, so grant interop is verified elsewhere; the
+// value here is the raw sealed-box open path against a fixed vector.
+//
+// HONESTY (F14): this vector was produced by our own x/crypto box.SealAnonymous,
+// which is crypto_box_seal-compatible by construction — it is a REGRESSION pin,
+// NOT independent libsodium evidence. Cross-language Swift/CryptoKit/libsodium
+// interop of this exact blob is an explicit ON-DEVICE RELEASE GATE, not proven
+// here. The open path (recipientPriv -> plaintext) is a genuine round-trip KAT.
+func TestCryptoBoxSeal_OpenKAT(t *testing.T) {
+	if len(sealedBoxKATCiphertext) == 0 {
+		t.Skip("TODO(impl): pin sealedBoxKATCiphertext at first green")
 	}
-	ks := devKeyStore(t, KeyMaterial{RecipientPriv: libsodiumGrantRecipientPriv})
-	_, _, got, err := OpenEpochGrant(ks, &EpochGrant{EpochID: 1, GrantSeq: 1, Sealed: libsodiumGrantSealed})
+	ks := devKeyStore(t, KeyMaterial{RecipientPriv: sealedBoxKATRecipientPriv})
+	plain, err := ks.OpenSealedBox(sealedBoxKATCiphertext)
 	if err != nil {
-		t.Fatalf("OpenEpochGrant(libsodium KAT): %v", err)
+		t.Fatalf("OpenSealedBox(KAT): %v", err)
 	}
-	if got != libsodiumGrantKeys {
-		t.Errorf("libsodium KAT epoch keys = %x/%x, want pinned", got.WakeKey, got.ContentKey)
+	if !bytes.Equal(plain, sealedBoxKATPlaintext) {
+		t.Errorf("sealed-box KAT plaintext = %x, want %x", plain, sealedBoxKATPlaintext)
 	}
 }
 
-// crypto_box_seal interop vector. box.SealAnonymous is crypto_box_seal-
-// compatible by construction, but this vector was produced by our own x/crypto
-// SealAnonymous (a real libsodium reference is not runnable in this env), so the
-// Swift/libsodium interop of this exact blob must be re-verified on-device
-// before shipping. The open path (recipientPriv -> keys) is a genuine KAT.
+// crypto_box_seal regression vector (see TestCryptoBoxSeal_OpenKAT for the
+// honesty caveat: self-generated by x/crypto, on-device libsodium interop is a
+// release gate). The plaintext is the 64-byte wake||content the old grant format
+// sealed; the open path stays a valid primitive round-trip.
 var (
-	libsodiumGrantSealed = []byte{
+	sealedBoxKATRecipientPriv = fill(0x77)
+	sealedBoxKATPlaintext     = sealedBoxKATPlain()
+	sealedBoxKATCiphertext    = []byte{
 		0x7f, 0x56, 0x66, 0x88, 0x44, 0xe3, 0xf9, 0xd2, 0xac, 0xcc, 0x23, 0xdf,
 		0x4f, 0xde, 0xb2, 0x04, 0x34, 0xd5, 0xd5, 0x1b, 0xeb, 0xfc, 0xd0, 0x32,
 		0xb6, 0x4b, 0x71, 0xad, 0x6f, 0xb3, 0x4b, 0x76, 0x16, 0xc7, 0x4e, 0x47,
@@ -133,8 +152,6 @@ var (
 		0x02, 0x78, 0xee, 0xea, 0xb8, 0x64, 0x6a, 0x3b, 0xc7, 0x98, 0x42, 0x16,
 		0x77, 0xd2, 0x38, 0x3c,
 	}
-	libsodiumGrantRecipientPriv = fill(0x77)
-	libsodiumGrantKeys          = EpochKeys{WakeKey: fill(0x9a), ContentKey: fill(0x9b)}
 )
 
 // TestNSE_WakeKeyDecryptsNoSessionContent pins A15/R-CRY.13: the wake key opens
@@ -171,7 +188,7 @@ func TestNSE_WakeKeyDecryptsNoSessionContent(t *testing.T) {
 // separation is DEFERRED-VERIFICATION; proxy: distinct keys + failed cross-open.)
 func TestContentKey_BiometricGatedNotNSEReadable(t *testing.T) {
 	keys := testEpochKeys()
-	if keys.WakeKey == keys.ContentKey {
+	if [32]byte(keys.WakeKey) == [32]byte(keys.ContentKey) {
 		t.Fatal("wake and content keys must be independent, not equal")
 	}
 

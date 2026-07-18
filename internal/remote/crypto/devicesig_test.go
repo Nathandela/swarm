@@ -10,7 +10,7 @@
 //	type Command struct { Action, Machine, Session, OperationID string; ExpiresAt int64; ContentHash []byte }
 //	func (Command) Canonical() []byte
 //	func VerifyCommandSig(commandSigningPub, msg, sig []byte) error
-//	(signing is KeyStore.SignCommand(Command.Canonical()))
+//	(signing is KeyStore.SignCommand(msg) where msg,_ = Command.Canonical())
 package crypto
 
 import (
@@ -35,11 +35,11 @@ func TestDeviceSig_SignVerifyRoundTrip(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	c := sampleCommand()
 
-	sig := ks.SignCommand(c.Canonical())
+	sig := ks.SignCommand(mustCanonical(t, c))
 	if len(sig) != 64 {
 		t.Errorf("Ed25519 signature length = %d, want 64", len(sig))
 	}
-	if err := VerifyCommandSig(ks.CommandSigningPublic(), c.Canonical(), sig); err != nil {
+	if err := VerifyCommandSig(ks.CommandSigningPublic(), mustCanonical(t, c), sig); err != nil {
 		t.Fatalf("valid signature rejected: %v", err)
 	}
 }
@@ -53,20 +53,20 @@ func TestDeviceSig_ForgedRejected(t *testing.T) {
 		CommandSignSeed: fill(0x63), RelayAuthSeed: fill(0x64),
 	})
 	c := sampleCommand()
-	sig := ks.SignCommand(c.Canonical())
+	sig := ks.SignCommand(mustCanonical(t, c))
 
 	// Bit-flipped signature.
 	forged := append([]byte(nil), sig...)
 	forged[0] ^= 0xff
-	if err := VerifyCommandSig(ks.CommandSigningPublic(), c.Canonical(), forged); err == nil {
+	if err := VerifyCommandSig(ks.CommandSigningPublic(), mustCanonical(t, c), forged); err == nil {
 		t.Error("tampered signature accepted")
 	}
 	// Right message, wrong signer.
-	if err := VerifyCommandSig(other.CommandSigningPublic(), c.Canonical(), sig); err == nil {
+	if err := VerifyCommandSig(other.CommandSigningPublic(), mustCanonical(t, c), sig); err == nil {
 		t.Error("signature verified against a different device key")
 	}
 	// Right signer, wrong (unregistered) key length.
-	if err := VerifyCommandSig([]byte("short"), c.Canonical(), sig); err == nil {
+	if err := VerifyCommandSig([]byte("short"), mustCanonical(t, c), sig); err == nil {
 		t.Error("verification accepted a malformed public key")
 	}
 }
@@ -77,31 +77,31 @@ func TestDeviceSig_ForgedRejected(t *testing.T) {
 func TestDeviceSig_ReplayBoundToOperationIdAndExpiry(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	c := sampleCommand()
-	sig := ks.SignCommand(c.Canonical())
+	sig := ks.SignCommand(mustCanonical(t, c))
 	pub := ks.CommandSigningPublic()
 
 	replayNewOp := c
 	replayNewOp.OperationID = "op-0002"
-	if bytes.Equal(replayNewOp.Canonical(), c.Canonical()) {
+	if bytes.Equal(mustCanonical(t, replayNewOp), mustCanonical(t, c)) {
 		t.Fatal("canonical encoding ignores operation_id")
 	}
-	if err := VerifyCommandSig(pub, replayNewOp.Canonical(), sig); err == nil {
+	if err := VerifyCommandSig(pub, mustCanonical(t, replayNewOp), sig); err == nil {
 		t.Error("signature verified under a different operation_id (replay)")
 	}
 
 	replayNewExpiry := c
 	replayNewExpiry.ExpiresAt = c.ExpiresAt + 3600
-	if bytes.Equal(replayNewExpiry.Canonical(), c.Canonical()) {
+	if bytes.Equal(mustCanonical(t, replayNewExpiry), mustCanonical(t, c)) {
 		t.Fatal("canonical encoding ignores expires_at")
 	}
-	if err := VerifyCommandSig(pub, replayNewExpiry.Canonical(), sig); err == nil {
+	if err := VerifyCommandSig(pub, mustCanonical(t, replayNewExpiry), sig); err == nil {
 		t.Error("signature verified under a pushed-out expiry (replay)")
 	}
 
 	// A different bound field (action) must also break verification.
 	replayNewAction := c
 	replayNewAction.Action = "launch"
-	if err := VerifyCommandSig(pub, replayNewAction.Canonical(), sig); err == nil {
+	if err := VerifyCommandSig(pub, mustCanonical(t, replayNewAction), sig); err == nil {
 		t.Error("signature verified under a different action")
 	}
 }
@@ -112,7 +112,7 @@ func TestDeviceSig_ReplayBoundToOperationIdAndExpiry(t *testing.T) {
 func TestDeviceSig_CanonicalBindsAllFields(t *testing.T) {
 	base := sampleCommand()
 	base.ContentHash = bytes.Repeat([]byte{0xAB}, 32)
-	ref := base.Canonical()
+	ref := mustCanonical(t, base)
 
 	mutate := map[string]func(*Command){
 		"action":       func(c *Command) { c.Action = "interrupt" },
@@ -125,8 +125,17 @@ func TestDeviceSig_CanonicalBindsAllFields(t *testing.T) {
 	for name, mut := range mutate {
 		c := base
 		mut(&c)
-		if bytes.Equal(c.Canonical(), ref) {
+		if bytes.Equal(mustCanonical(t, c), ref) {
 			t.Errorf("canonical encoding does not bind %s", name)
 		}
 	}
+}
+
+func mustCanonical(t *testing.T, c Command) []byte {
+	t.Helper()
+	b, err := c.Canonical()
+	if err != nil {
+		t.Fatalf("Canonical: %v", err)
+	}
+	return b
 }

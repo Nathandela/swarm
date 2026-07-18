@@ -13,7 +13,7 @@
 //	const NoiseSuite = "Noise_XX_25519_ChaChaPoly_SHA256"
 //	const RekeyAfterBytes = 1 << 30
 //	const RekeyAfterDuration = 15 * time.Minute
-//	type NoiseConfig struct { Initiator bool; Static *NoiseStatic; PeerStatic []byte; Prologue []byte; Rand io.Reader }
+//	type NoiseConfig struct { Initiator bool; Static *NoiseStatic; PeerStatic []byte; AllowUnpinnedPeer bool; PSK []byte; Prologue []byte; randReader io.Reader (test-only) }
 //	func NewNoise(cfg NoiseConfig) (*NoiseSession, error)
 //	func (*NoiseSession) WriteMessage(payload []byte) ([]byte, error)   // handshake
 //	func (*NoiseSession) ReadMessage(message []byte) ([]byte, error)    // handshake
@@ -109,14 +109,14 @@ func TestNoiseXX_KnownAnswer(t *testing.T) {
 
 	ini, err := NewNoise(NoiseConfig{
 		Initiator: true, Static: a.NoiseStatic(), PeerStatic: b.NoiseStaticPublic(),
-		Prologue: livePrologue(), Rand: bytes.NewReader(bytes.Repeat([]byte{0x55}, 256)),
+		Prologue: livePrologue(), randReader: bytes.NewReader(bytes.Repeat([]byte{0x55}, 256)),
 	})
 	if err != nil {
 		t.Fatalf("NewNoise(ini): %v", err)
 	}
 	resp, err := NewNoise(NoiseConfig{
 		Initiator: false, Static: b.NoiseStatic(), PeerStatic: a.NoiseStaticPublic(),
-		Prologue: livePrologue(), Rand: bytes.NewReader(bytes.Repeat([]byte{0xAA}, 256)),
+		Prologue: livePrologue(), randReader: bytes.NewReader(bytes.Repeat([]byte{0xAA}, 256)),
 	})
 	if err != nil {
 		t.Fatalf("NewNoise(resp): %v", err)
@@ -139,9 +139,9 @@ func TestNoiseXX_KnownAnswer(t *testing.T) {
 // wantChannelBinding is a derive-and-pin KAT (fixed statics + fixed ephemeral
 // randomness above); filled by the implementer at first green.
 var wantChannelBinding = []byte{
-	0x66, 0x6c, 0x23, 0x58, 0xd2, 0x33, 0x86, 0x55, 0x26, 0xf7, 0x8b, 0x1b,
-	0x84, 0x94, 0x70, 0x10, 0x24, 0x40, 0xc1, 0xbf, 0x6b, 0x2d, 0x03, 0x6a,
-	0xe2, 0x0b, 0x32, 0xea, 0x24, 0x38, 0xc5, 0x2b,
+	0x65, 0x8a, 0xc5, 0xc7, 0xe2, 0x89, 0xd7, 0xc2, 0xad, 0xe4, 0x55, 0x24,
+	0x24, 0xfe, 0x54, 0x2a, 0x76, 0x05, 0x16, 0x4d, 0x8f, 0x3d, 0xaf, 0x14,
+	0xb6, 0x00, 0xc0, 0x6c, 0xf7, 0x92, 0x2d, 0x8a,
 }
 
 // TestNoise_PrologueMismatchAborts pins R-CRY.5: differing prologues abort the

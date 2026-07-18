@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -30,6 +32,13 @@ type KeyMaterial struct {
 	CommandSignSeed [32]byte
 	RelayAuthSeed   [32]byte
 }
+
+// String/GoString/Format redact KeyMaterial under every fmt verb — it is all
+// private seeds, so there is nothing safe to print (F2). Value receiver so a
+// KeyMaterial value or pointer, and any struct embedding it, are all covered.
+func (KeyMaterial) String() string               { return "crypto.KeyMaterial{REDACTED}" }
+func (m KeyMaterial) GoString() string           { return m.String() }
+func (m KeyMaterial) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, m.String()) }
 
 // KeyStore is the device's key custody boundary. It exposes DH (via the opaque
 // Noise-static handle), sealed-box open, and detached signatures — but NEVER the
@@ -105,7 +114,7 @@ func writeMaterial(dir string, m KeyMaterial) error {
 	copy(buf[32:64], m.RecipientPriv[:])
 	copy(buf[64:96], m.CommandSignSeed[:])
 	copy(buf[96:128], m.RelayAuthSeed[:])
-	return os.WriteFile(filepath.Join(dir, deviceKeyFile), buf[:], 0o600)
+	return writeSecretFile(filepath.Join(dir, deviceKeyFile), buf[:])
 }
 
 func newFileKeyStore(m KeyMaterial) *fileKeyStore {
@@ -118,6 +127,17 @@ func newFileKeyStore(m KeyMaterial) *fileKeyStore {
 	k.relayPub = k.relayPriv.Public().(ed25519.PublicKey)
 	return k
 }
+
+// String/GoString/Format redact the store under every fmt verb: only the four
+// public-key fingerprints, never the private material in m or the derived
+// Ed25519 privates (F2).
+func (k *fileKeyStore) String() string {
+	return fmt.Sprintf("crypto.fileKeyStore{noiseStatic:%s recipient:%s command:%s relay:%s}",
+		fingerprint(k.noiseStaticPub[:]), fingerprint(k.recipientPub[:]),
+		fingerprint(k.commandPub), fingerprint(k.relayPub))
+}
+func (k *fileKeyStore) GoString() string           { return k.String() }
+func (k *fileKeyStore) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, k.String()) }
 
 func (k *fileKeyStore) NoiseStaticPublic() []byte { return append([]byte(nil), k.noiseStaticPub[:]...) }
 func (k *fileKeyStore) RecipientPublic() []byte   { return append([]byte(nil), k.recipientPub[:]...) }

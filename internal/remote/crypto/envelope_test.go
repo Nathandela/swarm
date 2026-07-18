@@ -17,7 +17,7 @@
 //	type EnvelopeHeader struct { Version, Type uint8; EpochID uint32; Seq uint64; RecipientKeyID, SenderKeyID [8]byte }
 //	type Envelope struct { Header EnvelopeHeader; Nonce [24]byte; Ciphertext []byte }
 //	func Seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error)
-//	func SealDeterministic(key [32]byte, h EnvelopeHeader, nonce [24]byte, plaintext []byte) (*Envelope, error)
+//	func sealDeterministic(key [32]byte, h EnvelopeHeader, nonce [24]byte, plaintext []byte) (*Envelope, error)
 //	func (*Envelope) Open(key [32]byte) ([]byte, error)
 //	func (*Envelope) Marshal() []byte
 //	func ParseEnvelope(b []byte) (*Envelope, error)
@@ -59,9 +59,9 @@ func TestEnvelope_RoundTripKAT(t *testing.T) {
 	h := testHeader()
 	plaintext := []byte("session-event-payload")
 
-	env, err := SealDeterministic(key, h, nonce, plaintext)
+	env, err := sealDeterministic(key, h, nonce, plaintext)
 	if err != nil {
-		t.Fatalf("SealDeterministic: %v", err)
+		t.Fatalf("sealDeterministic: %v", err)
 	}
 	raw := env.Marshal()
 
@@ -84,12 +84,15 @@ func TestEnvelope_RoundTripKAT(t *testing.T) {
 	if !bytes.Equal(raw[22:30], h.SenderKeyID[:]) {
 		t.Error("sender_key_id offset wrong")
 	}
-	if !bytes.Equal(raw[30:54], nonce[:]) {
+	if got := int64(binary.BigEndian.Uint64(raw[30:38])); got != h.IssuedAt {
+		t.Errorf("issued_at offset wrong: %d != %d", got, h.IssuedAt)
+	}
+	if !bytes.Equal(raw[38:62], nonce[:]) {
 		t.Error("nonce offset wrong")
 	}
 	// XChaCha20-Poly1305 appends a 16-byte tag.
-	if len(raw)-54 != len(plaintext)+16 {
-		t.Errorf("ciphertext length = %d, want %d (plaintext+tag)", len(raw)-54, len(plaintext)+16)
+	if len(raw)-62 != len(plaintext)+16 {
+		t.Errorf("ciphertext length = %d, want %d (plaintext+tag)", len(raw)-62, len(plaintext)+16)
 	}
 
 	parsed, err := ParseEnvelope(raw)
@@ -115,9 +118,9 @@ func TestEnvelope_RoundTripKAT(t *testing.T) {
 // pinned from the reference implementation at first green.
 var envelopeKATCiphertext = []byte{
 	0x88, 0xd4, 0x29, 0x37, 0xb3, 0x60, 0x1b, 0x10, 0x85, 0x5e, 0x07, 0xf9,
-	0x46, 0xfe, 0xe2, 0xcc, 0x06, 0x03, 0x88, 0xa0, 0x02, 0x9e, 0x29, 0xcf,
-	0xb1, 0x48, 0x20, 0xa4, 0x2f, 0x11, 0x85, 0x27, 0x46, 0x03, 0x25, 0x42,
-	0x36,
+	0x46, 0xfe, 0xe2, 0xcc, 0x06, 0x03, 0x88, 0xa0, 0x02, 0x9e, 0x07, 0x65,
+	0xf8, 0xa8, 0x96, 0x2c, 0x90, 0x51, 0x37, 0x7c, 0x8b, 0xe3, 0x0b, 0x38,
+	0x75,
 }
 
 // TestEnvelope_TruncatedRejected pins that a buffer shorter than a full header
@@ -129,7 +132,9 @@ func TestEnvelope_TruncatedRejected(t *testing.T) {
 		t.Fatalf("Seal: %v", err)
 	}
 	raw := env.Marshal()
-	for _, n := range []int{0, 1, 30, 53, len(raw) - 1} {
+	// The minimum complete envelope is headerLen+tag (an empty plaintext, valid
+	// per F12); every size below that is genuinely truncated and rejected.
+	for _, n := range []int{0, 1, 30, 61, headerLen + 16 - 1} {
 		if _, err := ParseEnvelope(raw[:n]); err == nil {
 			t.Errorf("ParseEnvelope accepted a %d-byte truncated buffer", n)
 		}
@@ -228,13 +233,13 @@ func TestEnvelope_IdenticalCiphertextAcrossRecipients(t *testing.T) {
 		t.Fatal("test setup: recipient ids must differ")
 	}
 
-	envA, err := SealDeterministic(key, hA, nonce, plaintext)
+	envA, err := sealDeterministic(key, hA, nonce, plaintext)
 	if err != nil {
-		t.Fatalf("SealDeterministic(A): %v", err)
+		t.Fatalf("sealDeterministic(A): %v", err)
 	}
-	envB, err := SealDeterministic(key, hB, nonce, plaintext)
+	envB, err := sealDeterministic(key, hB, nonce, plaintext)
 	if err != nil {
-		t.Fatalf("SealDeterministic(B): %v", err)
+		t.Fatalf("sealDeterministic(B): %v", err)
 	}
 	if !bytes.Equal(envA.Ciphertext, envB.Ciphertext) {
 		t.Error("ciphertext differs across recipients; recipient_key_id must be outside the AAD")

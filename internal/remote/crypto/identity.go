@@ -84,7 +84,7 @@ func (id *Identity) Save(dir string) error {
 	var buf [64]byte
 	copy(buf[:32], id.noiseStaticPriv[:])
 	copy(buf[32:], id.recipientPriv[:])
-	return os.WriteFile(filepath.Join(dir, identityFile), buf[:], 0o600)
+	return writeSecretFile(filepath.Join(dir, identityFile), buf[:])
 }
 
 // NoiseStaticPublic returns a copy of the 32-byte Noise-static public key.
