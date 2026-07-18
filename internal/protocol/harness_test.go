@@ -401,8 +401,6 @@ func (s *stubStream) resizesCopy() [][2]int {
 	return append([][2]int(nil), s.resizes...)
 }
 
-func (s *stubStream) isClosed() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.closed }
-
 // waitClosed reports whether the stream is Closed within d.
 func (s *stubStream) waitClosed(d time.Duration) bool {
 	select {

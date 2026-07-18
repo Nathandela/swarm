@@ -2,7 +2,6 @@ package attach
 
 import (
 	"sort"
-	"sync"
 	"testing"
 	"time"
 )
@@ -64,7 +63,6 @@ func latencyMarker(i int) []byte {
 }
 
 type latencyRecorder struct {
-	mu       sync.Mutex
 	out      *lockedBuffer
 	baseline int
 	seen     map[string]time.Time

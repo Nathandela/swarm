@@ -63,6 +63,11 @@ jobs:
       # above); an uninstrumented build asserts the authoritative <100ms p95 @50.
       - name: TUI first-paint p95 gate (E14.4, N-1)
         run: go test -run '^TestFirstPaintGate_RealDaemon_FiftySessions_P95$' -count=1 ./internal/tui/
+      # E14.4 (N-2): the live-shim keystroke->PTY echo p95 gate. Same non-race
+      # rationale as N-1 — the authoritative <10ms assertion is the non-race build
+      # (a 250ms sanity ceiling is asserted under -race by `go test -race ./...`).
+      - name: Live-shim keystroke echo p95 gate (E14.4, N-2)
+        run: go test -run '^TestE2E_LiveShimKeystrokeEchoLatencyP95$' -count=1 ./internal/e2e/
 
   # E10.6: the darwin half. The pure CPU parsers run in the unit step (untagged, on
   # every runner), and the integration step exercises the REAL proc_pidinfo syscall

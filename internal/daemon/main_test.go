@@ -539,15 +539,3 @@ func writeRunningMeta(t *testing.T, stateDir, id string, shimPID int, shimStart 
 		t.Fatalf("Save meta: %v", err)
 	}
 }
-
-// readTranscriptFile reads a session's transcript.log (raw PTY capture).
-func readTranscriptFile(t *testing.T, sessionDir string) string {
-	t.Helper()
-	// The transcript file name is owned by the shim package; mirror it here to
-	// avoid a test-time import cycle on shim internals.
-	b, err := os.ReadFile(filepath.Join(sessionDir, "transcript.log"))
-	if err != nil {
-		t.Fatalf("read transcript: %v", err)
-	}
-	return string(b)
-}

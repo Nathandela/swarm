@@ -248,15 +248,21 @@ func TestLease_SupersededControllerFramesChannelCloses(t *testing.T) {
 		t.Fatalf("Attach B: %v", err)
 	}
 
-	// A's frames channel must close now that it has lost the lease.
-	select {
-	case _, ok := <-a.Frames():
-		if ok {
-			// A stray already-queued frame is tolerable; the channel must still
-			// close afterward, which the drain below checks.
+	// A's frames channel must close now that it has lost the lease. A stray
+	// already-queued frame is tolerable, but draining it must not mask a channel
+	// that never actually closes, so keep reading until close or timeout.
+	deadline := time.After(recvTimeout)
+drain:
+	for {
+		select {
+		case _, ok := <-a.Frames():
+			if !ok {
+				break drain
+			}
+			// stray already-queued frame; keep draining until close.
+		case <-deadline:
+			t.Fatalf("superseded controller's Frames() channel did not close within %s", recvTimeout)
 		}
-	case <-time.After(recvTimeout):
-		t.Fatalf("superseded controller's Frames() channel neither closed nor delivered within %s", recvTimeout)
 	}
 
 	// The new controller receives a freshly published live frame.

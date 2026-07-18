@@ -100,6 +100,22 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 // lookPath (a stub in tests, the real PATH search in production). A missing binary
 // is a clear launch error.
 func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, getSource func(local string) (persist.Meta, bool), lookPath func(name string, env []string) (string, error)) (daemon.LaunchSpec, error) {
+	// GG-6 scope: refuse a registered-but-non-production adapter at the launch
+	// boundary so a crafted launch RPC cannot spawn it in a real install. The only
+	// such adapter is the fixture-only "reference" (kept registered for the E9.5
+	// characterization harness and the launch-picker probe). The gate is lifted ONLY
+	// in dev/test mode — signalled, as for the reserved "fake" agent, by fakeAgentBin
+	// being configured (SWARM_FAKE_AGENT_BIN, unset in a real install) — under which
+	// the reference adapter is the non-billable e2e vehicle for the conversation-
+	// capture/resume flows (C1/R2). Riding on that already-dev/test-only signal adds
+	// no new production launch surface. ("fake" is not registered here, so it is
+	// unaffected; an unknown agent falls through to its existing empty-argv rejection.)
+	if fakeAgentBin == "" {
+		if _, registered := registry.New(spec.AgentType); registered && !registry.IsProduction(spec.AgentType) {
+			return daemon.LaunchSpec{}, fmt.Errorf("launch: agent %q is not a production provider and cannot be launched", spec.AgentType)
+		}
+	}
+
 	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
 		local, srcMeta, err := validateResumeSource(src, spec.AgentType, endpointID, getSource)
 		if err != nil {

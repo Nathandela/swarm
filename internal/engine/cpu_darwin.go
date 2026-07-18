@@ -51,7 +51,7 @@ func SampleCPU(pid int) (float64, error) {
 func procCPUNanos(pid int) (uint64, error) {
 	var buf [taskInfoSize]byte
 	r1, _, errno := unix.Syscall6(
-		unix.SYS_PROC_INFO,
+		unix.SYS_PROC_INFO, //nolint:staticcheck // no libSystem wrapper exists in x/sys/unix; the raw syscall is the only cgo-free path (see package doc)
 		procInfoCallPIDInfo,
 		uintptr(pid),
 		procPIDTaskInfo,

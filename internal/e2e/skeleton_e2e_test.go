@@ -71,7 +71,11 @@ func buildBinaries(t *testing.T) {
 		}
 	})
 	if buildErr != nil {
-		t.Skipf("cannot build e2e binaries: %v", buildErr)
+		// E14.1: a BUILD failure of our own binaries is a real error, never a
+		// silent skip — a required e2e test that cannot build its subject must fail
+		// loudly (fail-closed), not fail-open. Legitimate absent-dependency skips
+		// (e.g. git) live at their own call sites.
+		t.Fatalf("cannot build e2e binaries: %v", buildErr)
 	}
 }
 

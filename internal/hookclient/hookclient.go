@@ -101,7 +101,9 @@ func nextSequence(path string) (uint64, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return 0, fmt.Errorf("hookclient: lock sequence file %s: %w", path, err)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	// The unlock error is not actionable: f.Close() below releases the same flock
+	// as a side effect, so a failed explicit unlock leaves nothing stuck.
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
 	data, err := io.ReadAll(f)
 	if err != nil {

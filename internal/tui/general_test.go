@@ -107,7 +107,7 @@ func TestGeneral_CwdShortenedToTilde(t *testing.T) {
 func TestGoldenGeneralView(t *testing.T) {
 	tm := startTM(t, New(fullBoard(), detectMixed()))
 	waitContains(t, tm, "COMPLETED") // all four groups painted
-	tm.Quit()
+	quitTM(t, tm)
 
 	got := normalizeTimes(finalView(t, tm))
 	teatest.RequireEqualOutput(t, []byte(got))

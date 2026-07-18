@@ -24,6 +24,18 @@ var constructors = map[string]func() adapter.Adapter{
 	"reference": func() adapter.Adapter { return refadapter.New(adapter.Fixture{}) },
 }
 
+// production is the subset of registered adapters that are REAL providers a client
+// may launch in production. The registry also holds the fixture-only "reference"
+// adapter (constructed above for the E9.5 characterization harness and the
+// launch-picker probe), but it is NOT a production provider: a launch RPC naming it
+// must be refused at the launch boundary (GG-6 scope), even though it stays
+// registered here. A new production adapter must be added to BOTH constructors and
+// this set — the fail-closed default (absent ⇒ not launchable) is deliberate.
+var production = map[string]bool{
+	"claude": true,
+	"codex":  true,
+}
+
 // New constructs the adapter registered under name. ok is false for an unknown
 // name (e.g. a v1.1 CLI not yet registered).
 func New(name string) (adapter.Adapter, bool) {
@@ -32,6 +44,13 @@ func New(name string) (adapter.Adapter, bool) {
 		return nil, false
 	}
 	return build(), true
+}
+
+// IsProduction reports whether name is a registered REAL provider that may be
+// launched in production (the GG-6 scope gate), as opposed to a fixture-only
+// adapter such as "reference". Unknown names return false.
+func IsProduction(name string) bool {
+	return production[name]
 }
 
 // Names returns the registered adapter names, sorted, so a caller (DetectFunc, the

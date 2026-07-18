@@ -108,7 +108,7 @@ func TestAttach_EnterOnCompletedRowIsReadOnly(t *testing.T) {
 	m := New(f, detectMixed(), WithAttachRunner(r.run))
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
 
-	m = runAttachCmd(m)
+	runAttachCmd(m)
 
 	calls := r.recorded()
 	if len(calls) != 1 {

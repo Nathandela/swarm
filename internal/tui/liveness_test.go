@@ -27,7 +27,7 @@ func TestLiveness_EventMovesRowGroup(t *testing.T) {
 
 	waitContains(t, tm, "NEEDS INPUT")
 	waitContains(t, tm, "Permission: run tests?")
-	tm.Quit()
+	quitTM(t, tm)
 
 	// Final single-screen render: the row is under NEEDS INPUT, the old WORKING
 	// placement and old summary are gone, and there is exactly one codex row (the

@@ -101,7 +101,9 @@ func spawnPTYHelper(t *testing.T, mode string) (ptmx, tty *os.File, cmd *exec.Cm
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
 
-	go io.Copy(io.Discard, ptmx) // keep the slave's writes from blocking
+	// Discard the slave's writes so they never block; the copy error (e.g. EIO on
+	// PTY close during t.Cleanup) is expected and not asserted on.
+	go func() { _, _ = io.Copy(io.Discard, ptmx) }()
 
 	// Wait until the helper has put the terminal into raw mode.
 	waitRaw(t, tty.Fd(), true)

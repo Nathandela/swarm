@@ -165,12 +165,10 @@ func helperDSR() {
 	}
 	got := make(chan bool, 1)
 	go func() {
-		buf := make([]byte, 0, 64)
 		tmp := make([]byte, 32)
 		for {
 			n, err := os.Stdin.Read(tmp)
 			if n > 0 {
-				buf = append(buf, tmp[:n]...)
 				// CPR is ESC [ rows ; cols R — terminator 'R' is enough.
 				for _, b := range tmp[:n] {
 					if b == 'R' {

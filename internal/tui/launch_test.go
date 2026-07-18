@@ -145,7 +145,7 @@ func TestGoldenLaunchForm(t *testing.T) {
 	waitContains(t, tm, "new") // general footer painted first
 	tm.Send(keyRune('n'))
 	waitContains(t, tm, "new session")
-	tm.Quit()
+	quitTM(t, tm)
 
 	teatest.RequireEqualOutput(t, []byte(finalView(t, tm)))
 }

@@ -20,7 +20,7 @@ func TestBanner_OnNeedsInputTransition(t *testing.T) {
 	f.emit(protocol.Event{Session: sNeedsInput("endpoint/s1", "claude", "~/Code/x", "Permission: run tests?", 0)})
 
 	waitContains(t, tm, "claude needs input") // the transient banner
-	tm.Quit()
+	quitTM(t, tm)
 }
 
 // E7.2 / V-5 — WHEN a session transitions INTO ready_for_review, the banner fires.
@@ -33,7 +33,7 @@ func TestBanner_OnReadyForReviewTransition(t *testing.T) {
 	f.emit(protocol.Event{Session: sReview("endpoint/s1", "claude", "~/Code/x", "Turn finished", 0)})
 
 	waitContains(t, tm, "claude ready for review")
-	tm.Quit()
+	quitTM(t, tm)
 }
 
 // E7.2 / V-5 — the banner is TRANSITION-triggered: the initial listing of a
@@ -63,7 +63,7 @@ func TestBanner_NotShownOnWorkingTransition(t *testing.T) {
 
 	f.emit(protocol.Event{Session: sWorking("endpoint/s1", "claude", "~/Code/x", "resumed work", 0)})
 	waitContains(t, tm, "resumed work") // event applied
-	tm.Quit()
+	quitTM(t, tm)
 
 	final := finalView(t, tm)
 	if strings.Contains(final, "claude needs input") || strings.Contains(final, "claude ready for review") {

@@ -162,6 +162,62 @@ func TestComposeLaunchSpec_FakeResumeRejected(t *testing.T) {
 	}
 }
 
+// TestComposeLaunchSpec_ReferenceAgentRejected asserts GG-6 scope: in a real install
+// (no fake-agent binary configured — the production condition), the fixture-only
+// "reference" adapter, though it stays registered for the E9.5 characterization
+// harness, is NOT launchable through the assembled daemon — a launch RPC naming it is
+// refused at the compose boundary. The real production providers (claude/codex) still
+// resolve to a concrete argv even in production mode.
+func TestComposeLaunchSpec_ReferenceAgentRejected(t *testing.T) {
+	// Production mode: fakeAgentBin == "" (SWARM_FAKE_AGENT_BIN unset in a real install).
+	refSpec := daemon.LaunchSpec{AgentType: "reference", Cwd: "/work", Options: map[string]string{}}
+	got, err := composeLaunchSpec(refSpec, testEndpoint, "", srcGetter("", persist.Meta{}), stubLookPath)
+	if err == nil {
+		t.Fatalf("production launch of the fixture-only reference adapter was accepted (got %+v); GG-6 requires it be refused", got)
+	}
+	if len(got.Argv) != 0 {
+		t.Errorf("a refused launch must compose no argv; got %v", got.Argv)
+	}
+
+	// The real production providers still resolve to their bare binary (absolute path).
+	for _, agent := range []string{"claude", "codex"} {
+		spec := daemon.LaunchSpec{AgentType: agent, Cwd: "/work", Options: map[string]string{}}
+		got, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter("", persist.Meta{}), stubLookPath)
+		if err != nil {
+			t.Fatalf("production agent %q rejected: %v", agent, err)
+		}
+		if len(got.Argv) == 0 || got.Argv[0] != "/abs/"+agent {
+			t.Fatalf("%s launch argv[0] = %v; want the resolved %s binary", agent, got.Argv, agent)
+		}
+	}
+
+	// The reserved fake agent still resolves to the fake-agent binary (dev/test mode).
+	fakeSpec := daemon.LaunchSpec{AgentType: "fake", Cwd: "/work", Options: map[string]string{"script": "/s.txt"}}
+	fakeGot, err := composeLaunchSpec(fakeSpec, testEndpoint, "/bin/fake-agent", srcGetter("", persist.Meta{}), stubLookPath)
+	if err != nil {
+		t.Fatalf("fake launch rejected: %v", err)
+	}
+	if len(fakeGot.Argv) == 0 || fakeGot.Argv[0] != "/bin/fake-agent" {
+		t.Fatalf("fake launch argv = %v; want the fake-agent binary", fakeGot.Argv)
+	}
+}
+
+// TestComposeLaunchSpec_ReferenceAllowedInDevTest pins the other half of the GG-6
+// gate: in DEV/TEST mode (a fake-agent binary configured — the same signal that
+// enables the reserved "fake" agent), the reference adapter IS launchable, so it can
+// remain the non-billable e2e vehicle for the conversation-capture/resume flows
+// (C1/R2) without reopening any production launch surface.
+func TestComposeLaunchSpec_ReferenceAllowedInDevTest(t *testing.T) {
+	spec := daemon.LaunchSpec{AgentType: "reference", Cwd: "/work", Options: map[string]string{}}
+	got, err := composeLaunchSpec(spec, testEndpoint, "/bin/fake-agent", srcGetter("", persist.Meta{}), stubLookPath)
+	if err != nil {
+		t.Fatalf("dev/test launch of reference rejected: %v", err)
+	}
+	if len(got.Argv) == 0 || got.Argv[0] != "/abs/reference-cli" {
+		t.Fatalf("reference launch argv[0] = %v; want the resolved reference-cli binary", got.Argv)
+	}
+}
+
 func argvContains(argv []string, s string) bool {
 	for _, a := range argv {
 		if a == s {
