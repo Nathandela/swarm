@@ -1,0 +1,135 @@
+===== RECONSTRUCTED RED RUN (Epic 14 — the 5 seams that drove genuinely new code) =====
+
+This is a RECONSTRUCTED failing-first run (GG-5), not an originally-retained one —
+see README.md for why Epic 14 (a verification epic) has only these 5 red phases
+and not one per test file. Each seam below was TEMPORARILY neutralized on top of
+HEAD (main @ 35b1fc0) to reproduce the pre-Epic-14 state; every file was restored
+via `git checkout` immediately after this capture, confirmed by an empty `git
+diff` and a green `go build ./... && go test ./internal/engine/ ./internal/persist/
+./internal/shim/ -count=1` afterward (plus targeted reruns of the daemon/e2e
+packages below). No test file's assertions were weakened to produce this run;
+the one test-file constant touched (the L1 bound) was restored to its original
+value.
+
+------------------------------------------------------------------------------
+SEAM 1 — a7d: shim arm->spawn ordering (internal/shim/shim_signal_order_test.go)
+------------------------------------------------------------------------------
+Neutralization: in internal/shim/shim.go's Run(), the block that arms the
+self-containment signal handler (signal.Notify) was moved from BEFORE
+pty.StartWithSize to AFTER it, and the testHookAfterSignalArm() seam call was
+kept BEFORE the (now-later) arming — reproducing the exact "reordered" bug the
+test's own comments describe: a signal delivered in the window fires before the
+handler is armed, so it is never buffered. A deliberate 100ms sleep was added
+after the hook fires (before arming) to make the miss deterministic rather than a
+microsecond scheduling race against the next few instructions.
+
+$ go test ./internal/shim/ -run TestShimBuffersSignalArrivingInArmSpawnWindow -v
+=== RUN   TestShimBuffersSignalArrivingInArmSpawnWindow
+    shim_signal_order_test.go:59: shim.Run did not return within 10s
+--- FAIL: TestShimBuffersSignalArrivingInArmSpawnWindow (10.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	11.337s
+FAIL
+EXIT=1
+(The window SIGTERM is lost — never buffered — because the handler is armed only
+after it fires; the idle test agent has no SIGTERM handler of its own and parks
+forever reading stdin; Run never returns, and waitRun's bounded 10s timeout is
+what surfaces the failure, exactly as the test's own comments predict for the
+reordered-bug case. The test's own SIGTERM backstop keeps this from crashing the
+test binary itself.)
+
+------------------------------------------------------------------------------
+SEAM 2 — persist.writeTemp disk-full injection (internal/persist/diskfull_test.go)
+------------------------------------------------------------------------------
+Neutralization: in internal/persist/persist.go's Save(), the injectable
+`writeTemp(tmp, data)` call was replaced with a direct `tmp.Write(data)`,
+bypassing the package-var seam entirely (the var itself is untouched, so the
+test's `writeTemp = func(...) { return 0, syscall.ENOSPC }` fault injection has
+no effect on the real write path).
+
+$ go test ./internal/persist/ -run TestSaveDiskFullNeverTears -v
+=== RUN   TestSaveDiskFullNeverTears
+    diskfull_test.go:52: Save under ENOSPC returned nil; want a disk-full error
+--- FAIL: TestSaveDiskFullNeverTears (0.02s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/persist	0.632s
+FAIL
+EXIT=1
+(Without the seam, the real disk isn't actually full, so Save succeeds where the
+test expects the injected ENOSPC to surface as an error — proving the
+writeTemp indirection is what makes S8's disk-full path testable at all.)
+
+------------------------------------------------------------------------------
+SEAM 3 — old-shim x new-daemon compat matrix (internal/daemon/compatmatrix_test.go)
+------------------------------------------------------------------------------
+Neutralization: internal/shimwire/version_compat_v0.go and version_compat_v2.go
+(the E14.3 build-tagged Version seam) were both stamped to Version = 1 (matched)
+instead of 0 and 2 respectively — i.e. the compat_shim_v0/v2 binaries no longer
+advertise a skewed wire version, reproducing the state before this seam existed
+(any build only ever produced Version 1).
+
+$ go test ./internal/daemon/ -run TestCompatMatrix_OldShimNewDaemon -v
+=== RUN   TestCompatMatrix_OldShimNewDaemon
+=== RUN   TestCompatMatrix_OldShimNewDaemon/new-daemon(1)_x_old-shim(0)
+    compatmatrix_test.go:146: confirmShimServing = true; want false (wire-version hard gate)
+=== RUN   TestCompatMatrix_OldShimNewDaemon/matched(1)
+=== RUN   TestCompatMatrix_OldShimNewDaemon/old-daemon(1)_x_new-shim(2)
+    compatmatrix_test.go:146: confirmShimServing = true; want false (wire-version hard gate)
+--- FAIL: TestCompatMatrix_OldShimNewDaemon (5.28s)
+    --- FAIL: TestCompatMatrix_OldShimNewDaemon/new-daemon(1)_x_old-shim(0) (0.82s)
+    --- PASS: TestCompatMatrix_OldShimNewDaemon/matched(1) (0.87s)
+    --- FAIL: TestCompatMatrix_OldShimNewDaemon/old-daemon(1)_x_new-shim(2) (0.85s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	7.599s
+FAIL
+EXIT=1
+(Both skew cells wrongly read as a matched/compatible connection instead of the
+expected hard-gated rejection — proving the version-skew build-tag seam is what
+lets the matrix actually exercise adjacent wire versions; the pre-existing
+single-version equality gate in shimclient.go/server.go is untouched and still
+correctly rejects a REAL mismatch, this seam is what SIMULATES one.)
+
+------------------------------------------------------------------------------
+SEAM 4 (representative) — perf/composite gate fail-closed: L1 composite
+(internal/e2e/l1composite_e2e_test.go)
+------------------------------------------------------------------------------
+Neutralization: l1RenderBound tightened from time.Second to 1 * time.Millisecond
+(a test-file constant, not production code) — the same "tighten the budget"
+proof-of-fail-closed the authors already demonstrated for N-1 (first-paint),
+N-2 (attach latency), and idle-CPU; one gate captured here as representative
+per the task scope.
+
+$ go test ./internal/e2e/ -run TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad -v
+=== RUN   TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad
+    l1composite_e2e_test.go:114: "NEEDS INPUT" not rendered within 1ms (fail-closed on the L1 bound); last render:
+--- FAIL: TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad (2.21s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/e2e	2.956s
+FAIL
+EXIT=1
+(With the bound restored to time.Second this same run passes at a measured
+signal->render latency of ~33ms — see the restoration verification below —
+confirming the gate is real and fails closed rather than trivially passing.)
+
+------------------------------------------------------------------------------
+RESTORATION
+------------------------------------------------------------------------------
+$ git checkout -- internal/shim/shim.go internal/persist/persist.go \
+    internal/shimwire/version_compat_v0.go internal/shimwire/version_compat_v2.go \
+    internal/e2e/l1composite_e2e_test.go
+$ git diff -- <the 5 files above>       # empty
+$ go build ./...                        # EXIT=0
+$ go test ./internal/engine/ ./internal/persist/ ./internal/shim/ -count=1
+ok  	github.com/Nathandela/swarm/internal/engine	0.864s
+ok  	github.com/Nathandela/swarm/internal/persist	1.769s
+ok  	github.com/Nathandela/swarm/internal/shim	45.547s
+$ go test ./internal/daemon/ -run TestCompatMatrix_OldShimNewDaemon -v -count=1
+--- PASS: TestCompatMatrix_OldShimNewDaemon (4.38s)
+    --- PASS: TestCompatMatrix_OldShimNewDaemon/new-daemon(1)_x_old-shim(0) (0.87s)
+    --- PASS: TestCompatMatrix_OldShimNewDaemon/matched(1) (0.87s)
+    --- PASS: TestCompatMatrix_OldShimNewDaemon/old-daemon(1)_x_new-shim(2) (0.82s)
+PASS
+$ go test ./internal/e2e/ -run TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad -v -count=1
+    l1composite_e2e_test.go:127: L1 composite: signal->rendered-TUI latency = 32.637875ms (bound 1s), under output load (207.46ms into a guaranteed 10s print stream)
+--- PASS: TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad (2.22s)
+PASS

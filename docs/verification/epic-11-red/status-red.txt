@@ -1,0 +1,237 @@
+===== RECONSTRUCTED RED RUN (Epic 11 — adapters + engine->daemon status feature) =====
+
+This is a RECONSTRUCTED failing-first run (GG-5), not an originally-retained one:
+Epic 11's tests were written and driven red/green during implementation as TDD
+requires, but no red-log was archived under docs/verification/ at the time (every
+other epic has one; this one and Epic 14 did not). To produce retained evidence,
+the four production seams Epic 11 wired were TEMPORARILY neutralized on top of
+HEAD (main @ 35b1fc0) to reproduce the pre-implementation state, the frozen Epic
+11 test suite was run against that neutralized tree (captured verbatim below),
+and every file was then restored via `git checkout` — confirmed by a clean `git
+diff` and a green `go build ./... && go test ./...` afterward. No test file was
+modified to produce this run.
+
+Seams neutralized (temporary, restored immediately after this capture):
+  (a) internal/skeleton/serve.go: registerSession() — early-returned so no launched
+      session is ever registered with the engine (the daemon->engine wiring, seam a).
+  (b) internal/engine/engine.go: deriveDims() — body replaced with an unconditional
+      `return nil` (the hook-event -> status-dimension mapping bridge, seam c).
+  (c) internal/skeleton/api.go: composeLaunchSpec() — early-returned right after the
+      GG-6 gate, skipping both the resume-as-new-session block (R-2) and the
+      fresh-launch adapter-argv composition (adapters wired into launch).
+  (d) internal/skeleton/serve.go: captureConversationID() — early-returned so a
+      session's conversation id is never captured from its transcript (C1/B2).
+
+------------------------------------------------------------------------------
+$ go test ./internal/engine/ -run TestDeriveDims -v
+------------------------------------------------------------------------------
+=== RUN   TestDeriveDims
+=== RUN   TestDeriveDims/event_maps_to_turn+interaction
+    derivedims_test.go:55: deriveDims("Stop",map[]) = map[]; want map[interaction:none turn:idle]
+=== RUN   TestDeriveDims/active_event
+    derivedims_test.go:55: deriveDims("PreToolUse",map[]) = map[]; want map[interaction:none turn:active]
+=== RUN   TestDeriveDims/notification_with_no_subtype_degrades_to_none_(B5,_not_a_false_permission)
+    derivedims_test.go:55: deriveDims("Notification",map[]) = map[]; want map[interaction:none turn:idle]
+=== RUN   TestDeriveDims/notification_idle_subtype_->_none
+    derivedims_test.go:55: deriveDims("Notification",map[notification_type:idle]) = map[]; want map[interaction:none turn:idle]
+=== RUN   TestDeriveDims/notification_explicit_permission_subtype_->_permission
+    derivedims_test.go:55: deriveDims("Notification",map[notification_type:permission]) = map[]; want map[interaction:permission turn:idle]
+=== RUN   TestDeriveDims/unknown_subtype_degrades_to_none_(B5)
+    derivedims_test.go:55: deriveDims("Notification",map[notification_type:weird]) = map[]; want map[interaction:none turn:idle]
+=== RUN   TestDeriveDims/explicit_dims_win_over_the_descriptor
+    derivedims_test.go:55: deriveDims("Stop",map[turn:active]) = map[]; want map[turn:active]
+=== RUN   TestDeriveDims/unmapped_event_yields_no_dims
+=== RUN   TestDeriveDims/empty_event_yields_no_dims
+--- FAIL: TestDeriveDims (0.01s)
+    --- FAIL: TestDeriveDims/event_maps_to_turn+interaction (0.00s)
+    --- FAIL: TestDeriveDims/active_event (0.00s)
+    --- FAIL: TestDeriveDims/notification_with_no_subtype_degrades_to_none_(B5,_not_a_false_permission) (0.00s)
+    --- FAIL: TestDeriveDims/notification_idle_subtype_->_none (0.00s)
+    --- FAIL: TestDeriveDims/notification_explicit_permission_subtype_->_permission (0.00s)
+    --- FAIL: TestDeriveDims/unknown_subtype_degrades_to_none_(B5) (0.00s)
+    --- FAIL: TestDeriveDims/explicit_dims_win_over_the_descriptor (0.00s)
+    --- PASS: TestDeriveDims/unmapped_event_yields_no_dims (0.00s)
+    --- PASS: TestDeriveDims/empty_event_yields_no_dims (0.00s)
+=== RUN   TestDeriveDims_UnmappedEventIsBenignNoOp
+--- PASS: TestDeriveDims_UnmappedEventIsBenignNoOp (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/engine	0.834s
+FAIL
+EXIT=1
+(The 3 PASSes are the cases that already expect no/empty dims — an unconditional
+nil trivially satisfies them; every case that actually EXERCISES the mapping fails.)
+
+------------------------------------------------------------------------------
+$ go test ./internal/adapter/claude/ -run TestHookMapping_DrivesStatusViaSignalSources -v
+------------------------------------------------------------------------------
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources/Stop_from_fixture_->_idle
+    mapping_test.go:56: event "Stop" drove no status change; the engine did not derive a status via SignalSources
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources/PermissionRequest_is_the_dedicated_permission_event
+    mapping_test.go:56: event "PermissionRequest" drove no status change; the engine did not derive a status via SignalSources
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources/Notification_with_no_subtype_degrades_to_none_(B5)
+    mapping_test.go:56: event "Notification" drove no status change; the engine did not derive a status via SignalSources
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources/Notification_idle_subtype_->_none
+    mapping_test.go:56: event "Notification" drove no status change; the engine did not derive a status via SignalSources
+=== RUN   TestHookMapping_DrivesStatusViaSignalSources/Notification_explicit_permission_subtype_->_permission
+    mapping_test.go:56: event "Notification" drove no status change; the engine did not derive a status via SignalSources
+--- FAIL: TestHookMapping_DrivesStatusViaSignalSources (0.01s)
+    --- FAIL: TestHookMapping_DrivesStatusViaSignalSources/Stop_from_fixture_->_idle (0.00s)
+    --- FAIL: TestHookMapping_DrivesStatusViaSignalSources/PermissionRequest_is_the_dedicated_permission_event (0.00s)
+    --- FAIL: TestHookMapping_DrivesStatusViaSignalSources/Notification_with_no_subtype_degrades_to_none_(B5) (0.00s)
+    --- FAIL: TestHookMapping_DrivesStatusViaSignalSources/Notification_idle_subtype_->_none (0.00s)
+    --- FAIL: TestHookMapping_DrivesStatusViaSignalSources/Notification_explicit_permission_subtype_->_permission (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.763s
+FAIL
+EXIT=1
+
+------------------------------------------------------------------------------
+$ go test ./internal/adapter/codex/ -v
+------------------------------------------------------------------------------
+(Included for completeness per the task's "claude + codex mapping tests" scope.
+Codex's tests do NOT go red under this neutralization: Epic 11 deferred Codex's
+runtime typed-event producer to Epic 14 (see epic-11-evidence.md Deferral D1), so
+Codex's v1 status driver is the CLI-agnostic grid heuristic (OnOutput), which does
+not route through deriveDims. TestGridHeuristicFallback_ClassifiesIdlePrompt and
+TestSignalSources_DeclaresTypedEventsWithStatusMapping assert Codex's fixture-
+proven mapping TABLE and the heuristic fallback directly — genuinely independent
+of the seam reconstructed here. Reported honestly rather than omitted.)
+=== RUN   TestParseVersion_RealBanner
+--- PASS: TestParseVersion_RealBanner (0.00s)
+=== RUN   TestBinaryAndVersionArgs
+--- PASS: TestBinaryAndVersionArgs (0.00s)
+=== RUN   TestDetect_VersionGreying_L2
+--- PASS: TestDetect_VersionGreying_L2 (0.00s)
+=== RUN   TestCommand_ComposesArgv
+--- PASS: TestCommand_ComposesArgv (0.00s)
+=== RUN   TestSignalSources_DeclaresTypedEventsWithStatusMapping
+--- PASS: TestSignalSources_DeclaresTypedEventsWithStatusMapping (0.00s)
+=== RUN   TestResume_CarriesConversationID
+--- PASS: TestResume_CarriesConversationID (0.00s)
+=== RUN   TestExtractConversationID_FromFixture
+--- PASS: TestExtractConversationID_FromFixture (0.02s)
+=== RUN   TestConformance
+--- PASS: TestConformance (0.00s)
+=== RUN   TestCapability_EventStyle
+--- PASS: TestCapability_EventStyle (0.01s)
+=== RUN   TestGridHeuristicFallback_ClassifiesIdlePrompt
+--- PASS: TestGridHeuristicFallback_ClassifiesIdlePrompt (0.00s)
+=== RUN   TestImportBoundary_T5
+--- PASS: TestImportBoundary_T5 (0.10s)
+=== RUN   TestStateless_NoIOInSource
+--- PASS: TestStateless_NoIOInSource (0.00s)
+=== RUN   TestSignalSources_UseJSONRPCMethodNames
+--- PASS: TestSignalSources_UseJSONRPCMethodNames (0.00s)
+=== RUN   TestExtractConversationID_FromThreadIDJSON
+--- PASS: TestExtractConversationID_FromThreadIDJSON (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	0.831s
+EXIT=0
+
+------------------------------------------------------------------------------
+$ go test ./internal/skeleton/ -run TestComposeLaunchSpec -v
+------------------------------------------------------------------------------
+=== RUN   TestComposeLaunchSpec_ValidClaudeResume
+    launch_compose_test.go:63: ResumedFrom = ""; want "srclocal" (the resume link)
+    launch_compose_test.go:66: resume argv[0] = []; want the resolved claude binary
+--- FAIL: TestComposeLaunchSpec_ValidClaudeResume (0.00s)
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected/foreign_endpoint
+    launch_compose_test.go:108: invalid resume (foreign endpoint) was accepted; want a clear rejection
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected/malformed_id
+    launch_compose_test.go:108: invalid resume (malformed id) was accepted; want a clear rejection
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected/source_not_found
+    launch_compose_test.go:108: invalid resume (source not found) was accepted; want a clear rejection
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected/source_still_running
+    launch_compose_test.go:108: invalid resume (source still running) was accepted; want a clear rejection
+=== RUN   TestComposeLaunchSpec_InvalidResumeRejected/agent_type_mismatch
+    launch_compose_test.go:108: invalid resume (agent type mismatch) was accepted; want a clear rejection
+--- FAIL: TestComposeLaunchSpec_InvalidResumeRejected (0.00s)
+    --- FAIL: TestComposeLaunchSpec_InvalidResumeRejected/foreign_endpoint (0.00s)
+    --- FAIL: TestComposeLaunchSpec_InvalidResumeRejected/malformed_id (0.00s)
+    --- FAIL: TestComposeLaunchSpec_InvalidResumeRejected/source_not_found (0.00s)
+    --- FAIL: TestComposeLaunchSpec_InvalidResumeRejected/source_still_running (0.00s)
+    --- FAIL: TestComposeLaunchSpec_InvalidResumeRejected/agent_type_mismatch (0.00s)
+=== RUN   TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv
+    launch_compose_test.go:121: fresh argv[0] = []; want the resolved claude binary
+--- FAIL: TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv (0.00s)
+=== RUN   TestComposeLaunchSpec_NoConversationIDRejected
+    launch_compose_test.go:142: resume with no captured conversation id was accepted (got {AgentType:claude Argv:[] Cwd:/work ClientEnv:[] Cols:0 Rows:0 Options:map[resume_from:ep-test01/srclocal] InitialPrompt: ResumedFrom:}); want a clear rejection
+--- FAIL: TestComposeLaunchSpec_NoConversationIDRejected (0.00s)
+=== RUN   TestComposeLaunchSpec_FakeResumeRejected
+    launch_compose_test.go:161: fake resume (no resuming adapter) was accepted; want a clear rejection
+--- FAIL: TestComposeLaunchSpec_FakeResumeRejected (0.00s)
+=== RUN   TestComposeLaunchSpec_ReferenceAgentRejected
+    launch_compose_test.go:190: claude launch argv[0] = []; want the resolved claude binary
+--- FAIL: TestComposeLaunchSpec_ReferenceAgentRejected (0.00s)
+=== RUN   TestComposeLaunchSpec_ReferenceAllowedInDevTest
+    launch_compose_test.go:217: reference launch argv[0] = []; want the resolved reference-cli binary
+--- FAIL: TestComposeLaunchSpec_ReferenceAllowedInDevTest (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.722s
+FAIL
+EXIT=1
+(ReferenceAgentRejected / ReferenceAllowedInDevTest fail here on their SECONDARY
+argv-composition assertion, not the GG-6 production-gate assertion that names
+them — that gate sits earlier in composeLaunchSpec and is untouched by this
+neutralization, so it is not part of what this run reconstructs.)
+
+------------------------------------------------------------------------------
+$ go test ./internal/e2e/ -run 'TestE2E_EngineWiring|TestE2E_AdapterWiring_ClaudeLaunchAndHook|TestE2E_ResumeAsNewSession_R2|TestE2E_ConversationCapture_DuringHeldAttach_C1' -v -timeout 120s
+------------------------------------------------------------------------------
+=== RUN   TestE2E_AdapterWiring_ClaudeLaunchAndHook
+    adapter_wiring_e2e_test.go:67: client Launch(claude): protocol: request timed out
+--- FAIL: TestE2E_AdapterWiring_ClaudeLaunchAndHook (12.30s)
+=== RUN   TestE2E_ConversationCapture_DuringHeldAttach_C1
+    capture_c1_e2e_test.go:34: launch reference: protocol: request timed out
+--- FAIL: TestE2E_ConversationCapture_DuringHeldAttach_C1 (10.08s)
+=== RUN   TestE2E_EngineWiring_HookChangesStatus
+    engine_wiring_e2e_test.go:119: client Launch(fake): protocol: request timed out
+--- FAIL: TestE2E_EngineWiring_HookChangesStatus (10.09s)
+=== RUN   TestE2E_EngineWiring_StatusPersisted
+    engine_wiring_e2e_test.go:189: client Launch(fake): protocol: request timed out
+--- FAIL: TestE2E_EngineWiring_StatusPersisted (10.09s)
+=== RUN   TestE2E_EngineWiring_OutputTapDrivesHeuristic
+    engine_wiring_e2e_test.go:239: client Launch(fake): protocol: request timed out
+--- FAIL: TestE2E_EngineWiring_OutputTapDrivesHeuristic (10.08s)
+=== RUN   TestE2E_ResumeAsNewSession_R2
+    resume_e2e_test.go:62: launch reference: protocol: request timed out
+--- FAIL: TestE2E_ResumeAsNewSession_R2 (10.07s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/e2e	63.432s
+FAIL
+EXIT=1
+(All 6 fail, INCLUDING the "fake"-agent launches: with composeLaunchSpec
+short-circuited right after the GG-6 gate, even the fake-agent branch never
+runs, so Argv stays empty for every launch and the daemon's own empty-argv
+rejection manifests through the full client/daemon RPC path as a request
+timeout rather than a fast local error — still a clean, unambiguous failure of
+every wiring path this suite exercises, just a different failure shape than the
+unit-level tests above.)
+
+------------------------------------------------------------------------------
+RESTORATION
+------------------------------------------------------------------------------
+$ git checkout -- internal/engine/engine.go internal/skeleton/serve.go internal/skeleton/api.go
+$ git diff --stat                      # empty
+$ go build ./...                       # EXIT=0
+$ go test ./internal/engine/ ./internal/skeleton/ ./internal/adapter/... -count=1
+ok  	github.com/Nathandela/swarm/internal/engine	0.812s
+ok  	github.com/Nathandela/swarm/internal/skeleton	4.202s
+ok  	github.com/Nathandela/swarm/internal/adapter	1.974s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	1.399s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	1.697s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	2.163s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	2.422s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	2.716s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	2.190s
+$ go test ./internal/e2e/ -run 'TestE2E_EngineWiring|TestE2E_AdapterWiring_ClaudeLaunchAndHook|TestE2E_ResumeAsNewSession_R2|TestE2E_ConversationCapture_DuringHeldAttach_C1' -v -timeout 120s -count=1
+--- PASS: TestE2E_AdapterWiring_ClaudeLaunchAndHook (2.59s)
+--- PASS: TestE2E_ConversationCapture_DuringHeldAttach_C1 (0.60s)
+--- PASS: TestE2E_EngineWiring_HookChangesStatus (1.30s)
+--- PASS: TestE2E_EngineWiring_StatusPersisted (0.26s)
+--- PASS: TestE2E_EngineWiring_OutputTapDrivesHeuristic (0.25s)
+--- PASS: TestE2E_ResumeAsNewSession_R2 (0.81s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/e2e	6.534s

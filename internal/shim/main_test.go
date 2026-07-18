@@ -559,6 +559,24 @@ func dialShim(t *testing.T, socketPath string) *shimClient {
 	}
 }
 
+// shrinkRecvBuf shrinks a wedged client's OS receive buffer so the shim's
+// subscriber writer blocks after only a few frames. That makes the bounded-queue
+// overflow (the S9 drop path) engage quickly and DETERMINISTICALLY — independent
+// of CPU speed. Without it, filling a large default socket buffer is CPU-bound
+// and can take >20s on a constrained CI runner (the flood produces frames only as
+// fast as the runner schedules it), flaking the "drops engaged" wait. This does
+// NOT weaken S9: drops still must engage; it only removes the timing dependence.
+func (c *shimClient) shrinkRecvBuf(t *testing.T) {
+	t.Helper()
+	uc, ok := c.conn.(*net.UnixConn)
+	if !ok {
+		t.Fatalf("wedged conn is %T, not *net.UnixConn", c.conn)
+	}
+	if err := uc.SetReadBuffer(2048); err != nil {
+		t.Fatalf("shrink wedged recv buffer: %v", err)
+	}
+}
+
 func (c *shimClient) startReader() {
 	go func() {
 		for {

@@ -65,6 +65,7 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 
 	// Wedged client: hello + attach, then never read a single frame.
 	wedged := dialShim(t, cfg.SocketPath)
+	wedged.shrinkRecvBuf(t) // deterministic S9 overflow, not CPU-timing-dependent
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeAttach})
 
@@ -127,6 +128,7 @@ func TestSurvival_SoakBoundedMemory(t *testing.T) {
 	// Wedged consumer: attach, never read — exercises the bounded-queue drop path
 	// (and thus the memory bound) for the whole soak.
 	wedged := dialShim(t, cfg.SocketPath)
+	wedged.shrinkRecvBuf(t) // deterministic S9 overflow, not CPU-timing-dependent
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
 	wedged.writeControl(shimwire.Control{Type: shimwire.TypeAttach})
 
