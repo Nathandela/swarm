@@ -9,6 +9,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [003](ADR-003-persistence-schema.md) | Per-session metadata as source of truth; roster is a rebuildable index | Accepted | 2026-07-16 |
 | [004](ADR-004-security-baseline.md) | v1 security baseline: filesystem permissions, argv-only spawning, server-side revalidation | Accepted | 2026-07-16 |
 | [005](ADR-005-vt-emulator-library.md) | VT emulator library — `github.com/charmbracelet/x/vt` (E2.1 risk gate) | Accepted | 2026-07-17 |
+| [006](ADR-006-field-test-ux-revisions.md) | Field-test UX revisions — detach key Ctrl+q, full-screen chrome, auth inheritance | Accepted | 2026-07-18 |
 
 ## Adding a new ADR
 
