@@ -256,7 +256,7 @@ func TestMailbox_ReplaySeqRejected(t *testing.T) {
 
 	// Re-deliver seq 2.
 	env := sealSeq(t, key, 2)
-	if _, err := r.Accept(key, env); !errors.Is(err, ErrStaleSeq) {
+	if _, err := r.Accept(ContentKey(key), env); !errors.Is(err, ErrStaleSeq) {
 		t.Fatalf("replay of seq 2 err = %v, want ErrStaleSeq", err)
 	}
 }
@@ -271,7 +271,7 @@ func TestMailbox_ReorderDetected(t *testing.T) {
 	acceptSeq(t, r, key, 3)
 
 	env := sealSeq(t, key, 2) // arrives after 3
-	if _, err := r.Accept(key, env); !errors.Is(err, ErrStaleSeq) {
+	if _, err := r.Accept(ContentKey(key), env); !errors.Is(err, ErrStaleSeq) {
 		t.Fatalf("reordered seq 2 err = %v, want ErrStaleSeq", err)
 	}
 }
@@ -284,7 +284,7 @@ func TestMailbox_GapSurfaced(t *testing.T) {
 	acceptSeq(t, r, key, 1)
 
 	env := sealSeq(t, key, 3) // seq 2 skipped
-	res, err := r.Accept(key, env)
+	res, err := r.Accept(ContentKey(key), env)
 	if err != nil {
 		t.Fatalf("Accept(seq 3 after 1): %v", err)
 	}
@@ -303,7 +303,7 @@ func TestRelay_CannotForgeEvent(t *testing.T) {
 	forged := sealSeq(t, key, 1)
 	// The relay does not hold K_epoch; it can only fabricate ciphertext bytes.
 	forged.Ciphertext = bytes.Repeat([]byte{0xde}, len(forged.Ciphertext))
-	if _, err := r.Accept(key, forged); err == nil {
+	if _, err := r.Accept(ContentKey(key), forged); err == nil {
 		t.Fatal("receiver accepted a relay-forged event")
 	}
 }
@@ -321,7 +321,7 @@ func sealSeq(t *testing.T, key [32]byte, seq uint64) *Envelope {
 
 func acceptSeq(t *testing.T, r *MailboxReceiver, key [32]byte, seq uint64) {
 	t.Helper()
-	if _, err := r.Accept(key, sealSeq(t, key, seq)); err != nil {
+	if _, err := r.Accept(ContentKey(key), sealSeq(t, key, seq)); err != nil {
 		t.Fatalf("Accept(seq=%d): %v", seq, err)
 	}
 }

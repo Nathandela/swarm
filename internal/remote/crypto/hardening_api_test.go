@@ -180,6 +180,21 @@ func TestEpochGrant_ReplaySurvivesRestart(t *testing.T) {
 	}
 }
 
+// F10 — the mailbox receiver requires a ContentKey and refuses a non-mailbox
+// (type 0x02 wake) envelope, so a wake payload cannot enter the session-content
+// path and a WakeKey cannot be passed where a ContentKey is required.
+func TestMailbox_RejectsWakeType(t *testing.T) {
+	keys := testEpochKeys()
+	wake, err := SealWake(keys.WakeKey, testHeader(), []byte("activity"))
+	if err != nil {
+		t.Fatalf("SealWake: %v", err)
+	}
+	r := NewMailboxReceiver()
+	if _, err := r.Accept(keys.ContentKey, wake); !errors.Is(err, ErrWrongKeyType) {
+		t.Fatalf("Accept(wake envelope) err = %v, want ErrWrongKeyType", err)
+	}
+}
+
 // F4 — a seeded receiver surfaces a first-event gap relative to the snapshot
 // cursor, and rejects an at-or-below-cursor first event as stale.
 func TestMailbox_SeededFirstEventGap(t *testing.T) {
@@ -188,7 +203,7 @@ func TestMailbox_SeededFirstEventGap(t *testing.T) {
 	r := NewMailboxReceiver()
 	r.SeedHighWater(h.SenderKeyID, h.EpochID, 99)
 
-	res, err := r.Accept(key, sealSeq(t, key, 101)) // 100 missing
+	res, err := r.Accept(ContentKey(key), sealSeq(t, key, 101)) // 100 missing
 	if err != nil {
 		t.Fatalf("Accept(101 after seed 99): %v", err)
 	}
@@ -202,7 +217,7 @@ func TestMailbox_SeededStaleRejected(t *testing.T) {
 	h := testHeader()
 	r := NewMailboxReceiver()
 	r.SeedHighWater(h.SenderKeyID, h.EpochID, 100)
-	if _, err := r.Accept(key, sealSeq(t, key, 100)); !errors.Is(err, ErrStaleSeq) {
+	if _, err := r.Accept(ContentKey(key), sealSeq(t, key, 100)); !errors.Is(err, ErrStaleSeq) {
 		t.Fatalf("seeded stale first event err = %v, want ErrStaleSeq", err)
 	}
 }
@@ -212,7 +227,7 @@ func TestMailbox_UnseededFirstEventNoGap(t *testing.T) {
 	// cannot detect a gap on its very first event.
 	key := fill(0x9c)
 	r := NewMailboxReceiver()
-	res, err := r.Accept(key, sealSeq(t, key, 100))
+	res, err := r.Accept(ContentKey(key), sealSeq(t, key, 100))
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -304,7 +319,7 @@ func TestMailbox_StaleByAgeRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal(stale): %v", err)
 	}
-	if _, err := r.Accept(key, staleEnv); !errors.Is(err, ErrStaleAge) {
+	if _, err := r.Accept(ContentKey(key), staleEnv); !errors.Is(err, ErrStaleAge) {
 		t.Fatalf("stale-by-age err = %v, want ErrStaleAge", err)
 	}
 
@@ -315,7 +330,7 @@ func TestMailbox_StaleByAgeRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal(fresh): %v", err)
 	}
-	if _, err := r.Accept(key, freshEnv); err != nil {
+	if _, err := r.Accept(ContentKey(key), freshEnv); err != nil {
 		t.Fatalf("fresh event rejected by age: %v", err)
 	}
 }

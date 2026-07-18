@@ -242,7 +242,12 @@ func (r *MailboxReceiver) clockNow() time.Time {
 // highest+1 sets Gap. An envelope that fails the AEAD (e.g. a relay forgery)
 // returns the AEAD error and does not advance the tracker. When maxAge > 0 an
 // authenticated-but-too-old issued_at is ErrStaleAge.
-func (r *MailboxReceiver) Accept(key [32]byte, e *Envelope) (*MailboxResult, error) {
+func (r *MailboxReceiver) Accept(key ContentKey, e *Envelope) (*MailboxResult, error) {
+	// The mailbox carries session content (type 0x01) under the content key only;
+	// a wake payload (type 0x02) must never enter the mailbox path (F10/A15).
+	if e.Header.Type != TypeMailbox {
+		return nil, ErrWrongKeyType
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -251,7 +256,7 @@ func (r *MailboxReceiver) Accept(key [32]byte, e *Envelope) (*MailboxResult, err
 	if seen && e.Header.Seq <= hi {
 		return nil, ErrStaleSeq
 	}
-	pt, err := e.open(key)
+	pt, err := e.open([32]byte(key))
 	if err != nil {
 		return nil, err
 	}
