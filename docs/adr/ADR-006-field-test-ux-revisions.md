@@ -75,6 +75,21 @@ the spec.
   first row carries content lost it to the bar. Snapshot fidelity wins by default;
   the board's persistent bottom status bar carries the detach-key hint
   ("ctrl+q returns") instead, and the Chrome seam remains for callers that want it.
+- Chrome is back ON by default (v0.3), but the overdraw problem above is designed
+  out rather than tolerated: the hint gets its OWN row the agent cannot touch. When
+  chrome is engaged the session PTY is sized to `rows-1` (both at attach and on every
+  SIGWINCH), a DECSTBM scroll region of `1..rows-1` keeps normal-mode scrolling off the
+  real bottom row, and the reverse-video hint is painted there under DECSC/DECRC so the
+  cursor is preserved. The snapshot paint is clipped to `rows-1` for the same reason.
+  The remaining trade-offs are small and bounded: (a) the agent sees one fewer row while
+  attached; (b) a full reset (`ESC c`), an `ED2` clear, an alt-screen swap, or a bare
+  `CSI r` from the agent can still transiently clobber the row, so the output pump
+  re-asserts region+hint after each frame batch — immediately on one of those damage
+  signatures (a cheap byte scan), otherwise throttled to at most once per ~250ms — which
+  self-heals the bare-`CSI r` region reset; and (c) a terminal of `rows<=2` is too small
+  to reserve a row, so the hint disables itself and the attach falls back to exactly the
+  Chrome:false passthrough. On detach the region is reset to full (`CSI r`) and the hint
+  row cleared before the board repaints.
 
 ## Alternatives Considered
 

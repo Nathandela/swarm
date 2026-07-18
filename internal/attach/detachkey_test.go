@@ -27,14 +27,16 @@ func TestKeyLabel_DELRendersAsDEL(t *testing.T) {
 	}
 }
 
-// The one-line chrome names the detach key so it is discoverable (A-5); after the
-// change it must read "Ctrl+Q", never the old "Ctrl+\".
-func TestChromeLineNamesCtrlQ(t *testing.T) {
-	line := string(chromeLine("claude", DefaultDetachKey))
-	if !strings.Contains(line, "Ctrl+Q to detach") {
-		t.Fatalf("chrome line must name Ctrl+Q as the detach key; got %q", line)
+// The reserved-row hint names the detach key so returning is discoverable (A-5);
+// after ADR-006 v0.3 it reads "ctrl+q returns to swarm" (the key label lowercased in
+// the hint), never the old "Ctrl+\". Repointed from the v0.2 top-row chromeLine, which
+// the reserved-row design replaced.
+func TestChromeHintNamesCtrlQ(t *testing.T) {
+	hint := hintText("claude", DefaultDetachKey, 0)
+	if !strings.Contains(hint, "ctrl+q returns to swarm") {
+		t.Fatalf("hint must name ctrl+q as the return key; got %q", hint)
 	}
-	if strings.Contains(line, `Ctrl+\`) {
-		t.Fatalf("chrome line must not still name the old Ctrl+\\ key; got %q", line)
+	if strings.Contains(hint, `Ctrl+\`) || strings.Contains(hint, `ctrl+\`) {
+		t.Fatalf("hint must not still name the old Ctrl+\\ key; got %q", hint)
 	}
 }

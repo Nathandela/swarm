@@ -77,12 +77,11 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			Term:     tc,
 			Session:  sess,
 			ReadOnly: readOnly,
-			// Chrome defaults OFF: the one-line chrome overwrites snapshot row 1
-			// content (DECSC/DECRC preserves only the cursor, not the overdrawn cells),
-			// so a full-screen agent's top row would be clobbered. The board's status
-			// bar teaches the detach key instead (ADR-006 negative consequences); the
-			// Chrome seam stays for callers that want it.
-			Chrome: false,
+			// Chrome ON (ADR-006 v0.3): the return hint gets its OWN reserved bottom row
+			// — the PTY is sized to rows-1 and a DECSTBM region keeps the agent off that
+			// row — so it can no longer overdraw snapshot/agent content the way the v0.2
+			// top-row banner did. The output pump self-heals full-screen damage.
+			Chrome: true,
 			Name:   s.Agent,
 		})
 		return err

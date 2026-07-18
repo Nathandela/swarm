@@ -16,10 +16,14 @@
 package attach
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -60,9 +64,14 @@ type Config struct {
 	Session   Session
 	DetachKey byte   // default DefaultDetachKey (0x11, Ctrl+q) when zero
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
-	Chrome    bool   // show the one-line chrome (name + detach hint) (A-5)
-	Name      string // session label rendered in the chrome line
+	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
+	Name      string // session label rendered in the reserved-row hint
 }
+
+// chromeReassertInterval throttles the reserved-row re-assert on benign live frames to
+// at most once per this interval, so ordinary scrolling output is not amplified; a
+// frame carrying a damage signature re-asserts immediately regardless (ADR-006 v0.3).
+const chromeReassertInterval = 250 * time.Millisecond
 
 // Reason is why Run returned, so the caller knows whether to return to the general
 // view (detached / session ended) or surface an error.
@@ -144,8 +153,25 @@ func Run(cfg Config) (reason Reason, err error) {
 	if sizeErr != nil {
 		cols, rows = 0, 0
 	}
+	// chromeActive reports whether the reserved-row hint is engaged for a terminal of
+	// the given height. Chrome (ADR-006 v0.3) reserves the REAL bottom row: the session
+	// PTY is sized to rows-1 and a DECSTBM region keeps scrolling off the hint row. A
+	// terminal of rows<=2 is too small to give up a row, so the hint is disabled and the
+	// attach behaves exactly as Chrome:false (full rows, no region, no hint).
+	chromeActive := func(rows int) bool { return cfg.Chrome && rows > 2 }
+	// ptyRows maps the real terminal height to the height the session PTY is told about:
+	// one row shorter when the hint is reserved, so the agent's absolute cursor
+	// addressing never reaches the real bottom row.
+	ptyRows := func(rows int) int {
+		if chromeActive(rows) {
+			return rows - 1
+		}
+		return rows
+	}
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
-		writeAll(out, vt.RenderSnapshotClipped(snap, cols, rows))
+		// Clip the snapshot to the reserved area (rows-1 when chrome is on) so it never
+		// paints over the hint row.
+		writeAll(out, vt.RenderSnapshotClipped(snap, cols, ptyRows(rows)))
 	} else {
 		// A snapshot that fails to decode paints a single plain notice instead of
 		// nothing, so an attach to a session with a skewed/corrupt snapshot is never
@@ -153,18 +179,25 @@ func Run(cfg Config) (reason Reason, err error) {
 		// line (A-4 never-blank). It carries no escape bytes; the live stream follows.
 		writeAll(out, []byte(snapshotUnavailableNotice))
 	}
-	// Chrome is drawn AFTER the grid paint, whose clear+home would otherwise wipe
-	// it; chromeLine saves/restores the cursor so the snapshot's cursor position
-	// survives (A-5).
-	if cfg.Chrome {
-		writeAll(out, chromeLine(cfg.Name, detachKey))
+	// Chrome is established AFTER the grid paint, whose clear+home would otherwise wipe
+	// it: chromeHint sets the scroll region and paints the hint on the reserved bottom
+	// row, saving/restoring the cursor (DECSC/DECRC) so the snapshot's cursor position
+	// survives (A-5). lastAssert seeds the output pump's re-assert throttle.
+	var lastAssert time.Time
+	if chromeActive(rows) {
+		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows))
+		lastAssert = time.Now()
 	}
 
-	// Sync the PTY to the client's terminal size on attach (E8.3); further changes
-	// propagate via the resize pump.
+	// Sync the PTY to the client's terminal size on attach (E8.3), reserving the hint
+	// row when chrome is engaged; further changes propagate via the resize pump.
 	if sizeErr == nil {
-		_ = cfg.Session.Resize(cols, rows)
+		_ = cfg.Session.Resize(cols, ptyRows(rows))
 	}
+	// curCols/curRows track the latest real terminal size (updated by the resize pump
+	// via winCh) so the output pump's re-assert and the detach cleanup target the
+	// current bottom row rather than the attach-time one.
+	curCols, curRows := cols, rows
 
 	// Input pump: raw keystrokes -> Session.Input, tight so echo latency stays low
 	// (N-2). The detach key, recognized as a discrete single-byte keypress, is NOT
@@ -196,14 +229,31 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 	}()
 
-	// Resize pump: one SIGWINCH tick -> propagate the current size to the session.
+	// Resize pump: one SIGWINCH tick -> propagate the current size to the session,
+	// reserving the hint row when chrome is engaged. When chrome is on it also nudges
+	// the main loop (winCh) to re-establish region+hint at the new size — the main loop
+	// is the sole writer to out, so region/hint re-paints never race the frame writes.
+	// winCh is a coalescing tick: the handler re-reads the current size, so a dropped
+	// (already-pending) tick loses nothing.
+	var winCh chan struct{}
+	if cfg.Chrome {
+		winCh = make(chan struct{}, 1)
+	}
 	resizeCh, stopResize := cfg.Term.Resizes()
 	defer stopResize()
 	go func() {
 		defer func() { _ = recover() }()
 		for range resizeCh {
-			if cols, rows, e := cfg.Term.Size(); e == nil {
-				_ = cfg.Session.Resize(cols, rows)
+			c, r, e := cfg.Term.Size()
+			if e != nil {
+				continue
+			}
+			_ = cfg.Session.Resize(c, ptyRows(r))
+			if winCh != nil {
+				select {
+				case winCh <- struct{}{}:
+				default: // a re-assert is already pending; it will read the current size
+				}
 			}
 		}
 	}()
@@ -212,23 +262,54 @@ func Run(cfg Config) (reason Reason, err error) {
 	// before the loop tears down, so a raw-mode client killed by SIGINT/SIGTERM/
 	// SIGHUP never leaves a wrecked terminal behind (E8.2).
 	frames := cfg.Session.Frames()
+	// finish tears the loop down on the terminal paths: it releases the lease, and when
+	// chrome reserved a row it resets the scroll region to full and clears the hint row
+	// so the board repaint that follows starts on a clean full-height screen, then hands
+	// the terminal back. The panic path does not route through here — its deferred
+	// restore still runs, but out may be mid-fault, so chrome cleanup is best-effort.
+	finish := func(r Reason) (Reason, error) {
+		_ = cfg.Session.Detach()
+		if cfg.Chrome {
+			writeAll(out, chromeCleanup(curRows))
+		}
+		restore()
+		return r, nil
+	}
 	for {
 		select {
 		case f, ok := <-frames:
 			if !ok {
-				_ = cfg.Session.Detach()
-				restore()
-				return ReasonSessionEnd, nil
+				return finish(ReasonSessionEnd)
 			}
 			writeAll(out, f)
+			// The agent's own output can damage the reserved row — a full reset (ESC c),
+			// an ED2 clear, an alt-screen swap, or a bare CSI r region reset. Re-assert
+			// region+hint after the frame: immediately on a damage signature, otherwise
+			// throttled so benign scrolling output is not amplified.
+			if chromeActive(curRows) {
+				if hasDamageSignature(f) || time.Since(lastAssert) >= chromeReassertInterval {
+					writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+					lastAssert = time.Now()
+				}
+			}
 		case <-detachCh:
-			_ = cfg.Session.Detach()
-			restore()
-			return ReasonDetached, nil
+			return finish(ReasonDetached)
 		case <-sigCh:
-			_ = cfg.Session.Detach()
-			restore()
-			return ReasonDetached, nil
+			return finish(ReasonDetached)
+		case <-winCh:
+			// A resize arrived (chrome only): re-read the current size and re-establish
+			// the reserved row at the new dimensions. If the terminal shrank below the
+			// reserve threshold, release the scroll region so the now-full-height agent
+			// is not confined.
+			if c, r, e := cfg.Term.Size(); e == nil {
+				curCols, curRows = c, r
+				if chromeActive(r) {
+					writeAll(out, chromeHint(cfg.Name, detachKey, c, r))
+				} else {
+					writeAll(out, []byte("\x1b[r"))
+				}
+				lastAssert = time.Now()
+			}
 		}
 	}
 }
@@ -250,12 +331,70 @@ func writeAll(w io.Writer, p []byte) {
 	}
 }
 
-// chromeLine renders the single toggleable chrome line: the session name and the
-// detach-key hint (A-5). It is drawn after the snapshot repaint, so it saves the
-// cursor (DECSC), homes to the top line, writes the banner and clears to line end,
-// then restores the cursor (DECRC) so the snapshot's cursor position is preserved.
-func chromeLine(name string, detachKey byte) []byte {
-	return []byte(fmt.Sprintf("\x1b7\x1b[1;1H[ %s  %s to detach ]\x1b[K\x1b8", name, keyLabel(detachKey)))
+// chromeHint reserves the real bottom row (ADR-006 v0.3): it sets the DECSTBM scroll
+// region to rows 1..rows-1 so normal-mode scrolling never drags the hint row, then
+// paints the reverse-video return hint on the real bottom row. The whole sequence is
+// wrapped in DECSC/DECRC so the agent's (or the snapshot's) cursor position and pen
+// survive both the region change (DECSTBM homes the cursor) and the paint. The caller
+// guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
+// CSI r region reset from the agent is repaired by the next re-assert).
+func chromeHint(name string, detachKey byte, cols, rows int) []byte {
+	var b strings.Builder
+	b.WriteString("\x1b7") // DECSC: save cursor + pen
+	b.WriteString("\x1b[1;")
+	b.WriteString(strconv.Itoa(rows - 1))
+	b.WriteByte('r') // DECSTBM: scroll region 1..rows-1
+	b.WriteString("\x1b[")
+	b.WriteString(strconv.Itoa(rows))
+	b.WriteString(";1H")     // CUP to the reserved bottom row
+	b.WriteString("\x1b[7m") // reverse video
+	b.WriteString(hintText(name, detachKey, cols))
+	b.WriteString("\x1b[0m") // reset pen
+	b.WriteString("\x1b[K")  // clear to end of the reserved row
+	b.WriteString("\x1b8")   // DECRC: restore cursor + pen
+	return []byte(b.String())
+}
+
+// hintText builds the reserved-row hint, truncated to fit cols columns: the session
+// name and the return affordance ("<name>  ctrl+q returns to swarm"). The key label
+// tracks the configured detach key. Truncation keeps a wide row from wrapping (a wrap
+// on the bottom row scrolls); cols<=0 disables truncation.
+func hintText(name string, detachKey byte, cols int) string {
+	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
+	if cols > 0 {
+		if r := []rune(s); len(r) > cols {
+			s = string(r[:cols])
+		}
+	}
+	return s
+}
+
+// chromeCleanup releases the reserved row on detach: it resets the scroll region to the
+// full screen (bare CSI r) and clears the hint row, leaving the cursor on the now-blank
+// bottom row so the board repaint that follows starts clean. rows<=0 (unknown size)
+// still resets the region.
+func chromeCleanup(rows int) []byte {
+	var b strings.Builder
+	b.WriteString("\x1b[r") // DECSTBM reset: full-screen scroll region
+	if rows > 0 {
+		b.WriteString("\x1b[")
+		b.WriteString(strconv.Itoa(rows))
+		b.WriteString(";1H")
+		b.WriteString("\x1b[K")
+	}
+	return []byte(b.String())
+}
+
+// hasDamageSignature reports whether a live frame carries an escape sequence that
+// damages the reserved row — a full reset (ESC c), an ED2 screen clear, an alt-screen
+// swap (?1049h/l), or a bare CSI r scroll-region reset — so the output pump re-asserts
+// region+hint immediately instead of waiting for the throttle. It is a cheap byte scan,
+// not a full parse; a rare false positive costs only one extra re-assert.
+func hasDamageSignature(f []byte) bool {
+	return bytes.Contains(f, []byte("\x1bc")) ||
+		bytes.Contains(f, []byte("[2J")) ||
+		bytes.Contains(f, []byte("?1049")) ||
+		bytes.Contains(f, []byte("\x1b[r"))
 }
 
 // keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q"). DEL (0x7f)
