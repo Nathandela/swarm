@@ -551,9 +551,13 @@ func (a *Attachment) failSnapshot() {
 
 // deliverFrame delivers one live frame. It is only ever called from the client
 // read-loop goroutine, so it never races closeFrames (also read-loop-driven).
+// p is not copied: wire.ReadFrame allocates a fresh body slice per frame
+// (wire.go) and the read loop never touches p again after this call returns
+// (checked against the TSnapshot/chunking path too), so ownership transfers
+// onto the channel without a redundant copy (R3.3.2).
 func (a *Attachment) deliverFrame(done <-chan struct{}, p []byte) {
 	select {
-	case a.frames <- append([]byte(nil), p...):
+	case a.frames <- p:
 	case <-a.closed:
 	case <-done:
 	}

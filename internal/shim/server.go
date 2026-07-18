@@ -375,7 +375,11 @@ func (h *hub) feed(data []byte) {
 			h.metrics.FramesDropped.Add(1)
 		}
 	}
-	_, _ = h.tr.Write(data)
+	// data is a fresh per-read allocation (drain(), server.go) that no one
+	// mutates: the subscriber path only ever reads it (wire.WriteFrame copies
+	// into its own frame buffer before writing) and emu.Feed's parser also only
+	// reads. WriteOwned's no-copy handoff is therefore safe here (R3.3.3).
+	_, _ = h.tr.WriteOwned(data)
 	h.emu.Feed(data)
 }
 
