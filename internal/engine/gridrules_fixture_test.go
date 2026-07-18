@@ -119,31 +119,40 @@ func TestGridRulesFullTimeline_Opencode(t *testing.T) {
 		busyEnd   = 67787 // inclusive
 		settled   = 68087 // confirmed non-busy, sustained for the next 500 bytes (memo)
 	)
-	fineSpans := [][2]int{{busyStart - 15, busyEnd + 15}}
+	// Fine granularity spans the padded busy window THROUGH THE END OF THE
+	// CAPTURE — R-H4 committee finding: the settled tail was previously only
+	// spot-checked at 4 offsets below, leaving the "generic fallback never
+	// emits idle here" claim an unproven inference. This extends it to a real
+	// regression sweep of the whole tail at the existing fine-step constant
+	// (adds ~132 evaluations: 8479 tail bytes / 64). The pre-submit prefix
+	// (before the busy window) is untouched, coarse-stepped as before — it
+	// precedes any turn and is not the claim under test.
+	fineSpans := [][2]int{{busyStart - 15, len(fx.PTYCapture)}}
 
-	var idleInsideWindow []int
+	var idleAnywhere []int
 	var nonActiveInsideWindow []int
 
-	// fineStep 64 (not byte-exact): opencode declares NO idle rule, so the
-	// rules layer cannot emit idle; the generic fallback's idle path needs a
-	// parked VISIBLE cursor, which opencode's alt-screen busy TUI never shows;
-	// and Phase B proved byte-exact zero-gap busy coverage twice, so this
-	// sweep only regression-checks busy coverage. Byte-exact replay here costs
-	// ~8 minutes under -race (34240 snapshot round-trips) for no added safety.
+	// fineStep 64 (not byte-exact): the rules layer cannot emit idle for
+	// opencode (no idle rule is declared in SignalSources); the generic
+	// fallback's idle path requires a parked visible cursor, which this
+	// whole-tail sweep now regression-checks at 64-byte granularity rather
+	// than leaving as an inference. Byte-exact replay measured >10min in
+	// normal builds and stays reserved for agy, the adapter that actually
+	// declares an idle rule.
 	replayFixture(t, fx.PTYCapture, rules, fineSpans, timelineFineStepOpencode, func(offset int, turn status.Turn, inter status.Interaction) {
+		if turn == status.TurnIdle {
+			idleAnywhere = append(idleAnywhere, offset)
+		}
 		if offset < busyStart || offset > busyEnd {
 			return
-		}
-		if turn == status.TurnIdle {
-			idleInsideWindow = append(idleInsideWindow, offset)
 		}
 		if turn != status.TurnActive {
 			nonActiveInsideWindow = append(nonActiveInsideWindow, offset)
 		}
 	})
 
-	if len(idleInsideWindow) > 0 {
-		t.Fatalf("opencode: idle emitted inside the busy window at offsets %v (want zero)", idleInsideWindow)
+	if len(idleAnywhere) > 0 {
+		t.Fatalf("opencode: idle emitted at offsets %v (want zero anywhere from the busy window through the end of the capture — opencode declares no idle rule)", idleAnywhere)
 	}
 	if len(nonActiveInsideWindow) > 0 {
 		t.Fatalf("opencode: busy window had non-active offsets %v (want active everywhere, zero gaps)", nonActiveInsideWindow)

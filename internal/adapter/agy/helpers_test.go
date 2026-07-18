@@ -49,11 +49,13 @@ func equalArgv(a, b []string) bool {
 	return true
 }
 
-// renderGrid feeds capture through the vt emulator and returns the decoded
-// snapshot — the same *vt.Snap projection the engine hands an adapter at runtime.
+// renderGrid feeds capture through the vt emulator at the fixture's recorded
+// geometry (100x30, per the Phase B characterization memo) and returns the
+// decoded snapshot — the same *vt.Snap projection the engine hands an adapter
+// at runtime.
 func renderGrid(t *testing.T, capture []byte) *vt.Snap {
 	t.Helper()
-	emu := vt.NewEmulator(80, 24)
+	emu := vt.NewEmulator(100, 30)
 	defer emu.Close()
 	emu.Feed(capture)
 	b, err := emu.Snapshot()

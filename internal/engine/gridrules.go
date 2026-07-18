@@ -146,12 +146,11 @@ func idleLineMatch(lines, values []string) (idx int, ok bool) {
 }
 
 // containsBraille reports whether any line carries a braille spinner rune
-// (U+2800..U+28FF) anywhere in its text — the idle-line-equals suppressor
-// (R-C1's defense in depth).
-// containsBraille reuses the isBraille range U+2800..U+28FF deliberately —
-// one rune wider at the low end than the plan's U+2801 floor: U+2800 is the
-// blank braille frame some spinners emit, and a broader suppressor only ever
-// fails toward unknown, never toward a false idle.
+// anywhere in its text — the idle-line-equals suppressor (R-C1's defense in
+// depth). It reuses the isBraille range U+2800..U+28FF deliberately: one
+// rune wider at the low end than the plan's U+2801 floor, because U+2800 is
+// the blank braille frame some spinners emit, and a broader suppressor only
+// ever fails toward unknown, never toward a false idle.
 func containsBraille(lines []string) bool {
 	for _, l := range lines {
 		for _, r := range l {

@@ -1,5 +1,10 @@
 # CLI Adapter Design: agy, opencode
 
+> **Historical strategy-phase document.** The implemented v1.1 behavior is
+> recorded in docs/verification/cli-duo-adapters-evidence.md and the adapter
+> sources (internal/adapter/agy, internal/adapter/opencode) — where this
+> document and the code/evidence differ, code and evidence win.
+
 Status: strategy/exploration phase output (2026-07-18, issue agents-tracker-5gv).
 Scope note: this phase originally evaluated three CLIs; **vibe was dropped by
 decision on 2026-07-18** (see appendix). Integration targets are **agy**
@@ -42,10 +47,13 @@ SQLite `~/.local/share/opencode/opencode.db`.
 
 ## 3. Adapter designs (prototyped and conformance-proven)
 
-Each is a stateless pure strategy object per the frozen contract; prototypes in
-internal/adapter/trioproto/ pass `adapter.Conformance`, real-binary
-`adapter.Detect` via `detect.Host`, and extraction against the recorded
-captures. Highlights:
+Each is a stateless pure strategy object per the frozen contract. At the time
+this section was written, prototypes lived in internal/adapter/trioproto/ and
+passed `adapter.Conformance`, real-binary `adapter.Detect` via `detect.Host`,
+and extraction against the recorded captures; that package was **deleted in
+Phase H** once the production adapters shipped — they now live in
+internal/adapter/agy/ and internal/adapter/opencode/. Highlights (prototype
+values; see the evidence file for the shipped ones where they differ):
 
 - **agy**: options = model (string, Suggest = the 8 `agy models` names), mode
   (choice: accept-edits/plan), dangerously-skip-permissions (bool).
@@ -56,8 +64,15 @@ captures. Highlights:
 - **opencode**: options = model, agent (free strings). InitialPrompt via
   `--prompt`. Extraction = LAST `ses_<alnum>` token (length- and
   terminator-guarded); last occurrence because transcripts can mention child
-  session ids. Declares the SSE event triple (busy/idle/permission) as
-  wire-later `event` sources, codex-precedent. Min 1.0.0.
+  session ids. **Superseded (R-H4, 2026-07-18)**: the shipped extraction is
+  anchored to the last `opencode -s ` exit-command marker — a bare prose
+  `ses_` token could be captured write-once by the daemon's live transcript
+  scan; see the evidence file's R-E6 amendment. **Descoped from this
+  prototype description**: the shipped
+  adapter is heuristics-only and declares no event sources — the invented
+  flattened event names this bullet originally proposed (e.g.
+  "session.status.busy") were ruled out as encoding a fake wire schema; see
+  system-spec.md T-2 and the evidence file's R-E4 row. Min 1.0.0.
 
 Registry: add both to `constructors` AND `production` in
 internal/adapter/registry/registry.go — the only mandatory core-adjacent edit
@@ -72,8 +87,11 @@ Timeline evidence: TestTrioExploration_HeuristicTimeline.
 
 v1 approach (DECIDED 2026-07-18): **descriptor-driven bottom-region grid
 rules**, read by the engine from the adapter's declared heuristic
-SignalSources — e.g. `busy-contains` (agy "Generating...", opencode "Thinking")
-and `idle-prompt-in-box` (bare `>` line above a box border within the bottom K
+SignalSources — e.g. `busy-contains` (illustrative markers at design time;
+the SHIPPED rules are `busy-contains` "esc interrupt" for opencode, and
+`busy-contains` "esc to cancel" + "Generating..." plus `idle-line-equals` ">"
+for agy — see the evidence file's frozen marker table) and `idle-prompt-in-box`
+(bare `>` line above a box border within the bottom K
 lines). This is the architecturally sanctioned slot ("per-CLI grid rules are
 Epic 11 adapter work" — heuristic.go), leaves claude/codex behavior
 byte-identical, and stays inside T-4 humility (unknown remains the fallback).

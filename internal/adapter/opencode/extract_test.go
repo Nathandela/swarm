@@ -1,12 +1,16 @@
 package opencode
 
-// R-E6 adversarial extraction tests: the LAST "ses_<alnum>" token, gated by a
-// LEFT WORD BOUNDARY (the byte before "ses_" must be non-alphanumeric — else a
-// scrolled snake_case identifier like "increases_..."/"phases_..." would
-// false-positive), a minimum id length (>=10 alnum chars after the prefix, so a
-// stray short "ses_" substring is not misread), and a terminator requirement
-// after the token (C3: a token running to EOF is a transcript read mid-write and
-// must not be committed partial).
+// R-E6 adversarial extraction tests (amended post-committee, R-H4 finding 1):
+// the id following the LAST "opencode -s " exit-command marker occurrence,
+// requiring idPrefix immediately after the marker, a minimum id length (>=10
+// alnum chars after the prefix, so a stray short "ses_" substring is not
+// misread), and a terminator requirement after the token (C3: a token running
+// to EOF is a transcript read mid-write and must not be committed partial). A
+// standalone "ses_..." token anywhere else in the transcript — e.g. a
+// scrolled snake_case identifier or a prose mention — is never matched,
+// because it is not anchored to the marker (see the new
+// TestExtractConversationID_ProseToken* tests below for the adversarial
+// cases the anchor closes).
 
 import "testing"
 
@@ -61,5 +65,47 @@ func TestExtractConversationID_ControlByteTerminator(t *testing.T) {
 	id, ok := a.ExtractConversationID(nil, tail)
 	if !ok || id != fixtureConversationID {
 		t.Fatalf("ExtractConversationID(tail) = (%q, %v); want (%q, true)", id, ok, fixtureConversationID)
+	}
+}
+
+// R-H4 committee finding: a standalone "ses_..." token anywhere in the
+// transcript is NOT the conversation id — only the token immediately after
+// the exit-command marker "opencode -s " is (mirrors agy's
+// "agy --conversation=" anchor design). The daemon scans the live transcript
+// every 200ms and persists write-once first-wins, so a mid-session prose
+// mention of a ses_-shaped token must never be captured.
+
+// TestExtractConversationID_ProseTokenAlone_NotExtracted: a standalone,
+// well-formed ses_ token with no exit-command marker anywhere in the capture
+// must not be extracted.
+func TestExtractConversationID_ProseTokenAlone_NotExtracted(t *testing.T) {
+	a := New()
+	tail := []byte("please inspect ses_abcdefghij0 for me\n")
+	if id, ok := a.ExtractConversationID(nil, tail); ok {
+		t.Errorf("ExtractConversationID(tail) = (%q, true); want no match — no exit-command marker precedes the token", id)
+	}
+}
+
+// TestExtractConversationID_ProseTokenThenExitLine_ExitLineWins: a prose
+// ses_ token precedes the real exit line; the marker-anchored id must win.
+func TestExtractConversationID_ProseTokenThenExitLine_ExitLineWins(t *testing.T) {
+	a := New()
+	tail := []byte("please inspect ses_abcdefghij0 for me\nmore transcript\nopencode -s " + fixtureConversationID + "\x1b[0m\r\n")
+	id, ok := a.ExtractConversationID(nil, tail)
+	if !ok || id != fixtureConversationID {
+		t.Fatalf("ExtractConversationID(tail) = (%q, %v); want (%q, true) — the exit-line marker anchors extraction", id, ok, fixtureConversationID)
+	}
+}
+
+// TestExtractConversationID_ExitLineThenLaterProseToken_ExitLineStillWins: an
+// exit line is followed by a LATER, well-formed prose ses_ token; the
+// exit-line id must still win because the anchor is the last MARKER
+// occurrence, not the last ses_ token overall.
+func TestExtractConversationID_ExitLineThenLaterProseToken_ExitLineStillWins(t *testing.T) {
+	a := New()
+	tail := []byte("opencode -s " + fixtureConversationID + "\x1b[0m\r\nsome later chatter mentions ses_prosetoken99 here\n")
+	id, ok := a.ExtractConversationID(nil, tail)
+	if !ok || id != fixtureConversationID {
+		t.Fatalf("ExtractConversationID(tail) = (%q, %v); want (%q, true) — the anchor is the LAST marker occurrence, not the last ses_ token", id, ok, fixtureConversationID)
 	}
 }

@@ -31,10 +31,18 @@ import (
 // binary is the `opencode` executable name on PATH.
 const binary = "opencode"
 
-// idPrefix starts every opencode session id; the exit screen prints
-// "opencode -s ses_<id>". The LAST occurrence is taken: an earlier one in a
-// long transcript may name a child/subagent session.
+// idPrefix starts every opencode session id.
 const idPrefix = "ses_"
+
+// exitMarker precedes the session id on opencode's exit screen: "opencode -s
+// ses_<id>" (Phase B evidence: raw offset 76231 in testdata/opencode.json).
+// Extraction is anchored to the LAST occurrence of this full command context,
+// not the bare "ses_" prefix alone (mirrors agy's "agy --conversation="
+// anchor design) — the daemon scans the live transcript every 200ms and
+// persists write-once first-wins, so a mid-session prose mention of a
+// ses_-shaped token (e.g. "inspect ses_abcdefghij please") must never be
+// mistaken for the real exit id, which would permanently stick.
+const exitMarker = "opencode -s "
 
 // minIDLen is the minimum alnum run length after idPrefix a match must carry,
 // so a stray short "ses_" substring is not misread as a session id.
@@ -125,31 +133,28 @@ func optionFlags(opts map[string]string) []string {
 	return flags
 }
 
-// lastSessionToken finds the LAST "ses_<alnum>" token in s, requiring: a LEFT
-// WORD BOUNDARY (the byte before idPrefix must be absent or non-alphanumeric —
-// otherwise a scrolled snake_case identifier like "increases_..." or
-// "phases_..." would false-positive), at least minIDLen alnum characters after
-// the prefix, and a terminator byte after the token (any non-alnum byte, but
-// NOT end-of-input: a token running to EOF is a transcript read mid-write and
-// is rejected rather than committed partial, C3). It is total and
-// deterministic.
+// lastSessionToken finds the id following the LAST exitMarker occurrence in
+// s, requiring: idPrefix immediately after the marker, at least minIDLen
+// alnum characters after the prefix, and a terminator byte after the token
+// (any non-alnum byte, but NOT end-of-input: a token running to EOF is a
+// transcript read mid-write and is rejected rather than committed partial,
+// C3). It is total and deterministic.
 func lastSessionToken(s string) (string, bool) {
-	for i := len(s); i > 0; {
-		j := strings.LastIndex(s[:i], idPrefix)
-		if j < 0 {
-			return "", false
-		}
-		if j == 0 || !isAlnum(s[j-1]) {
-			rest := s[j+len(idPrefix):]
-			end := 0
-			for end < len(rest) && isAlnum(rest[end]) {
-				end++
-			}
-			if end >= minIDLen && end < len(rest) {
-				return idPrefix + rest[:end], true
-			}
-		}
-		i = j
+	i := strings.LastIndex(s, exitMarker)
+	if i < 0 {
+		return "", false
+	}
+	rest := s[i+len(exitMarker):]
+	if !strings.HasPrefix(rest, idPrefix) {
+		return "", false
+	}
+	rest = rest[len(idPrefix):]
+	end := 0
+	for end < len(rest) && isAlnum(rest[end]) {
+		end++
+	}
+	if end >= minIDLen && end < len(rest) {
+		return idPrefix + rest[:end], true
 	}
 	return "", false
 }

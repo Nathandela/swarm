@@ -57,7 +57,7 @@ Both load and pass `adapter.Fixture.Validate()` via
 |---|---|---|
 | Busy markers (union, any-match) | `"esc to cancel"` (persistent footer hint), `"Generating..."` (spinner label) | `"esc interrupt"` |
 | Idle rule | `idle-line-equals` value `">"`, border line immediately below, bottom-3/bottom-6 windows, braille-suppressed | **none** — R-B2b/c could not be jointly satisfied with a stable idle substring within this phase's scope; opencode reports `Signals: [heuristic]` with a busy rule only, `unknown` at rest (honest T-4 outcome) |
-| Conversation-id marker | `"agy --conversation="` + UUID (8-4-4-4-12 lowercase hex), terminator byte `<=0x20 \| ==0x7f \| >=0x80` | `"ses_"` (left word boundary: preceding byte non-alnum) + `>=10` alnum chars, same terminator rule |
+| Conversation-id marker | `"agy --conversation="` + UUID (8-4-4-4-12 lowercase hex), terminator byte `<=0x20 \| ==0x7f \| >=0x80` | `"ses_"` (left word boundary: preceding byte non-alnum) + `>=10` alnum chars, same terminator rule — **amended post-committee (R-H4 finding 1, 2026-07-18)**: the opencode column above described the ORIGINAL, under-anchored design; extraction is now anchored to the LAST `"opencode -s "` exit-command marker occurrence (mirroring agy's marker column to its left), not a bare word-boundary-gated `"ses_"` scan, closing a mid-transcript prose false-positive. See R-E6 below. |
 | Bottom-region scan | "content lines" = non-blank rows after right-trim, scanned upward from the last grid row, same discipline as `lastContentLine` in `internal/engine/heuristic.go` | same |
 
 ### Byte-granularity replay methodology
@@ -649,7 +649,7 @@ at HEAD while writing this section and are clean (not a full `-race` +
 | R-D6 hardened ExtractConversationID | Met | `TestExtractConversationID_Adversarial` (`agy_test.go:318`, 8 subtests: last-wins, malformed-then-valid, multiple redraws, `\x1b[K`-butted, UTF-8 C1-butted, malformed-only-rejected, EOF-truncated-rejected, tail-invalid/grid-valid fallback) — all 8 subtests PASS at HEAD (re-run directly during this write: `go test ./internal/adapter/agy/... -run TestExtractConversationID_Adversarial -v`, `--- PASS`). |
 | R-D7 fixture-derived capability baseline | Met | `TestExtractConversationID_FromFixture`, `TestCapability_FromFixture` (`agy_test.go:409,428`) — asserts exactly `Resume=true, ConversationID=true, Hooks=false, Options=3, Signals=["heuristic"]`, matching the plan's stated baseline. |
 | R-D8 suite (conformance, detect greying, import boundary, no-IO) | Met | `TestConformance`, `TestDetect_VersionGreying_L2`, `TestImportBoundary_T5`, `TestStateless_NoIOInSource` (`agy_test.go:122,457,471,487`); red-first evidence in `.claude/tmp/phase-d-red-evidence.txt` (two-stage: compile red, then targeted logic red on an under-hardened extractor). |
-| R-D9 engine-path integration test | Met-with-deviation | `141bea0`; `internal/adapter/agy/engine_test.go:55` `TestEnginePath_BusyAndSettled`, registers `a.SignalSources()` (not a hand-copied rule list) against a real `engine.New/RegisterSession/OnOutput`. Red evidence via the plan's disclosed "inverted-assertion" technique (implementation pre-existed at merge time per the plan's own sequencing note) in `.claude/tmp/phase-f-red-evidence.txt`. **Deviation** (disclosed in that file): the test defines its own 100x30 `snapAtOffset` helper rather than reusing the package's pre-existing 80x24 `helpers_test.go` `renderGrid` — flagged by the implementer as a pre-existing-file discrepancy, left untouched per "never weaken an existing test," not fixed. |
+| R-D9 engine-path integration test | Met-with-deviation | `141bea0`; `internal/adapter/agy/engine_test.go:55` `TestEnginePath_BusyAndSettled`, registers `a.SignalSources()` (not a hand-copied rule list) against a real `engine.New/RegisterSession/OnOutput`. Red evidence via the plan's disclosed "inverted-assertion" technique (implementation pre-existed at merge time per the plan's own sequencing note) in `.claude/tmp/phase-f-red-evidence.txt`. **Deviation** (disclosed in that file): the test defines its own 100x30 `snapAtOffset` helper rather than reusing the package's `helpers_test.go` `renderGrid` — a redundant helper, not a correctness gap. **Amended post-committee (R-H4 finding 6, 2026-07-18)**: `helpers_test.go`'s `renderGrid` previously hardcoded 80x24, a real geometry mismatch against the 100x30-recorded fixture; fixed to 100x30 to match `snapAtOffset` and the opencode package's own `renderGrid`. `go test ./internal/adapter/agy/... -race` all green post-fix. The two helpers remain separately defined (redundant, not incorrect); not consolidated here. |
 
 ### Phase E — opencode adapter (internal/adapter/opencode)
 
@@ -660,7 +660,7 @@ at HEAD while writing this section and are clean (not a full `-race` +
 | R-E3 options schema | Met | `TestOptions_Schema` (`opencode_test.go:165`) — model/agent. |
 | R-E4 SignalSources — heuristics only, no invented events | Met | `TestSignalSources_MatchMemoTable_HeuristicsOnly` (`opencode_test.go:200`); the "no invented event names" design judgment is additionally truth-up'd in `system-spec.md` T-2 (R-F2, verified below) rather than merely asserted in a unit test. |
 | R-E5 resume | Met | `TestResume_CarriesConversationID` (`opencode_test.go:234`). |
-| R-E6 hardened extraction (left word boundary) | Met | `TestExtractConversationID_WordBoundary_RejectsProseToken`, `_MinLength_RejectsShortToken`, `_LastOccurrenceWins`, `_TruncatedAtEOF_Rejected`, `_ControlByteTerminator` (`extract_test.go:17,26,36,48,58`). |
+| R-E6 hardened extraction (left word boundary) | Met | `TestExtractConversationID_WordBoundary_RejectsProseToken`, `_MinLength_RejectsShortToken`, `_LastOccurrenceWins`, `_TruncatedAtEOF_Rejected`, `_ControlByteTerminator` (`extract_test.go:17,26,36,48,58`). **Amended post-committee (R-H4 finding 1, 2026-07-18)**: the original left-word-boundary design accepted ANY standalone, well-terminated `ses_<alnum>` token in the transcript — including a mid-session prose mention such as `"inspect ses_abcdefghij please"` — because the daemon's live 200ms transcript scan (`skeleton/serve.go` `tapGrids`->`captureConversationID`) combined with write-once-first-wins persistence (`daemon.go` `SetConversationID`) means a false-positive match sticks permanently and Resume would target the wrong session. Extraction is now anchored to the LAST `"opencode -s "` exit-command marker occurrence (mirroring agy's `"agy --conversation="` marker anchor, R-D6), with the token immediately following required to carry idPrefix + the existing charset/min-length/terminator rules. TDD red-first evidence in `.claude/tmp/fixwave-red-evidence.txt`: three new adversarial tests (`TestExtractConversationID_ProseTokenAlone_NotExtracted`, `_ProseTokenThenExitLine_ExitLineWins`, `_ExitLineThenLaterProseToken_ExitLineStillWins`); the first and third fail against the pre-fix code, demonstrating the bug (the second passes pre-fix by chronological coincidence — the exit line is also the last token), then all three pass post-fix; all five pre-existing tests plus `TestExtractConversationID_FromFixture` and the `TestE2E_ReplayProductionPath_AgyOpencode` full-daemon replay remain green unmodified (`internal/adapter/opencode/opencode.go`, `extract_test.go`). |
 | R-E7 fixture-derived capability baseline | Met | `TestExtractConversationID_FromFixture`, `TestCapability_FromFixture` (`opencode_test.go:258,284`) — asserts exactly `Hooks=false, Resume=true, ConversationID=true, Options=2, Signals=["heuristic"]`, matching the plan's stated baseline. |
 | R-E8 suite | Met | `TestConformance`, `TestDetect_VersionGreying_L2`, `TestImportBoundary_T5`, `TestStateless_NoIOInSource` (`opencode_test.go:88,273,312,327`); red-first evidence in `.claude/tmp/phase-e-red-evidence.txt` (compile red only — `New` undefined — no targeted-logic-red stage was needed for this package). |
 | R-E9 engine-path integration test | Met | `141bea0`; `internal/adapter/opencode/engine_test.go:30` `TestEnginePath_BusyAndSettled`; reuses the package's existing 100x30 `helpers_test.go` `renderGrid` directly on a sliced capture prefix (no geometry discrepancy, unlike R-D9); settled subtest seeds `RegisterSession`'s initial status to `TurnActive` so busy->unknown is an observable transition rather than a silent no-op. Red evidence via the same inverted-assertion technique in `.claude/tmp/phase-f-red-evidence.txt`. |
@@ -803,7 +803,13 @@ FAIL
   reads `unknown`, never `idle` — the honest T-4 outcome given R-B2b/c could
   not jointly establish a stable idle substring for opencode within this
   phase's scope. Proven as a whole-stream invariant in both R-G1 (e2e replay)
-  and R-G2 (real CLI).
+  and R-G2 (real CLI). **User-visible consequence (R-H4 committee finding,
+  2026-07-18)**: `status.Derive` maps `TurnUnknown` while the process is
+  running to `GroupWorking` (`internal/status/status.go`), and the TUI's
+  completion banner only fires on a transition INTO `needs_input` /
+  `ready_for_review` — so a finished opencode turn sits in the Working group
+  showing "?" indefinitely and never triggers the ready-for-review
+  notification. Documented at the consequence level in `system-spec.md` T-2.
 - **opencode typed-event (SSE `session.status`) wiring is future work**
   (R-E4, R-F2). v1.1 is heuristics-only for opencode; the real wire schema
   (one `session.status` event with a busy/idle/retry payload, plus separate
@@ -827,15 +833,21 @@ FAIL
 - **R-C5's opencode sweep is not byte-exact in the permanent regression test**
   (see the R-C5 row above) — a disclosed, justified deviation from the plan's
   literal wording, not a silent gap.
-- **R-D9's engine-path test uses its own 100x30 helper instead of the
-  package's existing 80x24 `renderGrid`** (see the R-D9 row above) — flagged
-  by the implementer, left as-is per "never weaken an existing test."
+- **R-D9's engine-path test uses its own 100x30 `snapAtOffset` helper instead
+  of the package's `renderGrid`** (see the R-D9 row above) — a redundant
+  helper, not a correctness gap; left as two separate definitions, not
+  consolidated. The geometry MISMATCH this entry previously also flagged
+  (`renderGrid` hardcoded 80x24 against the 100x30-recorded fixture) was a
+  real bug, not a style deviation, and is fixed (R-H4 finding 6).
 - **vibe (Mistral) was evaluated and dropped** (pre-Phase-A decision,
   2026-07-18, "too shitty for now"). Out of this epic's scope entirely, but
   its prototype and fixture remain retained under
   `docs/verification/cli-trio-exploration/` (`fx_vibe.json`, `drive_vibe.txt`)
   per `system-spec.md` T-7 and the design doc appendix, for a possible future
   re-evaluation.
+- **All committed fixtures and replay tests use 100x30 geometry.** Other
+  terminal geometries and resize behavior are uncovered by this epic's test
+  suite (R-H4 committee note, 2026-07-18) — future characterization work.
 
 ### How to re-verify
 

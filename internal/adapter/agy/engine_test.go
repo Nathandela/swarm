@@ -13,9 +13,10 @@ package agy
 // Offsets are the Phase B evidence memo's frozen phase-window bytes
 // (docs/verification/cli-duo-adapters-evidence.md): busy window [3802,7261],
 // settled-idle frame 7262. snapAtOffset renders at 100x30 — the geometry the
-// fixture was recorded at and the memo's offsets are measured against — unlike
-// this package's helpers_test.go renderGrid (80x24), which only needs to find
-// markers anywhere in the text and is insensitive to the exact row window.
+// fixture was recorded at and the memo's offsets are measured against; this
+// package's helpers_test.go renderGrid also renders at 100x30 (fixed
+// post-committee, R-H4 finding 6 — it previously used 80x24, a stale
+// geometry mismatch against the fixture).
 
 import (
 	"testing"
