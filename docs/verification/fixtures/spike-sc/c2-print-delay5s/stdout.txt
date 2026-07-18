@@ -1,0 +1,1 @@
+`kill -0 99999` returned exit code 1: **No such process** — PID 99999 isn't running. (`kill -0` only probes for the process; it sends no actual signal.)

@@ -10,8 +10,10 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/charmbracelet/x/vt v0.0.0-20260713092006-0d683c34c74b
 	github.com/creack/pty v1.1.24
+	github.com/flynn/noise v1.1.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/rivo/uniseg v0.4.7
+	golang.org/x/crypto v0.48.0
 	golang.org/x/sys v0.41.0
 )
 
