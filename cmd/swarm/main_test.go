@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 )
 
 // v0.3 — detectAgents derives a human-readable unavailability reason from the raw
@@ -28,6 +32,100 @@ func TestUnavailabilityReason(t *testing.T) {
 		if got := unavailabilityReason(c.det); got != c.want {
 			t.Errorf("%s: unavailabilityReason = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// prodAdapterNames returns the registered PRODUCTION adapter names, sorted (the
+// same set detectAgentsWith probes), so the tests below track the registry
+// instead of hardcoding a count.
+func prodAdapterNames() []string {
+	var names []string
+	for _, name := range registry.Names() {
+		if registry.IsProduction(name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// TestDetectAgentsWith_ProbesRunConcurrently — R-A2: detectAgents must probe
+// every production adapter CONCURRENTLY; at 4+ production CLIs, a serial probe
+// (worst case N*probeTimeout) would otherwise gate the launch form. A barrier
+// stub blocks each probe on a shared gate that only releases once ALL N probes
+// have started; a serial implementation calls them one at a time, so the first
+// probe can never observe the others starting and the test fails deterministically
+// — no wall-clock duration assertion involved (the 3s wait is only a
+// deadlock-breaker, not the pass condition).
+func TestDetectAgentsWith_ProbesRunConcurrently(t *testing.T) {
+	names := prodAdapterNames()
+	n := len(names)
+	if n < 2 {
+		t.Fatalf("need >= 2 production adapters to prove concurrency; registry has %d", n)
+	}
+
+	var started int32
+	allStarted := make(chan struct{})
+	var closeOnce sync.Once
+	stub := func(ad adapter.Adapter) adapter.Detection {
+		if int(atomic.AddInt32(&started, 1)) == n {
+			closeOnce.Do(func() { close(allStarted) })
+		}
+		select {
+		case <-allStarted:
+		case <-time.After(3 * time.Second):
+			t.Errorf("probe for %s never observed all %d probes starting — probes are not concurrent", ad.Binary(), n)
+		}
+		return adapter.Detection{}
+	}
+
+	agents := detectAgentsWith("", stub)()
+	if len(agents) != n {
+		t.Fatalf("got %d agents, want %d", len(agents), n)
+	}
+}
+
+// TestDetectAgentsWith_SortedOrderAndCompleteness — the result lists every
+// production adapter exactly once, in registry.Names() (sorted) order,
+// regardless of which goroutine finishes first.
+func TestDetectAgentsWith_SortedOrderAndCompleteness(t *testing.T) {
+	names := prodAdapterNames()
+	stub := func(adapter.Adapter) adapter.Detection { return adapter.Detection{Found: true, InRange: true} }
+	agents := detectAgentsWith("", stub)()
+	if len(agents) != len(names) {
+		t.Fatalf("got %d agents, want %d: %+v", len(agents), len(names), agents)
+	}
+	for i, name := range names {
+		if agents[i].Name != name {
+			t.Errorf("agents[%d].Name = %q, want %q (result must be sorted by name)", i, agents[i].Name, name)
+		}
+	}
+}
+
+// TestDetectAgentsWith_SkipsNonProductionByRegistryFlag — non-production
+// adapters (e.g. "reference") are excluded via registry.IsProduction, not a
+// literal name match, so a future fixture-only adapter can never leak into the
+// picker.
+func TestDetectAgentsWith_SkipsNonProductionByRegistryFlag(t *testing.T) {
+	stub := func(adapter.Adapter) adapter.Detection { return adapter.Detection{} }
+	agents := detectAgentsWith("", stub)()
+	for _, a := range agents {
+		if !registry.IsProduction(a.Name) {
+			t.Errorf("detectAgentsWith surfaced non-production adapter %q", a.Name)
+		}
+	}
+}
+
+// TestDetectAgentsWith_AppendsFakeAgent — the SWARM_FAKE_AGENT_BIN dev/test knob
+// still appends the reserved "fake" agent last, unchanged by the R-A2 refactor.
+func TestDetectAgentsWith_AppendsFakeAgent(t *testing.T) {
+	stub := func(adapter.Adapter) adapter.Detection { return adapter.Detection{} }
+	agents := detectAgentsWith("/path/to/fake", stub)()
+	if len(agents) != len(prodAdapterNames())+1 {
+		t.Fatalf("got %d agents, want %d production + 1 fake", len(agents), len(prodAdapterNames()))
+	}
+	last := agents[len(agents)-1]
+	if last.Name != "fake" || !last.Installed || !last.InRange {
+		t.Errorf("last agent = %+v, want the fake agent entry", last)
 	}
 }
 

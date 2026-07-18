@@ -16,8 +16,11 @@ import (
 // milliseconds; a Node-based CLI that cold-starts or wedges could otherwise hang
 // indefinitely, and detection runs on the launch-form path, so an unbounded exec
 // froze the whole UI (the P0 field-test bug). Detection is best-effort: a probe
-// that overruns is abandoned and the binary is reported Found-but-unversioned.
-const probeTimeout = 2 * time.Second
+// that overruns is abandoned and the binary is reported Found-but-unversioned. 5s
+// (raised from 2s, R-A1) gives a slow cold-starting CLI room to print its banner;
+// probes now run concurrently (cmd/swarm/main.go detectAgents, R-A2), so this no
+// longer multiplies into serial form latency.
+const probeTimeout = 5 * time.Second
 
 // Host is the real adapter.HostProber: it resolves binaries on PATH and runs
 // them, owning the fds and child process that the pure adapter contract must

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -203,32 +204,69 @@ func dialClient() (*protocol.Client, error) {
 	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
 }
 
-// detectAgents builds the launch-form agent detector. It probes the host for every
-// registered adapter (claude, codex) through the CORE adapter.Detect + the real
+// agentDetectFunc probes one already-constructed adapter and reports its
+// Detection. The production default runs the real exec-based detect.Host; tests
+// inject a stub so detectAgentsWith's concurrency can be proven with a barrier
+// instead of a wall-clock assertion (R-A2).
+type agentDetectFunc func(ad adapter.Adapter) adapter.Detection
+
+// detectAgents builds the launch-form agent detector. It probes the host for
+// every registered PRODUCTION adapter through the CORE adapter.Detect + the real
 // exec-based detect.Host, so the picker greys an agent that is missing or
 // out-of-supported-range (L-2). The reserved dev/test "fake" agent is appended when
 // SWARM_FAKE_AGENT_BIN is set (unset in a real install). Detection runs the free
 // `--version` probe only — never a billable agent run.
 func detectAgents(fakeBin string) tui.DetectFunc {
+	host := detect.Host{}
+	return detectAgentsWith(fakeBin, func(ad adapter.Adapter) adapter.Detection {
+		return adapter.Detect(ad, host)
+	})
+}
+
+// detectAgentsWith is detectAgents with the per-adapter probe INJECTED (R-A2), so
+// a test can substitute a barrier stub for the real host. It probes every
+// PRODUCTION adapter (registry.IsProduction — never a literal name match, which
+// would leak a future fixture-only adapter into the picker) CONCURRENTLY, one
+// goroutine per adapter: at probeTimeout up to 5s each, N production CLIs probed
+// serially would gate the launch form at N*5s worst case. Results are joined and
+// reported in registry.Names()'s deterministic sorted order regardless of which
+// goroutine finishes first.
+func detectAgentsWith(fakeBin string, probe agentDetectFunc) tui.DetectFunc {
 	return func() []tui.AgentInfo {
-		var agents []tui.AgentInfo
-		host := detect.Host{}
-		for _, name := range registry.Names() {
-			if name == "reference" {
-				continue // the reference adapter is a test harness, not an installable CLI
+		names := registry.Names()
+		slots := make([]tui.AgentInfo, len(names))
+		present := make([]bool, len(names))
+
+		var wg sync.WaitGroup
+		for i, name := range names {
+			if !registry.IsProduction(name) {
+				continue // fixture-only adapters (e.g. "reference") are not installable CLIs
 			}
 			ad, ok := registry.New(name)
 			if !ok {
 				continue
 			}
-			det := adapter.Detect(ad, host)
-			agents = append(agents, tui.AgentInfo{
-				Name:      name,
-				Installed: det.Found,
-				InRange:   det.InRange,
-				Reason:    unavailabilityReason(det),
-				Options:   ad.Options(),
-			})
+			wg.Add(1)
+			go func(i int, name string, ad adapter.Adapter) {
+				defer wg.Done()
+				det := probe(ad)
+				slots[i] = tui.AgentInfo{
+					Name:      name,
+					Installed: det.Found,
+					InRange:   det.InRange,
+					Reason:    unavailabilityReason(det),
+					Options:   ad.Options(),
+				}
+				present[i] = true
+			}(i, name, ad)
+		}
+		wg.Wait()
+
+		agents := make([]tui.AgentInfo, 0, len(names)+1)
+		for i, ok := range present {
+			if ok {
+				agents = append(agents, slots[i])
+			}
 		}
 		if fakeBin != "" {
 			agents = append(agents, tui.AgentInfo{
