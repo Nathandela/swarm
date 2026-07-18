@@ -71,16 +71,21 @@ func (d *Daemon) Delete(id string) error {
 
 	// Phase 2 — COMMIT the removal. Tombstone within the same d.mu section as the
 	// registry removal, so a concurrent exit-merge's putMem/saveMeta sees it and
-	// cannot re-add or re-persist this id after the removal (F3).
+	// cannot re-add or re-persist this id after the removal (F3). Presence is
+	// RE-CHECKED under d.mu (Phase 1's `ok` is stale — the termination step above has
+	// an up-to-deleteWait window): only the goroutine that actually removes the
+	// session owns closing its stop channel, so two concurrent Deletes of the same id
+	// never double-close it (a double close would panic).
 	d.mu.Lock()
-	if ok {
+	sess, present := d.sessions[id]
+	if present {
 		delete(d.sessions, id)
 	}
 	d.tombstoneID(id)
 	d.mu.Unlock()
 
-	if ok {
-		close(s.stop) // stop this session's monitor WITHOUT finalizing it
+	if present {
+		close(sess.stop) // stop this session's monitor WITHOUT finalizing it
 	}
 	// The session is being removed: retire its engine registration and token (S6).
 	if d.cfg.OnSessionEnd != nil {

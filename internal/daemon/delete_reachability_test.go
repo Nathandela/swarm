@@ -9,11 +9,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
+	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -166,5 +168,53 @@ func TestDelete_UnterminableShimMutatesNothing(t *testing.T) {
 	}
 	if !processAlive(agentPID) {
 		t.Fatal("agent killed on the mutate-nothing path")
+	}
+}
+
+// F1 (review regression) — two concurrent Deletes of the SAME id must not double-
+// close session.stop. The transactional Delete splits the read (Phase 1) from the
+// registry removal + close (Phase 2), so both goroutines capture the session
+// present and both would reach close(session.stop) -> "close of closed channel"
+// panic. Only the goroutine that actually removes the session may close its stop.
+func TestDelete_ConcurrentSameIDClosesStopOnce(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+
+	const id = "concurrent-del"
+	if err := os.MkdirAll(filepath.Join(cfg.StateDir, id), 0o700); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	d.mu.Lock()
+	d.sessions[id] = &session{
+		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
+		stop: make(chan struct{}),
+	}
+	d.mu.Unlock()
+
+	// Hold both Deletes in the termination step (both already past Phase 1, both
+	// holding the same session) until released together, so they race into Phase 2.
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	orig := terminateForDeleteFn
+	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool {
+		started <- struct{}{}
+		<-release
+		return true
+	}
+	t.Cleanup(func() { terminateForDeleteFn = orig })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = d.Delete(id) }()
+	}
+	<-started
+	<-started      // both are past Phase 1, both hold the same session pointer
+	close(release) // release both into Phase 2 concurrently
+
+	wg.Wait() // pre-fix: a double close of session.stop panics and crashes the run
+
+	if _, ok := d.Get(id); ok {
+		t.Fatal("session still present after concurrent Delete")
 	}
 }
