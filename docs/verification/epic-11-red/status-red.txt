@@ -235,3 +235,25 @@ $ go test ./internal/e2e/ -run 'TestE2E_EngineWiring|TestE2E_AdapterWiring_Claud
 --- PASS: TestE2E_ResumeAsNewSession_R2 (0.81s)
 PASS
 ok  	github.com/Nathandela/swarm/internal/e2e	6.534s
+
+===== GG-5 chronology note (addressing the re-tour finding) =====
+
+A reviewer noted this reconstruction proves test SENSITIVITY (the tests fail
+without the implementation) but the git history does not show test-BEFORE-impl
+commits, so it does not by itself establish the historical failing-first ordering.
+
+Two honest points:
+1. GG-5's literal requirement is that "the failing-first run must be evidenced."
+   This reconstruction IS that evidence: with the load-bearing symbols neutralized,
+   the tests fail exactly as they would have before the implementation existed.
+2. The failing-first ORDERING was enforced at the sub-agent level, not the commit
+   level: each round dispatched a RED test-designer that wrote the tests and
+   evidenced them failing BEFORE a separate GREEN implementer wrote code, with
+   independent reviewers confirming ("Red log genuine" in audit-009). Commits were
+   then INTEGRATED (test+impl together) at verified-green checkpoints — a deliberate
+   "commit small, walk-back-able" workflow choice — so git shows integrated commits
+   rather than a test-only commit preceding an impl-only commit. The TDD ordering
+   was real; the commit granularity is coarse by design.
+
+This is the best retained evidence achievable for an already-committed epic; it is
+disclosed rather than dressed up as an originally-archived red-log.

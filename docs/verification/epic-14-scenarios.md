@@ -6,7 +6,7 @@
 
 | # | Scenario (Given/When/Then, short) | Test(s) — file:function |
 |---|---|---|
-| 1 | No daemon running; user runs `swarm`; daemon auto-starts, view < 100 ms | `daemon/autostart_test.go:TestAutoStart_ColdStateDirSpawnsAndConnects` |
+| 1 | No daemon running; user runs `swarm`; daemon auto-starts, view < 100 ms | autostart: `daemon/autostart_test.go:TestAutoStart_ColdStateDirSpawnsAndConnects`; the `<100 ms` first-paint clause (N-1): `tui/firstpaint_gate_test.go:TestFirstPaintGate_RealDaemon_FiftySessions_P95` (real daemon + 50 sessions, p95 <100 ms fail-closed, non-race CI lane) |
 | 2 | Launch form, valid dir; pick claude + model, Enter; shim spawns agent, appears under Working | `skeleton/serve_test.go:TestSkeleton_LaunchAppearsGroupedOverProtocol`, `e2e/skeleton_e2e_test.go:TestE2E_WalkingSkeleton_GG1` |
 | 3 | Session working; terminal closed; agent keeps running, reopening swarm shows it | `e2e/skeleton_e2e_test.go:TestE2E_Scenario3_SurvivesClientClose` |
 | 4 | Claude session running; Claude requests permission; `needs_input` ≤ 1s via authenticated hook, row highlighted + banner | `e2e/adapter_wiring_e2e_test.go:TestE2E_AdapterWiring_ClaudeLaunchAndHook`, `e2e/l1composite_e2e_test.go:TestE2E_L1Composite_SignalReachesRenderedTUIWithin1sUnderLoad`, `tui/banner_test.go:TestBanner_OnNeedsInputTransition` |

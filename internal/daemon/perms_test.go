@@ -13,14 +13,17 @@ import (
 
 // wantOwnerOnly stats path and fails unless its permission bits are owner-only (no
 // group/other bits) — the 0600/0700 tightness E5.7/D-6 requires.
-func wantOwnerOnly(t *testing.T, path string) {
+func wantOwnerOnly(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
-	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("%s mode = %#o; want owner-only (no group/other bits)", path, perm)
+	// Assert the EXACT contracted mode, not merely "no group/other bits": E5.7
+	// pins 0600 on files/sockets and 0700 on dirs, so a stray 0400/0700/0000 must
+	// fail too (owner read-write, not read-only or executable).
+	if perm := fi.Mode().Perm(); perm != want {
+		t.Fatalf("%s mode = %#o; want exactly %#o (E5.7)", path, perm, want)
 	}
 }
 
@@ -42,8 +45,8 @@ func TestPermissions_StateDirAndSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat state dir: %v", err)
 	}
-	if perm := di.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("state dir mode = %#o; want 0700 (no group/other bits)", perm)
+	if perm := di.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("state dir mode = %#o; want exactly 0700 (E5.7)", perm)
 	}
 
 	// Daemon socket 0600: owner rw only.
@@ -51,8 +54,8 @@ func TestPermissions_StateDirAndSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat daemon socket: %v", err)
 	}
-	if perm := si.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("daemon socket mode = %#o; want 0600 (no group/other bits)", perm)
+	if perm := si.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("daemon socket mode = %#o; want exactly 0600 (E5.7)", perm)
 	}
 }
 
@@ -70,8 +73,8 @@ func TestPermissions_LockUnderPrivateDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat lock file: %v", err)
 	}
-	if perm := li.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("lock file mode = %#o; want no group/other bits", perm)
+	if perm := li.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("lock file mode = %#o; want exactly 0600 (E5.7)", perm)
 	}
 }
 
@@ -87,7 +90,7 @@ func TestPermissions_ShimLaunchConfig(t *testing.T) {
 	d := openDaemon(t, cfg)
 	m, _ := launchAnnounce(t, d)
 
-	wantOwnerOnly(t, filepath.Join(cfg.StateDir, m.ID, shimLaunchConfigFile))
+	wantOwnerOnly(t, filepath.Join(cfg.StateDir, m.ID, shimLaunchConfigFile), 0o600)
 }
 
 // TestPermissions_ShimSocketAndSideFiles asserts E5.7/D-6 for the SHIM's own
@@ -104,7 +107,7 @@ func TestPermissions_ShimSocketAndSideFiles(t *testing.T) {
 	// shim is alive (the shim unlinks the socket on exit).
 	const sockID = "permsock"
 	spawnRealShim(t, stateDir, sockID)
-	wantOwnerOnly(t, shimSocketPath(stateDir, sockID))
+	wantOwnerOnly(t, shimSocketPath(stateDir, sockID), 0o600)
 
 	// Side-files: a shim run to completion writes final-snapshot.bin then exit.json.
 	const exitID = "permexit"
@@ -146,6 +149,6 @@ func TestPermissions_ShimSocketAndSideFiles(t *testing.T) {
 
 	// exit.json is written last (after the snapshot), so its presence implies both.
 	waitFile(t, filepath.Join(sessionDir, shim.ExitFile), pollTimeout)
-	wantOwnerOnly(t, filepath.Join(sessionDir, shim.SnapshotFile))
-	wantOwnerOnly(t, filepath.Join(sessionDir, shim.ExitFile))
+	wantOwnerOnly(t, filepath.Join(sessionDir, shim.SnapshotFile), 0o600)
+	wantOwnerOnly(t, filepath.Join(sessionDir, shim.ExitFile), 0o600)
 }
