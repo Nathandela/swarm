@@ -117,6 +117,12 @@ is present in the bottom-6 for the entire gap. Net effect: the engine would
 read `unknown/none` for these 72 bytes, never `idle` and never a wrong
 `active` — a benign, documented micro-gap, not a re-record trigger.
 
+*Reconciliation (Phase C, post-merge):* the prediction above modeled only the
+*declared* rules. The merged engine also keeps its pre-existing generic
+spinner fallback, which fires on the braille glyph, so the gap actually
+classifies `active` (not `unknown`) — strictly safer, same zero-idle
+guarantee, proven byte-exact in `internal/engine/gridrules_fixture_test.go`.
+
 This same replay independently reproduces the plan's cited **"offset ~6132"
 hard-frame class**: in the range roughly [6100, 6227] (just before the gap
 above), the bottom-3 shows a bare `">"` with a border line directly below it
@@ -269,3 +275,326 @@ id-extraction result on either fixture.
 - Neither fixture's id token is EOF-truncated, so the "unterminated at EOF"
   rejection path is untested by real captures; Phase D/E's adversarial unit
   tests must synthesize it.
+
+## Phase G: verification
+
+Phases A-F are merged: agy and opencode are registered production adapters
+(`internal/adapter/registry`) with the engine's descriptor-driven grid rules
+(`internal/engine/gridrules.go`) live, and already proven byte-exact offline
+against both committed fixtures by `internal/engine/gridrules_fixture_test.go`
+(R-C5). Phase G closes the remaining gap: does the REAL assembled stack —
+registry resolution, launch-argv composition, daemon/shim spawn, the shim's PTY,
+the daemon's periodic grid sampler, `engine.OnOutput`, persisted status — 
+reproduce those same verdicts, and do the real CLIs themselves round-trip a
+resumed conversation with the exact production argv.
+
+### R-G1: production-path e2e with replay binaries
+
+**Test**: `TestE2E_ReplayProductionPath_AgyOpencode`,
+`internal/e2e/replay_e2e_test.go`. Runtime ~13-33s across five repeated runs
+(build + daemon startup + ~7.3s of agy holds + ~4.2s of opencode holds run
+concurrently, plus polling overhead); comfortably under the 60s bound, `-race`
+clean.
+
+**Mechanics**: two REPLAY BINARIES, named exactly `agy` and `opencode`, are
+built at test time via `go build` from generated Go source (stdlib-only, no
+module imports, so it compiles standalone) written to `t.TempDir()`. Each
+binary reads its own committed fixture (`internal/adapter/{agy,opencode}/
+testdata/*.json`) and writes the raw `pty_capture` bytes to stdout in SEGMENTS
+cut at the Phase B marker-memo byte offsets, holding output at each target
+state before advancing:
+
+| agy segment | bytes | hold |
+|---|---|---|
+| startup | [0,3802) | 300ms |
+| busy (pre-hard-frame) | [3802,6150) | 1200ms |
+| hard-frame region (offset~6132 false-idle repro class) | [6150,6228) | 1200ms |
+| marker-gap transient (neither declared marker intact) | [6228,6300) | 1200ms |
+| busy tail | [6300,7262) | 1200ms |
+| settled idle | [7262,10035) | 2200ms |
+| exit screen (`agy --conversation=<uuid>`) | [10035,10092) | 300ms |
+
+| opencode segment | bytes | hold |
+|---|---|---|
+| startup (incl. the "Update Available" modal) | [0,33547) | 300ms |
+| busy (`esc interrupt`, zero-gap) | [33547,67787) | 1700ms |
+| settled (no idle rule declared) | [67787,76243) | 2200ms |
+| exit id line (`opencode -s ses_<id>`) | [76243,76281) | 300ms |
+
+Every hold exceeds `internal/skeleton/serve.go`'s `gridPoll`/`eventPoll` 200ms
+sampling cadence by 6-11x, so the daemon's real sampler deterministically
+observes each state on more than one tick (R-G1's stated bound). Both sessions
+are launched through the CLIENT protocol exactly as a real launch would be
+(`c.Launch(protocol.LaunchReq{Agent: "agy"/"opencode", ...})`, geometry 100x30
+matching the fixtures' recorded geometry, both running CONCURRENTLY — a small
+incidental proof of `skeleton.go`'s per-session sampling goroutines / no-head-
+of-line-blocking design, FIX 7), then status is polled via `c.List()` every
+50ms and every sample recorded with its elapsed time, for both sessions off the
+SAME poll, until both sessions' process has exited or a 40s bound elapses.
+
+**DEVIATION from the plan's suggested "pass the fixture path via env var"**: a
+custom env var does not survive to the exec'd agent process.
+`internal/persist/env.go`'s `FilterEnv` is a normative ALLOWLIST (ADR-004 item
+6, invariant S-2) applied to the launch `ClientEnv` before it becomes the
+agent's env (PATH/HOME/SHELL/TERM/locale/venv/provider-key names only); an
+arbitrary `SWARM_REPLAY_FIXTURE` would be silently dropped. The fixture's
+absolute path is instead baked into the compiled replay binary as a build-time
+string constant (one build per CLI name, from a small Go template) — this is a
+property of the TEST HARNESS, not a production launch input, so it correctly
+leaves the allowlist boundary (which the launch this test drives DOES go
+through, unmodified) completely undisturbed. Noted here as a deliberate,
+disclosed deviation, not a shortfall.
+
+**Assertions and results** (all passed):
+- agy: `turn=active` first observed, then `turn=idle` first observed
+  strictly after it, with the elapsed gap between them `>= 3s` (a regression
+  guard well below the ~4.8s the four busy-hold segments are scheduled to
+  occupy — a premature/false idle firing during the hard-frame or marker-gap
+  holds would collapse this gap far below 3s) and `>= 5` distinct `active`
+  samples recorded in between (sustained observation spanning both the
+  pre-hard-frame hold and the hard-frame hold itself, not a single lucky
+  tick). Exit-screen conversation id `fb5e3e02-e5ef-4d25-b398-aead20366441`
+  (the real committed fixture's id — the replay streams the committed bytes
+  verbatim) extracted and persisted (`waitForConversationID` against the
+  daemon's meta store).
+- opencode: `turn=active` observed during its busy hold; `turn=idle` NEVER
+  observed at any point across the whole session life (opencode declares no
+  idle rule, R-B4 — asserted as a whole-stream invariant, the strongest form
+  of "never idle ever"); `turn=unknown` observed after the last `active`
+  sample (the honest "settled -> unknown" T-4 outcome); the final recorded
+  sample is not `active`. Exit id `ses_08b642915ffeYL3T6ea1DnJZDd` (the real
+  committed fixture's id) extracted and persisted.
+
+**TDD red-first evidence**: `.claude/tmp/phase-g-red-evidence.txt` captures a
+run with both `agySegments` and `opencodeSegments` temporarily stubbed to only
+their startup slice (never emitting the busy/settled bytes). The real assembled
+stack correctly failed the test — `agy: turn=idle never observed after active`
+— proving the assertions are load-bearing (they fail when the signal is
+genuinely absent) rather than vacuous; the sample log in that run also shows
+`turn=active` was reached from the startup slice alone (agy's pre-prompt
+screen already carries transient spinner content), which is a fine, harmless
+detail — the meaningful failure is the missing settle. The stub was then
+reverted to the full segment schedule above and the test passed (`--- PASS:
+TestE2E_ReplayProductionPath_AgyOpencode`).
+
+### R-G2: real-CLI user snippets (bounded, env-gated, not in CI)
+
+Run interactively in this session against the REAL installed CLIs (agy 1.1.4,
+opencode 1.17.9 — both already authenticated in this environment from Phase
+B's original characterization). Harness: a throwaway `cmd/zzg2harness` command
+package (built, exercised, then `rm -rf`'d — never committed, confirmed absent
+from `git status`) driving the REAL registry adapters' `Command()`/`Resume()`/
+`ExtractConversationID` plus the real `internal/vt` emulator for the busy-
+marker proof; `cmd/swarm-char` (built fresh) as the PTY-driving exec harness,
+following the exact quote pattern of the existing
+`docs/verification/cli-trio-exploration/drive_{agy,oc}.txt` (a literal `0x03`
+Ctrl+C byte, sent twice, 400ms apart, ~25s after submit). All runs used
+`-cwd` the worktree root (already an agy-trusted workspace per
+`~/.gemini/antigravity-cli/settings.json`'s `trustedWorkspaces` — a scratch
+subdirectory was tried first and hit agy's per-EXACT-path trust prompt, so it
+was abandoned in favor of the already-trusted root; `git status` confirmed
+clean, no stray files, after every run). `OPENCODE_DISABLE_AUTOUPDATE=1` was
+exported for both opencode runs.
+
+**1. Detection** (`registry.Names() x adapter.Detect(name, detect.Host{})`,
+the exact `detectAgents` path):
+
+| adapter | production | Found | Version | InRange |
+|---|---|---|---|---|
+| agy | true | true | 1.1.4 | true |
+| claude | true | true | 2.1.214 | true |
+| codex | true | true | (unversioned) | false |
+| opencode | true | true | 1.17.9 | true |
+| reference | false | false | — | — |
+
+agy and opencode both detect cleanly, in range, alongside claude. codex is
+found but its version banner did not parse in this environment (pre-existing,
+unrelated to this phase's adapters — not investigated further, out of scope).
+
+**2. agy round-trip** — real argv composed by the REAL adapter (`agy.New().
+Command(...)`, options `model="Gemini 3.5 Flash (Low)"`, `InitialPrompt="Say
+OK and nothing else."`):
+
+```
+agy --model "Gemini 3.5 Flash (Low)" --prompt-interactive "Say OK and nothing else."
+```
+
+Transcript excerpt (initial turn, ANSI-stripped, email redacted per the R-B3
+convention):
+
+```
+▄▀▀▄        Antigravity CLI 1.1.4
+▀▀▀▀▀▀       user.sanitized1@example.com
+▀▀▀▀▀▀▀▀      Gemini 3.5 Flash (Low)
+   ▄▀▀    ▀▀▄     ~/Code/swarm/.claude/worktrees/cli-trio-integration
+> Say OK and nothing else.
+⣾  Generating...
+esc to cancel
+  OK
+press ctrl+c again to exit
+Resume with -c (or command below):
+agy --conversation=0ce8720a-256f-47f7-b145-2e2ba103cb44
+```
+
+Busy-marker proof via the REAL `internal/vt` emulator (not a raw-byte scan —
+a raw substring search for `"esc to cancel"`/`"Generating..."` FAILED even
+though both are visibly present once rendered, because agy types its footer
+character-by-character with cursor-show/hide escape codes interleaved between
+individual characters; only the DECODED GRID — exactly what the production
+`busy-contains` rule reads — shows them as contiguous text): `"esc to cancel"`
+first observed at rendered byte 3488, `"Generating..."` at byte 3424, both
+absent (as expected) from the settled/exit frame.
+
+`ad.ExtractConversationID(nil, tail)` (the REAL R-D6 extraction, run against
+the real capture) recovered `ok=true id=0ce8720a-256f-47f7-b145-2e2ba103cb44`
+— matching the exit-screen marker exactly.
+
+Resume argv, composed by the REAL adapter (`agy.New().Resume(...)`, unmodified
+— production invokes it verbatim via `composeLaunchSpec`):
+
+```
+agy --conversation 0ce8720a-256f-47f7-b145-2e2ba103cb44
+```
+
+Driven with the follow-up prompt "Repeat my previous message back to me,
+verbatim." (typed via the drive script, 6s after spawn + Enter, then the same
+~25s-then-double-Ctrl+C quit). Transcript excerpt:
+
+```
+> Say OK and nothing else.
+  OK
+> Repeat my previous message back to me, verbatim.
+▸ Thought for 3s, 281 tokens
+  Prioritizing Tool Usage
+  Say OK and nothing else.
+press ctrl+c again to exit
+Resume with -c (or command below):
+agy --conversation=0ce8720a-256f-47f7-b145-2e2ba103cb44
+```
+
+**Retention assertions (automated, string match on the capture)**: PASS — the
+resumed capture contains `"Say OK and nothing else."` verbatim (the model's
+answer to the follow-up literally echoes the original prompt back), the prior
+turn `"> Say OK and nothing else. / OK"` is already present in the resumed
+session's scrollback (proving the SAME conversation was loaded, not a fresh
+one), and the resumed session's exit-screen id is byte-identical to the
+original (`0ce8720a-256f-47f7-b145-2e2ba103cb44`) — a real resume, not a
+relabeled fresh launch. (Incidental, expected: agy's own default model
+`"Gemini 3.1 Pro (High)"` took over on resume, since `Resume()`'s argv per R-D5
+carries only `--conversation <id>`, no model flag — exactly what production
+composes.)
+
+**3. opencode round-trip** — real argv (`opencode.New().Command(...)`, options
+`model="opencode/deepseek-v4-flash-free"` — the specified free-tier model
+worked on the first attempt, so the ollama/qwen3:4b fallback was never
+needed):
+
+```
+opencode --model opencode/deepseek-v4-flash-free --prompt "Say OK and nothing else."
+```
+
+Transcript excerpt (initial turn):
+
+```
+Say OK and nothing else.
+Build · DeepSeek V4 Flash Free
+■⬝⬝⬝⬝⬝⬝⬝esc interrupt
+⠋ Thinking
++ Thought: 227ms
+OK
+Session   Request to say OK
+Continue  opencode -s ses_089cb3878ffeUL81NnKWbOp1La
+```
+
+Busy-marker proof via the real `internal/vt` emulator: `"esc interrupt"` first
+observed at rendered byte 24704, absent from the settled/exit frame (same
+raw-vs-rendered caveat as agy above — opencode's footer is likewise typed
+through interleaved escape codes, so only the decoded grid shows it as
+contiguous text, which is exactly why the production rule reads the grid, not
+raw bytes).
+
+`ad.ExtractConversationID(nil, tail)` recovered
+`ok=true id=ses_089cb3878ffeUL81NnKWbOp1La`, matching the exit line.
+
+Resume argv, composed by the REAL adapter (`opencode.New().Resume(...)`,
+unmodified):
+
+```
+opencode --session ses_089cb3878ffeUL81NnKWbOp1La
+```
+
+Driven with the same follow-up prompt and quit pattern. **Retention
+assertions**: PASS — the resumed capture contains `"Say OK and nothing else."`
+verbatim, and the resumed session's exit line carries the byte-identical
+session id (`opencode -s ses_089cb3878ffeUL81NnKWbOp1La`) — a real resume.
+
+**Summary**: both CLIs round-tripped successfully on the first attempt, within
+the plan's bound of max 2 turns per CLI (one initial + one resume, each); no
+fallback model or temporary opencode config was needed.
+
+### R-G3: attached-vs-detached sampling note
+
+From `internal/skeleton/serve.go` (`sampleGrid`, `tapGrids`,
+`captureConversationID`) and `internal/shim/server.go` (`acceptLoop`,
+`server.curConn`):
+
+- The shim is a v1 single-slot server: `acceptLoop` calls `listener.Accept()`
+  then blocks inside `serveConn(conn)` until that ONE connection ends before
+  looping back to `Accept()` for the next ("Exactly one client connection is
+  served at a time," `internal/shim/server.go:37-38`). A second dial while a
+  client is attached is accepted at the kernel/socket level but sits queued —
+  it is not served until the current connection's `serveConn` returns.
+- The daemon's grid tap (`tapGrids`, `gridPoll` = 200ms) drives
+  `sampleGridAsync` per running session in its OWN goroutine each tick, deduped
+  so at most one sample is ever in flight per session (no pile-up). Each
+  sample calls `sampleGrid`, which itself does a full `Attach` (dial + hello +
+  attach control frame + wait for the snapshot, bounded by
+  `shimAttachTimeout` = 10s) and closes the stream IMMEDIATELY after reading
+  the one snapshot — holding the shim's single slot for only the few
+  milliseconds of that round-trip when the shim is otherwise idle.
+- **Detached** (no client holding the session): each 200ms tick's sample dial
+  is served almost instantly (the shim's `Accept` is idle), so
+  `engine.OnOutput` gets a fresh grid roughly every 200ms — the cadence R-G1's
+  holds are sized against.
+- **Attached** (a client — e.g. the TUI, or a held test attach) is
+  continuously connected: the periodic sample dial queues behind that live
+  connection and, per `sampleGrid`'s own doc comment, "the sample's dial times
+  out and is ignored" if the client does not detach within the 10s
+  `shimAttachTimeout` — a silent skip, not a hang (the per-session goroutine +
+  dedup means this never blocks OTHER sessions' cadence, L1's no-head-of-line-
+  blocking property, FIX 7). Net effect: while a client stays attached to a
+  session, the grid-driven half of status derivation (the ENTIRE signal source
+  for agy/opencode, which are heuristic-only, R-D4/R-E4) is starved and freezes
+  at whatever it last observed, resuming only once the client detaches (or a
+  fresh 200ms tick's dedup-cleared attempt succeeds once the slot frees).
+  Hook/typed-signal-driven status (claude/codex) is unaffected, since it flows
+  over the separate hook socket, not the shim's attach slot. The client's OWN
+  live view is also unaffected — its attach stream keeps receiving real-time
+  output frames regardless; only the DAEMON's own background sampling side-
+  channel is blocked.
+- This is precisely why conversation-id capture (Epic 11 C1) was moved OFF the
+  grid tap onto an independent transcript-file poll
+  (`captureConversationID`'s doc comment states this exact rationale
+  verbatim), and is independently proven by the existing
+  `TestE2E_ConversationCapture_DuringHeldAttach_C1`
+  (`internal/e2e/capture_c1_e2e_test.go`) — that test holds an attach for a
+  session's whole life and confirms id capture still completes, precisely
+  because it does NOT depend on the grid tap's own attach succeeding.
+
+### Deferred / carried forward (Phase G)
+
+- R-G3 is a documentation note synthesized from source inspection plus the
+  EXISTING `TestE2E_ConversationCapture_DuringHeldAttach_C1` as corroborating
+  proof; no new test was written specifically for the attached-vs-detached
+  status-freeze behavior (as opposed to conversation-id capture, which already
+  has one). If this ever needs to be a regression-tested guarantee rather than
+  a documented architectural property, that is follow-up work.
+- The busy-marker "user-visible proof" in R-G2 uses the real `internal/vt`
+  emulator (not a raw-byte substring scan, which was tried first and shown to
+  be unreliable — see the transcript notes above); the authoritative
+  classification proof (through the actual `busy-contains`/`idle-line-equals`
+  engine rules, not just marker presence) remains R-G1 (byte-identical replay
+  of the same committed fixtures) and R-C5 (offline full-timeline replay).
+- codex's version-banner parsing failure in the R-G2 detection sweep (found,
+  unversioned, out of range) is pre-existing and unrelated to the agy/opencode
+  work; not investigated as out of this phase's scope.
