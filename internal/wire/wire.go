@@ -15,7 +15,20 @@ import (
 
 // MaxFrame is the largest legal declared frame length L (payload+1 type
 // byte), the anti-DoS cap enforced before any body allocation or read.
+//
+// internal/skeleton's connection demux (handleConn) routes a fresh connection
+// to the protocol server the instant its first byte is 0x00, relying on every
+// legal frame's 4-byte big-endian length prefix having a zero most-significant
+// byte — see the guard immediately below, which fails to compile if that ever
+// stops holding.
 const MaxFrame = 1 << 20 // 1 MiB
+
+// Compile-time proof that MaxFrame stays small enough for the 0x00-first-byte
+// demux described above: every legal length up to MaxFrame needs a zero top
+// byte, which holds iff MaxFrame <= 1<<24-1 (0x00FFFFFF). An untyped negative
+// constant cannot convert to uint, so if MaxFrame ever grows past that bound
+// this line fails to compile instead of silently breaking the demux.
+const _ uint = 1<<24 - 1 - MaxFrame
 
 // Type identifies the payload a frame carries.
 type Type byte
