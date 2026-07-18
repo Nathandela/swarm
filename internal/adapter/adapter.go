@@ -85,6 +85,23 @@ type Detection struct {
 	Version  string // detected version string, when Found
 	InRange  bool   // Version falls within SupportedVersions
 	ProbeErr string // first line of the version probe's output when it errored/exited non-zero (the CLI's own diagnostic, e.g. codex's "Reinstall Codex"); empty on success
+
+	// ConfiguredModel and Models are ADDITIVE DATA ONLY — the frozen contract
+	// gains fields, no behavior. The CORE Detect above never sets them (it stays
+	// I/O-free); they are filled by the host-I/O model probe in
+	// internal/adapter/detect (reading each CLI's on-disk config) and consumed by
+	// the launch-form model-option overlay in cmd/swarm.
+	ConfiguredModel string        // the model the CLI is actually configured to default to (best-effort; empty when unknown), pre-filling the launch form's model field
+	Models          []ModelChoice // the model choices the CLI exposes, discovered from its config (best-effort; nil when the CLI has no enumeration or none could be read)
+}
+
+// ModelChoice is one model a CLI exposes: ID is the launch value (the slug the
+// CLI's -m/--model accepts), Display its human-readable label. It is pure data
+// carried on Detection for the launch form's model picker — the frozen adapter
+// contract gains no behavior.
+type ModelChoice struct {
+	ID      string
+	Display string
 }
 
 // HostProber is the host-I/O capability the CORE Detect function needs: locate a

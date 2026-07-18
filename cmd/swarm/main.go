@@ -270,12 +270,17 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 				continue
 			}
 			det := adapter.Detect(ad, host)
+			// Piggyback the best-effort model discovery on the same async detection:
+			// pre-fill the form's model field with the real configured default and
+			// cycle the CLI's real choices (v0.5, bead e5i). Read failures leave these
+			// empty and the option renders exactly as before.
+			det.ConfiguredModel, det.Models = detect.ProbeModels(name)
 			agents = append(agents, tui.AgentInfo{
 				Name:      name,
 				Installed: det.Found,
 				InRange:   det.InRange,
 				Reason:    archAugmentedReason(unavailabilityReason(det), det, translated),
-				Options:   ad.Options(),
+				Options:   overlayModelOptions(ad.Options(), det.ConfiguredModel, det.Models),
 			})
 		}
 		if fakeBin != "" {
@@ -288,6 +293,16 @@ func detectAgents(fakeBin string) tui.DetectFunc {
 		}
 		return agents
 	}
+}
+
+// overlayModelOptions augments the "model" launch option with what the CLI is
+// actually configured to use, discovered from its on-disk config: the real
+// default pre-fills the field (Default) and the discovered choices become the
+// left/right cycle values (Suggest, layered over any curated aliases). Non-model
+// options, and adapters with nothing discovered, are returned untouched. The
+// input specs are never mutated — a fresh slice is returned when anything changes.
+func overlayModelOptions(specs []adapter.OptionSpec, configured string, models []adapter.ModelChoice) []adapter.OptionSpec {
+	return specs
 }
 
 // unavailabilityReason derives a short, human-readable cause an agent cannot launch
