@@ -5,9 +5,10 @@ package daemon
 // finalizeTerminal — persist.Save (the disk-write trust boundary, pinned by
 // persist.TestSaveFiltersEnvBeforePersist) is now the SOLE site that filters.
 // This test pins the end-to-end property the dedup must not weaken: a secret
-// in a session's launch env never reaches meta.json on disk, exercised through
-// the exact daemon write paths that lost their own filtering (SetStatus,
-// SetConversationID). Must pass unchanged before and after the dedup.
+// in a session's launch env never reaches meta.json on disk NOR the in-memory
+// registry Get/List expose, exercised through the exact daemon write paths
+// that lost their own filtering (SetStatus, SetConversationID). Must pass
+// unchanged before and after the dedup.
 
 import (
 	"os"
@@ -56,5 +57,45 @@ func TestSecretEnvNeverReachesDiskAcrossDaemonWrites(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "PATH=") {
 		t.Fatalf("allowlisted env was dropped:\n%s", raw)
+	}
+
+	got, ok := d.Get(m.ID)
+	if !ok {
+		t.Fatalf("Get(%s): not found", m.ID)
+	}
+	checkFilteredEnv(t, "Get", got.Env)
+
+	found := false
+	for _, meta := range d.List() {
+		if meta.ID == m.ID {
+			found = true
+			checkFilteredEnv(t, "List", meta.Env)
+		}
+	}
+	if !found {
+		t.Fatalf("List(): session %s not present", m.ID)
+	}
+}
+
+// checkFilteredEnv asserts env carries the allowlisted PATH entry but not the
+// disallowed AWS_SECRET_ACCESS_KEY entry, pinning the in-memory registry
+// property the FilterEnv dedup relies on (persist.Save is the sole filtering
+// site; SetStatus/SetConversationID must still hand back filtered meta).
+func checkFilteredEnv(t *testing.T, source string, env []string) {
+	t.Helper()
+	hasSecret, hasAllowed := false, false
+	for _, e := range env {
+		if strings.HasPrefix(e, "AWS_SECRET_ACCESS_KEY=") {
+			hasSecret = true
+		}
+		if strings.HasPrefix(e, "PATH=") {
+			hasAllowed = true
+		}
+	}
+	if hasSecret {
+		t.Fatalf("%s: non-allowlisted env reached in-memory registry: %v", source, env)
+	}
+	if !hasAllowed {
+		t.Fatalf("%s: allowlisted env was dropped: %v", source, env)
 	}
 }
