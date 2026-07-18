@@ -1,0 +1,245 @@
+======================================================================
+Remote-control Phase 1 — DAEMON FOUNDATION — RED RUN
+date: Sat Jul 18 18:52:00 CEST 2026
+go: go1.26.1  host: darwin/arm64 (built amd64 toolchain)
+packages: internal/journal (new), internal/idempotency (new),
+          internal/daemon (extended), internal/protocol (extended)
+requirements: R-JRN.1-.7, R-IDP.1-.4, R-PROT.1/.2/.3/.7
+amendments:   D.0-A3 (two-phase idempotency), A4 (input live-only / request_id),
+              A6 (approval identity+expiry), A7 (choke-point journal hook + WAL),
+              A11 (R-PROT.7 error taxonomy)
+TDD: GG-5 failing-first, undefined-only RED. NO production code/stubs written.
+     No existing test modified or weakened.
+======================================================================
+
+### GG-5 property: every error below is undefined-symbol / unknown-field /
+### no-such-method — the tests fail to COMPILE because the production symbols
+### they reference AS EXPECTATIONS do not exist yet. No syntax errors, no type
+### errors, no test bugs (verified: 'grep -v <undefined-classes>' is empty).
+
+======================================================================
+### internal/journal — go test ./internal/journal/ (cap lifted: -gcflags=-e) ###
+======================================================================
+# github.com/Nathandela/swarm/internal/journal [github.com/Nathandela/swarm/internal/journal.test]
+internal/journal/journal_test.go:69:45: undefined: Journal
+internal/journal/journal_test.go:71:12: undefined: Open
+internal/journal/journal_test.go:80:34: undefined: Journal
+internal/journal/journal_test.go:80:45: undefined: Record
+internal/journal/journal_test.go:97:9: undefined: Record
+internal/journal/journal_test.go:98:18: undefined: SchemaVersion
+internal/journal/journal_test.go:102:18: undefined: TypeGroupTransition
+internal/journal/journal_test.go:105:10: undefined: EncodeRecord
+internal/journal/journal_test.go:109:15: undefined: DecodeRecord
+internal/journal/journal_test.go:121:25: undefined: SchemaVersion
+internal/journal/journal_test.go:122:15: undefined: DecodeRecord
+internal/journal/journal_test.go:122:28: undefined: EncodeRecord
+internal/journal/journal_test.go:128:24: undefined: SchemaVersion
+internal/journal/journal_test.go:129:19: undefined: DecodeRecord
+internal/journal/journal_test.go:129:32: undefined: EncodeRecord
+internal/journal/journal_test.go:133:31: undefined: SchemaVersion
+internal/journal/journal_test.go:134:91: undefined: SchemaVersion
+internal/journal/journal_test.go:145:20: undefined: Record
+internal/journal/journal_test.go:145:49: undefined: TypeGroupTransition
+internal/journal/journal_test.go:189:26: undefined: Record
+internal/journal/journal_test.go:189:55: undefined: TypeGroupTransition
+internal/journal/journal_test.go:240:25: undefined: Record
+internal/journal/journal_test.go:240:54: undefined: TypeLaunched
+internal/journal/journal_test.go:255:26: undefined: Record
+internal/journal/journal_test.go:255:55: undefined: TypeExited
+internal/journal/journal_test.go:273:12: undefined: Open
+internal/journal/journal_test.go:277:28: undefined: Record
+internal/journal/journal_test.go:277:64: undefined: TypeLaunched
+internal/journal/journal_test.go:310:12: undefined: OpenWithOptions
+internal/journal/journal_test.go:310:33: undefined: Options
+internal/journal/journal_test.go:317:20: undefined: Record
+internal/journal/journal_test.go:317:53: undefined: TypeGroupTransition
+internal/journal/journal_test.go:330:12: undefined: OpenWithOptions
+internal/journal/journal_test.go:330:33: undefined: Options
+internal/journal/journal_test.go:336:20: undefined: Record
+internal/journal/journal_test.go:336:49: undefined: TypeGroupTransition
+internal/journal/debounce_test.go:37:20: undefined: Record
+internal/journal/debounce_test.go:37:49: undefined: TypeGroupTransition
+internal/journal/debounce_test.go:52:9: undefined: NewDebouncer
+internal/journal/debounce_test.go:56:12: undefined: Record
+internal/journal/debounce_test.go:56:41: undefined: TypeGroupTransition
+internal/journal/debounce_test.go:58:12: undefined: Record
+internal/journal/debounce_test.go:58:41: undefined: TypeGroupTransition
+internal/journal/debounce_test.go:60:12: undefined: Record
+internal/journal/debounce_test.go:60:41: undefined: TypeGroupTransition
+internal/journal/debounce_test.go:78:12: undefined: Record
+internal/journal/debounce_test.go:78:41: undefined: TypeExited
+internal/journal/debounce_test.go:82:16: undefined: TypeExited
+FAIL	github.com/Nathandela/swarm/internal/journal [build failed]
+FAIL
+
+======================================================================
+### internal/idempotency — go test ./internal/idempotency/ (cap lifted: -gcflags=-e) ###
+======================================================================
+# github.com/Nathandela/swarm/internal/idempotency [github.com/Nathandela/swarm/internal/idempotency.test]
+internal/idempotency/store_test.go:62:29: undefined: Store
+internal/idempotency/store_test.go:70:19: undefined: PhaseCompleted
+internal/idempotency/store_test.go:70:50: undefined: PhaseFailed
+internal/idempotency/store_test.go:70:78: undefined: PhaseOutcomeUnknown
+internal/idempotency/store_test.go:71:17: undefined: PhaseExecuting
+internal/idempotency/store_test.go:71:48: undefined: PhasePrepared
+internal/idempotency/store_test.go:93:12: undefined: Open
+internal/idempotency/store_test.go:115:12: undefined: Open
+internal/idempotency/store_test.go:130:13: undefined: Open
+internal/idempotency/store_test.go:138:18: undefined: PhaseCompleted
+internal/idempotency/store_test.go:157:12: undefined: Open
+internal/idempotency/store_test.go:178:13: undefined: Open
+internal/idempotency/store_test.go:186:18: undefined: PhaseExecuting
+internal/idempotency/store_test.go:209:12: undefined: Open
+internal/idempotency/store_test.go:223:13: undefined: Open
+internal/idempotency/store_test.go:228:25: undefined: PhaseExecuting
+internal/idempotency/store_test.go:236:18: undefined: PhaseOutcomeUnknown
+internal/idempotency/store_test.go:239:18: undefined: PhaseCompleted
+internal/idempotency/store_test.go:251:12: undefined: Open
+internal/idempotency/store_test.go:258:27: undefined: MaxOperationIDLen
+internal/idempotency/store_test.go:263:98: undefined: MaxOperationIDLen
+internal/idempotency/store_test.go:276:12: undefined: OpenWithOptions
+internal/idempotency/store_test.go:276:37: undefined: Options
+FAIL	github.com/Nathandela/swarm/internal/idempotency [build failed]
+FAIL
+
+======================================================================
+### internal/daemon — go test ./internal/daemon/ (cap lifted: -gcflags=-e) ###
+======================================================================
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/idempotency_wiring_test.go:31:7: spec.OperationID undefined (type LaunchSpec has no field or method OperationID)
+internal/daemon/journal_wiring_test.go:43:17: d.JournalReadFrom undefined (type *Daemon has no field or method JournalReadFrom)
+internal/daemon/journal_wiring_test.go:159:14: d.RecordGatewayPresence undefined (type *Daemon has no field or method RecordGatewayPresence)
+internal/daemon/journal_wiring_test.go:162:14: d.RecordGatewayPresence undefined (type *Daemon has no field or method RecordGatewayPresence)
+internal/daemon/journal_wiring_test.go:199:17: d2.JournalReadFrom undefined (type *Daemon has no field or method JournalReadFrom)
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL
+
+======================================================================
+### internal/protocol — go test ./internal/protocol/ (cap lifted: -gcflags=-e) ###
+======================================================================
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/remote_journal_test.go:40:9: undefined: JournalResume
+internal/protocol/remote_journal_test.go:41:14: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:45:69: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:48:53: undefined: JournalResume
+internal/protocol/remote_journal_test.go:51:12: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:57:9: undefined: JournalResume
+internal/protocol/remote_journal_test.go:60:50: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:64:36: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:76:4: undefined: JournalBackend
+internal/protocol/remote_journal_test.go:99:3: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:100:3: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:101:3: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:102:3: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:103:3: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:107:36: undefined: CapJournal
+internal/protocol/remote_journal_test.go:109:30: undefined: OpJournalRead
+internal/protocol/remote_journal_test.go:109:73: unknown field Cursor in struct literal of type Control
+internal/protocol/remote_journal_test.go:111:15: undefined: OpJournalRead
+internal/protocol/remote_journal_test.go:112:59: undefined: OpJournalRead
+internal/protocol/remote_journal_test.go:114:9: got.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_journal_test.go:115:61: got.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_journal_test.go:118:13: got.Journal undefined (type Control has no field or method Journal)
+internal/protocol/remote_journal_test.go:119:76: got.Journal undefined (type Control has no field or method Journal)
+internal/protocol/remote_journal_test.go:121:26: got.Journal undefined (type Control has no field or method Journal)
+internal/protocol/remote_journal_test.go:137:40: undefined: CapJournal
+internal/protocol/remote_journal_test.go:138:34: undefined: OpJournalSubscribe
+internal/protocol/remote_journal_test.go:143:38: undefined: CapJournal
+internal/protocol/remote_journal_test.go:144:32: undefined: OpJournalSubscribe
+internal/protocol/remote_journal_test.go:151:17: undefined: JournalRecord
+internal/protocol/remote_journal_test.go:160:15: undefined: OpJournalEvent
+internal/protocol/remote_journal_test.go:161:58: undefined: OpJournalEvent
+internal/protocol/remote_journal_test.go:163:9: ev.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_journal_test.go:164:66: ev.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_journal_test.go:166:13: ev.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_errors_test.go:34:14: undefined: ServeRemote
+internal/protocol/remote_errors_test.go:46:13: undefined: ErrorCode
+internal/protocol/remote_errors_test.go:47:3: undefined: CodePolicy
+internal/protocol/remote_errors_test.go:47:15: undefined: CodeKillSwitch
+internal/protocol/remote_errors_test.go:47:31: undefined: CodeRateLimit
+internal/protocol/remote_errors_test.go:48:3: undefined: CodeStaleApproval
+internal/protocol/remote_errors_test.go:48:22: undefined: CodeNotAuthorized
+internal/protocol/remote_errors_test.go:48:41: undefined: CodeInvalidField
+internal/protocol/remote_errors_test.go:50:14: undefined: ErrorCode
+internal/protocol/remote_errors_test.go:62:6: undefined: CodeRateLimit
+internal/protocol/remote_errors_test.go:65:5: undefined: CodeNotAuthorized
+internal/protocol/remote_errors_test.go:68:5: undefined: CodeInvalidField
+internal/protocol/remote_errors_test.go:76:36: undefined: CapRemoteGateway
+internal/protocol/remote_errors_test.go:82:9: got.ErrorCode undefined (type Control has no field or method ErrorCode)
+internal/protocol/remote_errors_test.go:82:22: undefined: CodeInvalidField
+internal/protocol/remote_errors_test.go:83:88: got.ErrorCode undefined (type Control has no field or method ErrorCode)
+internal/protocol/remote_errors_test.go:83:99: undefined: CodeInvalidField
+internal/protocol/remote_errors_test.go:94:36: undefined: CapRemoteGateway
+internal/protocol/remote_errors_test.go:107:82: unknown field OperationID in struct literal of type Control
+internal/protocol/remote_errors_test.go:109:81: got.ErrorCode undefined (type Control has no field or method ErrorCode)
+internal/protocol/remote_hello_test.go:55:45: undefined: CapRemoteGateway
+internal/protocol/remote_hello_test.go:55:63: undefined: CapJournal
+internal/protocol/remote_hello_test.go:55:75: undefined: CapActivity
+internal/protocol/remote_hello_test.go:55:88: undefined: CapPolicy
+internal/protocol/remote_hello_test.go:55:99: undefined: CapPairing
+internal/protocol/remote_hello_test.go:62:32: undefined: CapRemoteGateway
+internal/protocol/remote_hello_test.go:62:50: undefined: CapJournal
+internal/protocol/remote_hello_test.go:62:62: undefined: CapActivity
+internal/protocol/remote_hello_test.go:62:75: undefined: CapPolicy
+internal/protocol/remote_hello_test.go:62:86: undefined: CapPairing
+internal/protocol/remote_hello_test.go:79:30: undefined: OpJournalRead
+internal/protocol/remote_hello_test.go:79:75: unknown field Cursor in struct literal of type Control
+internal/protocol/remote_hello_test.go:124:3: unknown field OperationID in struct literal of type Control
+internal/protocol/remote_hello_test.go:125:3: unknown field InteractionID in struct literal of type Control
+internal/protocol/remote_hello_test.go:126:3: unknown field DeviceID in struct literal of type Control
+internal/protocol/remote_hello_test.go:127:3: unknown field DeviceSig in struct literal of type Control
+internal/protocol/remote_hello_test.go:128:3: unknown field Cursor in struct literal of type Control
+internal/protocol/remote_hello_test.go:129:3: unknown field Approve in struct literal of type Control
+internal/protocol/remote_hello_test.go:129:13: undefined: ApproveReq
+internal/protocol/remote_hello_test.go:131:19: undefined: AgentInstanceRef
+internal/protocol/remote_hello_test.go:149:11: round.OperationID undefined (type Control has no field or method OperationID)
+internal/protocol/remote_hello_test.go:149:28: c.OperationID undefined (type Control has no field or method OperationID)
+internal/protocol/remote_hello_test.go:149:49: round.InteractionID undefined (type Control has no field or method InteractionID)
+internal/protocol/remote_hello_test.go:149:68: c.InteractionID undefined (type Control has no field or method InteractionID)
+internal/protocol/remote_hello_test.go:150:9: round.DeviceID undefined (type Control has no field or method DeviceID)
+internal/protocol/remote_hello_test.go:150:23: c.DeviceID undefined (type Control has no field or method DeviceID)
+internal/protocol/remote_hello_test.go:150:41: round.DeviceSig undefined (type Control has no field or method DeviceSig)
+internal/protocol/remote_hello_test.go:150:56: c.DeviceSig undefined (type Control has no field or method DeviceSig)
+internal/protocol/remote_hello_test.go:150:75: round.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_hello_test.go:150:87: c.Cursor undefined (type Control has no field or method Cursor)
+internal/protocol/remote_hello_test.go:153:11: round.Approve undefined (type Control has no field or method Approve)
+internal/protocol/remote_hello_test.go:154:68: round.Approve undefined (type Control has no field or method Approve)
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL
+
+======================================================================
+### NON-undefined error check (MUST be empty for a clean RED) ###
+======================================================================
+<<< empty above == clean undefined-only RED >>>
+
+======================================================================
+### TEST INVENTORY (test function -> requirement) ###
+======================================================================
+internal/daemon/journal_wiring_test.go:60:func TestDaemon_StatusChangeAppendsGroupTransition
+internal/daemon/journal_wiring_test.go:78:func TestDaemon_LifecycleAppendsRecords
+internal/daemon/journal_wiring_test.go:101:func TestJournal_ReconcileRestartTransitionRecorded
+internal/daemon/journal_wiring_test.go:134:func TestJournal_DeletedRecordOutlivesSessionDir
+internal/daemon/journal_wiring_test.go:156:func TestDaemon_GatewayPresenceRecorded
+internal/daemon/journal_wiring_test.go:175:func TestJournal_MetaAndJournalConsistentAcrossCrash
+internal/journal/debounce_test.go:27:func TestJournal_DebounceCollapsesFlap
+internal/protocol/remote_errors_test.go:45:func TestProtocol_ErrorCodeTaxonomy
+internal/protocol/remote_errors_test.go:90:func TestServer_RemoteMutatingOpRequiresRequestID
+internal/journal/journal_test.go:96:func TestJournal_SchemaRoundTripAndReject
+internal/journal/journal_test.go:141:func TestJournal_TruncatedTailTolerated
+internal/journal/journal_test.go:180:func TestJournal_ResumeBoundaryAtomic
+internal/journal/journal_test.go:235:func TestJournal_CursorMonotonicAcrossRestart
+internal/journal/journal_test.go:271:func TestJournal_CrashAfterAckSurvives
+internal/journal/journal_test.go:307:func TestJournal_CompactionBoundsDisk
+internal/journal/journal_test.go:328:func TestJournal_StaleCursorReturnsFullResync
+internal/daemon/idempotency_wiring_test.go:26:func TestIdempotency_ReplayLaunchNoSecondSession
+internal/idempotency/store_test.go:92:func TestIdempotency_ReplayKillNoSecondSignal
+internal/idempotency/store_test.go:113:func TestIdempotency_OutcomeSurvivesRestart
+internal/idempotency/store_test.go:155:func TestIdempotency_CrashBetweenExecuteAndCommitNoDoubleExecute
+internal/idempotency/store_test.go:207:func TestIdempotency_InterruptOutcomeUnknownOnCrash
+internal/idempotency/store_test.go:250:func TestIdempotency_OperationIDBounded
+internal/idempotency/store_test.go:273:func TestIdempotency_TTLCompaction
+internal/protocol/remote_hello_test.go:51:func TestHello_NegotiatesRemoteCaps
+internal/protocol/remote_hello_test.go:72:func TestServer_UnnegotiatedOpRefused
+internal/protocol/remote_hello_test.go:89:func TestControl_AdditiveFieldsOmitEmpty
+internal/protocol/remote_journal_test.go:96:func TestProtocol_JournalReadFromCursor
+internal/protocol/remote_journal_test.go:131:func TestProtocol_JournalSubscribeOrderedAndEvictsWedged
