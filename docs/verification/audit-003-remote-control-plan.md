@@ -181,14 +181,29 @@ gate before TDD begins.
 
 ## Disposition
 
-All consensus items, accepted divergences, and blind spots are incorporated into the plan: section D.22
-adds the genuinely-new requirements (dedicated remote-tier socket R-GW.8; device command-signing key +
-per-command signature R-CRY.16/R-POL.9; two-phase crash-safe idempotency R-IDP.5; relay account/routing/
-APNs-token/de-authorization lifecycle R-REL.11-.13; error-code taxonomy R-PROT.7; client reconnect
-backoff R-PHC.13; durable-artifact migrations R-TDD.8; content-free NSE wake key R-CRY.17; headless
-pairing scope R-PAIR.9; approval identity/expiry wire fields folded into R-PROT.2); and surgically
-corrects the contradicted requirements in place (R-GW.6 peek-supersedes; R-IDP.2 two-phase; R-PHC.4/.11
-input-not-queued + control-session; R-CRY.9/.13 + R-NSE.1/.2 fan-out AAD + wake key; R-JRN.2/.3 choke-
-point hook + debounce-at-delivery; R-POL.3/.5 resolved-path + Options allowlist; R-ADV.6/.8 phase split +
-all sanitizer classes; R-KS.4 modest log; R-GATE.3 device gate + deferred-risk rollup; the monitorPoll
-and relay-envelope corrections). Re-verification: the deltas are re-reviewed before Phase-1 code begins.
+All consensus items, accepted divergences, and blind spots are incorporated into the plan's section D.0
+(authoritative amendments A1-A13, superseding the referenced requirements). New requirements added:
+dedicated remote-tier socket R-GW.8; device command-signing key R-CRY.16 + daemon signature/capability
+verification R-POL.9; two-phase crash-safe idempotency (folded into R-IDP.2/.3); relay account/routing/
+APNs-token/de-authorization lifecycle R-REL.11-.13; error-code taxonomy R-PROT.7; client reconnect backoff
+R-PHC.13; durable-artifact migrations R-TDD.8; content-free NSE wake key (folded into R-CRY.13); headless
+pairing scope R-PAIR.9; approval identity/expiry wire fields (folded into R-PROT.2). The contradicted
+requirement bodies carry inline `[amended/SUPERSEDED by D.0-Ax]` markers pointing at the governing
+amendment (R-GW.6 peek-supersedes; R-IDP.2 two-phase; R-GW.2/R-PROT.2 socket+signature not capability;
+R-PHC.5 crypto layering; and the rest).
+
+## Delta re-audit (003b)
+
+The D.0 amendments were re-reviewed by the two source-verified members (codex, opus). Result: every prior
+finding is CLOSED or conceptually closed; NONE left unaddressed. `box.SealAnonymous` rejection confirmed
+(exists in x/crypto). Verdict (both, convergent): **Phase 0 (ADR-007 + spikes S-A/S-B/S-C) may begin now —
+the residuals belong exactly there.** Four residuals are pinned in ADR-007 and captured as D.0 refinements
+A1-R..A5-R + A14/A15: (1) A1 same-uid gateway isolation — pin a dedicated-uid/sandbox mechanism OR adopt
+the scoped threat model (a compromised owner-uid gateway holds the machine identity key and is outside the
+crypto boundary; the boundary is the untrusted relay + semi-trusted phone, enforced by device signatures)
+and make R-GW.8's test non-vacuous; (2) interrupt is at-most-once with an outcome-unknown crash record;
+(3) a signed `take_control` op establishes the control session, keystrokes ride session+lease not
+per-keystroke signatures; (4) EpochGrants carry their own `(epoch_id, grant_seq)` anti-replay coordinate,
+outside the journal-seq stream. Two body-propagations gate the Phase-1 CRYPTO slice (not Phase 0): A14 the
+two-X25519-key split into R-CRY preface/.4/.10 + R-PAIR.3/.7 + R-DEV.1; A15 the wake-key/content-key split
+into R-CRY.10/.11/.13. These land with ADR-007 (the crypto-design authority) before any crypto TDD.

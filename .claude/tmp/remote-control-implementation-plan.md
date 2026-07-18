@@ -329,6 +329,57 @@ scope-out with the operator-presence assumption stated).
 - **UI naming** (codex, opus M6): the phone "kill switch" control uses unambiguous labels
   (remote-access ON = enabled, OFF = severed); avoid an inverted "on = disabled" reading in R-IOS.6.
 
+### Delta re-audit refinements (audit-003b: codex + opus verified the D.0 fixes; both PASS coverage and green-light Phase 0). Four items are pinned in ADR-007; three propagate into requirement bodies before the Phase-1 crypto slice.
+
+- **A1-R (threat-model scope, ADR-007 decision).** A `0600` socket does NOT isolate two processes running
+  as the same owner uid, and the gateway MUST run as the owner (it holds the machine identity key R-CRY.1
+  and reads the 0700 owner state dir), so SO_PEERCRED cannot distinguish a compromised gateway from the
+  local TUI. Honest boundary, pinned in ADR-007: the cryptographic containment boundary is the UNTRUSTED
+  RELAY and the SEMI-TRUSTED PHONE — device signatures (R-CRY.16/R-POL.9) mean a compromised relay cannot
+  forge commands and only paired, unrevoked devices can issue them; the kill switch + revocation defend a
+  stolen phone. A process compromised while running AS THE OWNER (gateway included) already holds the
+  machine identity key and can act as the owner directly WITHOUT the daemon, so it is OUTSIDE the
+  cryptographic boundary by construction — the same status as a compromised shell on a single-owner
+  machine. Sidecar isolation (5.7) limits blast radius on daemon/PTY state (defense-in-depth), it is not
+  a cryptographic barrier. ADR-007 EITHER pins a stronger isolation mechanism (dedicated service uid with
+  its own key custody, or an OS sandbox/MAC profile denying the gateway the main-socket path) OR adopts
+  this scoped threat model and downgrades `TestDaemon_CompromisedGatewayCannotReachMainUDS` to
+  `TestDaemon_RemoteSocketRequiresDeviceSignature` (a compromised gateway cannot forge a device signature;
+  local-tier bypass is out of scope on a single-owner box). No remote-class mutating op executes on ANY
+  listener without a valid device signature.
+- **A3-R (interrupt semantics).** SIGINT delivery is not verifiable from terminal state, so `interrupt`
+  is AT-MOST-ONCE: its two-phase record resolves to `completed` or, after a crash mid-interrupt, to a
+  terminal `outcome-unknown` state the phone surfaces (never a claimed exactly-once). `kill` (SIGKILL +
+  terminal-state-verifiable via shimIdentityMatches) stays exactly-once-verifiable. `operation_id` is
+  persisted inside the reservation's fsync (R-IDP.2, already corrected).
+- **A4-R (signed take-control session).** A signed one-shot `take_control` op (device signature R-POL.9 +
+  a single biometric gate token R-PHC.11) establishes a bounded authenticated control session (TTL +
+  explicit end). Raw `input`/`resize` within that session require only the live session + current lease
+  generation (server.go:604) — NOT a per-keystroke signature or token. Discrete ops
+  (interrupt/kill/approve/launch) each carry their own signature + gate token. This reconciles A1
+  (ops signed), A4 (input is session data, live-only, never queued), and A13 (gate token on discrete ops).
+- **A5-R (EpochGrant anti-replay + debounce boundary).** EpochGrants are NOT in the session-event
+  journal-seq stream; they are per-device rotation artifacts delivered via the relay mailbox with their
+  own authenticated anti-replay coordinate `(epoch_id, grant_seq)` monotonic per device, so a device
+  rejects a replayed/stale grant independently of the session-event seq (no journal record type needed for
+  grants). And the A7 flap-debounce applies ONLY to push-wakes + coalesced snapshots (R-GW.4), NEVER to
+  the never-drop durable journal mailbox (R-GW.5) — otherwise R-CRY.12's consecutive-seq gap detection
+  would false-positive into spurious resyncs.
+- **A14 (propagate the two-key crypto split — Phase-1 crypto-slice gate).** The A13 phone-key split MUST be
+  written into the requirement bodies before crypto TDD: the R-CRY preface + R-CRY.4/.10 use TWO X25519
+  keys (Noise-static `s`; sealed-box recipient); R-PAIR.3 handshake payloads carry BOTH; R-PAIR.7 pins
+  BOTH; R-DEV.1 registry stores BOTH; R-CRY.10 seals the EpochGrant to the RECIPIENT key, not the Noise
+  static. Neither key is TOFU.
+- **A15 (two-key EpochGrant: wake vs content — Phase-1 crypto-slice gate).** A10's separation MUST be
+  written into R-CRY.10/.11/.13: an EpochGrant delivers TWO independent keys per epoch — a WAKE key
+  (after-first-unlock, app-group-readable by the NSE, decrypts ONLY content-free "activity on machine X"
+  type-0x02 wake payloads) and a CONTENT key (biometric-gated, NOT NSE-readable and NOT derivable from the
+  wake key, decrypts type-0x01 mailbox session content). Push wakes are wake-key-AEAD; mailbox session
+  content is content-key-AEAD. A once-unlocked stolen phone yields only the wake key (no session content).
+- **Bookkeeping (opus):** the audit-003 report's Disposition mentioned working IDs D.22/R-IDP.5/R-CRY.17;
+  the plan implements the amendments in THIS section D.0 (R-IDP.2/.3 and R-CRY.13 refined in place +
+  R-CRY.16 added). The audit-003 report is corrected to match.
+
 ---
 
 ## D.1 Crypto (R-CRY) — owner: security-architecture — Phase 1
@@ -540,11 +591,14 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
   unit), NOT spawned by the daemon; dials daemon UDS as an ordinary client; holds no state a restart
   loses except live connections; `kill -9` leaves daemon+sessions untouched (S1) and it resumes from
   its last durable journal cursor. Verify: `TestGateway_RestartResumesFromCursor` (new `internal/remotegw`).
-- **R-GW.2 (CRITICAL PATH) Gateway authenticates as remote-origin.** [amended: D.0-A1] Gateway offers the
-  `remote-gateway` capability (R-PROT.1); daemon marks that `clientConn` remote-origin for its
-  lifetime so every mutating op on it is subject to R-POL + R-KS; per-connection, not per-session; the
-  local TUI is unaffected. Verify: `TestServer_RemoteGatewayCapMarksConn`. Deps: extends
-  `internal/protocol/server.go` handleHello/serverCaps/clientConn.
+- **R-GW.2 (CRITICAL PATH) Gateway reaches the daemon via the remote-tier socket.** [SUPERSEDED by
+  D.0-A1 — read A1, not this body.] Origin is established by which socket a connection reached
+  (dedicated remote-tier `remote.sock`, R-GW.8), NOT by a self-declared `remote-gateway` capability: a
+  capability offer is negotiation, not authentication. Any `remote-gateway` capability that survives is a
+  non-trust feature FLAG only (protocol-feature discovery), never the trust basis. Every remote mutating
+  op additionally carries a daemon-verified device signature (R-CRY.16/R-POL.9). Verify (replaces
+  `TestServer_RemoteGatewayCapMarksConn`): `TestDaemon_RemoteSocketAlwaysRemoteTier`,
+  `TestPolicy_ForgedDeviceSignatureRejected`. Deps: R-GW.8, R-CRY.16, R-POL.9.
 - **R-GW.3 Translate protocol <-> wire product.** daemon event/journal -> `session_state` + journal
   events; on-demand attach -> `grid_snapshot` (forwarded exactly from `vt.RenderSnapshot`, never raw
   PTY bytes, G-2); phone input/interrupt/kill/launch/approve -> daemon ops; transcript_delta +
@@ -557,10 +611,14 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
   do not advance the relay-acked cursor past relay acks; on outage stop advancing + re-read from last
   acked cursor on reconnect (at-least-once + daemon dedupe = exactly-once). Verify:
   `TestGateway_RelayOutageNoJournalLoss`. Deps: R-PROT.3, R-JRN.
-- **R-GW.6 On-demand snapshot via non-blocking attach.** [amended: D.0-A2] Produce grid_snapshot via lease-attach,
-  read, close immediately (the `sampleGrid` pattern), holding the shim's single serve slot only for the
-  round-trip; NO observer/multi-subscriber fan-out (Phase 3). Verify:
-  `TestGateway_SnapshotDoesNotStealActiveController`.
+- **R-GW.6 Peek: last-known cached snapshot; live grid requires take-control.** [SUPERSEDED by D.0-A2 —
+  read A2, not this body.] When NOT controlling, the phone shows the last-known cached grid snapshot
+  (labelled possibly-stale); a LIVE grid requires take-control, which supersedes the current controller
+  via the existing S2 generation mechanism (close-old-then-open-new, server.go:388-394), UX-confirmed.
+  A non-stealing snapshot under an active controller would only "succeed" by silently timing out
+  (serve.go:280-292) — so that path is NOT relied upon. NO observer/multi-subscriber fan-out (Phase 3).
+  Verify (replaces `TestGateway_SnapshotDoesNotStealActiveController`):
+  `TestGateway_PeekShowsLastKnownWhenNotControlling`, `TestGateway_TakeControlSupersedesDesktop`.
 - **R-GW.7 Remote input rides the existing lease + supersede.** Phone input/resize flows through the
   existing controller-lease path under generation-supersede (S2); gateway holds the lease while phone
   is in take-control; concurrent desktop attach supersedes phone and vice-versa, unchanged. Verify:
@@ -602,9 +660,14 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
 - **R-IDP.1 request_id on every remote mutating op.** [amended: D.0-A4] interrupt/kill/launch/approve carry a durable
   `request_id` (additive Control field); `input` exempt (raw frames never auto-retried); a remote
   mutating op lacking one is refused. Verify: `TestServer_RemoteMutatingOpRequiresRequestID`.
-- **R-IDP.2 Persisted outcome cache surviving restart.** [amended: D.0-A3] Executed `request_id`s + cached outcome under
-  `<stateDir>/idempotency/`, fsync'd before the reply is sent; key = `<device_id>:<client-ULID>` (opaque,
-  <=128 bytes). Verify: `TestIdempotency_OutcomeSurvivesRestart`.
+- **R-IDP.2 Two-phase durable record surviving restart.** [SUPERSEDED by D.0-A3 — a cached outcome
+  written AFTER execution leaves the execute -> crash -> re-execute window.] A durable
+  `prepared -> executing -> completed/failed` record keyed by `operation_id` is fsync'd BEFORE the side
+  effect; for launch the `operation_id` is persisted AS PART OF the two-phase session reservation
+  (launch.go phaseReserved, same fsync — not a separate post-side-effect file), so a crash between spawn
+  and commit is resolved by reconcile against the reserved id rather than re-spawning. Key =
+  `<device_id>:<client-ULID>` (opaque, <=128 bytes). Verify:
+  `TestIdempotency_CrashBetweenExecuteAndCommitNoDoubleExecute`, `TestIdempotency_OutcomeSurvivesRestart`.
 - **R-IDP.3 Replay returns cached outcome, executes nothing.** A duplicate request_id returns the cached
   outcome with no second side effect. Verify: `TestIdempotency_ReplayLaunchNoSecondSession`,
   `TestIdempotency_ReplayKillNoSecondSignal` (side-effect count == 1).
@@ -701,10 +764,15 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
   `pairing` to the hello intersection (F-1); an un-negotiated op is refused with `error`, never actioned;
   existing attach/subscribe clients unaffected. Verify: `TestHello_NegotiatesRemoteCaps`,
   `TestServer_UnnegotiatedOpRefused`.
-- **R-PROT.2 Additive `Control` fields (omitempty).** [amended: D.0-A1/A6] `request_id`, `device_id`, `capability_assertion`,
-  `cursor`, and an `approve` sub-struct binding `(session, agent_instance{shim_pid, shim_start_time},
-  request_id, content_hash)`; existing messages serialize byte-identically; `protocol.md` amended in
-  lockstep (GG-7). Verify: `TestControl_AdditiveFieldsOmitEmpty` + existing codec/drift tests green.
+- **R-PROT.2 Additive `Control` fields (omitempty).** [SUPERSEDED by D.0-A1/A6 — `capability_assertion`
+  is NOT a trust field; replaced by a device signature.] Additive omitempty fields: `operation_id` and
+  `interaction_id` (separated per A6), `device_id`, a detached `device_sig` (Ed25519 over the canonical
+  op tuple, verified by R-POL.9 — replaces the self-reported `capability_assertion`), `cursor`,
+  `issued_at`/`expires_at` (daemon-authoritative), and an `approve` sub-struct binding
+  `(session, agent_instance{shim_pid, shim_start_time}, interaction_id, content_hash, expires_at)` with
+  a byte-exact content canonicalization (A6). Existing messages serialize byte-identically; `protocol.md`
+  amended in lockstep (GG-7). Verify: `TestControl_AdditiveFieldsOmitEmpty`,
+  `TestPolicy_ReplayedSignatureRejected` + existing codec/drift tests green.
 - **R-PROT.3 Journal ops.** `journal_subscribe` (stream from cursor), `journal_read` (snapshot+range,
   atomic per R-JRN.4), `journal_event` (daemon->gateway push); fan-out reuses the bounded-queue
   evict-the-wedged-subscriber discipline (S9/L1). Verify: `TestProtocol_JournalSubscribeOrderedAndEvictsWedged`,
@@ -740,10 +808,13 @@ Pinned crypto architecture (instantiates the pinned decisions; recorded in ADR-0
   durable client-generated idempotency key made at creation, replayed in order on reconnect, never
   regenerated; superseded-generation op surfaces a distinct failure; bounded FIFO per session with defined
   overflow. Verify: go test (echo daemon stub) + phonesim `send-input` offline gap.
-- **R-PHC.5 Decrypt + auth pipeline (single choke point).** [amended: D.0-A10] Both schemes in one decrypt-and-verify point:
-  Noise XX for live, sealed-box-to-device-key for offline mailbox/APNs; reject (not log-and-continue) any
-  auth failure before cache/UI; unpinned machine traffic rejected; rotated-out epoch rejected. Verify: KAT
-  + negative tests (wrong key, rotated epoch, truncated, replayed nonce).
+- **R-PHC.5 Decrypt + auth pipeline (single choke point).** [SUPERSEDED by D.0-A5/A10 — the crypto layering
+  is: Noise XX live; K_epoch-AEAD for mailbox events + push; sealed-box ONLY for EpochGrant delivery.]
+  One decrypt-and-verify point handles: Noise XX for the live stream; K_epoch-AEAD (XChaCha20-Poly1305,
+  R-CRY.11) for offline mailbox events; the content-free WAKE key for push (A10); and sealed-box open
+  ONLY for an EpochGrant (which carries a new K_epoch/content-key). Reject (not log-and-continue) any auth
+  failure before cache/UI; unpinned-machine traffic rejected; rotated-out epoch rejected. Verify: KAT +
+  negative tests (wrong key, rotated epoch, truncated, replayed nonce).
 - **R-PHC.6 Snapshot renderer + sanitizer conformance.** Decode wire `vt.Snap/Line/Run` (version-checked
   vs `vt.SnapshotVersion`) into a cell grid; re-sanitize every `Run.Text`/`Snap.Title` on-device with the
   same blocked classes as `internal/vt` (C0/C1/DEL, bidi overrides, zero-width, separators) before any text
