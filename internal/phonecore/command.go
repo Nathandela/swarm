@@ -72,6 +72,28 @@ func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd 
 	return env.Marshal(), nil
 }
 
+// SealLaunchEnvelope seals a signed launch command together with its LaunchReq spec
+// as a mailbox envelope under the epoch content key. The spec rides alongside the
+// signed tuple (protocol.RemoteCommand) so the gateway can forward it to the daemon;
+// the command's ContentHash must be crypto/protocol.LaunchContentHash(launch), which
+// the daemon recomputes from the forwarded spec, so a relay or gateway that alters
+// the spec breaks the signature. seq must be unique per epoch.
+func SealLaunchEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) ([]byte, error) {
+	plaintext, err := json.Marshal(protocol.RemoteCommand{DeviceCommandAuth: cmd, Launch: launch})
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1,
+		EpochID: epochID,
+		Seq:     seq,
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
+}
+
 // OpenControlReply opens a daemon reply Control the gateway sealed and returned via the
 // phone's mailbox (the response half of the command round-trip). Fail-closed on a
 // malformed/wrong-key envelope or non-Control plaintext.

@@ -57,16 +57,18 @@ func (f *fakeMailbox) MailboxAppend(_ context.Context, target string, env []byte
 
 // fakeForwarder records forwarded commands and returns a canned OK reply.
 type fakeForwarder struct {
-	mu   sync.Mutex
-	seen []protocol.DeviceCommandAuth
-	ops  []string
+	mu       sync.Mutex
+	seen     []protocol.DeviceCommandAuth
+	ops      []string
+	launches []*protocol.LaunchReq
 }
 
-func (f *fakeForwarder) ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, _ *protocol.LaunchReq) (protocol.Control, error) {
+func (f *fakeForwarder) ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen = append(f.seen, cmd)
 	f.ops = append(f.ops, op)
+	f.launches = append(f.launches, launch)
 	return protocol.Control{Op: protocol.OpOK, SessionID: sessionID}, nil
 }
 

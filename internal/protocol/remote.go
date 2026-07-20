@@ -89,6 +89,20 @@ type DeviceCommandAuth struct {
 	Sig         string    // detached Ed25519 signature (device_sig) over the tuple
 }
 
+// RemoteCommand is the plaintext a phone seals into a command envelope for the
+// untrusted relay: the signed command tuple plus, for a launch, the LaunchReq spec
+// it is bound to. DeviceCommandAuth is embedded (its fields inline in the JSON, no
+// tags), and Launch is omitempty, so this wrapper is byte-compatible with a bare
+// DeviceCommandAuth envelope in BOTH directions -- a bare-auth envelope decodes here
+// with Launch nil, and a RemoteCommand decodes as a plain DeviceCommandAuth ignoring
+// the extra field. The launch spec is NOT part of the signed tuple; it is bound
+// instead by ContentHash = LaunchContentHash(spec), which the daemon recomputes from
+// the forwarded spec, so a gateway that alters the spec breaks the signature.
+type RemoteCommand struct {
+	DeviceCommandAuth
+	Launch *LaunchReq `json:"launch,omitempty"`
+}
+
 // DeviceAuthenticator is the optional interface a remote-tier DaemonAPI implements to
 // authorize remote mutating ops (R-POL.9): AuthorizeCommand returns nil ONLY when the
 // device signature verifies over the canonical tuple AND the device's capability

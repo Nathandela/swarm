@@ -135,15 +135,15 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 // handle opens one command envelope, forwards it to the daemon, and seals the reply
 // back to the phone mailbox.
 func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
-	cmd, err := OpenCommandEnvelope(b.cfg.Key, it.Envelope)
+	rc, err := OpenRemoteCommand(b.cfg.Key, it.Envelope)
 	if err != nil {
 		return fmt.Errorf("open command: %w", err)
 	}
-	op, err := opForAction(cmd.Action)
+	op, err := opForAction(rc.Action, rc.Launch)
 	if err != nil {
 		return err
 	}
-	reply, err := b.cfg.Forwarder.ForwardCommand(op, cmd.Session, cmd, nil)
+	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc.Session, rc.DeviceCommandAuth, rc.Launch)
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
@@ -162,18 +162,21 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 }
 
 // opForAction maps a command action to the daemon wire op. kill/delete carry no body
-// and map to identically-named ops. launch is not yet handled here: it additionally
-// needs the LaunchReq carried inside the sealed envelope (a follow-up); forwarding it
-// with a nil launch would fail the daemon's content-hash binding, so it is refused
-// loudly rather than silently mis-sent. approve is not a daemon remote op (D6/D7).
-func opForAction(action string) (string, error) {
+// and map to identically-named ops. launch additionally requires the LaunchReq to
+// ride in the sealed envelope (RemoteCommand.Launch); a launch action with no body is
+// refused loudly rather than forwarded with a nil spec (which would fail the daemon's
+// content-hash binding). approve is not a daemon remote op (D6/D7).
+func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
 	switch action {
 	case protocol.ActionKill:
 		return protocol.OpKill, nil
 	case protocol.ActionDelete:
 		return protocol.OpDelete, nil
 	case protocol.ActionLaunch:
-		return "", errors.New("remotegw: launch over the command loop needs the launch spec in-envelope (not yet supported)")
+		if launch == nil {
+			return "", errors.New("remotegw: launch command missing its launch spec in-envelope")
+		}
+		return protocol.OpLaunch, nil
 	default:
 		return "", fmt.Errorf("remotegw: unsupported command action %q", action)
 	}

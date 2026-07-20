@@ -29,6 +29,25 @@ func OpenCommandEnvelope(key crypto.ContentKey, raw []byte) (protocol.DeviceComm
 	return cmd, nil
 }
 
+// OpenRemoteCommand opens a command envelope to the full RemoteCommand wrapper (the
+// signed tuple plus, for a launch, the LaunchReq spec). It is backward-compatible
+// with a bare-auth envelope (Launch is nil then). Fail-closed like OpenCommandEnvelope.
+func OpenRemoteCommand(key crypto.ContentKey, raw []byte) (protocol.RemoteCommand, error) {
+	env, err := crypto.ParseEnvelope(raw)
+	if err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	plain, err := crypto.OpenMailbox(key, env)
+	if err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	var rc protocol.RemoteCommand
+	if err := json.Unmarshal(plain, &rc); err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	return rc, nil
+}
+
 // SealControlReply seals a daemon reply Control as a mailbox envelope under the epoch
 // content key so the gateway can return it to the phone through the untrusted relay
 // (the request/response counterpart of OpenCommandEnvelope). seq must be unique.
