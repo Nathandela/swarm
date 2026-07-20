@@ -28,3 +28,22 @@ func OpenCommandEnvelope(key crypto.ContentKey, raw []byte) (protocol.DeviceComm
 	}
 	return cmd, nil
 }
+
+// SealControlReply seals a daemon reply Control as a mailbox envelope under the epoch
+// content key so the gateway can return it to the phone through the untrusted relay
+// (the request/response counterpart of OpenCommandEnvelope). seq must be unique.
+func SealControlReply(key crypto.ContentKey, epochID uint32, seq uint64, reply protocol.Control) ([]byte, error) {
+	plaintext, err := json.Marshal(reply)
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1,
+		EpochID: epochID,
+		Seq:     seq,
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
+}

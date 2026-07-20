@@ -106,6 +106,35 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 	if reply.Op == protocol.OpError {
 		t.Fatalf("daemon refused the phone's command relayed end to end: %q / %q", reply.Error, reply.ErrorCode)
 	}
+
+	// Reply path: the gateway seals the daemon reply and returns it to the phone's
+	// mailbox; the phone reads and decodes it -- the full request/response round-trip.
+	replyEnv, err := remotegw.SealControlReply(key, 4, 1, reply)
+	if err != nil {
+		t.Fatalf("seal reply: %v", err)
+	}
+	// The phone authorizes the machine so the machine may append the reply to the phone
+	// mailbox (relay-level pairing, reverse direction).
+	if err := phoneRelay.AuthorizeDevice(ctx, mPub); err != nil {
+		t.Fatalf("phone authorize machine: %v", err)
+	}
+	if _, err := machineRelay.MailboxAppend(ctx, phoneRelay.RoutingID(), replyEnv); err != nil {
+		t.Fatalf("gateway append reply: %v", err)
+	}
+	pitems, err := phoneRelay.MailboxRead(ctx, 0)
+	if err != nil {
+		t.Fatalf("phone read reply: %v", err)
+	}
+	if len(pitems) == 0 {
+		t.Fatalf("phone mailbox empty; the reply did not arrive")
+	}
+	gotReply, err := phonecore.OpenControlReply(key, pitems[len(pitems)-1].Envelope)
+	if err != nil {
+		t.Fatalf("phone open reply: %v", err)
+	}
+	if gotReply.Op == protocol.OpError {
+		t.Fatalf("phone decoded an error reply for a command the daemon accepted")
+	}
 }
 
 // relayAuth builds a relay.ClientAuth from an ed25519 keypair (skeleton-package copy of

@@ -71,3 +71,22 @@ func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd 
 	}
 	return env.Marshal(), nil
 }
+
+// OpenControlReply opens a daemon reply Control the gateway sealed and returned via the
+// phone's mailbox (the response half of the command round-trip). Fail-closed on a
+// malformed/wrong-key envelope or non-Control plaintext.
+func OpenControlReply(key crypto.ContentKey, raw []byte) (protocol.Control, error) {
+	env, err := crypto.ParseEnvelope(raw)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	plain, err := crypto.OpenMailbox(key, env)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	var ctrl protocol.Control
+	if err := json.Unmarshal(plain, &ctrl); err != nil {
+		return protocol.Control{}, err
+	}
+	return ctrl, nil
+}
