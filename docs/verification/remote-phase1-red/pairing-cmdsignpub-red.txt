@@ -1,0 +1,11 @@
+# github.com/Nathandela/swarm/internal/remote/pairing [github.com/Nathandela/swarm/internal/remote/pairing.test]
+internal/remote/pairing/cmdsignpub_test.go:59:3: unknown field DeviceCommandSignPub in struct literal of type DevicePayload
+internal/remote/pairing/cmdsignpub_test.go:67:22: got.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:67:49: want.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:69:8: got.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:69:35: want.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:103:13: dp.Payload.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:118:28: mo.Device.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+internal/remote/pairing/cmdsignpub_test.go:120:14: mo.Device.DeviceCommandSignPub undefined (type DevicePayload has no field or method DeviceCommandSignPub)
+FAIL	github.com/Nathandela/swarm/internal/remote/pairing [build failed]
+FAIL

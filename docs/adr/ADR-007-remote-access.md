@@ -151,3 +151,33 @@ consume the victim's budget) plus a post-auth per-key fairness test;
 `TestRelay_ConnRateLimited` is reframed as the per-source pre-auth limit / coarse global
 valve. Findings: `agents-tracker-40o` (H1), `agents-tracker-45s` (H2), `agents-tracker-a0u`
 (H3).
+
+## Amendment 2026-07-20 — Pairing conveys the device command-signing public key
+
+**Context**: D4/A1 mandate a device Ed25519 COMMAND-SIGNING keypair (R-CRY.16),
+"minted at pairing, its public key pinned in the daemon device registry (R-DEV.1)",
+so the daemon can verify each remote mutating op's detached signature (R-POL.9)
+independently of the untrusted gateway. The crypto layer already provides this key
+(`crypto.KeyStore.CommandSigningPublic()`/`SignCommand`, `crypto.VerifyCommandSig`),
+domain-separated from the relay-auth key. But the shipped pairing handshake's
+`DevicePayload` (msg3) carries only {name, routing id, relay-auth pub, recipient pub}
+— it never transmits the command-signing public key, so the machine cannot pin it and
+R-POL.9 is unimplementable. R-DEV.1's field list likewise omitted it.
+
+**Decision** (completes A1/R-CRY.16; the trust model is unchanged): the device's
+authenticated pairing `DevicePayload` gains a fifth field, `DeviceCommandSignPub` (the
+device's Ed25519 command-signing public key), sent inside the encrypted, mutually
+authenticated Noise XXpsk0 msg3. On affirmative confirm the machine pins it alongside
+the Noise-static and recipient keys; the device registry (R-DEV.1) stores it as the
+key R-POL.9 verifies against. Rejected alternative: a separate post-pairing
+key-registration op — it contradicts A1's "at pairing", opens a window where a device
+is paired but not yet command-capable, and adds an unauthenticated-until-bound surface.
+
+**Consequence**: R-POL.9 becomes implementable; the command-signing key is pinned in
+the same atomic, SAS-confirmed step as every other device key (no separate trust
+window). **Test impact** (tracked, reframed with review, never silently): the pairing
+payload round-trip and outcome tests gain assertions that `DeviceCommandSignPub` is
+conveyed and surfaced for pinning; this is additive coverage for a new field, not a
+modification to force an existing assertion to pass. The pairing handshake change is
+re-reviewed (the slice was previously security-reviewed). Finding tracked under the
+R-DEV epic.

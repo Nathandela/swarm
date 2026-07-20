@@ -122,12 +122,14 @@ type MachinePayload struct {
 }
 
 // DevicePayload is the device's authenticated msg3 handshake payload (R-PAIR.3;
-// RecipientPub added by D.0-A14).
+// RecipientPub added by D.0-A14; DeviceCommandSignPub added by ADR-007 2026-07-20
+// so the machine pins the device's Ed25519 command-signing key for R-POL.9).
 type DevicePayload struct {
-	DeviceName         string
-	DeviceRoutingID    []byte
-	DeviceRelayAuthPub []byte
-	RecipientPub       []byte // A14: device sealed-box recipient X25519 pub, pinned at pairing
+	DeviceName           string
+	DeviceRoutingID      []byte
+	DeviceRelayAuthPub   []byte
+	RecipientPub         []byte // A14: device sealed-box recipient X25519 pub, pinned at pairing
+	DeviceCommandSignPub []byte // R-CRY.16 / ADR-007 2026-07-20: device Ed25519 command-signing pub, pinned at pairing for R-POL.9
 }
 
 // MachineParams configures one machine-side (Noise XXpsk0 responder) pairing.
@@ -534,14 +536,15 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 	return p, nil
 }
 
-// encodeDevicePayload serialises the msg3 device payload (R-PAIR.3 + A14): four
-// length-prefixed byte fields.
+// encodeDevicePayload serialises the msg3 device payload (R-PAIR.3 + A14 +
+// ADR-007 2026-07-20): five length-prefixed byte fields.
 func encodeDevicePayload(p DevicePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.DeviceName))
 	b = appendField(b, p.DeviceRoutingID)
 	b = appendField(b, p.DeviceRelayAuthPub)
 	b = appendField(b, p.RecipientPub)
+	b = appendField(b, p.DeviceCommandSignPub)
 	return b
 }
 
@@ -561,6 +564,9 @@ func decodeDevicePayload(b []byte) (DevicePayload, error) {
 		return DevicePayload{}, errMalformedPayload
 	}
 	if p.RecipientPub, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	if p.DeviceCommandSignPub, b, ok = readField(b); !ok {
 		return DevicePayload{}, errMalformedPayload
 	}
 	if len(b) != 0 {
