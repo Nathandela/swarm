@@ -16,6 +16,16 @@ func (d *Daemon) JournalReadFrom(from uint64) (journal.Resume, error) {
 	return d.journal.ReadFrom(from)
 }
 
+// JournalSubscribe returns a live feed of journal records appended after
+// subscription plus a cancel func (backs the remote journal_subscribe op,
+// R-PROT.3 / R-JRN). It forwards the journal's fan-out; the caller (the protocol
+// Server) fans out to per-connection subscribers. The record type is converted to
+// the wire type upstream (coreAPI) to keep this package free of a protocol import.
+// The cancel func is idempotent and race-free.
+func (d *Daemon) JournalSubscribe() (<-chan journal.Record, func()) {
+	return d.journal.Subscribe()
+}
+
 // RecordGatewayPresence appends a `presence` record when the remote gateway
 // connects or disconnects (R-JRN.7) — a daemon-side liveness proxy. It carries no
 // session id; the online flag rides in the opaque payload.

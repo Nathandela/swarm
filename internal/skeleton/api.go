@@ -13,6 +13,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shimwire"
@@ -64,6 +65,75 @@ func (a *coreAPI) List() []persist.Meta        { return a.core.List() }
 func (a *coreAPI) Kill(id string) error        { return a.core.Kill(id) }
 func (a *coreAPI) Delete(id string) error      { return a.core.Delete(id) }
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
+
+// coreAPI ALSO satisfies protocol.JournalBackend so the assembled remote-tier
+// Server can serve journal_read / journal_subscribe (DHI-1). The daemon and
+// internal/journal stay free of a protocol import; the wire-type conversion lives
+// here, where both packages are already in scope.
+var _ protocol.JournalBackend = (*coreAPI)(nil)
+
+// toWireJournalRecord converts a daemon-internal journal.Record to the wire-facing
+// protocol.JournalRecord (only the fields the phone needs; the opaque payload and
+// schema/ts are not carried on the wire).
+func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
+	return protocol.JournalRecord{
+		Cursor:    r.Cursor,
+		SessionID: r.SessionID,
+		Type:      string(r.Type),
+		Group:     r.Group,
+	}
+}
+
+// JournalReadFrom forwards journal_read to the core and converts the daemon
+// journal.Resume to the wire protocol.JournalResume (Events + full-resync + cursor).
+func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
+	res, err := a.core.JournalReadFrom(from)
+	if err != nil {
+		return protocol.JournalResume{}, err
+	}
+	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+	for _, e := range res.Events {
+		out.Events = append(out.Events, toWireJournalRecord(e))
+	}
+	return out, nil
+}
+
+// JournalSubscribe forwards to the daemon journal fan-out, converting each
+// journal.Record to the wire protocol.JournalRecord on a dedicated relay goroutine
+// (the daemon cannot import protocol, so the conversion happens here). The returned
+// cancel stops the relay AND cancels the daemon subscription; it is idempotent and
+// race-free. The relay's send onto the wire feed is guarded by the done channel, so
+// cancel/shutdown never blocks it and no goroutine leaks.
+func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
+	src, cancelSrc := a.core.JournalSubscribe()
+	out := make(chan protocol.JournalRecord, eventsBuffer)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case rec, ok := <-src:
+				if !ok {
+					return // daemon journal closed the source
+				}
+				select {
+				case out <- toWireJournalRecord(rec):
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			close(done)
+			cancelSrc()
+		})
+	}
+	return out, cancel
+}
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and

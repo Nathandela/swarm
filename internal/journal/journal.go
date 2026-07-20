@@ -116,7 +116,15 @@ type Journal struct {
 	activeF  *os.File
 	nextSeq  uint64
 	closed   bool
+	subs     map[chan Record]struct{} // live subscribers (fan-out), guarded by mu
 }
+
+// subscriberBuffer bounds each live subscriber's per-channel buffer. Append does a
+// NON-BLOCKING send (drop-on-full) so a wedged subscriber never stalls journaling
+// (Append is on the daemon's write-critical path under writeMu); the downstream
+// protocol layer evicts a wedged subscriber and the phone resyncs from its cursor
+// (R-JRN.6).
+const subscriberBuffer = 256
 
 // Open opens (or creates) the journal at dir with default (unbounded) retention.
 func Open(dir string) (*Journal, error) { return OpenWithOptions(dir, Options{}) }
@@ -208,7 +216,51 @@ func (j *Journal) Append(r Record) (Record, error) {
 	j.active.count++
 	j.records = append(j.records, r)
 	j.enforceRetentionLocked()
+	// Live fan-out: deliver the newly-appended record to every subscriber. The send
+	// is NON-BLOCKING (drop-on-full) so a slow/wedged subscriber never blocks the
+	// write-critical path; the protocol layer evicts it and the phone resyncs.
+	for ch := range j.subs {
+		select {
+		case ch <- r:
+		default:
+		}
+	}
 	return r, nil
+}
+
+// Subscribe registers a live subscriber and returns its record feed plus a cancel
+// func. Every Record appended after subscription is delivered to the feed (subject
+// to the non-blocking drop-on-full discipline in Append). The cancel func
+// unsubscribes and closes the feed; it is idempotent and race-free (serialized with
+// Append and Close under the journal lock).
+func (j *Journal) Subscribe() (<-chan Record, func()) {
+	ch := make(chan Record, subscriberBuffer)
+	j.mu.Lock()
+	if j.subs == nil {
+		j.subs = make(map[chan Record]struct{})
+	}
+	if j.closed {
+		// Already shut down: hand back an immediately-closed feed so the reader sees
+		// EOF and no goroutine leaks.
+		j.mu.Unlock()
+		close(ch)
+		return ch, func() {}
+	}
+	j.subs[ch] = struct{}{}
+	j.mu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			j.mu.Lock()
+			if _, ok := j.subs[ch]; ok {
+				delete(j.subs, ch)
+				close(ch)
+			}
+			j.mu.Unlock()
+		})
+	}
+	return ch, cancel
 }
 
 // Cursor returns the current high-water cursor.
@@ -246,6 +298,13 @@ func (j *Journal) Close() error {
 		return nil
 	}
 	j.closed = true
+	// Release every live subscriber: closing its feed signals EOF so its reader exits
+	// (no goroutine leak). A subsequent cancel is a no-op (guarded on map membership),
+	// so there is no double close.
+	for ch := range j.subs {
+		close(ch)
+		delete(j.subs, ch)
+	}
 	if j.activeF != nil {
 		return j.activeF.Close()
 	}
