@@ -53,6 +53,12 @@ type Config struct {
 	PollInterval                                        time.Duration // engine fallback-poll cadence (E10.8); 0 = no cadence
 	StalenessThreshold                                  time.Duration
 	FakeAgentBin                                        string // DEV/TEST ONLY: resolves the reserved agent "fake"
+	// RemoteSocketPath, when non-empty, stands up the dedicated REMOTE-tier UDS the
+	// gateway dials (R-GW.8 / amendment D.0-A1), distinct from the owner-trusted main
+	// SocketPath. Every connection on it is unconditionally remote-origin, so every
+	// mutating op is authorized against the pinned device registry (R-POL.9) before any
+	// action. Empty => no remote socket (remote control is opt-in).
+	RemoteSocketPath string
 }
 
 // Daemon is the assembled, running walking skeleton: the core lifecycle daemon,
@@ -61,6 +67,7 @@ type Config struct {
 type Daemon struct {
 	core       *daemon.Daemon
 	srv        *protocol.Server
+	remoteSrv  *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
 	api        *coreAPI
 	eng        *engine.Engine
 	socketPath string
@@ -150,6 +157,20 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.api.devices = devReg
 	d.srv = protocol.NewServer(d.api, epID)
+
+	// R-GW.8: opt-in dedicated remote-tier listener the gateway dials. It binds its own
+	// socket and accept loop (independent of the demuxed main UDS), and every connection
+	// is remote-origin -- so mutating ops are authorized against the device registry via
+	// coreAPI's DeviceAuthenticator (R-POL.9). Assembled AFTER the registry is wired so
+	// the very first remote connection is already fail-closed.
+	if cfg.RemoteSocketPath != "" {
+		rs, rerr := protocol.ServeRemote(d.api, cfg.RemoteSocketPath)
+		if rerr != nil {
+			_ = core.Close()
+			return nil, rerr
+		}
+		d.remoteSrv = rs
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -380,7 +401,10 @@ func (d *Daemon) Close() error {
 		d.sampleWG.Wait()  // drain in-flight grid samples (bounded by shim timeouts)
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
-		d.api.close()      // stops the roster poller
+		if d.remoteSrv != nil {
+			_ = d.remoteSrv.Close() // tears down the remote-tier listener + its connections
+		}
+		d.api.close() // stops the roster poller
 	})
 	return nil
 }

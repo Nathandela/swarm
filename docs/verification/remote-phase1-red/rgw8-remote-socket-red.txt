@@ -1,0 +1,4 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/rgw_remote_socket_test.go:43:3: unknown field RemoteSocketPath in struct literal of type Config
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
