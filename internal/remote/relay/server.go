@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -77,6 +78,14 @@ const (
 	// no explicit limit (limit <= 0). The byte budget below independently keeps a
 	// page under MaxFrame, so this only caps the count of small items (CR-4).
 	defaultMailboxPageItems = 256
+	// maxMailboxItemWrapper conservatively over-covers the JSON framing around ONE
+	// item in a mailbox_read reply — {"has_more":false,"items":[{"cursor":<=20
+	// digits,"envelope":".."}]} is ~74 bytes at the largest uint64 cursor. An
+	// append-time envelope-size cap using it guarantees a single stored item always
+	// fits one reply page under MaxFrame at any cursor magnitude, so a maximally-sized
+	// envelope can never become an un-servable page head and brick the read
+	// (CR-4 / R2 review H-1).
+	maxMailboxItemWrapper = 96
 	// mailboxPageByteBudget is the estimated-serialized-size ceiling for one
 	// mailbox_read page. It sits well under MaxFrame so the JSON reply — the items
 	// plus the {"items":[...],"has_more":bool} wrapper plus the 5-byte frame header
@@ -709,6 +718,14 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	// means no depth cap.
 	if capN := sc.s.cfg.Quotas.MailboxMaxItems; capN > 0 && sc.s.st.mailboxDepth(req.Target) >= capN {
 		return sc.replyErr(codeQuotaExceeded)
+	}
+	// CR-4 / R2 review H-1: refuse an envelope so large that a mailbox_read reply
+	// carrying it alone would exceed MaxFrame. readItemsPage always emits at least one
+	// item (progress guarantee), so an un-servable item would tear the read connection
+	// permanently. Cap the envelope at append so every stored item is always readable
+	// within one page at any cursor magnitude. base64 is the on-wire size.
+	if base64.StdEncoding.EncodedLen(len(req.Envelope))+maxMailboxItemWrapper > MaxFrame-1 {
+		return sc.replyErr(codeBadRequest)
 	}
 	cur, err := sc.s.st.appendItem(req.Target, req.Envelope, sc.s.clk.Now().UnixMilli())
 	if err != nil {
