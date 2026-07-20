@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,9 +89,9 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	g.sink.Snapshot(res.Roster, res.Cursor)
+	g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), res.Cursor)
 	for _, rec := range res.Journal {
-		g.deliver(rec)
+		g.deliver(namespaceRecord(dc.endpointID, rec))
 	}
 	if res.Cursor > from {
 		g.setCursor(res.Cursor)
@@ -115,7 +116,7 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		switch ctrl.Op {
 		case protocol.OpJournalEvent:
 			for _, rec := range ctrl.Journal {
-				g.deliver(rec)
+				g.deliver(namespaceRecord(dc.endpointID, rec))
 			}
 		case protocol.OpError:
 			return fmt.Errorf("daemon refused a journal op: %s (%s)", ctrl.Error, ctrl.ErrorCode)
@@ -155,6 +156,35 @@ func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceComman
 	}
 	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
 	return dc.readControl(10 * time.Second)
+}
+
+// namespaceRecord rewrites a journal record's SessionID to the endpoint-scoped id
+// (<endpoint>/<local>) the phone commands against (agents-tracker-p1b). The daemon
+// stores and journals raw local ids, but its SessionViews and remote command targets
+// are namespaced; namespacing at the gateway's remote egress makes the id the phone
+// sees in the journal identical to the id it must sign a command over, so a phone can
+// correlate a roster/event entry to a command with no side channel. A record with no
+// SessionID (session-neutral, e.g. gateway presence) or an already-namespaced id is
+// left untouched.
+func namespaceRecord(endpointID string, rec protocol.JournalRecord) protocol.JournalRecord {
+	if endpointID == "" || rec.SessionID == "" || strings.Contains(rec.SessionID, "/") {
+		return rec
+	}
+	rec.SessionID = protocol.NamespacedID(endpointID, rec.SessionID)
+	return rec
+}
+
+// namespaceRoster applies namespaceRecord to each roster record, returning a new slice
+// so the caller's snapshot is not mutated.
+func namespaceRoster(endpointID string, roster []protocol.JournalRecord) []protocol.JournalRecord {
+	if len(roster) == 0 {
+		return roster
+	}
+	out := make([]protocol.JournalRecord, len(roster))
+	for i, rec := range roster {
+		out[i] = namespaceRecord(endpointID, rec)
+	}
+	return out
 }
 
 // deliver forwards a record to the sink only if it advances the delivered cursor,

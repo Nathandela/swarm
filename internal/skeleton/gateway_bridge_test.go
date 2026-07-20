@@ -94,11 +94,13 @@ func TestRGW_GatewayBridgesRosterThenLiveEvents(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- gw.RunJournal(ctx) }()
 
-	sink.waitFor(t, before.ID, 10*time.Second)
+	// The gateway namespaces journal ids at its remote egress (agents-tracker-p1b), so
+	// the phone-facing sink sees <endpoint>/<local>, matching command targets.
+	sink.waitFor(t, protocol.NamespacedID(sk.api.endpointID, before.ID), 10*time.Second)
 
 	// A session launched AFTER the gateway subscribed must arrive as a live event.
 	after := launchFake(t, sk, "print AFTER\nidle 60s\n")
-	sink.waitFor(t, after.ID, 10*time.Second)
+	sink.waitFor(t, protocol.NamespacedID(sk.api.endpointID, after.ID), 10*time.Second)
 
 	// The gateway advanced its resume cursor past the initial snapshot.
 	if got := gw.Cursor(); got == 0 {

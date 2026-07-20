@@ -40,11 +40,10 @@ func TestGatewayServiceE2E_JournalOutAndCommandIn(t *testing.T) {
 	sk, rsock := assembleWithRemote(t)
 	ks := registerPhone(t, sk, device.CapFull)
 	meta := launchFake(t, sk, "print HELLO\nidle 60s\n")
-	// The journal/roster carries the RAW local session id over the wire (the protocol
-	// layer namespaces views + commands, but not journal records -- tracked separately);
-	// commands still target the namespaced id.
-	rosterID := meta.ID
+	// The gateway namespaces journal/roster ids at the remote egress (agents-tracker-p1b),
+	// so the id the phone sees in the journal is EXACTLY the id it commands against.
 	namespaced := protocol.NamespacedID(sk.api.endpointID, meta.ID)
+	rosterID := namespaced
 
 	mPub, mPriv, _ := ed25519.GenerateKey(nil)
 	pPub, pPriv, _ := ed25519.GenerateKey(nil)
