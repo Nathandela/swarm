@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/remote/device [github.com/Nathandela/swarm/internal/remote/device.test]
+internal/remote/device/registry_test.go:43:49: undefined: Capability
+internal/remote/device/registry_test.go:43:75: undefined: Record
+internal/remote/device/registry_test.go:63:43: undefined: Record
+internal/remote/device/capability_test.go:34:14: undefined: Capability
+internal/remote/device/capability_test.go:39:17: undefined: CapReadOnly
+internal/remote/device/capability_test.go:40:20: undefined: CapReadApprove
+internal/remote/device/capability_test.go:41:12: undefined: CapFull
+internal/remote/device/capability_test.go:44:20: undefined: Capability
+internal/remote/device/capability_test.go:48:28: undefined: ActionRead
+internal/remote/device/capability_test.go:51:28: undefined: ActionApprove
+internal/remote/device/capability_test.go:51:28: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/device [build failed]
+FAIL
