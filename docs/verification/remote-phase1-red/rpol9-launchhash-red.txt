@@ -1,0 +1,4 @@
+internal/protocol/launchhash_test.go:56:10: undefined: LaunchContentHash
+internal/protocol/launchhash_test.go:68:24: undefined: LaunchContentHash
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL

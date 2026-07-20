@@ -880,9 +880,9 @@ func (cc *clientConn) handleLaunch(c Control) {
 		return
 	}
 	// R-POL.9: launch has no pre-existing session, so it is signed over the reserved
-	// LaunchSessionSentinel. Content-binding of the launch spec (ContentHash) is threaded
-	// but populated in the real authenticator wiring (R-POL.9b launch content-binding).
-	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, nil) {
+	// LaunchSessionSentinel, and its spec is bound via LaunchContentHash so a gateway
+	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
+	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
 		return
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {

@@ -171,6 +171,43 @@ func TestPolicy_ReadOnlyDeviceCannotApprove(t *testing.T) {
 	}
 }
 
+// TestPolicy_LaunchContentMismatchRejected: a launch signed over content hash A is
+// rejected when presented with a different content hash B (as a compromised gateway
+// altering the launch spec would produce), and accepted when the hash matches. This is
+// the R-POL.9 launch content-binding property at the authenticator.
+func TestPolicy_LaunchContentMismatchRejected(t *testing.T) {
+	reg, ks, _, id := authFixture(t, device.CapFull)
+	now := time.Unix(1_700_000_100, 0)
+	exp := now.Add(time.Minute)
+	hashA := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") // 32 bytes
+	hashB := []byte("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+
+	msg, err := crypto.Command{
+		Action: protocol.ActionLaunch, Machine: "machine1", Session: protocol.LaunchSessionSentinel,
+		OperationID: "op-1", ExpiresAt: exp.Unix(), ContentHash: hashA,
+	}.Canonical()
+	if err != nil {
+		t.Fatalf("Canonical: %v", err)
+	}
+	sig := base64.StdEncoding.EncodeToString(ks.SignCommand(msg))
+
+	// Signed over hashA but presented with hashB -> the tuple differs -> reject.
+	mismatch := protocol.DeviceCommandAuth{
+		DeviceID: id, Action: protocol.ActionLaunch, Machine: "machine1", Session: protocol.LaunchSessionSentinel,
+		OperationID: "op-1", ExpiresAt: exp, ContentHash: hashB, Sig: sig,
+	}
+	if err := authorizeCommand(reg, now, mismatch); err == nil {
+		t.Fatalf("launch with an altered content hash was authorized; want rejection (R-POL.9 content-binding)")
+	}
+
+	// The same command with the matching hash is authorized.
+	match := mismatch
+	match.ContentHash = hashA
+	if err := authorizeCommand(reg, now, match); err != nil {
+		t.Fatalf("launch with the signed content hash was rejected: %v", err)
+	}
+}
+
 func TestPolicy_UnknownDeviceAndNilRegistryFailClosed(t *testing.T) {
 	reg, ks, _, _ := authFixture(t, device.CapFull)
 	now := time.Unix(1_700_000_100, 0)
