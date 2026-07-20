@@ -16,6 +16,7 @@ import (
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -42,11 +43,38 @@ type coreAPI struct {
 	fakeAgentBin string
 	endpointID   string // this daemon's stable federation id (resume source validation)
 
+	// devices is the pinned-device registry backing R-POL.9 remote-command
+	// authorization. It is nil until wired at assembly; a nil registry authorizes
+	// nothing (authorizeCommand fails closed), so a remote-tier Server built on a
+	// coreAPI without a registry refuses every mutating op. clock is the expiry clock
+	// (nil => time.Now).
+	devices *device.Registry
+	clock   func() time.Time
+
 	events   chan persist.Meta
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
+
+// AuthorizeCommand makes coreAPI a protocol.DeviceAuthenticator (R-POL.9): it verifies
+// a remote command's Ed25519 signature against the pinned registry key and enforces the
+// device's capability and the command's expiry. Fail-closed on every error.
+func (a *coreAPI) AuthorizeCommand(cmd protocol.DeviceCommandAuth) error {
+	return authorizeCommand(a.devices, a.now(), cmd)
+}
+
+// now returns the authorization clock (injectable for tests; defaults to time.Now).
+func (a *coreAPI) now() time.Time {
+	if a.clock != nil {
+		return a.clock()
+	}
+	return time.Now()
+}
+
+// coreAPI ALSO satisfies protocol.DeviceAuthenticator so an assembled remote-tier
+// Server authorizes remote mutating ops against the pinned device registry (R-POL.9).
+var _ protocol.DeviceAuthenticator = (*coreAPI)(nil)
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{

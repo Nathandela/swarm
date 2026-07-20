@@ -37,6 +37,7 @@ import (
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -140,6 +141,14 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	// Open the pinned-device registry that backs R-POL.9 remote-command authorization.
+	// A corrupt registry fails assembly (fail-closed): the daemon must not start unable
+	// to authorize -- or worse, silently unable to enumerate -- its paired devices.
+	devReg, err := device.Open(filepath.Join(cfg.StateDir, "devices"))
+	if err != nil {
+		return nil, err
+	}
+	d.api.devices = devReg
 	d.srv = protocol.NewServer(d.api, epID)
 
 	ctx, cancel := context.WithCancel(context.Background())

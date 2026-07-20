@@ -879,9 +879,10 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: missing request")
 		return
 	}
-	// R-POL.9: launch has no pre-existing session; content-binding of the launch spec
-	// (ContentHash) is threaded but populated in the real authenticator (R-POL.9b).
-	if !cc.requireRemoteAuthz(c, ActionLaunch, "", nil) {
+	// R-POL.9: launch has no pre-existing session, so it is signed over the reserved
+	// LaunchSessionSentinel. Content-binding of the launch spec (ContentHash) is threaded
+	// but populated in the real authenticator wiring (R-POL.9b launch content-binding).
+	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, nil) {
 		return
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {

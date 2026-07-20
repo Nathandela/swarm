@@ -59,10 +59,18 @@ type JournalBackend interface {
 // against, so they must never drift. Each maps to a capability action class in the
 // authenticator (launch/kill/delete are all control-class).
 const (
-	ActionLaunch = "launch"
-	ActionKill   = "kill"
-	ActionDelete = "delete"
+	ActionLaunch  = "launch"
+	ActionKill    = "kill"
+	ActionDelete  = "delete"
+	ActionApprove = "approve"
 )
+
+// LaunchSessionSentinel is the canonical Session value signed over a launch command
+// (D4/R-POL.9): a launch has no target session yet, but the signed tuple requires a
+// non-empty Session, so both the phone-core (signer) and the daemon (verifier) use this
+// reserved value. It contains no "/" so it can never collide with a namespaced session
+// id (endpoint/local).
+const LaunchSessionSentinel = "@launch"
 
 // DeviceCommandAuth is the authenticated context of one remote mutating op, passed
 // to the DeviceAuthenticator (R-POL.9). Its fields are exactly the canonical command

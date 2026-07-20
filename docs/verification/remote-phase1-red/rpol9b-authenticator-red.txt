@@ -1,0 +1,8 @@
+internal/skeleton/deviceauth_test.go:151:12: undefined: authorizeCommand
+internal/skeleton/deviceauth_test.go:155:12: undefined: authorizeCommand
+internal/skeleton/deviceauth_test.go:160:12: undefined: authorizeCommand
+internal/skeleton/deviceauth_test.go:169:12: undefined: authorizeCommand
+internal/skeleton/deviceauth_test.go:179:12: undefined: authorizeCommand
+internal/skeleton/deviceauth_test.go:179:12: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
