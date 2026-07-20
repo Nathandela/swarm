@@ -94,6 +94,15 @@ type RendezvousTransport interface {
 // the orchestrator holds no separate confirm clock.
 type ConfirmFunc func(ctx context.Context, sas [4]string, deviceName string) (bool, error)
 
+// DeviceSASFunc is the device-side mirror of the machine's ConfirmFunc seam
+// (R-PAIR.4/.5): it surfaces the SAS the device derived from the Noise channel
+// binding so the phone operator can compare it out-of-band against the desktop
+// SAS BEFORE the device commits to the pairing decision. It is invoked exactly
+// once, after the handshake completes but before RunDevice blocks on the
+// machine's decision frame and before any DeviceOutcome is pinned. A non-nil
+// error fails the pairing CLOSED (nothing pinned); a nil callback is a no-op.
+type DeviceSASFunc func(ctx context.Context, sas [4]string) error
+
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
 // attempt before any transport work; a nil RateLimiter is unlimited.
@@ -140,6 +149,7 @@ type DeviceParams struct {
 	MachineStaticPub []byte              // optional pin from the QR (nil or 32 bytes)
 	Payload          DevicePayload       // carried to the machine in msg3
 	Limiter          RateLimiter         // optional device-side rate limit (nil => unlimited)
+	DeviceSAS        DeviceSASFunc       // optional; surfaces the SAS before the decision (nil => no-op)
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -415,6 +425,16 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 		return nil, fmt.Errorf("pairing: derive sas: %w", err)
 	}
 	machineStatic := sess.PeerStatic()
+
+	// Surface the SAS to the phone operator (R-PAIR.4) BEFORE blocking on the
+	// machine's decision and BEFORE any pin, so the operator can compare it
+	// out-of-band against the desktop SAS at the right moment. A non-nil error
+	// fails the pairing CLOSED: nothing is pinned and no outcome is returned.
+	if p.DeviceSAS != nil {
+		if err := p.DeviceSAS(ctx, sas); err != nil {
+			return nil, err
+		}
+	}
 
 	// Wait for the machine's authenticated decision (R-PAIR.5). No machine static
 	// is pinned unless the machine affirmatively accepts; a decline / timeout on
