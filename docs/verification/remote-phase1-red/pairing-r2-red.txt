@@ -1,0 +1,95 @@
+======================================================================
+Remote-control Phase 1 - PAIRING R2 (internal/remote/pairing) - RED RUN
+epic: agents-tracker-qnx (remote-control)
+role: TEST-WRITER (TDD Phase 1 + Red, GG-5)
+remediates: pairing security review
+  PR-H1 (assurance: pin fail-closed behavior so a future regression is caught)
+  PR-M1 (failing-first: device must surface its SAS before the pairing decision)
+date: Mon Jul 20 13:12:19 CEST 2026
+go: go version go1.26.1 darwin/arm64   host: darwin/arm64
+new files (ADDITIVE ONLY; git diff --stat is EMPTY -> no existing test or
+           non-test source modified, and internal/remote/crypto untouched):
+  internal/remote/pairing/assurance_test.go   (PART A - PR-H1, 6 tests / 27 subtests)
+  internal/remote/pairing/devicesas_test.go   (PART B - PR-M1, 1 failing-first test)
+command: go test ./internal/remote/pairing/... 2>&1
+======================================================================
+
+### Why this evidence has TWO runs.
+### Go builds ONE test binary per package, so PART B's reference to the not-yet-
+### existing DeviceParams.DeviceSAS / DeviceSASFunc symbols fails the whole package
+### build. To show BOTH the PART A assurance PASS and the PART B failing-first RED
+### honestly, the assurance run is captured with PART B temporarily absent, and the
+### RED run is captured with both files present (the committed tree state).
+###
+### PART A (PR-H1) is ASSURANCE: it PASSES against the current CORRECT code and
+### stands guard so a future fail-open regression turns it RED.
+### PART B (PR-M1) is FAILING-FIRST: it is RED now (undefined contract symbol) and
+### turns GREEN once the implementer adds the optional device SAS callback.
+
+======================================================================
+RUN 1 - PART A assurance PASS + 17 frozen tests (PART B moved aside)
+command: go test ./internal/remote/pairing/... -race -v
+======================================================================
+--- PASS: TestQR_HostileDecodeFailsClosed (0.00s)                 [PR-H1 #1: hostile QR decode, 11 subtests]
+--- PASS: TestPairing_ForgedAcceptWithoutSecretFailsClosed (0.06s)[PR-H1 #2: no forged accept, 4 subtests]
+--- PASS: TestPairing_MalformedPayloadDecodeFailsClosed (0.00s)   [PR-H1 #3a: payload decoders, 10 subtests]
+--- PASS: TestPairing_CorruptHandshakeMessageFailsClosed (0.03s)  [PR-H1 #3b: corrupt msg2/msg3, 2 subtests]
+--- PASS: TestPairing_PeerAbortBeforeMsg3LeavesSecretRetryable (0.01s) [PR-H1 #4: abort => secret retryable]
+--- PASS: TestPairing_QRPinnedMachineStaticMismatchAborts (0.01s) [PR-H1 #5: QR static mismatch aborts]
+--- PASS: TestPairing_PhotographedQRFailsAtConfirm (0.01s)        [frozen]
+--- PASS: TestPairing_DeclineLeavesNoState (0.01s)                [frozen]
+--- PASS: TestPairing_ConfirmTimeoutFailsClosed (0.01s)           [frozen]
+--- PASS: TestPairing_SecretSingleUse (0.01s)                     [frozen]
+--- PASS: TestPairing_NoStandingListener (0.01s)                  [frozen]
+--- PASS: TestPairing_RateLimitedBothSides (0.00s)               [frozen]
+--- PASS: TestPairing_RefusedWithoutLocalConsole (0.00s)          [frozen]
+--- PASS: TestPairing_XXpsk0Completes (0.01s)                     [frozen]
+--- PASS: TestPairing_PayloadFields (0.01s)                       [frozen]
+--- PASS: TestPairing_SecretNeverOnWire (0.01s)                   [frozen]
+--- PASS: TestSAS_MatchOnCleanHandshake (0.01s)                   [frozen]
+--- PASS: TestSAS_MismatchOnTamper (0.01s)                        [frozen]
+--- PASS: TestPairing_PinsAndStoresRouting (0.01s)               [frozen]
+--- PASS: TestPairing_ThenLiveHandshakeUsesPin (0.03s)            [frozen]
+--- PASS: TestQR_RoundTripKAT (0.00s)                             [frozen]
+--- PASS: TestQR_SizeBudget (0.00s)                               [frozen]
+--- PASS: TestQR_RendezvousIndependentOfSecret (0.00s)            [frozen]
+PASS
+ok  	github.com/Nathandela/swarm/internal/remote/pairing   (23 tests, -race clean)
+
+  => All 6 PR-H1 assurance tests PASS; all 17 frozen tests still PASS. The
+     assurance tests are ADDITIVE and change no frozen behavior.
+
+======================================================================
+RUN 2 - PART B PR-M1 failing-first RED (committed tree: both files present)
+command: go test ./internal/remote/pairing/... 2>&1
+======================================================================
+# github.com/Nathandela/swarm/internal/remote/pairing [github.com/Nathandela/swarm/internal/remote/pairing.test]
+internal/remote/pairing/devicesas_test.go:37:7: undefined: DeviceSASFunc
+internal/remote/pairing/devicesas_test.go:69:5: dp.DeviceSAS undefined (type DeviceParams has no field or method DeviceSAS)
+FAIL	github.com/Nathandela/swarm/internal/remote/pairing [build failed]
+FAIL
+EXIT: 1
+
+  => Both failures are exactly the TWO intended contract symbols -- there are NO
+     test-bug, type, or logic errors. This is the failing-first (RED) state for
+     the ONE PR-M1 test, TestPairing_DeviceSurfacesSASBeforeDecision.
+
+----------------------------------------------------------------------
+CONTRACT the implementer must add for PR-M1 (GREEN):
+
+  type DeviceSASFunc func(ctx context.Context, sas [4]string) error
+
+  DeviceParams.DeviceSAS DeviceSASFunc   // OPTIONAL; nil => no-op (back-compat)
+
+  RunDevice MUST invoke p.DeviceSAS (when non-nil) with the SAS derived from the
+  Noise channel binding AFTER the handshake completes but BEFORE it blocks on the
+  machine's decision frame (rt.Recv) and BEFORE any DeviceOutcome is applied. A
+  non-nil error from the callback fails the pairing CLOSED (device pins nothing).
+  A nil callback is a no-op, so every existing device-side test that omits the
+  field keeps compiling and passing.
+
+  Once the field + call site exist, TestPairing_DeviceSurfacesSASBeforeDecision
+  turns GREEN: the callback fires exactly once, with the same SAS the DeviceOutcome
+  carries, and before the device commits to the decision (the test gates the
+  machine's confirm on the device having surfaced its SAS first).
+----------------------------------------------------------------------
