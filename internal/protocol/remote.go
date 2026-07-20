@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"net"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -51,6 +52,44 @@ type JournalResume struct {
 type JournalBackend interface {
 	JournalReadFrom(from uint64) (JournalResume, error)
 	JournalSubscribe() (<-chan JournalRecord, func()) // single source; the Server fans out (S9)
+}
+
+// Canonical action strings signed over the remote command tuple (D4/R-POL.9). They
+// are a wire contract: the phone-core signs the SAME string the daemon authorizes
+// against, so they must never drift. Each maps to a capability action class in the
+// authenticator (launch/kill/delete are all control-class).
+const (
+	ActionLaunch = "launch"
+	ActionKill   = "kill"
+	ActionDelete = "delete"
+)
+
+// DeviceCommandAuth is the authenticated context of one remote mutating op, passed
+// to the DeviceAuthenticator (R-POL.9). Its fields are exactly the canonical command
+// tuple (D4) plus the detached signature: the authenticator reconstructs the signing
+// input from them, verifies the signature against the device's pinned command-signing
+// key, and checks the device's capability permits Action — returning nil only if both
+// hold.
+type DeviceCommandAuth struct {
+	DeviceID    string    // registry lookup key; never trusted alone (A1)
+	Action      string    // canonical action string (also selects the capability class)
+	Machine     string    // endpoint id
+	Session     string    // namespaced session id ("" for launch, which creates one)
+	OperationID string    // idempotency identity; single-use, binds the signature
+	ExpiresAt   time.Time // daemon-authoritative expiry; a past value is refused
+	ContentHash []byte    // optional 32-byte hash binding op content (e.g. a launch spec)
+	Sig         string    // detached Ed25519 signature (device_sig) over the tuple
+}
+
+// DeviceAuthenticator is the optional interface a remote-tier DaemonAPI implements to
+// authorize remote mutating ops (R-POL.9): AuthorizeCommand returns nil ONLY when the
+// device signature verifies over the canonical tuple AND the device's capability
+// permits the action. Any failure (unknown device, invalid/expired signature,
+// insufficient capability) returns a non-nil error and the op is refused before any
+// side effect. The Server refuses every remote mutating op when its backend does NOT
+// implement this interface — fail-closed against a misassembled remote server.
+type DeviceAuthenticator interface {
+	AuthorizeCommand(a DeviceCommandAuth) error
 }
 
 // ServeRemote binds a REMOTE-TIER Server on socketPath: every connection is

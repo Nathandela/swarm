@@ -227,7 +227,42 @@ type stubDaemon struct {
 	killErr   error
 	deleteErr error
 	attachErr error
+
+	// R-POL.9 device authorization. authzFn decides each AuthorizeCommand (nil =>
+	// accept); authzCalls records every tuple the Server presented so a test can
+	// assert what was authorized. stubDaemon implements DeviceAuthenticator, so a
+	// remote-tier Server built on it is NOT fail-closed-absent (use daemonOnly for
+	// that case).
+	authzFn    func(DeviceCommandAuth) error
+	authzCalls []DeviceCommandAuth
 }
+
+// AuthorizeCommand makes stubDaemon a protocol.DeviceAuthenticator (R-POL.9). It
+// records the presented tuple and defers the accept/reject decision to authzFn.
+func (s *stubDaemon) AuthorizeCommand(a DeviceCommandAuth) error {
+	s.mu.Lock()
+	s.authzCalls = append(s.authzCalls, a)
+	fn := s.authzFn
+	s.mu.Unlock()
+	if fn != nil {
+		return fn(a)
+	}
+	return nil
+}
+
+// authorizedTuples returns a copy of every DeviceCommandAuth the Server presented.
+func (s *stubDaemon) authorizedTuples() []DeviceCommandAuth {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DeviceCommandAuth, len(s.authzCalls))
+	copy(out, s.authzCalls)
+	return out
+}
+
+// daemonOnly wraps a DaemonAPI so ONLY DaemonAPI's methods are exposed: it embeds the
+// interface, so the concrete backend's DeviceAuthenticator does NOT promote through.
+// A remote-tier Server built on it must fail closed (R-POL.9).
+type daemonOnly struct{ DaemonAPI }
 
 func newStubDaemon() *stubDaemon {
 	return &stubDaemon{events: make(chan persist.Meta, 64)}

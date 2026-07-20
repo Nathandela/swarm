@@ -1,0 +1,11 @@
+--- FAIL: TestProtocol_RemoteMutatingOpRequiresDeviceFields (0.00s)
+    remote_devicesig_test.go:55: remote kill missing device fields = op "ok" code ""; want error/invalid_field
+--- FAIL: TestProtocol_ForgedDeviceCommandRefused (0.00s)
+    remote_devicesig_test.go:81: forged remote kill = op "ok" code ""; want error/not_authorized
+--- FAIL: TestProtocol_RemoteAuthzFailClosedWithoutAuthenticator (0.00s)
+    remote_devicesig_test.go:107: mutating op on a no-authenticator remote server = op "ok" code ""; want error/not_authorized (fail-closed)
+--- FAIL: TestProtocol_AuthorizedCommandForwardedWithTuple (0.00s)
+    remote_devicesig_test.go:139: authenticator saw 0 commands; want 1
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.341s
+FAIL

@@ -25,7 +25,10 @@ package protocol
 //	// (interrupt/kill/launch/approve) MUST carry operation_id; input is exempt.
 //	func ServeRemote(d DaemonAPI, socketPath string) (*Server, error)
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // serveRemote stands up a remote-tier Server (every connection is remote origin).
 func serveRemote(t *testing.T, stub *stubDaemon) string {
@@ -103,10 +106,19 @@ func TestServer_RemoteMutatingOpRequiresRequestID(t *testing.T) {
 		t.Fatalf("daemon executed %d kills for an op lacking operation_id; want 0 (refused before action)", n)
 	}
 
-	// With operation_id: forwarded.
-	rc.writeControl(Control{Op: OpKill, EndpointID: rep.EndpointID, SessionID: sid, OperationID: "devA:01JKILLOK000000000000000"})
+	// With operation_id AND device authorization: forwarded. (R-POL.9 layered a device
+	// signature + capability gate on top of the R-IDP.1 operation_id gate; the stub
+	// daemon's authenticator accepts by default, so a well-formed authorized op with all
+	// the identity fields present is forwarded. The operation_id-gate behavior asserted
+	// above is unchanged — a missing operation_id still fails first, with invalid_field.)
+	exp := time.Now().Add(time.Minute)
+	rc.writeControl(Control{
+		Op: OpKill, EndpointID: rep.EndpointID, SessionID: sid,
+		OperationID: "devA:01JKILLOK000000000000000",
+		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
+	})
 	if got := rc.readControl(); got.Op == OpError {
-		t.Fatalf("remote kill WITH operation_id was refused: %q / %q", got.Error, got.ErrorCode)
+		t.Fatalf("remote kill WITH operation_id and device auth was refused: %q / %q", got.Error, got.ErrorCode)
 	}
 	if n := len(stub.killedIDs()); n != 1 {
 		t.Fatalf("daemon executed %d kills for a well-formed remote op; want 1", n)

@@ -879,7 +879,9 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: missing request")
 		return
 	}
-	if !cc.requireOperationID(c) {
+	// R-POL.9: launch has no pre-existing session; content-binding of the launch spec
+	// (ContentHash) is threaded but populated in the real authenticator (R-POL.9b).
+	if !cc.requireRemoteAuthz(c, ActionLaunch, "", nil) {
 		return
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
@@ -914,7 +916,7 @@ func (cc *clientConn) handleKill(c Control) {
 	if !ok {
 		return
 	}
-	if !cc.requireOperationID(c) {
+	if !cc.requireRemoteAuthz(c, ActionKill, c.SessionID, nil) {
 		return
 	}
 	if err := cc.srv.d.Kill(local); err != nil {
@@ -929,7 +931,7 @@ func (cc *clientConn) handleDelete(c Control) {
 	if !ok {
 		return
 	}
-	if !cc.requireOperationID(c) {
+	if !cc.requireRemoteAuthz(c, ActionDelete, c.SessionID, nil) {
 		return
 	}
 	if err := cc.srv.d.Delete(local); err != nil {
@@ -1247,6 +1249,55 @@ func (cc *clientConn) hasCap(cap string) bool {
 func (cc *clientConn) requireOperationID(c Control) bool {
 	if cc.srv.remoteTier && c.OperationID == "" {
 		cc.replyErrorCode("remote mutating op requires operation_id", CodeInvalidField)
+		return false
+	}
+	return true
+}
+
+// deviceAuthenticator returns the backend's DeviceAuthenticator if it implements one.
+func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
+	da, ok := cc.srv.d.(DeviceAuthenticator)
+	return da, ok
+}
+
+// requireRemoteAuthz is the single choke point for a remote mutating op (R-POL.9): it
+// gates launch/kill/delete before any side effect. On the owner (main) tier it is a
+// no-op — local connections keep full trust (R-POL.1). On the remote tier it enforces,
+// in order: operation_id present (R-IDP.1); the backend exposes a DeviceAuthenticator
+// (else FAIL CLOSED — a misassembled remote server authorizes nothing); the device
+// identity fields (device_id, device_sig, expires_at) are present; and finally the
+// authenticator verifies the signature over the canonical tuple AND the device's
+// capability permits action. A missing structural field is invalid_field; any
+// authorization failure is not_authorized. Returns false when the caller must stop
+// (a refusal has already been sent). `session` is the namespaced session id, empty
+// for launch (which creates a session). contentHash optionally binds op content.
+func (cc *clientConn) requireRemoteAuthz(c Control, action string, session string, contentHash []byte) bool {
+	if !cc.srv.remoteTier {
+		return true
+	}
+	if !cc.requireOperationID(c) {
+		return false
+	}
+	auth, ok := cc.deviceAuthenticator()
+	if !ok {
+		cc.replyErrorCode("remote authorization unavailable", CodeNotAuthorized)
+		return false
+	}
+	if c.DeviceID == "" || c.DeviceSig == "" || c.ExpiresAt == nil {
+		cc.replyErrorCode("remote mutating op requires device_id, device_sig, and expires_at", CodeInvalidField)
+		return false
+	}
+	if err := auth.AuthorizeCommand(DeviceCommandAuth{
+		DeviceID:    c.DeviceID,
+		Action:      action,
+		Machine:     cc.endpointID,
+		Session:     session,
+		OperationID: c.OperationID,
+		ExpiresAt:   *c.ExpiresAt,
+		ContentHash: contentHash,
+		Sig:         c.DeviceSig,
+	}); err != nil {
+		cc.replyErrorCode("device command not authorized", CodeNotAuthorized)
 		return false
 	}
 	return true
