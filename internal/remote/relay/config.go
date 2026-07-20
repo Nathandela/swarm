@@ -12,12 +12,24 @@ import (
 type Quotas struct {
 	// MaxConcurrentRendezvous caps live pairing rendezvous slots.
 	MaxConcurrentRendezvous int `json:"max_concurrent_rendezvous"`
+	// MaxConcurrentConnections is the global cap on live websocket connections
+	// admitted at once (CR-1 admission control). A value <= 0 means unlimited;
+	// the (cap+1)th concurrent connection is cleanly closed, not served.
+	MaxConcurrentConnections int `json:"max_concurrent_connections"`
 	// MailboxAppendPerMin caps appends per target routing id per minute.
 	MailboxAppendPerMin int `json:"mailbox_append_per_min"`
 	// PushPerMin caps push triggers per target routing id per minute.
 	PushPerMin int `json:"push_per_min"`
-	// ConnPerMin caps authenticated connections accepted per minute.
+	// ConnPerMin caps authentication attempts per source (auth_init, keyed by
+	// the presented relay-auth routing id) AND, globally, the connections
+	// successfully authenticated per minute (auth_resp).
 	ConnPerMin int `json:"conn_per_min"`
+	// OpsPerMin is the per-source cap applied to every state-touching control op
+	// (auth_resp, authorize_device, mailbox_read/ack, token_register/delete,
+	// presence, device_revoke, and the rendezvous ops). mailbox_append and
+	// push_trigger keep their own dedicated windows above. A value <= 0 means
+	// unlimited.
+	OpsPerMin int `json:"ops_per_min"`
 }
 
 // Config is the relay's on-disk configuration (R-REL.9). cmd/swarm-relay reads
@@ -31,6 +43,11 @@ type Config struct {
 	// DBPath is the bbolt persistence file.
 	DBPath string `json:"db_path"`
 
+	// HandshakeTimeout bounds a read on a connection that has not yet
+	// authenticated or joined a rendezvous: an idle socket that completes the ws
+	// handshake but sends no frame is closed within it (CR-1 slowloris defense).
+	// A value <= 0 disables the bound.
+	HandshakeTimeout time.Duration `json:"handshake_timeout"`
 	// PresenceTimeout is how long after a gateway drop presence goes offline and
 	// the silent-push path fires (R-REL.3).
 	PresenceTimeout time.Duration `json:"presence_timeout"`
@@ -46,17 +63,20 @@ type Config struct {
 // Listen/TLSMode/DBPath (and tighten quotas) before New.
 func DefaultConfig() Config {
 	return Config{
-		Listen:          "127.0.0.1:0",
-		TLSMode:         "off",
-		DBPath:          "relay.db",
-		PresenceTimeout: 30 * time.Second,
-		RendezvousTTL:   60 * time.Second,
-		RetentionCap:    7 * 24 * time.Hour,
+		Listen:           "127.0.0.1:0",
+		TLSMode:          "off",
+		DBPath:           "relay.db",
+		HandshakeTimeout: 30 * time.Second,
+		PresenceTimeout:  30 * time.Second,
+		RendezvousTTL:    60 * time.Second,
+		RetentionCap:     7 * 24 * time.Hour,
 		Quotas: Quotas{
-			MaxConcurrentRendezvous: 1024,
-			MailboxAppendPerMin:     600,
-			PushPerMin:              600,
-			ConnPerMin:              600,
+			MaxConcurrentRendezvous:  1024,
+			MaxConcurrentConnections: 4096,
+			MailboxAppendPerMin:      600,
+			PushPerMin:               600,
+			ConnPerMin:               600,
+			OpsPerMin:                600,
 		},
 	}
 }

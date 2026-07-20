@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -125,7 +126,9 @@ type Server struct {
 	rendezvous map[string]*rdvSlot
 	burned     map[string]bool // completed (single-use) rendezvous ids
 	conns      map[*serverConn]struct{}
-	connRate   *rateWindow
+	connRate   *rateWindow            // global auth-success admission (auth_resp)
+	authRate   map[string]*rateWindow // per-source auth attempts (auth_init), keyed by rid
+	opsRate    map[string]*rateWindow // per-source state-touching ops (OpsPerMin)
 	appendRate map[string]*rateWindow
 	pushRate   map[string]*rateWindow
 }
@@ -144,6 +147,8 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 		burned:     make(map[string]bool),
 		conns:      make(map[*serverConn]struct{}),
 		connRate:   &rateWindow{},
+		authRate:   make(map[string]*rateWindow),
+		opsRate:    make(map[string]*rateWindow),
 		appendRate: make(map[string]*rateWindow),
 		pushRate:   make(map[string]*rateWindow),
 	}
@@ -239,9 +244,16 @@ type serverConn struct {
 }
 
 func (s *Server) serveConn(ws *websocket.Conn) {
+	s.mu.Lock()
+	if capN := s.cfg.Quotas.MaxConcurrentConnections; capN > 0 && len(s.conns) >= capN {
+		// CR-1 admission control: over the global live-connection cap, refuse the
+		// (cap+1)th socket cleanly rather than admit it into an unbounded pool.
+		s.mu.Unlock()
+		_ = ws.CloseNow()
+		return
+	}
 	ctx, cancel := context.WithCancel(s.baseCtx)
 	sc := &serverConn{s: s, ws: ws, ctx: ctx, cancel: cancel}
-	s.mu.Lock()
 	s.conns[sc] = struct{}{}
 	s.mu.Unlock()
 	defer func() {
@@ -264,6 +276,7 @@ func (s *Server) removeConn(sc *serverConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.conns, sc)
+	delete(s.opsRate, connSource(sc)) // reap this connection's ephemeral ops-rate window
 	if sc.rdvID != "" {
 		if slot, ok := s.rendezvous[sc.rdvID]; ok {
 			slot.detach(sc)
@@ -282,7 +295,19 @@ func (s *Server) removeConn(sc *serverConn) {
 }
 
 func (sc *serverConn) readFrame() (MsgType, []byte, error) {
-	mt, data, err := sc.ws.Read(sc.ctx)
+	// CR-1: bound reads on a connection that has neither authenticated nor joined
+	// a rendezvous. A socket that completes the ws handshake but sends no frame is
+	// closed within HandshakeTimeout (slowloris / fd-exhaustion defense), while an
+	// established (authenticated or rendezvous) connection may idle indefinitely.
+	// These fields are only ever mutated in this connection's own dispatch
+	// goroutine, so reading them here without the lock is race-free.
+	ctx := sc.ctx
+	if to := sc.s.cfg.HandshakeTimeout; to > 0 && !sc.authed && sc.rdvID == "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(sc.ctx, to)
+		defer cancel()
+	}
+	mt, data, err := sc.ws.Read(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -327,6 +352,46 @@ func (sc *serverConn) requireAuth() (string, bool) {
 		return codeDuplicateConn, false
 	}
 	return "", true
+}
+
+// connSource is a connection's ephemeral per-source rate key, used for ops on an
+// unauthenticated connection (rendezvous). It is reaped when the connection ends.
+func connSource(sc *serverConn) string { return fmt.Sprintf("conn:%p", sc) }
+
+// opSource identifies the source a state-touching op is metered against: the
+// authenticated routing id when available (stable across this party's
+// connections), the pending relay-auth id mid-handshake, else the connection
+// itself (rendezvous rides an unauthenticated conn).
+func (sc *serverConn) opSource() string {
+	if sc.rid != "" {
+		return "rid:" + sc.rid
+	}
+	if sc.pendingRID != "" {
+		return "rid:" + sc.pendingRID
+	}
+	return connSource(sc)
+}
+
+// meterOp charges one unit against the per-source OpsPerMin window (CR-2 /
+// R-REL.8). It is called at the TOP of every state-touching op — before the op's
+// own auth/validation — so abuse is metered even when the op would otherwise
+// short-circuit (e.g. a revoke on an already-unpaired target). A limit <= 0 is
+// unlimited.
+func (sc *serverConn) meterOp() bool {
+	limit := sc.s.cfg.Quotas.OpsPerMin
+	if limit <= 0 {
+		return true
+	}
+	key := sc.opSource()
+	sc.s.mu.Lock()
+	w := sc.s.opsRate[key]
+	if w == nil {
+		w = &rateWindow{}
+		sc.s.opsRate[key] = w
+	}
+	ok := w.allow(sc.s.clk.Now(), limit)
+	sc.s.mu.Unlock()
+	return ok
 }
 
 func (sc *serverConn) dispatch(tag MsgType, payload []byte) error {
@@ -418,8 +483,16 @@ func (sc *serverConn) handleAuthInit(payload []byte) error {
 	if sc.s.st.isRevoked(rid) {
 		return sc.replyErr(codeRevoked)
 	}
+	// CR-1: auth attempts are metered PER SOURCE (the presented relay-auth id),
+	// so one key exhausting its own budget cannot lock out any other key. The
+	// global admission budget is charged on success in auth_resp.
 	sc.s.mu.Lock()
-	ok := sc.s.connRate.allow(sc.s.clk.Now(), sc.s.cfg.Quotas.ConnPerMin)
+	w := sc.s.authRate[rid]
+	if w == nil {
+		w = &rateWindow{}
+		sc.s.authRate[rid] = w
+	}
+	ok := w.allow(sc.s.clk.Now(), sc.s.cfg.Quotas.ConnPerMin)
 	sc.s.mu.Unlock()
 	if !ok {
 		return sc.replyErr(codeQuotaExceeded)
@@ -435,6 +508,9 @@ func (sc *serverConn) handleAuthInit(payload []byte) error {
 }
 
 func (sc *serverConn) handleAuthResp(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if sc.authNonce == nil {
 		return sc.replyErr(codeBadRequest)
 	}
@@ -447,6 +523,15 @@ func (sc *serverConn) handleAuthResp(payload []byte) error {
 	msg := AuthChallengeMessage(sc.authNonce, sc.pendingRID)
 	if len(req.Signature) != ed25519.SignatureSize || !ed25519.Verify(sc.pendingPub, msg, req.Signature) {
 		return sc.replyErr(codeAuthFailed)
+	}
+	// CR-1: charge the global admission budget only on a successful auth, so a
+	// legitimate cold-start burst is bounded without a single anonymous socket
+	// being able to burn it pre-signature.
+	sc.s.mu.Lock()
+	admitted := sc.s.connRate.allow(sc.s.clk.Now(), sc.s.cfg.Quotas.ConnPerMin)
+	sc.s.mu.Unlock()
+	if !admitted {
+		return sc.replyErr(codeQuotaExceeded)
 	}
 	sc.authed = true
 	sc.rid = sc.pendingRID
@@ -477,6 +562,9 @@ func (s *Server) registerSession(sc *serverConn) {
 // --- pairing / mailbox / push ----------------------------------------------
 
 func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -529,6 +617,9 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 }
 
 func (sc *serverConn) handleMailboxRead(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -549,6 +640,9 @@ func (sc *serverConn) handleMailboxRead(payload []byte) error {
 }
 
 func (sc *serverConn) handleMailboxAck(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -565,6 +659,9 @@ func (sc *serverConn) handleMailboxAck(payload []byte) error {
 }
 
 func (sc *serverConn) handleTokenRegister(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -581,6 +678,9 @@ func (sc *serverConn) handleTokenRegister(payload []byte) error {
 }
 
 func (sc *serverConn) handleTokenDelete(_ []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -591,6 +691,9 @@ func (sc *serverConn) handleTokenDelete(_ []byte) error {
 }
 
 func (sc *serverConn) handlePresence(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -649,6 +752,9 @@ func (sc *serverConn) handlePushTrigger(payload []byte) error {
 }
 
 func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
@@ -685,6 +791,9 @@ func (s *Server) deliverPush(ctx context.Context, token string, p APNsPayload) {
 // --- rendezvous ------------------------------------------------------------
 
 func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -694,6 +803,17 @@ func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
 	now := sc.s.clk.Now()
 	sc.s.mu.Lock()
 	sc.s.purgeExpiredRendezvous(now)
+	// HI-1: never blindly overwrite. A burned (completed, single-use) id or a live
+	// slot is refused so the original creator's in-flight pairing is never
+	// orphaned or hijacked.
+	if sc.s.burned[req.ID] {
+		sc.s.mu.Unlock()
+		return sc.replyErr(codeRendezvousUsed)
+	}
+	if _, exists := sc.s.rendezvous[req.ID]; exists {
+		sc.s.mu.Unlock()
+		return sc.replyErr(codeRendezvousExists)
+	}
 	if len(sc.s.rendezvous) >= sc.s.cfg.Quotas.MaxConcurrentRendezvous {
 		sc.s.mu.Unlock()
 		return sc.replyErr(codeQuotaExceeded)
@@ -706,6 +826,9 @@ func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
 }
 
 func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -736,6 +859,9 @@ func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
 }
 
 func (sc *serverConn) handleRendezvousSend(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	var req struct {
 		ID   string `json:"id"`
 		Data []byte `json:"data"`
@@ -744,11 +870,16 @@ func (sc *serverConn) handleRendezvousSend(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	sc.s.mu.Lock()
+	slot, ok := sc.s.rendezvous[req.ID]
+	// HI-1: only a participant (creator/claimer) may inject into a rendezvous; a
+	// non-participant is cleanly refused rather than silently told success.
+	if !ok || (slot.creator != sc && slot.claimer != sc) {
+		sc.s.mu.Unlock()
+		return sc.replyErr(codeNotAuthorized)
+	}
 	var inbox chan []byte
-	if slot, ok := sc.s.rendezvous[req.ID]; ok {
-		if target := slot.other(sc); target != nil {
-			inbox = target.rdvInbox
-		}
+	if target := slot.other(sc); target != nil {
+		inbox = target.rdvInbox
 	}
 	sc.s.mu.Unlock()
 	if inbox != nil {
@@ -776,6 +907,9 @@ func (sc *serverConn) handleRendezvousRecv(_ []byte) error {
 }
 
 func (sc *serverConn) handleRendezvousComplete(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -783,6 +917,13 @@ func (sc *serverConn) handleRendezvousComplete(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	sc.s.mu.Lock()
+	slot, ok := sc.s.rendezvous[req.ID]
+	// HI-1: only a participant may burn the id, so a third party cannot burn a
+	// victim's in-flight pairing.
+	if !ok || (slot.creator != sc && slot.claimer != sc) {
+		sc.s.mu.Unlock()
+		return sc.replyErr(codeNotAuthorized)
+	}
 	delete(sc.s.rendezvous, req.ID)
 	sc.s.burned[req.ID] = true
 	sc.s.mu.Unlock()

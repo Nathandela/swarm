@@ -23,6 +23,9 @@ var (
 	// ErrRendezvousExpired is returned when a rendezvous is claimed past its
 	// hard relay-side TTL.
 	ErrRendezvousExpired = errors.New("relay: rendezvous expired")
+	// ErrRendezvousExists is returned when rendezvous_create targets an id that
+	// already holds a live slot, so the original creator is never overwritten.
+	ErrRendezvousExists = errors.New("relay: rendezvous id already in use")
 	// ErrRendezvousBurned is returned when a completed (single-use) rendezvous
 	// id is claimed again.
 	ErrRendezvousBurned = errors.New("relay: rendezvous already used")
@@ -30,28 +33,30 @@ var (
 
 // wire error codes. The client maps a received code back to the sentinel above.
 const (
-	codeBadRequest     = "bad_request"
-	codeQuotaExceeded  = "quota_exceeded"
-	codeNotAuthorized  = "not_authorized"
-	codeRevoked        = "revoked"
-	codeDuplicateConn  = "duplicate_connection"
-	codeRendezvousFull = "rendezvous_full"
-	codeRendezvousTTL  = "rendezvous_expired"
-	codeRendezvousUsed = "rendezvous_burned"
-	codeAuthFailed     = "auth_failed"
-	codeUnsupported    = "unsupported"
+	codeBadRequest       = "bad_request"
+	codeQuotaExceeded    = "quota_exceeded"
+	codeNotAuthorized    = "not_authorized"
+	codeRevoked          = "revoked"
+	codeDuplicateConn    = "duplicate_connection"
+	codeRendezvousFull   = "rendezvous_full"
+	codeRendezvousTTL    = "rendezvous_expired"
+	codeRendezvousUsed   = "rendezvous_burned"
+	codeRendezvousExists = "rendezvous_exists"
+	codeAuthFailed       = "auth_failed"
+	codeUnsupported      = "unsupported"
 )
 
 // codeToErr maps a wire error code to its sentinel. An unrecognised code becomes
 // a generic error carrying the server message.
 var codeToErr = map[string]error{
-	codeQuotaExceeded:  ErrQuotaExceeded,
-	codeNotAuthorized:  ErrNotAuthorized,
-	codeRevoked:        ErrRevoked,
-	codeDuplicateConn:  ErrDuplicateConnection,
-	codeRendezvousFull: ErrRendezvousFull,
-	codeRendezvousTTL:  ErrRendezvousExpired,
-	codeRendezvousUsed: ErrRendezvousBurned,
+	codeQuotaExceeded:    ErrQuotaExceeded,
+	codeNotAuthorized:    ErrNotAuthorized,
+	codeRevoked:          ErrRevoked,
+	codeDuplicateConn:    ErrDuplicateConnection,
+	codeRendezvousFull:   ErrRendezvousFull,
+	codeRendezvousTTL:    ErrRendezvousExpired,
+	codeRendezvousUsed:   ErrRendezvousBurned,
+	codeRendezvousExists: ErrRendezvousExists,
 }
 
 // errorBody is the JSON shape of an r_error reply.
