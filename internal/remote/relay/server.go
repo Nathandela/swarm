@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -42,6 +41,30 @@ func WithAPNsSink(a APNsSink) Option { return func(s *Server) { s.apns = a } }
 // WithLogWriter directs the relay's (body-free) log output.
 func WithLogWriter(w io.Writer) Option {
 	return func(s *Server) { s.logger = log.New(w, "relay ", log.LstdFlags) }
+}
+
+// WithSourceKeyFunc installs the pre-authentication source-key deriver. The relay
+// evaluates it ONCE per accepted connection (passing that connection's transport
+// RemoteAddr) and uses the result to key every PRE-SIGNATURE rate window —
+// auth_init and the unauthenticated rendezvous ops — instead of any client-
+// presented (and still unproven) relay-auth pubkey (ADR-007 amendment 2026-07-20,
+// remediating R1-H1/H2). A nil fn keeps the default (the IP host of RemoteAddr).
+func WithSourceKeyFunc(fn func(remoteAddr string) string) Option {
+	return func(s *Server) {
+		if fn != nil {
+			s.sourceKeyFn = fn
+		}
+	}
+}
+
+// defaultSourceKey derives a connection's pre-auth rate key from its RemoteAddr by
+// stripping the port, so every connection from one IP host shares a single source
+// window. On loopback this collapses all connections to one source.
+func defaultSourceKey(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 // serverCaps is the relay's capability set; r_hello negotiates the intersection.
@@ -126,31 +149,37 @@ type Server struct {
 	rendezvous map[string]*rdvSlot
 	burned     map[string]bool // completed (single-use) rendezvous ids
 	conns      map[*serverConn]struct{}
-	connRate   *rateWindow            // global auth-success admission (auth_resp)
-	authRate   map[string]*rateWindow // per-source auth attempts (auth_init), keyed by rid
-	opsRate    map[string]*rateWindow // per-source state-touching ops (OpsPerMin)
+	authRate   map[string]*rateWindow // pre-signature auth_init attempts, keyed by TRANSPORT SOURCE (ConnPerMin)
+	opsRate    map[string]*rateWindow // state-touching ops: pre-signature keyed by source, post-signature keyed by "rid:"+rid (OpsPerMin)
 	appendRate map[string]*rateWindow
 	pushRate   map[string]*rateWindow
+
+	// sourceKeyFn derives a connection's pre-authentication rate key from its
+	// transport RemoteAddr. It is evaluated ONCE per accepted connection. The
+	// default strips the port so all connections from one IP host collapse to a
+	// single source (ADR-007 amendment 2026-07-20). A pubkey the client presents
+	// in auth_init is NEVER a rate key: it is unproven until a signature verifies.
+	sourceKeyFn func(remoteAddr string) string
 }
 
 // New constructs a relay over cfg.DBPath. It opens the persistence store; call
 // Start to bind the listener.
 func New(cfg Config, opts ...Option) (*Server, error) {
 	s := &Server{
-		cfg:        cfg,
-		clk:        realClock{},
-		logger:     log.New(io.Discard, "", 0),
-		sessions:   make(map[string]*serverConn),
-		presence:   make(map[string]*presenceEntry),
-		tokens:     make(map[string]string),
-		rendezvous: make(map[string]*rdvSlot),
-		burned:     make(map[string]bool),
-		conns:      make(map[*serverConn]struct{}),
-		connRate:   &rateWindow{},
-		authRate:   make(map[string]*rateWindow),
-		opsRate:    make(map[string]*rateWindow),
-		appendRate: make(map[string]*rateWindow),
-		pushRate:   make(map[string]*rateWindow),
+		cfg:         cfg,
+		clk:         realClock{},
+		logger:      log.New(io.Discard, "", 0),
+		sessions:    make(map[string]*serverConn),
+		presence:    make(map[string]*presenceEntry),
+		tokens:      make(map[string]string),
+		rendezvous:  make(map[string]*rdvSlot),
+		burned:      make(map[string]bool),
+		conns:       make(map[*serverConn]struct{}),
+		authRate:    make(map[string]*rateWindow),
+		opsRate:     make(map[string]*rateWindow),
+		appendRate:  make(map[string]*rateWindow),
+		pushRate:    make(map[string]*rateWindow),
+		sourceKeyFn: defaultSourceKey,
 	}
 	for _, o := range opts {
 		o(s)
@@ -221,7 +250,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(MaxFrame + 64)
-	s.serveConn(ws)
+	s.serveConn(ws, r.RemoteAddr)
 }
 
 // serverConn is one live connection's server-side state.
@@ -231,6 +260,10 @@ type serverConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wmu    sync.Mutex
+
+	// sourceKey is this connection's pre-authentication rate key, derived ONCE at
+	// accept time from its transport RemoteAddr (never from a presented pubkey).
+	sourceKey string
 
 	authed     bool
 	rid        string
@@ -243,7 +276,7 @@ type serverConn struct {
 	rdvInbox chan []byte
 }
 
-func (s *Server) serveConn(ws *websocket.Conn) {
+func (s *Server) serveConn(ws *websocket.Conn, remoteAddr string) {
 	s.mu.Lock()
 	if capN := s.cfg.Quotas.MaxConcurrentConnections; capN > 0 && len(s.conns) >= capN {
 		// CR-1 admission control: over the global live-connection cap, refuse the
@@ -253,7 +286,7 @@ func (s *Server) serveConn(ws *websocket.Conn) {
 		return
 	}
 	ctx, cancel := context.WithCancel(s.baseCtx)
-	sc := &serverConn{s: s, ws: ws, ctx: ctx, cancel: cancel}
+	sc := &serverConn{s: s, ws: ws, ctx: ctx, cancel: cancel, sourceKey: s.sourceKeyFn(remoteAddr)}
 	s.conns[sc] = struct{}{}
 	s.mu.Unlock()
 	defer func() {
@@ -276,7 +309,26 @@ func (s *Server) removeConn(sc *serverConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.conns, sc)
-	delete(s.opsRate, connSource(sc)) // reap this connection's ephemeral ops-rate window
+	// H3: keep the pre-auth (source) and post-auth (rid) rate maps bounded — every
+	// window is tied to at least one live connection. When the last connection that
+	// shares a source key (or routing id) disconnects, its windows are reaped, so an
+	// attacker cannot mint unbounded rate-limit state.
+	sourceLive, ridLive := false, false
+	for other := range s.conns {
+		if other.sourceKey == sc.sourceKey {
+			sourceLive = true
+		}
+		if sc.rid != "" && other.rid == sc.rid {
+			ridLive = true
+		}
+	}
+	if !sourceLive {
+		delete(s.authRate, sc.sourceKey)
+		delete(s.opsRate, sc.sourceKey)
+	}
+	if sc.rid != "" && !ridLive {
+		delete(s.opsRate, "rid:"+sc.rid)
+	}
 	if sc.rdvID != "" {
 		if slot, ok := s.rendezvous[sc.rdvID]; ok {
 			slot.detach(sc)
@@ -354,22 +406,17 @@ func (sc *serverConn) requireAuth() (string, bool) {
 	return "", true
 }
 
-// connSource is a connection's ephemeral per-source rate key, used for ops on an
-// unauthenticated connection (rendezvous). It is reaped when the connection ends.
-func connSource(sc *serverConn) string { return fmt.Sprintf("conn:%p", sc) }
-
-// opSource identifies the source a state-touching op is metered against: the
-// authenticated routing id when available (stable across this party's
-// connections), the pending relay-auth id mid-handshake, else the connection
-// itself (rendezvous rides an unauthenticated conn).
+// opSource identifies the source a state-touching op is metered against. AFTER a
+// signature verifies, the op is keyed by the PROVEN routing id ("rid:"+rid), so
+// each authenticated identity gets its own per-key window (ADR-007 amendment point
+// 4). BEFORE any signature verifies (mid-handshake auth_resp, the unauthenticated
+// rendezvous ops), the op is keyed by TRANSPORT SOURCE — never by the unproven
+// presented pubkey — so no per-unproven-key state is ever retained (R1-H2/H3).
 func (sc *serverConn) opSource() string {
 	if sc.rid != "" {
 		return "rid:" + sc.rid
 	}
-	if sc.pendingRID != "" {
-		return "rid:" + sc.pendingRID
-	}
-	return connSource(sc)
+	return sc.sourceKey
 }
 
 // meterOp charges one unit against the per-source OpsPerMin window (CR-2 /
@@ -483,14 +530,18 @@ func (sc *serverConn) handleAuthInit(payload []byte) error {
 	if sc.s.st.isRevoked(rid) {
 		return sc.replyErr(codeRevoked)
 	}
-	// CR-1: auth attempts are metered PER SOURCE (the presented relay-auth id),
-	// so one key exhausting its own budget cannot lock out any other key. The
-	// global admission budget is charged on success in auth_resp.
+	// Pre-signature rate limiting is keyed by the TRANSPORT SOURCE, never by the
+	// presented relay-auth pubkey (which is unproven until a signature verifies).
+	// A per-source auth_init window (ConnPerMin) bounds one network source without
+	// letting an attacker exhaust a victim identity's budget by presenting the
+	// victim's pubkey, and without minting unbounded per-key state (ADR-007
+	// amendment 2026-07-20, remediating R1-H1/H2). There is no global auth counter
+	// a single source could monopolize (R1-H3).
 	sc.s.mu.Lock()
-	w := sc.s.authRate[rid]
+	w := sc.s.authRate[sc.sourceKey]
 	if w == nil {
 		w = &rateWindow{}
-		sc.s.authRate[rid] = w
+		sc.s.authRate[sc.sourceKey] = w
 	}
 	ok := w.allow(sc.s.clk.Now(), sc.s.cfg.Quotas.ConnPerMin)
 	sc.s.mu.Unlock()
@@ -524,15 +575,9 @@ func (sc *serverConn) handleAuthResp(payload []byte) error {
 	if len(req.Signature) != ed25519.SignatureSize || !ed25519.Verify(sc.pendingPub, msg, req.Signature) {
 		return sc.replyErr(codeAuthFailed)
 	}
-	// CR-1: charge the global admission budget only on a successful auth, so a
-	// legitimate cold-start burst is bounded without a single anonymous socket
-	// being able to burn it pre-signature.
-	sc.s.mu.Lock()
-	admitted := sc.s.connRate.allow(sc.s.clk.Now(), sc.s.cfg.Quotas.ConnPerMin)
-	sc.s.mu.Unlock()
-	if !admitted {
-		return sc.replyErr(codeQuotaExceeded)
-	}
+	// No global auth counter is charged here: admission is bounded by the per-source
+	// auth_init window (above) plus MaxConcurrentConnections/HandshakeTimeout, none
+	// of which a single source can monopolize to lock out other sources (R1-H3).
 	sc.authed = true
 	sc.rid = sc.pendingRID
 	sc.authNonce = nil

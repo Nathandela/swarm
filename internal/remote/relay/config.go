@@ -20,9 +20,10 @@ type Quotas struct {
 	MailboxAppendPerMin int `json:"mailbox_append_per_min"`
 	// PushPerMin caps push triggers per target routing id per minute.
 	PushPerMin int `json:"push_per_min"`
-	// ConnPerMin caps authentication attempts per source (auth_init, keyed by
-	// the presented relay-auth routing id) AND, globally, the connections
-	// successfully authenticated per minute (auth_resp).
+	// ConnPerMin caps pre-signature authentication attempts (auth_init) per
+	// TRANSPORT SOURCE (client IP; the presented, still-unproven relay-auth pubkey
+	// is NEVER a rate key). There is no global auth counter (ADR-007 amendment
+	// 2026-07-20).
 	ConnPerMin int `json:"conn_per_min"`
 	// OpsPerMin is the per-source cap applied to every state-touching control op
 	// (auth_resp, authorize_device, mailbox_read/ack, token_register/delete,
