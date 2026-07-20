@@ -1,0 +1,90 @@
+======================================================================
+Remote-control Phase 1 — RELAY HARDENING R1 (internal/remote/relay) — RED RUN
+epic: agents-tracker-qnx (remote-control)   task: agents-tracker-7qc
+role: TEST-WRITER (TDD Phase 1 + Red, GG-5)
+remediates: docs/verification/remote-phase1-relay-review.md
+            CR-1 (admission control + per-source auth rate)
+            CR-2 (rate-limit every state-touching op)
+            HI-1 (rendezvous integrity + participant checks + per-source rate)
+date: Mon Jul 20 10:55:30 CEST 2026
+go: go1.26.1   host: darwin/arm64
+baseline: pre-change tree = GREEN 36/36 (go test ./internal/remote/relay/... -> ok)
+new file: internal/remote/relay/harden_test.go  (ADDITIVE ONLY; no existing test
+          or non-test source modified; git status shows it as the sole change)
+command: go test ./internal/remote/relay/... 2>&1
+======================================================================
+
+### RED STYLE (matches relay-red.txt): UNDEFINED-SYMBOL RED. The new tests
+### reference the frozen CONTRACT the implementer must supply. Because Go builds
+### one test binary per package, referencing these not-yet-existing symbols
+### fails the whole relay test build. Every failure below is one of exactly FOUR
+### intended contract symbols -- there are NO test-bug, type, or logic errors.
+###
+### The CONTRACT the implementer must add (see report):
+###   Config.HandshakeTimeout         time.Duration  (bounded idle/handshake read deadline)
+###   Quotas.MaxConcurrentConnections int            (global live-conn cap; <=0 == unlimited)
+###   Quotas.OpsPerMin                int            (per-source cap on every state-touching op)
+###   ErrRendezvousExists (+ codeRendezvousExists)   (clean refusal: create on a live/burned id)
+###
+### Once these four symbols exist the package COMPILES and the assertions run as
+### BEHAVIORAL RED against the reviewed logic (one global auth counter; 14/16
+### unlimited ops; blind-overwrite + no-participant-check rendezvous).
+
+### VERBATIM RED (default go test output) ###
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harden_test.go:57:12: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:91:5: c.HandshakeTimeout undefined (type *Config has no field or method HandshakeTimeout)
+internal/remote/relay/harden_test.go:128:12: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:227:14: c.Quotas.OpsPerMin undefined (type Quotas has no field or method OpsPerMin)
+internal/remote/relay/harden_test.go:230:14: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:259:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:268:64: undefined: ErrRendezvousExists
+internal/remote/relay/harden_test.go:293:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:311:21: undefined: ErrRendezvousExists
+internal/remote/relay/harden_test.go:321:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:321:63: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+======================================================================
+### UNCAPPED VERIFICATION (go test -gcflags=-e): the COMPLETE error set is
+### exactly the four intended contract symbols and nothing else.
+======================================================================
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harden_test.go:57:12: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:91:5: c.HandshakeTimeout undefined (type *Config has no field or method HandshakeTimeout)
+internal/remote/relay/harden_test.go:128:12: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:227:14: c.Quotas.OpsPerMin undefined (type Quotas has no field or method OpsPerMin)
+internal/remote/relay/harden_test.go:230:14: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:259:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:268:64: undefined: ErrRendezvousExists
+internal/remote/relay/harden_test.go:293:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:311:21: undefined: ErrRendezvousExists
+internal/remote/relay/harden_test.go:321:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:359:63: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+internal/remote/relay/harden_test.go:385:12: c.Quotas.OpsPerMin undefined (type Quotas has no field or method OpsPerMin)
+internal/remote/relay/harden_test.go:386:12: c.Quotas.MaxConcurrentConnections undefined (type Quotas has no field or method MaxConcurrentConnections)
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+======================================================================
+### NEW TEST FUNCTIONS -> FINDING MAP
+======================================================================
+CR-1  TestRelay_ConcurrentConnCapEnforced   global concurrent-connection cap; over-cap conn refused/closed
+CR-1  TestRelay_IdleHandshakeTimeout        ws-handshaked-but-silent conn closed within HandshakeTimeout
+CR-1  TestRelay_AuthRatePerSource           auth rate keyed per source key; A's flood must not lock out B
+                                            (correct counterpart to the UNMODIFIED TestRelay_ConnRateLimited)
+CR-2  TestRelay_EveryOpRateLimited          table over auth_resp, authorize_device, mailbox_read, mailbox_ack,
+                                            token_register, token_delete, presence, device_revoke
+                                            (+ mailbox_append & push_trigger asserted STILL limited);
+                                            each must refuse past a per-source quota with ErrQuotaExceeded
+HI-1  TestRendezvous_CreateExistingRefused          create on a LIVE id refused; original creator keeps the slot
+HI-1  TestRendezvous_CreateBurnedRefused            create on a BURNED id refused
+HI-1  TestRendezvous_CompleteByNonParticipantRefused non-participant cannot burn a victim's in-flight rendezvous
+HI-1  TestRendezvous_SendByNonParticipantRefused     non-participant cannot inject into a rendezvous
+HI-1  TestRendezvous_RateLimitedPerSource            rendezvous_create rate-limited per source (distinct ids,
+                                                     independent of the MaxConcurrentRendezvous slot cap)
+
+### CONFIRMATION: no existing test modified; no implementation written. Only
+### internal/remote/relay/harden_test.go was added.
+======================================================================
