@@ -1,0 +1,4 @@
+internal/remotegw/relaysink_test.go:38:9: undefined: NewRelaySink
+internal/remotegw/relaysink_test.go:38:22: undefined: RelayConfig
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
