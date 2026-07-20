@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
@@ -83,6 +84,12 @@ func (d *Daemon) Delete(id string) error {
 	// tombstone-check + store.Save, so a merge racing this Delete cannot recreate the
 	// directory after it is removed (F3).
 	d.writeMu.Lock()
+	// Journal the tombstone WAL-first (before the dir is removed) into the daemon-wide
+	// journal, which lives outside the per-session dir so the `deleted` record outlives
+	// the removed session directory (R-JRN.7).
+	if _, jerr := d.journal.Append(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
+		d.logf("delete %s: journal tombstone: %v", id, jerr)
+	}
 	err := d.store.Delete(id)
 	d.writeMu.Unlock()
 	if err != nil {

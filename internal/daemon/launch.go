@@ -134,6 +134,27 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
 
+	// Remote launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
+	// the reservation so a replayed launch reuses the reserved session and spawns
+	// nothing. Prepare is mutex-guarded, so a concurrent double-launch has exactly one
+	// winner; the loser drops its fresh reservation and returns the cached session. The
+	// reservation has touched only d.sessions (no disk yet), so dropReserved is a clean
+	// abort here.
+	if spec.OperationID != "" {
+		rec, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		if perr != nil {
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
+		}
+		if existed {
+			d.dropReserved(id)
+			if cached, ok := d.Get(rec.SessionID); ok {
+				return cached, nil
+			}
+			return persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: cached session %q is gone", spec.OperationID, rec.SessionID)
+		}
+	}
+
 	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
 	// the AGENT's working directory. m.Cwd above already captured the caller's
 	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,

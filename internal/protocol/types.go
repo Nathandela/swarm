@@ -38,6 +38,24 @@ const (
 	OpLease     = "lease"
 	OpOK        = "ok"
 	OpError     = "error"
+
+	// Remote journal ops (R-PROT.3): stream/read the daemon-wide journal.
+	OpJournalSubscribe = "journal_subscribe"
+	OpJournalRead      = "journal_read"
+	OpJournalEvent     = "journal_event"
+)
+
+// Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
+// caps (R-PROT.1): the hello handshake returns the intersection with the client's
+// offer, and an op whose capability was not negotiated is refused.
+const (
+	CapAttach        = "attach"
+	CapSubscribe     = "subscribe"
+	CapRemoteGateway = "remote-gateway"
+	CapJournal       = "journal"
+	CapActivity      = "activity"
+	CapPolicy        = "policy"
+	CapPairing       = "pairing"
 )
 
 // Control is the single JSON envelope for every control message (F-1: every
@@ -63,6 +81,41 @@ type Control struct {
 	Sessions     []SessionView `json:"sessions,omitempty"`
 	Session      *SessionView  `json:"session,omitempty"`
 	Error        string        `json:"error,omitempty"`
+
+	// Remote-tier additive fields (R-PROT.2/.3/.7, amendments D.0-A1/A3/A6/A11).
+	// Every field is omitempty so an existing-shape Control serializes
+	// byte-identically (GG-7); the daemon-authoritative times are pointers so a zero
+	// Control emits no new key (a zero time.Time is NOT omitted by encoding/json).
+	OperationID   string          `json:"operation_id,omitempty"`   // idempotency key of a remote mutating op
+	InteractionID string          `json:"interaction_id,omitempty"` // the agent interaction being approved (A6)
+	DeviceID      string          `json:"device_id,omitempty"`      // pairing device id (never trusted alone, A1)
+	DeviceSig     string          `json:"device_sig,omitempty"`     // detached Ed25519 over the canonical op tuple (D4)
+	Cursor        uint64          `json:"cursor,omitempty"`         // journal cursor (journal_read/journal_event)
+	IssuedAt      *time.Time      `json:"issued_at,omitempty"`      // daemon-authoritative issue time
+	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`     // daemon-authoritative expiry
+	Approve       *ApproveReq     `json:"approve,omitempty"`        // remote approval request (A6)
+	ErrorCode     ErrorCode       `json:"error_code,omitempty"`     // machine-readable refusal reason (R-PROT.7)
+	Journal       []JournalRecord `json:"journal,omitempty"`        // journal records (journal_read/journal_event)
+	FullResync    bool            `json:"full_resync,omitempty"`    // the caller's cursor fell below the retained floor
+}
+
+// ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):
+// operation_id (the idempotency identity of the approve op, on the enclosing
+// Control) is separated from interaction_id (the agent interaction being approved).
+// ExpiresAt is daemon-authoritative and omitempty.
+type ApproveReq struct {
+	Session       string           `json:"session"`
+	AgentInstance AgentInstanceRef `json:"agent_instance"`
+	InteractionID string           `json:"interaction_id"`
+	ContentHash   string           `json:"content_hash"`
+	ExpiresAt     *time.Time       `json:"expires_at,omitempty"`
+}
+
+// AgentInstanceRef pins the agent-instance the approval binds to, mapping to the
+// daemon's (shim PID, start-time) identity check (A6/shimIdentityMatches).
+type AgentInstanceRef struct {
+	ShimPID       int   `json:"shim_pid"`
+	ShimStartTime int64 `json:"shim_start_time"`
 }
 
 // SessionView is one general-view row (V-4), stamped for the receiving client: a

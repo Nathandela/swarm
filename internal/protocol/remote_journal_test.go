@@ -30,6 +30,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/wire"
 )
 
 // journalStub is a DaemonAPI (via the embedded stubDaemon) that ALSO implements the
@@ -132,42 +134,139 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 	js := newJournalStub()
 	sock := serveJournal(t, js)
 
-	// A wedged subscriber that never drains its socket.
+	// A wedged subscriber that never drains its socket. Bound its kernel RECEIVE
+	// buffer so a modest flood of the small journal frames overflows it and blocks the
+	// server's writer promptly — otherwise, on a default (large, OS-autotuned) recv
+	// buffer, thousands of tiny journal_event frames are absorbed by the kernel before
+	// the writer ever blocks, so the queue never overflows and eviction cannot be
+	// observed within a bounded flood (especially under -race, where the fan-out is
+	// throttled). This models a real subscriber with a bounded socket buffer; the
+	// server side cannot control a remote peer's recv buffer, so the eviction
+	// discipline it DOES own (bounded queue + evict-on-overflow) is what is under test.
 	wedged := rawDial(t, sock)
+	if uc, ok := wedged.conn.(interface{ SetReadBuffer(int) error }); ok {
+		if err := uc.SetReadBuffer(4 << 10); err != nil {
+			t.Fatalf("bound wedged recv buffer: %v", err)
+		}
+	}
 	wep := wedged.hello(Version, []string{CapJournal})
 	wedged.writeControl(Control{Op: OpJournalSubscribe, EndpointID: wep.EndpointID})
 	_ = wedged.readControl() // the subscribe OK; then never read again
 
-	// A healthy subscriber that drains and checks ordering.
+	// A healthy subscriber, drained CONTINUOUSLY in the background — exactly as
+	// TestFanout_WedgedSubscriberDisconnectedWithinBound drains its healthy peer. This
+	// is what keeps it from becoming wedged itself: reading a FIXED prefix and then
+	// stopping (as an earlier version did) leaves the "healthy" subscriber wedged too,
+	// so under load eviction becomes a race between the two subscribers, and the
+	// wedged one is not reliably the one evicted. The drainer verifies strictly
+	// increasing cursor order on every frame; a gap is allowed (a momentarily-behind
+	// subscriber may drop a record, resynced via journal_read, R-JRN.6), a regression
+	// is not.
 	live := rawDial(t, sock)
 	lep := live.hello(Version, []string{CapJournal})
 	live.writeControl(Control{Op: OpJournalSubscribe, EndpointID: lep.EndpointID})
 	_ = live.readControl() // subscribe OK
 
-	// Flood the single journal source: ordered cursors, more than one bounded queue
-	// holds, so the wedged subscriber overflows and is evicted.
+	var mu sync.Mutex
+	var liveGot int
+	var orderRegressed bool
+	// Blocking-read drainer under a single generous deadline (NOT a per-iteration
+	// deadline + tight poll, which burns CPU on SetReadDeadline/syscalls and — under
+	// -race on a loaded machine — starves the server's fan-out goroutine that must run
+	// to evict the wedged subscriber). t.Cleanup closes live.conn, which unblocks and
+	// ends this goroutine; no explicit join is needed.
+	_ = live.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	go func() {
-		for i := uint64(1); i <= uint64(eventQueueCap+200); i++ {
-			js.source <- JournalRecord{Cursor: i, SessionID: "s1", Type: "group_transition"}
+		var last uint64
+		for {
+			typ, payload, err := wire.ReadFrame(live.conn)
+			if err != nil {
+				return // deadline, conn closed at cleanup, or other error: stop
+			}
+			if typ != wire.TControl {
+				continue
+			}
+			ev, derr := DecodeControl(payload)
+			if derr != nil || ev.Op != OpJournalEvent {
+				continue
+			}
+			mu.Lock()
+			if ev.Cursor <= last {
+				orderRegressed = true
+			}
+			last = ev.Cursor
+			liveGot++
+			mu.Unlock()
 		}
 	}()
 
-	// The healthy subscriber sees journal_event frames in strictly increasing cursor
-	// order.
-	var last uint64
-	for n := 0; n < 20; n++ {
-		ev := live.readControl()
-		if ev.Op != OpJournalEvent {
-			t.Fatalf("live subscriber got op %q; want %q", ev.Op, OpJournalEvent)
+	// Flood the single journal source CONTINUOUSLY until the test signals stop. The
+	// wedged subscriber's queue must OVERFLOW (triggering eviction) before the
+	// eventuallyClosed check below, whose reads would otherwise DRAIN and un-wedge it.
+	// Nothing reads the wedged conn until then, and its kernel send buffer is bounded
+	// (journalSndBuf) so its writer blocks after a few KB — so its bounded queue backs up
+	// monotonically to overflow. A continuous flood (not a fixed burst) guarantees the
+	// fan-out has enough records in flight to reach that overflow even when it is throttled
+	// under -race.
+	stopFlood := make(chan struct{})
+	floodDone := make(chan struct{})
+	go func() {
+		defer close(floodDone)
+		for i := uint64(1); ; i++ {
+			select {
+			case <-stopFlood:
+				return
+			case js.source <- JournalRecord{Cursor: i, SessionID: "s1", Type: "group_transition"}:
+			}
 		}
-		if ev.Cursor <= last {
-			t.Fatalf("journal_event out of order: cursor %d after %d", ev.Cursor, last)
+	}()
+
+	// Wait until the healthy subscriber has received MORE than eventQueueCap frames, in
+	// strictly increasing cursor order, before checking eviction. This is the key
+	// synchronization: distributeJournal delivers each record to BOTH subscribers in the
+	// same pass, so once the healthy subscriber has drained > eventQueueCap records, the
+	// fan-out has attempted at least that many deliveries to the wedged subscriber's
+	// queue too — which, with the wedged writer blocked on its bounded socket buffer,
+	// overflowed at eventQueueCap and triggered eviction. Gating on a small count (e.g.
+	// 20) instead raced eventuallyClosed's draining reads against a not-yet-overflowed
+	// wedged queue, which un-wedged it under -race (the fan-out is slower there, so the
+	// queue had not yet filled when we started reading).
+	const wantLive = eventQueueCap + 64
+	// Generous deadline: under `go test ./...` full-package parallelism on a loaded
+	// machine the fan-out goroutine can be CPU-starved (the live subscriber receives
+	// frames slowly). The bound tolerates that without weakening the assertion. NOTE:
+	// this eviction property is inherently CPU-scheduling sensitive — the pre-existing
+	// TestFanout_WedgedSubscriberDisconnectedWithinBound has the same sensitivity and
+	// also fails under severe parallel starvation; both are reliable in isolation and
+	// on an unloaded CI box. See docs/verification/remote-phase1-daemon-evidence.md.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n, regressed := liveGot, orderRegressed
+		mu.Unlock()
+		if regressed {
+			t.Fatal("journal_event cursor order regressed on the healthy subscriber")
 		}
-		last = ev.Cursor
+		if n >= wantLive {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	n, regressed := liveGot, orderRegressed
+	mu.Unlock()
+	if regressed {
+		t.Fatal("journal_event cursor order regressed on the healthy subscriber")
+	}
+	if n < wantLive {
+		t.Fatalf("healthy subscriber received only %d ordered journal_event frames; want >= %d (a continuous stream)", n, wantLive)
 	}
 
-	// The wedged subscriber is disconnected within a bound.
-	if !wedged.eventuallyClosed(2 * time.Second) {
+	// The wedged subscriber is disconnected within a bound (its queue overflowed above).
+	evicted := wedged.eventuallyClosed(3 * time.Second)
+	close(stopFlood)
+	<-floodDone
+	if !evicted {
 		t.Fatalf("wedged journal subscriber not evicted within bound (S9/P-3)")
 	}
 }

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/idempotency"
+	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -112,6 +114,11 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
+	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
+	// session — the replay reuses the reserved session and spawns nothing. Local
+	// launches leave it "" (no idempotency reservation).
+	OperationID string
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a
@@ -120,6 +127,12 @@ type LaunchSpec struct {
 type session struct {
 	meta persist.Meta
 	stop chan struct{}
+	// persisted is false for a launch reservation until its first saveMetaLocked
+	// commits, and true for any session known to disk (adopted via putMem). It lets
+	// the journal choke point tell a fresh launch (no prior on disk) apart from a
+	// running->running status tick, so exactly one `launched` record is written even
+	// though the reservation already occupies the registry slot before that write.
+	persisted bool
 }
 
 // Daemon is the running lifecycle authority. Exactly one holds the flock + bound
@@ -127,6 +140,8 @@ type session struct {
 type Daemon struct {
 	cfg      Config
 	store    *persist.Store
+	journal  *journal.Journal   // daemon-wide durable event log (R-JRN)
+	idem     *idempotency.Store // two-phase launch idempotency (R-IDP)
 	lockFile *os.File
 	listener net.Listener
 
@@ -169,9 +184,28 @@ func Open(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 
+	// The daemon-wide durable journal (R-JRN) and the two-phase idempotency store
+	// (R-IDP) both live under the state dir and must be open BEFORE reconcile, whose
+	// restart transitions journal through the saveMeta choke point.
+	jrnl, err := journal.Open(filepath.Join(cfg.StateDir, "journal"))
+	if err != nil {
+		listener.Close()
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
+	idem, err := idempotency.Open(filepath.Join(cfg.StateDir, "idempotency"))
+	if err != nil {
+		_ = jrnl.Close()
+		listener.Close()
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
+
 	d := &Daemon{
 		cfg:      cfg,
 		store:    store,
+		journal:  jrnl,
+		idem:     idem,
 		lockFile: lockFile,
 		listener: listener,
 		sessions: make(map[string]*session),
@@ -185,6 +219,7 @@ func Open(cfg Config) (*Daemon, error) {
 	// live sessions (F4). Release everything acquired above before returning.
 	if err := d.reconcile(); err != nil {
 		d.listener.Close()
+		_ = d.journal.Close()
 		removePIDFile(cfg.StateDir)
 		_ = releaseLock(lockFile)
 		return nil, err
@@ -326,6 +361,9 @@ func (d *Daemon) Close() error {
 
 	d.listener.Close() // unlinks the socket (clean shutdown)
 	d.wg.Wait()        // accept loop + supervisors drain on stopCh
+	_ = d.journal.Close()
+	// The idempotency store fsyncs every write, so dropping its handle loses nothing;
+	// it exposes no Close (internal/idempotency), so the fd is released on GC.
 	removePIDFile(d.cfg.StateDir)
 	return releaseLock(d.lockFile)
 }
@@ -350,6 +388,10 @@ func (d *Daemon) abandon() {
 	}
 	d.listener.Close()
 	d.lockFile.Close() // release the flock as the OS would on process death
+	// Every journal / idempotency write was fsync'd before its ack, so dropping these
+	// handles (as a kill -9 would) loses nothing already made durable. The idempotency
+	// store exposes no Close (internal/idempotency), so only the journal handle closes.
+	_ = d.journal.Close()
 }
 
 // saveMeta is the SINGLE meta-write choke point (G6): it stamps the meta to the
@@ -383,6 +425,25 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
+	}
+	// Derive the journal record from the PREVIOUS state, read BEFORE putMem overwrites
+	// it. A launch reservation is prevExists=false (persisted still false) so a fresh
+	// launch journals `launched`, not a same-group tick.
+	d.mu.Lock()
+	prevSess, inMap := d.sessions[m.ID]
+	prevExists := inMap && prevSess.persisted
+	var prev persist.Meta
+	if prevExists {
+		prev = prevSess.meta
+	}
+	d.mu.Unlock()
+
+	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
+	// journal record without meta (tolerable) but never meta without journal (A7).
+	if rec, ok := journalRecordFor(prev, prevExists, m); ok {
+		if _, jerr := d.journal.Append(rec); jerr != nil {
+			return false, jerr
+		}
 	}
 	if err := d.store.Save(m); err != nil {
 		return false, err

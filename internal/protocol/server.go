@@ -74,6 +74,15 @@ const (
 	// produces — so a wedged subscriber is still disconnected within a bound.
 	eventQueueCap = 256
 
+	// journalSndBuf bounds the kernel send buffer (SO_SNDBUF) of a journal-subscribe
+	// connection. Journal events are small, so with a default (large, OS-autotuned)
+	// send buffer a subscriber that stops reading can have hundreds of KB of events
+	// buffered in the kernel before its writer ever blocks — pinning kernel memory and
+	// deferring eviction. A small bound caps per-subscriber kernel memory and makes a
+	// wedged subscriber's writer block after a bounded volume, so its queue overflows
+	// and the fan-out evicts it (S9/P-3). See handleJournalSubscribe.
+	journalSndBuf = 4 << 10
+
 	// snapshotChunkSize is the largest snapshot slice carried in one TSnapshot
 	// frame. A grid snapshot can exceed wire.MaxFrame (maxDim=1000 → far over
 	// 1 MiB), so the Server chunks it across frames the client reassembles (F2).
@@ -95,8 +104,13 @@ func pumpWriteTimeout() time.Duration {
 }
 
 // serverCaps is the capability set the daemon supports; the handshake returns the
-// intersection with the client's offer.
-var serverCaps = []string{"attach", "subscribe"}
+// intersection with the client's offer. The remote-tier caps are advertised
+// unconditionally; a journal op still requires both the negotiated `journal` cap
+// and a JournalBackend, and a remote mutating op is gated by the remote tier.
+var serverCaps = []string{
+	CapAttach, CapSubscribe,
+	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
+}
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
 // a UNIX socket, wraps a DaemonAPI, holds the per-session controller lease (S2),
@@ -113,6 +127,11 @@ type Server struct {
 	endpointID string
 	epSeq      atomic.Uint64 // per-connection endpoint-id source (when endpointID == "")
 
+	// remoteTier marks a Server bound on the dedicated remote socket (ServeRemote):
+	// every connection is unconditionally remote-origin, so every remote mutating op
+	// must carry an operation_id (amendment D.0-A1/A4).
+	remoteTier bool
+
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
 	leases map[string]*sessionLease // keyed by local session id
@@ -120,6 +139,11 @@ type Server struct {
 
 	subMu sync.Mutex
 	subs  map[*clientConn]struct{}
+
+	jsubMu sync.Mutex
+	jsubs  map[*clientConn]struct{} // journal subscribers (fanned out separately)
+
+	journalCancel func() // stops the JournalBackend subscription on Close (if any)
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -186,10 +210,19 @@ func newServer(d DaemonAPI) *Server {
 		conns:  make(map[*clientConn]struct{}),
 		leases: make(map[string]*sessionLease),
 		subs:   make(map[*clientConn]struct{}),
+		jsubs:  make(map[*clientConn]struct{}),
 		stop:   make(chan struct{}),
 	}
 	s.wg.Add(1)
 	go s.fanoutLoop()
+	// When the backend exposes a journal, drain its single source and fan journal
+	// events out to journal subscribers (reusing the bounded-queue evict discipline).
+	if jb, ok := d.(JournalBackend); ok {
+		source, cancel := jb.JournalSubscribe()
+		s.journalCancel = cancel
+		s.wg.Add(1)
+		go s.journalFanoutLoop(source)
+	}
 	return s
 }
 
@@ -225,6 +258,9 @@ func (s *Server) Close() error {
 	}
 	for _, cc := range conns {
 		cc.close()
+	}
+	if s.journalCancel != nil {
+		s.journalCancel() // release the JournalBackend subscription
 	}
 	s.wg.Wait()
 	// If the DaemonAPI runs a background event source (FromDaemon's roster
@@ -307,6 +343,54 @@ func (s *Server) distribute(m persist.Meta) {
 	}
 }
 
+// journalFanoutLoop drains the single JournalBackend source and distributes each
+// record to every journal subscriber via its bounded queue; a wedged subscriber is
+// evicted, never allowed to block the loop (S9, mirrors fanoutLoop).
+func (s *Server) journalFanoutLoop(source <-chan JournalRecord) {
+	defer s.wg.Done()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case rec, ok := <-source:
+			if !ok {
+				return
+			}
+			s.distributeJournal(rec)
+		}
+	}
+}
+
+func (s *Server) distributeJournal(rec JournalRecord) {
+	s.jsubMu.Lock()
+	var dead []*clientConn
+	for sc := range s.jsubs {
+		// Encode HERE (in the fan-out), not in the writer, so one encoding is shared
+		// across subscribers and the fan-out never blocks on a slow writer.
+		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+		if err != nil {
+			continue
+		}
+		select {
+		case sc.jEventQ <- body:
+		default:
+			// Full queue: the subscriber is not draining its socket (its writer is
+			// blocked on a full kernel buffer while eventQueueCap events backed up).
+			// Evict it here, within the bound (S9/P-3), so a wedged subscriber never
+			// grows the queue unboundedly nor blocks the fan-out. A draining subscriber
+			// keeps its queue below the cap and is never evicted (mirrors distribute).
+			dead = append(dead, sc)
+		}
+	}
+	for _, sc := range dead {
+		delete(s.jsubs, sc)
+	}
+	s.jsubMu.Unlock()
+	for _, sc := range dead {
+		sc.close()
+	}
+}
+
 func (s *Server) removeConn(cc *clientConn) {
 	s.mu.Lock()
 	delete(s.conns, cc)
@@ -314,6 +398,9 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Lock()
 	delete(s.subs, cc)
 	s.subMu.Unlock()
+	s.jsubMu.Lock()
+	delete(s.jsubs, cc)
+	s.jsubMu.Unlock()
 }
 
 // attach installs cc as the controller of local at a new, higher generation (S2),
@@ -668,6 +755,14 @@ type clientConn struct {
 	subOnce sync.Once
 	eventQ  chan Control
 
+	// journal subscription (separate bounded queue + writer, same evict discipline).
+	// The queue carries PRE-ENCODED frame bodies: encoding happens in the fan-out
+	// goroutine, not the writer, so the fan-out and writer run at balanced speeds and
+	// a draining subscriber's writer keeps its queue below the cap (only a wedged one
+	// overflows).
+	jSubOnce sync.Once
+	jEventQ  chan []byte
+
 	// controller state (this conn as the controller of attSession)
 	attMu      sync.Mutex
 	attSession string
@@ -736,6 +831,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleResize(c)
 	case OpSubscribe:
 		cc.handleSubscribe()
+	case OpJournalRead:
+		cc.handleJournalRead(c)
+	case OpJournalSubscribe:
+		cc.handleJournalSubscribe()
 	default:
 		cc.replyError("unknown op " + strconv.Quote(c.Op))
 	}
@@ -780,6 +879,9 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: missing request")
 		return
 	}
+	if !cc.requireOperationID(c) {
+		return
+	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
 		return
@@ -812,6 +914,9 @@ func (cc *clientConn) handleKill(c Control) {
 	if !ok {
 		return
 	}
+	if !cc.requireOperationID(c) {
+		return
+	}
 	if err := cc.srv.d.Kill(local); err != nil {
 		cc.replyError("kill: " + err.Error())
 		return
@@ -822,6 +927,9 @@ func (cc *clientConn) handleKill(c Control) {
 func (cc *clientConn) handleDelete(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
+		return
+	}
+	if !cc.requireOperationID(c) {
 		return
 	}
 	if err := cc.srv.d.Delete(local); err != nil {
@@ -888,6 +996,89 @@ func (cc *clientConn) handleSubscribe() {
 		cc.srv.subMu.Unlock()
 	})
 	cc.replyOK("")
+}
+
+// handleJournalRead serves journal_read(from_cursor): it requires the `journal`
+// capability negotiated and a JournalBackend, then returns the snapshot+range from
+// the cursor (atomic per R-JRN.4) with the boundary cursor and full-resync flag.
+func (cc *clientConn) handleJournalRead(c Control) {
+	jb, ok := cc.journalBackend()
+	if !ok {
+		return
+	}
+	res, err := jb.JournalReadFrom(c.Cursor)
+	if err != nil {
+		cc.replyError("journal_read: " + err.Error())
+		return
+	}
+	_ = cc.writeControl(Control{
+		Op:         OpJournalRead,
+		EndpointID: cc.endpointID,
+		Cursor:     res.Cursor,
+		Journal:    res.Events,
+		FullResync: res.FullResync,
+	})
+}
+
+// handleJournalSubscribe registers a journal subscriber (journal-capable backend +
+// negotiated `journal` cap) and starts its bounded-queue writer, then acks. Journal
+// events stream as journal_event frames via the journal fan-out.
+func (cc *clientConn) handleJournalSubscribe() {
+	if _, ok := cc.journalBackend(); !ok {
+		return
+	}
+	cc.jSubOnce.Do(func() {
+		// Bound this subscribe connection's kernel send buffer (see journalSndBuf):
+		// caps per-subscriber kernel memory and makes a wedged subscriber block (and
+		// be evicted) after a bounded volume. Best-effort — a conn without a settable
+		// buffer keeps its default.
+		if uc, ok := cc.conn.(interface{ SetWriteBuffer(int) error }); ok {
+			_ = uc.SetWriteBuffer(journalSndBuf)
+		}
+		cc.jEventQ = make(chan []byte, eventQueueCap)
+		cc.srv.wg.Add(1)
+		go cc.journalWriter()
+		cc.srv.jsubMu.Lock()
+		cc.srv.jsubs[cc] = struct{}{}
+		cc.srv.jsubMu.Unlock()
+	})
+	cc.replyOK("")
+}
+
+// journalBackend returns the backend's JournalBackend if journal ops are available
+// to this connection (negotiated `journal` cap AND a journal-capable backend),
+// replying with an error refusal otherwise (R-PROT.1: an unnegotiated op is refused).
+func (cc *clientConn) journalBackend() (JournalBackend, bool) {
+	if !cc.hasCap(CapJournal) {
+		cc.replyError("journal capability not negotiated")
+		return nil, false
+	}
+	jb, ok := cc.srv.d.(JournalBackend)
+	if !ok {
+		cc.replyError("journal not supported by this daemon")
+		return nil, false
+	}
+	return jb, true
+}
+
+// journalWriter drains this subscriber's bounded journal queue (pre-encoded frame
+// bodies) to the socket. A wedged subscriber (one not draining its socket) blocks
+// the writer on a full kernel buffer, backs its queue up to eventQueueCap, and is
+// evicted by the fan-out on the next overflow; the close then unblocks this write
+// with an error and the goroutine exits.
+func (cc *clientConn) journalWriter() {
+	defer cc.srv.wg.Done()
+	for {
+		select {
+		case <-cc.done:
+			return
+		case body := <-cc.jEventQ:
+			if err := cc.writeFrame(wire.TControl, body); err != nil {
+				cc.close()
+				return
+			}
+		}
+	}
 }
 
 func (cc *clientConn) handleDataIn(payload []byte) {
@@ -1029,8 +1220,35 @@ func (cc *clientConn) replyError(msg string) {
 	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, Error: msg})
 }
 
+// replyErrorCode is replyError carrying a machine-readable refusal code (R-PROT.7).
+func (cc *clientConn) replyErrorCode(msg string, code ErrorCode) {
+	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, Error: msg, ErrorCode: code})
+}
+
 func (cc *clientConn) replyOK(sessionID string) {
 	_ = cc.writeControl(Control{Op: OpOK, EndpointID: cc.endpointID, SessionID: sessionID})
+}
+
+// hasCap reports whether cap was negotiated for this connection.
+func (cc *clientConn) hasCap(cap string) bool {
+	for _, c := range cc.caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// requireOperationID enforces the remote-tier rule that every remote mutating op
+// carries an operation_id (R-IDP.1/A4): on the remote tier a missing operation_id is
+// refused with invalid_field before any action. On the main (owner) tier it is a
+// no-op. Returns false when the caller must stop (already replied).
+func (cc *clientConn) requireOperationID(c Control) bool {
+	if cc.srv.remoteTier && c.OperationID == "" {
+		cc.replyErrorCode("remote mutating op requires operation_id", CodeInvalidField)
+		return false
+	}
+	return true
 }
 
 // intersectCaps returns the capabilities present in both offered and supported,

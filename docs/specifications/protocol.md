@@ -71,6 +71,23 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
 | `error`            | string          | human-readable error text, carried on `error`                            |
+| `operation_id`     | string            | idempotency key of a remote mutating op (`<device_id>:<client-ULID>`, R-IDP) |
+| `interaction_id`   | string            | the agent interaction being approved, distinct from `operation_id` (A6)      |
+| `device_id`        | string            | pairing device id; never trusted alone, always paired with `device_sig` (A1) |
+| `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
+| `cursor`           | uint64            | journal cursor, carried on `journal_read` / `journal_event` (R-PROT.3)       |
+| `issued_at`        | time              | daemon-authoritative issue time (pointer; the key is omitted when zero)      |
+| `expires_at`       | time              | daemon-authoritative expiry (pointer; the key is omitted when zero)          |
+| `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |
+| `error_code`       | `ErrorCode`       | machine-readable refusal reason, carried alongside `error` (R-PROT.7)        |
+| `journal`          | `[]JournalRecord` | journal records, carried on `journal_read` / `journal_event` (R-PROT.3)      |
+| `full_resync`      | bool              | set when the caller's `cursor` fell below the retained journal floor (R-JRN.6) |
+
+The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
+amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
+uses none of them serializes byte-identically to the pre-remote shape. The nested
+`ApproveReq` (approval) and `JournalRecord` (journal event) shapes are documented at
+the field level in `internal/protocol` and are not repeated as wire tables here.
 
 ## The `SessionView` message
 
