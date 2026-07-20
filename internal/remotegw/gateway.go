@@ -1,0 +1,218 @@
+// Package remotegw is the supervised gateway sidecar (R-GW): a standalone process
+// that dials the daemon's dedicated remote-tier socket (R-GW.8) and, later, the
+// untrusted relay, bridging the daemon's journal/events and the phone's commands.
+// It is never spawned by the daemon and shares no address space with it (ADR-007 D5);
+// a crash leaves the daemon and its sessions untouched (S1) and it resumes from its
+// last durable journal cursor.
+//
+// This slice implements the DAEMON-FACING JOURNAL READ PATH (R-GW.3/.5): the atomic
+// roster+cursor snapshot (journal_read) followed by the live event stream
+// (journal_subscribe), delivered to a sink and cursor-tracked so a reconnect resumes
+// without loss. Relay forwarding and phone-command forwarding are later slices.
+package remotegw
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/wire"
+)
+
+// JournalSink receives the journal the gateway bridges toward the phone. Snapshot is
+// called once per (re)connection with the roster as-of the read cursor; Event is then
+// called for each live record in cursor order. Implementations must not block the
+// gateway's read loop (R-GW.4/.5: bounded/coalescing on the relay side).
+type JournalSink interface {
+	Snapshot(roster []protocol.JournalRecord, cursor uint64)
+	Event(rec protocol.JournalRecord)
+}
+
+// Gateway bridges one daemon's remote socket toward the phone. It holds the last
+// journal cursor it delivered so a reconnect resumes from there (R-GW.5: journal
+// events are never dropped; the cursor only advances as records are delivered).
+type Gateway struct {
+	socketPath string
+	sink       JournalSink
+
+	mu     sync.Mutex
+	cursor uint64
+}
+
+// New returns a gateway that dials socketPath (the daemon remote.sock) and delivers
+// the journal to sink.
+func New(socketPath string, sink JournalSink) *Gateway {
+	return &Gateway{socketPath: socketPath, sink: sink}
+}
+
+// Cursor is the highest journal cursor the gateway has delivered (its durable resume
+// point).
+func (g *Gateway) Cursor() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cursor
+}
+
+// setCursor advances the delivered-cursor high-water mark (monotonic).
+func (g *Gateway) setCursor(c uint64) {
+	g.mu.Lock()
+	if c > g.cursor {
+		g.cursor = c
+	}
+	g.mu.Unlock()
+}
+
+// RunJournal connects to the daemon remote socket, delivers the roster snapshot as-of
+// the current cursor, then streams live journal events to the sink until ctx is
+// cancelled or the connection fails. It returns the reason it stopped; the caller may
+// reconnect, and RunJournal resumes from the last delivered cursor (Cursor()). NOTE:
+// the strict no-loss guarantee across the read->subscribe boundary also depends on the
+// daemon's atomic read+subscribe (DME-2, agents-tracker-7ra); until that lands a
+// reconnect re-reads from the last cursor to recover any gap.
+func (g *Gateway) RunJournal(ctx context.Context) error {
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
+	if err != nil {
+		return err
+	}
+	defer dc.Close()
+
+	// Snapshot: the atomic roster + events after our cursor (R-JRN.4).
+	from := g.Cursor()
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalRead, EndpointID: dc.endpointID, Cursor: from}); err != nil {
+		return err
+	}
+	res, err := dc.awaitOp(protocol.OpJournalRead, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	g.sink.Snapshot(res.Roster, res.Cursor)
+	for _, rec := range res.Journal {
+		g.deliver(rec)
+	}
+	if res.Cursor > from {
+		g.setCursor(res.Cursor)
+	}
+
+	// Live stream: subscribe, then relay every journal_event whose cursor advances past
+	// what we have delivered (dedup guards the read->subscribe overlap).
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
+		return err
+	}
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		ctrl, err := dc.readControl(time.Second)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue // idle; re-check ctx and keep waiting for events
+			}
+			return err
+		}
+		switch ctrl.Op {
+		case protocol.OpJournalEvent:
+			for _, rec := range ctrl.Journal {
+				g.deliver(rec)
+			}
+		case protocol.OpError:
+			return fmt.Errorf("daemon refused a journal op: %s (%s)", ctrl.Error, ctrl.ErrorCode)
+		default:
+			// The journal_subscribe ack (OpOK) and any other control are ignored.
+		}
+	}
+}
+
+// deliver forwards a record to the sink only if it advances the delivered cursor,
+// deduplicating the small read/subscribe overlap so no event is delivered twice.
+func (g *Gateway) deliver(rec protocol.JournalRecord) {
+	g.mu.Lock()
+	if rec.Cursor != 0 && rec.Cursor <= g.cursor {
+		g.mu.Unlock()
+		return
+	}
+	if rec.Cursor > g.cursor {
+		g.cursor = rec.Cursor
+	}
+	g.mu.Unlock()
+	g.sink.Event(rec)
+}
+
+// dialDaemon is the gateway's minimal remote-tier client: it speaks the frozen wire +
+// Control protocol directly because protocol.Client exposes no journal ops.
+type daemonConn struct {
+	conn       net.Conn
+	endpointID string
+}
+
+func dialDaemon(socketPath string, caps ...string) (*daemonConn, error) {
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	d := &daemonConn{conn: conn}
+	if err := d.writeControl(protocol.Control{Op: protocol.OpHello, ProtocolVersion: protocol.Version, Capabilities: caps}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	rep, err := d.readControl(5 * time.Second)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if rep.Op != protocol.OpHello {
+		conn.Close()
+		return nil, fmt.Errorf("gateway: hello reply op %q, want %q", rep.Op, protocol.OpHello)
+	}
+	d.endpointID = rep.EndpointID
+	return d, nil
+}
+
+func (d *daemonConn) writeControl(c protocol.Control) error {
+	body, err := protocol.EncodeControl(c)
+	if err != nil {
+		return err
+	}
+	return wire.WriteFrame(d.conn, wire.TControl, body)
+}
+
+func (d *daemonConn) readControl(within time.Duration) (protocol.Control, error) {
+	_ = d.conn.SetReadDeadline(time.Now().Add(within))
+	typ, payload, err := wire.ReadFrame(d.conn)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	if typ != wire.TControl {
+		return protocol.Control{}, fmt.Errorf("gateway: frame type %d, want a control frame", typ)
+	}
+	return protocol.DecodeControl(payload)
+}
+
+// awaitOp reads control frames until one with the wanted op arrives (or the overall
+// deadline elapses), returning an error on a refusal.
+func (d *daemonConn) awaitOp(op string, within time.Duration) (protocol.Control, error) {
+	deadline := time.Now().Add(within)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return protocol.Control{}, fmt.Errorf("gateway: timed out awaiting %q", op)
+		}
+		ctrl, err := d.readControl(remaining)
+		if err != nil {
+			return protocol.Control{}, err
+		}
+		switch ctrl.Op {
+		case op:
+			return ctrl, nil
+		case protocol.OpError:
+			return protocol.Control{}, fmt.Errorf("gateway: daemon refused %q: %s (%s)", op, ctrl.Error, ctrl.ErrorCode)
+		default:
+			// skip unrelated frames
+		}
+	}
+}
+
+// Close closes the connection.
+func (d *daemonConn) Close() error { return d.conn.Close() }
