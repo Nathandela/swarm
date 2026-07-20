@@ -38,6 +38,13 @@ const (
 	TypeLost            RecordType = "lost"
 	TypeDeleted         RecordType = "deleted"
 	TypePresence        RecordType = "presence"
+	// TypeRoster is a SYNTHETIC snapshot record: it is emitted ONLY inside
+	// Resume.Roster (the atomic snapshot half of R-JRN.4) to describe a session that
+	// is live as-of the read cursor. It is NEVER appended to the journal — no
+	// producer writes it and no reader will find it in the event stream. The daemon
+	// (which owns the meta store) populates these; the journal package itself never
+	// manufactures a roster record.
+	TypeRoster RecordType = "roster"
 )
 
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by

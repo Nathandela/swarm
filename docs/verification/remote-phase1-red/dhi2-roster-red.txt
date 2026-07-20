@@ -1,0 +1,20 @@
+# github.com/Nathandela/swarm/internal/journal [github.com/Nathandela/swarm/internal/journal.test]
+internal/journal/roster_dhi2_test.go:24:5: undefined: TypeRoster
+internal/journal/roster_dhi2_test.go:25:48: undefined: TypeRoster
+internal/journal/roster_dhi2_test.go:53:16: undefined: TypeRoster
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/roster_dhi2_test.go:41:25: out.Roster undefined (type protocol.JournalResume has no field or method Roster)
+internal/skeleton/roster_dhi2_test.go:46:32: undefined: journal.TypeRoster
+internal/skeleton/roster_dhi2_test.go:47:71: undefined: journal.TypeRoster
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/roster_dhi2_test.go:56:4: unknown field Roster in struct literal of type JournalResume
+internal/protocol/roster_dhi2_test.go:82:13: got.Roster undefined (type Control has no field or method Roster)
+internal/protocol/roster_dhi2_test.go:83:149: got.Roster undefined (type Control has no field or method Roster)
+internal/protocol/roster_dhi2_test.go:87:24: got.Roster undefined (type Control has no field or method Roster)
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/roster_dhi2_test.go:102:24: undefined: journal.TypeRoster
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL	github.com/Nathandela/swarm/internal/journal [build failed]
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL

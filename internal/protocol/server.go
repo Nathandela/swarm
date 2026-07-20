@@ -1016,6 +1016,7 @@ func (cc *clientConn) handleJournalRead(c Control) {
 		EndpointID: cc.endpointID,
 		Cursor:     res.Cursor,
 		Journal:    res.Events,
+		Roster:     res.Roster,
 		FullResync: res.FullResync,
 	})
 }

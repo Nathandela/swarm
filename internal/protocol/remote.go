@@ -39,6 +39,7 @@ type JournalRecord struct {
 // JournalResume is journal_read's snapshot+range result (atomic per R-JRN.4).
 type JournalResume struct {
 	Cursor     uint64
+	Roster     []JournalRecord // live sessions as-of Cursor (snapshot half of R-JRN.4)
 	Events     []JournalRecord
 	FullResync bool
 }

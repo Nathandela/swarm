@@ -92,6 +92,9 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 		return protocol.JournalResume{}, err
 	}
 	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+	for _, r := range res.Roster {
+		out.Roster = append(out.Roster, toWireJournalRecord(r))
+	}
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
 	}

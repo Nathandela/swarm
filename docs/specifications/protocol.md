@@ -81,6 +81,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |
 | `error_code`       | `ErrorCode`       | machine-readable refusal reason, carried alongside `error` (R-PROT.7)        |
 | `journal`          | `[]JournalRecord` | journal records, carried on `journal_read` / `journal_event` (R-PROT.3)      |
+| `roster`           | `[]JournalRecord` | live sessions as-of `cursor` on a `journal_read` snapshot (R-JRN.4)          |
 | `full_resync`      | bool              | set when the caller's `cursor` fell below the retained journal floor (R-JRN.6) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,

@@ -96,6 +96,7 @@ type Control struct {
 	Approve       *ApproveReq     `json:"approve,omitempty"`        // remote approval request (A6)
 	ErrorCode     ErrorCode       `json:"error_code,omitempty"`     // machine-readable refusal reason (R-PROT.7)
 	Journal       []JournalRecord `json:"journal,omitempty"`        // journal records (journal_read/journal_event)
+	Roster        []JournalRecord `json:"roster,omitempty"`         // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
 	FullResync    bool            `json:"full_resync,omitempty"`    // the caller's cursor fell below the retained floor
 }
 
