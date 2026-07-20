@@ -13,9 +13,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
+
+// defaultSweepInterval is the production cadence for the relay's clock-driven
+// maintenance sweeps (presence-went-silent pushes + retention purges) when the
+// config file does not specify one (CR-3). DefaultConfig leaves SweepInterval at
+// 0 so in-process tests stay manual; the shipped binary must run the loop.
+const defaultSweepInterval = 30 * time.Second
 
 // run parses argv, loads the config, and serves until ctx is canceled.
 func run(ctx context.Context, args []string) error {
@@ -31,6 +38,12 @@ func run(ctx context.Context, args []string) error {
 	cfg, err := relay.LoadConfig(*cfgPath)
 	if err != nil {
 		return err
+	}
+	// CR-3: the shipped relay runs the maintenance sweeps on a timer. Honor a
+	// sweep_interval from the config file if it supplies one; otherwise fall back
+	// to a sane non-zero production cadence (DefaultConfig deliberately leaves it 0).
+	if cfg.SweepInterval <= 0 {
+		cfg.SweepInterval = defaultSweepInterval
 	}
 	srv, err := relay.New(cfg)
 	if err != nil {

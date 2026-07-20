@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 
 	bolt "go.etcd.io/bbolt"
@@ -78,10 +79,26 @@ func (s *store) appendItem(rid string, env []byte, atMillis int64) (uint64, erro
 	return cursor, err
 }
 
-// readItems returns the items whose storage cursor is strictly greater than
-// afterCursor, in ascending cursor order.
-func (s *store) readItems(rid string, afterCursor uint64) ([]Item, error) {
+// mailboxItemJSONOverhead is a conservative upper bound on the JSON framing an
+// Item costs beyond its base64 envelope: the object braces, the "cursor"/
+// "envelope" keys, a 20-digit cursor, the string quotes, and the array comma.
+// The real cost is ~46 bytes; 64 keeps the page-size estimate an over-estimate
+// so the serialized reply can never exceed the byte budget (CR-4).
+const mailboxItemJSONOverhead = 64
+
+// readItemsPage returns at most maxItems items whose storage cursor is strictly
+// greater than afterCursor, in ascending cursor order, bounded so that the
+// items' estimated serialized size stays within byteBudget. It reports hasMore
+// true iff at least one further item remains past the returned page.
+//
+// At least one item is always returned when the mailbox holds any item past the
+// cursor (progress guarantee): a page is never empty-with-more, so a paginated
+// drain cannot spin. The byte accounting uses the base64-encoded envelope length
+// plus a conservative per-item JSON overhead, so a caller can size byteBudget to
+// keep the whole JSON reply under MaxFrame without ever leaking plaintext (CR-4).
+func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudget int) ([]Item, bool, error) {
 	var out []Item
+	hasMore := false
 	err := s.db.View(func(tx *bolt.Tx) error {
 		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
 		if mb == nil {
@@ -89,13 +106,24 @@ func (s *store) readItems(rid string, afterCursor uint64) ([]Item, error) {
 		}
 		c := mb.Cursor()
 		start := u64(afterCursor + 1)
+		used := 0
 		for k, v := c.Seek(start); k != nil; k, v = c.Next() {
-			env := append([]byte(nil), v[8:]...)
+			raw := v[8:]
+			cost := base64.StdEncoding.EncodedLen(len(raw)) + mailboxItemJSONOverhead
+			// Once the page holds at least one item, stop before either the item
+			// count cap or the byte budget would be exceeded; the current item then
+			// remains for a later page, so more items remain (hasMore).
+			if len(out) > 0 && (len(out) >= maxItems || used+cost > byteBudget) {
+				hasMore = true
+				break
+			}
+			env := append([]byte(nil), raw...)
 			out = append(out, Item{Cursor: binary.BigEndian.Uint64(k), Envelope: env})
+			used += cost
 		}
 		return nil
 	})
-	return out, err
+	return out, hasMore, err
 }
 
 // ackItems compacts away every item whose storage cursor is at or below

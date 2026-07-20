@@ -18,6 +18,12 @@ type Quotas struct {
 	MaxConcurrentConnections int `json:"max_concurrent_connections"`
 	// MailboxAppendPerMin caps appends per target routing id per minute.
 	MailboxAppendPerMin int `json:"mailbox_append_per_min"`
+	// MailboxMaxItems is the per-mailbox depth cap (CR-4): an append that would
+	// push a target's live mailbox past this many items is refused with a clean
+	// ErrQuotaExceeded before storing, so a device that never drains cannot drive
+	// unbounded growth. The cap is on live depth, so capacity recovers on ack. A
+	// value <= 0 means no depth cap.
+	MailboxMaxItems int `json:"mailbox_max_items"`
 	// PushPerMin caps push triggers per target routing id per minute.
 	PushPerMin int `json:"push_per_min"`
 	// ConnPerMin caps pre-signature authentication attempts (auth_init) per
@@ -56,6 +62,12 @@ type Config struct {
 	RendezvousTTL time.Duration `json:"rendezvous_ttl"`
 	// RetentionCap purges mailbox items this old even if never acked (R-REL.10).
 	RetentionCap time.Duration `json:"retention_cap"`
+	// SweepInterval is the cadence at which Start runs the clock-driven maintenance
+	// sweeps (presence-went-silent pushes + retention purges) on a timer (CR-3). A
+	// value <= 0 disables the loop, leaving the sweeps to be invoked manually — the
+	// DefaultConfig value, so existing manual-sweep tests stay deterministic. The
+	// shipped binary (cmd/swarm-relay) sets a non-zero production value.
+	SweepInterval time.Duration `json:"sweep_interval"`
 
 	Quotas Quotas `json:"quotas"`
 }

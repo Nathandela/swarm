@@ -280,18 +280,33 @@ func (c *Client) MailboxAppend(ctx context.Context, target string, env []byte) (
 }
 
 // MailboxRead returns items whose storage cursor is strictly greater than cursor.
+// The reply is a bounded first page (CR-4): on a large backlog it returns a
+// subset that fits one frame rather than tearing the connection. Callers that
+// need to drain a backlog and observe whether more remains use MailboxReadPage.
 func (c *Client) MailboxRead(ctx context.Context, cursor uint64) ([]Item, error) {
-	resp, err := c.conn.control(ctx, "mailbox_read", map[string]any{"cursor": cursor})
+	items, _, err := c.MailboxReadPage(ctx, cursor, 0)
+	return items, err
+}
+
+// MailboxReadPage returns at most a bounded page of items whose storage cursor is
+// strictly greater than cursor, plus has_more indicating whether further items
+// remain past the page (CR-4). limit caps the page's item count; limit <= 0 asks
+// for the server's own default page bound. A page always fits under MaxFrame, so
+// draining an arbitrarily large backlog is a loop of MailboxReadPage + MailboxAck
+// that never overflows a frame.
+func (c *Client) MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]Item, bool, error) {
+	resp, err := c.conn.control(ctx, "mailbox_read", map[string]any{"cursor": cursor, "limit": limit})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var r struct {
-		Items []Item `json:"items"`
+		Items   []Item `json:"items"`
+		HasMore bool   `json:"has_more"`
 	}
 	if err := json.Unmarshal(resp, &r); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return r.Items, nil
+	return r.Items, r.HasMore, nil
 }
 
 // MailboxAck compacts away every item at or below cursor.

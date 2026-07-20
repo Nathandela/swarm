@@ -72,6 +72,21 @@ var serverCaps = map[string]bool{
 	"mailbox": true, "push": true, "presence": true, "rendezvous": true,
 }
 
+const (
+	// defaultMailboxPageItems bounds a mailbox_read page when the client asks for
+	// no explicit limit (limit <= 0). The byte budget below independently keeps a
+	// page under MaxFrame, so this only caps the count of small items (CR-4).
+	defaultMailboxPageItems = 256
+	// mailboxPageByteBudget is the estimated-serialized-size ceiling for one
+	// mailbox_read page. It sits well under MaxFrame so the JSON reply — the items
+	// plus the {"items":[...],"has_more":bool} wrapper plus the 5-byte frame header
+	// — can never trip WriteFrame's ErrFrameTooLarge and tear the connection. The
+	// per-item estimate (base64 envelope length + mailboxItemJSONOverhead) is an
+	// over-estimate of the real JSON cost, so the true reply is always smaller than
+	// this budget, and the headroom absorbs the wrapper and framing (CR-4).
+	mailboxPageByteBudget = MaxFrame - 8192
+)
+
 // rateWindow is a fixed one-minute window evaluated on the injected clock.
 type rateWindow struct {
 	start time.Time
@@ -141,6 +156,7 @@ type Server struct {
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 	closeOnce  sync.Once
+	sweepWG    sync.WaitGroup
 
 	mu         sync.Mutex
 	sessions   map[string]*serverConn // rid -> active authenticated conn
@@ -207,7 +223,36 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/", s.handleHTTP)
 	s.httpSrv = &http.Server{Handler: mux}
 	go func() { _ = s.httpSrv.Serve(ln) }()
+
+	// CR-3: when a sweep interval is configured, run the clock-driven maintenance
+	// sweeps (presence-went-silent pushes + retention purges) on a timer instead of
+	// leaving them to be called by hand. The ticker cadence is wall-clock, but every
+	// TTL/retention DECISION each sweep makes still reads the injected clock. The
+	// goroutine is guarded by baseCtx and joined in Close, so it neither leaks nor
+	// races the store shutdown. SweepInterval <= 0 (the DefaultConfig value) disables
+	// the loop, preserving the manual-sweep behavior the existing tests depend on.
+	if s.cfg.SweepInterval > 0 {
+		s.sweepWG.Add(1)
+		go s.runSweeps()
+	}
 	return nil
+}
+
+// runSweeps ticks every SweepInterval and runs both sweeps until baseCtx is
+// canceled (Close). It is the CR-3 production wiring of the clock-driven sweeps.
+func (s *Server) runSweeps() {
+	defer s.sweepWG.Done()
+	ticker := time.NewTicker(s.cfg.SweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.baseCtx.Done():
+			return
+		case <-ticker.C:
+			s.SweepPresence(s.baseCtx)
+			s.SweepRetention(s.baseCtx)
+		}
+	}
 }
 
 // URL is the relay's ws:// endpoint (plain ws is intentional — E2EE does not
@@ -237,6 +282,10 @@ func (s *Server) Close() error {
 		if s.ln != nil {
 			_ = s.ln.Close()
 		}
+		// Join the sweep goroutine (baseCancel above signaled it) before closing the
+		// store, so an in-flight SweepRetention can never touch a closed bbolt handle
+		// (CR-3: no leak, no store-shutdown race).
+		s.sweepWG.Wait()
 		if s.st != nil {
 			_ = s.st.close()
 		}
@@ -654,6 +703,13 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	if !allowed {
 		return sc.replyErr(codeQuotaExceeded)
 	}
+	// CR-4: refuse an append that would push the mailbox past its depth cap BEFORE
+	// storing it — a clean ErrQuotaExceeded, never unbounded growth. The cap is on
+	// LIVE depth, so capacity recovers once the device drains and acks. A value <= 0
+	// means no depth cap.
+	if capN := sc.s.cfg.Quotas.MailboxMaxItems; capN > 0 && sc.s.st.mailboxDepth(req.Target) >= capN {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	cur, err := sc.s.st.appendItem(req.Target, req.Envelope, sc.s.clk.Now().UnixMilli())
 	if err != nil {
 		return sc.replyErr(codeBadRequest)
@@ -670,18 +726,27 @@ func (sc *serverConn) handleMailboxRead(payload []byte) error {
 	}
 	var req struct {
 		Cursor uint64 `json:"cursor"`
+		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	items, err := sc.s.st.readItems(sc.rid, req.Cursor)
+	// CR-4: a mailbox_read reply is ALWAYS a bounded page. limit caps the item
+	// count (a sane server default when limit <= 0), and mailboxPageByteBudget
+	// caps the serialized size so an oversized backlog can never overflow one
+	// frame and tear the connection (the permanent brick the reviewer flagged).
+	maxItems := req.Limit
+	if maxItems <= 0 {
+		maxItems = defaultMailboxPageItems
+	}
+	items, hasMore, err := sc.s.st.readItemsPage(sc.rid, req.Cursor, maxItems, mailboxPageByteBudget)
 	if err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
 	if items == nil {
 		items = []Item{}
 	}
-	return sc.replyOK(map[string]any{"items": items})
+	return sc.replyOK(map[string]any{"items": items, "has_more": hasMore})
 }
 
 func (sc *serverConn) handleMailboxAck(payload []byte) error {
