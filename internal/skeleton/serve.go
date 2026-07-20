@@ -164,7 +164,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// coreAPI's DeviceAuthenticator (R-POL.9). Assembled AFTER the registry is wired so
 	// the very first remote connection is already fail-closed.
 	if cfg.RemoteSocketPath != "" {
-		rs, rerr := protocol.ServeRemote(d.api, cfg.RemoteSocketPath)
+		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID)
 		if rerr != nil {
 			_ = core.Close()
 			return nil, rerr

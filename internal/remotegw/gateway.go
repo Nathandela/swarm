@@ -125,6 +125,38 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	}
 }
 
+// ForwardCommand sends a phone-authored, device-signed mutating op to the daemon's
+// remote socket and returns the daemon's reply. It is the command-IN counterpart to
+// the journal-OUT bridge: the gateway is a blind conduit -- it forwards the phone's
+// signature untouched, and the daemon verifies it independently (R-POL.9). The gateway
+// holds no device key and cannot forge or escalate a command. `launch` is set only for
+// an OpLaunch (nil otherwise). A fresh connection is used per command (pooling is a
+// later refinement).
+func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error) {
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	defer dc.Close()
+
+	exp := cmd.ExpiresAt
+	ctrl := protocol.Control{
+		Op:          op,
+		EndpointID:  dc.endpointID,
+		SessionID:   sessionID,
+		OperationID: cmd.OperationID,
+		DeviceID:    cmd.DeviceID,
+		DeviceSig:   cmd.Sig,
+		ExpiresAt:   &exp,
+		Launch:      launch,
+	}
+	if err := dc.writeControl(ctrl); err != nil {
+		return protocol.Control{}, err
+	}
+	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
+	return dc.readControl(10 * time.Second)
+}
+
 // deliver forwards a record to the sink only if it advances the delivered cursor,
 // deduplicating the small read/subscribe overlap so no event is delivered twice.
 func (g *Gateway) deliver(rec protocol.JournalRecord) {

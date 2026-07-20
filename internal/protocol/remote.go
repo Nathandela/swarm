@@ -105,11 +105,21 @@ type DeviceAuthenticator interface {
 // dedicated socket), so every remote MUTATING op (kill/launch/delete/...) MUST carry
 // an operation_id or it is refused before any action (R-IDP.1/A4). Input is exempt.
 func ServeRemote(d DaemonAPI, socketPath string) (*Server, error) {
+	return ServeRemoteWithID(d, socketPath, "")
+}
+
+// ServeRemoteWithID is ServeRemote with an explicit STABLE endpoint id, so remote-tier
+// namespaced session ids match the main tier and are stable across connections and
+// restarts (a phone signs and addresses a session by the same id every client sees).
+// The assembly passes the daemon's federation id here; an empty id falls back to a
+// per-connection id (test-only).
+func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string) (*Server, error) {
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, err
 	}
 	s := newServer(d)
+	s.endpointID = endpointID
 	s.ln = ln
 	s.remoteTier = true
 	s.wg.Add(1)
