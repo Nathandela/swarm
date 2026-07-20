@@ -579,10 +579,9 @@ func (sc *serverConn) handleAuthResp(payload []byte) error {
 	// auth_init window (above) plus MaxConcurrentConnections/HandshakeTimeout, none
 	// of which a single source can monopolize to lock out other sources (R1-H3).
 	sc.authed = true
-	sc.rid = sc.pendingRID
 	sc.authNonce = nil
-	sc.s.registerSession(sc)
-	return sc.replyOK(map[string]any{"routing_id": sc.rid})
+	sc.s.registerSession(sc) // sets sc.rid under s.mu, where removeConn scans other.rid
+	return sc.replyOK(map[string]any{"routing_id": sc.pendingRID})
 }
 
 // registerSession binds sc as the live session for its routing id, superseding
@@ -590,6 +589,7 @@ func (sc *serverConn) handleAuthResp(payload []byte) error {
 func (s *Server) registerSession(sc *serverConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	sc.rid = sc.pendingRID // write rid under the lock: removeConn scans other.rid here (R1b review HIGH-1)
 	if old, ok := s.sessions[sc.rid]; ok && old != sc {
 		old.superseded.Store(true)
 	}
