@@ -110,3 +110,44 @@ Native SwiftUI, iOS-first; an Apple developer account ($99/yr) for APNs + NSE is
 ## Spec amendments this ADR governs
 
 `docs/specifications/protocol.md` gains the remote protocol extensions (new negotiated capabilities; additive omitempty `Control` fields incl. `operation_id`/`interaction_id`/`device_sig`/`cursor`/`expires_at` and the `approve` sub-struct; journal/activity/policy/pairing ops) drift-checked field-by-field (GG-7). `docs/specifications/system-spec.md` gains the remote-origin trust tier, the journal/idempotency/kill-switch/activity artifacts, and new invariants ("no remote op executes when the kill switch is off"; "remote mutating ops are idempotent"; "no remote-class mutating op executes without a valid device signature"). Both are amended in the Phase-1 epics that implement each piece, never silently.
+
+## Amendment 2026-07-20 — Relay pre-authentication rate-limiting model (refines D9)
+
+**Status**: Accepted. **Context**: the relay-hardening R1 review
+(`docs/verification/remote-phase1-relay-review.md`, findings R1-H1/H2/H3) showed that
+keying pre-authentication rate limits by the *presented* relay-auth pubkey is unsafe.
+`auth_init` carries an UNPROVEN pubkey (no signature yet), so (a) an attacker floods
+`auth_init` presenting a victim's pubkey to exhaust that victim's window — a targeted
+lockout; (b) attacker-chosen keys create unbounded per-key rate-limit state — a memory
+DoS; and (c) a single global counter charged on each successful auth is monopolizable by
+one valid key. All three defeat the "day-one rate limits on every endpoint" intent of D9
+for the auth path, on a component whose whole job is to be safe while untrusted.
+
+**Decision** (refines D9's rate-limit obligation; the untrusted-relay threat model is
+unchanged):
+
+1. **Connection admission is source-agnostic and first.** A global concurrent-connection
+   cap and an idle/handshake read deadline bound fds/goroutines/memory before any auth
+   work, independent of any claimed identity.
+2. **Pre-signature rate limiting is keyed by TRANSPORT SOURCE** (client IP; per-connection
+   only as a fallback when no IP is available), NEVER by the unproven presented pubkey.
+   This covers `auth_init` and the unauthenticated rendezvous ops. A per-source window
+   bounds one network source; no single source can exhaust another source's or a victim
+   identity's budget.
+3. **No global auth counter that a single source can monopolize.** If a coarse global
+   safety valve is kept at all, its budget is strictly larger than any single source's
+   per-window budget; the primary control is the per-source window.
+4. **Per-key (per-routing-id) rate limits apply only AFTER signature verification**, where
+   the identity is proven (post-auth ops). Those maps are reaped on disconnect and bounded
+   by a TTL sweep; the relay MUST NOT retain any per-presented-key state before a signature
+   verifies.
+
+**Consequence**: the pre-auth DoS surface is bounded per network source, not per claimed
+identity, and no unproven-key state is retained — closing R1-H1/H2/H3. **Test impact**
+(tracked, and reframed with review, never silently): `TestRelay_AuthRatePerSource`
+asserted per-unproven-key independence (the unsafe premise) and is replaced by a
+poison-resistance test (an attacker flooding `auth_init` with a victim's pubkey does not
+consume the victim's budget) plus a post-auth per-key fairness test;
+`TestRelay_ConnRateLimited` is reframed as the per-source pre-auth limit / coarse global
+valve. Findings: `agents-tracker-40o` (H1), `agents-tracker-45s` (H2), `agents-tracker-a0u`
+(H3).
