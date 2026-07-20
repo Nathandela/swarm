@@ -1,0 +1,59 @@
+======================================================================
+Remote-control Phase 1 - RELAY HARDENING R2 (internal/remote/relay) - RED RUN
+epic: agents-tracker-qnx (remote-control)   task: agents-tracker-7qc
+role: TEST-WRITER (TDD Phase 1 + Red, GG-5)
+remediates: docs/verification/remote-phase1-relay-review.md
+            CR-4 (mailbox_read pagination / no permanent brick + per-mailbox depth cap)
+            CR-3 (retention + presence sweeps wired on a timer in Start, not called by hand)
+date: Mon Jul 20 12:22:14 CEST 2026
+go: go1.26.1   host: darwin/arm64
+baseline: pre-change tree = GREEN (go test ./internal/remote/relay/... -> ok)
+new file: internal/remote/relay/r2_test.go  (ADDITIVE ONLY; git status shows it as
+          the sole new file; git diff --stat is empty -> no existing test or
+          non-test source modified)
+command: go test ./internal/remote/relay/... 2>&1
+======================================================================
+
+### RED STYLE (matches relay-red.txt / harden_test.go): UNDEFINED-SYMBOL RED. The
+### new tests reference the frozen CONTRACT the implementer must supply. Because Go
+### builds one test binary per package, referencing these not-yet-existing symbols
+### fails the whole relay test build. Every failure below is one of exactly THREE
+### intended contract symbols -- there are NO test-bug, type, or logic errors.
+###
+### The CONTRACT the implementer must add (see report):
+###   CR-4:
+###     Quotas.MailboxMaxItems int
+###         per-mailbox depth cap; over-cap append -> clean ErrQuotaExceeded, not
+###         unbounded growth / resource exhaustion. (Quotas.MailboxMaxBytes int64 is
+###         an accepted alternative/companion; the suite pins the item cap.)
+###     (*Client).MailboxReadPage(ctx, cursor uint64, limit int) ([]Item, bool, error)
+###         bounded mailbox_read; wire req adds {cursor, limit[, max_bytes]}, wire
+###         resp becomes {items:[...], has_more:bool}; a single reply must NEVER
+###         exceed MaxFrame (default page bound applies when limit<=0). The existing
+###         (*Client).MailboxRead signature is UNCHANGED and must also stay bounded.
+###   CR-3:
+###     Config.SweepInterval time.Duration
+###         Start launches a baseCtx-guarded goroutine ticking every SweepInterval
+###         that calls BOTH SweepPresence and SweepRetention on the injected clock;
+###         <=0 disables (DefaultConfig keeps 0 so existing manual-sweep tests stay
+###         deterministic). cmd/swarm-relay/main.go MUST set a non-zero value.
+###
+### After the contract exists, the assertions turn BEHAVIORAL RED against current
+### logic: unpaginated handleMailboxRead bricks an oversized backlog (WriteFrame
+### ErrFrameTooLarge -> torn conn); appendItem has no depth cap; and no goroutine
+### ever calls the sweeps (purge / silent-push never fire without a manual call).
+### ---------------------------------------------------------------------
+
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/r2_test.go:101:12: c.Quotas.MailboxMaxItems undefined (type Quotas has no field or method MailboxMaxItems)
+internal/remote/relay/r2_test.go:149:33: device.MailboxReadPage undefined (type *Client has no field or method MailboxReadPage)
+internal/remote/relay/r2_test.go:196:12: c.Quotas.MailboxMaxItems undefined (type Quotas has no field or method MailboxMaxItems)
+internal/remote/relay/r2_test.go:251:5: c.SweepInterval undefined (type *Config has no field or method SweepInterval)
+internal/remote/relay/r2_test.go:253:12: c.Quotas.MailboxMaxItems undefined (type Quotas has no field or method MailboxMaxItems)
+internal/remote/relay/r2_test.go:283:5: c.SweepInterval undefined (type *Config has no field or method SweepInterval)
+internal/remote/relay/r2_test.go:327:15: Quotas{}.MailboxMaxItems undefined (type Quotas has no field or method MailboxMaxItems)
+internal/remote/relay/r2_test.go:328:15: Config{}.SweepInterval undefined (type Config has no field or method SweepInterval)
+internal/remote/relay/r2_test.go:330:27: c.MailboxReadPage undefined (type *Client has no field or method MailboxReadPage)
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+EXIT: 1
