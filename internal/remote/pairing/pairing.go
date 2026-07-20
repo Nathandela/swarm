@@ -33,7 +33,11 @@ package pairing
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"sync"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
@@ -160,12 +164,16 @@ type DeviceOutcome struct {
 // invocation. Its secret is single-use (R-PAIR.1) and it listens only while Pair
 // runs (R-PAIR.8) — no standing listener between invocations.
 type Machine struct {
-	// Fields are the implementer's; the stub carries none.
+	params MachineParams
+
+	mu        sync.Mutex
+	consumed  bool // set once a handshake reaches transport mode (R-PAIR.1)
+	listening bool // true only while Pair drives the transport (R-PAIR.8)
 }
 
 // NewMachine builds a machine-side pairing endpoint. It opens NO listener and
 // touches NO transport until Pair is called (R-PAIR.8).
-func NewMachine(p MachineParams) *Machine { return &Machine{} }
+func NewMachine(p MachineParams) *Machine { return &Machine{params: p} }
 
 // Pair runs one machine-side pairing attempt over rt: create rendezvous, drive
 // the XXpsk0 handshake as responder, derive the SAS, gate on the mandatory
@@ -177,12 +185,161 @@ func NewMachine(p MachineParams) *Machine { return &Machine{} }
 // timeout. A gateway-side rate refusal or a relay-side rate error surfaces as
 // ErrRateLimited (R-PAIR.8).
 func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOutcome, error) {
-	return nil, ErrUnimplemented
+	p := m.params
+
+	// Refuse cheaply, BEFORE any transport work, in fail-closed precedence order.
+	// Gateway-side rate limit (R-PAIR.8): refuse an over-budget attempt outright.
+	if p.Limiter != nil && !p.Limiter.Allow() {
+		return nil, ErrRateLimited
+	}
+	// Headless refusal (R-PAIR.9 / D.0-A12): Phase-1 pairing needs a local operator.
+	if !p.LocalConsole {
+		return nil, ErrHeadlessRefused
+	}
+	// Single-use secret (R-PAIR.1): a spent Machine never opens a second rendezvous.
+	m.mu.Lock()
+	if m.consumed {
+		m.mu.Unlock()
+		return nil, ErrSecretConsumed
+	}
+	m.listening = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.listening = false
+		m.mu.Unlock()
+	}()
+
+	label := rendezvousLabel(p.RendezvousID)
+	if err := rt.Create(ctx, label); err != nil {
+		// A relay-side rate refusal (or any create failure) surfaces verbatim so
+		// errors.Is(err, ErrRateLimited) holds for the rate-limited case (R-PAIR.8).
+		return nil, fmt.Errorf("pairing: create rendezvous: %w", err)
+	}
+
+	// Machine is the XXpsk0 responder; the 32-byte secret is the PSK, and the peer
+	// static is learned (not pinned) on the wire — the SAS + desktop confirm are
+	// the out-of-band gate. AllowUnpinnedPeer is mechanically pairing-only.
+	sess, err := crypto.NewNoise(crypto.NoiseConfig{
+		Initiator:         false,
+		Static:            p.Static,
+		AllowUnpinnedPeer: true,
+		PSK:               p.Secret[:],
+		Prologue:          crypto.PairPrologue(p.RendezvousID[:]),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pairing: new noise responder: %w", err)
+	}
+
+	// msg1 (e): device -> machine.
+	msg1, err := rt.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: recv msg1: %w", err)
+	}
+	if _, err := sess.ReadMessage(msg1); err != nil {
+		return nil, fmt.Errorf("pairing: read msg1: %w", err)
+	}
+	// msg2 (e, ee, s, es + machine payload): machine -> device. Carries the
+	// machine's Noise static plus its routing payload, incl. the A14 RecipientPub.
+	msg2, err := sess.WriteMessage(encodeMachinePayload(p.Payload))
+	if err != nil {
+		return nil, fmt.Errorf("pairing: write msg2: %w", err)
+	}
+	if err := rt.Send(ctx, msg2); err != nil {
+		return nil, fmt.Errorf("pairing: send msg2: %w", err)
+	}
+	// msg3 (s, se + device payload): device -> machine. Completes the handshake;
+	// the machine learns the device's static + routing payload.
+	msg3, err := rt.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: recv msg3: %w", err)
+	}
+	devPayloadBytes, err := sess.ReadMessage(msg3)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: read msg3: %w", err)
+	}
+	if !sess.HandshakeComplete() {
+		return nil, fmt.Errorf("pairing: handshake did not complete after msg3")
+	}
+	// The secret is now spent (R-PAIR.1): a completed handshake consumes it even if
+	// the operator later declines — a photographed QR cannot be retried.
+	m.mu.Lock()
+	m.consumed = true
+	m.mu.Unlock()
+
+	devPayload, err := decodeDevicePayload(devPayloadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: decode device payload: %w", err)
+	}
+	deviceStatic := sess.PeerStatic()
+
+	// SAS from the Noise channel binding (R-PAIR.4): on a MITM the two ends bind
+	// different transcripts, so the operator's out-of-band comparison diverges.
+	sas, err := crypto.SAS(sess.ChannelBinding())
+	if err != nil {
+		return nil, fmt.Errorf("pairing: derive sas: %w", err)
+	}
+
+	// Mandatory desktop confirm (R-PAIR.5). Nothing is pinned and no acceptance is
+	// sent until the operator affirmatively allows. A decline / timeout / missing
+	// callback fails CLOSED: the device is told (a decline frame so it unblocks),
+	// the rendezvous is burned, and no outcome is returned.
+	allow, cErr := false, error(nil)
+	if p.Confirm != nil {
+		allow, cErr = p.Confirm(ctx, sas, devPayload.DeviceName)
+	}
+	if cErr != nil || !allow {
+		_ = m.sendDecision(ctx, sess, rt, label, false)
+		switch {
+		case cErr != nil && errors.Is(cErr, ErrConfirmTimeout):
+			return nil, ErrConfirmTimeout
+		case cErr != nil:
+			return nil, cErr
+		default:
+			return nil, ErrConfirmDeclined
+		}
+	}
+
+	// Affirmative confirm (R-PAIR.7): send acceptance over the authenticated
+	// channel, pin the device static + record its routing, and burn the rendezvous.
+	if err := m.sendDecision(ctx, sess, rt, label, true); err != nil {
+		return nil, fmt.Errorf("pairing: send acceptance: %w", err)
+	}
+	return &MachineOutcome{
+		SAS:          sas,
+		DeviceStatic: deviceStatic,
+		Device:       devPayload,
+	}, nil
+}
+
+// sendDecision encrypts the machine's final accept/decline signal over the
+// established Noise transport and burns the rendezvous. It is authenticated (both
+// statics are pinned by now), so the device knows the decision came from the real
+// machine. The rendezvous is completed (burned) regardless of the decision.
+func (m *Machine) sendDecision(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, label string, accept bool) error {
+	b := decisionDecline
+	if accept {
+		b = decisionAccept
+	}
+	frame, err := sess.Encrypt([]byte{b})
+	if err != nil {
+		_ = rt.Complete(ctx, label)
+		return err
+	}
+	sendErr := rt.Send(ctx, frame)
+	if err := rt.Complete(ctx, label); err != nil && sendErr == nil {
+		sendErr = err
+	}
+	return sendErr
 }
 
 // Listening reports whether a pairing listener is currently active. It is false
 // before Pair starts and after it returns (R-PAIR.8: no standing listener).
-func (m *Machine) Listening() bool { return false }
+func (m *Machine) Listening() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listening
+}
 
 // RunDevice runs one device-side pairing attempt over rt: claim the rendezvous,
 // drive the XXpsk0 handshake as initiator, derive the SAS, and finalize by
@@ -190,5 +347,204 @@ func (m *Machine) Listening() bool { return false }
 // affirmatively accepts. Returns ErrPairingDeclined if the machine declines or
 // times out.
 func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*DeviceOutcome, error) {
-	return nil, ErrUnimplemented
+	// Optional device-side rate limit (R-PAIR.8; the relay enforces its own).
+	if p.Limiter != nil && !p.Limiter.Allow() {
+		return nil, ErrRateLimited
+	}
+
+	label := rendezvousLabel(p.RendezvousID)
+	if err := rt.Claim(ctx, label); err != nil {
+		return nil, fmt.Errorf("pairing: claim rendezvous: %w", err)
+	}
+
+	// Device is the XXpsk0 initiator; the scanned secret is the PSK. If the QR
+	// carried a machine static, pin it up front; otherwise learn it on the wire
+	// (the SAS + desktop confirm are the out-of-band gate).
+	cfg := crypto.NoiseConfig{
+		Initiator: true,
+		Static:    p.Static,
+		PSK:       p.Secret[:],
+		Prologue:  crypto.PairPrologue(p.RendezvousID[:]),
+	}
+	if len(p.MachineStaticPub) == 32 {
+		cfg.PeerStatic = p.MachineStaticPub
+	} else {
+		cfg.AllowUnpinnedPeer = true
+	}
+	sess, err := crypto.NewNoise(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: new noise initiator: %w", err)
+	}
+
+	// msg1 (e): device -> machine.
+	msg1, err := sess.WriteMessage(nil)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: write msg1: %w", err)
+	}
+	if err := rt.Send(ctx, msg1); err != nil {
+		return nil, fmt.Errorf("pairing: send msg1: %w", err)
+	}
+	// msg2 (e, ee, s, es + machine payload): machine -> device. The device learns
+	// the machine's static + routing payload (incl. the A14 RecipientPub + epoch).
+	msg2, err := rt.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: recv msg2: %w", err)
+	}
+	machPayloadBytes, err := sess.ReadMessage(msg2)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: read msg2: %w", err)
+	}
+	machPayload, err := decodeMachinePayload(machPayloadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: decode machine payload: %w", err)
+	}
+	// msg3 (s, se + device payload): device -> machine. Completes the handshake.
+	msg3, err := sess.WriteMessage(encodeDevicePayload(p.Payload))
+	if err != nil {
+		return nil, fmt.Errorf("pairing: write msg3: %w", err)
+	}
+	if err := rt.Send(ctx, msg3); err != nil {
+		return nil, fmt.Errorf("pairing: send msg3: %w", err)
+	}
+	if !sess.HandshakeComplete() {
+		return nil, fmt.Errorf("pairing: handshake did not complete after msg3")
+	}
+
+	sas, err := crypto.SAS(sess.ChannelBinding())
+	if err != nil {
+		return nil, fmt.Errorf("pairing: derive sas: %w", err)
+	}
+	machineStatic := sess.PeerStatic()
+
+	// Wait for the machine's authenticated decision (R-PAIR.5). No machine static
+	// is pinned unless the machine affirmatively accepts; a decline / timeout on
+	// the machine side surfaces here as ErrPairingDeclined with no pin.
+	frame, err := rt.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: recv decision: %w", err)
+	}
+	decision, err := sess.Decrypt(frame)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: decrypt decision: %w", err)
+	}
+	if len(decision) != 1 || decision[0] != decisionAccept {
+		return nil, ErrPairingDeclined
+	}
+
+	// R-PAIR.7: pin the machine static + record its routing payload (incl. epoch).
+	return &DeviceOutcome{
+		SAS:           sas,
+		MachineStatic: machineStatic,
+		Machine:       machPayload,
+	}, nil
+}
+
+// decisionAccept / decisionDecline are the single-byte machine-side pairing
+// decision carried in the final authenticated transport frame (R-PAIR.5).
+const (
+	decisionDecline byte = 0x00
+	decisionAccept  byte = 0x01
+)
+
+// errMalformedPayload is returned when a handshake payload cannot be decoded. It
+// only fires on a truncated/garbled frame; the frame rides the authenticated
+// Noise channel, so this is a defensive check, not an expected path.
+var errMalformedPayload = errors.New("pairing: malformed handshake payload")
+
+// rendezvousLabel renders the 16-byte rendezvous id as the opaque relay label.
+// It is derived only from the rendezvous id (never the secret), so the secret is
+// never carried in a label the relay can see (R-PAIR.1).
+func rendezvousLabel(id [16]byte) string { return hex.EncodeToString(id[:]) }
+
+// appendField appends a 4-byte big-endian length prefix then f, so no two
+// distinct field sequences share an encoding (F11 — no splicing).
+func appendField(b, f []byte) []byte {
+	b = binary.BigEndian.AppendUint32(b, uint32(len(f)))
+	return append(b, f...)
+}
+
+// readField reads one length-prefixed field from b, returning the field, the
+// remaining bytes, and whether the read was well-formed.
+func readField(b []byte) (field, rest []byte, ok bool) {
+	if len(b) < 4 {
+		return nil, nil, false
+	}
+	n := binary.BigEndian.Uint32(b[:4])
+	b = b[4:]
+	if uint32(len(b)) < n {
+		return nil, nil, false
+	}
+	return append([]byte(nil), b[:n]...), b[n:], true
+}
+
+// encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14): the
+// four length-prefixed byte fields followed by the 4-byte big-endian epoch id.
+func encodeMachinePayload(p MachinePayload) []byte {
+	var b []byte
+	b = appendField(b, []byte(p.Hostname))
+	b = appendField(b, p.MachineRoutingID)
+	b = appendField(b, p.MachineRelayAuthPub)
+	b = appendField(b, p.RecipientPub)
+	b = binary.BigEndian.AppendUint32(b, p.EpochID)
+	return b
+}
+
+// decodeMachinePayload is the inverse of encodeMachinePayload.
+func decodeMachinePayload(b []byte) (MachinePayload, error) {
+	var p MachinePayload
+	var ok bool
+	var host []byte
+	if host, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.Hostname = string(host)
+	if p.MachineRoutingID, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	if p.MachineRelayAuthPub, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	if p.RecipientPub, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	if len(b) != 4 {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.EpochID = binary.BigEndian.Uint32(b)
+	return p, nil
+}
+
+// encodeDevicePayload serialises the msg3 device payload (R-PAIR.3 + A14): four
+// length-prefixed byte fields.
+func encodeDevicePayload(p DevicePayload) []byte {
+	var b []byte
+	b = appendField(b, []byte(p.DeviceName))
+	b = appendField(b, p.DeviceRoutingID)
+	b = appendField(b, p.DeviceRelayAuthPub)
+	b = appendField(b, p.RecipientPub)
+	return b
+}
+
+// decodeDevicePayload is the inverse of encodeDevicePayload.
+func decodeDevicePayload(b []byte) (DevicePayload, error) {
+	var p DevicePayload
+	var ok bool
+	var name []byte
+	if name, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	p.DeviceName = string(name)
+	if p.DeviceRoutingID, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	if p.DeviceRelayAuthPub, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	if p.RecipientPub, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	if len(b) != 0 {
+		return DevicePayload{}, errMalformedPayload
+	}
+	return p, nil
 }

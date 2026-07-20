@@ -10,7 +10,11 @@
 // wire). This file is a failing-first stub; the codec is the implementer's.
 package pairing
 
-import "errors"
+import (
+	"encoding/base64"
+	"errors"
+	"strings"
+)
 
 const (
 	// QRPrefix is the textual scheme prefix of an encoded pairing QR.
@@ -42,9 +46,83 @@ type QRPayload struct {
 // EncodeQR renders p as QRPrefix + base64url(no padding) of the documented byte
 // layout. It errors if the resulting string would exceed QRMaxBytes or if the
 // relay URL is longer than a u8 length field allows.
-func EncodeQR(p QRPayload) (string, error) { return "", ErrUnimplemented }
+func EncodeQR(p QRPayload) (string, error) {
+	if len(p.RelayURL) > 255 {
+		return "", ErrQRMalformed
+	}
+	if n := len(p.MachineStaticPub); n != 0 && n != 32 {
+		return "", ErrQRMalformed
+	}
+	// The static-pub flag bit mirrors the trailer's presence exactly, so encode
+	// and decode always agree; other flag bits are preserved verbatim.
+	flags := p.Flags
+	if len(p.MachineStaticPub) == 32 {
+		flags |= QRFlagMachineStaticPub
+	} else {
+		flags &^= QRFlagMachineStaticPub
+	}
+
+	raw := make([]byte, 0, 3+len(p.RelayURL)+16+32+32)
+	raw = append(raw, QRVersion)
+	raw = append(raw, flags)
+	raw = append(raw, byte(len(p.RelayURL)))
+	raw = append(raw, []byte(p.RelayURL)...)
+	raw = append(raw, p.RendezvousID[:]...)
+	raw = append(raw, p.PairingSecret[:]...)
+	if len(p.MachineStaticPub) == 32 {
+		raw = append(raw, p.MachineStaticPub...)
+	}
+
+	s := QRPrefix + base64.RawURLEncoding.EncodeToString(raw)
+	if len(s) > QRMaxBytes {
+		return "", ErrQRMalformed
+	}
+	return s, nil
+}
 
 // DecodeQR parses a QRPrefix-scheme pairing string back into a QRPayload,
 // rejecting an unknown version, a bad length, or a flags/trailer mismatch with
 // ErrQRMalformed.
-func DecodeQR(s string) (QRPayload, error) { return QRPayload{}, ErrUnimplemented }
+func DecodeQR(s string) (QRPayload, error) {
+	body, ok := strings.CutPrefix(s, QRPrefix)
+	if !ok {
+		return QRPayload{}, ErrQRMalformed
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return QRPayload{}, ErrQRMalformed
+	}
+	// Fixed header: version | flags | relay_url_len.
+	if len(raw) < 3 {
+		return QRPayload{}, ErrQRMalformed
+	}
+	if raw[0] != QRVersion {
+		return QRPayload{}, ErrQRMalformed
+	}
+	var p QRPayload
+	p.Flags = raw[1]
+	urlLen := int(raw[2])
+	off := 3
+	// relay_url:L | rendezvous_id:16 | pairing_secret:32.
+	if len(raw) < off+urlLen+16+32 {
+		return QRPayload{}, ErrQRMalformed
+	}
+	p.RelayURL = string(raw[off : off+urlLen])
+	off += urlLen
+	copy(p.RendezvousID[:], raw[off:off+16])
+	off += 16
+	copy(p.PairingSecret[:], raw[off:off+32])
+	off += 32
+	// Optional machine_static_pub:32, present iff the flag bit is set. The
+	// remaining length MUST match the flag exactly (no splicing, no trailer).
+	rest := len(raw) - off
+	if p.Flags&QRFlagMachineStaticPub != 0 {
+		if rest != 32 {
+			return QRPayload{}, ErrQRMalformed
+		}
+		p.MachineStaticPub = append([]byte(nil), raw[off:off+32]...)
+	} else if rest != 0 {
+		return QRPayload{}, ErrQRMalformed
+	}
+	return p, nil
+}
