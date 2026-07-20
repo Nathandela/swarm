@@ -2,6 +2,7 @@ package phonecore
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -48,4 +49,25 @@ func SignCommand(ks crypto.KeyStore, in CommandInput) (protocol.DeviceCommandAut
 		ContentHash: in.ContentHash,
 		Sig:         base64.StdEncoding.EncodeToString(sig),
 	}, nil
+}
+
+// SealCommandEnvelope seals a signed command as a mailbox envelope under the epoch
+// content key (XChaCha20-Poly1305), so it can travel through the untrusted relay to the
+// machine as ciphertext. The command's device signature is verified by the daemon after
+// the gateway opens the envelope; sealing adds confidentiality, not the command's
+// authenticity (which the signature already carries). seq must be unique per epoch.
+func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd protocol.DeviceCommandAuth) ([]byte, error) {
+	plaintext, err := json.Marshal(cmd)
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1,
+		EpochID: epochID,
+		Seq:     seq,
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
 }

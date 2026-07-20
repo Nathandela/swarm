@@ -1,0 +1,5 @@
+internal/skeleton/fullstack_e2e_test.go:41:29: undefined: device
+internal/skeleton/fullstack_e2e_test.go:80:24: undefined: phonecore.SealCommandEnvelope
+internal/skeleton/fullstack_e2e_test.go:96:23: undefined: remotegw.OpenCommandEnvelope
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
