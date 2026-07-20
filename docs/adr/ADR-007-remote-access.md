@@ -181,3 +181,38 @@ conveyed and surfaced for pinning; this is additive coverage for a new field, no
 modification to force an existing assertion to pass. The pairing handshake change is
 re-reviewed (the slice was previously security-reviewed). Finding tracked under the
 R-DEV epic.
+## Amendment 2026-07-20 — Pairing conveys the machine grant-signing public key (enrollment keystone)
+
+**Context**: D2/D3 and F3/A15 deliver each epoch's wake/content keys to a paired
+device as a sealed, machine-signed `crypto.EpochGrant`: sealed to the device's
+recipient X25519 key and signed with the machine's Ed25519 grant-signing key so an
+untrusted relay can neither read nor forge it (`crypto.SealEpochGrant` /
+`OpenEpochGrant`). The device verifies the grant against the machine's Ed25519 pub.
+But the shipped pairing handshake's `MachinePayload` (msg2) carried only {hostname,
+routing id, relay-auth pub, recipient pub, epoch id} — it never transmitted the
+machine's grant-signing public key, so a just-paired phone had no key to verify epoch
+grants against and the async content-key delivery path could not be bootstrapped from
+a pairing. This is the exact mirror of the device-command-signing-key gap above, on
+the machine->device direction.
+
+**Decision** (symmetric with the DeviceCommandSignPub amendment; the trust model is
+unchanged): the machine's authenticated `MachinePayload` gains a `MachineSignPub`
+field (the machine's Ed25519 grant-signing public key), sent inside the encrypted,
+mutually authenticated Noise XXpsk0 msg2, carried as a length-prefixed field before
+the trailing epoch id so the epoch-trailer wire contract is undisturbed. On a
+completed pair the device pins it in its `DeviceOutcome`, and later verifies every
+`EpochGrant` against it. A new machine-side `internal/remote/enroll` package composes
+the pairing outcome into (a) a `device.Registry` record the daemon authorizes commands
+against (R-POL.9) and (b) the initial sealed `EpochGrant`; the phone accepts the grant
+via `phonecore.AcceptGrant`. Rejected alternative: reuse the machine's Noise-static
+(X25519) key — it cannot produce Ed25519 signatures, and grant authenticity must not
+depend on the confidential DH key.
+
+**Consequence**: a single SAS-confirmed pairing now bootstraps BOTH halves of the
+remote trust — the pinned device command key (verify inbound commands) and the pinned
+machine grant key (verify inbound epoch keys) — with no out-of-band provisioning. The
+end-to-end remote flow runs without any hand-built registry record or manually shared
+content key (proved by `TestEnrollmentE2E_PairThenCommandNoManualSetup`). **Test
+impact** (tracked, additive): the pairing payload round-trip/outcome tests gain
+`MachineSignPub` assertions; new `enroll` and `phonecore.AcceptGrant` tests are
+failing-first. Tracked under agents-tracker-qo4.
