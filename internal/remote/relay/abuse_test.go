@@ -77,8 +77,17 @@ func TestRelay_PushRateLimited(t *testing.T) {
 	}
 }
 
-// TestRelay_ConnRateLimited asserts the per-window connection rate is bounded:
-// past the cap, Dial itself is a clean refusal.
+// TestRelay_ConnRateLimited asserts the per-source(IP) PRE-AUTHENTICATION
+// connection-rate window is bounded (ADR-007 "Amendment 2026-07-20 - Relay
+// pre-authentication rate-limiting model", refining D9): ConnPerMin caps admission
+// per TRANSPORT SOURCE, never per presented relay-auth key. All these Dials
+// originate from a single loopback source (127.0.0.1), so they share ONE window
+// and the third is cleanly refused regardless of using distinct keys — keying is
+// by source, not by the (still unproven at that point) key. Advancing the clock
+// past the window restores capacity. Per-unproven-key independence is deliberately
+// NOT asserted here: that unsafe premise was removed with the old
+// TestRelay_AuthRatePerSource (see harden_test.go). This is a flagged comment-only
+// reframe; no assertion, value, or call is changed.
 func TestRelay_ConnRateLimited(t *testing.T) {
 	srv, _, _, clk := startTestRelay(t, func(c *Config) {
 		c.Quotas.ConnPerMin = 2

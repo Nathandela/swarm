@@ -24,16 +24,26 @@ package relay
 //      unlimited ops (CR-2), and blind-overwrite / no-participant-check
 //      rendezvous (HI-1).
 //
-// This file ADDS tests only. It modifies NO existing test and contains NO
-// implementation. In particular it does NOT touch TestRelay_ConnRateLimited,
-// which documents the CURRENT (incorrect) global-bucket behavior;
-// TestRelay_AuthRatePerSource below asserts the CORRECT per-source behavior.
+// R1b amendment (ADR-007, "Amendment 2026-07-20 - Relay pre-authentication
+// rate-limiting model", remediating relay-review findings R1-H1/H2/H3): the
+// original TestRelay_AuthRatePerSource asserted per-UNPROVEN-key independence,
+// the exact premise the amendment rejects (auth_init carries an unsigned pubkey,
+// so keying a pre-auth window by it lets an attacker exhaust a victim's window
+// and lets attacker-chosen keys create unbounded state). It is REPLACED below by
+// TestRelay_AuthInitNotPoisonableByPresentedPubkey (pre-signature limiting keyed
+// by TRANSPORT SOURCE, never by the presented pubkey) and
+// TestRelay_PostAuthPerKeyOpBudgetIndependent (per-key limits are legitimate only
+// AFTER signature verification). TestRelay_ConnRateLimited (abuse_test.go) is
+// reframed comment-only as the per-source(IP) pre-auth window. No other test is
+// modified and this file contains NO implementation.
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -112,47 +122,128 @@ func TestRelay_IdleHandshakeTimeout(t *testing.T) {
 	}
 }
 
-// TestRelay_AuthRatePerSource (CR-1) asserts the auth rate window is keyed PER
-// SOURCE (the presented relay-auth pubkey / its routing id), not one process-
-// wide counter: key A exhausting its own budget must NOT lock out key B.
+// TestRelay_AuthInitNotPoisonableByPresentedPubkey (ADR-007 amendment 2026-07-20,
+// remediating R1-H1) asserts pre-signature auth rate limiting is keyed by the
+// TRANSPORT SOURCE, NEVER by the UNPROVEN presented relay-auth pubkey. An attacker
+// on one source floods auth_init presenting a VICTIM's pubkey until that source's
+// per-source budget is spent; a victim on a DISTINCT source must then still
+// complete a FULL authenticated Dial (auth_init+auth_resp) with that same pubkey.
+// If the attacker's flood had been charged to the victim's presented identity (the
+// current server.go:489-499 authRate[RoutingID(presentedPub)] keying), the victim's
+// window would already be spent and its Dial refused — the R1-H1 targeted lockout.
 //
-// This is the CORRECT counterpart to TestRelay_ConnRateLimited (which documents
-// the current global-bucket behavior with three keys sharing one counter and is
-// left UNMODIFIED). Against the reviewed relay (single s.connRate at
-// server.go:128, consumed server.go:422) A's flood drains the shared counter and
-// B is refused — so this FAILS.
-func TestRelay_AuthRatePerSource(t *testing.T) {
+// SEAM the implementer MUST add (compile-level RED today; see the RED evidence):
+//
+//	WithSourceKeyFunc(func(remoteAddr string) string) Option
+//	  Installs the pre-auth source-key deriver. The relay evaluates it ONCE per
+//	  accepted connection (passing that connection's RemoteAddr) and uses the
+//	  result as the rate key for every PRE-SIGNATURE op (auth_init and the
+//	  unauthenticated rendezvous ops), REPLACING today's
+//	  authRate[RoutingID(presentedPub)] keying. The DEFAULT (no option) derives the
+//	  IP host of RemoteAddr (port stripped), so all localhost connections collapse
+//	  to one source — which is why this test cannot rely on the default: two real
+//	  client IPs are unavailable on loopback. It injects an IDENTITY deriver so the
+//	  source key is the full RemoteAddr (ephemeral port included), giving each
+//	  CONNECTION a distinct, controllable source. The attacker floods on a single
+//	  connection (one source); the victim dials on another (a second source).
+//
+// GREEN once pre-auth keying is by source: the attacker's flood is charged to the
+// attacker's source, and the victim (a different source) keeps its own budget.
+func TestRelay_AuthInitNotPoisonableByPresentedPubkey(t *testing.T) {
 	const budget = 3
+
+	cfg := DefaultConfig()
+	cfg.Listen = "127.0.0.1:0"
+	cfg.TLSMode = "off"
+	cfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
+	cfg.Quotas.ConnPerMin = budget
+	cfg.Quotas.MaxConcurrentConnections = 0 // unlimited: the flood + victim open several sockets
+
+	clk := newFakeClock()
+	// identitySource makes each CONNECTION its own transport source (full
+	// RemoteAddr, ephemeral port included), so the attacker's flood connection and
+	// the victim's dial connection are distinct sources on one loopback host — the
+	// per-connection seam the amendment's source keying needs.
+	identitySource := func(remoteAddr string) string { return remoteAddr }
+	srv, err := New(cfg, WithClock(clk), WithAPNsSink(&mockAPNs{}), WithSourceKeyFunc(identitySource))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	victimPub, victimPriv := newRelayAuthKey(t)
+
+	// The attacker floods auth_init presenting the VICTIM's pubkey on ONE connection
+	// (one transport source), spending that source's whole per-source budget.
+	attacker := dialRaw(t, srv.URL())
+	for i := 0; i < budget; i++ {
+		if err := discard(attacker.control(testCtx(t), "auth_init", map[string]any{"relay_auth_pub": []byte(victimPub)})); err != nil {
+			t.Fatalf("attacker auth_init #%d within the attacker source budget: got %v, want nil", i, err)
+		}
+	}
+	// One more from the attacker's source is refused: the attacker exhausted the
+	// ATTACKER'S OWN source budget — not the victim's identity.
+	if err := discard(attacker.control(testCtx(t), "auth_init", map[string]any{"relay_auth_pub": []byte(victimPub)})); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("attacker auth_init over the attacker source budget: got %v, want ErrQuotaExceeded", err)
+	}
+
+	// The victim, on a DISTINCT source, completes a full Dial with the very pubkey
+	// the attacker was flooding. It must succeed: pre-auth limiting is keyed by
+	// source, so the attacker's flood never touched the victim's budget.
+	victim, err := Dial(testCtx(t), srv.URL(), authFor(victimPub, victimPriv))
+	if err != nil {
+		t.Fatalf("victim Dial with the flooded pubkey from a distinct source: got %v, want success (auth_init must be keyed by transport source, not the presented pubkey — ADR-007 amendment R1-H1)", err)
+	}
+	t.Cleanup(func() { _ = victim.Close() })
+}
+
+// TestRelay_PostAuthPerKeyOpBudgetIndependent (ADR-007 amendment 2026-07-20,
+// point 4) asserts POST-authentication per-key (per-routing-id) op budgets are
+// INDEPENDENT: once a key has PROVEN its identity by completing the signed
+// handshake, its OpsPerMin window is its own, and one authenticated key exhausting
+// its budget must NOT limit another. Per-key rate limits are legitimate ONLY here —
+// after signature verification — the counterpart to pre-signature limiting being
+// keyed by source (never by the unproven pubkey).
+//
+// This guards the correct half of the model: the implementer must move the unproven
+// pre-auth keying to source WITHOUT collapsing the proven post-auth per-key
+// fairness. It compiles only once the WithSourceKeyFunc contract above exists (the
+// package builds as one binary), then runs GREEN.
+func TestRelay_PostAuthPerKeyOpBudgetIndependent(t *testing.T) {
+	const quota = 5
 	srv, _, _, _ := startTestRelay(t, func(c *Config) {
-		c.Quotas.ConnPerMin = budget
-		c.Quotas.MaxConcurrentConnections = 0 // unlimited: this test opens many sockets
+		c.Quotas.OpsPerMin = quota
+		c.Quotas.MaxConcurrentConnections = 0
 	})
 
-	keyAPub, _ := newRelayAuthKey(t)
-	keyBPub, _ := newRelayAuthKey(t)
+	aPub, aPriv := newRelayAuthKey(t)
+	bPub, bPriv := newRelayAuthKey(t)
+	keyA := dialAuthed(t, srv.URL(), authFor(aPub, aPriv))
+	keyB := dialAuthed(t, srv.URL(), authFor(bPub, bPriv))
 
-	// authInit presents a relay-auth pubkey via a fresh raw auth_init and reports
-	// whether the relay issued a challenge (nil) or refused (ErrQuotaExceeded).
-	authInit := func(pub ed25519.PublicKey) error {
-		conn := dialRaw(t, srv.URL())
-		return discard(conn.control(testCtx(t), "auth_init", map[string]any{"relay_auth_pub": []byte(pub)}))
-	}
-
-	// Key A spends its ENTIRE per-source budget.
-	for i := 0; i < budget; i++ {
-		if err := authInit(keyAPub); err != nil {
-			t.Fatalf("auth_init A #%d within A's own budget: got %v, want nil", i, err)
+	// Key A exhausts its OWN post-auth op budget on a post-auth op (mailbox_read).
+	sawA := false
+	for i := 0; i < quota+3; i++ {
+		_, err := keyA.MailboxRead(testCtx(t), 0)
+		if errors.Is(err, ErrQuotaExceeded) {
+			sawA = true
+			break
+		}
+		if err != nil {
+			t.Fatalf("key A mailbox_read #%d: unexpected %v", i, err)
 		}
 	}
-	// A's next auth_init is refused: A exhausted A's OWN budget.
-	if err := authInit(keyAPub); !errors.Is(err, ErrQuotaExceeded) {
-		t.Fatalf("auth_init A over A's budget: got %v, want ErrQuotaExceeded", err)
+	if !sawA {
+		t.Fatalf("key A never hit its own post-auth OpsPerMin budget after %d reads; a proven key needs its own per-key window (ADR-007 amendment point 4)", quota+3)
 	}
-	// Key B must still have its FULL budget — A's flood must not consume B's.
-	for i := 0; i < budget; i++ {
-		if err := authInit(keyBPub); err != nil {
-			t.Fatalf("auth_init B #%d must be unaffected by A's flood (per-source keying): got %v, want nil (CR-1)", i, err)
-		}
+
+	// Key B — a DISTINCT proven identity — must still have its own budget: A's
+	// exhaustion must not limit B. B completes a post-auth op successfully.
+	if _, err := keyB.MailboxRead(testCtx(t), 0); err != nil {
+		t.Fatalf("key B post-auth op after key A exhausted its budget: got %v, want success (post-auth per-key windows are independent — ADR-007 amendment point 4)", err)
 	}
 }
 
