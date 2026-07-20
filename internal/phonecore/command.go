@@ -1,0 +1,51 @@
+package phonecore
+
+import (
+	"encoding/base64"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/device"
+)
+
+// CommandInput is the identity of a remote mutating op the phone authors.
+type CommandInput struct {
+	Action      string    // a protocol.Action* constant
+	Machine     string    // target machine endpoint id
+	Session     string    // namespaced session id (protocol.LaunchSessionSentinel for launch)
+	OperationID string    // durable client-generated idempotency key (R-PHC.4)
+	ExpiresAt   time.Time // command validity horizon
+	ContentHash []byte    // optional 32-byte content binding (e.g. protocol.LaunchContentHash)
+}
+
+// SignCommand authors and signs a remote command with the device's command-signing key
+// (R-PHC authoring side of R-POL.9). It builds the canonical crypto.Command tuple,
+// signs it with the KeyStore, and returns the protocol.DeviceCommandAuth the phone
+// sends to the gateway -> daemon. The DeviceID is derived canonically from the
+// command-signing public key, matching how the daemon registry pins it (R-DEV.1), so a
+// signature always verifies against exactly the record its id names.
+func SignCommand(ks crypto.KeyStore, in CommandInput) (protocol.DeviceCommandAuth, error) {
+	msg, err := crypto.Command{
+		Action:      in.Action,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt.Unix(),
+		ContentHash: in.ContentHash,
+	}.Canonical()
+	if err != nil {
+		return protocol.DeviceCommandAuth{}, err
+	}
+	sig := ks.SignCommand(msg)
+	return protocol.DeviceCommandAuth{
+		DeviceID:    device.DeviceIDFor(ks.CommandSigningPublic()),
+		Action:      in.Action,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: in.ContentHash,
+		Sig:         base64.StdEncoding.EncodeToString(sig),
+	}, nil
+}

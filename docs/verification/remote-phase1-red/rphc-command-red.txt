@@ -1,0 +1,4 @@
+internal/skeleton/command_interop_test.go:45:24: undefined: phonecore.SignCommand
+internal/skeleton/command_interop_test.go:45:50: undefined: phonecore.CommandInput
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
