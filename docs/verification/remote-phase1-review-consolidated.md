@@ -153,13 +153,21 @@ Sizes: S = day, M = few days, L = 1-2 weeks, XL = multi-week.
 Activities. Note: an `approve` capability class exists but NO approve wire op or
 daemon workflow — Phase-2 scope, do not mistake the scaffolding for the feature.
 
-## 6. Open decisions (user)
+## 6. Decisions (user, 2026-07-22)
 
-1. **Scope order**: full Phase-1 completion vs a minimal daily-usable slice
-   (fix pack + CLI/TUI + notifications-and-kill from phone) first.
-2. **Client strategy**: iOS-first per plan D12 (gated on Apple dev account +
-   Xcode availability) vs an interim phonesim/CLI-driven client to prove daily
-   usability sooner.
-3. **Relay hosting**: which VPS/host, who provisions it, TLS termination choice
-   (terminator vs in-process TLS — interacts with fix 7/HI-2).
-4. **ADR-007 status**: still "Proposed"; ratification language says Phase-1 close.
+1. **Scope order: SAFETY FIX PACK FIRST** (items 1-8 above), then Phase-1
+   completion in plan order.
+2. **Client strategy: iOS AND Android, both first-class.** This AMENDS the
+   plan's iOS-first/Android-Phase-3 stance (ADR-007 D12) — write the ADR
+   amendment when client work starts. Consequence: the gomobile-bound Go
+   phone-core becomes the single shared core (it binds to both an iOS
+   xcframework and an Android AAR), with two thin native UIs. Android is
+   buildable and testable on THIS machine (no Apple account needed), so an
+   Android build is likely the first real on-phone artifact; iOS follows when
+   an Xcode + Apple developer account environment is provided.
+3. **Relay hosting: VPS + reverse proxy** (Caddy/nginx terminates TLS in front
+   of swarm-relay). Ops item 19 delivers Dockerfile/systemd + runbook for this
+   shape; relay round 3 removes the dead TLSMode flag and adds channel binding
+   rather than in-process TLS.
+4. **ADR-007 status**: still "Proposed"; ratification language says Phase-1
+   close — ratify (with the D12 amendment) at R-GATE.3.
