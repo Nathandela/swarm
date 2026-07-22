@@ -5,6 +5,12 @@ drive the swarm terminal multi-agent tracker from a phone). It is written so a f
 agent on a different machine can pick up with full context. Read this top to bottom
 before touching anything.
 
+> **UPDATE 2026-07-22**: 37 further commits landed (relay hardening R1/R1b/R2,
+> pairing GREEN, device registry, enrollment keystone, gateway, phonecore,
+> real-stack E2E, remote launch). Sections 2-4 below are OUTDATED. The current
+> authoritative state, four-agent review verdicts, and the dependency-ordered
+> remaining-work map are in `remote-phase1-review-consolidated.md`. Start there.
+
 ## 0. The one document that governs everything
 
 `.claude/tmp/remote-control-implementation-plan.md` is the PLAN OF RECORD (~1100 lines).
