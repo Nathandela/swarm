@@ -97,6 +97,23 @@ listed A1..A8 order.
 - **A2 `cmd/swarm-remote` binary deferred to after A3/A4** (it needs a paired device's
   content key + relay routing to do anything).
 
+**A3 sub-slices + design decisions (from scouting):**
+- A3.1 read ops (`device_list`, `policy_query`) — new `Control` fields `Devices []DeviceView` /
+  `Policy *PolicyView`, new optional interfaces `DeviceLister`/`PolicyDescriber` on `coreAPI`
+  (reuse `device.Registry.List()` / `remoteLaunchPolicy.roots`), cap-gated, non-mutating (no
+  `requireRemoteAuthz`). New direct `Control` fields REQUIRE `protocol.md` field-table rows
+  (GG-7 `TestProtocolMDBidi`). Cleanest; first.
+- A3.2 `device_revoke` — mutating; uses a NEW `TargetDeviceID` field (NOT `DeviceID`, which is
+  the caller's own auth id), new `ActionDeviceRevoke`, full `requireRemoteAuthz`, `coreAPI.
+  RevokeDevice` -> `Registry.Remove`. Auto-off on last device is already automatic. KNOWN GAPS
+  (document, do not claim done): does NOT purge the relay-side registration (-> A6 ME-1 atomic
+  revoke), and any CapFull device can revoke any other (no admin tier).
+- A3.3 `pair_pending`/`pair_confirm` — OWNER-TIER ONLY (local console per R-PAIR.9; remote tier
+  refuses). Needs new per-connection push infra (like `journalWriter`) + a background
+  `pairing.Machine.Pair` goroutine bridged to a wire `ConfirmFunc`, PLUS a 6th deliverable the
+  named ops omit: a "start pairing" trigger (rendezvous id / QR + a terminal paired/failed
+  signal). Largest; own design pass; last.
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
