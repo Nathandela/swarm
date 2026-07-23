@@ -64,6 +64,7 @@ const (
 	ActionDelete       = "delete"
 	ActionApprove      = "approve"
 	ActionDeviceRevoke = "device_revoke"
+	ActionTakeControl  = "take_control"
 )
 
 // LaunchSessionSentinel is the canonical Session value signed over a launch command

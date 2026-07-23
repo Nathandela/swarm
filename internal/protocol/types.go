@@ -53,6 +53,12 @@ const (
 	// paired device from the daemon's device registry.
 	OpDeviceRevoke = "device_revoke"
 
+	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
+	// controller lease on a session — the anti-abuse gate that must precede any remote
+	// keystroke reaching a session. It runs through requireRemoteAuthz like every other
+	// remote mutating op and, on success, establishes a lease via the same attach path.
+	OpTakeControl = "take_control"
+
 	// Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option
 	// A"): wire types only in this slice — no handlers, no pairing logic.
 	OpPairStart   = "pair_start"

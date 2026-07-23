@@ -792,8 +792,23 @@ type clientConn struct {
 	pairMu sync.Mutex
 	pair   *pairSession
 
+	// remote-control lease state (slice A5-a): the session this connection took
+	// control of via take_control and the lease generation attach assigned it.
+	// Guarded by ctlMu, mirroring pairMu/pair. A5-b adds input forwarding under this
+	// lease and A5-c binds a single-use gate token; both extend controlSession then.
+	ctlMu   sync.Mutex
+	control *controlSession
+
 	closeOnce sync.Once
 	done      chan struct{}
+}
+
+// controlSession records an established take_control lease: the target local session
+// id and the lease generation s.attach assigned (published via setAttach). Minimal by
+// design for slice A5-a — later slices add expiry and the controlling device id.
+type controlSession struct {
+	target   string
+	leaseGen uint64
 }
 
 // clientSrv is the subset of *Server a clientConn needs; it is *Server. (Named to
@@ -865,6 +880,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handlePolicyQuery()
 	case OpDeviceRevoke:
 		cc.handleDeviceRevoke(c)
+	case OpTakeControl:
+		cc.handleTakeControl(c)
 	case OpPairStart:
 		cc.handlePairStart(c)
 	case OpPairConfirm:
@@ -1057,6 +1074,46 @@ func (cc *clientConn) handleAttach(c Control) {
 	if err := cc.srv.attach(cc, local); err != nil {
 		cc.replyError("attach: " + err.Error())
 	}
+}
+
+// handleTakeControl serves the signed take_control op (slice A5-a) — the ONLY
+// remote-tier path that acquires a controller lease. It mirrors handleKill's
+// authorization (the SAME requireRemoteAuthz choke point every remote mutating op
+// uses: kill switch first, then operation_id + DeviceAuthenticator) and, only once
+// authorized, handleAttach's lease establishment (the SAME s.attach path the owner
+// tier uses). On an authenticator refusal requireRemoteAuthz has already replied, so
+// we return WITHOUT attaching — no lease may open on refusal. On success the pump's
+// OpLease grant is the observed reply (no extra reply here, exactly like handleAttach).
+// SCOPE: establishment + authz ONLY. Input forwarding under this lease
+// (OpDataIn/OpResize) is slice A5-b; gate-token single-use is A5-c.
+func (cc *clientConn) handleTakeControl(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionTakeControl, c.SessionID, nil) {
+		return
+	}
+	// A second lease on this connection auto-detaches the first (mirror handleAttach),
+	// so one connection never holds two leases or cross-routes data (F7).
+	cc.attMu.Lock()
+	prev, prevGen := cc.attSession, cc.attGen
+	cc.attMu.Unlock()
+	if prev != "" && prev != local {
+		cc.srv.releaseLease(cc, prev, prevGen, false, true)
+	}
+	if err := cc.srv.attach(cc, local); err != nil {
+		cc.replyError("take_control: " + err.Error())
+		return
+	}
+	// Record the controller session at the generation attach assigned (attach publishes
+	// it via setAttach -> cc.attGen).
+	cc.attMu.Lock()
+	gen := cc.attGen
+	cc.attMu.Unlock()
+	cc.ctlMu.Lock()
+	cc.control = &controlSession{target: local, leaseGen: gen}
+	cc.ctlMu.Unlock()
 }
 
 func (cc *clientConn) handleDetach(c Control) {

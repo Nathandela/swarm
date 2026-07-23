@@ -16,7 +16,7 @@ import (
 // action the daemon does not recognise is refused, never silently treated as a read.
 func actionClass(action string) (device.Action, bool) {
 	switch action {
-	case protocol.ActionLaunch, protocol.ActionKill, protocol.ActionDelete, protocol.ActionDeviceRevoke:
+	case protocol.ActionLaunch, protocol.ActionKill, protocol.ActionDelete, protocol.ActionDeviceRevoke, protocol.ActionTakeControl:
 		return device.ActionControl, true
 	case protocol.ActionApprove:
 		return device.ActionApprove, true
