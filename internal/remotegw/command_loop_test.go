@@ -55,6 +55,13 @@ func (f *fakeMailbox) MailboxAppend(_ context.Context, target string, env []byte
 	return uint64(len(f.replies)), nil
 }
 
+// MailboxAck is a no-op: fakeMailbox does not model durable purge (see
+// ackPurgingMailbox in command_ack_test.go for that). It exists only to satisfy
+// the Mailbox interface so this fake keeps compiling.
+func (f *fakeMailbox) MailboxAck(_ context.Context, _ uint64) error {
+	return nil
+}
+
 // fakeForwarder records forwarded commands and returns a canned OK reply.
 type fakeForwarder struct {
 	mu       sync.Mutex

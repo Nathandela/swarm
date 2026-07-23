@@ -55,6 +55,12 @@ func (m *scriptedMailbox) MailboxAppend(_ context.Context, _ string, env []byte)
 	return uint64(len(m.appends)), nil
 }
 
+// MailboxAck is a no-op: this fake does not model durable purge. It exists only
+// to satisfy the Mailbox interface so this fake keeps compiling.
+func (m *scriptedMailbox) MailboxAck(_ context.Context, _ uint64) error {
+	return nil
+}
+
 func (m *scriptedMailbox) appendCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

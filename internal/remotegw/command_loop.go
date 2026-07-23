@@ -25,6 +25,7 @@ var _ CommandForwarder = (*Gateway)(nil)
 type Mailbox interface {
 	MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error)
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
+	MailboxAck(ctx context.Context, cursor uint64) error
 }
 
 // CommandForwarder forwards a device-signed command to the daemon and returns the
@@ -113,6 +114,13 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 	// Advance past every item read, so a poisoned envelope is not retried forever.
 	if maxCursor > 0 {
 		b.SetCursor(maxCursor)
+		// Ack durably purges consumed items from the relay's mailbox store, so a
+		// restarted bridge (fresh in-memory cursor) never re-reads them. A failed
+		// ack surfaces as an error but must not lose the in-memory cursor advance
+		// above -- the next poll will simply try to ack forward again.
+		if err := b.cfg.Mailbox.MailboxAck(ctx, maxCursor); err != nil {
+			errs = append(errs, fmt.Errorf("ack cursor %d: %w", maxCursor, err))
+		}
 	}
 	return processed, errors.Join(errs...)
 }
