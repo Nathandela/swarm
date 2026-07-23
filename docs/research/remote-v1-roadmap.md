@@ -164,6 +164,22 @@ OpDataIn/OpResize behind the session; A5-c gate token (ContentHash + idempotency
 A5-d adversarial suite (14 attacks incl. -race) -> cross-model review gate. All doable
 against the in-tree protocol/skeleton harnesses (E2E-over-relay is A8).
 
+**A5 STATUS: COMPLETE + cross-model reviewed (2026-07-23).** A5-a (op+authz), A5-b (input
+reopen behind the four-clause gate), A5-c (gate token + single-use), A5-d (14-attack
+adversarial suite), A5-e1 (review hardening R3/R4/R5). codex + opus both verdict the gate
+TRUSTED (docs/verification/remote-phaseA-a5-review.md). Tracked follow-ups from the review:
+- **R2 (next hardening slice):** make the remote tier fail-CLOSED when OperationClaimer /
+  KillSwitch are absent (today they fail open; production wires them, so NOT a live exploit,
+  but a future misassembly via a DaemonAPI decorator would silently lose single-use +
+  kill-switch). Requires a test-contract refactor (stub implements the now-mandatory
+  interfaces; take_control helper sends a gate token) preserving all assertions -- a careful
+  dedicated slice, not a rushed one.
+- **R1 + R7 -> A7 BLOCKERS:** decide the end-to-end keystroke-transport trust boundary (the
+  input producer doesn't exist yet; the relay can't forge; the gateway data-plane integrity
+  is the owner-uid residual -- decide before real phones type) and have the phone sign the
+  session lifetime (bind to the signed ExpiresAt).
+- **R6 -> L3/DME-1 constraint:** idem-GC TTL must exceed max command validity; persist ExpiresAt.
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
