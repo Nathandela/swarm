@@ -117,9 +117,31 @@ listed A1..A8 order.
   - A3.3-b tier/cap gating (remote-tier refuses; CapPairing) — now.
   - A3.3-c ConfirmFunc<->wire bridge (PairingHost iface + Server closures; fake host + memRendezvous) — now.
   - A3.3-d enroll wiring (coreAPI implements PairingHost; real Machine.Pair->enroll->Add, keys injected) — now.
-  - A3.3-e live-relay RendezvousTransport adapter (relay.DialRaw) — BLOCKED on A2 binary.
-  Deferred to A2/A7: production machine-key provisioning (swarm remote init) + sealed-grant
-  delivery over the relay mailbox. Frozen pairing/enroll/crypto untouched.
+  - A3.3-e live-relay RendezvousTransport adapter (relay.DialRaw) — DOABLE NOW (see reconciliation).
+  Deferred to A2/A7: sealed-grant delivery over the relay mailbox. Frozen pairing/enroll/crypto untouched.
+
+**RECONCILIATION (2026-07-23, after A4 scoping) — supersedes earlier "blocked on A2" notes:**
+- The pairing-host ADR decision (daemon makes its own ephemeral rendezvous `DialRaw`)
+  **decoupled A3.3-e from the A2 gateway binary**: the pairing rendezvous is the daemon's
+  transient dial, NOT the gateway's steady-state relay connection. A3.3-e needs only a
+  RendezvousTransport adapter over `relay.DialRaw` + `relay.Client.Rendezvous*` + the relay
+  URL/auth key from `swarm remote init` — all doable now, testable against an in-process relay
+  (`cmd/swarm-relay` exists). So real relay-backed pairing is reachable without the gateway binary.
+- **`swarm remote init` is FOUNDATIONAL, lands in A4** (not deferred to A2/A7): it provisions +
+  persists the machine pairing identity (Noise-static + recipient X25519, grant-signing +
+  relay-auth Ed25519) + relay URL under StateDir (0600, temp+rename+Sync), and serve.go loads it
+  into `coreAPI.pairing` (tri-state: missing => nil/pairing-off; corrupt => daemon refuses to
+  start). Needs a NEW machine-identity bundle type in internal/remote/crypto (no existing bundle
+  fits both the 4-key shape and enroll.Enroll's raw-grant-key need). Follow-up: BeginPairing must
+  populate QRPayload.RelayURL once init provides one (one line, easy to lose).
+
+**A4 sub-slices (dependency-ordered, from scouting):** A4-0 CLI scaffold (`swarm remote` dispatch);
+A4-1 `swarm remote init` (keystone, above); A3.3-e rendezvous adapter (now unblocked); A4-3
+`devices` + A4-4 `revoke` (thin protocol.Client extensions, owner-tier no-sig); A4-6 kill-switch
+manual override (NEW owner-tier-only wire op + durable ManualOff field, winning under device-count
+auto-off; `off` process-sever half is a TODO until A2); A4-5 `pair` + A4-7 TUI confirm modal (share
+a new async pairing-session protocol.Client API for the pair_pending/pair_result pushes — the one
+"bigger than it looks" piece; TUI modal is mock-flow-licensed by the DoD); A4-2 `status`.
 
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
