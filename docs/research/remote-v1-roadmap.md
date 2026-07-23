@@ -200,6 +200,27 @@ typing), real grant delivery over the relay mailbox (deferred). G3 launchd/syste
 supervising swarm-remote: off the phonesim path, land last. Frozen crypto/relay/remotegw/phonecore
 reused unmodified; the renderer is a new phonecore file.
 
+**A6 remainder plan (from scouting 2026-07-23; relay is modifiable, only crypto is frozen):**
+- ME-1 (do first, LIVE BUG): handleDeviceRevoke never severs the revoked device's live socket
+  (3 non-atomic store txns, no cancel/CloseNow). Fix: store.revokeAndPurge (one bolt txn) +
+  capture the target serverConn under s.mu, then old.cancel()+CloseNow() outside the lock
+  (mirrors Server.Close). Test: revoke a connected device -> a blocking read on its conn
+  unblocks within a bound.
+- DHI-3 kill/delete idempotency: OperationClaimer (Prepare-only, existed->refuse) is WRONG here
+  -- a replayed kill must return cached SUCCESS, not an error. Use a NEW additive interface
+  IdempotentExecutor{ClaimIdempotentOp(op,action,session)->(existed,priorOK,err),
+  CommitIdempotentOp(op,ok)} backed by d.idem Prepare/Complete/Fail; Kill/Delete signatures
+  UNCHANGED (wrap at the remote boundary only, owner-tier local calls untouched). Delete has a
+  real double-fire on replay (OnSessionEnd + duplicate journal tombstone).
+- CR-1: add Quotas.MaxConcurrentConnectionsPerSource (per-source cap under s.mu) + anchor the
+  handshake deadline at serverConn.acceptedAt (cumulative, slow-loris defense) instead of the
+  per-read idle window.
+- HI-3 SPLIT: machine allowlist (Config.AllowedMachineRIDs, gate handleAuthInit/authorize_device
+  fail-closed) is clean+TDD-able now; the DEVICE-CONSENT-PROOF half is UNDER-SPECIFIED (needs an
+  ADR amendment: the proof artifact + whether pairing.go is frozen) and has ZERO production call
+  sites today (daemon-hosted pairing; relay authorize_device unused) -> defer to a design decision.
+Order: ME-1, DHI-3 (parallel, daemon+relay disjoint), CR-1, HI-3-allowlist; HI-3-consent deferred.
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
