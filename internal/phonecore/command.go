@@ -1,6 +1,7 @@
 package phonecore
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"time"
@@ -49,6 +50,62 @@ func SignCommand(ks crypto.KeyStore, in CommandInput) (protocol.DeviceCommandAut
 		ContentHash: in.ContentHash,
 		Sig:         base64.StdEncoding.EncodeToString(sig),
 	}, nil
+}
+
+// TakeControlInput is the identity of a take_control op the phone authors. GateToken is
+// hashed into the signed command (ContentHash = SHA256(GateToken)) AND carried on the
+// wire, so the daemon can recompute the hash from the wire token and a relay that swaps
+// the one-shot token breaks the signature.
+type TakeControlInput struct {
+	Machine     string    // target machine endpoint id
+	Session     string    // namespaced session id to take control of
+	OperationID string    // durable client-generated idempotency key (single-use)
+	ExpiresAt   time.Time // command validity horizon
+	GateToken   string    // one-shot gate token bound via ContentHash and carried on the wire
+}
+
+// SignTakeControl authors and signs a take_control command (A7 input), mirroring
+// SignCommand but binding the one-shot gate token into the signature the way launch binds
+// its spec: ContentHash = SHA256(GateToken), Action = protocol.ActionTakeControl. The
+// daemon (handleTakeControl) recomputes SHA256 from the WIRE gate token, so a relay that
+// swaps the token yields a different content hash and the device signature fails to verify.
+func SignTakeControl(ks crypto.KeyStore, in TakeControlInput) (protocol.DeviceCommandAuth, error) {
+	h := sha256.Sum256([]byte(in.GateToken))
+	return SignCommand(ks, CommandInput{
+		Action:      protocol.ActionTakeControl,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: h[:],
+	})
+}
+
+// SealTakeControlEnvelope seals a signed take_control command together with its wire gate
+// token and requested TTL as a mailbox envelope under the epoch content key, mirroring
+// SealLaunchEnvelope. The gate token rides alongside the signed tuple (protocol.RemoteCommand)
+// so the gateway can reconstruct the take_control Control frame; the token is bound into the
+// signature via ContentHash = SHA256(gateToken), which the daemon recomputes from this
+// forwarded token, so a relay that alters it breaks the signature. TTLSeconds is not signed
+// (server-clamped). seq must be unique per epoch.
+func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd protocol.DeviceCommandAuth, gateToken string, ttlSeconds int) ([]byte, error) {
+	plaintext, err := json.Marshal(protocol.RemoteCommand{
+		DeviceCommandAuth: cmd,
+		GateToken:         gateToken,
+		TTLSeconds:        ttlSeconds,
+	})
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1,
+		EpochID: epochID,
+		Seq:     seq,
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
 }
 
 // SealCommandEnvelope seals a signed command as a mailbox envelope under the epoch

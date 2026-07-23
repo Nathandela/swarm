@@ -114,7 +114,9 @@ type DeviceCommandAuth struct {
 // the forwarded spec, so a gateway that alters the spec breaks the signature.
 type RemoteCommand struct {
 	DeviceCommandAuth
-	Launch *LaunchReq `json:"launch,omitempty"`
+	Launch     *LaunchReq `json:"launch,omitempty"`
+	GateToken  string     `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
+	TTLSeconds int        `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
 }
 
 // DeviceAuthenticator is the optional interface a remote-tier DaemonAPI implements to
