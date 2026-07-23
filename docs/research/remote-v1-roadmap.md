@@ -74,6 +74,38 @@ All on this machine; no app, no Apple account. Dependency-ordered.
 **Phase A exit:** phonesim pairs (SAS), observes (inbox + journal + snapshot cards),
 launches (policy-gated), AND types (take-control) — the entire wire proven, no UI.
 
+## Phase A execution status (live log)
+
+Slices land RED->GREEN through the sonnet/opus TDD swarm; each verified (targeted tests +
+build/vet + `-race`) and pushed. Order is by CRITICAL PATH to a working `phonesim`, not the
+listed A1..A8 order.
+
+**Done (pushed):**
+- A1 — daemon binds the remote-tier socket in prod (opt-in, secure default OFF).
+- A2/GW-M2 — command-IN through `crypto.MailboxReceiver` (replay/reorder rejected).
+- A2/GW-M1 — command mailbox ack + durable cursor (no cross-restart command replay).
+
+**Decisions:**
+- **GW-H2 design LOCKED, deferred to pre-gate.** Live events seal `Seq = rec.Cursor` (ADR
+  D6). The roster snapshot (deliberate `Cursor=0` records) must seal **boundary-anchored**
+  seqs: for a snapshot as-of journal cursor `N` with `K` roster items, item `i` (0-indexed)
+  seals `Seq = N-K+1+i` (a contiguous block ending at `N`; first live event is `N+1`). This
+  is restart-consistent (D6) and collision-free. Requires the daemon snapshot to expose `N`,
+  so it spans daemon + gateway + phonecore + a fixture update to the committed phonecore
+  replay tests (asserted properties preserved). Reliability polish, NOT on the phonesim
+  critical path -> implemented as a dedicated careful slice before the phase gate.
+- **A2 `cmd/swarm-remote` binary deferred to after A3/A4** (it needs a paired device's
+  content key + relay routing to do anything).
+
+**Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
+A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
+A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
+input blast radius). GW-H2 slots in before the end-of-phase gate.
+
+**Known GG-4 blocker:** pre-existing `TestProtocol_JournalSubscribeOrderedAndEvictsWedged`
+timing flake (see `docs/verification/remote-phaseA-dod.md` §2b) — not Phase A's, must clear
+before the gate.
+
 ## Phase B — Android handset (the v1 milestone)
 
 - **B1. gomobile bind** phone-core -> Android AAR; enforce the surface contract from A7. (M)
