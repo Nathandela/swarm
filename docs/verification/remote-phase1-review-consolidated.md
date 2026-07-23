@@ -104,15 +104,21 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
 - **Item 6 (HIGH-3) phone journal replay/reorder/gap guard** — DONE. RED `53732a3`,
   GREEN `b8bdcec`. `JournalReceiver` over the frozen `MailboxReceiver` + monotonic-cursor
   guard on `SessionCache.Apply`; `-race` green.
-- **Item 4a (CRITICAL DCR-1/DCR-2) launch crash-window fix** — RED in progress (atomic
-  opID+meta durability, phase-aware replay, Open-time resolver; W1 poison + W3 silent-corpse).
-- **Item 2a (R-KS.1) kill-switch enforcement at the protocol choke point** — RED in progress
-  (optional `KillSwitch` interface; disabled => refuse every remote op `CodeKillSwitch` before
-  signature work). 2b (durable remote-state.json + enroll wiring) follows.
-- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3); item 1 launch policy
-  (R-POL.2-.8); item 5 gateway reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink
-  seq to the journal cursor, which must reconcile with item 6's test setup); item 7 relay
-  round 3; item 8 SAS widening (needs an ADR — crypto is frozen).
+- **Item 2a (R-KS.1) kill-switch enforcement at the protocol choke point** — DONE. RED
+  `bb9dfed`, GREEN `3958c13`. Optional `KillSwitch` interface consulted as the FIRST gate in
+  `requireRemoteAuthz`; disabled => `CodeKillSwitch` before signature work. `-race` green.
+  2b (durable remote-state.json + enroll wiring + R-KS.2 auto-off) still to do.
+- **Item 4a (CRITICAL DCR-1/DCR-2) launch crash-window fix** — DONE (independent
+  adversarial re-derivation of the crash table in progress as a gate). RED `ed17303`, GREEN
+  `a39cfc7`. Liveness-based replay (return recorded session only if present-and-not-Lost;
+  else Redrive under the same operation_id) + Open-time resolver failing stale
+  prepared/executing launch records. W1 poison and W3 silent-corpse closed; W4 live-orphan
+  double-spawn is the documented ceiling (skipped test). `-race` green.
+- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3); 2b kill-switch durable
+  state + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5
+  gateway reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink seq to the journal
+  cursor, which must reconcile with item 6's test setup); item 7 relay round 3; item 8 SAS
+  widening (needs an ADR — crypto is frozen).
 
 ## 5. Remaining work to "usable from a phone, daily" (dependency-ordered)
 
