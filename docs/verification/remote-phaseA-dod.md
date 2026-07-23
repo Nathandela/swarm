@@ -99,16 +99,19 @@ The end-of-phase gate (§3) runs the full committee; individual slices bake thes
 
 ## 2b. Known GG-4 blockers discovered during Phase A (must clear before the phase gate)
 
-- **`internal/protocol` `TestProtocol_JournalSubscribeOrderedAndEvictsWedged` fails on this
-  machine even in isolation** (healthy subscriber receives ~190-310 of the required 320
-  frames within the 15s deadline; count varies run to run). The test comment
-  (`remote_journal_test.go:235-241`) documents it as inherently CPU-scheduling-sensitive
-  and "reliable in isolation and on an unloaded CI box" — but it does NOT hold in isolation
-  here. NOT caused by Phase A (no Phase A slice touches `internal/protocol`; the wedged-
-  eviction property is a pre-existing fix-pack concern). Resolution options for the gate:
-  make the eviction test deterministic (drive the fan-out via an injected clock / a
-  synchronous overflow signal instead of a wall-clock throughput threshold), or run GG-4 on
-  an unloaded CI box as the authors intended. Tracked here; must be green before Phase A closes.
+- **RESOLVED 2026-07-24 (commit 3824a7a).** `TestProtocol_JournalSubscribeOrderedAndEvictsWedged`
+  flaked on loaded machines because it asserted the healthy subscriber received
+  >= eventQueueCap+64 frames within a 15s wall-clock window — a throughput/rate gate that
+  false-fails under CPU starvation (the healthy sub is alive but slow; ~190-310 of 320).
+  Fixed by observing eviction DIRECTLY at its source of truth: `distributeJournal` removes a
+  wedged subscriber from `srv.jsubs` on queue overflow, and the test is `package protocol` so
+  it polls `len(srv.jsubs)` under `srv.jsubMu` (2->1) instead of the frame-count proxy. Both
+  guarded properties are asserted directly and more strongly (eviction: map removal +
+  `remaining==1` healthy-survives + wedged conn torn down; ordering: unchanged strictly-
+  increasing cursor check). Test-only change, zero production changes. Verified 6/6 `-race`
+  on the box the old test failed on; mutation checks (eviction disabled -> FAIL; concurrent
+  `go distributeJournal` -> ordering FAIL) confirm the assertions retain teeth. The full-suite
+  GG-4 blocker for the phase gate is cleared.
 
 ## 3. End-of-phase gate (iterate until all pass)
 
