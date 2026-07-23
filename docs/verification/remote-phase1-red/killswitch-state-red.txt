@@ -1,0 +1,17 @@
+RED evidence — fix-pack item 2b (R-KS.1/.2): durable kill-switch state (off-until-paired)
+Date: 2026-07-23  Commit-base: 47dcb73
+
+$ go test -run 'KillSwitch' ./internal/skeleton/
+--- FAIL: TestKillSwitch_DefaultOffUntilDevicePaired (1.42s)
+    killswitch_state_test.go:133: assembled coreAPI does not implement protocol.KillSwitch: the durable remote-control switch is unwired (slice 2b R-KS.1)
+--- FAIL: TestKillSwitch_StateSurvivesRestart (0.03s)
+    killswitch_state_test.go:183: assembled coreAPI does not implement protocol.KillSwitch: the durable remote-control switch is unwired (slice 2b R-KS.1)
+--- FAIL: TestKillSwitch_AutoOffOnZeroDevices (0.00s)
+    killswitch_state_test.go:215: assembled coreAPI does not implement protocol.KillSwitch: the durable remote-control switch is unwired (slice 2b R-KS.1)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	2.282s
+FAIL
+
+Runtime RED (package compiles): coreAPI does not implement protocol.KillSwitch yet. Model pinned: RemoteControlEnabled()==(device Count()>0), read-time recompute, mirrored to <stateDir>/remote-state.json (0600). Default off-until-paired; enable-on-first-pair; auto-off-at-zero-devices (R-KS.2). AutoOff test removes a device directly and requires the switch to flip off => pins read-time recompute (a cache-at-assembly impl fails). Blast radius: one decoy device added to TestRGW_RemoteSocketIsRemoteTierAndFailClosed (assertions unchanged); all device-registering E2E tests enable the switch for free.
+
+SCOPE NOTE: 2b delivers the default + auto-off safety properties, NOT the manual 'swarm remote off' override (R-KS.3) which needs the CLI; remote-state.json is the persistence hook for it.

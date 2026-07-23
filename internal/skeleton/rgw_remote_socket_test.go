@@ -4,10 +4,19 @@ package skeleton
 // remote-tier socket (the amendment D.0-A1 remote.sock the gateway dials), distinct
 // from the owner-trusted main UDS, when a RemoteSocketPath is configured. Every
 // connection on it is remote-tier, so a mutating op is authorized against the pinned
-// device registry (R-POL.9) before any action -- and with no paired devices it is
-// refused, fail-closed. The main socket is unaffected (owner tier, no device auth).
+// device registry (R-POL.9) before any action -- an unknown device is refused,
+// fail-closed. The main socket is unaffected (owner tier, no device auth).
 //
 // RED is undefined-only: Config has no RemoteSocketPath field yet.
+//
+// Fix-pack 2b harness note (R-KS.1): the durable kill switch defaults OFF UNTIL A DEVICE
+// IS PAIRED, and it is the FIRST authz gate, so with zero paired devices EVERY remote op
+// is refused CodeKillSwitch before device auth is even consulted. To keep exercising the
+// device-auth gates this test is ABOUT (missing-field => invalid_field, unknown device =>
+// not_authorized), pair one decoy device up front so the switch is on. The
+// zero-devices/kill-switch path is covered separately by
+// killswitch_state_test.go:TestKillSwitch_DefaultOffUntilDevicePaired. This adjusts only
+// the setup; it weakens no assertion (the decoy id never matches "nobody").
 
 import (
 	"net"
@@ -17,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 )
 
 // assembleWithRemote stands up the full assembly with a configured remote.sock and
@@ -67,6 +77,11 @@ func assembleWithRemote(t *testing.T) (*Daemon, string) {
 
 func TestRGW_RemoteSocketIsRemoteTierAndFailClosed(t *testing.T) {
 	sk, rsock := assembleWithRemote(t)
+	// Fix-pack 2b: pair a decoy device so the durable kill switch (default off-until-paired)
+	// is ON — otherwise the first authz gate refuses every op CodeKillSwitch before the
+	// device-auth gates below are reached. The decoy's id never equals "nobody", so the
+	// unknown-device assertion is unchanged.
+	registerPhone(t, sk, device.CapFull)
 
 	// The remote socket exists and accepts connections.
 	if fi, err := os.Stat(rsock); err != nil || fi.Mode()&os.ModeSocket == 0 {
@@ -86,7 +101,7 @@ func TestRGW_RemoteSocketIsRemoteTierAndFailClosed(t *testing.T) {
 		t.Fatalf("remote kill missing device fields = op %q code %q; want error/invalid_field", got.Op, got.ErrorCode)
 	}
 
-	// A well-formed mutating op with device fields, but no paired device in the
+	// A well-formed mutating op with device fields, but from a device that is NOT in the
 	// registry, is refused not_authorized (fail-closed: unknown device).
 	exp := time.Now().Add(time.Minute)
 	rc.write(protocol.Control{
