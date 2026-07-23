@@ -395,16 +395,27 @@ remote-phaseA-a5-review.md R1) and that Phase A left open. Both are the operator
 recorded here before A7 implementation. Neither touches the frozen crypto layer.
 
 **Decision 1 — keystroke transport: sealed + sequence-gated, riding the control lease
-(option (a) of R1; per-keystroke MAC rejected).** After a signed `take_control` establishes
-a control session on a connection, live input frames (`OpDataIn`/`OpResize`) travel as a
-**persistent input channel on that same lease-holding connection**: each frame is E2E-sealed
-under the epoch `ContentKey` (the relay sees opaque bytes — it cannot read or forge
-keystrokes, and lacks the key regardless), and carries a **per-session monotonic sequence
-number** the daemon uses to reject replay/reorder/dup (the same GW-M2 `MailboxReceiver`
-seq-gating discipline already used for command-IN). Keystrokes are NOT individually signed —
-they ride the lease per D7. The daemon's existing four-clause input gate (`controlGateOpen`:
-kill-switch -> `cc.control != nil` -> now < expiry -> target/leaseGen match) is the
-authorization; the seq number is the anti-replay/reorder layer on top.
+(option (a) of R1; per-keystroke MAC rejected).** Live input frames (`OpDataIn`/`OpResize`)
+travel as **sealed mailbox envelopes** (the relay is mailbox-only) on the SAME machine
+mailbox as commands: each frame is E2E-sealed under the epoch `ContentKey` (the relay sees
+opaque bytes — it cannot read or forge keystrokes, and lacks the key regardless) and carries
+a **monotonic mailbox sequence number**. The **gateway** (machine side) seq-gates the stream
+with the same `crypto.MailboxReceiver` discipline already used for command-IN — reusing the
+SAME single `(sender, epoch)` seq space, since the phone stamps commands AND input from one
+monotonic allocator — rejecting replay/reorder/dup, then forwards the ordered, deduped raw
+input as `TDataIn`/`resize` over ONE persistent lease-holding UDS connection it dials to the
+daemon (take_control is forwarded on that same connection to establish the lease first).
+Keystrokes are NOT individually signed — they ride the lease per D7. The daemon's existing
+four-clause input gate (`controlGateOpen`: kill-switch -> `cc.control != nil` -> now < expiry
+-> target/leaseGen match) authorizes every frame on the ordered lease connection.
+Per-session anti-replay is structural: input flows only while the lease is live, the
+session+generation match is the per-session authorization, and the mailbox seq is the
+anti-replay coordinate. **Seam note (grounded 2026-07-24):** the seq-gate lives on the
+**machine side at the gateway**, NOT in the daemon — the daemon holds no `ContentKey` and
+receives an already-ordered UDS stream, so a daemon-side seq field would add GG-7 surface for
+zero gain under this trust model (relay = adversary, defended at the gateway; gateway =
+owner-uid residual). The daemon change is R7 only; the rest is phone-core encoders + gateway
+lease plumbing.
 
 **Trust boundary (the R1 question, answered).** The **relay is the adversary** and is fully
 defended: it cannot forge sealed frames (no `ContentKey`) and cannot replay/reorder them past
@@ -434,6 +445,20 @@ receives sanitized snapshot frames, not raw PTY bytes.
 **Consequences.** A7 gains a machine-side snapshot renderer/sanitizer and a sealed+seq'd input
 data-plane; the phone-core gains an input encoder (seal + seq) and a snapshot decoder, but no
 VT emulator and no keystroke signing. A7 remains a **security-critical slice** (cross-model
-review required, DoD §0). GG-7 field-drift applies to any new `Control` fields (input seq,
-snapshot frames). Frozen crypto reused unchanged (`SealMailbox`/`ContentKey` for sealing;
+review required, DoD §0). GG-7: the input channel adds NO new GG-7-covered `Control` fields —
+keystrokes are the already-documented raw `TDataIn`, resize reuses `cols`/`rows`, take_control
+reuses `ttl_seconds`/`gate_token`/`expires_at`; only prose updates to `protocol.md` (no field
+table rows). Frozen crypto reused unchanged (`SealMailbox`/`ContentKey` for sealing;
 `MailboxReceiver` seq discipline for the gate) — no ADR needed for the crypto layer.
+
+**Grounded residuals (2026-07-24).** (1) **Cross-device input (single-device v1: moot).** The
+epoch `ContentKey` is shared across paired devices (D2) and `SenderKeyID` is zero on the wire,
+so the gateway cannot cryptographically attribute an unsigned input frame to a specific paired
+device; a second paired device could seal frames routed to the lease holder. For the D12
+personal single-device v1 this cannot occur. Cheap hardening if multi-device is added: stamp
+`SenderKeyID = KeyID(commandSigningPub)` on take_control + input envelopes and bind the lease
+to that sender id. (2) **Keystroke latency is a Phase B UX concern, not Phase A correctness.**
+The relay is mailbox-only; input rides the command-IN poll (default 500ms — unusable for live
+typing). Phase A proves the backend correct at any poll interval (phonesim uses a tight one);
+a live/long-poll transport (or a hard poll-interval drop) is a Phase B decision, not a blocker
+for the input backend.
