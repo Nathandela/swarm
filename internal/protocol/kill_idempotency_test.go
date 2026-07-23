@@ -30,9 +30,13 @@ package protocol
 //	// replies accordingly. Kill/Delete signatures are UNCHANGED (owner-tier calls untouched).
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // idempotentStub is a remote-tier DaemonAPI (via the embedded *stubDaemon, so it is
@@ -64,6 +68,12 @@ func newIdempotentStub() *idempotentStub {
 var _ IdempotentExecutor = (*idempotentStub)(nil)
 
 func (s *idempotentStub) ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error) {
+	// Mirror the durable store (internal/idempotency Prepare): an empty operation_id is
+	// refused. This is what makes an OWNER-tier call that wrongly enters the idempotency
+	// block surface the production "idempotency: empty operation_id" regression.
+	if operationID == "" {
+		return false, false, errors.New("idempotency: empty operation_id")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rec, ok := s.ops[operationID]; ok {
@@ -162,5 +172,43 @@ func TestProtocol_ReplayedDeleteExecutesOnce(t *testing.T) {
 	}
 	if deleted := stub.deletedIDs(); len(deleted) != 1 {
 		t.Fatalf("daemon executed %d deletes for a replayed op; want exactly 1 (idempotent replay)", len(deleted))
+	}
+}
+
+// TestProtocol_OwnerTierKillDeleteWithoutOperationID pins the OWNER-TIER property that a
+// local kill/delete over the owner socket (which carries NO operation_id) SUCCEEDS even
+// when the backend implements IdempotentExecutor (the production coreAPI does). DHI-3's
+// replay-dedup is a REMOTE-tier concern: on the owner tier requireRemoteAuthz is a
+// pass-through and local calls carry no operation_id, so the idempotency claim (which
+// rejects an empty operation_id) must NOT run. Regression guard for the "empty
+// operation_id" error surfacing on owner-tier c.Kill/c.Delete (a cross-slice regression
+// that broke TestE2E_ResumeAsNewSession_R2 and TestE2E_Worktree_LaunchRunTeardown).
+func TestProtocol_OwnerTierKillDeleteWithoutOperationID(t *testing.T) {
+	stub := newIdempotentStub()
+	stub.setMetas(persist.Meta{
+		ID:        "sess1",
+		AgentType: "claude",
+		Cwd:       "/tmp",
+		Status:    status.Status{Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone},
+	})
+	sock := serveOwnerAPI(t, stub) // owner tier: remoteTier == false
+	c := dialClient(t, sock, nil)
+	id := onlyViewID(t, c)
+
+	// Owner-tier kill: no operation_id. Must execute and reply OK, NOT error with
+	// "empty operation_id" from the idempotency store.
+	if err := c.Kill(id); err != nil {
+		t.Fatalf("owner-tier Kill with empty operation_id: %v; want success (idempotency must not gate the owner tier)", err)
+	}
+	if got := stub.killedIDs(); len(got) != 1 || got[0] != "sess1" {
+		t.Fatalf("daemon Kill received %v, want [sess1] exactly once", got)
+	}
+
+	// Owner-tier delete: same property.
+	if err := c.Delete(id); err != nil {
+		t.Fatalf("owner-tier Delete with empty operation_id: %v; want success", err)
+	}
+	if got := stub.deletedIDs(); len(got) != 1 || got[0] != "sess1" {
+		t.Fatalf("daemon Delete received %v, want [sess1] exactly once", got)
 	}
 }

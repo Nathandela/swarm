@@ -1031,7 +1031,10 @@ func (cc *clientConn) handleKill(c Control) {
 	// Replay-safe when the backend is an IdempotentExecutor (DHI-3): claim the
 	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
 	// re-executing Kill, so a captured remote kill cannot double-fire the side effect.
-	if exec, ok := cc.srv.d.(IdempotentExecutor); ok {
+	// REMOTE-tier ONLY: owner-tier local calls carry no operation_id and must bypass the
+	// claim (which rejects an empty operation_id); requireOperationID has already ensured
+	// a non-empty operation_id on the remote tier.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok && cc.srv.remoteTier {
 		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionKill, local)
 		if err != nil {
 			cc.replyError("kill: " + err.Error())
@@ -1073,7 +1076,10 @@ func (cc *clientConn) handleDelete(c Control) {
 	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
 	// re-executing Delete, so a captured remote delete cannot append a duplicate
 	// tombstone or re-fire OnSessionEnd.
-	if exec, ok := cc.srv.d.(IdempotentExecutor); ok {
+	// REMOTE-tier ONLY: owner-tier local calls carry no operation_id and must bypass the
+	// claim (which rejects an empty operation_id); requireOperationID has already ensured
+	// a non-empty operation_id on the remote tier.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok && cc.srv.remoteTier {
 		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionDelete, local)
 		if err != nil {
 			cc.replyError("delete: " + err.Error())
