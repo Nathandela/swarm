@@ -43,6 +43,11 @@ const (
 	OpJournalSubscribe = "journal_subscribe"
 	OpJournalRead      = "journal_read"
 	OpJournalEvent     = "journal_event"
+
+	// Remote control-plane read ops (slice A3.1): non-mutating, capability-gated
+	// reads of the paired-device roster and the machine's remote launch policy.
+	OpDeviceList  = "device_list"
+	OpPolicyQuery = "policy_query"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
@@ -98,6 +103,8 @@ type Control struct {
 	Journal       []JournalRecord `json:"journal,omitempty"`        // journal records (journal_read/journal_event)
 	Roster        []JournalRecord `json:"roster,omitempty"`         // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
 	FullResync    bool            `json:"full_resync,omitempty"`    // the caller's cursor fell below the retained floor
+	Devices       []DeviceView    `json:"devices,omitempty"`        // paired-device roster, carried on the device_list reply
+	Policy        *PolicyView     `json:"policy,omitempty"`         // remote launch policy, carried on the policy_query reply
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):
@@ -132,6 +139,23 @@ type SessionView struct {
 	LastActivity time.Time     `json:"last_activity"`
 	CreatedAt    time.Time     `json:"created_at"`
 	Summary      string        `json:"summary"` // V-4 one-line last-output summary
+}
+
+// DeviceView is one paired-device row (R-DEV.1), carried on the device_list
+// reply. Capability is the device's authorization tier rendered as its stable
+// snake_case text (e.g. "full"/"read_only"/"read_approve").
+type DeviceView struct {
+	DeviceID   string    `json:"device_id"`
+	Name       string    `json:"name"`
+	Capability string    `json:"capability"`
+	PairedAt   time.Time `json:"paired_at"`
+}
+
+// PolicyView is the machine's remote launch policy (R-POL.3), carried on the
+// policy_query reply: the configured allowed cwd roots a remote launch is
+// confined to.
+type PolicyView struct {
+	AllowedCwdRoots []string `json:"allowed_cwd_roots"`
 }
 
 // LaunchReq is a client's request to launch a new session. Every field is

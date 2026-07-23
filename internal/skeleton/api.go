@@ -106,6 +106,52 @@ func (a *coreAPI) RemoteLaunchAllowed(resolvedCwd string) error {
 // remote launches to the configured cwd roots (R-POL.3).
 var _ protocol.LaunchPolicy = (*coreAPI)(nil)
 
+// ListDevices makes coreAPI a protocol.DeviceLister (slice A3.1): it converts the
+// pinned device registry's roster to the wire-facing protocol.DeviceView, carrying
+// the capability tier as its stable text form (device.Capability.MarshalText). A
+// nil registry (never wired) reports no devices rather than panicking.
+func (a *coreAPI) ListDevices() []protocol.DeviceView {
+	if a.devices == nil {
+		return nil
+	}
+	recs := a.devices.List()
+	out := make([]protocol.DeviceView, 0, len(recs))
+	for _, r := range recs {
+		capText, err := r.Capability.MarshalText()
+		if err != nil {
+			continue // corrupted capability: fail closed by omitting the record
+		}
+		out = append(out, protocol.DeviceView{
+			DeviceID:   r.DeviceID,
+			Name:       r.Name,
+			Capability: string(capText),
+			PairedAt:   r.PairedAt,
+		})
+	}
+	return out
+}
+
+// coreAPI ALSO satisfies protocol.DeviceLister so the assembled remote-tier Server
+// can serve device_list (R-DEV.1).
+var _ protocol.DeviceLister = (*coreAPI)(nil)
+
+// DescribePolicy makes coreAPI a protocol.PolicyDescriber (slice A3.1): it reports
+// the configured remote launch policy's allowed cwd roots. protocol.LaunchPolicy
+// itself only carries RemoteLaunchAllowed, so the roots are obtained by type-asserting
+// the loaded policy's own AllowedRoots() (remoteLaunchPolicy implements it); a nil or
+// non-conforming policy reports an empty root set rather than panicking.
+func (a *coreAPI) DescribePolicy() protocol.PolicyView {
+	rp, ok := a.launchPolicy.(interface{ AllowedRoots() []string })
+	if !ok {
+		return protocol.PolicyView{}
+	}
+	return protocol.PolicyView{AllowedCwdRoots: rp.AllowedRoots()}
+}
+
+// coreAPI ALSO satisfies protocol.PolicyDescriber so the assembled remote-tier
+// Server can serve policy_query (R-POL.3).
+var _ protocol.PolicyDescriber = (*coreAPI)(nil)
+
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{
 		core:         core,

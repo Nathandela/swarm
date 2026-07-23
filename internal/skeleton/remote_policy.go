@@ -30,6 +30,13 @@ type remoteLaunchPolicy struct {
 	roots []string
 }
 
+// AllowedRoots returns the policy's configured cwd roots (slice A3.1's
+// policy_query read), so a PolicyDescriber can expose them without reaching into
+// the protocol.LaunchPolicy interface (which only carries RemoteLaunchAllowed).
+func (p remoteLaunchPolicy) AllowedRoots() []string {
+	return p.roots
+}
+
 // RemoteLaunchAllowed allows resolvedCwd iff it equals, or lies within, a configured root
 // (R-POL.3). The trailing-separator guard makes "/a/bc" NOT match root "/a/b".
 func (p remoteLaunchPolicy) RemoteLaunchAllowed(resolvedCwd string) error {

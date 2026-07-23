@@ -83,12 +83,15 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `journal`          | `[]JournalRecord` | journal records, carried on `journal_read` / `journal_event` (R-PROT.3)      |
 | `roster`           | `[]JournalRecord` | live sessions as-of `cursor` on a `journal_read` snapshot (R-JRN.4)          |
 | `full_resync`      | bool              | set when the caller's `cursor` fell below the retained journal floor (R-JRN.6) |
+| `devices`          | `[]DeviceView`    | paired-device roster, carried on the `device_list` reply (R-DEV.1)           |
+| `policy`           | `*PolicyView`     | remote launch policy (allowed cwd roots), carried on the `policy_query` reply (R-POL.3) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
 uses none of them serializes byte-identically to the pre-remote shape. The nested
-`ApproveReq` (approval) and `JournalRecord` (journal event) shapes are documented at
-the field level in `internal/protocol` and are not repeated as wire tables here.
+`ApproveReq` (approval), `JournalRecord` (journal event), `DeviceView` (paired
+device), and `PolicyView` (launch policy) shapes are documented at the field level
+in `internal/protocol` and are not repeated as wire tables here.
 
 ## The `SessionView` message
 
@@ -150,6 +153,23 @@ after an upgrade) can surface that and suggest `swarm daemon restart` even when
 
 The client sends `list`. The daemon replies with `list` carrying `sessions`, one
 stamped `SessionView` per session, each with its precomputed `group`.
+
+### `device_list`
+
+Remote-tier control-plane read (slice A3.1, R-DEV.1). The client sends
+`device_list`; the daemon replies with `device_list` carrying `devices`, the
+paired-device roster. Non-mutating: gated purely by the negotiated `pairing`
+capability and a `DeviceLister` backend (no `requireRemoteAuthz` choke point). An
+unnegotiated capability or an unsupporting backend replies `error`.
+
+### `policy_query`
+
+Remote-tier control-plane read (slice A3.1, R-POL.3). The client sends
+`policy_query`; the daemon replies with `policy_query` carrying `policy`, the
+machine's configured remote launch policy (allowed cwd roots). Non-mutating:
+gated purely by the negotiated `policy` capability and a `PolicyDescriber`
+backend (no `requireRemoteAuthz` choke point). An unnegotiated capability or an
+unsupporting backend replies `error`.
 
 ### `launch`
 

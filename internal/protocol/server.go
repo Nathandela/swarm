@@ -852,6 +852,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleJournalRead(c)
 	case OpJournalSubscribe:
 		cc.handleJournalSubscribe()
+	case OpDeviceList:
+		cc.handleDeviceList()
+	case OpPolicyQuery:
+		cc.handlePolicyQuery()
 	default:
 		cc.replyError("unknown op " + strconv.Quote(c.Op))
 	}
@@ -1122,6 +1126,62 @@ func (cc *clientConn) journalBackend() (JournalBackend, bool) {
 		return nil, false
 	}
 	return jb, true
+}
+
+// handleDeviceList serves device_list (slice A3.1): the backend's full
+// paired-device roster (R-DEV.1). It is a READ, so no requireRemoteAuthz gate
+// applies — only the negotiated `pairing` capability plus a DeviceLister backend.
+func (cc *clientConn) handleDeviceList() {
+	dl, ok := cc.deviceLister()
+	if !ok {
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpDeviceList, EndpointID: cc.endpointID, Devices: dl.ListDevices()})
+}
+
+// deviceLister returns the backend's DeviceLister if device_list is available to
+// this connection (negotiated `pairing` cap AND a device-listing backend),
+// replying with an error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) deviceLister() (DeviceLister, bool) {
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return nil, false
+	}
+	dl, ok := cc.srv.d.(DeviceLister)
+	if !ok {
+		cc.replyError("device_list not supported by this daemon")
+		return nil, false
+	}
+	return dl, true
+}
+
+// handlePolicyQuery serves policy_query (slice A3.1): the backend's configured
+// remote launch policy (allowed cwd roots, R-POL.3). It is a READ, so no
+// requireRemoteAuthz gate applies — only the negotiated `policy` capability plus a
+// PolicyDescriber backend.
+func (cc *clientConn) handlePolicyQuery() {
+	pd, ok := cc.policyDescriber()
+	if !ok {
+		return
+	}
+	pv := pd.DescribePolicy()
+	_ = cc.writeControl(Control{Op: OpPolicyQuery, EndpointID: cc.endpointID, Policy: &pv})
+}
+
+// policyDescriber returns the backend's PolicyDescriber if policy_query is
+// available to this connection (negotiated `policy` cap AND a policy-describing
+// backend), replying with an error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) policyDescriber() (PolicyDescriber, bool) {
+	if !cc.hasCap(CapPolicy) {
+		cc.replyError("policy capability not negotiated")
+		return nil, false
+	}
+	pd, ok := cc.srv.d.(PolicyDescriber)
+	if !ok {
+		cc.replyError("policy_query not supported by this daemon")
+		return nil, false
+	}
+	return pd, true
 }
 
 // journalWriter drains this subscriber's bounded journal queue (pre-encoded frame
