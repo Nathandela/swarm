@@ -1,0 +1,11 @@
+RED evidence — fix-pack item 2a (R-KS.1): kill-switch enforcement at the remote choke point
+Date: 2026-07-23  Commit-base: 3a8b1fe
+
+$ go test -run 'KillSwitch' ./internal/protocol/
+--- FAIL: TestKillSwitch_OffRefusesRemoteOps (0.02s)
+    killswitch_test.go:84: disabled kill switch: valid signed kill = op "ok" code ""; want error/kill_switch
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.620s
+FAIL
+
+TestKillSwitch_OffRefusesRemoteOps fails on the ASSERTION: requireRemoteAuthz does not consult a kill switch yet, so a validly-signed OpKill is authorized ('ok') and actioned instead of refused kill_switch. The three guards (On allows / owner-tier unaffected / backend-without-switch unchanged) PASS and must stay green. File persistence (remote-state.json) is slice 2b, not tested here.
