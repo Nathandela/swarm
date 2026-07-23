@@ -163,12 +163,17 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 				return cached, nil
 			}
 			// ponytail: the re-drive spawns a fresh session under the same operation_id.
-			// If the lost session were actually a LIVE orphan shim (window W4 — reconcile
-			// marked it LOST only because it could not match the orphan's identity), this
-			// double-spawns a live agent. Detecting a live orphan across restart needs
-			// orphan-process tracking that is out of scope for this slice; tracked by the
-			// skipped TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO. Fall through and
-			// re-drive with our reservation `id`, now the operation_id's session.
+			// SAFETY CEILING (window W4, NOT "no worse" than before): if the lost session
+			// were actually a LIVE orphan shim (reconcile marked it LOST only because it
+			// could not match the orphan's identity, meta ShimPID=0), this re-drive spawns
+			// a SECOND live agent while the orphan keeps running — two code-editing agents
+			// racing on one cwd, and unbounded under repeated crash+replay (each cycle can
+			// leave another unreapable orphan). For the code-editing threat model that is
+			// arguably WORSE than the pre-fix corpse+one-orphan, not neutral. Closing it
+			// needs orphan-process tracking (persist the shim PID before/around cmd.Start,
+			// then SIGTERM the prior attempt on re-drive — collapsing W4 into W3); tracked
+			// as follow-up 4c and by the skipped TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO.
+			// Fall through and re-drive with our reservation `id`, now the operation_id's session.
 		}
 	}
 

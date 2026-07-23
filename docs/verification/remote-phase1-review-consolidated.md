@@ -108,17 +108,32 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
   `bb9dfed`, GREEN `3958c13`. Optional `KillSwitch` interface consulted as the FIRST gate in
   `requireRemoteAuthz`; disabled => `CodeKillSwitch` before signature work. `-race` green.
   2b (durable remote-state.json + enroll wiring + R-KS.2 auto-off) still to do.
-- **Item 4a (CRITICAL DCR-1/DCR-2) launch crash-window fix** — DONE (independent
-  adversarial re-derivation of the crash table in progress as a gate). RED `ed17303`, GREEN
-  `a39cfc7`. Liveness-based replay (return recorded session only if present-and-not-Lost;
+- **Item 4a (CRITICAL DCR-1/DCR-2) launch crash-window fix** — DONE + independently
+  re-audited. RED `ed17303`, GREEN `a39cfc7`, W4-framing honesty fix + this note in a
+  follow-up. Liveness-based replay (return recorded session only if present-and-not-Lost;
   else Redrive under the same operation_id) + Open-time resolver failing stale
-  prepared/executing launch records. W1 poison and W3 silent-corpse closed; W4 live-orphan
-  double-spawn is the documented ceiling (skipped test). `-race` green.
-- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3); 2b kill-switch durable
-  state + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5
-  gateway reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink seq to the journal
-  cursor, which must reconcile with item 6's test setup); item 7 relay round 3; item 8 SAS
-  widening (needs an ADR — crypto is frozen).
+  prepared/executing launch records. Independent adversarial re-derivation of the W0-W5
+  crash table: **W1 poison, W2 poison, and W3 silent-corpse genuinely CLOSED**;
+  single-winner concurrency, lock order (d.mu->idem.mu, no cycle), and crash-self-healing
+  all validated; `-race` clean; the reviewer "could not break" any window except W4.
+  Findings folded in:
+    - **W4 is a real SAFETY CEILING, not "no worse"** (H1). The original commit framed W4
+      as no-worse-than-before; the re-audit correctly disputed this — a re-drive of a
+      reconcile-LOST session that is actually a live orphan spawns a SECOND code-editing
+      agent on the same cwd (unbounded under repeated crashes). Comment re-framed honestly.
+      Closing W4 needs orphan-process tracking (persist shim PID before/around cmd.Start,
+      SIGTERM the prior attempt on re-drive => collapses W4 into W3) — **follow-up 4c**.
+    - **L2**: Delete/Kill leave the idem record intact, so a replay of a since-deleted
+      operation_id re-spawns a new agent (narrow: opIDs are per-request ULIDs). Ties to 4b.
+    - **L3 / DCR-2 residual**: the permanent-poison is closed by the liveness mechanism, but
+      idem-log + LOST-session-dir growth is unbounded (no Compact/TTL caller, no session GC).
+      Resource leak, not a correctness poison — **follow-up** (with the daemon-review DME-1).
+- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3, subsumes L2); 4c W4
+  orphan-tracking (real safety ceiling from the 4a re-audit); 2b kill-switch durable state
+  + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5 gateway
+  reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink seq to the journal cursor,
+  which must reconcile with item 6's test setup); item 7 relay round 3; item 8 SAS widening
+  (needs an ADR — crypto is frozen); L3/DME-1 idem-log + session-dir GC (Compact/TTL wiring).
 
 ## 5. Remaining work to "usable from a phone, daily" (dependency-ordered)
 
