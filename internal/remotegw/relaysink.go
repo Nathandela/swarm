@@ -76,15 +76,53 @@ func (s *RelaySink) Event(rec protocol.JournalRecord) error {
 	return s.forward(rec)
 }
 
-// forward seals rec under the content key and appends it to the phone's mailbox. The
-// seal/append error is returned (authoritative for the gateway's cursor gating) and also
-// stashed as the first error surfaced via Err().
+// kindTerminalSnapshot tags a mailbox plaintext as a server-rendered terminal snapshot.
+// The phone decoder demuxes journal (kind-less) vs snapshot frames on this discriminator
+// (phonecore.MailboxRouter); it MUST match phonecore's kindTerminalSnapshot.
+const kindTerminalSnapshot = "terminal_snapshot"
+
+// snapshotFrame is the sealed terminal-snapshot plaintext: the protocol.TerminalSnapshot
+// fields (session/lines/cols/rows, promoted via anonymous embedding so its frozen json
+// tags stay the single source of truth) plus a kind tag. It mirrors phonecore's
+// snapshotFrame exactly -- the phone unmarshals this shape (TestSnapshotFrame_WireShape).
+type snapshotFrame struct {
+	Kind                      string `json:"kind"`
+	protocol.TerminalSnapshot        // session, lines, cols, rows (promoted)
+}
+
+// Terminal seals a server-rendered terminal snapshot into the phone's mailbox on the SAME
+// seq stream as the journal (A7 slice D): the plaintext is the committed wire shape the
+// phone decoder demuxes on -- the TerminalSnapshot fields plus a kind:"terminal_snapshot"
+// tag. The seal/append error is returned and stashed for Err(), mirroring the journal path.
+func (s *RelaySink) Terminal(session string, lines []string, cols, rows int) error {
+	plaintext, err := json.Marshal(snapshotFrame{
+		Kind:             kindTerminalSnapshot,
+		TerminalSnapshot: protocol.TerminalSnapshot{Session: session, Lines: lines, Cols: cols, Rows: rows},
+	})
+	if err != nil {
+		s.setErr(err)
+		return err
+	}
+	return s.seal(plaintext)
+}
+
+// forward marshals rec as a bare journal record (no kind tag, backward-compatible with the
+// phone's journal path) and seals it into the phone's mailbox. The seal/append error is
+// returned (authoritative for the gateway's cursor gating) and also stashed for Err().
 func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 	plaintext, err := json.Marshal(rec)
 	if err != nil {
 		s.setErr(err)
 		return err
 	}
+	return s.seal(plaintext)
+}
+
+// seal allocates the next shared seq, seals plaintext under the epoch content key, and
+// appends the opaque envelope to the phone's mailbox. Journal records and terminal
+// snapshots both flow through here so they share one strictly increasing seq stream
+// (R-GW.3; the phone orders and dedups on that single seq).
+func (s *RelaySink) seal(plaintext []byte) error {
 	s.mu.Lock()
 	s.seq++
 	seq := s.seq

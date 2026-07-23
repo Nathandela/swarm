@@ -32,6 +32,13 @@ type JournalSink interface {
 	Event(rec protocol.JournalRecord) error
 }
 
+// TerminalSink receives the server-rendered terminal snapshots the gateway bridges toward
+// the phone (A7 slice D). RelaySink implements it alongside JournalSink; RunTerminal
+// requires the gateway's sink to accept snapshots.
+type TerminalSink interface {
+	Terminal(session string, lines []string, cols, rows int) error
+}
+
 // Gateway bridges one daemon's remote socket toward the phone. It holds the last
 // journal cursor it delivered so a reconnect resumes from there (R-GW.5: journal
 // events are never dropped; the cursor only advances as records are delivered).
@@ -132,6 +139,57 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	}
 }
 
+// RunTerminal connects to the daemon remote socket, subscribes to the server-rendered
+// terminal-snapshot stream, and forwards every decoded snapshot to the sink until ctx is
+// cancelled or the connection fails. It mirrors RunJournal but is latest-wins per session
+// (no roster read, no cursor: the phone's SnapshotCache keeps only the newest snapshot
+// behind the shared relay seq gate). The snapshot's session id is namespaced to the
+// endpoint at egress, exactly like RunJournal, so the phone correlates a snapshot to the
+// roster/command id it signs against. NOTE: the live daemon terminal_subscribe handler is
+// Slice E/F; RunTerminal's Slice-D contract is unit-level (it constructs the subscribe
+// frame and forwards decoded snapshots), its live E2E deferred to Slice 7.
+func (g *Gateway) RunTerminal(ctx context.Context) error {
+	sink, ok := g.sink.(TerminalSink)
+	if !ok {
+		return fmt.Errorf("gateway: sink %T does not accept terminal snapshots", g.sink)
+	}
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
+	if err != nil {
+		return err
+	}
+	defer dc.Close()
+
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpTerminalSubscribe, EndpointID: dc.endpointID}); err != nil {
+		return err
+	}
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		ctrl, err := dc.readControl(time.Second)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue // idle; re-check ctx and keep waiting for snapshots
+			}
+			return err
+		}
+		switch ctrl.Op {
+		case protocol.OpTerminalSnapshot:
+			if ctrl.Terminal == nil {
+				continue
+			}
+			session := namespaceSessionID(dc.endpointID, ctrl.Terminal.Session)
+			if err := sink.Terminal(session, ctrl.Terminal.Lines, ctrl.Terminal.Cols, ctrl.Terminal.Rows); err != nil {
+				return err
+			}
+		case protocol.OpError:
+			return fmt.Errorf("daemon refused a terminal op: %s (%s)", ctrl.Error, ctrl.ErrorCode)
+		default:
+			// The terminal_subscribe ack (OpOK) and any other control are ignored.
+		}
+	}
+}
+
 // ForwardCommand sends a phone-authored, device-signed mutating op to the daemon's
 // remote socket and returns the daemon's reply. It is the command-IN counterpart to
 // the journal-OUT bridge: the gateway is a blind conduit -- it forwards the phone's
@@ -173,11 +231,20 @@ func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceComman
 // SessionID (session-neutral, e.g. gateway presence) or an already-namespaced id is
 // left untouched.
 func namespaceRecord(endpointID string, rec protocol.JournalRecord) protocol.JournalRecord {
-	if endpointID == "" || rec.SessionID == "" || strings.Contains(rec.SessionID, "/") {
-		return rec
-	}
-	rec.SessionID = protocol.NamespacedID(endpointID, rec.SessionID)
+	rec.SessionID = namespaceSessionID(endpointID, rec.SessionID)
 	return rec
+}
+
+// namespaceSessionID rewrites a raw local session id to its endpoint-scoped form
+// (<endpoint>/<local>). A session-neutral id ("") or an already-namespaced id (contains
+// "/") is returned unchanged, so it is safe at every remote egress (journal records and
+// terminal snapshots) regardless of whether the daemon emitted a raw or already-namespaced
+// id.
+func namespaceSessionID(endpointID, session string) string {
+	if endpointID == "" || session == "" || strings.Contains(session, "/") {
+		return session
+	}
+	return protocol.NamespacedID(endpointID, session)
 }
 
 // namespaceRoster applies namespaceRecord to each roster record, returning a new slice
