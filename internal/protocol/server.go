@@ -1180,7 +1180,10 @@ func (cc *clientConn) handleTakeControl(c Control) {
 	ttl := defaultControlSessionTTL
 	if c.TTLSeconds > 0 {
 		ttl = time.Duration(c.TTLSeconds) * time.Second
-		if ttl > maxControlSessionTTL {
+		// ttl <= 0 catches an int64 overflow (a huge TTLSeconds wraps the ns multiply to a
+		// NEGATIVE duration): an absurdly large request clamps to the server maximum, never
+		// to a past expiry, so the session is never immediately-expired (R5).
+		if ttl <= 0 || ttl > maxControlSessionTTL {
 			ttl = maxControlSessionTTL
 		}
 	}
@@ -1201,8 +1204,16 @@ func (cc *clientConn) handleTakeControlEnd(c Control) {
 	if !ok {
 		return
 	}
+	// Shut the input gate ONLY when the end identifies the CURRENT control session (same
+	// target + generation). A STALE end carrying an OLD generation (reordered by the
+	// untrusted relay) targets a superseded lease, so it must leave the live, newer control
+	// session intact: releaseLease already refuses the release on a generation mismatch
+	// (F11), and this makes the input-gate side agree so a replayed end can never shut a
+	// newer session's keystrokes (R3).
 	cc.ctlMu.Lock()
-	cc.control = nil
+	if cc.control != nil && cc.control.target == local && cc.control.leaseGen == c.Generation {
+		cc.control = nil
+	}
 	cc.ctlMu.Unlock()
 	cc.srv.releaseLease(cc, local, c.Generation, true, true)
 }
@@ -1256,10 +1267,24 @@ func (cc *clientConn) handleDetach(c Control) {
 
 func (cc *clientConn) handleResize(c Control) {
 	// Remote tier (slice A5-b): a resize reaches the shim ONLY inside a live, authorized
-	// control session (the four-clause gate); any out-of-session resize is dropped. The
-	// owner tier keeps full interactive trust — the gate applies only on the remote tier,
-	// so the owner path below is unchanged. Resize is fire-and-forget, so no reply either way.
-	if cc.srv.remoteTier && !cc.controlGateOpen() {
+	// control session (the four-clause gate); any out-of-session resize is dropped. On the
+	// remote tier the resize is forwarded on the SAME server-tracked lease identity the gate
+	// validated (cc.attSession/cc.attGen), mirroring handleDataIn, so the gated identity and
+	// the forwarded identity are identical rather than the (potentially divergent) wire
+	// session/generation (R4). The owner tier keeps full interactive trust and its original
+	// wire-addressed behavior — the gate applies only on the remote tier. Resize is
+	// fire-and-forget, so no reply either way.
+	if cc.srv.remoteTier {
+		if !cc.controlGateOpen() {
+			return
+		}
+		cc.attMu.Lock()
+		local, gen := cc.attSession, cc.attGen
+		cc.attMu.Unlock()
+		if local == "" {
+			return
+		}
+		cc.srv.forwardResize(cc, local, gen, c.Cols, c.Rows)
 		return
 	}
 	ep, local, ok := ParseID(c.SessionID)
