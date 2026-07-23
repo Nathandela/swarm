@@ -46,6 +46,8 @@ const (
 	EnvSocket   = "SWARM_DAEMON_SOCK"
 	EnvLock     = "SWARM_DAEMON_LOCK"
 	EnvLog      = "SWARM_DAEMON_LOG"
+	// EnvRemoteSocket is the OPT-IN dedicated remote-tier socket; empty => remote control off.
+	EnvRemoteSocket = "SWARM_DAEMON_REMOTE_SOCK"
 )
 
 const (

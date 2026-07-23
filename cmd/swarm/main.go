@@ -303,6 +303,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),
+		RemoteSocketPath:   os.Getenv(daemon.EnvRemoteSocket),
 		ShimBinary:         exe,
 		MaxSessions:        defaultMaxSessions,
 		PollInterval:       daemonPollInterval,
