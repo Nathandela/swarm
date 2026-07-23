@@ -57,6 +57,12 @@ type coreAPI struct {
 	// config file. A nil policy denies (fail-closed) via RemoteLaunchAllowed.
 	launchPolicy protocol.LaunchPolicy
 
+	// pairing carries the machine-side pairing identity + enrollment material and the
+	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
+	// until provisioned (a LATER slice: `swarm remote init`); a nil config makes
+	// BeginPairing fail closed, so pairing is simply unsupported until keys exist.
+	pairing *pairingConfig
+
 	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
 	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
 	stateDir string
