@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -785,6 +786,12 @@ type clientConn struct {
 	attSession string
 	attGen     uint64
 
+	// pairing state: at most one owner-tier pairing in flight per connection
+	// (handlePairStart). pair is guarded by pairMu; handlePairConfirm routes the
+	// SAS-gate decision through it.
+	pairMu sync.Mutex
+	pair   *pairSession
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -858,6 +865,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handlePolicyQuery()
 	case OpDeviceRevoke:
 		cc.handleDeviceRevoke(c)
+	case OpPairStart:
+		cc.handlePairStart(c)
+	case OpPairConfirm:
+		cc.handlePairConfirm(c)
 	default:
 		cc.replyError("unknown op " + strconv.Quote(c.Op))
 	}
@@ -1183,6 +1194,138 @@ func (cc *clientConn) deviceLister() (DeviceLister, bool) {
 		return nil, false
 	}
 	return dl, true
+}
+
+// handlePairStart serves the owner-tier pair_start (slice A3.3-bc, ADR-007
+// amendment "Pairing host: Option A"). Gate order is load-bearing: pairing is
+// owner-tier only, so a remote-tier connection is refused not_authorized BEFORE the
+// host is ever consulted (mirrors handleAttach's remote-tier refusal); then the
+// negotiated `pairing` cap is required; then the backend must implement PairingHost.
+//
+// It drives the anti-MITM SAS gate fail-closed: the pairing ctx is derived from the
+// CONNECTION lifetime, so a disconnect cancels it and the in-flight confirm returns
+// a non-nil error (a decline) rather than hanging. BeginPairing returns the PairView
+// synchronously (replied as pair_start) and runs the handshake in a background
+// goroutine that calls confirm at the SAS gate (pushed as pair_pending, blocking for
+// the matching pair_confirm or ctx cancel) and result at the terminal outcome
+// (pushed as pair_result). Only ONE pairing is in flight per connection.
+func (cc *clientConn) handlePairStart(c Control) {
+	// Owner-tier only: fail closed on the remote tier before consulting the host
+	// (mirrors handleAttach's remote-tier refusal).
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("pairing is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	host, ok := cc.srv.d.(PairingHost)
+	if !ok {
+		cc.replyError("pairing not supported by this daemon")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ps := &pairSession{confirm: make(chan bool, 1), cancel: cancel}
+
+	cc.pairMu.Lock()
+	if cc.pair != nil { // one pairing in flight per connection
+		cc.pairMu.Unlock()
+		cancel()
+		cc.replyError("pairing already in progress")
+		return
+	}
+	cc.pair = ps
+	cc.pairMu.Unlock()
+
+	// Fail-closed wiring: a dropped connection closes cc.done, which cancels the
+	// pairing ctx so an in-flight confirm returns ctx.Err() (a decline). The
+	// goroutine also exits when the pairing ends normally (result -> cancel).
+	go func() {
+		select {
+		case <-cc.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	var req PairStartReq
+	if c.Pairing != nil {
+		req = PairStartReq{Capability: c.Pairing.Capability, TTLSeconds: c.Pairing.TTLSeconds}
+	}
+
+	// confirm pushes the SAS gate (pair_pending) to THIS connection, then blocks for
+	// the matching pair_confirm — or, if the connection drops, ctx cancel makes it
+	// fail closed (false, non-nil err). Writes use the connection's thread-safe path.
+	confirm := func(sas []string, deviceName string) (bool, error) {
+		ps.mu.Lock()
+		rvz := ps.rvz
+		ps.mu.Unlock()
+		_ = cc.writeControl(Control{Op: OpPairPending, EndpointID: cc.endpointID,
+			Pairing: &PairingControl{SAS: sas, DeviceName: deviceName, RendezvousID: rvz}})
+		select {
+		case allow := <-ps.confirm:
+			return allow, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+
+	// result pushes the terminal outcome (pair_result) and ends the pairing: success
+	// carries the device identity; failure carries no device (nil Pairing).
+	result := func(r PairResult) {
+		cc.clearPairing(ps)
+		var p *PairingControl
+		if r.Err == nil {
+			p = &PairingControl{DeviceID: r.DeviceID, Name: r.Name, Capability: r.Capability}
+		}
+		_ = cc.writeControl(Control{Op: OpPairResult, EndpointID: cc.endpointID, Pairing: p})
+	}
+
+	view, err := host.BeginPairing(ctx, req, confirm, result)
+	if err != nil {
+		cc.clearPairing(ps)
+		cc.replyError("pair_start: " + err.Error())
+		return
+	}
+	ps.mu.Lock()
+	ps.rvz = view.RendezvousID
+	ps.mu.Unlock()
+	// The pair_start reply and the pair_pending push race (this goroutine vs the
+	// host's background goroutine); both go through writeMu, so they are serialized
+	// and the test classifies the two frames by Op.
+	_ = cc.writeControl(Control{Op: OpPairStart, EndpointID: cc.endpointID,
+		Pairing: &PairingControl{QR: view.QR, RendezvousID: view.RendezvousID, ExpiresAt: view.ExpiresAt}})
+}
+
+// handlePairConfirm routes a pair_confirm's decision to this connection's in-flight
+// pairing's blocked confirm closure (a cap-1 channel, non-blocking send). No pairing
+// in flight -> error.
+func (cc *clientConn) handlePairConfirm(c Control) {
+	cc.pairMu.Lock()
+	ps := cc.pair
+	cc.pairMu.Unlock()
+	if ps == nil {
+		cc.replyError("no pairing in flight")
+		return
+	}
+	allow := c.Pairing != nil && c.Pairing.Allow
+	select {
+	case ps.confirm <- allow:
+	default: // already decided/cancelled: drop the duplicate
+	}
+}
+
+// clearPairing releases this connection's in-flight pairing slot (if ps still holds
+// it) and cancels its ctx, so the connection-lifetime canceller goroutine exits.
+func (cc *clientConn) clearPairing(ps *pairSession) {
+	cc.pairMu.Lock()
+	if cc.pair == ps {
+		cc.pair = nil
+	}
+	cc.pairMu.Unlock()
+	ps.cancel()
 }
 
 // handlePolicyQuery serves policy_query (slice A3.1): the backend's configured
