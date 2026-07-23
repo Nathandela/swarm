@@ -59,6 +59,12 @@ const (
 	// remote mutating op and, on success, establishes a lease via the same attach path.
 	OpTakeControl = "take_control"
 
+	// OpTakeControlEnd is the caller-scoped teardown of one's OWN control session
+	// (slice A5-b): it clears the connection's control session and releases its lease
+	// (session_id + generation, mirroring detach; no device signature). Ending the
+	// control session shuts the remote input gate.
+	OpTakeControlEnd = "take_control_end"
+
 	// Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option
 	// A"): wire types only in this slice — no handlers, no pairing logic.
 	OpPairStart   = "pair_start"
@@ -124,6 +130,7 @@ type Control struct {
 	Policy         *PolicyView     `json:"policy,omitempty"`           // remote launch policy, carried on the policy_query reply
 	TargetDeviceID string          `json:"target_device_id,omitempty"` // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
 	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
+	TTLSeconds     int             `json:"ttl_seconds,omitempty"`      // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):

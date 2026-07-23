@@ -87,6 +87,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `policy`           | `*PolicyView`     | remote launch policy (allowed cwd roots), carried on the `policy_query` reply (R-POL.3) |
 | `target_device_id` | string            | device_revoke: the device to REVOKE, distinct from the caller `device_id` (A3.2) |
 | `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
+| `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -235,6 +236,27 @@ screen.
 A second `attach` on the **same connection** auto-detaches the first (its lease is
 released) before the new lease is granted, so one connection never holds two
 leases.
+
+### `take_control` / `take_control_end`
+
+Remote-tier interactive control (slice A5). The owner tier uses `attach`; the remote
+tier has no unsigned `attach` and instead requires a signed `take_control`.
+
+- **`take_control`** is a signed, MUTATING op that runs through the same
+  `requireRemoteAuthz` choke point as `kill`/`delete` (kill switch first, then
+  `operation_id`, then the `device_id`/`device_sig`/`expires_at` signature over the
+  canonical tuple) and, only once authorized, establishes a controller lease through
+  the same `attach` path (replying with `lease`). It carries an optional `ttl_seconds`
+  (the requested control-session lifetime, clamped to a server maximum and defaulted
+  when absent). While that control session is live, remote `TDataIn` input frames and
+  `resize` reach the session's shim; they are gated on every keystroke by four
+  conditions — the kill switch is still on, the control session exists, it has not
+  expired (lazy, on the server clock), and it still targets the connection's current
+  lease generation — and dropped otherwise.
+- **`take_control_end`** is the caller-scoped teardown of one's OWN control session:
+  it carries the `session_id` and lease `generation` (mirroring `detach`; no device
+  signature), clears the control session, and releases the lease — shutting the input
+  gate.
 
 ### `detach`
 

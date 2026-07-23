@@ -121,6 +121,28 @@ func pumpWriteTimeout() time.Duration {
 	return 5 * time.Second
 }
 
+// serverNowNS is the server-clock seam (mirroring pumpWriteTimeoutNS): when nonzero
+// it fixes s.now() to that wall-clock instant (unix nanoseconds), so a test can
+// freeze/advance the clock to drive control-session lazy expiry deterministically.
+// Zero (the default) means the real time.Now().
+var serverNowNS atomic.Int64
+
+func (s *Server) now() time.Time {
+	if ns := serverNowNS.Load(); ns > 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Now()
+}
+
+// Control-session lifetime bounds (slice A5-b). A take_control's requested TTLSeconds
+// is clamped to maxControlSessionTTL and defaulted to defaultControlSessionTTL when
+// absent or non-positive, so a 0/oversized request never yields an immediately-expired
+// (or unbounded) control session.
+const (
+	maxControlSessionTTL     = 30 * time.Minute
+	defaultControlSessionTTL = 5 * time.Minute
+)
+
 // serverCaps is the capability set the daemon supports; the handshake returns the
 // intersection with the client's offer. The remote-tier caps are advertised
 // unconditionally; a journal op still requires both the negotiated `journal` cap
@@ -804,11 +826,14 @@ type clientConn struct {
 }
 
 // controlSession records an established take_control lease: the target local session
-// id and the lease generation s.attach assigned (published via setAttach). Minimal by
-// design for slice A5-a — later slices add expiry and the controlling device id.
+// id, the lease generation s.attach assigned (published via setAttach), and the
+// server-clock instant at which the session lazily expires (slice A5-b). Its fields are
+// set once at establishment and never mutated, so the input gate can capture the struct
+// under ctlMu and read them after releasing the lock. Slice A5-c adds the gate token.
 type controlSession struct {
 	target   string
 	leaseGen uint64
+	expiry   time.Time
 }
 
 // clientSrv is the subset of *Server a clientConn needs; it is *Server. (Named to
@@ -882,6 +907,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleDeviceRevoke(c)
 	case OpTakeControl:
 		cc.handleTakeControl(c)
+	case OpTakeControlEnd:
+		cc.handleTakeControlEnd(c)
 	case OpPairStart:
 		cc.handlePairStart(c)
 	case OpPairConfirm:
@@ -1107,13 +1134,70 @@ func (cc *clientConn) handleTakeControl(c Control) {
 		return
 	}
 	// Record the controller session at the generation attach assigned (attach publishes
-	// it via setAttach -> cc.attGen).
+	// it via setAttach -> cc.attGen), stamping its lazy-expiry deadline from the caller's
+	// requested TTL clamped to the server bounds (never immediately-expired nor unbounded).
 	cc.attMu.Lock()
 	gen := cc.attGen
 	cc.attMu.Unlock()
+	ttl := defaultControlSessionTTL
+	if c.TTLSeconds > 0 {
+		ttl = time.Duration(c.TTLSeconds) * time.Second
+		if ttl > maxControlSessionTTL {
+			ttl = maxControlSessionTTL
+		}
+	}
 	cc.ctlMu.Lock()
-	cc.control = &controlSession{target: local, leaseGen: gen}
+	cc.control = &controlSession{target: local, leaseGen: gen, expiry: cc.srv.now().Add(ttl)}
 	cc.ctlMu.Unlock()
+}
+
+// handleTakeControlEnd serves take_control_end (slice A5-b): the caller-scoped teardown
+// of its OWN control session. It clears cc.control (shutting the input gate — clause 2
+// fail-closed once cc.control is nil) and releases the caller's lease using the session
+// + generation it carries, mirroring handleDetach. No device signature is required: a
+// caller can only end a session it already holds, and releaseLease's controller==cc +
+// generation match is the gate (a delayed old-generation end cannot release a later
+// controller's lease, F11).
+func (cc *clientConn) handleTakeControlEnd(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	cc.ctlMu.Lock()
+	cc.control = nil
+	cc.ctlMu.Unlock()
+	cc.srv.releaseLease(cc, local, c.Generation, true, true)
+}
+
+// controlGateOpen is the slice A5-b four-clause gate: on the remote tier a keystroke or
+// resize reaches the shim ONLY inside a live, authorized control session. Every clause
+// must hold: (1) the kill switch is still ON (re-checked here so a mid-session `off`
+// halts input), (2) a control session exists (fail-closed default), (3) it has not
+// lazily expired on the server clock, and (4) it still targets this connection's current
+// lease (session + generation). Any clause false => drop. It captures the control-session
+// fields under ctlMu and the lease identity under attMu, releasing each lock before the
+// caller forwards, so ctlMu is never held across the lease locks forwardInput takes.
+func (cc *clientConn) controlGateOpen() bool {
+	// clause 1 — re-check the kill switch on every keystroke.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		return false
+	}
+	// clause 2 — fail-closed default: capture the (immutable) control session, release ctlMu.
+	cc.ctlMu.Lock()
+	ctl := cc.control
+	cc.ctlMu.Unlock()
+	if ctl == nil {
+		return false
+	}
+	// clause 3 — lazy expiry on the server clock.
+	if !cc.srv.now().Before(ctl.expiry) {
+		return false
+	}
+	// clause 4 — still bound to this connection's current lease (session + generation).
+	cc.attMu.Lock()
+	sess, gen := cc.attSession, cc.attGen
+	cc.attMu.Unlock()
+	return ctl.target == sess && ctl.leaseGen == gen
 }
 
 func (cc *clientConn) handleDetach(c Control) {
@@ -1133,10 +1217,11 @@ func (cc *clientConn) handleDetach(c Control) {
 }
 
 func (cc *clientConn) handleResize(c Control) {
-	// Fail closed on the remote tier: drop the resize without forwarding, since no
-	// signed take_control gate exists yet (HIGH-2 / A4-R). Resize is fire-and-forget,
-	// so no reply (owner tier sends none either).
-	if cc.srv.remoteTier {
+	// Remote tier (slice A5-b): a resize reaches the shim ONLY inside a live, authorized
+	// control session (the four-clause gate); any out-of-session resize is dropped. The
+	// owner tier keeps full interactive trust — the gate applies only on the remote tier,
+	// so the owner path below is unchanged. Resize is fire-and-forget, so no reply either way.
+	if cc.srv.remoteTier && !cc.controlGateOpen() {
 		return
 	}
 	ep, local, ok := ParseID(c.SessionID)
@@ -1435,10 +1520,12 @@ func (cc *clientConn) journalWriter() {
 }
 
 func (cc *clientConn) handleDataIn(payload []byte) {
-	// Fail closed on the remote tier: drop raw input frames without forwarding, since
-	// no signed take_control gate exists yet — this is the keystroke-injection vector
-	// (HIGH-2 / A4-R).
-	if cc.srv.remoteTier {
+	// Remote tier (slice A5-b): a raw input frame reaches the shim ONLY inside a live,
+	// authorized control session (the four-clause gate) — this is the keystroke-injection
+	// vector, so every out-of-session frame is dropped. The owner tier keeps full
+	// interactive trust — the gate applies only on the remote tier, so the path below is
+	// unchanged there.
+	if cc.srv.remoteTier && !cc.controlGateOpen() {
 		return
 	}
 	cc.attMu.Lock()
