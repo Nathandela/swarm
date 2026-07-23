@@ -85,6 +85,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `full_resync`      | bool              | set when the caller's `cursor` fell below the retained journal floor (R-JRN.6) |
 | `devices`          | `[]DeviceView`    | paired-device roster, carried on the `device_list` reply (R-DEV.1)           |
 | `policy`           | `*PolicyView`     | remote launch policy (allowed cwd roots), carried on the `policy_query` reply (R-POL.3) |
+| `target_device_id` | string            | device_revoke: the device to REVOKE, distinct from the caller `device_id` (A3.2) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -170,6 +171,24 @@ machine's configured remote launch policy (allowed cwd roots). Non-mutating:
 gated purely by the negotiated `policy` capability and a `PolicyDescriber`
 backend (no `requireRemoteAuthz` choke point). An unnegotiated capability or an
 unsupporting backend replies `error`.
+
+### `device_revoke`
+
+Remote-tier control-plane MUTATING op (slice A3.2): removes a paired device from
+the daemon's device registry. The client sends `device_revoke` with
+`target_device_id` (the device to remove), plus the usual mutating-op device-auth
+fields (`operation_id`, `device_id`, `device_sig`, `expires_at`) — `device_id` here
+is the CALLER (the signer), and `target_device_id` is the resource: it is what
+`requireRemoteAuthz` binds the caller's signature to, so a device can revoke a
+*different* device, not only itself. Goes through the same `requireRemoteAuthz`
+choke point as `kill`/`delete` (kill switch, `operation_id`, device signature,
+capability — `device_revoke` maps to the `ActionControl` capability class, so it
+requires a CapFull device). The daemon replies `ok` (or `error`). Revoking the
+last paired device is not a distinct code path: `RemoteControlEnabled` already
+derives from the registry's device count, so it flips remote control off as a side
+effect. Known gaps (future slices): this only removes the daemon-side registry
+entry, not any relay-side registration/mailbox; and there is no separate admin
+capability tier yet — any CapFull device can revoke any other.
 
 ### `launch`
 

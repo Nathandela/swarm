@@ -856,6 +856,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleDeviceList()
 	case OpPolicyQuery:
 		cc.handlePolicyQuery()
+	case OpDeviceRevoke:
+		cc.handleDeviceRevoke(c)
 	default:
 		cc.replyError("unknown op " + strconv.Quote(c.Op))
 	}
@@ -991,6 +993,34 @@ func (cc *clientConn) handleDelete(c Control) {
 	}
 	cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
 	cc.replyOK(c.SessionID)
+}
+
+// handleDeviceRevoke serves device_revoke (slice A3.2): removes a paired device from
+// the daemon's device registry. The resource being acted on is the TARGET device
+// (c.TargetDeviceID), NOT the caller's own authenticating device (c.DeviceID) --
+// passing TargetDeviceID as requireRemoteAuthz's resource means the caller's
+// signature binds the target, so a device can revoke another device, not just
+// itself (see remote_devicerevoke_test.go's field-collision guard).
+//
+// KNOWN GAPS (out of scope for A3.2, tracked for later slices): (a) this removes
+// only the daemon-side device.Registry entry -- it does NOT purge the relay-side
+// registration/mailbox (atomic-revoke-closes-live-socket is A6/ME-1); (b)
+// device_revoke maps to ActionControl (deviceauth.go actionClass), so any CapFull
+// device can revoke any other device -- there is no separate admin tier yet.
+func (cc *clientConn) handleDeviceRevoke(c Control) {
+	dr, ok := cc.srv.d.(DeviceRevoker)
+	if !ok {
+		cc.replyError("device_revoke not supported by this daemon")
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionDeviceRevoke, c.TargetDeviceID, nil) {
+		return
+	}
+	if _, err := dr.RevokeDevice(c.TargetDeviceID); err != nil {
+		cc.replyError("device_revoke: " + err.Error())
+		return
+	}
+	cc.replyOK(c.TargetDeviceID)
 }
 
 func (cc *clientConn) handleAttach(c Control) {

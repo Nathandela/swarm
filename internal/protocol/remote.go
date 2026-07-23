@@ -59,10 +59,11 @@ type JournalBackend interface {
 // against, so they must never drift. Each maps to a capability action class in the
 // authenticator (launch/kill/delete are all control-class).
 const (
-	ActionLaunch  = "launch"
-	ActionKill    = "kill"
-	ActionDelete  = "delete"
-	ActionApprove = "approve"
+	ActionLaunch       = "launch"
+	ActionKill         = "kill"
+	ActionDelete       = "delete"
+	ActionApprove      = "approve"
+	ActionDeviceRevoke = "device_revoke"
 )
 
 // LaunchSessionSentinel is the canonical Session value signed over a launch command

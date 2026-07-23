@@ -16,3 +16,12 @@ type DeviceLister interface {
 type PolicyDescriber interface {
 	DescribePolicy() PolicyView
 }
+
+// DeviceRevoker is the optional interface a DaemonAPI implements to expose
+// device_revoke (slice A3.2, backed by device.Registry.Remove in production):
+// RevokeDevice removes the TARGET device (Control.TargetDeviceID) from the
+// registry. Unlike DeviceLister/PolicyDescriber this is a MUTATING op, so it goes
+// through requireRemoteAuthz like kill/delete before RevokeDevice is called.
+type DeviceRevoker interface {
+	RevokeDevice(deviceID string) (bool, error)
+}

@@ -48,6 +48,10 @@ const (
 	// reads of the paired-device roster and the machine's remote launch policy.
 	OpDeviceList  = "device_list"
 	OpPolicyQuery = "policy_query"
+
+	// OpDeviceRevoke is the remote control-plane MUTATING op (slice A3.2): removes a
+	// paired device from the daemon's device registry.
+	OpDeviceRevoke = "device_revoke"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
@@ -91,20 +95,21 @@ type Control struct {
 	// Every field is omitempty so an existing-shape Control serializes
 	// byte-identically (GG-7); the daemon-authoritative times are pointers so a zero
 	// Control emits no new key (a zero time.Time is NOT omitted by encoding/json).
-	OperationID   string          `json:"operation_id,omitempty"`   // idempotency key of a remote mutating op
-	InteractionID string          `json:"interaction_id,omitempty"` // the agent interaction being approved (A6)
-	DeviceID      string          `json:"device_id,omitempty"`      // pairing device id (never trusted alone, A1)
-	DeviceSig     string          `json:"device_sig,omitempty"`     // detached Ed25519 over the canonical op tuple (D4)
-	Cursor        uint64          `json:"cursor,omitempty"`         // journal cursor (journal_read/journal_event)
-	IssuedAt      *time.Time      `json:"issued_at,omitempty"`      // daemon-authoritative issue time
-	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`     // daemon-authoritative expiry
-	Approve       *ApproveReq     `json:"approve,omitempty"`        // remote approval request (A6)
-	ErrorCode     ErrorCode       `json:"error_code,omitempty"`     // machine-readable refusal reason (R-PROT.7)
-	Journal       []JournalRecord `json:"journal,omitempty"`        // journal records (journal_read/journal_event)
-	Roster        []JournalRecord `json:"roster,omitempty"`         // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
-	FullResync    bool            `json:"full_resync,omitempty"`    // the caller's cursor fell below the retained floor
-	Devices       []DeviceView    `json:"devices,omitempty"`        // paired-device roster, carried on the device_list reply
-	Policy        *PolicyView     `json:"policy,omitempty"`         // remote launch policy, carried on the policy_query reply
+	OperationID    string          `json:"operation_id,omitempty"`     // idempotency key of a remote mutating op
+	InteractionID  string          `json:"interaction_id,omitempty"`   // the agent interaction being approved (A6)
+	DeviceID       string          `json:"device_id,omitempty"`        // pairing device id (never trusted alone, A1)
+	DeviceSig      string          `json:"device_sig,omitempty"`       // detached Ed25519 over the canonical op tuple (D4)
+	Cursor         uint64          `json:"cursor,omitempty"`           // journal cursor (journal_read/journal_event)
+	IssuedAt       *time.Time      `json:"issued_at,omitempty"`        // daemon-authoritative issue time
+	ExpiresAt      *time.Time      `json:"expires_at,omitempty"`       // daemon-authoritative expiry
+	Approve        *ApproveReq     `json:"approve,omitempty"`          // remote approval request (A6)
+	ErrorCode      ErrorCode       `json:"error_code,omitempty"`       // machine-readable refusal reason (R-PROT.7)
+	Journal        []JournalRecord `json:"journal,omitempty"`          // journal records (journal_read/journal_event)
+	Roster         []JournalRecord `json:"roster,omitempty"`           // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
+	FullResync     bool            `json:"full_resync,omitempty"`      // the caller's cursor fell below the retained floor
+	Devices        []DeviceView    `json:"devices,omitempty"`          // paired-device roster, carried on the device_list reply
+	Policy         *PolicyView     `json:"policy,omitempty"`           // remote launch policy, carried on the policy_query reply
+	TargetDeviceID string          `json:"target_device_id,omitempty"` // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):

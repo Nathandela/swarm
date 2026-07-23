@@ -135,6 +135,20 @@ func (a *coreAPI) ListDevices() []protocol.DeviceView {
 // can serve device_list (R-DEV.1).
 var _ protocol.DeviceLister = (*coreAPI)(nil)
 
+// RevokeDevice makes coreAPI a protocol.DeviceRevoker (slice A3.2): it removes
+// deviceID from the pinned device registry. A nil registry (never wired) reports no
+// device removed rather than panicking (nil-registry-safe like ListDevices).
+func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
+	if a.devices == nil {
+		return false, nil
+	}
+	return a.devices.Remove(deviceID)
+}
+
+// coreAPI ALSO satisfies protocol.DeviceRevoker so the assembled remote-tier Server
+// can serve device_revoke (slice A3.2).
+var _ protocol.DeviceRevoker = (*coreAPI)(nil)
+
 // DescribePolicy makes coreAPI a protocol.PolicyDescriber (slice A3.1): it reports
 // the configured remote launch policy's allowed cwd roots. protocol.LaunchPolicy
 // itself only carries RemoteLaunchAllowed, so the roots are obtained by type-asserting
