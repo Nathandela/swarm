@@ -143,6 +143,27 @@ auto-off; `off` process-sever half is a TODO until A2); A4-5 `pair` + A4-7 TUI c
 a new async pairing-session protocol.Client API for the pair_pending/pair_result pushes — the one
 "bigger than it looks" piece; TUI modal is mock-flow-licensed by the DoD); A4-2 `status`.
 
+**A5 design (from scouting, 2026-07-23) — take_control input backend:**
+take_control is a signed mutating op through the UNCHANGED requireRemoteAuthz (add
+ActionTakeControl -> device.ActionControl in actionClass; CapFull only). It establishes a
+lease through the UNCHANGED s.attach (inheriting genCounter + supersede), records a
+per-connection `controlSession{deviceID,target,leaseGen,expiry}` on clientConn (mirrors
+pairSession). DECISIONS: (1) the gate token binds via ContentHash = SHA256(gate_token) --
+same mechanism handleLaunch uses for the launch spec, so the FROZEN crypto layer is NOT
+edited (a first-class signed field would need an ADR); (2) single-use via the existing
+idempotency.Store keyed by operation_id (crash-safe, no new store). Reopened remote-tier
+OpDataIn/OpResize pass a four-clause gate: kill-switch on -> cc.control != nil -> now <
+expiry -> control.target==attSession && control.leaseGen==attGen -> existing forwardInput
+gen check. Bare remote OpAttach STAYS refused (only take_control attaches internally), so
+the item-3 fail-close tests stay green. TTL daemon-clamped on coreAPI.now(); OpTakeControlEnd
+clears the session. No new ADR (reopening is ratified by the 2026-07-23 amendment sec 2).
+Server-side "biometric gate" = the daemon verifies a fresh device-signed single-use token
+bound to this grant; the phone-side biometric UI is A7/deferred. GG-7 rows + a system-spec
+invariant required. Sub-slices: A5-a take_control op+session+authz (now); A5-b reopen
+OpDataIn/OpResize behind the session; A5-c gate token (ContentHash + idempotency single-use);
+A5-d adversarial suite (14 attacks incl. -race) -> cross-model review gate. All doable
+against the in-tree protocol/skeleton harnesses (E2E-over-relay is A8).
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
