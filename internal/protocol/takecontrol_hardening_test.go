@@ -26,10 +26,11 @@ package protocol
 // a compile error.
 //
 // Harness reuse (sibling _test.go files, package protocol): serveRemote (remote-tier
-// Server on the accepting stubDaemon, which is NOT an OperationClaimer, so no gate token
-// is required), rawDial/hello, the takeControl helper + nextControl/syncControlOp
-// (takecontrol_input_test.go / remote_input_refused_test.go), serverNowNS (the server-clock
-// seam), and stubStream.inputBytes (the shim side effect).
+// Server on the accepting stubDaemon; its ClaimOperation reports every op fresh, so the
+// takeControl helper's gate token establishes and the two same-op-id take_controls both
+// supersede rather than tripping single-use), rawDial/hello, the takeControl helper +
+// nextControl/syncControlOp (takecontrol_input_test.go / remote_input_refused_test.go),
+// serverNowNS (the server-clock seam), and stubStream.inputBytes (the shim side effect).
 
 import (
 	"bytes"

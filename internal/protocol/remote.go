@@ -1,10 +1,22 @@
 package protocol
 
 import (
+	"errors"
 	"net"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/status"
+)
+
+// errRemoteMissingKillSwitch / errRemoteMissingOperationClaimer are the fail-closed
+// construction refusals a remote-tier Server returns when its backend lacks a mandatory
+// guard (A5 review R2). The remote tier grants take_control (and other mutating ops) only if
+// it can globally halt remote control (KillSwitch) and can make each grant single-use
+// (OperationClaimer); a backend missing either would silently yield unkillable /
+// replayable control, so the Server refuses to serve rather than start the listener.
+var (
+	errRemoteMissingKillSwitch       = errors.New("remote-tier backend must implement KillSwitch (fail-closed construction guard)")
+	errRemoteMissingOperationClaimer = errors.New("remote-tier backend must implement OperationClaimer (fail-closed construction guard)")
 )
 
 // ErrorCode is the stable machine-readable refusal-reason taxonomy every
@@ -155,6 +167,19 @@ func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string) (*Server, err
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, err
+	}
+	// Fail-closed construction guard (A5 review R2): a remote-tier Server must not serve
+	// control it cannot make single-use (OperationClaimer) or cannot kill (KillSwitch). This
+	// enforces at construction what requireRemoteAuthz enforces for DeviceAuthenticator at
+	// request time, but once — so a misassembled remote server (an adapter that forwards
+	// DeviceAuthenticator while dropping these) never accepts a single connection.
+	if _, ok := d.(KillSwitch); !ok {
+		_ = ln.Close()
+		return nil, errRemoteMissingKillSwitch
+	}
+	if _, ok := d.(OperationClaimer); !ok {
+		_ = ln.Close()
+		return nil, errRemoteMissingOperationClaimer
 	}
 	s := newServer(d)
 	s.endpointID = endpointID

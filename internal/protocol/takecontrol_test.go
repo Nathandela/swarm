@@ -57,6 +57,9 @@ func TestProtocol_TakeControlEstablishesLeaseUnderAuthz(t *testing.T) {
 		Op: OpTakeControl, EndpointID: rep.EndpointID, SessionID: sid,
 		OperationID: "devA:01JTAKE0000000000000000",
 		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		// The stub backend is an OperationClaimer, so take_control now requires a gate token
+		// (present-check before authz); a non-empty token satisfies it.
+		GateToken: "gate-tok",
 	})
 
 	got := nextControl(t, rc)
@@ -104,6 +107,9 @@ func TestProtocol_TakeControlRejectedByAuthzOpensNoLease(t *testing.T) {
 		Op: OpTakeControl, EndpointID: rep.EndpointID, SessionID: sid,
 		OperationID: "devA:01JTAKE0000000000000000",
 		DeviceID:    "devA", DeviceSig: "forged", ExpiresAt: &exp,
+		// Gate token present (the stub is an OperationClaimer) so the present-check passes and
+		// the refusal comes from the authenticator rejection under test, not a missing token.
+		GateToken: "gate-tok",
 	})
 
 	got := nextControl(t, rc)
@@ -133,6 +139,9 @@ func TestProtocol_TakeControlKillSwitchOff(t *testing.T) {
 		Op: OpTakeControl, EndpointID: rep.EndpointID, SessionID: sid,
 		OperationID: "devA:01JTAKE0000000000000000",
 		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		// Gate token present (the stub is an OperationClaimer) so the present-check passes and
+		// the refusal comes from the kill switch under test — proving it gates before authz.
+		GateToken: "gate-tok",
 	})
 
 	got := nextControl(t, rc)

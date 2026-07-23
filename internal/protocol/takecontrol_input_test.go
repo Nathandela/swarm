@@ -97,6 +97,10 @@ func takeControl(t *testing.T, rc *rawConn, ep, sid string, ttlSeconds int) Cont
 		Op: OpTakeControl, EndpointID: ep, SessionID: sid,
 		OperationID: "devA:01JTAKE0000000000000000",
 		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		// The stub backend is now an OperationClaimer, so handleTakeControl engages the
+		// gate-token present-check; a non-empty token satisfies it (the stub authenticator
+		// accepts the resulting signed tuple regardless).
+		GateToken:  "gate-tok",
 		TTLSeconds: ttlSeconds,
 	})
 	got := nextControl(t, rc)

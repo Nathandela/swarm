@@ -259,10 +259,32 @@ func (s *stubDaemon) authorizedTuples() []DeviceCommandAuth {
 	return out
 }
 
-// daemonOnly wraps a DaemonAPI so ONLY DaemonAPI's methods are exposed: it embeds the
-// interface, so the concrete backend's DeviceAuthenticator does NOT promote through.
-// A remote-tier Server built on it must fail closed (R-POL.9).
+// RemoteControlEnabled makes stubDaemon a KillSwitch (R-KS.1), reporting ON by default so
+// the remote-tier fail-closed construction guard (which requires a KillSwitch) is satisfied
+// and existing take_control tests behave as before. The kill-switch tests use a separate
+// killSwitchStub / toggleKillSwitchStub that OVERRIDES this to exercise an OFF switch.
+func (s *stubDaemon) RemoteControlEnabled() bool { return true }
+
+// ClaimOperation makes stubDaemon an OperationClaimer (slice A5-c), required by the remote-
+// tier construction guard. It reports every operation as FRESH (existed=false), so a
+// take_control carrying a gate token establishes; single-use REPLAY refusal is exercised by
+// the real signer (internal/skeleton's durable store), not this in-memory stub.
+func (s *stubDaemon) ClaimOperation(operationID, action, session string) (bool, error) {
+	return false, nil
+}
+
+// daemonOnly wraps a DaemonAPI so the concrete backend's DeviceAuthenticator does NOT
+// promote through: it embeds the interface, not the concrete stub. It DOES satisfy the
+// remote-tier construction guards (KillSwitch + OperationClaimer) so the Server constructs;
+// the point of the fixture is the ABSENT DeviceAuthenticator, which requireRemoteAuthz must
+// fail closed on at request time (R-POL.9).
 type daemonOnly struct{ DaemonAPI }
+
+// RemoteControlEnabled / ClaimOperation satisfy the mandatory remote-tier construction guards
+// so daemonOnly still constructs — leaving the DeviceAuthenticator omission as the sole
+// fail-closed condition under test.
+func (daemonOnly) RemoteControlEnabled() bool                  { return true }
+func (daemonOnly) ClaimOperation(_, _, _ string) (bool, error) { return false, nil }
 
 func newStubDaemon() *stubDaemon {
 	return &stubDaemon{events: make(chan persist.Meta, 64)}
