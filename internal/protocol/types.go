@@ -52,6 +52,13 @@ const (
 	// OpDeviceRevoke is the remote control-plane MUTATING op (slice A3.2): removes a
 	// paired device from the daemon's device registry.
 	OpDeviceRevoke = "device_revoke"
+
+	// Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option
+	// A"): wire types only in this slice — no handlers, no pairing logic.
+	OpPairStart   = "pair_start"
+	OpPairPending = "pair_pending"
+	OpPairConfirm = "pair_confirm"
+	OpPairResult  = "pair_result"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
@@ -110,6 +117,7 @@ type Control struct {
 	Devices        []DeviceView    `json:"devices,omitempty"`          // paired-device roster, carried on the device_list reply
 	Policy         *PolicyView     `json:"policy,omitempty"`           // remote launch policy, carried on the policy_query reply
 	TargetDeviceID string          `json:"target_device_id,omitempty"` // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
+	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):
@@ -161,6 +169,26 @@ type DeviceView struct {
 // confined to.
 type PolicyView struct {
 	AllowedCwdRoots []string `json:"allowed_cwd_roots"`
+}
+
+// PairingControl is the owner-tier pairing payload (slice A3.3-a, ADR-007
+// amendment "Pairing host: Option A"): wire type only in this slice — no
+// handlers, no pairing logic. Each pair_* op uses a distinct field subset:
+// pair_start carries a request subset (Capability/TTLSeconds) outbound and a
+// reply subset (QR/RendezvousID/ExpiresAt) inbound; pair_pending carries
+// SAS/DeviceName/RendezvousID; pair_confirm carries Allow/RendezvousID;
+// pair_result carries DeviceID/Name.
+type PairingControl struct {
+	Capability   string     `json:"capability,omitempty"`
+	TTLSeconds   int        `json:"ttl_seconds,omitempty"`
+	QR           string     `json:"qr,omitempty"`
+	RendezvousID string     `json:"rendezvous_id,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	SAS          []string   `json:"sas,omitempty"`
+	DeviceName   string     `json:"device_name,omitempty"`
+	Allow        bool       `json:"allow,omitempty"`
+	DeviceID     string     `json:"device_id,omitempty"`
+	Name         string     `json:"name,omitempty"`
 }
 
 // LaunchReq is a client's request to launch a new session. Every field is

@@ -86,13 +86,15 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `devices`          | `[]DeviceView`    | paired-device roster, carried on the `device_list` reply (R-DEV.1)           |
 | `policy`           | `*PolicyView`     | remote launch policy (allowed cwd roots), carried on the `policy_query` reply (R-POL.3) |
 | `target_device_id` | string            | device_revoke: the device to REVOKE, distinct from the caller `device_id` (A3.2) |
+| `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
 uses none of them serializes byte-identically to the pre-remote shape. The nested
 `ApproveReq` (approval), `JournalRecord` (journal event), `DeviceView` (paired
-device), and `PolicyView` (launch policy) shapes are documented at the field level
-in `internal/protocol` and are not repeated as wire tables here.
+device), `PolicyView` (launch policy), and `PairingControl` (pairing payload)
+shapes are documented at the field level in `internal/protocol` and are not
+repeated as wire tables here.
 
 ## The `SessionView` message
 
@@ -189,6 +191,14 @@ derives from the registry's device count, so it flips remote control off as a si
 effect. Known gaps (future slices): this only removes the daemon-side registry
 entry, not any relay-side registration/mailbox; and there is no separate admin
 capability tier yet — any CapFull device can revoke any other.
+
+### `pair_start` / `pair_pending` / `pair_confirm` / `pair_result`
+
+Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option A").
+This slice freezes the wire shape only — the four op names and the `pairing`
+field's `PairingControl` payload — with no handlers and no pairing logic wired up
+yet; a later slice adds the handlers and the `PairingHost` bridge against this
+frozen contract.
 
 ### `launch`
 
