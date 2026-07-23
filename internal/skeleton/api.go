@@ -57,6 +57,16 @@ type coreAPI struct {
 	// config file. A nil policy denies (fail-closed) via RemoteLaunchAllowed.
 	launchPolicy protocol.LaunchPolicy
 
+	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
+	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
+	stateDir string
+	// ksMu guards the read-time diff-write of the durable kill-switch state:
+	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
+	// last enabled value written to remote-state.json this process (nil => never written),
+	// so the mirror only writes on a transition, not on every call.
+	ksMu        sync.Mutex
+	ksPersisted *bool
+
 	events   chan persist.Meta
 	stop     chan struct{}
 	stopOnce sync.Once

@@ -156,6 +156,10 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d.api.devices = devReg
+	// R-KS.1: the coreAPI mirrors its device-derived remote-control kill-switch state to a
+	// durable remote-state.json under the state dir. Wire the dir so the switch (default OFF
+	// until a device is paired) has somewhere to persist each transition.
+	d.api.stateDir = cfg.StateDir
 	// R-POL.3/.7: load the machine-configured remote launch policy (allowed cwd roots) and
 	// attach it to the coreAPI so the remote-tier Server confines remote launches. ALWAYS
 	// wired: a missing/malformed config yields a deny-all policy (fail-closed by default),
