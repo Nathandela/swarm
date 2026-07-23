@@ -89,6 +89,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
 | `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
 | `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
+| `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -136,6 +137,22 @@ and unrelated secrets are dropped.
 | `rows`           | int                 | initial terminal rows                                      |
 | `initial_prompt` | string              | optional initial prompt text                               |
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
+
+## The `TerminalSnapshot` message
+
+`TerminalSnapshot` is one **server-rendered, sanitized terminal snapshot** (A7
+renderer slice B), carried in `Control.terminal` on a `terminal_snapshot` op. The
+daemon renders the session's VT grid to plain text — every control byte already
+stripped — so only sanitized text crosses the daemon → gateway socket and the raw
+hostile PTY bytes never reach the network-facing sidecar. The phone displays
+`lines` as-is.
+
+| JSON key    | Go type    | Meaning                                            |
+| ----------- | ---------- | -------------------------------------------------- |
+| `session`   | string     | namespaced session id the snapshot is for          |
+| `lines`     | []string   | sanitized plain-text grid rows, top to bottom      |
+| `cols`      | int        | grid width the snapshot was rendered at            |
+| `rows`      | int        | grid height the snapshot was rendered at           |
 
 ## Control-op vocabulary
 
@@ -258,6 +275,23 @@ tier has no unsigned `attach` and instead requires a signed `take_control`.
   it carries the `session_id` and lease `generation` (mirroring `detach`; no device
   signature), clears the control session, and releases the lease — shutting the input
   gate.
+
+### `terminal_subscribe` / `terminal_snapshot`
+
+Remote-tier terminal peek (A7 renderer slice B), mirroring the
+`journal_subscribe`/`journal_event` streaming pair. Unlike `take_control`, the peek
+is **read-only** and works BEFORE any control session exists (no lease, no signed
+op).
+
+- **`terminal_subscribe`** requests the server-rendered terminal snapshot stream for
+  a `session_id`. The daemon renders that session's VT grid off a persistent
+  read-only fan-out tap and streams `terminal_snapshot` frames as the grid changes.
+- **`terminal_snapshot`** is daemon → client. It carries a `terminal`
+  (`TerminalSnapshot`): the namespaced `session`, the sanitized plain-text `lines`
+  (every control byte stripped daemon-side), and the `cols`/`rows` the grid was
+  rendered at. The VT emulator and the raw hostile PTY bytes stay off the
+  network-facing sidecar — only this sanitized text crosses the daemon → gateway
+  socket.
 
 ### `detach`
 

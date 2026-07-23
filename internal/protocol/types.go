@@ -71,6 +71,13 @@ const (
 	OpPairPending = "pair_pending"
 	OpPairConfirm = "pair_confirm"
 	OpPairResult  = "pair_result"
+
+	// Terminal-snapshot ops (A7 renderer slice B): terminal_subscribe requests the
+	// server-rendered terminal snapshot stream for a session; terminal_snapshot carries
+	// one sanitized, server-rendered snapshot to the phone (mirroring the
+	// journal_subscribe/journal_event pair).
+	OpTerminalSubscribe = "terminal_subscribe"
+	OpTerminalSnapshot  = "terminal_snapshot"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
@@ -132,6 +139,19 @@ type Control struct {
 	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
 	TTLSeconds     int             `json:"ttl_seconds,omitempty"`      // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
 	GateToken      string          `json:"gate_token,omitempty"`       // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
+
+	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
+}
+
+// TerminalSnapshot is one server-rendered, sanitized terminal snapshot (A7 renderer
+// slice B), carried in Control.Terminal on a terminal_snapshot op. The daemon renders
+// the session's VT grid to plain text (every control byte already stripped) so only
+// sanitized text crosses the daemon->gateway socket; the phone displays Lines as-is.
+type TerminalSnapshot struct {
+	Session string   `json:"session"` // namespaced session id the snapshot is for
+	Lines   []string `json:"lines"`   // sanitized plain-text grid rows, top to bottom
+	Cols    int      `json:"cols"`    // grid width the snapshot was rendered at
+	Rows    int      `json:"rows"`    // grid height the snapshot was rendered at
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):
