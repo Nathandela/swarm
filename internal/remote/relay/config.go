@@ -87,9 +87,17 @@ func DefaultConfig() Config {
 			MaxConcurrentRendezvous:  1024,
 			MaxConcurrentConnections: 4096,
 			MailboxAppendPerMin:      600,
-			PushPerMin:               600,
-			ConnPerMin:               600,
-			OpsPerMin:                600,
+			// ponytail: CR-4 per-mailbox depth cap, ON by default. Enforcement rejects
+			// an over-cap append with ErrQuotaExceeded (server.go:719) rather than
+			// dropping data, and on the journal-OUT path the gateway's ack-gated
+			// cursor (GW-H1) means a rejected append is re-read/retried, not lost —
+			// so hitting the cap applies back-pressure (delivery stalls until the
+			// device drains) instead of silent loss. 10000 is generous for a
+			// legitimately-offline device while bounding unbounded growth. Tunable.
+			MailboxMaxItems: 10000,
+			PushPerMin:      600,
+			ConnPerMin:      600,
+			OpsPerMin:       600,
 		},
 	}
 }
