@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestRelay_MachineRegistrationAndRoutingProof asserts the routing id is an
@@ -177,6 +178,56 @@ func TestRelay_RevokedDeviceDeauthorizedAndPurged(t *testing.T) {
 	// The relay-side mailbox is purged (no drainable pre-rotation backlog).
 	if d := srv.MailboxDepth(devRID); d != 0 {
 		t.Fatalf("revoked device mailbox not purged: depth %d, want 0", d)
+	}
+}
+
+// TestRelay_RevokedDeviceLiveSocketClosed (ME-1) asserts r_device_revoke
+// severs a CONNECTED device's live relay socket, not just its ability to
+// reconnect. Against the reviewed handleDeviceRevoke (server.go:900-904) the
+// revoked target's serverConn is only marked old.superseded.Store(true) and
+// dropped from s.sessions — cancel()/CloseNow() on that connection's ws is
+// NEVER called. serveConn's read loop (server.go:355-364) blocks on
+// sc.ws.Read(sc.ctx) with no deadline once authenticated, so a device that was
+// online at revoke time keeps its socket and goroutine alive until IT
+// disconnects. This mirrors TestRelay_IdleHandshakeTimeout's
+// blocking-read-must-unblock-within-a-bound pattern, but targets the
+// REVOKED, still-connected device's own connection instead of an idle one.
+func TestRelay_RevokedDeviceLiveSocketClosed(t *testing.T) {
+	srv, _, _, _ := startTestRelay(t, nil)
+
+	mPub, mPriv := newRelayAuthKey(t)
+	dPub, dPriv := newRelayAuthKey(t)
+	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
+	device := dialAuthed(t, srv.URL(), authFor(dPub, dPriv))
+	devRID := RoutingID(dPub)
+
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+		t.Fatalf("AuthorizeDevice: %v", err)
+	}
+
+	// Revoke while the device's own connection is still live (authenticated,
+	// present in s.sessions) — this is the ME-1 scenario the deauth-only test
+	// above (TestRelay_RevokedDeviceDeauthorizedAndPurged) does not cover.
+	if err := machine.DeviceRevoke(testCtx(t), devRID); err != nil {
+		t.Fatalf("DeviceRevoke: %v", err)
+	}
+
+	// A blocking read on the revoked device's OWN live connection must unblock
+	// with an error (relay-initiated close) within a bound. Today it never does:
+	// handleDeviceRevoke does not cancel()/CloseNow() the connected serverConn,
+	// so this read hangs until the test's own deadline fires.
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := device.conn.ReadMsg()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("revoked device's live connection read returned no error; want a relay-initiated close severing the socket (ME-1)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("revoked device's live socket not closed within bound; handleDeviceRevoke never cancels/CloseNow()s the connected serverConn (ME-1)")
 	}
 }
 
