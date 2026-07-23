@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/daemon"
 )
 
 // v0.3 — detectAgents derives a human-readable unavailability reason from the raw
@@ -87,5 +88,47 @@ func TestDispatch(t *testing.T) {
 				t.Errorf("dispatch(%v) stderr = %q, want substring %q", tt.args, stderr.String(), tt.wantStderr)
 			}
 		})
+	}
+}
+
+// A1 — skeletonConfigFromEnv must wire a NEW opt-in env var,
+// SWARM_DAEMON_REMOTE_SOCK, into skeleton.Config.RemoteSocketPath so `swarm
+// daemon` actually stands up the dedicated REMOTE-tier unix socket
+// (protocol.ServeRemoteWithID, gated on cfg.RemoteSocketPath != "" in
+// internal/skeleton/serve.go). The literal env var name is used directly
+// here (rather than a daemon.EnvRemoteSocket constant) because the constant
+// does not exist yet — this test must fail on the assertion, not on a
+// missing symbol.
+const testEnvRemoteSocket = "SWARM_DAEMON_REMOTE_SOCK"
+
+// TestSkeletonConfigFromEnv_WiresRemoteSocketFromEnv pins the opt-in case:
+// when SWARM_DAEMON_REMOTE_SOCK is set, it must flow through to
+// Config.RemoteSocketPath verbatim.
+func TestSkeletonConfigFromEnv_WiresRemoteSocketFromEnv(t *testing.T) {
+	t.Setenv(daemon.EnvStateDir, t.TempDir())
+	const want = "/tmp/swarm-remote-test.sock"
+	t.Setenv(testEnvRemoteSocket, want)
+
+	cfg, ok := skeletonConfigFromEnv()
+	if !ok {
+		t.Fatal("skeletonConfigFromEnv() ok = false, want true")
+	}
+	if cfg.RemoteSocketPath != want {
+		t.Errorf("cfg.RemoteSocketPath = %q, want %q", cfg.RemoteSocketPath, want)
+	}
+}
+
+// TestSkeletonConfigFromEnv_RemoteSocketEmptyByDefault pins the secure
+// default: with SWARM_DAEMON_REMOTE_SOCK unset, Config.RemoteSocketPath must
+// be "" so remote control stays off unless explicitly opted into.
+func TestSkeletonConfigFromEnv_RemoteSocketEmptyByDefault(t *testing.T) {
+	t.Setenv(daemon.EnvStateDir, t.TempDir())
+
+	cfg, ok := skeletonConfigFromEnv()
+	if !ok {
+		t.Fatal("skeletonConfigFromEnv() ok = false, want true")
+	}
+	if cfg.RemoteSocketPath != "" {
+		t.Errorf("cfg.RemoteSocketPath = %q, want empty (remote control must default off)", cfg.RemoteSocketPath)
 	}
 }
