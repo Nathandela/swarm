@@ -21,7 +21,7 @@
 //
 //	QR codec (qr.go): EncodeQR / DecodeQR, byte-exact, <=200 bytes (R-PAIR.2).
 //	type RendezvousTransport interface{ Create; Claim; Send; Recv; Complete }  // relay seam (R-PAIR.6)
-//	type ConfirmFunc func(ctx, sas [4]string, deviceName string) (bool, error)  // desktop confirm (R-PAIR.5)
+//	type ConfirmFunc func(ctx, sas [6]string, deviceName string) (bool, error)  // desktop confirm (R-PAIR.5)
 //	type RateLimiter interface{ Allow() bool }                                  // gateway-side limit (R-PAIR.8)
 //	type MachinePayload / DevicePayload                                         // msg2 / msg3 fields (R-PAIR.3 + A14 RecipientPub)
 //	type MachineParams / DeviceParams / MachineOutcome / DeviceOutcome
@@ -92,7 +92,7 @@ type RendezvousTransport interface {
 // non-nil error (e.g. the prompt's own TTL elapsing -> ErrConfirmTimeout) fails
 // the pairing CLOSED. The callback OWNS the confirm TTL (clock discipline), so
 // the orchestrator holds no separate confirm clock.
-type ConfirmFunc func(ctx context.Context, sas [4]string, deviceName string) (bool, error)
+type ConfirmFunc func(ctx context.Context, sas [6]string, deviceName string) (bool, error)
 
 // DeviceSASFunc is the device-side mirror of the machine's ConfirmFunc seam
 // (R-PAIR.4/.5): it surfaces the SAS the device derived from the Noise channel
@@ -101,7 +101,7 @@ type ConfirmFunc func(ctx context.Context, sas [4]string, deviceName string) (bo
 // once, after the handshake completes but before RunDevice blocks on the
 // machine's decision frame and before any DeviceOutcome is pinned. A non-nil
 // error fails the pairing CLOSED (nothing pinned); a nil callback is a no-op.
-type DeviceSASFunc func(ctx context.Context, sas [4]string) error
+type DeviceSASFunc func(ctx context.Context, sas [6]string) error
 
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
@@ -159,7 +159,7 @@ type DeviceParams struct {
 // (R-PAIR.7): the SAS shown to the operator, the pinned device Noise-static, and
 // the device's exchanged routing payload.
 type MachineOutcome struct {
-	SAS          [4]string
+	SAS          [6]string
 	DeviceStatic []byte // pinned device Noise-static public key
 	Device       DevicePayload
 }
@@ -168,7 +168,7 @@ type MachineOutcome struct {
 // SAS, the pinned machine Noise-static, and the machine's routing payload
 // (including the initial EpochID).
 type DeviceOutcome struct {
-	SAS           [4]string
+	SAS           [6]string
 	MachineStatic []byte // pinned machine Noise-static public key
 	Machine       MachinePayload
 }

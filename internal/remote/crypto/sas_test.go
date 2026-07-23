@@ -140,17 +140,16 @@ func TestSAS_KnownAnswer(t *testing.T) {
 			t.Errorf("SAS KAT index %d = %q is not in the 64-emoji table", i, e)
 		}
 	}
-	if wantSAS == ([6]string{}) {
-		t.Log("TODO(impl): pin wantSAS (all SIX emoji) for the fixed channel binding at first green; mirror it byte-identically in the Swift/Android SAS KAT (release gate)")
-	} else if got != wantSAS {
+	if got != wantSAS {
 		t.Errorf("SAS KAT = %v, want %v", got, wantSAS)
 	}
 }
 
-// wantSAS is a derive-and-pin cross-language KAT for the fixed channel binding
-// above. The implementer fills all SIX emoji at first green (from the reference
-// SAS output) and mirrors them byte-identically in the Swift/Android SAS table
-// test — the on-device KAT is a release gate, not verifiable in this repo. Left
-// empty ([6]string{}) so the structural KAT assertions run while the concrete
-// interop value is pending.
-var wantSAS = [6]string{}
+// wantSAS is the derive-and-pin cross-language KAT for the fixed channel binding
+// above (32 bytes, binding[i] = byte(i)): the concrete SIX-emoji SAS the Go
+// reference implementation produces at first green under the ADR-007 2026-07-23
+// 36-bit layout. This EXACT six-emoji sequence MUST be mirrored byte-identically
+// in the Swift/Android SAS table KAT — the on-device cross-language KAT is a
+// release gate (not verifiable in this repo): if the six emoji diverge across
+// platforms, pairing SAS comparison breaks.
+var wantSAS = [6]string{"🐷", "🐧", "🐰", "🦉", "🔨", "🐔"}
