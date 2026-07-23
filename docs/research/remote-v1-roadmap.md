@@ -221,6 +221,16 @@ reused unmodified; the renderer is a new phonecore file.
   sites today (daemon-hosted pairing; relay authorize_device unused) -> defer to a design decision.
 Order: ME-1, DHI-3 (parallel, daemon+relay disjoint), CR-1, HI-3-allowlist; HI-3-consent deferred.
 
+**A6 STATUS (2026-07-23): live-safety DONE.** CR-4 (mailbox cap), ME-1 (atomic revoke +
+sever live socket), DHI-3 (kill/delete two-phase idempotency), CR-1 (per-source cap +
+cumulative handshake deadline) all landed GREEN, -race. **HI-3 DEFERRED (tracked, needs a
+design decision, LOW urgency):** the relay's authorize_device has ZERO production call sites
+today (daemon-hosted pairing; relay authorize_device unused), so no live attack surface. Both
+halves need a call: (a) machine-allowlist semantics -- what it gates (authorize_device only?
+also machine registration?) and empty=allow (opt-in, backward-compatible) vs empty=deny
+(fail-closed but breaks unconfigured deployments); (b) device-consent proof -- the artifact
++ whether pairing.go is "frozen" -- write a short ADR amendment before implementing.
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
