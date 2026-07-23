@@ -38,6 +38,47 @@ func OpenJournalEnvelope(key crypto.ContentKey, raw []byte) (protocol.JournalRec
 	return rec, env.Header.Seq, nil
 }
 
+// JournalReceiver is the phone's replay/reorder/gap-protected journal receive path
+// (R-PHC.5, R-JRN.6). It wraps a crypto.MailboxReceiver plus the epoch content key: an
+// untrusted relay stores the sealed envelopes and can replay, reorder, or drop them, so
+// every envelope is run through the receiver's per-(sender,epoch) seq guard before its
+// record is decoded.
+type JournalReceiver struct {
+	key  crypto.ContentKey
+	recv *crypto.MailboxReceiver
+}
+
+// NewJournalReceiver returns a receiver bound to the epoch content key.
+func NewJournalReceiver(key crypto.ContentKey) *JournalReceiver {
+	return &JournalReceiver{key: key, recv: crypto.NewMailboxReceiver()}
+}
+
+// Accept parses one sealed envelope, authenticates + seq-guards it through the mailbox
+// receiver, and decodes the journal record. A replayed/reordered seq returns
+// crypto.ErrStaleSeq and a zero record (the caller must NOT apply it). A valid but
+// SKIPPED seq returns gap=true alongside the decoded record, so the phone
+// journal_read-resyncs instead of trusting contiguity.
+func (r *JournalReceiver) Accept(raw []byte) (rec protocol.JournalRecord, gap bool, err error) {
+	env, err := crypto.ParseEnvelope(raw)
+	if err != nil {
+		return protocol.JournalRecord{}, false, err
+	}
+	res, err := r.recv.Accept(r.key, env)
+	if err != nil {
+		return protocol.JournalRecord{}, false, err
+	}
+	if err := json.Unmarshal(res.Plaintext, &rec); err != nil {
+		return protocol.JournalRecord{}, false, err
+	}
+	return rec, res.Gap, nil
+}
+
+// SeedHighWater seeds the resume high-water mark for a (sender, epoch) stream to a
+// journal_read snapshot cursor N, so an envelope at seq <= N is rejected on resume (F4).
+func (r *JournalReceiver) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) {
+	r.recv.SeedHighWater(sender, epoch, seq)
+}
+
 // CachedSession is the phone's view of one session. Group is verbatim from the wire.
 type CachedSession struct {
 	SessionID string
@@ -59,21 +100,28 @@ func NewSessionCache() *SessionCache {
 	return &SessionCache{sessions: map[string]CachedSession{}}
 }
 
-// Apply folds one journal record into the cache. A record with a SessionID ensures the
-// session exists (present); a non-empty Group updates it verbatim; a deleted record
-// removes it. The cursor advances to the highest applied record cursor.
-func (c *SessionCache) Apply(rec protocol.JournalRecord) {
+// Apply folds one journal record into the cache and reports whether it mutated. A record
+// with a SessionID ensures the session exists (present); a non-empty Group updates it
+// verbatim; a deleted record removes it. The cursor advances to the highest applied
+// record cursor. A record whose Cursor is STRICTLY LESS than the highest applied cursor
+// is a stale replay/reorder (defense in depth behind the JournalReceiver seq guard): it
+// mutates nothing and returns false. An equal cursor still applies -- a roster snapshot
+// shares one read cursor across all its sessions.
+func (c *SessionCache) Apply(rec protocol.JournalRecord) (applied bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if rec.Cursor < c.cursor {
+		return false
+	}
 	if rec.Cursor > c.cursor {
 		c.cursor = rec.Cursor
 	}
 	if rec.SessionID == "" {
-		return // session-neutral record (e.g. presence)
+		return true // session-neutral record (e.g. presence)
 	}
 	if rec.Type == string(journalTypeDeleted) {
 		delete(c.sessions, rec.SessionID)
-		return
+		return true
 	}
 	cs, ok := c.sessions[rec.SessionID]
 	if !ok {
@@ -84,6 +132,7 @@ func (c *SessionCache) Apply(rec protocol.JournalRecord) {
 		cs.Group = rec.Group // verbatim from the wire (R-PHC.3)
 	}
 	c.sessions[rec.SessionID] = cs
+	return true
 }
 
 // Get returns the cached session for id.

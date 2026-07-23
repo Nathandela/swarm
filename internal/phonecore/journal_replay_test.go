@@ -87,7 +87,7 @@ func TestPhoneCore_ReplayedOlderEnvelopeRejectedAndDoesNotMutateCache(t *testing
 	envs := sealJournalStream(t, key, 5, sender, []protocol.JournalRecord{
 		{Cursor: 11, SessionID: "m/s2", Type: "group_transition", Group: status.Group("working")},     // seq 1
 		{Cursor: 12, SessionID: "m/s2", Type: "group_transition", Group: status.Group("needs_input")}, // seq 2
-		{Cursor: 13, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")},         // seq 3
+		{Cursor: 13, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")},        // seq 3
 	})
 
 	recv := NewJournalReceiver(key)
