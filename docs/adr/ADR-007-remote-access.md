@@ -321,3 +321,69 @@ activity-feed depth, Live Activities) are explicitly out of v1.
 lives in `docs/research/remote-v1-roadmap.md` (Phases A/B/C, dependency-ordered). The
 on-device cross-language SAS KAT gate (prior amendment) now applies to BOTH clients, not
 iOS alone.
+
+## Amendment 2026-07-23 — Pairing host: the daemon runs Machine.Pair (Option A), owner-tier pair_* ops
+
+**Status**: accepted. Refines D3 (identity/pairing) and D5 (gateway) with the concrete
+Phase-A pairing wire flow. Reuses the frozen pairing/enroll/crypto layer unchanged.
+
+**Decision.** The **daemon is the pairing host**. An owner-tier `pair_start` triggers the
+daemon to run `pairing.Machine.Pair` in a background goroutine whose `ConfirmFunc` bridges
+to the `pair_pending`/`pair_confirm` wire events; on accept it runs `enroll.Enroll` +
+`device.Registry.Add` in-process. The `RendezvousTransport` is injected (a `memRendezvous`
+in tests; a `relay.DialRaw` adapter in production), so the daemon holds no *standing* relay
+coupling — it dials per-pairing.
+
+**Why (Options B and C rejected).** (1) **Key custody** — `enroll.Enroll` needs the machine
+grant-signing key + epoch keys, which have no production home yet and must live in a
+long-lived trusted process; the daemon already owns the device registry (the enroll target
+and the R-POL.9 authorization authority). A short-lived `swarm remote pair` CLI must not
+hold grant-minting authority. (2) **R-PAIR.5** — a long-lived Bubble Tea TUI cannot cleanly
+fork a CLI and screen-scrape its confirm prompt, so the SAS must arrive as a wire event
+(`pair_pending`) and the decision return as one (`pair_confirm`); the wire events are the
+only clean mechanism for the TUI path and serve the CLI path identically. Option B
+(CLI-hosted pairing) splits the security-critical path across two processes and adds a
+"trust the CLI's word that the SAS matched" step without removing any daemon work; Option C
+(gateway-hosted) is most exposed to the untrusted relay and holds neither the registry nor
+the enroll keys. Both rejected.
+
+**Op set** (all **owner-tier only** — the remote tier refuses them; `CapPairing`-gated;
+bound to the triggering connection for correlation, one pairing in flight per connection):
+- `pair_start` (client->daemon; reply carries the QR + rendezvous id) — the trigger; the
+  daemon generates the rendezvous id + single-use secret (kept in the trusted process),
+  builds the QR, creates the rendezvous, spawns the handshake goroutine.
+- `pair_pending` (daemon->client push) — SAS (six emoji) + device name at the confirm gate.
+- `pair_confirm` (client->daemon) — the human's allow/deny, routed to the waiting `ConfirmFunc`.
+- `pair_result` (daemon->client) — terminal `paired: <device>` / `failed: <reason>` (since
+  `Machine.Pair` returns asynchronously relative to `pair_confirm`).
+Seam: an additive optional interface `PairingHost{ BeginPairing(ctx, req, confirm, result)
+(PairView, error) }` on the daemon API keeps pairing/enroll/crypto types out of the
+`protocol` package (mirrors `DeviceLister`/`DeviceRevoker`/`PolicyDescriber`). Every new
+direct `Control` field gets a `protocol.md` field-table row (GG-7).
+
+**New daemon attack surface (recorded for the audit committee).** The daemon makes an
+**ephemeral, human-triggered, outbound-only** `DialRaw` to the configured relay during the
+pairing window: opaque Noise bytes only, no relay-auth key disclosed, no standing listener,
+torn down on complete/decline/TTL/disconnect. This **relocates** rather than adds surface
+(B/C would open the same dial in another process) and is the smaller blast radius given the
+daemon must hold the enroll keys regardless. Abstracted behind `RendezvousTransport`.
+
+**Security invariants preserved.** SAS compared out-of-band by a human at the local console
+(never auto/timeout-confirmed); confirm never inferred or remembered (fresh SAS + single-use
+secret per handshake); disconnect-before-confirm **fails closed** (goroutine ctx derived from
+the connection; `ConfirmFunc` errors -> decline frame -> rendezvous burned -> nothing
+enrolled); headless refused (`LocalConsole=true` only while a live owner client is present —
+no standing auto-pair listener, R-PAIR.8); **owner-tier only** because the pairing device has
+no pinned `CommandSignPub` yet, so `requireRemoteAuthz` cannot and must not gate pairing;
+`enroll`/`Add` fail-closed. **Documented edge (tracked, not blocking):** `enroll`+`Add` run
+after the frozen single-byte accept frame is sent, so a `Registry.Add` I/O failure yields a
+confirmed-but-unenrolled device — fail-closed on the daemon (its future commands won't
+authorize), tiny window (enroll is pure; only `Add` does I/O).
+
+**Deferred (NOT A3.3).** Production machine-key provisioning (grant-signing + epoch keys)
+shares A2's `swarm remote init`. Sealed `EpochGrant` delivery to the phone goes **out-of-band
+via the relay mailbox** (gateway `MailboxAppend`), because in-band delivery would require
+editing the frozen single-byte decision frame — belongs to A2/A7. The live-relay
+`RendezvousTransport` adapter (sub-slice e) is blocked on A2; sub-slices a-d land now against
+`memRendezvous`. Frozen layer untouched (pairing/enroll/crypto/registry/qr reused; the relay
+`DialRaw`/`Rendezvous*` calls are wrapped by a new additive adapter, not a relay change).

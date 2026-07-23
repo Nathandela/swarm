@@ -108,11 +108,18 @@ listed A1..A8 order.
   RevokeDevice` -> `Registry.Remove`. Auto-off on last device is already automatic. KNOWN GAPS
   (document, do not claim done): does NOT purge the relay-side registration (-> A6 ME-1 atomic
   revoke), and any CapFull device can revoke any other (no admin tier).
-- A3.3 `pair_pending`/`pair_confirm` — OWNER-TIER ONLY (local console per R-PAIR.9; remote tier
-  refuses). Needs new per-connection push infra (like `journalWriter`) + a background
-  `pairing.Machine.Pair` goroutine bridged to a wire `ConfirmFunc`, PLUS a 6th deliverable the
-  named ops omit: a "start pairing" trigger (rendezvous id / QR + a terminal paired/failed
-  signal). Largest; own design pass; last.
+- A3.3 pairing flow — DESIGN LOCKED (ADR-007 amendment 2026-07-23, "Pairing host: Option A").
+  The DAEMON hosts pairing: owner-tier ops `pair_start` (trigger->QR) / `pair_pending`
+  (SAS+name push) / `pair_confirm` (allow/deny) / `pair_result` (terminal), via a
+  `PairingHost{BeginPairing(ctx,req,confirm,result)}` seam running `pairing.Machine.Pair` in a
+  background goroutine over an injected `RendezvousTransport`. Sub-slices:
+  - A3.3-a wire types (Op consts + Control fields + protocol.md rows) — now.
+  - A3.3-b tier/cap gating (remote-tier refuses; CapPairing) — now.
+  - A3.3-c ConfirmFunc<->wire bridge (PairingHost iface + Server closures; fake host + memRendezvous) — now.
+  - A3.3-d enroll wiring (coreAPI implements PairingHost; real Machine.Pair->enroll->Add, keys injected) — now.
+  - A3.3-e live-relay RendezvousTransport adapter (relay.DialRaw) — BLOCKED on A2 binary.
+  Deferred to A2/A7: production machine-key provisioning (swarm remote init) + sealed-grant
+  delivery over the relay mailbox. Frozen pairing/enroll/crypto untouched.
 
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
