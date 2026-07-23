@@ -180,6 +180,26 @@ TRUSTED (docs/verification/remote-phaseA-a5-review.md). Tracked follow-ups from 
   session lifetime (bind to the signed ExpiresAt).
 - **R6 -> L3/DME-1 constraint:** idem-GC TTL must exceed max command validity; persist ExpiresAt.
 
+**GATEWAY BINARY + PHONESIM plan (from scouting 2026-07-23):** the wire is ~80% proven by
+`internal/skeleton/gatewayservice_e2e_test.go` (in-process relay + real daemon + remotegw.Service);
+A8 = union of that + `enroll_e2e_test.go` (real pairing+grant). Doable-now slices:
+- G0 machineid relay-auth SIGNER (RelayAuthSign(challenge) []byte) -- the one additive change to a
+  non-frozen package; the gateway needs it for relay.ClientAuth. Prereq for the binary.
+- G1 config assembler (pure fn: DaemonSocket env + relay.json URL + machineid.Load + a paired device
+  -> PhoneTarget(hex RoutingID) + Key=EpochKeys().ContentKey + EpochID; fail-closed on any missing).
+- G2 cmd/swarm-remote main + Service.Run (signal-cancel); tested via the gatewayservice E2E harness.
+- P1 phonesim client wrapper over phonecore (RunDevice+AcceptGrant pair, JournalReceiver+SessionCache
+  observe, SignCommand+SealCommandEnvelope drive kill).
+- E1 observe+kill E2E: phonesim pairs over the in-process relay, decodes a journal event, drives a
+  kill end-to-end. Content-key: full-bootstrap (enroll->grant->AcceptGrant in-process), skip the
+  deferred relay-mailbox grant delivery.
+Order: G0 -> G1 -> P1 -> G2 -> E1 (all now). BLOCKED: P2 terminal renderer (A7 greenfield, gating for
+terminal peek), E2 take_control+input (R1 -- command-IN can't carry a gate token or hold the
+per-connection lease; live input needs a SEPARATE persistent raw-input channel -- decide before
+typing), real grant delivery over the relay mailbox (deferred). G3 launchd/systemd unit + daemon
+supervising swarm-remote: off the phonesim path, land last. Frozen crypto/relay/remotegw/phonecore
+reused unmodified; the renderer is a new phonecore file.
+
 **Reprioritized critical path (next):** A3 control-plane ops -> A4 pairing CLI/TUI ->
 A2 gateway binary -> A7 phone-core (pairing SM + snapshot renderer + gomobile surface) ->
 A5 full-input backend -> A8 phonesim. A6 hardening runs in parallel with A5 (both touch the
