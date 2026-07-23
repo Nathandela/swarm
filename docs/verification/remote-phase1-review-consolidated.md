@@ -141,6 +141,20 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
   default until roots are configured. Root check uses a trailing-separator guard. Protocol +
   skeleton (incl. remote-launch E2E) green under `-race`. **Item 1 (launch policy) now
   COMPLETE** — the largest safety gap is closed.
+- **Item 2b (R-KS.1/.2) durable kill-switch state** — DONE. RED `9c716e1`, GREEN `46e73a1`.
+  coreAPI implements protocol.KillSwitch: RemoteControlEnabled()==(device Count()>0),
+  read-time, mirrored to `remote-state.json` (0600, atomic). Default off-until-paired
+  (user decision); auto-off at zero devices (R-KS.2). Manual `swarm remote off` (R-KS.3)
+  deferred to the CLI slice (file is its hook). `-race` green.
+- **Item 8 (MED-1) SAS widening 24->36 bits (six emoji)** — DONE + cross-model reviewed.
+  ADR `1d810ef`, RED `1874370`, GREEN `47dcb73`. Cross-model review (codex + independent
+  opus + lead code check) in `remote-phase1-sas-review.md`: **TRUSTED for the stated
+  threat model.** opus refuted codex's "unbounded window" concern (relay enforces a 60s
+  rendezvous TTL + rate limiting, verified in code) and found the role-asymmetry that
+  blocks a 2^18 birthday shortcut (it's a genuine 2^36 preimage); KAT hand-recomputed.
+  CONDITIONAL: safety depends on the bounded/rate-limited pairing window staying in place;
+  if relaxed, add the ephemeral commitment (documented future hardening). On-device KAT
+  mirror is a release gate. ADR summary line corrected 4->6 emoji.
 - Remaining fix-pack: item 5 gateway reliability (GW-H1/H2/M1/M2 — NOTE GW-H2 changes
   RelaySink seq to the journal cursor, which interacts with item 6's committed replay tests
   (they assume contiguous seq 1..N); reconcile carefully, do fresh); 4b kill/delete/interrupt
