@@ -131,6 +131,7 @@ type Control struct {
 	TargetDeviceID string          `json:"target_device_id,omitempty"` // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
 	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
 	TTLSeconds     int             `json:"ttl_seconds,omitempty"`      // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
+	GateToken      string          `json:"gate_token,omitempty"`       // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
 }
 
 // ApproveReq is a remote approval of an agent interaction (amendment D.0-A6):
@@ -240,6 +241,18 @@ type SessionStream interface {
 	Input(p []byte) error
 	Resize(cols, rows int) error
 	Close() error
+}
+
+// OperationClaimer is the optional interface a DaemonAPI ALSO implements to claim a
+// remote op's operation_id as single-use through the daemon's durable idempotency store
+// (slice A5-c). handleTakeControl claims the op AFTER authorization: a duplicate
+// operation_id (existed=true) is a REPLAY and is refused, so a captured take_control
+// cannot re-establish a second lease. Unlike launch it is NOT redriven — take_control
+// has no re-drivable side effect, so a consumed operation_id stays consumed. A backend
+// that does NOT implement this interface leaves the A5-a/A5-b establishment path
+// unchanged (the gate-token/single-use mechanism engages only with a real store).
+type OperationClaimer interface {
+	ClaimOperation(operationID, action, session string) (existed bool, err error)
 }
 
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so

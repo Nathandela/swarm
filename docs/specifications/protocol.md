@@ -88,6 +88,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `target_device_id` | string            | device_revoke: the device to REVOKE, distinct from the caller `device_id` (A3.2) |
 | `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
 | `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
+| `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that

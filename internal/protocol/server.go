@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"os"
@@ -1111,15 +1112,52 @@ func (cc *clientConn) handleAttach(c Control) {
 // tier uses). On an authenticator refusal requireRemoteAuthz has already replied, so
 // we return WITHOUT attaching — no lease may open on refusal. On success the pump's
 // OpLease grant is the observed reply (no extra reply here, exactly like handleAttach).
-// SCOPE: establishment + authz ONLY. Input forwarding under this lease
-// (OpDataIn/OpResize) is slice A5-b; gate-token single-use is A5-c.
+// SCOPE: establishment + authz. Input forwarding under this lease
+// (OpDataIn/OpResize) is slice A5-b.
+//
+// Slice A5-c binds a one-shot, "biometric-attested" gate token into the device
+// signature and makes the operation_id single-use. Both properties require the durable
+// idempotency store, so the whole mechanism engages ONLY when the backend implements
+// OperationClaimer (the production coreAPI always does); a bare stub keeps the A5-a/A5-b
+// establishment path unchanged. When engaged, the order is: present-check (an absent
+// token can never gate control, even though SHA256("") is a valid 32-byte hash) ->
+// requireRemoteAuthz with content_hash = SHA256(GateToken) (so a relay that swaps the
+// wire token breaks the signature, exactly as launch binds its spec) -> single-use claim
+// AFTER authz (so an unauthenticated caller cannot flood the durable log) -> attach.
 func (cc *clientConn) handleTakeControl(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
 		return
 	}
-	if !cc.requireRemoteAuthz(c, ActionTakeControl, c.SessionID, nil) {
+	// The gate-token/single-use mechanism is coupled to the durable store: single-use is
+	// unenforceable without it, so it engages only when the backend is an OperationClaimer.
+	claimer, gated := cc.srv.d.(OperationClaimer)
+	var contentHash []byte
+	if gated {
+		// Present-check: refuse an empty one-shot token before authz. A hash-only check
+		// would wrongly accept it because SHA256("") is a valid 32-byte hash (A5-c).
+		if c.GateToken == "" {
+			cc.replyErrorCode("take_control requires a gate token", CodeInvalidField)
+			return
+		}
+		// Bind the gate token into the signed tuple via content_hash. The daemon
+		// recomputes SHA256(wire GateToken); a swapped token yields a different hash, so
+		// the device signature (which covers it) fails to verify (anti-tamper).
+		h := sha256.Sum256([]byte(c.GateToken))
+		contentHash = h[:]
+	}
+	if !cc.requireRemoteAuthz(c, ActionTakeControl, c.SessionID, contentHash) {
 		return
+	}
+	// Single-use: claim the operation_id AFTER authz. A duplicate (existed) is a REPLAY —
+	// refuse with NO attach, so a captured take_control cannot open a second lease. Unlike
+	// launch, take_control is never redriven; a consumed operation_id stays consumed.
+	if gated {
+		existed, err := claimer.ClaimOperation(c.OperationID, ActionTakeControl, local)
+		if err != nil || existed {
+			cc.replyErrorCode("take_control operation_id already used", CodeStaleApproval)
+			return
+		}
 	}
 	// A second lease on this connection auto-detaches the first (mirror handleAttach),
 	// so one connection never holds two leases or cross-routes data (F7).

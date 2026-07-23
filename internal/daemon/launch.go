@@ -102,6 +102,19 @@ func (d *Daemon) Launch(spec LaunchSpec) (persist.Meta, error) {
 	return d.launch(spec, nil)
 }
 
+// ClaimOperation claims operationID as single-use through the durable two-phase
+// idempotency store (slice A5-c), for a remote op that — unlike launch — has NO
+// re-drivable side effect. It Prepares the record (fsync'd before the caller acts) and
+// surfaces whether the key ALREADY existed; a true `existed` is a REPLAY the caller must
+// refuse. The record is left `prepared` deliberately — it is the durable "this
+// operation_id was consumed" marker, and the launch-only stale-record sweep
+// (resolveStaleLaunches) ignores non-launch actions, so no terminal transition (Begin/
+// Complete) is needed for a take_control claim.
+func (d *Daemon) ClaimOperation(operationID, action, session string) (bool, error) {
+	_, existed, err := d.idem.Prepare(operationID, action, session)
+	return existed, err
+}
+
 // launch is the two-phase, crash-safe launch (E5.4/S11): reserve a running meta,
 // spawn the shim with a deterministic socket and filtered env, then confirm it is
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT

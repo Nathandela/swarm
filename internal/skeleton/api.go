@@ -190,6 +190,18 @@ func (a *coreAPI) Kill(id string) error        { return a.core.Kill(id) }
 func (a *coreAPI) Delete(id string) error      { return a.core.Delete(id) }
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 
+// ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a
+// remote op's operation_id single-use through the daemon's durable idempotency store so
+// a take_control operation_id cannot be replayed to open a second lease. It delegates to
+// the daemon's ClaimOperation wrapper (Prepare + existed).
+func (a *coreAPI) ClaimOperation(operationID, action, session string) (bool, error) {
+	return a.core.ClaimOperation(operationID, action, session)
+}
+
+// coreAPI ALSO satisfies protocol.OperationClaimer so the assembled remote-tier Server
+// enforces take_control operation_id single-use (slice A5-c).
+var _ protocol.OperationClaimer = (*coreAPI)(nil)
+
 // coreAPI ALSO satisfies protocol.JournalBackend so the assembled remote-tier
 // Server can serve journal_read / journal_subscribe (DHI-1). The daemon and
 // internal/journal stay free of a protocol import; the wire-type conversion lives
