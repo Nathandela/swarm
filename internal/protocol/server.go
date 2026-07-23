@@ -30,14 +30,30 @@ const OptionWorktree = "worktree"
 // adapter's resume argv from the source conversation id.
 const OptionResumeFrom = "resume_from"
 
+// remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
+// remote tier (R-POL.4): each guarded option key maps to its single forbidden value, so
+// the safe default of the same key ("dangerously-skip-permissions"=="false",
+// "sandbox"=="workspace-write") is still allowed. Config-free by design (slice 1b adds
+// config).
+var remoteForbiddenOptions = map[string]string{
+	"dangerously-skip-permissions": "true",               // claude adapter full-access (claude.go:193)
+	"sandbox":                      "danger-full-access", // codex adapter full-access (codex.go:89)
+}
+
 // daemonLaunchSpec builds the DaemonAPI launch spec from a validated request,
 // applying the server-side env allowlist (S-6). Argv composition is the adapter's
-// job (Epic 9), so it is left empty here.
-func daemonLaunchSpec(req *LaunchReq) daemon.LaunchSpec {
+// job (Epic 9), so it is left empty here. On the remote tier the client env is DROPPED
+// entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
+// so filtering is not enough — it must not survive at all.
+func daemonLaunchSpec(req *LaunchReq, remote bool) daemon.LaunchSpec {
+	clientEnv := persist.FilterEnv(req.Env)
+	if remote {
+		clientEnv = nil // R-POL.5: remote launch carries no phone-supplied env
+	}
 	return daemon.LaunchSpec{
 		AgentType:     req.Agent,
 		Cwd:           req.Cwd,
-		ClientEnv:     persist.FilterEnv(req.Env),
+		ClientEnv:     clientEnv,
 		Cols:          req.Cols,
 		Rows:          req.Rows,
 		Options:       launchOptions(req),
@@ -885,6 +901,17 @@ func (cc *clientConn) handleLaunch(c Control) {
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
 		return
 	}
+	// R-POL.4/.2: on the remote tier refuse a dangerous option (value-aware, hard-coded)
+	// AFTER authz but BEFORE argv/cwd validation, so the policy refusal precedes the cwd
+	// stat and produces no daemon side effect.
+	if cc.srv.remoteTier {
+		for k, v := range req.Options {
+			if forbidden, ok := remoteForbiddenOptions[k]; ok && forbidden == v {
+				cc.replyErrorCode("launch: option "+strconv.Quote(k)+"="+strconv.Quote(v)+" not permitted on the remote tier", CodePolicy)
+				return
+			}
+		}
+	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
 		return
@@ -903,7 +930,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: cols/rows out of range")
 		return
 	}
-	spec := daemonLaunchSpec(req)
+	spec := daemonLaunchSpec(req, cc.srv.remoteTier)
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		cc.replyError("launch: " + err.Error())
