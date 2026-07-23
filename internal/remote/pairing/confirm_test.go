@@ -22,7 +22,7 @@ func TestPairing_PhotographedQRFailsAtConfirm(t *testing.T) {
 	rid := fill16(0x44)
 	secret := fill32(0x55)
 
-	decline := func(ctx context.Context, sas [4]string, name string) (bool, error) { return false, nil }
+	decline := func(ctx context.Context, sas [6]string, name string) (bool, error) { return false, nil }
 	mp := newMachineParams(mID, secret, rid, decline)
 	dp := newDeviceParams(atkID, secret, rid)
 
@@ -52,7 +52,7 @@ func TestPairing_DeclineLeavesNoState(t *testing.T) {
 	rid := fill16(0x45)
 	secret := fill32(0x56)
 
-	decline := func(ctx context.Context, sas [4]string, name string) (bool, error) { return false, nil }
+	decline := func(ctx context.Context, sas [6]string, name string) (bool, error) { return false, nil }
 	mp := newMachineParams(mID, secret, rid, decline)
 	dp := newDeviceParams(dID, secret, rid)
 
@@ -84,7 +84,7 @@ func TestPairing_ConfirmTimeoutFailsClosed(t *testing.T) {
 	rid := fill16(0x46)
 	secret := fill32(0x57)
 
-	timeout := func(ctx context.Context, sas [4]string, name string) (bool, error) {
+	timeout := func(ctx context.Context, sas [6]string, name string) (bool, error) {
 		return false, ErrConfirmTimeout
 	}
 	mp := newMachineParams(mID, secret, rid, timeout)

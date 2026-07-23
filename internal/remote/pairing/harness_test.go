@@ -39,7 +39,7 @@ func fill32(b byte) [32]byte {
 
 // acceptConfirm is a ConfirmFunc that unconditionally allows — the operator
 // answering "y" to a device they recognise.
-var acceptConfirm ConfirmFunc = func(ctx context.Context, sas [4]string, name string) (bool, error) {
+var acceptConfirm ConfirmFunc = func(ctx context.Context, sas [6]string, name string) (bool, error) {
 	return true, nil
 }
 
@@ -48,14 +48,14 @@ var acceptConfirm ConfirmFunc = func(ctx context.Context, sas [4]string, name st
 // (and, in a MITM, that the two ends' SAS diverge).
 type confirmRecorder struct {
 	mu     sync.Mutex
-	sas    [4]string
+	sas    [6]string
 	name   string
 	called int
 }
 
 // fn returns a ConfirmFunc that records its inputs then returns (allow, err).
 func (c *confirmRecorder) fn(allow bool, err error) ConfirmFunc {
-	return func(ctx context.Context, sas [4]string, name string) (bool, error) {
+	return func(ctx context.Context, sas [6]string, name string) (bool, error) {
 		c.mu.Lock()
 		c.sas, c.name, c.called = sas, name, c.called+1
 		c.mu.Unlock()
@@ -63,7 +63,7 @@ func (c *confirmRecorder) fn(allow bool, err error) ConfirmFunc {
 	}
 }
 
-func (c *confirmRecorder) snapshot() (sas [4]string, name string, called int) {
+func (c *confirmRecorder) snapshot() (sas [6]string, name string, called int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.sas, c.name, c.called

@@ -99,7 +99,7 @@ func TestEnrollmentE2E_PairThenCommandNoManualSetup(t *testing.T) {
 		Secret:       fillKey(0x5A),
 		RendezvousID: fill16(0x11),
 		LocalConsole: true,
-		Confirm:      func(context.Context, [4]string, string) (bool, error) { return true, nil },
+		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "test-machine.local",
 			MachineRoutingID:    []byte("machine-routing-id-0001"),

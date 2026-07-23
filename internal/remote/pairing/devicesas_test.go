@@ -7,7 +7,7 @@
 //
 // CONTRACT the implementer must deliver (mirrors Machine's ConfirmFunc seam):
 //
-//	type DeviceSASFunc func(ctx context.Context, sas [4]string) error
+//	type DeviceSASFunc func(ctx context.Context, sas [6]string) error
 //	DeviceParams.DeviceSAS DeviceSASFunc  // optional; nil => surfaced nowhere (back-compat)
 //
 // RunDevice MUST invoke p.DeviceSAS (when non-nil) with the SAS derived from the
@@ -34,7 +34,7 @@ import (
 )
 
 // compile-time contract pin: the field's type and signature are exactly this.
-var _ DeviceSASFunc = func(ctx context.Context, sas [4]string) error { return nil }
+var _ DeviceSASFunc = func(ctx context.Context, sas [6]string) error { return nil }
 
 // TestPairing_DeviceSurfacesSASBeforeDecision pins PR-M1: the device SAS callback
 // fires exactly once, with the SAS the device outcome carries, and BEFORE the
@@ -47,15 +47,15 @@ func TestPairing_DeviceSurfacesSASBeforeDecision(t *testing.T) {
 	rid := fill16(0x91)
 	secret := fill32(0x92)
 
-	deviceSASShown := make(chan [4]string, 1)
+	deviceSASShown := make(chan [6]string, 1)
 	var deviceSASCalls int32
-	var gotDeviceSAS [4]string
+	var gotDeviceSAS [6]string
 
 	// The machine's confirm only answers once the device has surfaced its SAS, so
 	// an implementation that surfaces the device SAS only AFTER the decision would
 	// deadlock. The timeout converts that would-be deadlock into a clean, loud
 	// failure (the machine declines) instead of hanging the suite.
-	confirm := func(ctx context.Context, sas [4]string, name string) (bool, error) {
+	confirm := func(ctx context.Context, sas [6]string, name string) (bool, error) {
 		select {
 		case gotDeviceSAS = <-deviceSASShown:
 			return true, nil
@@ -66,7 +66,7 @@ func TestPairing_DeviceSurfacesSASBeforeDecision(t *testing.T) {
 
 	mp := newMachineParams(mID, secret, rid, confirm)
 	dp := newDeviceParams(dID, secret, rid)
-	dp.DeviceSAS = func(ctx context.Context, sas [4]string) error {
+	dp.DeviceSAS = func(ctx context.Context, sas [6]string) error {
 		atomic.AddInt32(&deviceSASCalls, 1)
 		deviceSASShown <- sas // buffered: the device does not block surfacing it
 		return nil

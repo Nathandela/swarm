@@ -1,0 +1,10 @@
+RED evidence — fix-pack item 8 (MED-1): widen SAS 24->36 bits (six emoji), per ADR-007 amendment 2026-07-23
+Date: 2026-07-23  Commit-base: 1d810ef
+
+Production still builds (RED confined to test files):
+  BUILD OK
+
+Compile-fail RED (signature change [4]string -> [6]string), right reason:
+vet: internal/remote/crypto/sas_test.go:108:12: invalid operation: got != ([6]string{}) (mismatched types [4]string and [6]string)
+
+Tests pin: SAS returns six emoji (all in the 64-table), deterministic, divergent bindings diverge (MITM), empty binding => ErrEmptyBinding, KAT structure (concrete six-emoji value pinned at GREEN + mirrored on-device). Production callers to move [4]->[6]: crypto/sas.go, pairing/pairing.go (ConfirmFunc, DeviceSASFunc, Device/MachineOutcome.SAS).
