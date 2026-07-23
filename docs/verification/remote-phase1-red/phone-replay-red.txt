@@ -1,0 +1,16 @@
+RED evidence — fix-pack item 6 (HIGH-3): phone journal replay/reorder/gap guard
+Date: 2026-07-23  Commit-base: 0ccd8d3
+
+$ go test -run 'Replay|Gap|OutOfOrder|Resume|Stale' ./internal/phonecore/
+internal/phonecore/journal_replay_test.go:93:10: undefined: NewJournalReceiver
+internal/phonecore/journal_replay_test.go:128:16: cache.Apply(protocol.JournalRecord{…}) (no value) used as value
+internal/phonecore/journal_replay_test.go:133:16: cache.Apply(protocol.JournalRecord{…}) (no value) used as value
+internal/phonecore/journal_replay_test.go:141:16: cache.Apply(protocol.JournalRecord{…}) (no value) used as value
+internal/phonecore/journal_replay_test.go:149:16: cache.Apply(protocol.JournalRecord{…}) (no value) used as value
+internal/phonecore/journal_replay_test.go:157:16: cache.Apply(protocol.JournalRecord{…}) (no value) used as value
+internal/phonecore/journal_replay_test.go:177:10: undefined: NewJournalReceiver
+internal/phonecore/journal_replay_test.go:214:10: undefined: NewJournalReceiver
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+All failures are the missing pinned API (NewJournalReceiver, SeedHighWater, SessionCache.Apply returning applied bool). Every crypto primitive the tests use (ContentKey, ErrStaleSeq, KeyID, NewMailboxReceiver, MailboxResult.Gap, SeedHighWater), memMailbox, and NewRelaySink already exist. RED is for the right reason: the guard does not exist yet.
