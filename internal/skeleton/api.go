@@ -51,6 +51,12 @@ type coreAPI struct {
 	devices *device.Registry
 	clock   func() time.Time
 
+	// launchPolicy is the machine-configured remote launch policy (allowed cwd roots,
+	// R-POL.3/.7), loaded at assembly. nil until wired; the assembly ALWAYS wires a
+	// non-nil deny-all-by-default policy, so the remote tier is fail-closed even with no
+	// config file. A nil policy denies (fail-closed) via RemoteLaunchAllowed.
+	launchPolicy protocol.LaunchPolicy
+
 	events   chan persist.Meta
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -75,6 +81,20 @@ func (a *coreAPI) now() time.Time {
 // coreAPI ALSO satisfies protocol.DeviceAuthenticator so an assembled remote-tier
 // Server authorizes remote mutating ops against the pinned device registry (R-POL.9).
 var _ protocol.DeviceAuthenticator = (*coreAPI)(nil)
+
+// RemoteLaunchAllowed makes coreAPI a protocol.LaunchPolicy (R-POL.3): it delegates to the
+// loaded policy so an assembled remote-tier Server confines remote launches to the
+// machine-configured cwd roots. A nil policy (never wired) denies every launch — fail-closed.
+func (a *coreAPI) RemoteLaunchAllowed(resolvedCwd string) error {
+	if a.launchPolicy == nil {
+		return fmt.Errorf("remote launch policy unavailable")
+	}
+	return a.launchPolicy.RemoteLaunchAllowed(resolvedCwd)
+}
+
+// coreAPI ALSO satisfies protocol.LaunchPolicy so the assembled remote-tier Server confines
+// remote launches to the configured cwd roots (R-POL.3).
+var _ protocol.LaunchPolicy = (*coreAPI)(nil)
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{

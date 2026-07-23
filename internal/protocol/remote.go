@@ -124,6 +124,18 @@ type KillSwitch interface {
 	RemoteControlEnabled() bool
 }
 
+// LaunchPolicy confines a remote launch to machine-configured cwd roots (R-POL.3). On the
+// remote tier, handleLaunch resolves the request cwd with filepath.EvalSymlinks and calls
+// RemoteLaunchAllowed(resolvedCwd); a non-nil error refuses the launch with CodePolicy —
+// AFTER authz but BEFORE the cwd stat / any daemon side effect (R-POL.2), so a resolved cwd
+// outside every root is refused with no side effect. An EMPTY root set denies every launch
+// (fail-closed). A backend that does NOT implement it is unaffected (additive, like
+// KillSwitch); production fail-closed is delivered by the assembly ALWAYS wiring a
+// config-derived policy (empty-allowed by default) onto the coreAPI.
+type LaunchPolicy interface {
+	RemoteLaunchAllowed(resolvedCwd string) error
+}
+
 // ServeRemote binds a REMOTE-TIER Server on socketPath: every connection is
 // unconditionally remote-origin (amendment D.0-A1 — the gateway dials only this
 // dedicated socket), so every remote MUTATING op (kill/launch/delete/...) MUST carry

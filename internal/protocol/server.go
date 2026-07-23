@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -912,6 +913,24 @@ func (cc *clientConn) handleLaunch(c Control) {
 			}
 		}
 	}
+	// R-POL.3/.2: on the remote tier, when the backend exposes a LaunchPolicy, confine the
+	// launch to its machine-configured cwd roots. Resolve the cwd (symlink-hardened) HERE so
+	// the RESOLVED real path is what the policy checks — a symlink textually under a root but
+	// resolving outside it is refused — and do it AFTER authz/denylist but BEFORE the cwd
+	// stat / any side effect. An unresolvable cwd (e.g. nonexistent) is refused CodePolicy.
+	if cc.srv.remoteTier {
+		if lp, ok := cc.launchPolicy(); ok {
+			resolved, err := filepath.EvalSymlinks(req.Cwd)
+			if err != nil {
+				cc.replyErrorCode("launch: cwd is not a resolvable directory on the remote tier", CodePolicy)
+				return
+			}
+			if err := lp.RemoteLaunchAllowed(resolved); err != nil {
+				cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
+				return
+			}
+		}
+	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
 		return
@@ -1311,6 +1330,12 @@ func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
 func (cc *clientConn) killSwitch() (KillSwitch, bool) {
 	ks, ok := cc.srv.d.(KillSwitch)
 	return ks, ok
+}
+
+// launchPolicy returns the backend's LaunchPolicy if it implements one (R-POL.3).
+func (cc *clientConn) launchPolicy() (LaunchPolicy, bool) {
+	lp, ok := cc.srv.d.(LaunchPolicy)
+	return lp, ok
 }
 
 // requireRemoteAuthz is the single choke point for a remote mutating op (R-POL.9): it

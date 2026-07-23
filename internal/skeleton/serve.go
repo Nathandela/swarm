@@ -156,6 +156,12 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d.api.devices = devReg
+	// R-POL.3/.7: load the machine-configured remote launch policy (allowed cwd roots) and
+	// attach it to the coreAPI so the remote-tier Server confines remote launches. ALWAYS
+	// wired: a missing/malformed config yields a deny-all policy (fail-closed by default),
+	// and the error is advisory only (the returned policy is always safe).
+	launchPolicy, _ := loadRemoteLaunchPolicy(cfg.StateDir)
+	d.api.launchPolicy = launchPolicy
 	d.srv = protocol.NewServer(d.api, epID)
 
 	// R-GW.8: opt-in dedicated remote-tier listener the gateway dials. It binds its own
