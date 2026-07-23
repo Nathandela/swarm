@@ -134,8 +134,16 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
   R-POL.4 value-aware denylist (dangerously-skip-permissions=true, sandbox=danger-full-access
   refused with CodePolicy; safe =false/=workspace-write still allowed); R-POL.2 policy before
   cwd stat. Owner tier unchanged; skeleton E2E + `-race` green.
-- Remaining fix-pack: 1b allowed-cwd-roots + `remote-policy.json` (R-POL.3/.7, fail-closed;
-  has blast radius on remote-launch E2E — configure a root); 4b kill/delete/interrupt
+- **Item 1b (R-POL.3/.7) allowed-cwd-roots + remote-policy.json** — DONE. RED `7af0267`,
+  GREEN `fe07879`. Optional `protocol.LaunchPolicy` (symlink-resolved cwd confined to
+  configured roots; outside => CodePolicy); `<stateDir>/remote-policy.json` (0600) loader
+  fails CLOSED (missing/malformed => deny-all); assembled remote tier denies every launch by
+  default until roots are configured. Root check uses a trailing-separator guard. Protocol +
+  skeleton (incl. remote-launch E2E) green under `-race`. **Item 1 (launch policy) now
+  COMPLETE** — the largest safety gap is closed.
+- Remaining fix-pack: item 5 gateway reliability (GW-H1/H2/M1/M2 — NOTE GW-H2 changes
+  RelaySink seq to the journal cursor, which interacts with item 6's committed replay tests
+  (they assume contiguous seq 1..N); reconcile carefully, do fresh); 4b kill/delete/interrupt
   idempotency (DHI-3, subsumes L2); 4c W4
   orphan-tracking (real safety ceiling from the 4a re-audit); 2b kill-switch durable state
   + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5 gateway
