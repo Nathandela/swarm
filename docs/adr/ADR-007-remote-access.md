@@ -264,3 +264,60 @@ the identical six emoji from the same channel binding, or pairing SAS comparison
 across platforms. Existing SAS tests that assert a 4-emoji result are updated to six
 (additive-length harness correction, assertions preserved: determinism, divergent-binding
 divergence, empty-binding error). Tracked under the remote-control epic.
+
+## Amendment 2026-07-23 — Client strategy (iOS + Android both first-class), full remote input in v1, hardening into Phase A, existing design adopted as binding spec
+
+**Status**: accepted. Supersedes the D12 iOS-first stance; confirms and scopes D7/D8
+for v1; refines the D9/D10 hardening ordering. No crypto-layer change (the frozen layer
+is untouched by this amendment).
+
+**1. Client: iOS AND Android, both first-class (amends D12).** D12's "Native SwiftUI,
+iOS-first ... an Android thin client is later" is replaced. The gomobile-ready Go
+phone-core (unchanged in role) is the single shared core: it binds to an iOS xcframework
+AND an Android AAR, with two thin native UIs over one protocol/crypto/state core.
+Rationale: Android is buildable and testable on THIS machine with no Apple developer
+account, so the first real on-phone artifact is an Android build; iOS follows unchanged
+when an Xcode + Apple-account environment is available (D12's on-device release gate still
+governs iOS). Consequence: the phone-core exported surface is designed gomobile-bind-safe
+from the first line (no generics or unsupported types on the boundary) — a retrofit after
+the core is written is the expensive failure mode. The Apple-account Phase-0 dependency is
+no longer a blocker for first on-phone testing; it becomes an iOS-release dependency only.
+
+**2. Full remote input is in v1 (confirms D7, lifts the interim fail-close).** v1 includes
+remote keystroke input into a live session via D7's signed one-shot `take_control` op +
+lease-bound control session — not per-keystroke signatures, not an offline queue (input
+stays live-only per D7). The Phase-1 safety fix-pack fail-closed remote `OpDataIn` /
+`OpAttach` / `OpResize` on the remote tier as an interim measure; Phase A REOPENS them, but
+only behind a valid `take_control` session (device signature + biometric gate token +
+current lease generation + the `requireRemoteAuthz` choke point). Until `take_control`
+lands, remote input stays fail-closed. The v1 input UX is the already-designed **terminal
+peek + take-control** screen (design §8), NOT the chat/voice composer, which remains Phase
+2 (gated on spike S-A). D8 live launch execution likewise stays Phase 2; v1 launch is the
+builder + policy + crash-recovery path already scoped to Phase 1.
+
+**3. Safety hardening moves into Phase A, alongside the input backend (refines D9/D10
+ordering).** Because remote input is the highest-blast-radius capability — keystrokes into
+a code-editing agent through an untrusted relay — the two remaining hardening items are NOT
+deferred: relay round 3 (per-source concurrent-connection cap + cumulative handshake
+deadline, mailbox depth cap on by default, atomic revoke that closes the live socket,
+device-consent pairing proof + machine allowlist) and kill/delete routed through the
+two-phase idempotency store land in the same phase that reopens remote input. Enabling the
+capability and shipping the controls that bound it are one unit of work, not two.
+
+**4. The existing UI/UX design is adopted as the binding client spec.** The client UI is
+not designed from scratch. `docs/research/remote-control-design.md` §8 (the eight screens:
+pairing/onboarding, triage inbox, session detail, terminal peek, machines, approval sheet,
+activity feed, settings) is the phone-core output contract — the exported surface must feed
+exactly these screens. `docs/research/remote-control-design-directions.html` fixes the
+visual identity (skins 01 Substrate + 02 Void, purple retired, phosphor-green terminal
+hero, light+dark token sets); the native UIs implement it and the tokens are lifted into
+one shared source both clients consume. `docs/research/remote-control-mock.html` fixes the
+pairing flow (QR -> SAS "check both screens" compare -> paired); the Phase-A machine-side
+TUI/CLI confirm shows the SAME SAS the phone shows. Phase-2+ screens per the design's own
+§9 phasing (chat transcript S-A, approval sheets S-B/S-C, voice, quiet hours,
+activity-feed depth, Live Activities) are explicitly out of v1.
+
+**Consequence / tracking**: D12 is updated as above. The client + backend work breakdown
+lives in `docs/research/remote-v1-roadmap.md` (Phases A/B/C, dependency-ordered). The
+on-device cross-language SAS KAT gate (prior amendment) now applies to BOTH clients, not
+iOS alone.
