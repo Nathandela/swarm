@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -141,17 +142,33 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// reservation has touched only d.sessions (no disk yet), so dropReserved is a clean
 	// abort here.
 	if spec.OperationID != "" {
-		rec, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		_, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
 		if perr != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
 		}
 		if existed {
-			d.dropReserved(id)
-			if cached, ok := d.Get(rec.SessionID); ok {
+			// Replay of a known operation_id. The signal is LIVENESS, not phase: return
+			// the recorded session only if it is still usable; a MISSING (W1) or LOST
+			// (W3) session means the prior attempt crashed mid-launch and left no usable
+			// session, so re-point the key at THIS fresh reservation and re-drive rather
+			// than poison the key (W1) or return the dead corpse as success (W3).
+			redrive, cached, rerr := d.resolveReplay(spec.OperationID, id)
+			if rerr != nil {
+				d.dropReserved(id)
+				return persist.Meta{}, rerr
+			}
+			if !redrive {
+				d.dropReserved(id)
 				return cached, nil
 			}
-			return persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: cached session %q is gone", spec.OperationID, rec.SessionID)
+			// ponytail: the re-drive spawns a fresh session under the same operation_id.
+			// If the lost session were actually a LIVE orphan shim (window W4 — reconcile
+			// marked it LOST only because it could not match the orphan's identity), this
+			// double-spawns a live agent. Detecting a live orphan across restart needs
+			// orphan-process tracking that is out of scope for this slice; tracked by the
+			// skipped TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO. Fall through and
+			// re-drive with our reservation `id`, now the operation_id's session.
 		}
 	}
 
@@ -425,4 +442,51 @@ func (d *Daemon) rollbackReserved(id string, m persist.Meta, preLaunchOK bool) {
 		}
 	}
 	d.dropReserved(id)
+}
+
+// resolveReplay decides a replayed launch (Prepare returned existed) under d.mu.
+// If the operation_id's recorded session is present and NOT lost, the prior launch
+// left a usable session and its meta is returned (redrive=false) for an idempotent
+// success. If that session is MISSING (W1) or LOST (W3), the record is re-pointed
+// at freshID (this call's reservation) and redrive=true is returned, so the caller
+// drives a fresh spawn under the SAME operation_id — never poisoning the key or
+// returning a corpse. Re-reading the record under d.mu makes concurrent re-drivers
+// converge on one winner: the loser observes the winner's reservation (Running) and
+// returns it instead of spawning again. Reads d.sessions directly (not d.Get) since
+// d.mu is already held.
+func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, cached persist.Meta, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec, _ := d.idem.Get(opID)
+	if s, ok := d.sessions[rec.SessionID]; ok && s.meta.Status.Process != status.ProcessLost {
+		return false, s.meta, nil // live (or already-exited) session: idempotent success
+	}
+	if _, rerr := d.idem.Redrive(opID, "launch", freshID); rerr != nil {
+		return false, persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: redrive: %w", opID, rerr)
+	}
+	return true, persist.Meta{}, nil
+}
+
+// resolveStaleLaunches sweeps launch idempotency records still in flight
+// (prepared/executing) whose reserved session did not survive the restart — MISSING
+// (W1) or reconcile-LOST (W3) — and fails them, so the operation_id is re-drivable
+// on the next replay instead of lingering as a poison/corpse pointing at a dead
+// session (fix-pack 4a, DCR-1/DCR-2). Runs in Open AFTER reconcile, so d.sessions
+// already reflects the reconnected/lost world; a record pointing at a live (or
+// already-exited) session is left untouched.
+func (d *Daemon) resolveStaleLaunches() {
+	for _, rec := range d.idem.List() {
+		if rec.Action != "launch" {
+			continue
+		}
+		if rec.Phase != idempotency.PhasePrepared && rec.Phase != idempotency.PhaseExecuting {
+			continue
+		}
+		if m, ok := d.Get(rec.SessionID); ok && m.Status.Process != status.ProcessLost {
+			continue // a usable session survived: leave the record alone
+		}
+		if err := d.idem.Fail(rec.OperationID, nil); err != nil {
+			d.logf("resolve stale launch %s: %v", rec.OperationID, err)
+		}
+	}
 }

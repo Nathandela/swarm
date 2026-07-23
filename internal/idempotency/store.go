@@ -203,6 +203,51 @@ func (s *Store) Get(operationID string) (Record, bool) {
 	return rec, ok
 }
 
+// List returns a snapshot of every record (order unspecified). The daemon's
+// Open-time stale-launch resolver walks it to re-drivably fail launch records
+// whose reserved session did not survive a crash.
+func (s *Store) List() []Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Record, 0, len(s.records))
+	for _, rec := range s.records {
+		out = append(out, rec)
+	}
+	return out
+}
+
+// Redrive re-points operationID at newSessionID and resets it to `prepared`
+// (fsync), so a launch whose reserved session was lost to a mid-launch crash can
+// be re-driven under the SAME operation_id instead of poisoning the key. It force-
+// writes (last-write-wins), unlike Prepare which refuses an existing key; the
+// original CreatedAt is preserved when a prior record exists. Durable before the
+// re-driven side effect, exactly as Prepare is.
+func (s *Store) Redrive(operationID, action, newSessionID string) (Record, error) {
+	if operationID == "" {
+		return Record{}, errors.New("idempotency: empty operation_id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock()
+	created := now
+	if old, ok := s.records[operationID]; ok {
+		created = old.CreatedAt
+	}
+	rec := Record{
+		OperationID: operationID,
+		Action:      action,
+		SessionID:   newSessionID,
+		Phase:       PhasePrepared,
+		CreatedAt:   created,
+		UpdatedAt:   now,
+	}
+	if err := s.appendLocked(rec); err != nil {
+		return Record{}, err
+	}
+	s.records[operationID] = rec
+	return rec, nil
+}
+
 // Compact drops TTL-expired and over-cap records (R-IDP.4), rewriting the log
 // atomically (tmp+rename).
 func (s *Store) Compact() error {

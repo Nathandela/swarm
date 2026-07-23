@@ -225,6 +225,12 @@ func Open(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 
+	// Resolve launch idempotency records left in flight by a mid-launch crash whose
+	// reserved session did not survive (W1 missing / W3 reconcile-LOST), so the
+	// operation_id is re-drivable rather than a permanent poison/corpse (fix-pack 4a).
+	// Runs after reconcile so d.sessions already reflects the reconnected world.
+	d.resolveStaleLaunches()
+
 	d.wg.Add(1)
 	go d.acceptLoop()
 
