@@ -114,6 +114,16 @@ type DeviceAuthenticator interface {
 	AuthorizeCommand(a DeviceCommandAuth) error
 }
 
+// KillSwitch is the optional interface a remote-tier DaemonAPI implements to expose a
+// global remote-control master switch (R-KS.1): when RemoteControlEnabled reports false,
+// requireRemoteAuthz refuses EVERY remote mutating op with CodeKillSwitch as its FIRST
+// gate — before operation_id and the DeviceAuthenticator — so a valid device signature
+// cannot bypass it (fail-closed-before-signature). A backend that does NOT implement it
+// is unaffected (behavior unchanged); the durable default state is slice 2b.
+type KillSwitch interface {
+	RemoteControlEnabled() bool
+}
+
 // ServeRemote binds a REMOTE-TIER Server on socketPath: every connection is
 // unconditionally remote-origin (amendment D.0-A1 — the gateway dials only this
 // dedicated socket), so every remote MUTATING op (kill/launch/delete/...) MUST carry

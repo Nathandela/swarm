@@ -1280,6 +1280,12 @@ func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
 	return da, ok
 }
 
+// killSwitch returns the backend's KillSwitch if it implements one.
+func (cc *clientConn) killSwitch() (KillSwitch, bool) {
+	ks, ok := cc.srv.d.(KillSwitch)
+	return ks, ok
+}
+
 // requireRemoteAuthz is the single choke point for a remote mutating op (R-POL.9): it
 // gates launch/kill/delete before any side effect. On the owner (main) tier it is a
 // no-op — local connections keep full trust (R-POL.1). On the remote tier it enforces,
@@ -1294,6 +1300,12 @@ func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
 func (cc *clientConn) requireRemoteAuthz(c Control, action string, session string, contentHash []byte) bool {
 	if !cc.srv.remoteTier {
 		return true
+	}
+	// Kill switch (R-KS.1): fail closed BEFORE any authz work — a valid device signature
+	// must not bypass a disabled remote-control switch.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return false
 	}
 	if !cc.requireOperationID(c) {
 		return false
