@@ -1,0 +1,21 @@
+RED evidence — fix-pack item 4a (CRITICAL DCR-1/DCR-2): launch crash-window fix
+Date: 2026-07-23  Commit-base: 3958c13
+
+$ go test -run 'CrashReplay|Poison|Corpse|Redrive|StaleLaunch' ./internal/daemon/
+--- FAIL: TestLaunchCrashReplay_W1_PoisonedOperationID_Redrive (0.05s)
+    --- FAIL: TestLaunchCrashReplay_W1_PoisonedOperationID_Redrive/prepared (0.03s)
+    --- FAIL: TestLaunchCrashReplay_W1_PoisonedOperationID_Redrive/executing (0.02s)
+--- FAIL: TestLaunchCrashReplay_W3_SilentCorpse_NotReturnedAsSuccess (0.08s)
+    --- FAIL: TestLaunchCrashReplay_W3_SilentCorpse_NotReturnedAsSuccess/prepared (0.04s)
+    --- FAIL: TestLaunchCrashReplay_W3_SilentCorpse_NotReturnedAsSuccess/executing (0.04s)
+--- FAIL: TestLaunchCrashReplay_OpenTimeResolution_NoStalePreparedPointingAtDeadSession (0.01s)
+    launch_crash_replay_test.go:245: idem record for "devA:01JCRASHRESOLVE00000000000" is still in-flight (prepared) but points at a dead/missing session "resolve0planted0reserved0000" (live=false status=): the stale record was not resolved (poison/corpse)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	2.172s
+FAIL
+
+W1 (prepared+executing) fails on the poison hard-error 'cached session gone' (want live re-drive).
+W3 (prepared+executing) fails returning the LOST corpse as a successful launch (want no-corpse).
+OpenTimeResolution white-box guard fails: stale prepared record points at a dead session.
+W4 (live orphan) SKIPs with a clear reason (needs spawn-then-kill-9 integration harness).
+Regression TestIdempotency_ReplayLaunchNoSecondSession still passes. RED is for the right reason.
