@@ -264,9 +264,12 @@ tier has no unsigned `attach` and instead requires a signed `take_control`.
   `requireRemoteAuthz` choke point as `kill`/`delete` (kill switch first, then
   `operation_id`, then the `device_id`/`device_sig`/`expires_at` signature over the
   canonical tuple) and, only once authorized, establishes a controller lease through
-  the same `attach` path (replying with `lease`). It carries an optional `ttl_seconds`
-  (the requested control-session lifetime, clamped to a server maximum and defaulted
-  when absent). While that control session is live, remote `TDataIn` input frames and
+  the same `attach` path (replying with `lease`). The control-session lifetime binds to
+  the EARLIEST of the device-signed `expires_at`, `now + server-max` (30 min), and — when
+  the caller sets the optional `ttl_seconds` hint — `now + ttl_seconds`. Because
+  `expires_at` is covered by the device signature, the session can never outlive what the
+  device signed; `ttl_seconds` (unsigned) can only shorten it further (R7). While that
+  control session is live, remote `TDataIn` input frames and
   `resize` reach the session's shim; they are gated on every keystroke by four
   conditions — the kill switch is still on, the control session exists, it has not
   expired (lazy, on the server clock), and it still targets the connection's current

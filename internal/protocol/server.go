@@ -135,14 +135,11 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
-// Control-session lifetime bounds (slice A5-b). A take_control's requested TTLSeconds
-// is clamped to maxControlSessionTTL and defaulted to defaultControlSessionTTL when
-// absent or non-positive, so a 0/oversized request never yields an immediately-expired
-// (or unbounded) control session.
-const (
-	maxControlSessionTTL     = 30 * time.Minute
-	defaultControlSessionTTL = 5 * time.Minute
-)
+// maxControlSessionTTL is the server cap on a control-session lifetime (slice A5-b / A7 R7):
+// the lifetime is the EARLIEST of the device-signed ExpiresAt, now+maxControlSessionTTL, and
+// — when the caller sets one — now+TTLSeconds. The R5 lower-clamp keeps an overflowing
+// TTLSeconds from wrapping to a past (immediately-expired) instant.
+const maxControlSessionTTL = 30 * time.Minute
 
 // serverCaps is the capability set the daemon supports; the handshake returns the
 // intersection with the client's offer. The remote-tier caps are advertised
@@ -1237,18 +1234,31 @@ func (cc *clientConn) handleTakeControl(c Control) {
 	cc.attMu.Lock()
 	gen := cc.attGen
 	cc.attMu.Unlock()
-	ttl := defaultControlSessionTTL
+	// Bind the control-session lifetime to the EARLIEST of three bounds so it can never
+	// outlive what the device SIGNED nor the server cap (R7): the server maximum
+	// (now+maxControlSessionTTL); the signed command ExpiresAt (always present on the remote
+	// tier — requireRemoteAuthz refuses a nil expires_at and verifies *c.ExpiresAt against the
+	// signature, so it is device-authenticated, not a relay-forgeable hint); and, when the
+	// caller requested one, now+TTLSeconds (the A5-b hint).
+	now := cc.srv.now()
+	expiry := now.Add(maxControlSessionTTL)
 	if c.TTLSeconds > 0 {
-		ttl = time.Duration(c.TTLSeconds) * time.Second
+		ttl := time.Duration(c.TTLSeconds) * time.Second
 		// ttl <= 0 catches an int64 overflow (a huge TTLSeconds wraps the ns multiply to a
 		// NEGATIVE duration): an absurdly large request clamps to the server maximum, never
 		// to a past expiry, so the session is never immediately-expired (R5).
 		if ttl <= 0 || ttl > maxControlSessionTTL {
 			ttl = maxControlSessionTTL
 		}
+		if t := now.Add(ttl); t.Before(expiry) {
+			expiry = t
+		}
+	}
+	if c.ExpiresAt != nil && c.ExpiresAt.Before(expiry) {
+		expiry = *c.ExpiresAt
 	}
 	cc.ctlMu.Lock()
-	cc.control = &controlSession{target: local, leaseGen: gen, expiry: cc.srv.now().Add(ttl)}
+	cc.control = &controlSession{target: local, leaseGen: gen, expiry: expiry}
 	cc.ctlMu.Unlock()
 }
 
