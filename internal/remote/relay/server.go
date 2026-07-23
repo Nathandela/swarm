@@ -322,6 +322,10 @@ type serverConn struct {
 	// sourceKey is this connection's pre-authentication rate key, derived ONCE at
 	// accept time from its transport RemoteAddr (never from a presented pubkey).
 	sourceKey string
+	// acceptedAt is when this connection was accepted, anchoring the CUMULATIVE
+	// handshake deadline in readFrame (CR-1 slice 2): unlike a per-read idle
+	// window, it cannot be reset by a drip of harmless pre-auth frames.
+	acceptedAt time.Time
 
 	authed     bool
 	rid        string
@@ -335,6 +339,7 @@ type serverConn struct {
 }
 
 func (s *Server) serveConn(ws *websocket.Conn, remoteAddr string) {
+	sourceKey := s.sourceKeyFn(remoteAddr)
 	s.mu.Lock()
 	if capN := s.cfg.Quotas.MaxConcurrentConnections; capN > 0 && len(s.conns) >= capN {
 		// CR-1 admission control: over the global live-connection cap, refuse the
@@ -343,8 +348,30 @@ func (s *Server) serveConn(ws *websocket.Conn, remoteAddr string) {
 		_ = ws.CloseNow()
 		return
 	}
+	if capN := s.cfg.Quotas.MaxConcurrentConnectionsPerSource; capN > 0 {
+		// CR-1 slice 2: same admission control as the global cap above, scoped to
+		// this connection's source, so one source cannot monopolize the pool.
+		// ponytail: a linear scan over s.conns is fine at the documented scale; a
+		// per-source counter map is the upgrade path if throughput demands it.
+		n := 0
+		for c := range s.conns {
+			if c.sourceKey == sourceKey {
+				n++
+			}
+		}
+		if n >= capN {
+			s.mu.Unlock()
+			_ = ws.CloseNow()
+			return
+		}
+	}
 	ctx, cancel := context.WithCancel(s.baseCtx)
-	sc := &serverConn{s: s, ws: ws, ctx: ctx, cancel: cancel, sourceKey: s.sourceKeyFn(remoteAddr)}
+	// acceptedAt anchors the CUMULATIVE handshake deadline in readFrame. It uses
+	// the real wall clock, not the injected s.clk: context.WithDeadline always
+	// resolves against real time, and s.clk is a logical clock tests can freeze
+	// or jump independently of it (matching HandshakeTimeout's existing
+	// real-wall-clock behavior via context.WithTimeout).
+	sc := &serverConn{s: s, ws: ws, ctx: ctx, cancel: cancel, sourceKey: sourceKey, acceptedAt: time.Now()}
 	s.conns[sc] = struct{}{}
 	s.mu.Unlock()
 	defer func() {
@@ -405,16 +432,17 @@ func (s *Server) removeConn(sc *serverConn) {
 }
 
 func (sc *serverConn) readFrame() (MsgType, []byte, error) {
-	// CR-1: bound reads on a connection that has neither authenticated nor joined
-	// a rendezvous. A socket that completes the ws handshake but sends no frame is
-	// closed within HandshakeTimeout (slowloris / fd-exhaustion defense), while an
+	// CR-1: bound the CUMULATIVE time-to-authenticate on a connection that has
+	// neither authenticated nor joined a rendezvous, anchored at accept time —
+	// not a fresh per-read idle window, which a drip of harmless frames under
+	// HandshakeTimeout could otherwise reset forever (CR-1 slice 2). An
 	// established (authenticated or rendezvous) connection may idle indefinitely.
 	// These fields are only ever mutated in this connection's own dispatch
 	// goroutine, so reading them here without the lock is race-free.
 	ctx := sc.ctx
 	if to := sc.s.cfg.HandshakeTimeout; to > 0 && !sc.authed && sc.rdvID == "" {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(sc.ctx, to)
+		ctx, cancel = context.WithDeadline(sc.ctx, sc.acceptedAt.Add(to))
 		defer cancel()
 	}
 	mt, data, err := sc.ws.Read(ctx)

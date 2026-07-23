@@ -16,6 +16,11 @@ type Quotas struct {
 	// admitted at once (CR-1 admission control). A value <= 0 means unlimited;
 	// the (cap+1)th concurrent connection is cleanly closed, not served.
 	MaxConcurrentConnections int `json:"max_concurrent_connections"`
+	// MaxConcurrentConnectionsPerSource caps live websocket connections admitted
+	// at once from a single transport source (CR-1 slice 2), alongside the global
+	// MaxConcurrentConnections cap, so one source cannot monopolize the whole
+	// connection pool. A value <= 0 means unlimited.
+	MaxConcurrentConnectionsPerSource int `json:"max_concurrent_connections_per_source"`
 	// MailboxAppendPerMin caps appends per target routing id per minute.
 	MailboxAppendPerMin int `json:"mailbox_append_per_min"`
 	// MailboxMaxItems is the per-mailbox depth cap (CR-4): an append that would
@@ -86,7 +91,12 @@ func DefaultConfig() Config {
 		Quotas: Quotas{
 			MaxConcurrentRendezvous:  1024,
 			MaxConcurrentConnections: 4096,
-			MailboxAppendPerMin:      600,
+			// ponytail: generous-but-bounded per-source default, same spirit as the
+			// MailboxMaxItems default below — high enough that no legitimate single
+			// source (one client, one NAT'd fleet) trips it, low enough that one
+			// source cannot exhaust the global connection pool. Tunable.
+			MaxConcurrentConnectionsPerSource: 64,
+			MailboxAppendPerMin:               600,
 			// ponytail: CR-4 per-mailbox depth cap, ON by default. Enforcement rejects
 			// an over-cap append with ErrQuotaExceeded (server.go:719) rather than
 			// dropping data, and on the journal-OUT path the gateway's ack-gated
