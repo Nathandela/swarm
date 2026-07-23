@@ -128,7 +128,15 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
     - **L3 / DCR-2 residual**: the permanent-poison is closed by the liveness mechanism, but
       idem-log + LOST-session-dir growth is unbounded (no Compact/TTL caller, no session GC).
       Resource leak, not a correctness poison — **follow-up** (with the daemon-review DME-1).
-- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3, subsumes L2); 4c W4
+- **Item 1a (HIGH-1) remote launch env-drop + dangerous-options denylist** — DONE. RED
+  `0294e5e`, GREEN `8b8fb9e`. R-POL.5 drops phone-supplied env entirely on the remote tier
+  (was only FilterEnv'd, and excluded from LaunchContentHash => unauthenticated channel);
+  R-POL.4 value-aware denylist (dangerously-skip-permissions=true, sandbox=danger-full-access
+  refused with CodePolicy; safe =false/=workspace-write still allowed); R-POL.2 policy before
+  cwd stat. Owner tier unchanged; skeleton E2E + `-race` green.
+- Remaining fix-pack: 1b allowed-cwd-roots + `remote-policy.json` (R-POL.3/.7, fail-closed;
+  has blast radius on remote-launch E2E — configure a root); 4b kill/delete/interrupt
+  idempotency (DHI-3, subsumes L2); 4c W4
   orphan-tracking (real safety ceiling from the 4a re-audit); 2b kill-switch durable state
   + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5 gateway
   reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink seq to the journal cursor,
