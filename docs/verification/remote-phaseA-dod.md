@@ -97,6 +97,19 @@ The end-of-phase gate (§3) runs the full committee; individual slices bake thes
   cross-machine substitution, daemon/shim crash mid-op, cursor compaction, hostile PTY at
   the renderer, APNs dup/expiry, concurrent desktop/phone control) pass as the acceptance floor.
 
+## 2b. Known GG-4 blockers discovered during Phase A (must clear before the phase gate)
+
+- **`internal/protocol` `TestProtocol_JournalSubscribeOrderedAndEvictsWedged` fails on this
+  machine even in isolation** (healthy subscriber receives ~190-310 of the required 320
+  frames within the 15s deadline; count varies run to run). The test comment
+  (`remote_journal_test.go:235-241`) documents it as inherently CPU-scheduling-sensitive
+  and "reliable in isolation and on an unloaded CI box" — but it does NOT hold in isolation
+  here. NOT caused by Phase A (no Phase A slice touches `internal/protocol`; the wedged-
+  eviction property is a pre-existing fix-pack concern). Resolution options for the gate:
+  make the eviction test deterministic (drive the fan-out via an injected clock / a
+  synchronous overflow signal instead of a wall-clock throughput threshold), or run GG-4 on
+  an unloaded CI box as the authors intended. Tracked here; must be green before Phase A closes.
+
 ## 3. End-of-phase gate (iterate until all pass)
 
 1. Walk every A1-A8 criterion -> test/artifact in a per-slice evidence file (mirroring the
