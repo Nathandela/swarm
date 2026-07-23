@@ -114,6 +114,32 @@ func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 	return []byte(b.String())
 }
 
+// SnapText flattens a snapshot grid into plain-text lines, one string per grid
+// row, safe to display on a phone: no terminal control sequence can escape.
+// Unlike RenderSnapshot it emits NO ANSI — just each row's run text concatenated
+// with every control byte removed (stripControls: C0 incl. LF/CR, DEL, C1). It is
+// a sanitization choke point in its own right, stripping directly rather than
+// trusting the producer-side N-6 filter, so hostile bytes that reach a Snap by any
+// path still cannot smuggle an escape sequence to the viewer. A nil snapshot
+// yields nil.
+func SnapText(s *Snap) []string {
+	if s == nil {
+		return nil
+	}
+	lines := make([]string, len(s.Lines))
+	for y, line := range s.Lines {
+		var b strings.Builder
+		for _, r := range line.Runs {
+			// stripControls drops every C0 (incl. LF/CR/ESC), DEL, and C1 byte, so
+			// the concatenation can never contain a control byte or an embedded
+			// newline — the row is a single flat, escape-free line.
+			b.WriteString(stripControls(r.Text))
+		}
+		lines[y] = b.String()
+	}
+	return lines
+}
+
 // clampCursor bounds a 0-based cursor coordinate into the clipped grid. limit is the
 // client dimension on that axis; limit<=0 disables clipping and returns v unchanged
 // so the unclipped path is byte-identical to the legacy renderer. Otherwise the
