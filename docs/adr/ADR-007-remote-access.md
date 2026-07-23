@@ -387,3 +387,53 @@ editing the frozen single-byte decision frame — belongs to A2/A7. The live-rel
 `RendezvousTransport` adapter (sub-slice e) is blocked on A2; sub-slices a-d land now against
 `memRendezvous`. Frozen layer untouched (pairing/enroll/crypto/registry/qr reused; the relay
 `DialRaw`/`Rendezvous*` calls are wrapped by a new additive adapter, not a relay change).
+
+## Amendment 2026-07-24 — Keystroke transport (R1) + terminal renderer (A7): the two A7 decisions
+
+Resolves the two A7 blockers the A5 cross-model review flagged (docs/verification/
+remote-phaseA-a5-review.md R1) and that Phase A left open. Both are the operator's decision,
+recorded here before A7 implementation. Neither touches the frozen crypto layer.
+
+**Decision 1 — keystroke transport: sealed + sequence-gated, riding the control lease
+(option (a) of R1; per-keystroke MAC rejected).** After a signed `take_control` establishes
+a control session on a connection, live input frames (`OpDataIn`/`OpResize`) travel as a
+**persistent input channel on that same lease-holding connection**: each frame is E2E-sealed
+under the epoch `ContentKey` (the relay sees opaque bytes — it cannot read or forge
+keystrokes, and lacks the key regardless), and carries a **per-session monotonic sequence
+number** the daemon uses to reject replay/reorder/dup (the same GW-M2 `MailboxReceiver`
+seq-gating discipline already used for command-IN). Keystrokes are NOT individually signed —
+they ride the lease per D7. The daemon's existing four-clause input gate (`controlGateOpen`:
+kill-switch -> `cc.control != nil` -> now < expiry -> target/leaseGen match) is the
+authorization; the seq number is the anti-replay/reorder layer on top.
+
+**Trust boundary (the R1 question, answered).** The **relay is the adversary** and is fully
+defended: it cannot forge sealed frames (no `ContentKey`) and cannot replay/reorder them past
+the daemon's seq gate. A **compromised owner-uid gateway** could inject keystrokes into a live
+lease — this is the **documented D4/D5 owner-uid residual** (a compromised owner-uid process
+is already owner compromise; the gateway holds no more authority than the owner it runs as).
+Per-keystroke MAC (option (b)) would additionally defend gateway *integrity*, but is rejected
+for v1: it adds per-keystroke crypto + a key-custody question for marginal gain, since a
+gateway compromise is game-over regardless of keystroke authentication. Dedicated-uid /
+sandbox gateway hardening remains the deferred path if gateway integrity is later required.
+
+**R7 folded in.** The control-session lifetime binds to `min(signed command ExpiresAt,
+now + server-max)` where the phone signs `take_control` with `ExpiresAt = desired session
+end` — the lifetime is what the device signed, not an unsigned `TTLSeconds` hint (which
+remains an accepted upper-bound cap). A7's phone-core signs accordingly.
+
+**Decision 2 — terminal renderer: server-side VT render (option (a)).** The **daemon/gateway
+renders the live VT grid to a sanitized text snapshot + live tail** on the trusted machine
+side; the phone displays ready-made safe text. Rationale: (1) hostile-PTY sanitization stays
+on the **trusted** side — no VT-emulator / control-sequence-injection attack surface on the
+phone (the A7 "no control-sequence injection at the phone" criterion becomes structural, not
+a phone-core burden); (2) the phone-core stays thin (no terminal emulator over the gomobile
+boundary); (3) it matches the binding design doc's "terminal peek = snapshot + live tail".
+The renderer reuses the existing in-tree VT emulator (ADR-005) on the machine side; the phone
+receives sanitized snapshot frames, not raw PTY bytes.
+
+**Consequences.** A7 gains a machine-side snapshot renderer/sanitizer and a sealed+seq'd input
+data-plane; the phone-core gains an input encoder (seal + seq) and a snapshot decoder, but no
+VT emulator and no keystroke signing. A7 remains a **security-critical slice** (cross-model
+review required, DoD §0). GG-7 field-drift applies to any new `Control` fields (input seq,
+snapshot frames). Frozen crypto reused unchanged (`SealMailbox`/`ContentKey` for sealing;
+`MailboxReceiver` seq discipline for the gate) — no ADR needed for the crypto layer.

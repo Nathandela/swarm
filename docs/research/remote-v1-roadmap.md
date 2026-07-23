@@ -174,10 +174,12 @@ TRUSTED (docs/verification/remote-phaseA-a5-review.md). Tracked follow-ups from 
   kill-switch). Requires a test-contract refactor (stub implements the now-mandatory
   interfaces; take_control helper sends a gate token) preserving all assertions -- a careful
   dedicated slice, not a rushed one.
-- **R1 + R7 -> A7 BLOCKERS:** decide the end-to-end keystroke-transport trust boundary (the
-  input producer doesn't exist yet; the relay can't forge; the gateway data-plane integrity
-  is the owner-uid residual -- decide before real phones type) and have the phone sign the
-  session lifetime (bind to the signed ExpiresAt).
+- **R1 + R7 -> RESOLVED 2026-07-24 (ADR-007 amendment).** Keystroke transport = sealed +
+  seq-gated frames riding the take_control lease connection (relay is the adversary and fully
+  defended; compromised owner-uid gateway is the accepted D4/D5 residual; per-keystroke MAC
+  rejected as game-over-regardless). R7: session lifetime binds to the signed ExpiresAt
+  (phone signs take_control with ExpiresAt = desired end). Renderer = server-side VT render.
+  Both now UNBLOCKED for A7.
 - **R6 -> L3/DME-1 constraint:** idem-GC TTL must exceed max command validity; persist ExpiresAt.
 
 **GATEWAY BINARY + PHONESIM plan (from scouting 2026-07-23):** the wire is ~80% proven by
@@ -193,12 +195,15 @@ A8 = union of that + `enroll_e2e_test.go` (real pairing+grant). Doable-now slice
 - E1 observe+kill E2E: phonesim pairs over the in-process relay, decodes a journal event, drives a
   kill end-to-end. Content-key: full-bootstrap (enroll->grant->AcceptGrant in-process), skip the
   deferred relay-mailbox grant delivery.
-Order: G0 -> G1 -> P1 -> G2 -> E1 (all now). BLOCKED: P2 terminal renderer (A7 greenfield, gating for
-terminal peek), E2 take_control+input (R1 -- command-IN can't carry a gate token or hold the
-per-connection lease; live input needs a SEPARATE persistent raw-input channel -- decide before
-typing), real grant delivery over the relay mailbox (deferred). G3 launchd/systemd unit + daemon
+Order: G0 -> G1 -> P1 -> G2 -> E1 (all now). UNBLOCKED 2026-07-24 (ADR-007 amendment):
+P2 terminal renderer = server-side VT render (machine-side snapshot/sanitizer reusing the
+ADR-005 VT emulator; phone gets sanitized snapshot frames, no emulator on-device); E2
+take_control+input = a persistent sealed+seq-gated input channel riding the lease-holding
+connection (the gateway holds one persistent remote.sock connection for the lease; input
+frames sealed under ContentKey + per-session monotonic seq gated by the daemon). Still
+deferred: real grant delivery over the relay mailbox. G3 launchd/systemd unit + daemon
 supervising swarm-remote: off the phonesim path, land last. Frozen crypto/relay/remotegw/phonecore
-reused unmodified; the renderer is a new phonecore file.
+reused unmodified; the renderer is a new phonecore/daemon-side file.
 
 **A6 remainder plan (from scouting 2026-07-23; relay is modifiable, only crypto is frozen):**
 - ME-1 (do first, LIVE BUG): handleDeviceRevoke never severs the revoked device's live socket
