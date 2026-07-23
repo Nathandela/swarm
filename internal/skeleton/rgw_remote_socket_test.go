@@ -30,6 +30,22 @@ func assembleWithRemote(t *testing.T) (*Daemon, string) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	rsock := filepath.Join(dir, "r.sock")
+	// Fix-pack 1b harness: remote launches are now confined to machine-configured cwd roots
+	// and FAIL CLOSED when none are set (R-POL.3/.7). Seed a remote-policy.json (loaded on
+	// start) allowing the resolved test temp root, so a remote launch whose cwd is a
+	// t.TempDir() (which lives under os.TempDir()) is permitted. Without this, fail-closed
+	// would refuse the remote launch in TestRemoteLaunchE2E. This only ALLOWS the legitimate
+	// test working directory; it weakens no security assertion (the roots guard itself is
+	// tested in launch_roots_test.go / remote_policy_test.go, and the E2E's content-hash
+	// tamper assertion is unaffected). It is a no-op before enforcement lands (Serve ignores
+	// the file) and permits the launch after.
+	tmpRoot, terr := filepath.EvalSymlinks(os.TempDir())
+	if terr != nil {
+		tmpRoot = filepath.Clean(os.TempDir())
+	}
+	if werr := writeRemoteLaunchPolicy(dir, []string{tmpRoot}); werr != nil {
+		t.Fatalf("seed remote launch policy: %v", werr)
+	}
 	sk, err := Serve(Config{
 		StateDir:           dir,
 		SocketPath:         filepath.Join(dir, "d.sock"),
