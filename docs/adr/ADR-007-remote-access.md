@@ -216,3 +216,51 @@ content key (proved by `TestEnrollmentE2E_PairThenCommandNoManualSetup`). **Test
 impact** (tracked, additive): the pairing payload round-trip/outcome tests gain
 `MachineSignPub` assertions; new `enroll` and `phonecore.AcceptGrant` tests are
 failing-first. Tracked under agents-tracker-qo4.
+## Amendment 2026-07-23 — Widen the SAS from 24 to 36 bits (close the grind attack)
+
+**Context**: D3 / R-PAIR.4 has the two operators compare a Short Authentication String
+(SAS) out-of-band during pairing to detect a man-in-the-middle on the Noise handshake.
+The shipped SAS (`crypto.SAS`, `internal/remote/crypto/sas.go`) is
+`HKDF-SHA256(channelBinding)` truncated to 3 bytes = **24 bits**, rendered as four 6-bit
+indices into the 64-emoji table. An independent adversarial review of the pairing chain
+(2026-07-22, `docs/verification/remote-phase1-review-consolidated.md` finding MED-1)
+showed 24 bits is grindable: an attacker who has BOTH (a) obtained the 32-byte pairing
+secret (a photographed/leaked QR) AND (b) a live network man-in-the-middle position can,
+at msg3, grind ~2^24 candidate keypairs (seconds on commodity hardware) to force its own
+leg's channel binding to a SAS equal to the honest leg's — the operator then sees a
+matching SAS and a plausible device name and confirms the impostor. The SAS is precisely
+the designed defense for the leaked-QR case, so 24 bits does not meet the "extremely safe"
+bar for that case. Noise XX exposes ephemerals in the clear with no pre-commitment, so
+there is nothing today that stops the grind other than the SAS width.
+
+**Decision**: widen the SAS to **36 bits** — read 5 bytes (40 bits) of HKDF output and
+render **six** 6-bit indices into the SAME unchanged 64-emoji table, so
+`crypto.SAS` returns `[6]string` instead of `[4]string`. 36 bits raises the grind cost to
+~2^36 keypair-generations-plus-hash (tens of billions), which at microseconds each is
+weeks of compute — infeasible inside a pairing window (the rendezvous/pairing session is
+seconds-to-minutes and rate-limited). The 64-emoji wordlist, the HKDF salt
+(`swarm-remote/1 sas`), and the derivation construction are otherwise UNCHANGED, so this
+is a length extension, not a redesign. Six emoji to compare remains a comfortable
+out-of-band check (comparable to consumer pairing UIs) and is the minimal robust fix.
+
+**Rejected alternative — ephemeral commitment.** Adding an initiator ephemeral
+pre-commitment (`H(e)` sent before the responder reveals) would make grinding impossible
+at ANY SAS width, but it changes the Noise XX message flow (an extra commitment field /
+round) and its wire contract, a larger and more error-prone change to a frozen,
+independently-reviewed handshake. Widening the SAS is a smaller, self-contained change
+that reduces the attack to computational infeasibility. The commitment remains available
+as a future hardening if a wider threat model demands grind-immunity rather than
+grind-infeasibility.
+
+**Consequence**: `crypto.SAS` signature changes `[4]string -> [6]string`; every caller
+that displays or compares the SAS (the pairing SAS callbacks in
+`internal/remote/pairing`, `phonecore` SAS surfacing, and their tests) updates to six
+elements. This edits the FROZEN crypto layer, so per project rule it is gated on this
+ADR and re-reviewed cross-model after GREEN (the SAS change is security-critical). **KAT /
+on-device impact (tracked)**: the byte-identical SAS table is mirrored in the Swift/Android
+clients; the on-device cross-language KAT vector (an explicit release gate, not verifiable
+in this repo) MUST be regenerated for the new 6-emoji output and both clients must produce
+the identical six emoji from the same channel binding, or pairing SAS comparison breaks
+across platforms. Existing SAS tests that assert a 4-emoji result are updated to six
+(additive-length harness correction, assertions preserved: determinism, divergent-binding
+divergence, empty-binding error). Tracked under the remote-control epic.
