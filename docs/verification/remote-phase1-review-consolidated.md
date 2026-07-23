@@ -95,6 +95,25 @@ concentrated in what is MISSING or UNGATED, not in what is built.
 - Assembled daemon now really serves `journal_read`/`journal_subscribe` on a
   dedicated opt-in remote socket with an atomic roster snapshot (DHI-1/2 closed).
 
+## 4b. Fix-pack progress log (updated as slices land)
+
+TDD, independent roles (opus test-writer + separate opus implementer, Fable orchestrates).
+
+- **Item 3 (HIGH-2) fail-close remote-tier attach/resize/input** — DONE. RED `eb4cec0`,
+  GREEN `3442322`. Three tier-scoped guards in server.go; owner tier unchanged; `-race` green.
+- **Item 6 (HIGH-3) phone journal replay/reorder/gap guard** — DONE. RED `53732a3`,
+  GREEN `b8bdcec`. `JournalReceiver` over the frozen `MailboxReceiver` + monotonic-cursor
+  guard on `SessionCache.Apply`; `-race` green.
+- **Item 4a (CRITICAL DCR-1/DCR-2) launch crash-window fix** — RED in progress (atomic
+  opID+meta durability, phase-aware replay, Open-time resolver; W1 poison + W3 silent-corpse).
+- **Item 2a (R-KS.1) kill-switch enforcement at the protocol choke point** — RED in progress
+  (optional `KillSwitch` interface; disabled => refuse every remote op `CodeKillSwitch` before
+  signature work). 2b (durable remote-state.json + enroll wiring) follows.
+- Remaining fix-pack: 4b kill/delete/interrupt idempotency (DHI-3); item 1 launch policy
+  (R-POL.2-.8); item 5 gateway reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink
+  seq to the journal cursor, which must reconcile with item 6's test setup); item 7 relay
+  round 3; item 8 SAS widening (needs an ADR — crypto is frozen).
+
 ## 5. Remaining work to "usable from a phone, daily" (dependency-ordered)
 
 Sizes: S = day, M = few days, L = 1-2 weeks, XL = multi-week.
