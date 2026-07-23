@@ -944,6 +944,13 @@ func (cc *clientConn) handleDelete(c Control) {
 }
 
 func (cc *clientConn) handleAttach(c Control) {
+	// Fail closed on the remote tier: no signed take_control gate exists yet, so
+	// interactive control (lease acquisition) is refused before any session is
+	// resolved or lease established (HIGH-2 / A4-R).
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("interactive control not permitted on the remote tier (take_control not yet implemented)", CodeNotAuthorized)
+		return
+	}
 	local, ok := cc.resolveSession(c)
 	if !ok {
 		return
@@ -978,6 +985,12 @@ func (cc *clientConn) handleDetach(c Control) {
 }
 
 func (cc *clientConn) handleResize(c Control) {
+	// Fail closed on the remote tier: drop the resize without forwarding, since no
+	// signed take_control gate exists yet (HIGH-2 / A4-R). Resize is fire-and-forget,
+	// so no reply (owner tier sends none either).
+	if cc.srv.remoteTier {
+		return
+	}
 	ep, local, ok := ParseID(c.SessionID)
 	if !ok || ep != cc.endpointID || !validLocalID(local) {
 		return // resize is fire-and-forget; a bad id is simply dropped
@@ -1086,6 +1099,12 @@ func (cc *clientConn) journalWriter() {
 }
 
 func (cc *clientConn) handleDataIn(payload []byte) {
+	// Fail closed on the remote tier: drop raw input frames without forwarding, since
+	// no signed take_control gate exists yet — this is the keystroke-injection vector
+	// (HIGH-2 / A4-R).
+	if cc.srv.remoteTier {
+		return
+	}
 	cc.attMu.Lock()
 	local, gen := cc.attSession, cc.attGen
 	cc.attMu.Unlock()
