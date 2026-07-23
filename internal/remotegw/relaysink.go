@@ -59,25 +59,31 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 	return &RelaySink{cfg: cfg, now: now}
 }
 
-// Snapshot seals and forwards each roster record as-of the read cursor.
-func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) {
+// Snapshot seals and forwards each roster record as-of the read cursor, returning on
+// the first record that fails so the gateway can gate its cursor on delivery (R-GW.5).
+func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) error {
 	for _, rec := range roster {
-		s.forward(rec)
+		if err := s.forward(rec); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-// Event seals and forwards one live journal record.
-func (s *RelaySink) Event(rec protocol.JournalRecord) {
-	s.forward(rec)
+// Event seals and forwards one live journal record, returning any seal/append error so
+// the gateway declines to advance its cursor past an undelivered record (R-GW.5).
+func (s *RelaySink) Event(rec protocol.JournalRecord) error {
+	return s.forward(rec)
 }
 
-// forward seals rec under the content key and appends it to the phone's mailbox,
-// recording the first error encountered (surfaced via Err()).
-func (s *RelaySink) forward(rec protocol.JournalRecord) {
+// forward seals rec under the content key and appends it to the phone's mailbox. The
+// seal/append error is returned (authoritative for the gateway's cursor gating) and also
+// stashed as the first error surfaced via Err().
+func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 	plaintext, err := json.Marshal(rec)
 	if err != nil {
 		s.setErr(err)
-		return
+		return err
 	}
 	s.mu.Lock()
 	s.seq++
@@ -94,11 +100,13 @@ func (s *RelaySink) forward(rec protocol.JournalRecord) {
 	}, plaintext)
 	if err != nil {
 		s.setErr(err)
-		return
+		return err
 	}
 	if _, err := s.cfg.Appender.MailboxAppend(context.Background(), s.cfg.Target, env.Marshal()); err != nil {
 		s.setErr(err)
+		return err
 	}
+	return nil
 }
 
 // Err returns the first append/seal error encountered, or nil.

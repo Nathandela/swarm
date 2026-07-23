@@ -30,7 +30,7 @@ func newCollectSink() *collectSink {
 	return &collectSink{seen: map[string]bool{}, changed: make(chan struct{}, 64)}
 }
 
-func (s *collectSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) {
+func (s *collectSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	s.mu.Lock()
 	s.snapshot = cursor
 	for _, r := range roster {
@@ -40,15 +40,17 @@ func (s *collectSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) {
 	}
 	s.mu.Unlock()
 	s.signal()
+	return nil
 }
 
-func (s *collectSink) Event(rec protocol.JournalRecord) {
+func (s *collectSink) Event(rec protocol.JournalRecord) error {
 	s.mu.Lock()
 	if rec.SessionID != "" {
 		s.seen[rec.SessionID] = true
 	}
 	s.mu.Unlock()
 	s.signal()
+	return nil
 }
 
 func (s *collectSink) signal() {

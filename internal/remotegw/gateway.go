@@ -28,8 +28,8 @@ import (
 // called for each live record in cursor order. Implementations must not block the
 // gateway's read loop (R-GW.4/.5: bounded/coalescing on the relay side).
 type JournalSink interface {
-	Snapshot(roster []protocol.JournalRecord, cursor uint64)
-	Event(rec protocol.JournalRecord)
+	Snapshot(roster []protocol.JournalRecord, cursor uint64) error
+	Event(rec protocol.JournalRecord) error
 }
 
 // Gateway bridges one daemon's remote socket toward the phone. It holds the last
@@ -89,9 +89,13 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), res.Cursor)
+	if err := g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), res.Cursor); err != nil {
+		return err
+	}
 	for _, rec := range res.Journal {
-		g.deliver(namespaceRecord(dc.endpointID, rec))
+		if err := g.deliver(namespaceRecord(dc.endpointID, rec)); err != nil {
+			return err
+		}
 	}
 	if res.Cursor > from {
 		g.setCursor(res.Cursor)
@@ -116,7 +120,9 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		switch ctrl.Op {
 		case protocol.OpJournalEvent:
 			for _, rec := range ctrl.Journal {
-				g.deliver(namespaceRecord(dc.endpointID, rec))
+				if err := g.deliver(namespaceRecord(dc.endpointID, rec)); err != nil {
+					return err
+				}
 			}
 		case protocol.OpError:
 			return fmt.Errorf("daemon refused a journal op: %s (%s)", ctrl.Error, ctrl.ErrorCode)
@@ -189,17 +195,27 @@ func namespaceRoster(endpointID string, roster []protocol.JournalRecord) []proto
 
 // deliver forwards a record to the sink only if it advances the delivered cursor,
 // deduplicating the small read/subscribe overlap so no event is delivered twice.
-func (g *Gateway) deliver(rec protocol.JournalRecord) {
+func (g *Gateway) deliver(rec protocol.JournalRecord) error {
 	g.mu.Lock()
 	if rec.Cursor != 0 && rec.Cursor <= g.cursor {
 		g.mu.Unlock()
-		return
+		return nil
 	}
+	g.mu.Unlock()
+
+	// R-GW.5/GW-H1: forward first, advance the cursor only after the sink acks. A failed
+	// record must NOT record its cursor, or the reconnect re-read would skip it as
+	// already-delivered instead of redelivering it.
+	if err := g.sink.Event(rec); err != nil {
+		return err
+	}
+
+	g.mu.Lock()
 	if rec.Cursor > g.cursor {
 		g.cursor = rec.Cursor
 	}
 	g.mu.Unlock()
-	g.sink.Event(rec)
+	return nil
 }
 
 // dialDaemon is the gateway's minimal remote-tier client: it speaks the frozen wire +
