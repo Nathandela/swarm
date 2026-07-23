@@ -155,10 +155,19 @@ TDD, independent roles (opus test-writer + separate opus implementer, Fable orch
   CONDITIONAL: safety depends on the bounded/rate-limited pairing window staying in place;
   if relaxed, add the ephemeral commitment (documented future hardening). On-device KAT
   mirror is a release gate. ADR summary line corrected 4->6 emoji.
-- Remaining fix-pack: item 5 gateway reliability (GW-H1/H2/M1/M2 — NOTE GW-H2 changes
-  RelaySink seq to the journal cursor, which interacts with item 6's committed replay tests
-  (they assume contiguous seq 1..N); reconcile carefully, do fresh); 4b kill/delete/interrupt
-  idempotency (DHI-3, subsumes L2); 4c W4
+- **Item 5a (GW-H1) gateway ack-gated cursor** — DONE. RED `35e3361`, GREEN `ed087bc`.
+  JournalSink.Event/Snapshot return error; deliver() advances the cursor only after the
+  relay acks the append, so a transient relay failure leaves the record in the re-read
+  window (redelivered on reconnect) instead of silently dropping it (R-GW.5). remotegw +
+  skeleton `-race` green.
+- Remaining fix-pack: item 5b gateway GW-H2 (RelaySink seq = journal cursor per ADR D6 —
+  NOTE this interacts with item 6's committed phonecore replay tests which assume contiguous
+  seq 1..N; reconcile carefully, do fresh) + GW-M1 (command mailbox ack + durable cursor) +
+  GW-M2 (inbound replay guard); 4b kill/delete/interrupt idempotency (DHI-3, subsumes L2); 4c
+  W4 orphan-tracking (deferred per user — narrow window, tracked); item 7 relay round 3
+  (HI-2 TLS/channel-binding, HI-3 device-consent pairing + machine allowlist, CR-4
+  depth-cap-on-by-default, CR-1 per-source conn cap, ME-1 atomic revoke); L3/DME-1 idem-log +
+  session-dir GC (Compact/TTL wiring).
   orphan-tracking (real safety ceiling from the 4a re-audit); 2b kill-switch durable state
   + auto-off; item 1 launch policy (R-POL.2-.8 — the biggest safety gap); item 5 gateway
   reliability (GW-H1/H2/M1/M2 — note GW-H2 changes RelaySink seq to the journal cursor,
