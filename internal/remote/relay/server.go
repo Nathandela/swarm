@@ -894,17 +894,26 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	if !sc.s.st.isPaired(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
-	_ = sc.s.st.removePair(sc.rid, req.Target)
-	_ = sc.s.st.revoke(req.Target)
-	_ = sc.s.st.purgeMailbox(req.Target)
+	if err := sc.s.st.revokeAndPurge(sc.rid, req.Target); err != nil {
+		return sc.replyErr(codeBadRequest)
+	}
 	sc.s.mu.Lock()
-	if old, ok := sc.s.sessions[req.Target]; ok {
+	var old *serverConn
+	if o, ok := sc.s.sessions[req.Target]; ok {
+		old = o
 		old.superseded.Store(true)
 		delete(sc.s.sessions, req.Target)
 	}
 	delete(sc.s.tokens, req.Target)
 	delete(sc.s.presence, req.Target)
 	sc.s.mu.Unlock()
+	// ME-1: sever the revoked target's live socket OUTSIDE s.mu (mirrors
+	// Server.Close()'s collect-then-close pattern) — cancel() unblocks its
+	// serveConn's blocking ws.Read(ctx); CloseNow() is belt-and-suspenders.
+	if old != nil {
+		old.cancel()
+		_ = old.ws.CloseNow()
+	}
 	return sc.replyOK(map[string]any{})
 }
 

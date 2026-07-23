@@ -251,6 +251,26 @@ func (s *store) revoke(rid string) error {
 	})
 }
 
+// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked, and drops
+// rid's mailbox — in ONE transaction (ME-1), so a crash/read mid-revoke can
+// never observe rid as still-paired, not-yet-revoked, or holding a
+// pre-revoke backlog.
+func (s *store) revokeAndPurge(pairer, rid string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		pb := tx.Bucket(bucketPairs)
+		_ = pb.Delete(pairKey(pairer, rid))
+		_ = pb.Delete(pairKey(rid, pairer))
+		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte{1}); err != nil {
+			return err
+		}
+		root := tx.Bucket(bucketItems)
+		if root.Bucket([]byte(rid)) != nil {
+			return root.DeleteBucket([]byte(rid))
+		}
+		return nil
+	})
+}
+
 func (s *store) isRevoked(rid string) bool {
 	revoked := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
