@@ -92,6 +92,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "remote":
+		return runRemote(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:

@@ -166,6 +166,17 @@ func Serve(cfg Config) (*Daemon, error) {
 	// and the error is advisory only (the returned policy is always safe).
 	launchPolicy, _ := loadRemoteLaunchPolicy(cfg.StateDir)
 	d.api.launchPolicy = launchPolicy
+	// Load the machine's pairing identity (provisioned by `swarm remote init`) and wire
+	// it onto the coreAPI. TRI-STATE fail-closed, unlike the launch policy above: a
+	// MISSING identity simply leaves pairing unsupported (nil cfg -- BeginPairing
+	// already fails closed on that), but a CORRUPT identity aborts assembly entirely --
+	// the daemon must not start with pairing silently broken (machine key custody).
+	pc, err := loadPairingConfig(cfg.StateDir)
+	if err != nil {
+		_ = core.Close()
+		return nil, err
+	}
+	d.api.pairing = pc
 	d.srv = protocol.NewServer(d.api, epID)
 
 	// R-GW.8: opt-in dedicated remote-tier listener the gateway dials. It binds its own
