@@ -81,12 +81,31 @@ Slice F and input slices 3-7 (+ daemon R7) are the security-critical set -> cros
   lines printable-only — the e2e security assertion), `TestRenderLoop_CoalescesBurst`,
   `TestRenderLoop_InitialSnapshotFromStream`. Prod: `Frames()` -> `vt.Emulator.Feed` ->
   debounce (reuse `journal/debounce.go`) -> `SnapText` -> push. File: `daemon/terminalrender.go`.
-- **F — the live tap (the one architectural change; SECURITY-REVIEWED).** Daemon-side
-  observer/fan-out keeping the upstream shim stream alive for a remote observer + teeing frames
-  to the render loop, shim frozen; PLUS the pump-suppression unifier (§0). RED:
-  `TestRemotePeek_DoesNotSupersedeLocalController`, `TestRemotePeek_WorksWithNoLocalController`,
-  `TestRemotePeek_ReadOnly_NoInputInjection`, + a pump-suppression test (remote controller
-  receives OpLease + input acks, NOT raw TDataOut).
+- **F — SPLIT into F1/F2/F3 (grounded 2026-07-24; SECURITY-REVIEWED as a set).** Correction to
+  §0/§1: the shim is strictly single-consumer, and the local controller (owner-tier `d.srv`) and
+  remote peek (remote-tier `d.remoteSrv`) are DIFFERENT `protocol.Server` instances sharing ONE
+  `coreAPI` backend. So the fan-out tap CANNOT live in the pump — it must live at the single
+  convergence point, `coreAPI.Attach` (package skeleton), teeing one shared upstream to N
+  subscribers (mirror `vt.Emulator` seeds late joiners; per-sub bounded channel evicts only the
+  stalled sub; refcount opens/closes the single upstream). Shim stays frozen.
+  - **F1 — shared per-session tap** (skeleton/sessiontap.go + `coreAPI.Attach` routes through it).
+    The risky keystone. RED: `TestSessionTap_SecondSubscriberSharesOneUpstream`,
+    `_LateJoinerSeededFromMirror`, `_LastCloseClosesUpstream`, `_OverflowEvictsThatSubOnly`.
+    Regression guards that MUST stay green: protocol lease_test (supersede/detach/EOF),
+    daemon TestSurvival_KillDashNineReconnectsAll, skeleton gridtap_test.
+  - **F2 — terminal_subscribe peek handler** (export daemon RenderTerminal/TerminalStream/
+    TerminalRender; new optional `protocol.TerminalTapper`; handler + `case OpTerminalSubscribe`
+    in server.go; `coreAPI.TerminalTap` = readOnly subscribe). Read-only via 3 independent layers
+    (never routes to forwardInput; renderTerminal only reads; readOnly tapSub Input/Resize no-op).
+    **Kill-switch: peek REFUSES when RemoteControlEnabled()==false** (terminal content is more
+    sensitive than journal metadata; `swarm remote off` blanks the phone — fail-closed). RED:
+    `TestRemotePeek_WorksWithNoLocalController`, `_DoesNotSupersedeLocalController`,
+    `_ReadOnly_NoInputInjection`. GAP (slice-7 follow-on): Gateway.RunTerminal must send a focused
+    session_id (handler is session-scoped; unit tests drive it with a session_id).
+  - **F3 — remote-tier pump-suppression** (server.go pump: on `s.remoteTier`, OpLease only, skip
+    snapshot loop + TDataOut, still drain frames for end-detection). Independent of F1/F2, lands
+    first; removes the gateway lease drain-or-die/evictPump hazard and is the precondition for
+    input Slice 3. RED: `TestRemotePump_SuppressesRawOutput`.
 
 ## 4. Input slices (daemon side already built in A5: handleDataIn/handleResize/controlGateOpen)
 
