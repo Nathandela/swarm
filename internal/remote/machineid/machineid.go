@@ -128,6 +128,14 @@ func (id *Identity) RelayAuthPublic() ed25519.PublicKey {
 	return id.relayPriv.Public().(ed25519.PublicKey)
 }
 
+// RelayAuthSign signs a relay auth challenge with the machine's relay-auth
+// Ed25519 private key, matching relay.ClientAuth.Sign (a plain
+// func(challenge []byte) []byte). The gateway builds
+// relay.ClientAuth{RelayAuthPub: id.RelayAuthPublic(), Sign: id.RelayAuthSign}.
+func (id *Identity) RelayAuthSign(challenge []byte) []byte {
+	return ed25519.Sign(id.relayPriv, challenge)
+}
+
 // EpochKeys returns the wake/content key split for the current epoch.
 func (id *Identity) EpochKeys() crypto.EpochKeys { return id.epochKeys }
 
