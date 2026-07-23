@@ -82,7 +82,7 @@ var (
 // expected to expose journal ops when its backend also implements JournalBackend
 // (optional-interface assertion) — so passing js (which satisfies both) through the
 // existing Serve entry point is enough.
-func serveJournal(t *testing.T, js *journalStub) string {
+func serveJournal(t *testing.T, js *journalStub) (string, *Server) {
 	t.Helper()
 	sock := tmpSock(t)
 	srv, err := Serve(js, sock)
@@ -90,7 +90,7 @@ func serveJournal(t *testing.T, js *journalStub) string {
 		t.Fatalf("Serve(journal): %v", err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	return sock
+	return sock, srv
 }
 
 // TestProtocol_JournalReadFromCursor (R-PROT.3): journal_read(from_cursor) returns
@@ -104,7 +104,7 @@ func TestProtocol_JournalReadFromCursor(t *testing.T) {
 		JournalRecord{Cursor: 4, SessionID: "s1", Type: "exited"},
 		JournalRecord{Cursor: 5, SessionID: "s2", Type: "group_transition"},
 	)
-	sock := serveJournal(t, js)
+	sock, _ := serveJournal(t, js)
 	rc := rawDial(t, sock)
 	rep := rc.hello(Version, []string{CapJournal})
 
@@ -132,7 +132,7 @@ func TestProtocol_JournalReadFromCursor(t *testing.T) {
 // is disconnected within a bound, never blocking the fan-out (S9/L1 discipline).
 func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 	js := newJournalStub()
-	sock := serveJournal(t, js)
+	sock, srv := serveJournal(t, js)
 
 	// A wedged subscriber that never drains its socket. Bound its kernel RECEIVE
 	// buffer so a modest flood of the small journal frames overflows it and blocks the
@@ -221,52 +221,64 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 		}
 	}()
 
-	// Wait until the healthy subscriber has received MORE than eventQueueCap frames, in
-	// strictly increasing cursor order, before checking eviction. This is the key
-	// synchronization: distributeJournal delivers each record to BOTH subscribers in the
-	// same pass, so once the healthy subscriber has drained > eventQueueCap records, the
-	// fan-out has attempted at least that many deliveries to the wedged subscriber's
-	// queue too — which, with the wedged writer blocked on its bounded socket buffer,
-	// overflowed at eventQueueCap and triggered eviction. Gating on a small count (e.g.
-	// 20) instead raced eventuallyClosed's draining reads against a not-yet-overflowed
-	// wedged queue, which un-wedged it under -race (the fan-out is slower there, so the
-	// queue had not yet filled when we started reading).
-	const wantLive = eventQueueCap + 64
-	// Generous deadline: under `go test ./...` full-package parallelism on a loaded
-	// machine the fan-out goroutine can be CPU-starved (the live subscriber receives
-	// frames slowly). The bound tolerates that without weakening the assertion. NOTE:
-	// this eviction property is inherently CPU-scheduling sensitive — the pre-existing
-	// TestFanout_WedgedSubscriberDisconnectedWithinBound has the same sensitivity and
-	// also fails under severe parallel starvation; both are reliable in isolation and
-	// on an unloaded CI box. See docs/verification/remote-phase1-daemon-evidence.md.
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
+	// Observe eviction DIRECTLY at its source of truth: distributeJournal removes a
+	// wedged subscriber from srv.jsubs (delete(s.jsubs, sc)) the moment its bounded
+	// queue overflows. Under the continuous flood, the wedged subscriber's queue fills
+	// monotonically (its writer is blocked on a bounded socket buffer, nothing drains
+	// it), so eviction is INEVITABLE — the deadline below is a pure liveness net, not a
+	// throughput/rate gate, so it does not false-fail under CPU pressure (the earlier
+	// "receive >= eventQueueCap+64 frames within 15s wall-clock" barrier did). This test
+	// is package protocol, so it reads srv.jsubs under srv.jsubMu directly.
+	//
+	// jsubs starts with two subscribers (wedged + healthy); eviction of the wedged one
+	// drops it to one. Poll for n < 2.
+	evictDeadline := time.Now().Add(30 * time.Second)
+	evicted := false
+	for time.Now().Before(evictDeadline) {
 		mu.Lock()
-		n, regressed := liveGot, orderRegressed
+		regressed := orderRegressed
 		mu.Unlock()
 		if regressed {
 			t.Fatal("journal_event cursor order regressed on the healthy subscriber")
 		}
-		if n >= wantLive {
+		srv.jsubMu.Lock()
+		n := len(srv.jsubs)
+		srv.jsubMu.Unlock()
+		if n < 2 {
+			evicted = true
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	if !evicted {
+		t.Fatal("wedged journal subscriber not evicted within bound (S9/P-3)")
+	}
+
+	// The healthy subscriber survived the eviction, stayed strictly ordered, and is the
+	// sole remaining subscriber. No count-in-window: a floor of >= 2 frames only proves
+	// the stream reached the drainer at all (order is the guarded property, not rate).
 	mu.Lock()
-	n, regressed := liveGot, orderRegressed
+	liveN, regressed := liveGot, orderRegressed
 	mu.Unlock()
 	if regressed {
 		t.Fatal("journal_event cursor order regressed on the healthy subscriber")
 	}
-	if n < wantLive {
-		t.Fatalf("healthy subscriber received only %d ordered journal_event frames; want >= %d (a continuous stream)", n, wantLive)
+	if liveN < 2 {
+		t.Fatalf("healthy subscriber received only %d ordered journal_event frames; want >= 2", liveN)
+	}
+	srv.jsubMu.Lock()
+	remaining := len(srv.jsubs)
+	srv.jsubMu.Unlock()
+	if remaining != 1 {
+		t.Fatalf("after eviction jsubs has %d subscribers; want 1 (only the wedged one evicted, healthy survives)", remaining)
 	}
 
-	// The wedged subscriber is disconnected within a bound (its queue overflowed above).
-	evicted := wedged.eventuallyClosed(3 * time.Second)
+	// Confirm the wedged subscriber's connection is actually torn down (now safe/non-racy
+	// since eviction was already observed above; these draining reads no longer race the
+	// overflow).
+	if !wedged.eventuallyClosed(3 * time.Second) {
+		t.Fatalf("wedged journal subscriber connection not closed after eviction (S9/P-3)")
+	}
 	close(stopFlood)
 	<-floodDone
-	if !evicted {
-		t.Fatalf("wedged journal subscriber not evicted within bound (S9/P-3)")
-	}
 }
