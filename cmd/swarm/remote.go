@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -52,14 +54,29 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 // and the daemon assembly must agree on it.
 const remoteIdentityFile = "machine.key"
 
+// remoteRelayFile mirrors remoteRelayFile in internal/skeleton/pairing_config.go:
+// <stateDir>/remote/relay.json is the exact path loadRelayURL reads, and the path
+// `swarm remote init --relay-url` must agree on.
+const remoteRelayFile = "relay.json"
+
 // runRemoteInit is the `swarm remote init` verb (machine key custody, A4-1b). It
 // resolves the state dir the same way dialClient does (SWARM_DAEMON_STATE env,
 // falling back to persist.DefaultDir), then either loads the existing machine
 // identity at <stateDir>/remote/machine.key (IDEMPOTENT: a second run never
 // rotates keys) or generates and saves a fresh one at 0600. It prints only the
 // identity's redacted, public fingerprint (identity.String()) to stdout — never
-// any private material.
-func runRemoteInit(_ []string, stdout, stderr io.Writer) int {
+// any private material. An optional --relay-url flag, when non-empty, is
+// persisted to <stateDir>/remote/relay.json ({"relay_url":"..."}, 0600) — the
+// exact shape internal/skeleton.loadRelayURL reads back. Without the flag,
+// relay.json is left untouched (absent), so remote pairing stays unconfigured.
+func runRemoteInit(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("remote init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	relayURL := fs.String("relay-url", "", "relay server URL for remote pairing")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
 		var err error
@@ -101,6 +118,19 @@ func runRemoteInit(_ []string, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stderr, "remote init: %v\n", err)
 		return 1
+	}
+
+	if *relayURL != "" {
+		relayPath := filepath.Join(remoteDir, remoteRelayFile)
+		b, err := json.Marshal(map[string]string{"relay_url": *relayURL})
+		if err != nil {
+			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(relayPath, b, 0o600); err != nil {
+			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			return 1
+		}
 	}
 
 	fmt.Fprintln(stdout, id.String())
