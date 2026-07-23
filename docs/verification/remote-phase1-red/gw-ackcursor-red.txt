@@ -1,0 +1,10 @@
+RED evidence — fix-pack item 5a (GW-H1): gateway ack-gated cursor (no silent journal-event loss)
+Date: 2026-07-23  Commit-base: b7b15d4
+
+Production + skeleton still build (RED confined to the new remotegw test):
+  BUILD OK
+
+$ go vet ./internal/remotegw/
+vet: internal/remotegw/ackcursor_test.go:155:9: sink.Event(protocol.JournalRecord{…}) (no value) used as value
+
+Right reason: RelaySink.Event returns nothing today, so the gateway cannot gate on a failed relay append and deliver() advances the cursor regardless -> a transient append failure drops the record permanently on reconnect. Pinned seam: JournalSink.Event/Snapshot return error; RelaySink returns the append error; deliver advances the cursor ONLY on nil (R-GW.5). Ripple: collectSink fake in skeleton/gateway_bridge_test.go must adopt the new signature in the GREEN commit.
