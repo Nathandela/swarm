@@ -48,6 +48,26 @@ func OpenRemoteCommand(key crypto.ContentKey, raw []byte) (protocol.RemoteComman
 	return rc, nil
 }
 
+// OpenRemoteCommandGuarded opens a command envelope like OpenRemoteCommand, but through a
+// crypto.MailboxReceiver so a replayed or reordered seq for the sender/epoch is rejected
+// with crypto.ErrStaleSeq instead of being opened again (mirrors the phone-side receive
+// path, phonecore.JournalReceiver.Accept). Fail-closed: no command is returned on error.
+func OpenRemoteCommandGuarded(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw []byte) (protocol.RemoteCommand, error) {
+	env, err := crypto.ParseEnvelope(raw)
+	if err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	res, err := recv.Accept(key, env)
+	if err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	var rc protocol.RemoteCommand
+	if err := json.Unmarshal(res.Plaintext, &rc); err != nil {
+		return protocol.RemoteCommand{}, err
+	}
+	return rc, nil
+}
+
 // SealControlReply seals a daemon reply Control as a mailbox envelope under the epoch
 // content key so the gateway can return it to the phone through the untrusted relay
 // (the request/response counterpart of OpenCommandEnvelope). seq must be unique.

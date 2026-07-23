@@ -55,7 +55,8 @@ type CommandBridgeConfig struct {
 // the good items still process. The daemon's own two-phase idempotency (D6) dedups a
 // command that is redelivered after a crash before the cursor was persisted.
 type CommandBridge struct {
-	cfg CommandBridgeConfig
+	cfg  CommandBridgeConfig
+	recv *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
 
 	mu       sync.Mutex
 	cursor   uint64
@@ -65,7 +66,7 @@ type CommandBridge struct {
 // NewCommandBridge returns a bridge over cfg. The read cursor starts at 0; a caller
 // resuming across a restart should seed it via SetCursor from durable state.
 func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
-	return &CommandBridge{cfg: cfg}
+	return &CommandBridge{cfg: cfg, recv: crypto.NewMailboxReceiver()}
 }
 
 // Cursor is the highest relay mailbox cursor the bridge has consumed (its durable
@@ -135,7 +136,7 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 // handle opens one command envelope, forwards it to the daemon, and seals the reply
 // back to the phone mailbox.
 func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
-	rc, err := OpenRemoteCommand(b.cfg.Key, it.Envelope)
+	rc, err := OpenRemoteCommandGuarded(b.recv, b.cfg.Key, it.Envelope)
 	if err != nil {
 		return fmt.Errorf("open command: %w", err)
 	}
