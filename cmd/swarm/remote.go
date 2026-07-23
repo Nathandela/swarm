@@ -5,9 +5,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"text/tabwriter"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 )
 
@@ -24,7 +26,8 @@ const remoteUsage = `usage: swarm remote <command>
 
 // runRemote is the `swarm remote` role: it dispatches to a remote-control verb.
 // With no verb it prints usage (nonzero exit); an unrecognized verb is an error
-// (nonzero exit). Only `init` is wired in this slice — the rest are later work.
+// (nonzero exit). `init`, `devices`, and `revoke` are wired in this slice — the
+// rest are later work.
 func runRemote(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, remoteUsage)
@@ -33,6 +36,10 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runRemoteInit(args[1:], stdout, stderr)
+	case "devices":
+		return runRemoteDevices(args[1:], stdout, stderr)
+	case "revoke":
+		return runRemoteRevoke(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "remote: unknown remote command %q\n", args[0])
 		return 2
@@ -97,5 +104,67 @@ func runRemoteInit(_ []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintln(stdout, id.String())
+	return 0
+}
+
+// remoteRevokeUsage is `swarm remote revoke`'s usage message, printed to stderr
+// (and matched by TestRemoteRevoke_RequiresOneArg's "usage" substring check) when
+// the device-id arg is missing or extra args are given.
+const remoteRevokeUsage = `usage: swarm remote revoke <device-id>
+`
+
+// runRemoteDevices is the `swarm remote devices` verb: it dials the daemon
+// (requesting the CapPairing capability device_list needs), lists paired devices,
+// and prints them as a table (device id, name, capability, paired-at) to stdout. An
+// empty registry prints just the header, exit 0.
+func runRemoteDevices(_ []string, stdout, stderr io.Writer) int {
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote devices: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	devices, err := client.ListDevices()
+	if err != nil {
+		fmt.Fprintf(stderr, "remote devices: %v\n", err)
+		return 1
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "DEVICE ID\tNAME\tCAPABILITY\tPAIRED AT")
+	for _, d := range devices {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", d.DeviceID, d.Name, d.Capability, d.PairedAt.Format(timeFormat))
+	}
+	tw.Flush()
+	return 0
+}
+
+// timeFormat is the timestamp layout `swarm remote devices` prints PairedAt in.
+const timeFormat = "2006-01-02 15:04:05"
+
+// runRemoteRevoke is the `swarm remote revoke <device-id>` verb: it requires
+// exactly one positional arg (the device id) and refuses with a usage error
+// (nonzero exit, no dial attempt) otherwise. With exactly one arg it dials the
+// daemon, revokes the device, and prints a confirmation on success.
+func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprint(stderr, remoteRevokeUsage)
+		return 2
+	}
+	deviceID := args[0]
+
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	if err := client.RevokeDevice(deviceID); err != nil {
+		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	return 0
 }

@@ -129,7 +129,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	client, err := dialClient()
+	client, err := dialClient([]string{"attach", "subscribe"})
 	if err != nil {
 		fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
@@ -178,10 +178,11 @@ func interactiveTTY(stdout io.Writer, stdin *os.File) (out *os.File, ok bool) {
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
-// protocol client to it. The SWARM_DAEMON_* environment overrides the default home
-// (the same knobs `swarm daemon` reads), so a test can point the client at a
-// controlled daemon; EnsureDaemon only spawns one when the socket does not answer.
-func dialClient() (*protocol.Client, error) {
+// protocol client to it, offering caps. The SWARM_DAEMON_* environment overrides the
+// default home (the same knobs `swarm daemon` reads), so a test can point the client
+// at a controlled daemon; EnsureDaemon only spawns one when the socket does not
+// answer.
+func dialClient(caps []string) (*protocol.Client, error) {
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
 		var err error
@@ -201,8 +202,8 @@ func dialClient() (*protocol.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = conn.Close() // EnsureDaemon proved the daemon is live; the TUI speaks the full client protocol on its own dial
-	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+	_ = conn.Close() // EnsureDaemon proved the daemon is live; the caller speaks the full client protocol on its own dial
+	return protocol.Dial(cc.SocketPath, caps)
 }
 
 // detectAgents builds the launch-form agent detector. It probes the host for every

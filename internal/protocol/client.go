@@ -139,6 +139,31 @@ func (c *Client) Kill(id string) error { return c.simpleOp(OpKill, id) }
 // Delete removes a session.
 func (c *Client) Delete(id string) error { return c.simpleOp(OpDelete, id) }
 
+// ListDevices returns the daemon's paired-device roster (requires the negotiated
+// `pairing` capability).
+func (c *Client) ListDevices() ([]DeviceView, error) {
+	resp, err := c.request(Control{Op: OpDeviceList, EndpointID: c.endpointID})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Op == OpError {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Devices, nil
+}
+
+// RevokeDevice removes targetID from the daemon's device registry.
+func (c *Client) RevokeDevice(targetID string) error {
+	resp, err := c.request(Control{Op: OpDeviceRevoke, EndpointID: c.endpointID, TargetDeviceID: targetID})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 func (c *Client) simpleOp(op, id string) error {
 	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
 	if err != nil {
