@@ -115,6 +115,37 @@ func (d *Daemon) ClaimOperation(operationID, action, session string) (bool, erro
 	return existed, err
 }
 
+// ClaimIdempotentOp is the durable backing of protocol.IdempotentExecutor for replay-safe
+// remote kill/delete (slice DHI-3). A fresh op Prepares (existed=false) and the caller then
+// executes + CommitIdempotentOp; a replay returns the ORIGINAL attempt's cached outcome:
+// completed => priorOK=true, failed => priorOK=false (a cached failure, never a false
+// success). A record still prepared/executing means a crash struck mid-op — kill/delete are
+// self-idempotent, so it is reported as not-existed and safe to re-run.
+func (d *Daemon) ClaimIdempotentOp(op, action, session string) (existed, priorOK bool, err error) {
+	rec, existed, err := d.idem.Prepare(op, action, session)
+	if err != nil || !existed {
+		return existed, false, err
+	}
+	switch rec.Phase {
+	case idempotency.PhaseCompleted:
+		return true, true, nil
+	case idempotency.PhaseFailed:
+		return true, false, nil
+	default:
+		return false, false, nil // prepared/executing (crash mid-op): safe to re-run
+	}
+}
+
+// CommitIdempotentOp records the terminal outcome of a claimed kill/delete durably: a
+// success transitions the record -> completed, a failure -> failed, so a later replay
+// surfaces that exact outcome via ClaimIdempotentOp.
+func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
+	if ok {
+		return d.idem.Complete(op, nil)
+	}
+	return d.idem.Fail(op, nil)
+}
+
 // launch is the two-phase, crash-safe launch (E5.4/S11): reserve a running meta,
 // spawn the shim with a deterministic socket and filtered env, then confirm it is
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT

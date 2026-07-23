@@ -255,6 +255,22 @@ type OperationClaimer interface {
 	ClaimOperation(operationID, action, session string) (existed bool, err error)
 }
 
+// IdempotentExecutor is the optional interface a DaemonAPI ALSO implements to make a
+// remote MUTATING op replay-safe by CACHED OUTCOME (slice DHI-3), backing handleKill/
+// handleDelete. Unlike OperationClaimer (existed => refuse — correct for take_control,
+// which must NOT re-establish a lease), a replayed kill/delete must return the ORIGINAL
+// attempt's SUCCESS, executing the side effect exactly once.
+//
+// Fresh op: existed=false — the caller executes the side effect, then CommitIdempotentOp
+// with its terminal outcome. Replayed op: existed=true, priorOK reports whether the
+// ORIGINAL attempt COMPLETED (true) or FAILED (false); the caller returns that cached
+// outcome and executes nothing. A backend that does NOT implement this interface leaves
+// the existing non-idempotent kill/delete path unchanged.
+type IdempotentExecutor interface {
+	ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error)
+	CommitIdempotentOp(operationID string, ok bool) error
+}
+
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so
 // tests stub it; FromDaemon adapts a real *daemon.Daemon to it.
 type DaemonAPI interface {

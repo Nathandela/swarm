@@ -1028,6 +1028,32 @@ func (cc *clientConn) handleKill(c Control) {
 	if !cc.requireRemoteAuthz(c, ActionKill, c.SessionID, nil) {
 		return
 	}
+	// Replay-safe when the backend is an IdempotentExecutor (DHI-3): claim the
+	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
+	// re-executing Kill, so a captured remote kill cannot double-fire the side effect.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok {
+		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionKill, local)
+		if err != nil {
+			cc.replyError("kill: " + err.Error())
+			return
+		}
+		if existed {
+			if priorOK {
+				cc.replyOK(c.SessionID)
+			} else {
+				cc.replyError("kill: prior attempt failed")
+			}
+			return
+		}
+		kerr := cc.srv.d.Kill(local)
+		_ = exec.CommitIdempotentOp(c.OperationID, kerr == nil)
+		if kerr != nil {
+			cc.replyError("kill: " + kerr.Error())
+			return
+		}
+		cc.replyOK(c.SessionID)
+		return
+	}
 	if err := cc.srv.d.Kill(local); err != nil {
 		cc.replyError("kill: " + err.Error())
 		return
@@ -1041,6 +1067,34 @@ func (cc *clientConn) handleDelete(c Control) {
 		return
 	}
 	if !cc.requireRemoteAuthz(c, ActionDelete, c.SessionID, nil) {
+		return
+	}
+	// Replay-safe when the backend is an IdempotentExecutor (DHI-3): claim the
+	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
+	// re-executing Delete, so a captured remote delete cannot append a duplicate
+	// tombstone or re-fire OnSessionEnd.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok {
+		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionDelete, local)
+		if err != nil {
+			cc.replyError("delete: " + err.Error())
+			return
+		}
+		if existed {
+			if priorOK {
+				cc.replyOK(c.SessionID)
+			} else {
+				cc.replyError("delete: prior attempt failed")
+			}
+			return
+		}
+		derr := cc.srv.d.Delete(local)
+		_ = exec.CommitIdempotentOp(c.OperationID, derr == nil)
+		if derr != nil {
+			cc.replyError("delete: " + derr.Error())
+			return
+		}
+		cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+		cc.replyOK(c.SessionID)
 		return
 	}
 	if err := cc.srv.d.Delete(local); err != nil {

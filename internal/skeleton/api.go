@@ -202,6 +202,22 @@ func (a *coreAPI) ClaimOperation(operationID, action, session string) (bool, err
 // enforces take_control operation_id single-use (slice A5-c).
 var _ protocol.OperationClaimer = (*coreAPI)(nil)
 
+// ClaimIdempotentOp / CommitIdempotentOp make coreAPI a protocol.IdempotentExecutor
+// (slice DHI-3): they forward to the daemon's durable two-phase idempotency store so a
+// replayed remote kill/delete returns the original attempt's cached outcome and executes
+// the side effect exactly once.
+func (a *coreAPI) ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error) {
+	return a.core.ClaimIdempotentOp(operationID, action, session)
+}
+
+func (a *coreAPI) CommitIdempotentOp(operationID string, ok bool) error {
+	return a.core.CommitIdempotentOp(operationID, ok)
+}
+
+// coreAPI ALSO satisfies protocol.IdempotentExecutor so the assembled remote-tier Server
+// makes remote kill/delete replay-safe (slice DHI-3).
+var _ protocol.IdempotentExecutor = (*coreAPI)(nil)
+
 // coreAPI ALSO satisfies protocol.JournalBackend so the assembled remote-tier
 // Server can serve journal_read / journal_subscribe (DHI-1). The daemon and
 // internal/journal stay free of a protocol import; the wire-type conversion lives
