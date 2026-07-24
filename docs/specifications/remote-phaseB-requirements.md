@@ -1,6 +1,6 @@
 # Phase B requirements — Android handset (the v1 milestone)
 
-**Status**: v3.1, revised after audit-committee rounds 1-3. Rounds 1 and 2 returned REVISE from
+**Status**: v3.2, revised after audit-committee rounds 1-3 (every round: 3x REVISE). Rounds 1 and 2 returned REVISE from
 all three reviewers. **Round 3 disproved v3's own claim** that §4.6 was a live Phase A security
 hole; the claim is withdrawn and the finding is now correctly scoped as a durability /
 defense-in-depth defect with no reproduced exploit (PB-GW-*). Recording that retraction
@@ -177,7 +177,7 @@ PB-NET-5 on its merits — **as a protocol change covering both hops**.
 
 ---
 
-### 4.6 The GATEWAY's inbound replay guard is also in-memory — a live Phase A hole (opus round 2, verified)
+### 4.6 The GATEWAY's inbound replay guard is in-memory — latent today, live inside Phase B's own window
 
 §4.3 found the phone's durable-state gap. The machine side has the **same defect, and it is
 relay-adversary-reachable**, which §4.3's is not in the same way:
@@ -218,6 +218,31 @@ and the disproof was independently re-verified; every link holds:
   `SenderKeyID` stays zero). So a *new* legitimate `take_control` carries a seq above every old
   input frame; once it is accepted the fresh receiver's high-water exceeds them all and each
   replayed input is `ErrStaleSeq`.
+**Link 4 above is not a standing property — corrected (opus round 3).** "A new `take_control`
+carries a seq above every old input" holds only for a phone whose send-seq is monotonic across
+restarts, which §4.3 proves is exactly what does **not** exist today. With a phone holding
+durable keys but a regressed send-seq — the precise state that exists *during* Phase B's own
+implementation, before PB-STATE lands — the attack runs:
+
+1. A legitimate fresh `take_control` at seq 1 is accepted (`seen == false`, staleness skipped),
+   setting `highest = 1`. It is a **new** operation_id, so idempotency does not dedup it, and
+   it is not expired. A lease opens.
+2. The relay serves retained inputs at seqs 60..100. Seq 60 sets
+   `gap := seen && 60 > 1+1` -> true -> `routeInput` drops it.
+3. Seq 61 gives `gap := 61 > 60+1` -> **false** -> routed to the live lease -> the PTY. So do
+   62..100.
+
+The `operation_id`/`ExpiresAt` defenses cover the *replayed* take_control; here the lease is
+opened by the *legitimate* one, and input frames carry neither defense.
+
+**Therefore the correct standing is "not reachable in today's tree, but reachable inside Phase
+B's own implementation window" — not "disproved".** It is unreachable today for a blunter
+reason than any of the four links: `internal/phonecore` and `internal/phonesim` are imported by
+**no production binary**, and `phonecore` performs zero persistence — there is no shipped phone
+client, so a retaining relay has nothing to replay against. Phase B is what creates the client
+*and* the durable keys, so PB-GW-1 and PB-STATE-3/-4 must land together or Phase B briefly
+builds the very hole this section describes.
+
 - One reviewer proposed a surviving narrow window — a supervised restart *within* the ~60 s
   `ExpiresAt`, letting the relay replay a still-valid `take_control` to re-lease and land the
   inputs — but explicitly did not trace whether that replay is deduped. **It is.** The
@@ -298,6 +323,16 @@ committee agreement, not implementer discretion.
 | Cached-state freshness before it is shown as stale | 5 min without a successful poll | PB-APP-8 |
 | Latency harness | median of 3 runs, n >= 200 samples each, 20-sample warm-up discarded, 1-16 byte payloads, on an otherwise-idle machine, local relay over loopback; CI records the environment | PB-NET-5 |
 | Max coalesced input payload | 4 KiB per frame (flush early if exceeded) | PB-INPUT-6 |
+| **Machine->phone append rate (gateway coalescing)** | <= 8 appends/s sustained across journal **and** terminal combined (they share one sink and one target), i.e. terminal snapshots coalesced to <= 125 ms — against a render loop that can emit ~62/s | PB-GW-7 |
+| **take_control lease lifetime** | signed `ExpiresAt` = **now + 15 min** (not 1 min), so the lease is not the binding constraint on a typing session | PB-INPUT-3, PB-TIME-1 |
+
+**Two window subtleties the budget depends on.** (1) The relay's limiter is a **tumbling**
+one-minute window (`internal/remote/relay/server.go:105-115`: it resets when
+`now.Sub(w.start) >= time.Minute`), not a smooth rate — so "600/min" is not "10/s" in kind, and
+a burst can exhaust a window early. Budgets are therefore set against the *window*, and
+PB-NET-4's 64-op reconnect drain must not be issued as one burst. (2) `mailbox_append` never
+calls `meterOp`, so appends are capped by `MailboxAppendPerMin` alone (`OpsPerMin` does not
+apply to them).
 
 **Mechanism-conditional acceptance.** PB-NET-5 permits either request-id correlation with
 concurrent dispatch **or** an explicit server-push frame, but its criterion (a) is phrased for a
@@ -307,7 +342,7 @@ server-push implementation must instead show that an inbound push and a concurre
 append make progress simultaneously on the same connection. The chosen mechanism is recorded in
 S0 and fixes which form of (a) applies.
 
-### 6.0b PB-GW — durable gateway inbound state (NEW; closes §4.6, the live Phase A hole)
+### 6.0b PB-GW — durable gateway state, inbound and outbound (closes §4.6)
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
@@ -315,7 +350,9 @@ S0 and fixes which form of (a) applies.
 | **PB-GW-6** | **Prerequisite for PB-GW-2, and a trap that would have bricked production.** Every phone->machine seal sets only `{Version, EpochID, Seq}` — **no `IssuedAt`** (`internal/phonecore/input.go:59`, `command.go:100,121,143`); the only non-test producer of `IssuedAt` is the *outbound* journal path (`internal/remotegw/relaysink.go:166`). So inbound `IssuedAt` is 0, and turning on a bounded-age check would compute an age of ~56 years and **reject every legitimate command and keystroke**. The phone must stamp `IssuedAt` on inbound command and input seals **before** PB-GW-2's toggle is enabled. | Test asserts a non-zero `IssuedAt` on every inbound seal; a second test asserts PB-GW-2's toggle with real phone-sealed frames still passes traffic. Ordering edge enforced in §11. |
 | PB-GW-2 | The inbound receiver enables the bounded-age check, which `NewMailboxReceiver` leaves at `maxAge == 0` — an age backstop even if a high-water is lost. **Value: 10 minutes** (well above the 60 s command TTL and any plausible delivery delay, well below the 7 d retention cap). **Gated on PB-GW-6**: enabling it first would break all inbound traffic. | Test: an authenticated envelope older than the bound is refused with `ErrStaleAge`, **and** legitimate phone-sealed traffic is unaffected — the second assertion is what makes this test honest. |
 | PB-GW-3 | **A per-frame-class crash matrix**, not a single "atomic commit". A local transaction cannot atomically span the persisted high-water, the persisted cursor, an external PTY/daemon side effect, and the relay ack, so the rule differs by class: live input may persist consumption *before* the PTY write and accept loss on crash (it is live-only per ADR-007 D7); high-level operations rely on the daemon's durable two-phase idempotency for duplicate suppression; watch/unwatch needs an idempotent convergence rule. | Each class has a stated allowed-loss / duplicate-prevention rule and a crash-injection test at each boundary. |
-| PB-GW-4 | **Per-action-class replay tests** against a retaining (adversarial) relay across a restart: input, take_control, take_control_end, idempotent mutations, and terminal watch/unwatch. v3's single "no keystroke reaches the PTY twice" test would have **passed against today's unfixed code** because the restarted lease manager is empty — it proved nothing. | Each class asserts its own outcome at the guard that is supposed to enforce it; each test must fail against the unfixed code for the right reason. |
+| PB-GW-4 | **Per-action-class replay tests** against a retaining (adversarial) relay across a restart: input, take_control, take_control_end, idempotent mutations, and terminal watch/unwatch. **The input class must model a seq-regressed phone** (or an explicitly seeded-low receiver) as its adversary — against a monotonic phone the test passes with or without PB-GW-1, repeating the same "proves nothing" flaw as v3's empty-lease-manager test. The §4.6 trace (legitimate lease at seq 1, then contiguous retained inputs from seq 61) is the scenario to encode. | Each class asserts at the guard that is supposed to enforce it, and **each test must fail against unfixed code for the right reason** — demonstrated, not assumed. |
+| PB-GW-7 | **A machine->phone append budget with gateway-side coalescing, and no seq burned on a failed append.** The numbers do not currently close: `renderDebounceWindow = 16 ms` (`internal/daemon/terminalrender.go:33`) lets a live peek emit ~62 snapshots/s, while the relay caps appends at `MailboxAppendPerMin: 600` (= 10/min-window) per target. Worse, `RelaySink` allocates the seq **before** the append and returns on append error (`internal/remotegw/relaysink.go:154,181`), so **every quota-refused snapshot permanently burns an outbound seq** — manufacturing gaps that PB-SYNC-1 must conservatively stale on *both* journal and terminal, exhausting PB-SYNC-6's resync budget within minutes. Journal and terminal share one `RelaySink` and one target, so a peek starves the journal too. `internal/remotegw/gateway.go:29` already states the intended contract ("bounded/coalescing on the relay side") that `RelaySink` does not implement. **This is exit-criterion-fatal: "types into a real session" is meaningless without the live tail (PB-APP-4).** | Coalescing holds the outbound rate under the budget in §6.0; a failed append does **not** consume a seq; a sustained-peek test runs for >= 60 s without quota refusal, without manufactured gaps, and without starving the journal. |
+| PB-GW-8 | **The gateway's outbound journal cursor must be durable.** `Gateway.cursor` is a bare `uint64` (`internal/remotegw/gateway.go:47-50`) that nothing persists or seeds, while two comments call it durable — "its **durable** resume point" (`gateway.go:59`) and "resumes journal delivery from its last durable cursor" (`service.go:56-57`). Every restart therefore re-reads from cursor 0 and re-appends the entire journal at fresh seqs into the same 600/window mailbox. This is the **fourth** instance of a comment presuming durability that does not exist, and PB-LIFE-1/-5 make restarts routine. | Restart test: the gateway resumes from its persisted cursor and does not re-append delivered journal records. |
 | PB-GW-5 | The Phase A closure records **only what was reproduced** (see §4.6): a missing durable inbound high-water and a disabled age check, with the original claim scoped to a single gateway run. It must not be amended to assert an exploit that was disproved. | PB-DOC-5. |
 
 ### 6.1 PB-STATE — durable on-device state (NEW; the most severe gap, §4.3)
@@ -350,7 +387,7 @@ S0 and fixes which form of (a) applies.
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-PAIR-1 | **Machine-side QR rendering**: `swarm remote pair` renders a scannable QR (terminal block glyphs), not a raw string. | A test decodes the rendered output back to the exact payload (round-trip against `DecodeQR`). |
+| PB-PAIR-1 | **Machine-side QR rendering**: `swarm remote pair` renders a genuinely scannable symbol, not a raw string. Three constraints v3 missed: (a) it must render on a **light quiet-zone background** — filled blocks on a dark terminal produce an inverted symbol most scanners reject, and §5 pins the product theme dark; (b) the ECC level and module count must be stated and the symbol must fit a **standard 80x24 terminal** (a ~161-character payload in half-block glyphs needs roughly 31-35 rows, which does not fit — so either the payload shrinks or the rendering is denser); (c) a fallback for terminals that cannot render it. | **Scannability, not a string round-trip.** v3's criterion round-tripped against `DecodeQR`, which parses a *string* and would need a QR *symbol* decoder that does not exist in the tree and was never budgeted. Accept either a symbol-level decode of the rendered raster, or an evidenced manual scan with a real phone recorded under `docs/verification/`. |
 | PB-PAIR-2 | **Phone-side camera capture + decode**, with the `CAMERA` runtime permission requested, and a manual-entry fallback when it is denied or permanently denied. | Tests for granted, denied, and permanently-denied paths; manual-entry encoding is specified, not improvised. |
 | PB-PAIR-3 | The scanner dependency is justified under PB-SEC-14 (ML Kit pulls Google Play Services, in tension with a minimal dependency set) — the choice is explicit. | Decision recorded in the ADR with the tradeoff stated. |
 | PB-PAIR-4 | A **persisted** pairing state machine: process death at any transition (Noise msg1/2/3, SAS display, machine decision wait, local pin commit, grant bootstrap) resumes or fails closed — never a half-paired device. | Kill/restart test at each transition; a machine that committed while the app died before persisting pins is detected and resolved. |
@@ -368,7 +405,7 @@ S0 and fixes which form of (a) applies.
 | PB-KEY-6 | **`crypto.KeyStore` must become failable.** `SignCommand(msg []byte) []byte` is errorless and `NoiseStatic() *NoiseStatic` exports raw private material — neither is implementable against Android Keystore, which never exports private keys and whose every operation can fail (user-auth-required, and permanent invalidation on biometric-enrollment change, which PB-SEC-2 explicitly requires). PB-SEC-2's "Keystore-enforced sign authorization" is unimplementable until this changes. `crypto` is inside PB-BIND-0's allowlist, so this is a cross-cutting interface change that must be owned by a slice. | Interface returns errors; a test drives an auth-required failure and a key-invalidated failure through every signing path. |
 | PB-KEY-7 | **Lock purges live memory.** Invalidating the biometric gate is not enough: `MailboxRouter` holds `ContentKey` by value for its lifetime and caches decrypted sessions/snapshots (`internal/phonecore/snapshot.go:88,132`), so "locked device cannot decrypt" can pass while the process still holds the key and already-decrypted content. On lock, background, or auth expiry the core must stop content operations, zeroize/discard native key custody, purge decrypted session/snapshot/reply caches and sensitive UI state, and require a fresh unwrap before restoring content. | Test asserts no content key and no decrypted session content remains reachable after lock. |
 | PB-KEY-3 | **Epoch-grant recovery.** Today a grant can be lost with no recovery: the relay refuses appends past the mailbox depth cap (`server.go:743-747`) and `SweepRetention` purges items older than `RetentionCap` (**default 7 days**, `config.go:90`) **even if never acked** (`server.go:1136-1139`); no re-grant verb exists anywhere. A phone offline across a rotation is then permanently unable to decrypt, and re-pairing is refused because `BeginPairing` fail-fasts while a device is registered. | Either a re-grant request path, or a defined user-legible terminal state plus a documented machine-side unblock. A test drives the offline-across-rotation scenario to a defined, recoverable end — not an indefinite decrypt-failure loop. |
-| PB-KEY-4 | Key rotation while the app is backgrounded/offline is handled without data loss or silent breakage. | Test: rotate while offline, reconnect, converge. |
+| PB-KEY-4 | Key rotation while the app is backgrounded/offline is handled without data loss or silent breakage. **It must update the device record's `GrantedEpoch`**: `reconcilePairedDevices` removes any device whose `GrantedEpoch != curEpoch` on every daemon start (`internal/skeleton/serve.go:499-505`), so a re-grant or offline-rotation convergence that does not update it **silently unpairs the only device on the next restart**. §7's deferral of "the epoch-equality reconcile revisit" is scoped to *multi-device*; single-device re-grant hits the same mechanism and is therefore in scope here. | Test: rotate while offline, reconnect, converge, **restart the daemon**, and assert the device is still paired. |
 
 ### 6.5 PB-NET — transport (§4.5)
 
@@ -407,7 +444,7 @@ coordinate at all.
 |---|---|---|
 | PB-INPUT-1 | Input/resize are live-only per ADR-007 D7: never queued, never replayed; a disconnect resolves as an explicit **"delivery unknown / not sent"** surfaced to the user. | Test asserts no replay after reconnect and that the UX state appears. |
 | PB-INPUT-2 | Lease lifecycle is defined across gateway restart, daemon restart, session exit under the user, app backgrounding, and process death; input is suppressed until a new lease is visibly confirmed. | Test per event; no keystroke is ever sent without a confirmed current lease generation. |
-| PB-INPUT-3 | Lease TTL expiry mid-use (`maxControlSessionTTL = 30m`, `internal/protocol/server.go:156`) has defined UX. | Test drives expiry and asserts the state. |
+| PB-INPUT-3 | Lease TTL expiry mid-use has defined UX. **The 30-minute figure is not the operative one**: the lease is the *earliest* of `now+maxControlSessionTTL`, `now+TTLSeconds`, and the device-signed `ExpiresAt` (`internal/protocol/server.go:1500-1504`), so with PB-TIME-1's "phone signs `now + 1 minute`" the real lease is **60 s** — and PB-INPUT-5's ">= 60 s sustained typing" test sits exactly on it, as does §6.0's 60 s biometric freshness. Three independent 60-second walls collide. §6.0 now sets the signed `ExpiresAt` to 15 min for take_control so the lease is not the binding constraint, while command TTL stays 60 s. | Test asserts a typing session survives well past 60 s, and that expiry when it does arrive has defined UX rather than silent keystroke loss. |
 | PB-INPUT-4 | Retry policy is keyed on stable server error codes, never blind resend. | Test maps each error class to its policy. |
 | PB-INPUT-6 | **Coalescing must preserve ordering and flush at every boundary.** A sustained-rate test alone would pass while the last buffered keystrokes are lost whenever the user releases control. Required: byte-order preservation across frames; flush before resize; flush before release/take_control_end; defined handling of buffered input on background, auth expiry and disconnect (flushed or explicitly reported as "delivery unknown" per PB-INPUT-1, never silently dropped); a max coalesced payload (§6.0); and stated treatment of paste and IME composition, which are not keystroke streams. | A test per boundary asserts no reordering and no silent loss. |
 | PB-INPUT-5 | **Input must be coalesced to stay under the relay's quotas.** `MailboxAppendPerMin: 600` and `OpsPerMin: 600` (`internal/remote/relay/config.go:24-25,39-44`) allow 10 appends/s, so a ~30 Hz key-autorepeat or fast interactive typing trips `codeQuotaExceeded` mid-lease after roughly 20 s — while short-burst latency tests still pass. Coalescing bound per §6.0 (<= 8 frames/s sustained, one frame per 125 ms). | **A sustained-typing acceptance test** (not a burst): continuous input for >= 60 s at autorepeat rate stays within quota and loses no keystrokes. |
@@ -453,7 +490,7 @@ today is the presence-timeout sweep. FCM will be the first real backend *and* ne
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-PUSH-0 | **A gateway-side trigger**: which journal transitions fire a push, with coalescing/debounce (ADR-007 D6's "push-wakes + coalesced snapshots"), sealed under the **wake key** (PB-KEY-2). | Tests for trigger selection, coalescing, and that the content key is not used. |
+| PB-PUSH-0 | **A gateway-side trigger**: which journal transitions fire a push, with coalescing/debounce (ADR-007 D6's "push-wakes + coalesced snapshots"), sealed under the **wake key** (PB-KEY-2). **The wake key must first reach the gateway**: `gatewayParams` carries only `ContentKey`, and `WakeKey` appears nowhere in `internal/remotegw/`, `cmd/swarm-remote/`, or `internal/remote/relay/` outside tests — so this introduces a new key crossing into the sidecar that no requirement currently names, with its own custody and blast-radius consequences (the sidecar is the network-facing edge). | Tests for trigger selection, coalescing, that the content key is never used, and that the gateway holds the wake key only. |
 | PB-PUSH-1 | Rename the seam transport-neutral (`PushSink`/`PushPayload`); it is already content-agnostic and keeping the APNs name for FCM is a documented landmine. | Rename lands with Phase A tests green. |
 | PB-PUSH-2 | An FCM v1 sender implementing the seam. | Fake-endpoint tests: send, OAuth acquisition + refresh, 5xx retry, `UNREGISTERED` pruning. |
 | PB-PUSH-3 | **A specified payload schema** — not merely "opaque fields": which key seals it, replay/expiry gating, and no session names, hostnames, agent names, or Group labels visible to the provider. | Schema pinned by test; ADR states exactly what the provider observes (token, timing, size). |
@@ -572,7 +609,7 @@ checks, TLS renewal automation, resource limits, and cross-version compatibility
 | PB-DOC-4 | `docs/research/remote-v1-roadmap.md:286` ("Implementers are sonnet/opus subagents — never fable/haiku") is amended rather than silently contradicted by §11's model assignment. | Roadmap updated. |
 | PB-DOC-5 | **The Phase A closure gains a scoped note, not a retraction.** §4.6's exploit claim was disproved in round 3, so the closure's "no relay-adversary-reachable confidentiality/integrity hole" statement stands. What it must record is the narrower true finding: the gateway's inbound replay guard and read cursor do not survive a restart and the bounded-age check is disabled, so that property currently rests on incidental downstream mechanisms rather than on the guard itself, and the original claim was verified within a single gateway run. | Closure amended with the reproduced finding only; a note stating explicitly that the stronger exploit claim was investigated and **disproved**, so future readers do not resurrect it. |
 | PB-DOC-7 | **A machine-checked slice-ownership manifest.** Every concrete PB-* id appears **exactly once** as an owned requirement, wildcard ownership ("all") is prohibited, every dependency edge is enumerated, and acyclicity is validated in CI. Rounds 2 and 3 both found homeless requirements (PB-KEY-2, then PB-STATE-10 and PB-SAS-2) and ambiguous cycles by hand; this makes that class of error mechanical. | A test parses §11 and the requirement tables and fails on any unowned id, duplicate owner, wildcard, dangling edge, or cycle. |
-| PB-DOC-6 | ADR-007:313 attributes "light+dark token sets" to `remote-control-design-directions.html`, but that file is **dark-only** (31 `--p-*` tokens, four direction blocks, all near-black grounds). The amendment must say the statement was never true of its own cited artifact, rather than presenting the deferral as a change of plan. | ADR amendment states it. |
+| ~~PB-DOC-6~~ | **WITHDRAWN (round 3).** v3 claimed ADR-007:313's "light+dark token sets" was never true of its cited artifact. That is wrong: `remote-control-design-directions.html` **does** ship a light set — `@media (prefers-color-scheme: light)` at `:8-10` and `:root[data-theme="light"]` at `:12`. Only the four `--p-*` *product skins* are dark-only, which is exactly what §5 already says. Acting on this would have written a **false correction into the ADR**. The light-mode deferral (§5) stands on its own merits and needs no such justification. | n/a — requirement withdrawn. |
 
 ---
 
@@ -618,7 +655,7 @@ checks, TLS renewal automation, resource limits, and cross-version compatibility
 | Handset attack surface incomplete | codex#11 | PB-SEC-10..14 |
 | Vibe criteria | codex#14, opus, fable F12 | §9 |
 | ABI set / production-ready escape hatch | codex#12 | PB-TOOL-2, §10, §13 |
-| Relay ops floor | codex#13 | PB-OPS-5 |
+| Relay ops floor | codex#13 | PB-OPS-1..4 (v3's PB-OPS-5 was deleted by the §6.18 scope correction; this row pointed at a phantom id) |
 | Sequencing | all three | §11 |
 
 ### Round 2
@@ -707,7 +744,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-*, PB-OPS-4 | opus | — |
 | S5 Design tokens | PB-TOK-* | fable | — |
 | **S6 Transport primitives**: request-id correlation, both-hop latency, TLS/resilience | PB-NET-2..7 | opus | S1 |
-| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1 |
+| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2** (PB-STATE-4's rollback anchor *is* PB-GW-1's durable high-water, so it cannot ship first) |
 | **S7b Gateway age check** (split out: it depends on the phone seal change) | PB-GW-2 | opus | S2, S7 |
 | **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2 (Go KAT half)** | opus | S6, S7 |
 | S9 Façade<->transport integration | PB-NET-1 | opus | S8 |
@@ -724,7 +761,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | S15 State sealing + backup exclusion (breaks the v2 cycle) | PB-STATE-6/9, PB-SEC-10 | opus | S14, S7 |
 | S16 Screens + phone-side pairing | PB-APP-*, PB-PAIR-2..6, PB-SAS-3 | fable, opus review | S13, S5, S3, S10, S11, S12 |
 | S17 Push receiver | PB-PUSH-4; **PB-PUSH-9 Android half** (`getToken`, `onNewToken`, re-registration on reconnect, upgrade/process-death) | fable | S13, S12, S14 |
-| S18 App security hardening | PB-SEC-3..9, 11..14 | opus | S16, S17 |
+| S18 App security hardening | PB-SEC-3..8, 10..14 *(there is no PB-SEC-9; the family runs 1-8 then 10-14)* | opus | S16, S17 |
 | **S18b Fail-closed recovery** (was homeless: needs both the fail-closed path and the unblock) | PB-STATE-10 | opus | S7, S10, S16 |
 
 **Stage 3 — integration**
@@ -732,7 +769,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | Slice | Requirements | Model | Depends on |
 |---|---|---|---|
 | S19 E2E + emulator smoke | PB-E2E-1..4; **PB-SAS-2 emulator half** | opus | S9, S10, S11, S16, S17, S18, S18b |
-| S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 6, 7; PB-OPS-1..3 *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
+| S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3 *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
 | S21 Physical-handset gate (deferred; no device here) | PB-E2E-5 | — | S19 |
 
 **No wildcard ownership.** v3 gave both S19 and S20 the dependency "all", which read literally
