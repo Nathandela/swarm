@@ -37,6 +37,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,10 +59,11 @@ import (
 // simulated Phone bootstrapped from a REAL pairing + enrollment. Every teardown is
 // registered with t.Cleanup, so a test just launches its session and drives the phone.
 type phonesimHarness struct {
-	ctx   context.Context // long-lived: cancelled only at cleanup (keeps the relay dials + service alive)
-	phone *phonesim.Phone
-	sk    *Daemon
-	rsock string
+	ctx      context.Context // long-lived: cancelled only at cleanup (keeps the relay dials + service alive)
+	phone    *phonesim.Phone
+	sk       *Daemon
+	rsock    string
+	deviceID string // the enrolled phone's device id, so a test can revoke it to flip the kill switch OFF
 }
 
 // newPhonesimHarness performs the pair -> enroll -> gateway-up bootstrap shared by both
@@ -219,7 +221,7 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 		t.Fatalf("phonesim.New (AcceptGrant bootstrap): %v", err)
 	}
 
-	return phonesimHarness{ctx: ctx, phone: phone, sk: sk, rsock: rsock}
+	return phonesimHarness{ctx: ctx, phone: phone, sk: sk, rsock: rsock, deviceID: res.Record.DeviceID}
 }
 
 func TestPhonesim_PairObserveKillE2E(t *testing.T) {
@@ -369,4 +371,100 @@ func TestPhonesim_TakeControlTypeE2E(t *testing.T) {
 	if !waitSessionExited(t, sk, meta.ID, 5*time.Second) {
 		t.Fatal("session never left running after two distinct keystrokes; input did not reach the session's PTY over the take_control lease (the take_control-type chain is broken)")
 	}
+}
+
+// TestPhonesim_ObserveTerminalE2E is the A7 terminal-PEEK acceptance milestone (cross-model
+// review finding #2): a phone WATCHES a session and receives the daemon's SERVER-RENDERED,
+// sanitized terminal snapshots end to end over the real in-process relay + gateway + daemon,
+// and the kill switch BLANKS an established peek.
+//
+// The full chain exercised: phone.Watch -> relay mailbox -> gateway (routeCommand ->
+// TerminalWatcher.Watch -> Gateway.RunTerminal, which now carries the session id in the
+// terminal_subscribe frame so the daemon's resolveSession accepts it) -> daemon
+// handleTerminalSubscribe (read-only tap + RenderTerminal) -> RelaySink.Terminal seals each
+// snapshot into THIS phone's mailbox on the shared seq stream -> phone.Observe demuxes it via
+// the phonecore.MailboxRouter into the snapshot cache. Before this wiring RunTerminal sent no
+// session id (the daemon refused it) and nothing ran RunTerminal, so no snapshot ever reached
+// the phone.
+//
+// Two assertions:
+//  1. TERMINAL REACHED PHONE: a snapshot whose lines contain the session's first printed
+//     marker arrives at the phone (rendered + sanitized server-side).
+//  2. KILL SWITCH BLANKS THE PEEK: after the only device is revoked (RemoteControlEnabled ->
+//     false, i.e. `swarm remote off`), a marker the session prints AFTERWARD never reaches
+//     the phone -- the daemon re-checks the switch before every emission and stops the peek.
+func TestPhonesim_ObserveTerminalE2E(t *testing.T) {
+	h := newPhonesimHarness(t)
+	phone, sk, ctx := h.phone, h.sk, h.ctx
+
+	// A session that prints a first marker, idles long enough for the peek to establish and
+	// the kill switch to flip, then prints a SECOND marker that must be blanked once off.
+	const (
+		firstMark  = "HELLO-PEEK"
+		secondMark = "AFTER-OFF-SECRET"
+	)
+	meta := launchFake(t, sk, "print "+firstMark+"\nidle 2s\nprint "+secondMark+"\nidle 60s\n")
+	session := protocol.NamespacedID(sk.api.endpointID, meta.ID)
+
+	// WATCH: the phone asks the machine to open a read-only peek for the session. The
+	// unsigned terminal_watch rides the machine mailbox; the gateway routes it to its
+	// TerminalWatcher, which runs RunTerminal (a read-only terminal_subscribe) against the
+	// daemon and seals each rendered snapshot back to this phone's mailbox.
+	if err := phone.Watch(ctx, session); err != nil {
+		t.Fatalf("phonesim watch: %v", err)
+	}
+
+	// ASSERT 1: the server-rendered snapshot carrying firstMark reaches the phone. Poll
+	// Observe (which drains snapshots off the shared mailbox into the phone's snapshot cache)
+	// until the marker appears in a rendered line.
+	sawFirst := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !sawFirst {
+		if _, err := phone.Observe(ctx); err != nil {
+			t.Fatalf("phonesim observe: %v", err)
+		}
+		if lines, ok := phone.Snapshot(session); ok && linesContain(lines, firstMark) {
+			sawFirst = true
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if !sawFirst {
+		t.Fatalf("phone never received a terminal snapshot containing %q; the terminal peek is not wired end to end (RunTerminal session id / TerminalWatcher / phone MailboxRouter)", firstMark)
+	}
+
+	// FLIP THE KILL SWITCH OFF: revoke the only paired device, so RemoteControlEnabled()
+	// derives false. This is `swarm remote off`. The flip happens well within the session's
+	// 2s idle, so it precedes the render of secondMark.
+	if _, err := sk.api.RevokeDevice(h.deviceID); err != nil {
+		t.Fatalf("revoke device (flip kill switch off): %v", err)
+	}
+	if sk.api.RemoteControlEnabled() {
+		t.Fatal("kill switch still reports enabled after revoking the only paired device")
+	}
+
+	// ASSERT 2: the session prints secondMark at session-time ~2s (after the flip). The
+	// daemon re-checks the kill switch before EVERY snapshot emission, so secondMark must
+	// NEVER reach the phone. Poll a settle window comfortably longer than when a LIVE peek
+	// would have delivered it.
+	settle := time.Now().Add(3 * time.Second)
+	for time.Now().Before(settle) {
+		if _, err := phone.Observe(ctx); err != nil {
+			t.Fatalf("phonesim observe (settle): %v", err)
+		}
+		if lines, ok := phone.Snapshot(session); ok && linesContain(lines, secondMark) {
+			t.Fatalf("phone received %q AFTER `swarm remote off`; the kill switch did NOT blank the established peek", secondMark)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
+// linesContain reports whether any rendered line contains marker.
+func linesContain(lines []string, marker string) bool {
+	for _, l := range lines {
+		if strings.Contains(l, marker) {
+			return true
+		}
+	}
+	return false
 }

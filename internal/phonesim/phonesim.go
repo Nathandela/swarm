@@ -28,22 +28,22 @@ import (
 // grant-signing pub, the sealed epoch grant, its relay connection, and the machine's
 // routing/endpoint targets.
 type Config struct {
-	KeyStore       crypto.KeyStore   // phone key custody (Noise/relay-auth/command-signing)
-	MachineSignPub []byte            // machine Ed25519 grant-signing pub pinned at pairing
+	KeyStore       crypto.KeyStore    // phone key custody (Noise/relay-auth/command-signing)
+	MachineSignPub []byte             // machine Ed25519 grant-signing pub pinned at pairing
 	Grant          *crypto.EpochGrant // sealed initial epoch grant delivered by the machine
-	Relay          *relay.Client     // the phone's authenticated relay connection
-	MachineTarget  string            // machine mailbox routing id (where commands are appended)
-	Machine        string            // machine endpoint id, signed into each command tuple
+	Relay          *relay.Client      // the phone's authenticated relay connection
+	MachineTarget  string             // machine mailbox routing id (where commands are appended)
+	Machine        string             // machine endpoint id, signed into each command tuple
 }
 
 // Phone is a simulated device driving phonecore over the relay. It recovers the epoch
-// ContentKey from the grant (custody: unexported), and holds a journal receiver + a
-// merged session cache for OBSERVE, plus a monotonic command seq for DRIVE.
+// ContentKey from the grant (custody: unexported), and holds a MailboxRouter for OBSERVE
+// (demuxing journal records and server-rendered terminal snapshots off the ONE shared
+// mailbox seq stream into their respective caches), plus a monotonic command seq for DRIVE.
 type Phone struct {
 	ks            crypto.KeyStore
 	relay         *relay.Client
-	receiver      *phonecore.JournalReceiver
-	cache         *phonecore.SessionCache
+	router        *phonecore.MailboxRouter
 	content       crypto.ContentKey // custody: recovered from the grant, never exported
 	epochID       uint32
 	machineTarget string
@@ -61,8 +61,9 @@ type Phone struct {
 
 // New bootstraps the phone from the sealed grant: it AcceptGrants (verifying the grant
 // against the pinned machine sign pub and opening it with the phone KeyStore) to recover
-// the epoch ContentKey/EpochID, then builds a journal receiver + session cache bound to
-// that key. It fails closed on any grant that does not open under the pinned key.
+// the epoch ContentKey/EpochID, then builds a MailboxRouter bound to that key (its one
+// seq guard demuxes journal records and terminal snapshots off the shared mailbox stream).
+// It fails closed on any grant that does not open under the pinned key.
 func New(cfg Config) (*Phone, error) {
 	epochID, _, keys, err := phonecore.AcceptGrant(cfg.KeyStore, cfg.MachineSignPub, cfg.Grant)
 	if err != nil {
@@ -71,8 +72,7 @@ func New(cfg Config) (*Phone, error) {
 	return &Phone{
 		ks:            cfg.KeyStore,
 		relay:         cfg.Relay,
-		receiver:      phonecore.NewJournalReceiver(keys.ContentKey),
-		cache:         phonecore.NewSessionCache(),
+		router:        phonecore.NewMailboxRouter(keys.ContentKey),
 		content:       keys.ContentKey,
 		epochID:       epochID,
 		machineTarget: cfg.MachineTarget,
@@ -81,11 +81,13 @@ func New(cfg Config) (*Phone, error) {
 }
 
 // Observe performs ONE forward scan of the phone's relay mailbox: it reads items past
-// the phone's cursor, runs each through the phonecore JournalReceiver (which authenticates
-// and seq-guards it), applies every decoded record to the session cache, advances the
-// cursor, and returns the cache's current sessions. Items that are not journal records
-// (or replays/reorders the receiver rejects) are skipped. Callers poll it until the cache
-// holds the session they expect.
+// the phone's cursor, runs each through the phonecore MailboxRouter (which authenticates
+// and seq-guards it, then demuxes journal records into the session cache and terminal
+// snapshots into the snapshot cache), advances the cursor, and returns the session cache's
+// current sessions. Items the router rejects (not a router frame, or a replay/reorder) are
+// skipped. Callers poll it until the cache holds the session (or Snapshot the peek) they
+// expect. Draining here populates BOTH caches, so a Snapshot getter reads whatever the
+// latest Observe pulled off the shared mailbox.
 func (p *Phone) Observe(ctx context.Context) ([]phonecore.CachedSession, error) {
 	p.mu.Lock()
 	cursor := p.cursor
@@ -100,19 +102,63 @@ func (p *Phone) Observe(ctx context.Context) ([]phonecore.CachedSession, error) 
 		if it.Cursor > maxCursor {
 			maxCursor = it.Cursor
 		}
-		rec, _, err := p.receiver.Accept(it.Envelope)
-		if err != nil {
-			continue // not a journal record, or a replay/reorder the receiver rejected
+		if _, err := p.router.Accept(it.Envelope); err != nil {
+			continue // not a router frame, or a replay/reorder the receiver rejected
 		}
-		p.cache.Apply(rec)
 	}
 	p.advanceCursor(maxCursor)
-	return p.cache.List(), nil
+	return p.router.Sessions().List(), nil
 }
 
 // Session returns the phone's cached view of one namespaced session id.
 func (p *Phone) Session(id string) (phonecore.CachedSession, bool) {
-	return p.cache.Get(id)
+	return p.router.Sessions().Get(id)
+}
+
+// Snapshot returns the phone's latest server-rendered terminal snapshot lines for a
+// namespaced session id (found=false until a snapshot has been Observed). The phone is
+// THIN: it holds only the sanitized text the daemon rendered, never a VT emulator. Observe
+// is what drains snapshots into this cache off the shared mailbox, so callers poll Observe
+// then read Snapshot.
+func (p *Phone) Snapshot(session string) (lines []string, found bool) {
+	snap, ok := p.router.Snapshots().Get(session)
+	if !ok {
+		return nil, false
+	}
+	return snap.Lines, true
+}
+
+// Watch asks the machine to open a server-rendered terminal peek for a session: it seals
+// an UNSIGNED terminal_watch RemoteCommand under the epoch content key with the SHARED
+// sequencer and appends it to the machine mailbox, where the gateway routes it to its
+// TerminalWatcher (which runs a read-only terminal_subscribe against the daemon and seals
+// each snapshot back to this phone's mailbox). A peek is a READ, so the command carries no
+// device signature; the daemon gates the peek itself (capability + kill switch). session is
+// the target namespaced session id.
+func (p *Phone) Watch(ctx context.Context, session string) error {
+	return p.appendWatch(ctx, protocol.ActionTerminalWatch, session)
+}
+
+// Unwatch stops a terminal peek previously started with Watch, mirroring Watch with the
+// terminal_unwatch action.
+func (p *Phone) Unwatch(ctx context.Context, session string) error {
+	return p.appendWatch(ctx, protocol.ActionTerminalUnwatch, session)
+}
+
+// appendWatch seals an unsigned watch/unwatch command and appends it to the machine mailbox.
+func (p *Phone) appendWatch(ctx context.Context, action, session string) error {
+	env, err := phonecore.SealCommandEnvelope(p.content, p.epochID, p.seq.Next(), protocol.DeviceCommandAuth{
+		Action:  action,
+		Machine: p.machine,
+		Session: session,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DriveKill signs a kill for the session with the phone command-signing key, seals it

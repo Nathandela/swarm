@@ -33,10 +33,11 @@ type ServiceConfig struct {
 // process; a crash leaves the daemon and its sessions untouched (S1) and the runtime
 // resumes journal delivery from its last durable cursor.
 type Service struct {
-	cfg    ServiceConfig
-	gw     *Gateway
-	bridge *CommandBridge
-	leases *LeaseManager
+	cfg      ServiceConfig
+	gw       *Gateway
+	bridge   *CommandBridge
+	leases   *LeaseManager
+	watchers *TerminalWatcher
 }
 
 // NewService builds a runtime over cfg. It wires a RelaySink onto a Gateway for the
@@ -69,15 +70,20 @@ func NewService(cfg ServiceConfig) *Service {
 	// The input plane: take_control opens a persistent lease conn on the daemon
 	// remote.sock, and every keystroke/resize for that session rides THAT conn.
 	leases := NewLeaseManager(cfg.DaemonSocket, cfg.LeaseAwait)
+	// The peek plane: terminal_watch runs a read-only terminal_subscribe against the daemon
+	// (via the SAME Gateway/RelaySink as the journal), sealing each rendered snapshot to the
+	// phone. It reconnects on the journal backoff cadence.
+	watchers := NewTerminalWatcher(gw, cfg.ReconnectDelay)
 	bridge := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     cfg.Relay,
 		Forwarder:   forwarder,
 		Leases:      leases,
+		Watchers:    watchers,
 		Key:         cfg.Key,
 		EpochID:     cfg.EpochID,
 		ReplyTarget: cfg.PhoneTarget,
 	})
-	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases}
+	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases, watchers: watchers}
 }
 
 // Gateway exposes the underlying journal bridge (e.g. to seed or read its cursor).
@@ -90,9 +96,10 @@ func (s *Service) CommandBridge() *CommandBridge { return s.bridge }
 // loops are independent: a failing journal connection (retried with ReconnectDelay)
 // does not stall the command loop, and vice versa.
 func (s *Service) Run(ctx context.Context) error {
-	// Tear down every live lease conn on shutdown so no daemon connection is left
-	// holding a control gate after the sidecar exits.
+	// Tear down every live lease conn AND every terminal peek on shutdown so no daemon
+	// connection (control gate or read-only tap) is left behind after the sidecar exits.
 	defer func() { _ = s.leases.Close() }()
+	defer func() { _ = s.watchers.Close() }()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); s.runJournal(ctx) }()

@@ -140,15 +140,15 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 }
 
 // RunTerminal connects to the daemon remote socket, subscribes to the server-rendered
-// terminal-snapshot stream, and forwards every decoded snapshot to the sink until ctx is
-// cancelled or the connection fails. It mirrors RunJournal but is latest-wins per session
-// (no roster read, no cursor: the phone's SnapshotCache keeps only the newest snapshot
-// behind the shared relay seq gate). The snapshot's session id is namespaced to the
-// endpoint at egress, exactly like RunJournal, so the phone correlates a snapshot to the
-// roster/command id it signs against. NOTE: the live daemon terminal_subscribe handler is
-// Slice E/F; RunTerminal's Slice-D contract is unit-level (it constructs the subscribe
-// frame and forwards decoded snapshots), its live E2E deferred to Slice 7.
-func (g *Gateway) RunTerminal(ctx context.Context) error {
+// terminal-snapshot stream FOR ONE SESSION, and forwards every decoded snapshot to the sink
+// until ctx is cancelled or the connection fails. It mirrors RunJournal but is latest-wins
+// per session (no roster read, no cursor: the phone's SnapshotCache keeps only the newest
+// snapshot behind the shared relay seq gate). session is the namespaced id the phone asked
+// to peek; it is carried in the terminal_subscribe Control so the daemon's resolveSession
+// accepts it (handleTerminalSubscribe is session-scoped -- without the id it refuses "invalid
+// session id"). The snapshot's session id is re-namespaced to the endpoint at egress, exactly
+// like RunJournal, so the phone correlates a snapshot to the roster/command id it signs against.
+func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 	sink, ok := g.sink.(TerminalSink)
 	if !ok {
 		return fmt.Errorf("gateway: sink %T does not accept terminal snapshots", g.sink)
@@ -159,7 +159,7 @@ func (g *Gateway) RunTerminal(ctx context.Context) error {
 	}
 	defer dc.Close()
 
-	if err := dc.writeControl(protocol.Control{Op: protocol.OpTerminalSubscribe, EndpointID: dc.endpointID}); err != nil {
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpTerminalSubscribe, EndpointID: dc.endpointID, SessionID: session}); err != nil {
 		return err
 	}
 	for {

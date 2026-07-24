@@ -220,12 +220,18 @@ func TestGatewayRunTerminal_SubscribesAndForwards(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	errc := make(chan error, 1)
-	go func() { errc <- gw.RunTerminal(ctx) }()
+	go func() { errc <- gw.RunTerminal(ctx, "m/s1") }()
 
 	select {
 	case sub := <-gotSub:
 		if sub.Op != protocol.OpTerminalSubscribe {
 			t.Fatalf("subscribe op = %q, want terminal_subscribe", sub.Op)
+		}
+		// The session id MUST ride the subscribe frame: handleTerminalSubscribe is
+		// session-scoped (resolveSession), so a frame with no session id is refused. This
+		// is the wiring fix -- RunTerminal previously sent no SessionID.
+		if sub.SessionID != "m/s1" {
+			t.Fatalf("subscribe session id = %q, want m/s1 (RunTerminal must carry the peeked session)", sub.SessionID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunTerminal never sent a terminal_subscribe frame")

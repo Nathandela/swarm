@@ -77,6 +77,16 @@ const (
 	ActionApprove      = "approve"
 	ActionDeviceRevoke = "device_revoke"
 	ActionTakeControl  = "take_control"
+
+	// ActionTerminalWatch / ActionTerminalUnwatch start/stop a server-rendered terminal
+	// peek for a session (A7 F2 wiring). Unlike the mutating actions above they are a
+	// READ: the phone seals an UNSIGNED RemoteCommand carrying only the action + target
+	// session, and the gateway routes it to its TerminalWatcher WITHOUT forwarding to the
+	// daemon's device authenticator. The daemon still gates the peek itself (cap
+	// remote-gateway + the kill switch, re-checked per snapshot in handleTerminalSubscribe),
+	// so no device signature is required to merely ask the gateway to open the read.
+	ActionTerminalWatch   = "terminal_watch"
+	ActionTerminalUnwatch = "terminal_unwatch"
 )
 
 // LaunchSessionSentinel is the canonical Session value signed over a launch command

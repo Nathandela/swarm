@@ -48,14 +48,28 @@ type LeaseRouter interface {
 // *LeaseManager is the production LeaseRouter. Pinned at compile time.
 var _ LeaseRouter = (*LeaseManager)(nil)
 
+// TerminalWatchRouter is the terminal-peek seam the command loop routes terminal_watch /
+// terminal_unwatch through (A7 F2 wiring): Watch starts a server-rendered peek for a
+// session, Unwatch stops it. It is the routing subset of *TerminalWatcher (Close is the
+// runtime's, not the router's), extracted so the loop's dispatch is unit-testable with a
+// fake. *TerminalWatcher satisfies it.
+type TerminalWatchRouter interface {
+	Watch(session string)
+	Unwatch(session string)
+}
+
+// *TerminalWatcher is the production TerminalWatchRouter. Pinned at compile time.
+var _ TerminalWatchRouter = (*TerminalWatcher)(nil)
+
 // CommandBridgeConfig configures a CommandBridge.
 type CommandBridgeConfig struct {
-	Mailbox     Mailbox           // the machine's own relay mailbox (read) + the phone's (append)
-	Forwarder   CommandForwarder  // forwards opened mutating commands to the daemon remote.sock
-	Leases      LeaseRouter       // routes take_control + input frames to per-session lease conns (nil => input plane disabled)
-	Key         crypto.ContentKey // K_epoch content key shared with the phone
-	EpochID     uint32            // the epoch the content key belongs to
-	ReplyTarget string            // the phone's relay routing id (where replies are appended)
+	Mailbox     Mailbox             // the machine's own relay mailbox (read) + the phone's (append)
+	Forwarder   CommandForwarder    // forwards opened mutating commands to the daemon remote.sock
+	Leases      LeaseRouter         // routes take_control + input frames to per-session lease conns (nil => input plane disabled)
+	Watchers    TerminalWatchRouter // routes terminal_watch/terminal_unwatch to per-session peeks (nil => peek plane disabled)
+	Key         crypto.ContentKey   // K_epoch content key shared with the phone
+	EpochID     uint32              // the epoch the content key belongs to
+	ReplyTarget string              // the phone's relay routing id (where replies are appended)
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -217,6 +231,21 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 			return nil
 		}
 		b.cfg.Leases.End(rc.Session)
+		return nil
+	case protocol.ActionTerminalWatch:
+		// A READ: start a server-rendered peek for the session. It is NOT forwarded to the
+		// daemon's device authenticator (an unsigned watch); the daemon gates the peek
+		// itself (capability + kill switch). The peek plane may be disabled (nil Watchers).
+		if b.cfg.Watchers == nil {
+			return nil
+		}
+		b.cfg.Watchers.Watch(rc.Session)
+		return nil
+	case protocol.ActionTerminalUnwatch:
+		if b.cfg.Watchers == nil {
+			return nil
+		}
+		b.cfg.Watchers.Unwatch(rc.Session)
 		return nil
 	default:
 		return b.forward(ctx, rc)
