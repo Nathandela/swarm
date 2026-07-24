@@ -28,8 +28,8 @@ const remoteUsage = `usage: swarm remote <command>
 
 // runRemote is the `swarm remote` role: it dispatches to a remote-control verb.
 // With no verb it prints usage (nonzero exit); an unrecognized verb is an error
-// (nonzero exit). `init`, `devices`, `revoke`, and the `off`/`on` manual kill switch
-// are wired; `pair`/`status` are later work.
+// (nonzero exit). `init`, `devices`, `revoke`, the `off`/`on` manual kill switch, and
+// the `status` read are wired; `pair` is later work.
 func runRemote(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, remoteUsage)
@@ -46,6 +46,8 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 		return runRemoteSetControl(false, stdout, stderr)
 	case "on":
 		return runRemoteSetControl(true, stdout, stderr)
+	case "status":
+		return runRemoteStatus(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "remote: unknown remote command %q\n", args[0])
 		return 2
@@ -62,6 +64,12 @@ const remoteIdentityFile = "machine.key"
 // <stateDir>/remote/relay.json is the exact path loadRelayURL reads, and the path
 // `swarm remote init --relay-url` must agree on.
 const remoteRelayFile = "relay.json"
+
+// remoteStateFile mirrors remoteStateFile in internal/skeleton/killswitch.go: the
+// durable kill-switch file at <stateDir>/remote-state.json (directly under the state
+// dir, NOT the remote/ subdir) that `swarm remote off`/`on` write and `swarm remote
+// status` reads back for the manual override.
+const remoteStateFile = "remote-state.json"
 
 // runRemoteInit is the `swarm remote init` verb (machine key custody, A4-1b). It
 // resolves the state dir the same way dialClient does (SWARM_DAEMON_STATE env,
@@ -231,4 +239,114 @@ func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	return 0
+}
+
+// runRemoteStatus is the `swarm remote status` verb: a READ-ONLY operator report that
+// composes existing reads (no new wire op). It prints three things: (1) whether remote
+// control is configured — the machine identity at <stateDir>/remote/machine.key and the
+// relay at <stateDir>/remote/relay.json that `swarm remote init` provisions; (2) the
+// effective remote-control state — the durable manual override from
+// <stateDir>/remote-state.json (A4) composed with the live device roster, mirroring the
+// daemon's RemoteControlEnabled (manual off WINS; otherwise device-derived); and (3) the
+// paired-device roster from the owner client's ListDevices, dialed like `swarm remote
+// devices`. It degrades gracefully: an absent config/state file is a reported state, not
+// an error, and an unreachable daemon leaves the roster "unavailable" rather than
+// crashing. It exits 0 whenever it can resolve the state dir and produce a report.
+func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			fmt.Fprintf(stderr, "remote status: %v\n", err)
+			return 1
+		}
+	}
+
+	// 1. Configuration presence (machine identity + relay), both under <stateDir>/remote/.
+	remoteDir := filepath.Join(stateDir, "remote")
+	hasIdentity := statFileExists(filepath.Join(remoteDir, remoteIdentityFile))
+	hasRelay := statFileExists(filepath.Join(remoteDir, remoteRelayFile))
+	switch {
+	case hasIdentity && hasRelay:
+		fmt.Fprintln(stdout, "configuration: initialized (identity + relay)")
+	case hasIdentity:
+		fmt.Fprintln(stdout, "configuration: initialized (identity; no relay configured)")
+	default:
+		fmt.Fprintln(stdout, "configuration: not initialized (run swarm remote init)")
+	}
+
+	// 2. Durable manual kill-switch override from <stateDir>/remote-state.json (A4): the
+	// authoritative owner override. The derived on/off is recomputed from device presence,
+	// so it is composed with the live roster below rather than trusting the advisory
+	// `enabled` mirror.
+	manualOff := readRemoteManualOff(stateDir)
+
+	// 3. Device roster (best-effort): dial the owner daemon like `swarm remote devices`.
+	// Status is a read that must never crash if the daemon is down.
+	devices, listErr := statusListDevices()
+
+	// Effective remote-control state, mirroring coreAPI.RemoteControlEnabled: manual off
+	// WINS over device presence; otherwise it is device-derived.
+	switch {
+	case manualOff:
+		fmt.Fprintln(stdout, "remote control: OFF (manual override)")
+	case listErr != nil:
+		fmt.Fprintln(stdout, "remote control: unknown (daemon unreachable)")
+	case len(devices) > 0:
+		fmt.Fprintln(stdout, "remote control: ON (device-derived)")
+	default:
+		fmt.Fprintln(stdout, "remote control: OFF (device-derived; no devices paired)")
+	}
+
+	// Roster.
+	if listErr != nil {
+		fmt.Fprintf(stdout, "paired devices: unavailable (%v)\n", listErr)
+		return 0
+	}
+	fmt.Fprintf(stdout, "paired devices (%d):\n", len(devices))
+	for _, d := range devices {
+		fmt.Fprintf(stdout, "  %s  %s\n", d.DeviceID, d.Name)
+	}
+	return 0
+}
+
+// statusListDevices dials the owner daemon (CapPairing, like runRemoteDevices) and
+// returns the paired-device roster. Any dial or list failure is returned so status can
+// report the roster as unavailable rather than crash.
+func statusListDevices() ([]protocol.DeviceView, error) {
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	return client.ListDevices()
+}
+
+// readRemoteManualOff reports the durable owner kill-switch override from
+// <stateDir>/remote-state.json (the same file `swarm remote off`/`on` write, A4). An
+// absent file means the override was never set (device-derived). A present-but-unreadable
+// or corrupt file fails CLOSED (manual off), matching the daemon's loadRemoteState, so
+// status never under-reports a severed remote-control surface.
+func readRemoteManualOff(stateDir string) bool {
+	b, err := os.ReadFile(filepath.Join(stateDir, remoteStateFile))
+	if os.IsNotExist(err) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	var st struct {
+		ManualOff bool `json:"manual_off"`
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return true
+	}
+	return st.ManualOff
+}
+
+// statFileExists reports whether path exists (any stat error, including not-exist, is
+// treated as absent) — a read-only presence probe for status's configuration report.
+func statFileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
