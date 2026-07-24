@@ -178,5 +178,28 @@ joins; RelaySink bounds the append (5s). `TestPhonesim_ObserveTerminalRecoversAf
 proves OFF->ON recovery end to end. Also hardened the sibling load-sensitive
 `TestFanout_WedgedSubscriberDisconnectedWithinBound` (same class as #8).
 
-Remaining: full -race sweep under load + a focused confirmation that the teardown blocker is closed;
-then A7 is SOUND. The security core was confirmed sound across BOTH review cycles.
+## A7 VALIDATED SOUND (2026-07-24)
+
+- **Full -race sweep under 6x CPU load: GREEN** (40 pkgs, 0 fail/panic, build+vet clean). Both
+  load-sensitive fanout tests (#8 journal + the sibling `TestFanout_WedgedSubscriberDisconnectedWithinBound`,
+  `8044fdb`) are now load-independent by construction and hold under the committee's parallel load.
+- **Focused adversarial confirmation of the teardown fix (`7de9515`): SOUND, all 5 blockers CLOSED.**
+  The whole OFF->ON chain traced: idle peek dies within ~4ms of a flip; a peekGen-guarded OpError makes
+  RunTerminal return; the watcher reconnects with a bounded backoff (no busy-spin, no per-reconnect
+  tap/goroutine leak — the subscribe gate refuses before opening a tap), resumes on ON (E2E-proven); the
+  blank snapshot has a lower monotonic seq than the fresh ON snapshot so the phone can't stay blanked;
+  Unwatch joins; the bounded append is real (the relay client honors ctx).
+
+**Verdict: A7 is SOUND.** Security core confirmed across BOTH review cycles; the teardown/recovery
+completeness fixed and confirmed; full suite green under load. A7 proceeds to the end-of-phase
+`/audit-committee` (DoD §3), which will re-examine it adversarially alongside all of Phase A.
+
+**Non-blocking follow-ups logged (no code change required to unblock; revisit if the committee flags):**
+- (A) While OFF, the watcher re-seals a blank snapshot each backoff interval (~1 content-free envelope/
+  backoff); bounded, latest-wins, phone-ack-compacted. Cheap tidy: blank once on the first refusal.
+- (B) Latent, currently UNREACHABLE: sendPeekEnded fires outside peekMu, so a future NEW non-supersede
+  exit-reason that could fire while ON + session-alive would open a stale-signal window; today every
+  non-supersede exit also fails peek#2's subscribe gate, so no live peek#2 can coexist. Guard if a new
+  exit reason is added.
+- (C) Unwatch/Close teardown is bounded but not instantaneous (up to the ~1s read deadline, or 5s if the
+  relay hangs mid-append).
