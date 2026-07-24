@@ -122,6 +122,26 @@ func NewShimStream(conn net.Conn, caps shimwire.Caps) (SessionStream, error) {
 	return newShimStream(conn, caps)
 }
 
+// SnapshotOnly requests a one-shot grid snapshot over an already-helloed shim
+// connection WITHOUT attaching: it sends a snapshot_req and reads the snapshot
+// using the same reader (and the same negotiated-chunking enforcement) as an
+// attach. It never installs a subscriber shim-side, so it cannot supersede an
+// attached controller — the C3 tap-steal fix. The caller owns conn and must
+// close it; callers use a DEDICATED connection. Only valid against a shim whose
+// hello reply advertised SnapshotOnly (caps).
+func SnapshotOnly(conn net.Conn, caps shimwire.Caps) ([]byte, error) {
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSnapshotReq})
+	if err != nil {
+		return nil, err
+	}
+	if err := wire.WriteFrame(conn, wire.TControl, body); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(shimAttachTimeout))
+	defer conn.SetReadDeadline(time.Time{})
+	return readSnapshot(conn, caps.SnapshotChunking)
+}
+
 type shimStream struct {
 	conn   net.Conn
 	snap   []byte

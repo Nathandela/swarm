@@ -353,23 +353,22 @@ func (d *Daemon) asyncOnce(ctx context.Context, mu *sync.Mutex, inFlight map[str
 }
 
 // sampleGrid grabs one session's current shim grid and feeds it to the engine's
-// grid heuristic. The attach is closed IMMEDIATELY after the snapshot is read. The
-// shim serves connections concurrently, so this brief tap attach coexists with any
-// other connection; tapOnce only calls sampleGrid for a session with NO live
-// controller (R1.3.7), so the tap never supersedes a controller's subscriber.
+// grid heuristic, via coreAPI.SampleSnapshot: a NON-SUBSCRIBING snapshot_req
+// against a capability-advertising shim (which cannot supersede a controller's
+// stream no matter how it races an attach — the C3 tap-steal fix), or the
+// attach-based sample against an old shim. tapOnce still skips a session with a
+// live controller (R1.3.7) — cheap, and the sole safeguard on the old-shim path.
 // A failed attach (a gone shim, or — before item 1.2 — an oversized snapshot the
 // shim could not send in one frame) or an undecodable snapshot is retried next poll,
 // but it is COUNTED and rate-limit-logged via noteTapFailure so the heuristic can no
 // longer die silently (R1.2.6). A session not registered with the engine makes
 // OnOutput a no-op.
 func (d *Daemon) sampleGrid(id string) {
-	stream, err := d.api.Attach(id)
+	snapBytes, err := d.api.SampleSnapshot(id)
 	if err != nil {
 		d.noteTapFailure(id, err)
 		return
 	}
-	snapBytes := stream.Snapshot()
-	_ = stream.Close()
 	snap, err := vt.DecodeSnapshot(snapBytes)
 	if err != nil {
 		d.noteTapFailure(id, err)

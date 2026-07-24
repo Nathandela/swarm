@@ -256,6 +256,31 @@ func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
 	return protocol.NewShimStream(conn, caps)
 }
 
+// SampleSnapshot fetches one session's current grid snapshot for the tap
+// (serve.go sampleGrid). Against a shim advertising SnapshotOnly it uses the
+// non-subscribing snapshot_req — which CANNOT supersede a controller's stream,
+// closing the C3 tap-steal TOCTOU race by construction. Against an old shim
+// (capability absent) it falls back to the pre-C3 attach-based sample, whose
+// exposure is limited to the tapOnce controlled-skip exactly as before (G-D:
+// old-shim degradation no worse than today).
+func (a *coreAPI) SampleSnapshot(id string) ([]byte, error) {
+	conn, caps, err := a.core.DialSession(id)
+	if err != nil {
+		return nil, err
+	}
+	if caps.SnapshotOnly {
+		defer conn.Close()
+		return protocol.SnapshotOnly(conn, caps)
+	}
+	stream, err := protocol.NewShimStream(conn, caps) // owns conn from here
+	if err != nil {
+		return nil, err
+	}
+	snap := stream.Snapshot()
+	_ = stream.Close()
+	return snap, nil
+}
+
 // emitStatus routes an engine-derived status change through both halves of Epic
 // 10's status wiring (the Epic 11 carry-forward, now wired):
 //

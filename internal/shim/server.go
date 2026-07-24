@@ -193,7 +193,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -209,6 +209,8 @@ func (s *server) serveConn(conn net.Conn) {
 					<-sub.done
 				}
 				sub = s.hub.attach(cw)
+			case shimwire.TypeSnapshotReq:
+				s.hub.snapshotOnly(cw)
 			case shimwire.TypeResize:
 				s.resize(ctrl.Cols, ctrl.Rows)
 			case shimwire.TypeSignal:
@@ -452,6 +454,21 @@ func (h *hub) attach(cw *connWriter) *subscriber {
 		}
 	}()
 	return sub
+}
+
+// snapshotOnly answers a TypeSnapshotReq: it snapshots the grid under h.mu and
+// writes it to the requesting connection with the SAME encoding an attach uses
+// (sendSnapshot: chunked iff this connection negotiated chunking) — and never
+// touches h.sub, so it cannot supersede an attached controller no matter how it
+// races an attach (the C3 tap-steal fix). Runs synchronously in the caller's
+// serveConn read loop; the per-connection connWriter serializes its frames
+// against any writer on the same connection.
+func (h *hub) snapshotOnly(cw *connWriter) {
+	chunk := cw.chunkSnapshot
+	h.mu.Lock()
+	snap, _ := h.emu.Snapshot()
+	h.mu.Unlock()
+	_ = cw.sendSnapshot(snap, chunk)
 }
 
 // drainQueue empties a subscriber's queue after its writer has stopped writing,
