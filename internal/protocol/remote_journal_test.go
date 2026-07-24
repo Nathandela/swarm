@@ -153,35 +153,37 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 	wedged.writeControl(Control{Op: OpJournalSubscribe, EndpointID: wep.EndpointID})
 	_ = wedged.readControl() // the subscribe OK; then never read again
 
-	// A healthy subscriber, drained CONTINUOUSLY in the background — exactly as
-	// TestFanout_WedgedSubscriberDisconnectedWithinBound drains its healthy peer. This
-	// is what keeps it from becoming wedged itself: reading a FIXED prefix and then
-	// stopping (as an earlier version did) leaves the "healthy" subscriber wedged too,
-	// so under load eviction becomes a race between the two subscribers, and the
-	// wedged one is not reliably the one evicted. The drainer verifies strictly
-	// increasing cursor order on every frame; a gap is allowed (a momentarily-behind
-	// subscriber may drop a record, resynced via journal_read, R-JRN.6), a regression
-	// is not.
+	// A healthy subscriber, drained in LOCKSTEP with the flood below (send a bounded
+	// batch, then drain this subscriber to completion before sending the next). The
+	// lockstep is what makes its survival LOAD-INDEPENDENT: because it is drained fully
+	// between batches, at most `batch` (< eventQueueCap) records are ever outstanding for
+	// it, so its bounded fan-out queue can never overflow no matter how starved its writer
+	// gets under CPU pressure — it survives BY CONSTRUCTION, not by out-scheduling a
+	// continuous flood. The earlier continuous-drain version could lose that race under
+	// heavy load: the healthy subscriber's own 256-queue overflowed and it evicted too,
+	// dropping jsubs to 0 and failing the "only the wedged one evicted" assertion. The
+	// drain verifies strictly increasing cursor order on every frame; a regression fails.
 	live := rawDial(t, sock)
 	lep := live.hello(Version, []string{CapJournal})
 	live.writeControl(Control{Op: OpJournalSubscribe, EndpointID: lep.EndpointID})
 	_ = live.readControl() // subscribe OK
 
-	var mu sync.Mutex
-	var liveGot int
-	var orderRegressed bool
-	// Blocking-read drainer under a single generous deadline (NOT a per-iteration
-	// deadline + tight poll, which burns CPU on SetReadDeadline/syscalls and — under
-	// -race on a loaded machine — starves the server's fan-out goroutine that must run
-	// to evict the wedged subscriber). t.Cleanup closes live.conn, which unblocks and
-	// ends this goroutine; no explicit join is needed.
-	_ = live.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-	go func() {
-		var last uint64
-		for {
+	// drainHealthy blocks until it has read exactly n journal_event frames from the
+	// healthy subscriber, asserting strictly increasing cursor order. A read error here
+	// (the deadline) would mean the healthy subscriber did NOT receive an expected frame —
+	// i.e. its bounded queue overflowed and dropped one — which the lockstep loop makes
+	// impossible by construction; the deadline is only a hang-guard. Non-journal frames
+	// are skipped and not counted.
+	var last uint64
+	liveGot := 0
+	drainHealthy := func(n int) {
+		t.Helper()
+		_ = live.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		for got := 0; got < n; {
 			typ, payload, err := wire.ReadFrame(live.conn)
 			if err != nil {
-				return // deadline, conn closed at cleanup, or other error: stop
+				t.Fatalf("healthy subscriber read failed after %d/%d frames of a batch "+
+					"(its bounded queue must never overflow by construction): %v", got, n, err)
 			}
 			if typ != wire.TControl {
 				continue
@@ -190,57 +192,38 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 			if derr != nil || ev.Op != OpJournalEvent {
 				continue
 			}
-			mu.Lock()
 			if ev.Cursor <= last {
-				orderRegressed = true
+				t.Fatalf("journal_event cursor order regressed on the healthy subscriber: got %d after %d", ev.Cursor, last)
 			}
 			last = ev.Cursor
 			liveGot++
-			mu.Unlock()
+			got++
 		}
-	}()
+	}
 
-	// Flood the single journal source CONTINUOUSLY until the test signals stop. The
-	// wedged subscriber's queue must OVERFLOW (triggering eviction) before the
-	// eventuallyClosed check below, whose reads would otherwise DRAIN and un-wedge it.
-	// Nothing reads the wedged conn until then, and its kernel send buffer is bounded
-	// (journalSndBuf) so its writer blocks after a few KB — so its bounded queue backs up
-	// monotonically to overflow. A continuous flood (not a fixed burst) guarantees the
-	// fan-out has enough records in flight to reach that overflow even when it is throttled
-	// under -race.
-	stopFlood := make(chan struct{})
-	floodDone := make(chan struct{})
-	go func() {
-		defer close(floodDone)
-		for i := uint64(1); ; i++ {
-			select {
-			case <-stopFlood:
-				return
-			case js.source <- JournalRecord{Cursor: i, SessionID: "s1", Type: "group_transition"}:
-			}
-		}
-	}()
-
-	// Observe eviction DIRECTLY at its source of truth: distributeJournal removes a
-	// wedged subscriber from srv.jsubs (delete(s.jsubs, sc)) the moment its bounded
-	// queue overflows. Under the continuous flood, the wedged subscriber's queue fills
-	// monotonically (its writer is blocked on a bounded socket buffer, nothing drains
-	// it), so eviction is INEVITABLE — the deadline below is a pure liveness net, not a
-	// throughput/rate gate, so it does not false-fail under CPU pressure (the earlier
-	// "receive >= eventQueueCap+64 frames within 15s wall-clock" barrier did). This test
-	// is package protocol, so it reads srv.jsubs under srv.jsubMu directly.
-	//
-	// jsubs starts with two subscribers (wedged + healthy); eviction of the wedged one
-	// drops it to one. Poll for n < 2.
+	// LOCKSTEP flood/drain until the WEDGED subscriber is evicted (jsubs 2 -> 1). Each
+	// round emits a bounded batch into the single journal source, then drains the healthy
+	// subscriber fully — so the healthy subscriber never has more than `batch` records
+	// outstanding, and with batch < eventQueueCap (256) its fan-out queue can NEVER
+	// overflow regardless of CPU scheduling. That removes the load-sensitivity that made
+	// this test flaky under heavy load. The wedged subscriber is never drained and its
+	// writer is blocked on a bounded kernel buffer (journalSndBuf), so every batch
+	// accumulates monotonically in its 256-queue until it overflows and distributeJournal
+	// evicts it (delete(s.jsubs, sc)) — observed here at its source of truth by polling
+	// len(srv.jsubs). Eviction is inevitable under a monotonically growing queue, so the
+	// wall-clock deadline is a pure liveness net, not a throughput/rate gate, and CPU
+	// pressure cannot false-fail it. This test is package protocol, so it reads srv.jsubs
+	// under srv.jsubMu directly.
+	const batch = 64
+	next := uint64(1)
 	evictDeadline := time.Now().Add(30 * time.Second)
 	evicted := false
 	for time.Now().Before(evictDeadline) {
-		mu.Lock()
-		regressed := orderRegressed
-		mu.Unlock()
-		if regressed {
-			t.Fatal("journal_event cursor order regressed on the healthy subscriber")
+		for i := 0; i < batch; i++ {
+			js.source <- JournalRecord{Cursor: next, SessionID: "s1", Type: "group_transition"}
+			next++
 		}
+		drainHealthy(batch)
 		srv.jsubMu.Lock()
 		n := len(srv.jsubs)
 		srv.jsubMu.Unlock()
@@ -248,23 +231,16 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 			evicted = true
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 	if !evicted {
 		t.Fatal("wedged journal subscriber not evicted within bound (S9/P-3)")
 	}
 
-	// The healthy subscriber survived the eviction, stayed strictly ordered, and is the
-	// sole remaining subscriber. No count-in-window: a floor of >= 2 frames only proves
-	// the stream reached the drainer at all (order is the guarded property, not rate).
-	mu.Lock()
-	liveN, regressed := liveGot, orderRegressed
-	mu.Unlock()
-	if regressed {
-		t.Fatal("journal_event cursor order regressed on the healthy subscriber")
-	}
-	if liveN < 2 {
-		t.Fatalf("healthy subscriber received only %d ordered journal_event frames; want >= 2", liveN)
+	// The healthy subscriber survived the eviction, stayed strictly ordered (asserted in
+	// drainHealthy), and is the sole remaining subscriber. A floor of >= 2 frames only
+	// proves the stream reached the drain at all (order is the guarded property, not rate).
+	if liveGot < 2 {
+		t.Fatalf("healthy subscriber received only %d ordered journal_event frames; want >= 2", liveGot)
 	}
 	srv.jsubMu.Lock()
 	remaining := len(srv.jsubs)
@@ -273,12 +249,10 @@ func TestProtocol_JournalSubscribeOrderedAndEvictsWedged(t *testing.T) {
 		t.Fatalf("after eviction jsubs has %d subscribers; want 1 (only the wedged one evicted, healthy survives)", remaining)
 	}
 
-	// Confirm the wedged subscriber's connection is actually torn down (now safe/non-racy
-	// since eviction was already observed above; these draining reads no longer race the
-	// overflow).
+	// Confirm the wedged subscriber's connection is actually torn down (safe/non-racy now
+	// that eviction was already observed and the flood has stopped; these draining reads
+	// no longer race the overflow).
 	if !wedged.eventuallyClosed(3 * time.Second) {
 		t.Fatalf("wedged journal subscriber connection not closed after eviction (S9/P-3)")
 	}
-	close(stopFlood)
-	<-floodDone
 }
