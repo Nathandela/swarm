@@ -249,11 +249,11 @@ func validateResumeSource(src, agentType, endpointID string, getSource func(loca
 // single shared shim-wire implementation in internal/protocol (protocol.FromDaemon
 // uses the same code internally; see protocol.NewShimStream).
 func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
-	conn, err := a.core.DialSession(id)
+	conn, caps, err := a.core.DialSession(id)
 	if err != nil {
 		return nil, err
 	}
-	return protocol.NewShimStream(conn)
+	return protocol.NewShimStream(conn, caps)
 }
 
 // emitStatus routes an engine-derived status change through both halves of Epic

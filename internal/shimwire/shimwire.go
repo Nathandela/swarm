@@ -60,6 +60,21 @@ type Control struct {
 	SnapshotLen int `json:"snapshot_len,omitempty"` // snapshot_info
 }
 
+// Caps is the set of OPTIONAL capabilities a peer advertised in its hello
+// message (all negotiated without bumping WireVersion; an old peer that sets
+// none degrades to the pre-capability behavior, G-D). The daemon captures the
+// shim's reply Caps at hello and threads them to the code that must ENFORCE
+// them (e.g. protocol.readSnapshot reassembles a chunked snapshot only when
+// SnapshotChunking was advertised — R1.2.2).
+type Caps struct {
+	SnapshotChunking bool
+}
+
+// Caps extracts the capability fields from a hello Control.
+func (c Control) Caps() Caps {
+	return Caps{SnapshotChunking: c.SnapshotChunking}
+}
+
 // Encode serializes c to its JSON wire form.
 func Encode(c Control) ([]byte, error) {
 	return json.Marshal(c)

@@ -54,11 +54,11 @@ func (a *daemonAdapter) Delete(id string) error                              { r
 func (a *daemonAdapter) Events() <-chan persist.Meta                         { return a.events }
 
 func (a *daemonAdapter) Attach(id string) (SessionStream, error) {
-	conn, err := a.d.DialSession(id)
+	conn, caps, err := a.d.DialSession(id)
 	if err != nil {
 		return nil, err
 	}
-	return newShimStream(conn)
+	return newShimStream(conn, caps)
 }
 
 // stopEvents halts the roster poller. The Server calls it (via an optional
@@ -113,10 +113,13 @@ func (a *daemonAdapter) watch() {
 // ---------------------------------------------------------------------------
 
 // NewShimStream opens a SessionStream over an already-helloed shim connection:
-// it sends the attach request, reads the shim's single snapshot frame (S10),
-// then streams live frames. See newShimStream for the details.
-func NewShimStream(conn net.Conn) (SessionStream, error) {
-	return newShimStream(conn)
+// it sends the attach request, reads the shim's snapshot (S10), then streams
+// live frames. caps is the capability set the shim advertised in its hello
+// reply (from daemon.DialSession); the reader ENFORCES it — a chunked-snapshot
+// preamble from a shim that did not advertise SnapshotChunking is a protocol
+// error (R1.2.2), not an accepted stream.
+func NewShimStream(conn net.Conn, caps shimwire.Caps) (SessionStream, error) {
+	return newShimStream(conn, caps)
 }
 
 type shimStream struct {
@@ -132,7 +135,7 @@ type shimStream struct {
 // newShimStream sends the attach request over an already-helloed shim connection
 // and reads the one snapshot frame the shim emits first (S10), then starts
 // streaming live output frames.
-func newShimStream(conn net.Conn) (*shimStream, error) {
+func newShimStream(conn net.Conn, caps shimwire.Caps) (*shimStream, error) {
 	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeAttach})
 	if err != nil {
 		conn.Close()
@@ -144,7 +147,7 @@ func newShimStream(conn net.Conn) (*shimStream, error) {
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(shimAttachTimeout))
-	snap, err := readSnapshot(conn)
+	snap, err := readSnapshot(conn, caps.SnapshotChunking)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -162,10 +165,11 @@ func newShimStream(conn net.Conn) (*shimStream, error) {
 }
 
 var (
-	errDataBeforeSnapshot = errors.New("protocol: shim sent a live frame before the snapshot completed")
-	errSnapshotLen        = errors.New("protocol: shim declared an invalid snapshot length")
-	errSnapshotOvershoot  = errors.New("protocol: shim sent more snapshot bytes than it declared")
-	errDuplicatePreamble  = errors.New("protocol: shim sent a duplicate snapshot preamble")
+	errDataBeforeSnapshot   = errors.New("protocol: shim sent a live frame before the snapshot completed")
+	errSnapshotLen          = errors.New("protocol: shim declared an invalid snapshot length")
+	errSnapshotOvershoot    = errors.New("protocol: shim sent more snapshot bytes than it declared")
+	errDuplicatePreamble    = errors.New("protocol: shim sent a duplicate snapshot preamble")
+	errUnnegotiatedPreamble = errors.New("protocol: shim sent a chunked-snapshot preamble without advertising snapshot_chunking")
 )
 
 // readSnapshot reads the shim's snapshot before the live stream. It accepts two
@@ -174,16 +178,17 @@ var (
 //
 //   - CHUNKED (snapshot chunking negotiated at hello): a shimwire snapshot_info
 //     control preamble declares the total length up front, then that many bytes arrive
-//     across one or more TSnapshot chunk frames. Only a shim that advertised chunking
-//     in its hello reply ever sends the preamble, so reassembling on its receipt is
-//     exactly "the daemon reassembles only when the shim's reply advertised support".
+//     across one or more TSnapshot chunk frames. chunkingNegotiated carries the
+//     shim's advertised capability from its hello reply; a preamble arriving when
+//     it is false is a protocol error — the daemon reassembles ONLY when the
+//     shim's reply advertised support (R1.2.2), enforced here rather than assumed.
 //   - SINGLE-FRAME (old shim, or chunking not negotiated): one bare TSnapshot frame,
 //     exactly today's behavior (R1.1.4 carried forward).
 //
 // A live TDataOut before the snapshot completes violates S10 and is an error. The
 // caller sets a TOTAL read deadline (shimAttachTimeout) covering the preamble and
 // every chunk, so a short or stalled stream fails within a bound (R1.2.4).
-func readSnapshot(conn net.Conn) ([]byte, error) {
+func readSnapshot(conn net.Conn, chunkingNegotiated bool) ([]byte, error) {
 	for {
 		typ, payload, err := wire.ReadFrame(conn)
 		if err != nil {
@@ -200,6 +205,9 @@ func readSnapshot(conn net.Conn) ([]byte, error) {
 				continue // tolerate a malformed control frame (shimwire contract)
 			}
 			if c.Type == shimwire.TypeSnapshotInfo {
+				if !chunkingNegotiated {
+					return nil, errUnnegotiatedPreamble
+				}
 				return readChunkedSnapshot(conn, c.SnapshotLen)
 			}
 			// ignore any other pre-snapshot control frame

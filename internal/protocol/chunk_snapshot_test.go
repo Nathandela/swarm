@@ -51,7 +51,7 @@ func runReadSnapshot(t *testing.T, write func(w net.Conn)) ([]byte, error) {
 	t.Cleanup(func() { _ = cl.Close(); _ = sv.Close() })
 	go write(cl) // frames flow only as readSnapshot consumes them (net.Pipe is synchronous)
 	_ = sv.SetReadDeadline(time.Now().Add(2 * time.Second))
-	return readSnapshot(sv)
+	return readSnapshot(sv, true)
 }
 
 // deterministicSnap builds n bytes of non-trivial, position-dependent content so a
