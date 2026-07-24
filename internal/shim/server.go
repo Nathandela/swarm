@@ -402,18 +402,29 @@ func (h *hub) attach(cw *connWriter) *subscriber {
 	// later hello that might rewrite cw.chunkSnapshot.
 	chunk := cw.chunkSnapshot
 	h.mu.Lock()
-	if h.sub != nil {
-		h.sub.closeQueue() // supersede: terminate the prior writer, free h.sub
+	old := h.sub
+	if old != nil {
+		old.closeQueue() // supersede: terminate the prior writer, free h.sub
 		h.sub = nil
 	}
 	snap, _ := h.emu.Snapshot()
 	shuttingDown := h.shutdown
 	rep := h.exitReport
-	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}
+	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{}), conn: cw.conn}
 	if !shuttingDown {
 		h.sub = sub
 	}
 	h.mu.Unlock()
+	// An UNCOORDINATED supersede (a second connection attaching while the prior
+	// subscriber's connection is still open) also closes the superseded CONNECTION,
+	// outside h.mu: its peer sees prompt EOF instead of a silently-frozen stream,
+	// and a writer wedged mid-Write on that socket is unblocked (R1.3.3 hardening,
+	// C3 committee). The daemon-coordinated supersede already closed the old
+	// connection before attaching anew, making this a no-op there; serveConn's own
+	// deferred Close makes the double-close harmless.
+	if old != nil && old.conn != nil {
+		_ = old.conn.Close()
+	}
 
 	go func() {
 		defer close(sub.done)
@@ -463,11 +474,14 @@ func (h *hub) detach(sub *subscriber) {
 	sub.closeQueue()
 }
 
-// subscriber is one attached client's outbound side: a bounded live-frame queue
-// and a done signal for its writer goroutine.
+// subscriber is one attached client's outbound side: a bounded live-frame queue,
+// a done signal for its writer goroutine, and the connection it writes to (so an
+// uncoordinated supersede can close the superseded peer's connection — see
+// hub.attach).
 type subscriber struct {
 	queue     chan []byte
 	done      chan struct{}
+	conn      net.Conn
 	closeOnce sync.Once
 }
 
