@@ -160,6 +160,12 @@ func Serve(cfg Config) (*Daemon, error) {
 	// durable remote-state.json under the state dir. Wire the dir so the switch (default OFF
 	// until a device is paired) has somewhere to persist each transition.
 	d.api.stateDir = cfg.StateDir
+	// A4: restore the durable manual override (`swarm remote off`/`on`) so an owner who
+	// severed remote control stays severed across a restart. Absent file => not overridden;
+	// a corrupt file fails closed (loadRemoteState returns ManualOff=true).
+	if st, _ := loadRemoteState(cfg.StateDir); st.ManualOff {
+		d.api.manualOff.Store(true)
+	}
 	// R-POL.3/.7: load the machine-configured remote launch policy (allowed cwd roots) and
 	// attach it to the coreAPI so the remote-tier Server confines remote launches. ALWAYS
 	// wired: a missing/malformed config yields a deny-all policy (fail-closed by default),

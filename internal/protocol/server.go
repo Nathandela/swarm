@@ -939,6 +939,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handlePolicyQuery()
 	case OpDeviceRevoke:
 		cc.handleDeviceRevoke(c)
+	case OpRemoteSetControl:
+		cc.handleRemoteSetControl(c)
 	case OpTakeControl:
 		cc.handleTakeControl(c)
 	case OpTakeControlEnd:
@@ -1170,6 +1172,41 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 		return
 	}
 	cc.replyOK(c.TargetDeviceID)
+}
+
+// handleRemoteSetControl serves the owner-tier remote_set_control op (A4) — the durable
+// manual kill switch behind `swarm remote off`/`on`. Gate order mirrors handlePairStart:
+// OWNER-TIER ONLY, so a remote-tier connection is refused not_authorized BEFORE the
+// backend is ever consulted (a remote device must never re-enable a switch its owner
+// turned off); then the negotiated `pairing` cap is required (like device_list/pair_start);
+// then the backend must implement RemoteControlSetter. It DURABLY flips the master override
+// the choke points read via RemoteControlEnabled — with the switch off, requireRemoteAuthz
+// refuses every remote mutating op, controlGateOpen drops live input, and an established
+// peek is blanked — so `off` severs remote control at the daemon choke point.
+func (cc *clientConn) handleRemoteSetControl(c Control) {
+	// Owner-tier only: fail closed on the remote tier before consulting the backend.
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("remote control toggle is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	setter, ok := cc.srv.d.(RemoteControlSetter)
+	if !ok {
+		cc.replyError("remote control toggle not supported by this daemon")
+		return
+	}
+	if c.RemoteControl == nil {
+		cc.replyErrorCode("remote_set_control requires remote_control", CodeInvalidField)
+		return
+	}
+	if err := setter.SetRemoteControl(*c.RemoteControl); err != nil {
+		cc.replyError("remote_set_control: " + err.Error())
+		return
+	}
+	cc.replyOK("")
 }
 
 func (cc *clientConn) handleAttach(c Control) {

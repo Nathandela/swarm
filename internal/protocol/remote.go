@@ -150,6 +150,18 @@ type KillSwitch interface {
 	RemoteControlEnabled() bool
 }
 
+// RemoteControlSetter is the optional interface a DaemonAPI implements to expose the
+// OWNER-TIER manual override behind `swarm remote off`/`on` (A4): SetRemoteControl(false)
+// durably DISABLES remote control regardless of paired devices (manual off WINS over
+// device presence), and SetRemoteControl(true) returns to the device-derived value. It is
+// the durable write side of KillSwitch's RemoteControlEnabled read; handleRemoteSetControl
+// serves it OWNER-TIER ONLY (refused not_authorized on the remote tier, mirroring
+// handlePairStart), so a remote device can never re-enable a switch its owner turned off. A
+// backend that does NOT implement it leaves the toggle unsupported (behavior unchanged).
+type RemoteControlSetter interface {
+	SetRemoteControl(enabled bool) error
+}
+
 // TerminalTapper is the optional interface a remote-tier DaemonAPI implements to expose a
 // READ-ONLY terminal tap (A7 renderer slice F2): TerminalTap opens a per-session output
 // stream the Server renders server-side and streams to the phone as sanitized

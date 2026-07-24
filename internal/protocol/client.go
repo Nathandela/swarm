@@ -164,6 +164,21 @@ func (c *Client) RevokeDevice(targetID string) error {
 	return nil
 }
 
+// SetRemoteControl durably flips the remote-control master override (A4, `swarm remote
+// off`/`on`): enabled=false disables remote control regardless of paired devices,
+// enabled=true returns to the device-derived value. Owner-tier only — the daemon refuses
+// it on the remote tier (requires the negotiated `pairing` capability).
+func (c *Client) SetRemoteControl(enabled bool) error {
+	resp, err := c.request(Control{Op: OpRemoteSetControl, EndpointID: c.endpointID, RemoteControl: &enabled})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 func (c *Client) simpleOp(op, id string) error {
 	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
 	if err != nil {

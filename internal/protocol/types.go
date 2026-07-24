@@ -53,6 +53,13 @@ const (
 	// paired device from the daemon's device registry.
 	OpDeviceRevoke = "device_revoke"
 
+	// OpRemoteSetControl is the OWNER-TIER op behind `swarm remote off`/`on` (A4): it
+	// durably flips the manual remote-control master override the daemon reads at its
+	// kill-switch choke points. Owner-only (refused not_authorized on the remote tier,
+	// mirroring pair_start), so a remote device can never re-enable a switch its owner
+	// turned off. The desired enabled state rides on Control.RemoteControl.
+	OpRemoteSetControl = "remote_set_control"
+
 	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
 	// controller lease on a session — the anti-abuse gate that must precede any remote
 	// keystroke reaching a session. It runs through requireRemoteAuthz like every other
@@ -139,6 +146,7 @@ type Control struct {
 	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
 	TTLSeconds     int             `json:"ttl_seconds,omitempty"`      // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
 	GateToken      string          `json:"gate_token,omitempty"`       // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
+	RemoteControl  *bool           `json:"remote_control,omitempty"`   // remote_set_control: the DESIRED remote-control master state (true=on, false=manual off). Pointer so false is transmittable and a zero Control emits no key (A4)
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 }

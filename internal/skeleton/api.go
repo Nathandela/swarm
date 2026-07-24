@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -72,6 +73,12 @@ type coreAPI struct {
 	// so the mirror only writes on a transition, not on every call.
 	ksMu        sync.Mutex
 	ksPersisted *bool
+	// manualOff is the durable OWNER override behind `swarm remote off`/`on` (A4): when
+	// set, RemoteControlEnabled reports false regardless of paired devices (manual off WINS
+	// over device presence). It is atomic so the hot RemoteControlEnabled read (every remote
+	// op) is lock-free, and it is loaded from remote-state.json at assembly so an owner who
+	// severs remote control stays severed across a restart.
+	manualOff atomic.Bool
 
 	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
 	// it so the owner controller and the future remote peek can both observe one

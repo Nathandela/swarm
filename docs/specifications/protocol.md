@@ -89,6 +89,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
 | `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
 | `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
+| `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
@@ -210,6 +211,22 @@ derives from the registry's device count, so it flips remote control off as a si
 effect. Known gaps (future slices): this only removes the daemon-side registry
 entry, not any relay-side registration/mailbox; and there is no separate admin
 capability tier yet — any CapFull device can revoke any other.
+
+### `remote_set_control`
+
+Owner-tier MUTATING op (A4) — the durable manual kill switch behind `swarm remote
+off`/`on`. The client sends `remote_set_control` with `remote_control` (the desired
+master state: `false` = manual off, `true` = on). It is **owner-tier only**: a
+remote-tier connection is refused `not_authorized` BEFORE the backend is consulted
+(mirroring `pair_start`), so a remote device can never re-enable a switch its owner
+turned off. On the owner tier it requires the negotiated `pairing` capability, then
+durably flips the override via `RemoteControlSetter.SetRemoteControl` (persisted to
+`remote-state.json`), and replies `ok` (or `error`). Manual off **wins over device
+presence**: with the override set, `RemoteControlEnabled` reports false even while a
+device is paired, so `off` severs remote control at the daemon choke point —
+`requireRemoteAuthz` refuses every remote mutating op, `controlGateOpen` drops live
+input, and an established terminal peek is blanked. `on` clears the override,
+returning to the device-derived value.
 
 ### `pair_start` / `pair_pending` / `pair_confirm` / `pair_result`
 

@@ -28,8 +28,8 @@ const remoteUsage = `usage: swarm remote <command>
 
 // runRemote is the `swarm remote` role: it dispatches to a remote-control verb.
 // With no verb it prints usage (nonzero exit); an unrecognized verb is an error
-// (nonzero exit). `init`, `devices`, and `revoke` are wired in this slice — the
-// rest are later work.
+// (nonzero exit). `init`, `devices`, `revoke`, and the `off`/`on` manual kill switch
+// are wired; `pair`/`status` are later work.
 func runRemote(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, remoteUsage)
@@ -42,6 +42,10 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 		return runRemoteDevices(args[1:], stdout, stderr)
 	case "revoke":
 		return runRemoteRevoke(args[1:], stdout, stderr)
+	case "off":
+		return runRemoteSetControl(false, stdout, stderr)
+	case "on":
+		return runRemoteSetControl(true, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "remote: unknown remote command %q\n", args[0])
 		return 2
@@ -172,6 +176,36 @@ func runRemoteDevices(_ []string, stdout, stderr io.Writer) int {
 
 // timeFormat is the timestamp layout `swarm remote devices` prints PairedAt in.
 const timeFormat = "2006-01-02 15:04:05"
+
+// runRemoteSetControl is the `swarm remote off` (enabled=false) / `swarm remote on`
+// (enabled=true) verb: the durable manual kill switch. It dials the owner daemon
+// (CapPairing, like runRemoteDevices), durably flips the remote-control master override
+// via the owner-tier remote_set_control op, and prints a confirmation. `off` severs remote
+// control at the daemon choke point regardless of paired devices; `on` returns to the
+// device-derived value.
+func runRemoteSetControl(enabled bool, stdout, stderr io.Writer) int {
+	verb := "off"
+	if enabled {
+		verb = "on"
+	}
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
+		return 1
+	}
+	defer client.Close()
+
+	if err := client.SetRemoteControl(enabled); err != nil {
+		fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
+		return 1
+	}
+	if enabled {
+		fmt.Fprintln(stdout, "remote control enabled")
+	} else {
+		fmt.Fprintln(stdout, "remote control disabled")
+	}
+	return 0
+}
 
 // runRemoteRevoke is the `swarm remote revoke <device-id>` verb: it requires
 // exactly one positional arg (the device id) and refuses with a usage error
