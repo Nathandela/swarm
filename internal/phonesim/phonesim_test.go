@@ -13,7 +13,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -208,5 +210,214 @@ func TestPhone_NewFromMailbox_SkipsPoisonBootstrap(t *testing.T) {
 	}
 	if phone.content != keys.ContentKey {
 		t.Fatal("phone bootstrapped with the wrong ContentKey (did not open the real grant)")
+	}
+}
+
+// ROUND-3 RE-AUDIT FINDINGS -----------------------------------------------------------
+//
+// FINDING 1 (codex#5 + sonnet#4): drain calls router.Accept and THROWS AWAY the gap bool
+// it returns. gap=true means a SKIPPED seq -- a dropped/reordered frame from the relay --
+// yet drain acked the entire prefix anyway, so a relay could drop a frame and the phone
+// would silently trust a stale cache with no signal.
+//
+// FINDING 2 (codex#7): NewFromMailbox and drain both loop `for { ReadPage; if !hasMore
+// break }` and TRUST hasMore=true even when the page does not advance the cursor. A
+// hostile relay returning hasMore=true forever with no progress spins the loop forever.
+//
+// FINDING 3 (sonnet#2): drain mutex-guards only the cursor read + final write, not the
+// read-page-then-Accept sweep, so two concurrent Observe/ReadReply callers can interleave
+// their sweeps.
+
+// stuckRelay is a hostile relay that always reports has_more=true but never returns an
+// item past the cursor -- Finding 2 (codex#7). NewFromMailbox/drain must not trust
+// has_more blindly against this relay, or the scan spins forever.
+type stuckRelay struct{}
+
+func (stuckRelay) MailboxReadPage(_ context.Context, _ uint64, _ int) ([]relay.Item, bool, error) {
+	return nil, true, nil // empty page, has_more=true forever: no item ever advances the cursor
+}
+func (stuckRelay) MailboxAppend(_ context.Context, _ string, _ []byte) (uint64, error) { return 0, nil }
+func (stuckRelay) MailboxAck(_ context.Context, _ uint64) error                        { return nil }
+
+// FINDING 2a: NewFromMailbox must not spin forever against a relay whose page never
+// advances the cursor. If unfixed, this test hangs until the timeout fires.
+func TestPhone_NewFromMailbox_TerminatesOnNonAdvancingPage(t *testing.T) {
+	ks, err := crypto.NewFileKeyStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("phone keystore: %v", err)
+	}
+	signPub, _, _ := ed25519.GenerateKey(nil)
+	cfg := Config{KeyStore: ks, MachineSignPub: signPub, Relay: stuckRelay{}}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewFromMailbox(context.Background(), cfg)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("NewFromMailbox returned nil against a relay that never advances the cursor -- want a terminating error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("NewFromMailbox hung: trusted has_more=true from a page that never advanced the cursor (codex#7)")
+	}
+}
+
+// FINDING 2b: drain (via Observe) must not spin forever against the same hostile relay.
+func TestPhone_Drain_TerminatesOnNonAdvancingPage(t *testing.T) {
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	phone := &Phone{
+		relay:   stuckRelay{},
+		router:  phonecore.NewMailboxRouter(keys.ContentKey),
+		content: keys.ContentKey,
+		epochID: testEpoch,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := phone.Observe(context.Background())
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("drain returned nil against a relay that never advances the cursor -- want a terminating error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain hung: trusted has_more=true from a page that never advanced the cursor (codex#7)")
+	}
+}
+
+// FINDING 1: a skipped seq (the relay drops a frame between two it delivers) must be
+// surfaced as a sticky Stale() flag, and drain must not ack past the point where the gap
+// was detected -- today the gap bool router.Accept returns is silently discarded and the
+// whole prefix, including the frame past the gap, gets acked anyway.
+func TestPhone_Drain_DetectsGapAndDoesNotAckPastIt(t *testing.T) {
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	key := keys.ContentKey
+
+	// seq 1 then seq 3: seq 2 is the frame the relay dropped.
+	first := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
+	afterGap := sealJournal(t, key, 3, protocol.JournalRecord{Cursor: 2, SessionID: "sess-B"})
+	fake := &fakeRelay{items: []relay.Item{
+		{Cursor: 1, Envelope: first},
+		{Cursor: 2, Envelope: afterGap},
+	}}
+
+	phone := &Phone{
+		relay:   fake,
+		router:  phonecore.NewMailboxRouter(key),
+		content: key,
+		epochID: testEpoch,
+	}
+
+	if phone.Stale() {
+		t.Fatal("phone reports stale before any drain")
+	}
+	if _, err := phone.Observe(context.Background()); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	if !phone.Stale() {
+		t.Fatal("gap not surfaced: router.Accept reported gap=true for the seq-3 frame, but Phone.Stale() is still false")
+	}
+	// The gap was detected on the cursor=2 item: drain must stop the sweep there and ack
+	// only the confirmed-good prefix (cursor=1), never the cursor at/past the gap.
+	if fake.acked != 1 {
+		t.Fatalf("drain acked past the detected gap: acked=%d, want 1 (the last cursor before the gap)", fake.acked)
+	}
+
+	// A second Observe must still make forward progress: the seq-3 frame was already
+	// accepted by the crypto seq guard on the first pass (gap=true is not a rejection), so
+	// re-reading it now replays as a stale seq and is skipped, letting the cursor catch up.
+	if _, err := phone.Observe(context.Background()); err != nil {
+		t.Fatalf("second observe: %v", err)
+	}
+	if fake.acked != 2 {
+		t.Fatalf("drain did not make progress on the second sweep: acked=%d, want 2", fake.acked)
+	}
+	if !phone.Stale() {
+		t.Fatal("Stale() must stay sticky across a later successful sweep (Phase A has no resync to clear it)")
+	}
+}
+
+// gateRelay wraps fakeRelay and blocks the FIRST MailboxReadPage call until the test
+// releases it, letting a test hold one drain() sweep open while starting a second
+// concurrent one -- Finding 3 (sonnet#2): drainMu must serialize the WHOLE sweep (read +
+// Accept loop + cursor advance), not just the cursor read/write.
+type gateRelay struct {
+	fakeRelay
+	entered chan struct{}
+	release chan struct{}
+	calls   int32
+}
+
+func (g *gateRelay) MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]relay.Item, bool, error) {
+	if atomic.AddInt32(&g.calls, 1) == 1 {
+		close(g.entered)
+		<-g.release
+	}
+	return g.fakeRelay.MailboxReadPage(ctx, cursor, limit)
+}
+
+// FINDING 3: two concurrent drain sweeps (via Observe) must be serialized end to end. A
+// second sweep must not reach the relay read until the first sweep has fully finished --
+// otherwise their read-page-then-Accept work interleaves and a later frame's cache Apply
+// can execute before an earlier frame's, inverting freshness.
+func TestPhone_Drain_SerializesConcurrentSweeps(t *testing.T) {
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	key := keys.ContentKey
+	journal := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
+	fake := &gateRelay{
+		fakeRelay: fakeRelay{items: []relay.Item{{Cursor: 1, Envelope: journal}}},
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+
+	phone := &Phone{
+		relay:   fake,
+		router:  phonecore.NewMailboxRouter(key),
+		content: key,
+		epochID: testEpoch,
+	}
+
+	doneA := make(chan error, 1)
+	go func() {
+		_, err := phone.Observe(context.Background())
+		doneA <- err
+	}()
+	<-fake.entered // goroutine A is now inside its first MailboxReadPage call
+
+	doneB := make(chan error, 1)
+	go func() {
+		_, err := phone.Observe(context.Background())
+		doneB <- err
+	}()
+
+	// Give B every chance to run if it were (wrongly) able to start its own sweep while A's
+	// is still in flight.
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt32(&fake.calls); n != 1 {
+		t.Fatalf("drain did not serialize concurrent sweeps: relay read count=%d, want 1 -- a second sweep reached the relay before the first sweep finished", n)
+	}
+
+	close(fake.release)
+	if err := <-doneA; err != nil {
+		t.Fatalf("goroutine A observe: %v", err)
+	}
+	if err := <-doneB; err != nil {
+		t.Fatalf("goroutine B observe: %v", err)
 	}
 }

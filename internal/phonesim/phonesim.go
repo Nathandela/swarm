@@ -29,6 +29,12 @@ import (
 // epoch_grant_bootstrap frame: with no ContentKey the phone can do nothing, so it fails closed.
 var errNoBootstrap = errors.New("phonesim: no epoch_grant_bootstrap frame in mailbox")
 
+// errStuckPage is returned by NewFromMailbox and drain when a relay page reports
+// has_more=true but no item in it advanced past the cursor (an empty page, or every item
+// at/behind it). Trusting has_more in that case spins the scan forever against a hostile
+// relay (codex#7); a non-advancing page terminates it instead.
+var errStuckPage = errors.New("phonesim: relay page did not advance past cursor")
+
 // mailbox is the slice of *relay.Client the phone consumes: PAGED reads to drain its
 // mailbox, appends to reach the machine, and acks to compact what it has drained. Taking
 // an interface (not the concrete client) lets a test drive the phone with a scripted relay
@@ -71,8 +77,14 @@ type Phone struct {
 	// collide and the receiver would reject the second stream as a replayed seq.
 	seq phonecore.Sequencer
 
+	// drainMu serializes the WHOLE drain sweep (read-page-then-Accept loop, not just the
+	// cursor read/write) across concurrent Observe/ReadReply callers, so two sweeps never
+	// interleave their router.Accept + cache-apply calls (Finding 3 / sonnet#2).
+	drainMu sync.Mutex
+
 	mu     sync.Mutex
 	cursor uint64 // phone mailbox read cursor (drained forward by Observe + ReadReply)
+	stale  bool   // sticky: set once drain observes a mailbox gap (Finding 1 / codex#5+sonnet#4)
 }
 
 // New bootstraps the phone from an IN-PROCESS sealed grant (cfg.Grant): it AcceptGrants
@@ -98,9 +110,11 @@ func New(cfg Config) (*Phone, error) {
 // The read cursor is seeded to the CONSUMED frame's cursor, so a later Observe neither reprocesses
 // the bootstrap nor skips any real frame that followed it (frames read strictly-after that cursor).
 // It fails closed with errNoBootstrap only when the FULL paged scan opens nothing -- with no
-// ContentKey the phone can do nothing. The bootstrap is one-shot (a single consume the cursor
-// never returns to), so it needs no GrantReceiver: this IS the phone's first grant, the same
-// non-monotonic AcceptGrant New runs.
+// ContentKey the phone can do nothing. It does NOT simply trust has_more: a page that returns no
+// item past the cursor terminates the scan with errStuckPage instead of looping forever against a
+// hostile relay (codex#7). The bootstrap is one-shot (a single consume the cursor never returns
+// to), so it needs no GrantReceiver: this IS the phone's first grant, the same non-monotonic
+// AcceptGrant New runs.
 func NewFromMailbox(ctx context.Context, cfg Config) (*Phone, error) {
 	var cursor uint64
 	for {
@@ -108,9 +122,11 @@ func NewFromMailbox(ctx context.Context, cfg Config) (*Phone, error) {
 		if err != nil {
 			return nil, err
 		}
+		advanced := false
 		for _, it := range items {
 			if it.Cursor > cursor {
 				cursor = it.Cursor
+				advanced = true
 			}
 			g, ok := grant.ParseBootstrap(it.Envelope)
 			if !ok {
@@ -124,6 +140,9 @@ func NewFromMailbox(ctx context.Context, cfg Config) (*Phone, error) {
 		}
 		if !hasMore {
 			return nil, errNoBootstrap
+		}
+		if !advanced {
+			return nil, errStuckPage // has_more=true but no item advanced past cursor
 		}
 	}
 }
@@ -151,18 +170,34 @@ func newPhone(cfg Config, g *crypto.EpochGrant, startCursor uint64) (*Phone, err
 }
 
 // drain performs ONE forward sweep of the phone's relay mailbox and is the SINGLE consumer
-// Observe and ReadReply share (C8). It reads every bounded page past the shared cursor
-// (MailboxReadPage until has_more is false) and routes EACH item through the phonecore
-// MailboxRouter EXACTLY ONCE -- the router authenticates + seq-guards it, then demuxes it by
-// kind: journal records into the session cache, terminal snapshots into the snapshot cache,
-// command replies into the reply cache (drained by ReadReply). Because every item goes through
-// Accept once, a reply lands in the reply cache and a journal frame in the session cache no
-// matter WHICH caller drove the read -- neither consumer advances the cursor past the other's
-// frames. It advances the cursor once and acks the consumed prefix so the untrusted relay
-// compacts what the phone has drained. Items the router rejects (not a router frame, or a
-// replay/reorder) are skipped. NOTE: router.Accept also reports a seq GAP (a dropped frame);
-// the phone does not yet resync on it (no resync channel exists) -- see the follow-up note.
+// Observe and ReadReply share (C8). drainMu serializes the ENTIRE sweep -- read + Accept loop
+// + cursor advance -- across concurrent callers (Finding 3 / sonnet#2), so two sweeps never
+// interleave their router.Accept + cache-apply calls (which would let a later frame's Apply
+// execute before an earlier frame's, inverting freshness). It reads every bounded page past
+// the shared cursor and routes EACH item through the phonecore MailboxRouter EXACTLY ONCE --
+// the router authenticates + seq-guards it, then demuxes it by kind: journal records into the
+// session cache, terminal snapshots into the snapshot cache, command replies into the reply
+// cache (drained by ReadReply). Because every item goes through Accept once, a reply lands in
+// the reply cache and a journal frame in the session cache no matter WHICH caller drove the
+// read -- neither consumer advances the cursor past the other's frames. Items the router
+// rejects (not a router frame, or a replay/reorder) are skipped, and their cursor is still
+// consumed so the sweep does not re-read them forever.
+//
+// It does NOT simply trust has_more: a page that returns no item past the cursor terminates
+// the sweep with errStuckPage rather than looping forever against a hostile relay (Finding 2 /
+// codex#7).
+//
+// router.Accept also reports a seq GAP -- a dropped or reordered relay frame (Finding 1 /
+// codex#5+sonnet#4). On a gap, drain marks the phone Stale() (sticky: Phase A has no resync to
+// clear it) and stops the sweep AT the gap, advancing/acking only the confirmed-good prefix
+// before it -- it never tells the relay it may compact past a point known to have a missing
+// frame. The gapped frame itself was already authenticated and applied by router.Accept (that
+// happens before the gap bool is even returned), so a later sweep resumes past it once its now-
+// duplicate re-read is rejected as a stale seq by the crypto guard.
 func (p *Phone) drain(ctx context.Context) error {
+	p.drainMu.Lock()
+	defer p.drainMu.Unlock()
+
 	p.mu.Lock()
 	cursor := p.cursor
 	p.mu.Unlock()
@@ -172,16 +207,31 @@ func (p *Phone) drain(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		advanced := false
 		for _, it := range items {
+			gap, err := p.router.Accept(it.Envelope)
+			if err != nil {
+				if it.Cursor > cursor {
+					cursor = it.Cursor
+					advanced = true
+				}
+				continue // not a router frame, or a replay/reorder the receiver rejected
+			}
+			if gap {
+				p.markStale()
+				p.advanceCursor(cursor)
+				return p.relay.MailboxAck(ctx, cursor) // stop AT the gap: never ack past it
+			}
 			if it.Cursor > cursor {
 				cursor = it.Cursor
-			}
-			if _, err := p.router.Accept(it.Envelope); err != nil {
-				continue // not a router frame, or a replay/reorder the receiver rejected
+				advanced = true
 			}
 		}
 		if !hasMore {
 			break
+		}
+		if !advanced {
+			return errStuckPage // has_more=true but no item advanced past cursor
 		}
 	}
 	p.advanceCursor(cursor)
@@ -203,6 +253,17 @@ func (p *Phone) Observe(ctx context.Context) ([]phonecore.CachedSession, error) 
 // Session returns the phone's cached view of one namespaced session id.
 func (p *Phone) Session(id string) (phonecore.CachedSession, bool) {
 	return p.router.Sessions().Get(id)
+}
+
+// Stale reports whether drain has ever observed a mailbox gap (router.Accept's gap=true --
+// a seq the relay skipped, i.e. a dropped or reordered frame). It is STICKY: once set it
+// never clears itself, because Phase A has no resync path to repair the missing update
+// (Phase B). A caller that cares about cache freshness (e.g. before acting on a Snapshot
+// or Session) should check this alongside Observe/ReadReply.
+func (p *Phone) Stale() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stale
 }
 
 // Snapshot returns the phone's latest server-rendered terminal snapshot lines for a
@@ -401,5 +462,12 @@ func (p *Phone) advanceCursor(to uint64) {
 	if to > p.cursor {
 		p.cursor = to
 	}
+	p.mu.Unlock()
+}
+
+// markStale sets the sticky gap flag (see Stale).
+func (p *Phone) markStale() {
+	p.mu.Lock()
+	p.stale = true
 	p.mu.Unlock()
 }
