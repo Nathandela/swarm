@@ -545,8 +545,10 @@ Verified: **31 distinct** `--p-*` tokens (v1 said 38 — corrected) across 4 dir
 | PB-TOK-2 | Exactly one skin is chosen for v1 and recorded, and **the app is pinned to that fixed dark theme** — since §5 defers light mode, a system-light handset must not render the app unstyled or low-contrast (and PB-E2E-2's screenshots are the evidence artifact). | Decision in the ADR; a test asserts the app does not follow the system `uiMode`. |
 | PB-TOK-3 | The terminal peek keeps the phosphor-green monospace treatment; purple stays retired. | Asserted against the token source + emulator evidence. |
 
-*(v1's light-mode authoring and HTML<->JSON drift test are cut per §5; the four-direction HTML is
-a prototype, and one skin has one consumer.)*
+*(v1's light-mode authoring is cut per §5. The drift test is RETAINED but narrowed: a
+single-skin HTML<->JSON check, which is what makes PB-TOK-1's "asserted against the JSON"
+mechanically true. What was cut is the four-direction and light-mode scope, not the check
+itself — the S5 test author surfaced this ambiguity rather than silently picking one reading.)*
 
 ### 6.14 PB-SAS — SAS on the handset
 
