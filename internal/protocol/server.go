@@ -5,9 +5,11 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -36,6 +38,7 @@ const OptionResumeFrom = "resume_from"
 func daemonLaunchSpec(req *LaunchReq) daemon.LaunchSpec {
 	return daemon.LaunchSpec{
 		AgentType:     req.Agent,
+		Name:          sanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		Cwd:           req.Cwd,
 		ClientEnv:     persist.FilterEnv(req.Env),
 		Cols:          req.Cols,
@@ -43,6 +46,24 @@ func daemonLaunchSpec(req *LaunchReq) daemon.LaunchSpec {
 		Options:       launchOptions(req),
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 	}
+}
+
+// sanitizeName re-validates a client-supplied session name (E6.6/P-6): it strips
+// control characters and caps the value to maxNameRunes, so a persisted/displayed
+// name is always a single line of printable text regardless of what the client
+// sent. It is a cosmetic label, so a hostile or over-long value is sanitized rather
+// than rejected — the launch never fails over a display field.
+func sanitizeName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if r := []rune(s); len(r) > maxNameRunes {
+		return string(r[:maxNameRunes])
+	}
+	return s
 }
 
 // launchOptions returns the launch options, adding the reserved worktree flag when
@@ -66,6 +87,7 @@ func launchOptions(req *LaunchReq) map[string]string {
 const (
 	maxDim         = 1000    // cols/rows upper bound (matches the shim's resizeMax)
 	maxAgentLen    = 256     // agent-name length cap
+	maxNameRunes   = 64      // session-label rune cap (P2); a cosmetic field, so an over-long value is truncated, not rejected
 	maxOptionValue = 4 << 10 // per-option value cap (a few KiB; well under the wire cap)
 	// eventQueueCap bounds the per-subscriber event queue (S9). It is generous
 	// enough to absorb a legitimate status-change burst (e.g. many sessions
@@ -728,6 +750,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleKill(c)
 	case OpDelete:
 		cc.handleDelete(c)
+	case OpRename:
+		cc.handleRename(c)
 	case OpAttach:
 		cc.handleAttach(c)
 	case OpDetach:
@@ -829,6 +853,24 @@ func (cc *clientConn) handleDelete(c Control) {
 		return
 	}
 	cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+	cc.replyOK(c.SessionID)
+}
+
+// handleRename updates a session's display label (v0.5). The id is validated like
+// any session-scoped op (endpoint + path-safe local id) and the new name is
+// RE-VALIDATED server-side with sanitizeName — the same cosmetic-label sanitizer
+// launch uses (control chars stripped, capped to maxNameRunes), so a hostile or
+// over-long value is sanitized, never rejected. The daemon persists the change and
+// its roster event fans out to every subscriber (all clients converge).
+func (cc *clientConn) handleRename(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	if err := cc.srv.d.Rename(local, sanitizeName(c.Name)); err != nil {
+		cc.replyError("rename: " + err.Error())
+		return
+	}
 	cc.replyOK(c.SessionID)
 }
 
@@ -952,6 +994,7 @@ func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView
 		EndpointID:   cc.endpointID,
 		ID:           NamespacedID(cc.endpointID, m.ID),
 		Agent:        m.AgentType,
+		Name:         m.Name, // P2: carry the persisted label; "" degrades to Agent at display
 		Cwd:          m.Cwd,
 		Status:       m.Status,
 		Group:        group,

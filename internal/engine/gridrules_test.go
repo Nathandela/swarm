@@ -439,15 +439,18 @@ func TestEngine_RegisterSession_DescriptorMapMutationAfterRegisterHasNoEffect(t 
 	// be observable.
 	desc["value"] = "MUTATED"
 
+	// The mutated value does NOT match (proving the mutation had no effect): from
+	// the unknown seed, a frame carrying only the MUTATED value is inconclusive
+	// (no rule fires, generic reads prose), which ADR-007 preserves without an
+	// emit. An effective mutation would fire busy-contains and emit active here.
+	e.OnOutput("s1", gridByRow("footer shows MUTATED now"))
+	if got, ok := rec.last(); ok && got.s.Turn == status.TurnActive {
+		t.Fatalf("descriptor mutation after RegisterSession took effect: turn=%s", got.s.Turn)
+	}
+
 	// The original value still matches.
 	e.OnOutput("s1", gridByRow("footer shows ORIGINAL now"))
 	if got, _ := rec.last(); got.s.Turn != status.TurnActive {
 		t.Fatalf("post-registration mutation lost the ORIGINAL rule: turn=%s", got.s.Turn)
-	}
-
-	// The mutated value does NOT match (proving the mutation had no effect).
-	e.OnOutput("s1", gridByRow("footer shows MUTATED now"))
-	if got, _ := rec.last(); got.s.Turn != status.TurnUnknown {
-		t.Fatalf("descriptor mutation after RegisterSession took effect: turn=%s, want unknown (no busy match)", got.s.Turn)
 	}
 }

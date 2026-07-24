@@ -88,8 +88,9 @@ var agySegments = []replaySegment{
 // at the memo's offsets: [0,33547) startup (incl. the "Update Available" modal,
 // which never overlaps the bottom-6 status rows, per the memo); [33547,67787) busy
 // ("esc interrupt", proven zero-gap at true byte granularity); [67787,76243)
-// settled (opencode declares no idle rule, so this must classify unknown, never
-// idle); [76243,76281) the exit id line "opencode -s ses_<id>".
+// settled (opencode declares no idle rule: inconclusive frames preserve the
+// committed active per ADR-007, never idle); [76243,76281) the exit id line
+// "opencode -s ses_<id>".
 var opencodeSegments = []replaySegment{
 	{End: 33547, Hold: 300 * time.Millisecond},
 	{End: 67787, Hold: 1700 * time.Millisecond},
@@ -326,7 +327,6 @@ func anyMatch(samples []statusSample, pred func(status.Status) bool) bool {
 
 func isActive(s status.Status) bool  { return s.Turn == status.TurnActive }
 func isIdle(s status.Status) bool    { return s.Turn == status.TurnIdle }
-func isUnknown(s status.Status) bool { return s.Turn == status.TurnUnknown }
 
 // TestE2E_ReplayProductionPath_AgyOpencode is R-G1: drives the REAL assembled
 // stack (registry -> composeLaunchSpec -> daemon/shim -> engine grid rules ->
@@ -340,9 +340,10 @@ func isUnknown(s status.Status) bool { return s.Turn == status.TurnUnknown }
 //     false-idle repro class), turn=idle is never observed before that busy run
 //     completes, and turn=idle IS observed once the settled hold begins.
 //   - opencode: turn=active is observed during its busy hold; turn=idle is NEVER
-//     observed at any point (opencode declares no idle rule, R-B4); after its busy
-//     hold ends, turn=unknown is observed (the honest "settled -> unknown" T-4
-//     outcome) and the final observed turn is not active.
+//     observed at any point (opencode declares no idle rule, R-B4); the settled
+//     hold's inconclusive frames PRESERVE the committed active (ADR-007), so the
+//     final observed turn is the preserved active — the downgrade to unknown is
+//     Tick's staleness-guard job, outside this test's window.
 //   - both: the exit-screen conversation id is extracted and persisted (Epic 11
 //     C1's transcript-tail capture, independent of any live attach).
 func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
@@ -354,7 +355,7 @@ func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 
 	agentEnv := []string{"PATH=" + replayBinDir + ":" + os.Getenv("PATH")}
 
-	agyID, err := c.Launch(protocol.LaunchReq{
+	agyID, _, err := c.Launch(protocol.LaunchReq{
 		Agent: "agy", Cwd: t.TempDir(), Options: map[string]string{},
 		Env: agentEnv, Cols: 100, Rows: 30,
 	})
@@ -363,7 +364,7 @@ func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Delete(agyID) })
 
-	opencodeID, err := c.Launch(protocol.LaunchReq{
+	opencodeID, _, err := c.Launch(protocol.LaunchReq{
 		Agent: "opencode", Cwd: t.TempDir(), Options: map[string]string{},
 		Env: agentEnv, Cols: 100, Rows: 30,
 	})
@@ -418,7 +419,7 @@ func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 	}
 	waitForConversationID(t, env.stateDir, localOf(t, agyID), agyConvID)
 
-	// --- opencode: active during busy, NEVER idle, settled -> unknown. ---
+	// --- opencode: active during busy, NEVER idle, settled preserves (ADR-007). ---
 	ocActiveIdx := firstIndex(ocSamples, isActive)
 	if ocActiveIdx < 0 {
 		t.Fatalf("opencode: turn=active never observed during its busy hold [33547,67787); samples=%+v", ocSamples)
@@ -427,19 +428,16 @@ func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 		t.Fatalf("opencode: turn=idle observed at some point, but opencode declares no idle rule (R-B4) — it "+
 			"must NEVER report idle; samples=%+v", ocSamples)
 	}
-	lastActiveIdx := ocActiveIdx
-	for i, s := range ocSamples {
-		if isActive(s.status) {
-			lastActiveIdx = i
-		}
-	}
-	if !anyMatch(ocSamples[lastActiveIdx+1:], isUnknown) {
-		t.Fatalf("opencode: never observed turn=unknown after its busy hold ended at sample %d (the settled "+
-			"hold [67787,76243) should classify unknown, the honest no-idle-rule T-4 outcome); samples=%+v",
-			lastActiveIdx, ocSamples)
-	}
-	if final := ocSamples[len(ocSamples)-1].status.Turn; final == status.TurnActive {
-		t.Fatalf("opencode: final observed turn is still active; want settled (unknown) by session end")
+	// ADR-007 (merged from main after this epic's committee pass): the settled
+	// hold [67787,76243) carries no busy marker and opencode declares no idle
+	// rule, so every settled frame is INCONCLUSIVE and PRESERVES the committed
+	// active — unknown is no longer committed by the grid tap (that downgrade is
+	// now Tick's staleness guard's job, on 30s of silence, beyond this test's
+	// window). The final observed sample must therefore still be the preserved
+	// active, and never idle at any point (the load-bearing safety property).
+	if final := ocSamples[len(ocSamples)-1].status.Turn; final != status.TurnActive {
+		t.Fatalf("opencode: final observed turn = %q; want active preserved through the settled hold "+
+			"(inconclusive frames preserve the committed status, ADR-007); samples=%+v", final, ocSamples)
 	}
 	waitForConversationID(t, env.stateDir, localOf(t, opencodeID), opencodeConvID)
 }

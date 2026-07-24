@@ -67,6 +67,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `snapshot_len`     | int             | total snapshot byte length, carried on `lease` for chunk reassembly       |
 | `cols`             | int             | terminal columns, carried on `resize` (and inside `launch`)               |
 | `rows`             | int             | terminal rows, carried on `resize` (and inside `launch`)                  |
+| `name`             | string          | new session label, carried on `rename`; sanitized + length-capped server-side (P2) |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
@@ -84,6 +85,7 @@ alongside the group.
 | `endpoint_id`   | string          | the receiving connection's endpoint id                        |
 | `id`            | string          | namespaced session id `<endpoint_id>/<local>`                 |
 | `agent`         | string          | agent type (e.g. `claude`, `codex`)                           |
+| `name`          | string          | user-provided session label; empty/absent falls back to `agent` (P2) |
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
 | `group`         | `status.Group`  | the daemon-computed display group (E6.9)                      |
@@ -103,6 +105,7 @@ and unrelated secrets are dropped.
 | JSON key         | Go type             | Meaning                                                    |
 | ---------------- | ------------------- | ---------------------------------------------------------- |
 | `agent`          | string              | agent type to launch                                       |
+| `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
 | `cwd`            | string              | working directory (must exist and be a directory)          |
 | `options`        | map[string]string   | declarative adapter options (each value length-capped)     |
 | `env`            | []string            | `KEY=VALUE` launch env (allowlist-filtered server-side)    |
@@ -150,6 +153,17 @@ process group and replies with `ok` (or `error`).
 The client sends `delete` with a `session_id`. The daemon removes the session
 (killing it first if running) and replies with `ok` (or `error`).
 
+### `rename`
+
+The client sends `rename` with a `session_id` and the new `name`. The daemon
+**re-validates** the label server-side (the same sanitizer `launch` uses — control
+characters stripped, capped to the label rune limit), updates the session meta,
+persists it, and broadcasts a roster `event` so every client converges; it replies
+with `ok` (or `error`). A label is cosmetic, so a hostile or over-long value is
+sanitized rather than rejected. An **older daemon** that predates this op replies
+with `error` ("unknown op"), which the client surfaces (skew-safe) rather than
+crashing.
+
 ### `attach`
 
 The client sends `attach` with a `session_id`. The daemon grants the exclusive
@@ -195,8 +209,9 @@ input is dropped.
 The client sends `subscribe`. The daemon replies with `ok`, then streams `event`
 messages as session status changes. A subscriber that stops reading is
 disconnected within a bound; it never blocks the daemon's event loop or other
-subscribers (S9). A live status change reaches a healthy subscriber within one
-second (L1).
+subscribers (S9). Events are latest-state snapshots: consecutive changes may
+coalesce, and after any change the latest committed state reaches a healthy
+subscriber within one second (L1, ADR-008).
 
 ### `event`
 

@@ -6,11 +6,15 @@ package engine
 // (evaluateGridWithRules), configured from each adapter's OWN real
 // registry.New(name).SignalSources() (R-H4 committee finding: a hand-copied
 // rule list would not catch a future claude/codex SignalSources change) — as
-// of this phase that is just "prompt-marker", no busy/idle rules. Every
+// of the ADR-007 merge those declare the named signatures "claude"/"codex"
+// (no "value" key), which parseGridRules drops, yielding empty rules. Every
 // intermediate verdict must match exactly, proving evaluateGridWithRules's
 // fallback path is byte-for-byte identical to evaluateGrid when an adapter
-// declares no grid rules of its own; a future adapter change that adds a
+// declares no busy/idle rules of its own; a future adapter change that adds a
 // busy/idle rule would surface here as a real divergence, not a silent gap.
+// NOTE post-ADR-007: claude/codex OnOutput no longer takes this generic path at
+// all (the engine dispatches their named signatures to evaluateGridSig); this
+// freeze pins the RULES-path fallback that rule-less/generic adapters share.
 
 import (
 	"testing"

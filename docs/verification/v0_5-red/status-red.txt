@@ -1,0 +1,60 @@
+v0.5 P1 status-accuracy — RED evidence (TDD failing-first, GG-5)
+================================================================
+Beads: agents-tracker-dqh (claude idle decays done->Working 30s after Stop)
+       agents-tracker-q65 (codex stuck on Working forever)
+Design: ADR-007 (inconclusive grid heuristic preserves committed status;
+        per-adapter grid signatures declared via SignalSource.Descriptor["grid"]).
+
+These tests were written BEFORE the implementation and drive the public
+engine seam (OnOutput / HandleCallback) with faithfully reconstructed real
+screens (footer rendered BELOW the composer, exactly as the live transcripts
+render). Under the CURRENT apply-unknown + last-line-only heuristic they fail
+for the right reason:
+
+  - Preserve/decay: an inconclusive grid tap overwrites a KNOWN turn with
+    unknown (active->unknown, idle->unknown), and a typed idle decays to
+    unknown past the 30s staleness cliff. Root cause of dqh.
+  - Codex/Claude signatures: the generic last-line rule reads the model/Brewed
+    FOOTER (the last content line), returns unknown, and the session never
+    leaves its unknown seed (no emit). Root cause of q65 and the dqh footer.
+
+Command:
+  go test ./internal/engine/ -run \
+    'TestOnOutput_InconclusivePreservesCommittedTurn|TestOnOutput_TypedIdleHoldsPastStalenessCliff|TestOnOutput_CodexGridSignature|TestOnOutput_ClaudeGridSignature' \
+    -count=1 -v
+
+Captured failing run:
+--------------------------------------------------------------
+=== RUN   TestOnOutput_InconclusivePreservesCommittedTurn
+=== RUN   TestOnOutput_InconclusivePreservesCommittedTurn/active-held
+    v05_status_accuracy_test.go:121: inconclusive grid overwrote committed turn: turn=unknown, want active held (ADR-007)
+=== RUN   TestOnOutput_InconclusivePreservesCommittedTurn/idle-held
+    v05_status_accuracy_test.go:121: inconclusive grid overwrote committed turn: turn=unknown, want idle held (ADR-007)
+--- FAIL: TestOnOutput_InconclusivePreservesCommittedTurn (0.00s)
+    --- FAIL: TestOnOutput_InconclusivePreservesCommittedTurn/active-held (0.00s)
+    --- FAIL: TestOnOutput_InconclusivePreservesCommittedTurn/idle-held (0.00s)
+=== RUN   TestOnOutput_TypedIdleHoldsPastStalenessCliff
+    v05_status_accuracy_test.go:147: idle decayed to turn=unknown past the staleness cliff, want idle held (dqh/ADR-007)
+--- FAIL: TestOnOutput_TypedIdleHoldsPastStalenessCliff (0.00s)
+=== RUN   TestOnOutput_CodexGridSignature
+=== RUN   TestOnOutput_CodexGridSignature/idle-composer-above-footer
+    v05_status_accuracy_test.go:175: codex idle-composer-above-footer screen emitted no status change from the unknown seed
+=== RUN   TestOnOutput_CodexGridSignature/busy-esc-to-interrupt
+    v05_status_accuracy_test.go:175: codex busy-esc-to-interrupt screen emitted no status change from the unknown seed
+=== RUN   TestOnOutput_CodexGridSignature/busy-braille-spinner
+    v05_status_accuracy_test.go:175: codex busy-braille-spinner screen emitted no status change from the unknown seed
+--- FAIL: TestOnOutput_CodexGridSignature (0.00s)
+    --- FAIL: TestOnOutput_CodexGridSignature/idle-composer-above-footer (0.00s)
+    --- FAIL: TestOnOutput_CodexGridSignature/busy-esc-to-interrupt (0.00s)
+    --- FAIL: TestOnOutput_CodexGridSignature/busy-braille-spinner (0.00s)
+=== RUN   TestOnOutput_ClaudeGridSignature
+=== RUN   TestOnOutput_ClaudeGridSignature/idle-composer-above-brewed-footer
+    v05_status_accuracy_test.go:207: claude idle-composer-above-brewed-footer screen emitted no status change from the unknown seed
+=== RUN   TestOnOutput_ClaudeGridSignature/busy-esc-to-interrupt
+    v05_status_accuracy_test.go:207: claude busy-esc-to-interrupt screen emitted no status change from the unknown seed
+--- FAIL: TestOnOutput_ClaudeGridSignature (0.00s)
+    --- FAIL: TestOnOutput_ClaudeGridSignature/idle-composer-above-brewed-footer (0.00s)
+    --- FAIL: TestOnOutput_ClaudeGridSignature/busy-esc-to-interrupt (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/engine	0.794s
+FAIL

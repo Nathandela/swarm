@@ -112,6 +112,38 @@ func TestHostRun_BoundsAHangingProbe(t *testing.T) {
 	}
 }
 
+// crashingProbeAdapter names a "CLI" whose version probe exits NON-ZERO after
+// printing a diagnostic to stderr — the codex-on-Apple-Silicon case (bead 8c0):
+// `codex --version` throws "Missing optional dependency ... Reinstall Codex" and
+// exits 1. Detect must plumb that captured first line into Detection.ProbeErr
+// instead of discarding it, so the launch picker can show the CLI's own cause.
+type crashingProbeAdapter struct{ goAdapter }
+
+func (crashingProbeAdapter) Binary() string { return "sh" }
+func (crashingProbeAdapter) VersionArgs() []string {
+	return []string{"-c", "echo 'Missing optional dependency (@openai/codex-darwin-x64). Reinstall Codex.' 1>&2; exit 1"}
+}
+
+func TestDetect_CapturesProbeDiagnosticOnNonZeroExit(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH; cannot exercise the crashing-probe path")
+	}
+	det := adapter.Detect(crashingProbeAdapter{}, Host{})
+	if !det.Found {
+		t.Fatal("the binary resolves on PATH, so it must be Found even when the version probe crashes")
+	}
+	if det.Version != "" {
+		t.Errorf("a crashed probe must yield no version, got %q", det.Version)
+	}
+	if !strings.Contains(det.ProbeErr, "Reinstall Codex") {
+		t.Errorf("captured probe diagnostic lost on non-zero exit: ProbeErr = %q, want it to contain %q", det.ProbeErr, "Reinstall Codex")
+	}
+	// Only the FIRST non-empty line is kept, so a multi-line crash stays a one-line reason.
+	if strings.Contains(det.ProbeErr, "\n") {
+		t.Errorf("ProbeErr must be a single line, got %q", det.ProbeErr)
+	}
+}
+
 func TestHostRun_CapturesStderrVersion(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH; cannot exercise the stderr-capture path")

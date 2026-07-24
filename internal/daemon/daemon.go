@@ -104,6 +104,10 @@ type LaunchSpec struct {
 	ClientEnv  []string
 	Cols, Rows int
 	Options    map[string]string
+	// Name is the optional user-provided session label. The daemon only stamps it
+	// into the session meta; an empty name falls back to the agent name at display
+	// time (P2 / bd agents-tracker-4e2).
+	Name string
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string
@@ -298,6 +302,44 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 		return nil // write-once: already captured
 	}
 	m.ConversationID = convID
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
+}
+
+// Rename updates a session's user-provided display label (v0.5). The new name is
+// re-validated/sanitized server-side (the protocol layer) before it reaches here;
+// the daemon persists it through the SINGLE meta writer (G6) so the change is
+// durable and observable in List, and fires onMetaSave so a roster event fans out
+// to every client (all clients converge). It mirrors SetConversationID's RMW under
+// writeMu. An unknown session is an error; a no-op rename (same name) skips the
+// write; a tombstoned session is dropped by saveMetaLocked.
+func (d *Daemon) Rename(id, name string) error {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if m.Name == name {
+		d.writeMu.Unlock()
+		return nil // no label change to persist
+	}
+	m.Name = name
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = persist.FilterEnv(m.Env)
 	written, err := d.saveMetaLocked(m)

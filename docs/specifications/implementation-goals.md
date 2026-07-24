@@ -95,7 +95,7 @@ Goal: the low-reversibility wire surface, documented and hostile-input-proof.
 ### Epic 7 — TUI: general view + launch form
 Goal: the approved look (ui-preview.html), keyboard-complete, event-live.
 - E7.1 Screen router (general/launch/attach sub-models); only the router is shared shell.
-- E7.2 General view: grouped rows (Needs input / Working / Ready for review / Completed); every row shows agent name, shortened cwd, status, elapsed/last-activity time, and grid-derived last-line summary (V-4 — teatest goldens must demonstrate each field); highlight + notification banner fire for BOTH Needs-input and Ready-for-review transitions (V-5); goldens match the ui-preview screens tab.
+- E7.2 General view: grouped rows (Needs input / Working / Ready for review / Completed); every row shows agent name, shortened cwd, status, elapsed/last-activity time, and grid-derived last-line summary (V-4 — teatest goldens must demonstrate each field); highlight + notification banner fire for BOTH Needs-input and Ready-for-review transitions as observed in the delivered status stream (V-5, ADR-008); goldens match the ui-preview screens tab.
 - E7.3 Status-event → row update reflected ≤500 ms against a stub daemon (client half of the L1 ≤1 s composite; server half in E10.7; composition asserted at E14).
 - E7.4 Full keyboard map tested: ↑/↓/j/k, Enter, Esc, `n`, Ctrl+X with confirm — Ctrl+X kills running sessions, deletes completed/lost ones, and the confirm prompt states which (R-3).
 - E7.5 Launch form: free-text cwd with `~` expansion; invalid cwd → launch refused with inline error (L-3); agent picker greys both not-installed AND out-of-supported-version-range CLIs with install/upgrade hint (L-2); options rendered from declarative adapter schema; initial prompt field; worktree toggle placeholder.
@@ -130,7 +130,7 @@ Goal: status that is authenticated, fresh, and never confidently wrong.
 - E10.5 Idempotent under duplicate and out-of-order hook deliveries.
 - E10.6 CPU sampling: Linux (/proc) and macOS (proc_pidinfo) paths BOTH unit-tested in CI (linux + macos runners); real-process integration test on each.
 - E10.7 Status changes reach Epic 6 subscribers ≤500 ms from signal arrival (server half of L1; composite ≤1 s asserted at E14).
-- E10.8 Grid-heuristic evaluator: runs on output events plus a low-frequency fallback poll at a stated bounded frequency; no busy-polling (idle-CPU assertion); inconclusive detection maps deterministically to `unknown` (T-3, T-4; positive-idle case = scenario 6).
+- E10.8 Grid-heuristic evaluator: runs on output events plus a low-frequency fallback poll at a stated bounded frequency; no busy-polling (idle-CPU assertion); an inconclusive evaluation preserves the previously committed turn (T-3, T-4 as revised by ADR-007; positive-idle case = scenario 6).
 
 ### Epic 11 — Claude Code + Codex adapters
 Goal: two real CLIs, each characterized first, proving the adapter boundary under two signal styles.

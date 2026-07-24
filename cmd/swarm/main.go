@@ -128,7 +128,12 @@ func runTUI(stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	client, err := dialClient()
+	cc, err := clientConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		return 1
+	}
+	client, err := dialClient(cc)
 	if err != nil {
 		fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
@@ -138,18 +143,12 @@ func runTUI(stdout, stderr io.Writer) int {
 	// prog is captured by the attach runner's terminal handoff; it is assigned just
 	// before Run, so the closures see the live program when an attach fires.
 	var prog *tea.Program
-	dialAttach := func(id string) (attach.Session, error) {
-		att, aerr := client.Attach(id)
-		if aerr != nil {
-			return nil, aerr
-		}
-		return att, nil
-	}
-	runner := tui.NewAttachRunner(dialAttach, tui.TerminalHandoff{
+	runner := tui.NewAttachRunner(attachDialer(cc), tui.TerminalHandoff{
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)), tui.WithAttachRunner(runner))
+	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)),
+		tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)))
 
 	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
 	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {
@@ -176,26 +175,33 @@ func interactiveTTY(stdout io.Writer, stdin *os.File) (out *os.File, ok bool) {
 	return f, true
 }
 
-// dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
-// protocol client to it. The SWARM_DAEMON_* environment overrides the default home
-// (the same knobs `swarm daemon` reads), so a test can point the client at a
-// controlled daemon; EnsureDaemon only spawns one when the socket does not answer.
-func dialClient() (*protocol.Client, error) {
+// clientConfig builds the daemon.ClientConfig the client roles share (TUI dial,
+// auto-start, and the `swarm daemon restart` reuse) from the SWARM_DAEMON_*
+// environment, falling back to the default state dir. The SWARM_DAEMON_* knobs (the
+// same ones `swarm daemon` reads) let a test point the client at a controlled daemon.
+// DaemonBin is this executable, since the client auto-starts (and restarts) the daemon
+// from its own binary.
+func clientConfig() (daemon.ClientConfig, error) {
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
 		var err error
 		if stateDir, err = persist.DefaultDir(); err != nil {
-			return nil, err
+			return daemon.ClientConfig{}, err
 		}
 	}
 	exe, _ := os.Executable()
-	cc := daemon.ClientConfig{
+	return daemon.ClientConfig{
 		StateDir:   stateDir,
 		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
 		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
 		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
 		DaemonBin:  exe,
-	}
+	}, nil
+}
+
+// dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
+// protocol client to it. EnsureDaemon only spawns one when the socket does not answer.
+func dialClient(cc daemon.ClientConfig) (*protocol.Client, error) {
 	conn, err := daemon.EnsureDaemon(cc)
 	if err != nil {
 		return nil, err
@@ -204,10 +210,52 @@ func dialClient() (*protocol.Client, error) {
 	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
 }
 
+// attachDialer builds the per-attach dialer the TUI's attach runner uses: it dials a
+// FRESH protocol client to the daemon socket for EACH attach and returns that client's
+// Close as the cleanup. Dialing per attach — rather than multiplexing the TUI's
+// long-lived client connection — keeps attach working across a daemon auto-upgrade, which
+// swaps that long-lived client out from under the runner (bd agents-tracker-5jl); the old
+// code closed over the original client and, after the swap, attached on its dead conn
+// (item 1, the blocker). The fresh conn is closed by the returned cleanup once the
+// passthrough returns; on a dial/attach failure it is closed before returning the error.
+func attachDialer(cc daemon.ClientConfig) tui.AttachDialer {
+	return func(id string) (attach.Session, func(), error) {
+		c, err := protocol.Dial(cc.SocketPath, []string{"attach"})
+		if err != nil {
+			return nil, nil, err
+		}
+		att, err := c.Attach(id)
+		if err != nil {
+			_ = c.Close()
+			return nil, nil, err
+		}
+		return att, func() { _ = c.Close() }, nil
+	}
+}
+
+// daemonRestarter is the client-side reuse of `swarm daemon restart` injected into the
+// TUI (bd agents-tracker-5jl): it performs the D-8 safe restart of an outdated daemon
+// and reconnects to the replacement. Its shims survive the handoff (they own the PTYs)
+// and are reconnected by the replacement — the same guarantee `swarm daemon restart`
+// gives, now driven automatically when the client is newer than the daemon it reached.
+func daemonRestarter(cc daemon.ClientConfig) tui.DaemonRestarter {
+	return func() (tui.Client, error) {
+		if err := daemon.Restart(cc); err != nil {
+			return nil, err
+		}
+		c, err := protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+}
+
 // agentDetectFunc probes one already-constructed adapter and reports its
-// Detection. The production default runs the real exec-based detect.Host; tests
-// inject a stub so detectAgentsWith's concurrency can be proven with a barrier
-// instead of a wall-clock assertion (R-A2).
+// Detection. The production default runs the real exec-based detect.Host (plus
+// the best-effort on-disk model discovery, v0.5); tests inject a stub so
+// detectAgentsWith's concurrency can be proven with a barrier instead of a
+// wall-clock assertion (R-A2).
 type agentDetectFunc func(ad adapter.Adapter) adapter.Detection
 
 // detectAgents builds the launch-form agent detector. It probes the host for
@@ -219,7 +267,13 @@ type agentDetectFunc func(ad adapter.Adapter) adapter.Detection
 func detectAgents(fakeBin string) tui.DetectFunc {
 	host := detect.Host{}
 	return detectAgentsWith(fakeBin, func(ad adapter.Adapter) adapter.Detection {
-		return adapter.Detect(ad, host)
+		det := adapter.Detect(ad, host)
+		// Piggyback the best-effort model discovery on the same probe: pre-fill
+		// the form's model field with the real configured default and cycle the
+		// CLI's real choices (v0.5, bead e5i). Read failures leave these empty
+		// and the option renders exactly as before.
+		det.ConfiguredModel, det.Models = detect.ProbeModels(ad.Name())
+		return det
 	})
 }
 
@@ -236,6 +290,7 @@ func detectAgentsWith(fakeBin string, probe agentDetectFunc) tui.DetectFunc {
 		names := registry.Names()
 		slots := make([]tui.AgentInfo, len(names))
 		present := make([]bool, len(names))
+		translated := rosettaTranslated() // probed once: swarm x86_64 under Rosetta (bead 8c0)
 
 		var wg sync.WaitGroup
 		for i, name := range names {
@@ -254,8 +309,8 @@ func detectAgentsWith(fakeBin string, probe agentDetectFunc) tui.DetectFunc {
 					Name:      name,
 					Installed: det.Found,
 					InRange:   det.InRange,
-					Reason:    unavailabilityReason(det),
-					Options:   ad.Options(),
+					Reason:    archAugmentedReason(unavailabilityReason(det), det, translated),
+					Options:   overlayModelOptions(ad.Options(), det.ConfiguredModel, det.Models),
 				}
 				present[i] = true
 			}(i, name, ad)
@@ -280,6 +335,48 @@ func detectAgentsWith(fakeBin string, probe agentDetectFunc) tui.DetectFunc {
 	}
 }
 
+// overlayModelOptions augments the "model" launch option with what the CLI is
+// actually configured to use, discovered from its on-disk config: the real
+// default pre-fills the field (Default) and the discovered choices become the
+// left/right cycle values (Suggest, layered over any curated aliases). Non-model
+// options, and adapters with nothing discovered, are returned untouched. The
+// input specs are never mutated — a fresh slice is returned when anything changes.
+func overlayModelOptions(specs []adapter.OptionSpec, configured string, models []adapter.ModelChoice) []adapter.OptionSpec {
+	if configured == "" && len(models) == 0 {
+		return specs
+	}
+	out := make([]adapter.OptionSpec, len(specs))
+	copy(out, specs)
+	for i, spec := range out {
+		if spec.Key != "model" {
+			continue
+		}
+		if configured != "" {
+			spec.Default = configured
+		}
+		if len(models) > 0 {
+			// The CLI's own catalog replaces any curated aliases outright.
+			suggest := make([]string, len(models))
+			for j, m := range models {
+				suggest[j] = m.ID
+			}
+			spec.Suggest = suggest
+		} else if configured != "" {
+			// Default-only discovery (claude): the real default leads the curated
+			// aliases, deduplicated.
+			suggest := []string{configured}
+			for _, s := range spec.Suggest {
+				if s != configured {
+					suggest = append(suggest, s)
+				}
+			}
+			spec.Suggest = suggest
+		}
+		out[i] = spec
+	}
+	return out
+}
+
 // unavailabilityReason derives a short, human-readable cause an agent cannot launch
 // from its Detection, so the launch picker greys the agent WITH an explanation
 // instead of an indistinguishable dot (the v0.3 field-test gap: a broken codex whose
@@ -290,12 +387,36 @@ func unavailabilityReason(det adapter.Detection) string {
 	case !det.Found:
 		return "" // not installed: existing install-hint behavior
 	case det.Version == "":
+		// A crashed probe carries the CLI's own first error line; show that real cause
+		// (e.g. codex's "Missing optional dependency ... Reinstall Codex") rather than
+		// the generic hint (bead 8c0).
+		if det.ProbeErr != "" {
+			return det.ProbeErr
+		}
 		return "version probe failed - reinstall?"
 	case !det.InRange:
 		return "unsupported version " + det.Version
 	default:
 		return ""
 	}
+}
+
+// rosettaRebuildHint is appended to a found-but-crashed agent's reason when swarm
+// itself is an x86_64 binary under Rosetta on Apple Silicon (bead 8c0): the crash
+// is almost always that codex's env-node then resolves the x64 CLI package npm
+// never installs on arm64. Rebuilding swarm native arm64 fixes it.
+const rosettaRebuildHint = "(swarm is x86_64 under Rosetta; rebuild native: CGO_ENABLED=0 GOARCH=arm64 go build ./cmd/swarm)"
+
+// archAugmentedReason appends the Rosetta rebuild hint to a found-but-crashed
+// agent's reason when this swarm process is running translated (bead 8c0). A
+// usable agent (empty base reason), a not-installed agent, and a plainly
+// out-of-range agent (which reports a version, so is not an arch symptom) are
+// left untouched.
+func archAugmentedReason(base string, det adapter.Detection, translated bool) string {
+	if base == "" || !translated || !det.Found || det.Version != "" {
+		return base
+	}
+	return base + " " + rosettaRebuildHint
 }
 
 // runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the
@@ -352,21 +473,10 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 // runDaemonRestart stops the running daemon and spawns a fresh one (D-8). Its
 // shims survive the handoff and are reconnected by the replacement.
 func runDaemonRestart(stderr io.Writer) int {
-	stateDir := os.Getenv(daemon.EnvStateDir)
-	if stateDir == "" {
-		var err error
-		if stateDir, err = persist.DefaultDir(); err != nil {
-			fmt.Fprintf(stderr, "daemon restart: %v\n", err)
-			return 1
-		}
-	}
-	exe, _ := os.Executable()
-	cc := daemon.ClientConfig{
-		StateDir:   stateDir,
-		SocketPath: envOr(daemon.EnvSocket, filepath.Join(stateDir, "daemon.sock")),
-		LockPath:   envOr(daemon.EnvLock, filepath.Join(stateDir, "daemon.lock")),
-		LogPath:    envOr(daemon.EnvLog, filepath.Join(stateDir, "daemon.log")),
-		DaemonBin:  exe,
+	cc, err := clientConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+		return 1
 	}
 	if err := daemon.Restart(cc); err != nil {
 		fmt.Fprintf(stderr, "daemon restart: %v\n", err)

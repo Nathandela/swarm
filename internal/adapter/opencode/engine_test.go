@@ -58,14 +58,18 @@ func TestEnginePath_BusyAndSettled(t *testing.T) {
 		}
 	})
 
-	t.Run("settled_offset_classifies_unknown_never_idle_or_active", func(t *testing.T) {
+	t.Run("settled_offset_preserves_status_never_idle", func(t *testing.T) {
 		const settledOffset = 68087 // memo's settled candidate frame
 		snap := renderGrid(t, fx.PTYCapture[:settledOffset])
 
-		// Seed the session as if it were still busy right before settling, so a
-		// transition to unknown is an observable CHANGE (the default initial
-		// status is already unknown, which would make this assertion vacuous —
-		// OnOutput would emit nothing and "got" would never be set).
+		// Seed the session as if it were still busy right before settling. The
+		// settled frame carries no busy marker and opencode declares no idle rule
+		// (R-E4), so the read is INCONCLUSIVE — and under ADR-007 (merged from
+		// main after this epic's committee pass) an inconclusive grid tap
+		// PRESERVES the committed status instead of committing unknown. The
+		// safety property is unchanged: the settled frame must never emit idle
+		// (or anything else); the stale active is later downgraded to unknown by
+		// Tick's staleness guard, not by this tap.
 		initial := status.Status{
 			Process:     status.ProcessRunning,
 			Turn:        status.TurnActive,
@@ -84,11 +88,8 @@ func TestEnginePath_BusyAndSettled(t *testing.T) {
 		eng.RegisterSession("s1", "tok", 0, a.SignalSources(), initial)
 		eng.OnOutput("s1", snap)
 
-		if !emitted {
-			t.Fatalf("OnOutput at settled offset %d emitted no status change from the seeded active baseline", settledOffset)
-		}
-		if got.Turn == status.TurnActive || got.Turn == status.TurnIdle {
-			t.Errorf("settled offset %d classified turn=%q; want unknown (opencode declares no idle rule, R-E4)", settledOffset, got.Turn)
+		if emitted {
+			t.Fatalf("OnOutput at settled offset %d emitted turn=%q; want no emit (inconclusive read preserves the committed status, ADR-007)", settledOffset, got.Turn)
 		}
 	})
 }

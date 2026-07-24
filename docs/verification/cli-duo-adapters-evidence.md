@@ -873,3 +873,31 @@ R-G2's real-CLI round-trips are not part of CI (env-gated, requires installed
 + authenticated `agy` and `opencode` binaries and network access); they were
 run interactively in this session and are not reproducible by `go test`
 alone — see this file's "R-G2" section for the exact commands and transcripts.
+
+### Post-close merge reconciliation: ADR-007 (2026-07-24)
+
+After R-H4 closed, `origin/main` (v0.3-v0.5, 21 commits) was merged into this
+branch. Main's ADR-007 ("an inconclusive grid heuristic preserves the
+committed status") landed per-adapter named grid signatures for claude/codex
+(`evaluateGridSig`) and made the preserve rule the OnOutput-wide invariant.
+The merge resolution keeps both mechanisms at the same seam: a session with
+declared descriptor rules (agy/opencode) evaluates `evaluateGridWithRules`,
+now with ADR-007 semantics (conclusive iff the frame classified non-unknown;
+an unknown reading preserves the committed status instead of committing);
+rule-less sessions dispatch to main's `evaluateGridSig` (named signatures or
+the generic reader).
+
+Behavioral delta vs the statements above, opencode only (agy is unaffected —
+its declared idle rule reads the settled frame conclusively): a settled
+opencode session no longer commits `unknown` on the next grid tap; the last
+committed `active` is PRESERVED until Tick's staleness guard (30s silence +
+idle CPU) downgrades it to `unknown`. The end state, TUI grouping (Working),
+absent completion banner, never-idle safety property, launch-form note, and
+the T-2 disclosure are all unchanged. Tests updated to the new spec (never
+weakened, re-pointed at ADR-007's semantics and documented in place):
+`internal/adapter/opencode/engine_test.go` (settled frame asserts NO emit),
+`internal/e2e/replay_e2e_test.go` (final observed opencode turn is the
+preserved active; never-idle assertion retained verbatim),
+`internal/engine/gridrules_test.go` descriptor-mutation test (reordered so an
+effective mutation would emit active from the unknown seed — same
+discriminating power under preserve semantics).

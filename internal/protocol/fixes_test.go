@@ -48,8 +48,9 @@ func (d *fixDaemon) List() []persist.Meta {
 func (d *fixDaemon) Launch(daemon.LaunchSpec) (persist.Meta, error) {
 	return persist.Meta{}, errors.New("fixDaemon: launch unused")
 }
-func (d *fixDaemon) Kill(string) error   { return nil }
-func (d *fixDaemon) Delete(string) error { return nil }
+func (d *fixDaemon) Kill(string) error           { return nil }
+func (d *fixDaemon) Delete(string) error         { return nil }
+func (d *fixDaemon) Rename(string, string) error { return nil }
 func (d *fixDaemon) Attach(id string) (SessionStream, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -499,7 +500,7 @@ func TestFix_InitialPromptReachesDaemonSpec(t *testing.T) {
 	c := dialClient(t, sock, nil)
 
 	dir := t.TempDir()
-	if _, err := c.Launch(LaunchReq{Agent: "claude", Cwd: dir, Cols: 80, Rows: 24, InitialPrompt: "do-the-thing"}); err != nil {
+	if _, _, err := c.Launch(LaunchReq{Agent: "claude", Cwd: dir, Cols: 80, Rows: 24, InitialPrompt: "do-the-thing"}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	specs := stub.launchSpecs()
@@ -816,8 +817,9 @@ func (d *multiFixDaemon) List() []persist.Meta {
 func (d *multiFixDaemon) Launch(daemon.LaunchSpec) (persist.Meta, error) {
 	return persist.Meta{}, errors.New("unused")
 }
-func (d *multiFixDaemon) Kill(string) error   { return nil }
-func (d *multiFixDaemon) Delete(string) error { return nil }
+func (d *multiFixDaemon) Kill(string) error           { return nil }
+func (d *multiFixDaemon) Delete(string) error         { return nil }
+func (d *multiFixDaemon) Rename(string, string) error { return nil }
 func (d *multiFixDaemon) Attach(id string) (SessionStream, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

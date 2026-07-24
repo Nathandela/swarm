@@ -13,6 +13,7 @@ package tui
 import (
 	"image/color"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/version"
 )
 
 // Client is the narrow, stub-friendly daemon surface the TUI needs. Attach is
@@ -29,9 +31,15 @@ import (
 // in-memory fake.
 type Client interface {
 	List() ([]protocol.SessionView, error)
-	Launch(protocol.LaunchReq) (string, error)
+	// Launch returns the new session's namespaced id and the daemon's CANONICAL
+	// (sanitized/truncated) name for it; an older daemon whose reply predates naming
+	// returns an empty name, and the producer falls back to the request name.
+	Launch(protocol.LaunchReq) (id, name string, err error)
 	Kill(id string) error
 	Delete(id string) error
+	// Rename changes a session's display label (v0.5). An older daemon without the op
+	// returns an error, which the caller banners (skew-safe).
+	Rename(id, name string) error
 	Subscribe() (<-chan protocol.Event, error)
 }
 
@@ -72,8 +80,27 @@ type eventMsg struct{ ev protocol.Event }
 type repaintMsg struct{}
 
 // launchResultMsg carries the outcome of an async launch/resume so a FAILURE is
-// surfaced to the user (the transient banner) instead of silently discarded (B1).
-type launchResultMsg struct{ err error }
+// surfaced to the user (the transient banner) instead of silently discarded (B1),
+// and a SUCCESS carries the daemon-returned session id + agent so the router can
+// auto-attach straight into the new session (bd agents-tracker-stc).
+type launchResultMsg struct {
+	id    string // namespaced id of the new session on success ("" if the producer omits it)
+	agent string // the new session's agent, for the attach chrome label
+	name  string // the new session's label (P2); carried into the auto-attach chrome hint
+	err   error
+}
+
+// beginUpgradeMsg kicks the daemon auto-restart from Init through Update (which owns
+// model mutation), so the once-per-process guard and the upgrade banner are set in one
+// place (bd agents-tracker-5jl).
+type beginUpgradeMsg struct{}
+
+// daemonRestartedMsg carries the result of an auto-restart + reconnect: the fresh
+// client on success, or the error to surface.
+type daemonRestartedMsg struct {
+	client Client
+	err    error
+}
 
 // detectMsg carries the result of an async agent-detection probe. Detection runs
 // off the Update hot path (a Cmd from Init and again on each form open) and is
@@ -133,6 +160,18 @@ type rootModel struct {
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
 	ticking  bool // whether a repaint tick is in flight (only on the general view)
+
+	// Build identities for the version-skew notice (E13.2): the daemon's build,
+	// reported on the hello (via the optional Client.BuildVersion surface), and this
+	// client's own build. A persistent notice shows while they differ (see skewNotice).
+	daemonVersion string
+	clientVersion string
+
+	// Auto-restart of an outdated daemon (bd agents-tracker-5jl): when this client is
+	// newer than the daemon it reached, restarter restarts the daemon and reconnects.
+	// restartAttempted is the once-per-process guard against restart loops.
+	restarter        DaemonRestarter
+	restartAttempted bool
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -149,12 +188,19 @@ const listDialTimeout = time.Second
 func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	events, _ := c.Subscribe()
 	m := rootModel{
-		client:  c,
-		detect:  detect,
-		screen:  screenGeneral,
-		general: newGeneralModel(boundedList(c)),
-		events:  events,
-		ticking: true, // Init arms the first repaint tick
+		client:        c,
+		detect:        detect,
+		screen:        screenGeneral,
+		general:       newGeneralModel(boundedList(c)),
+		events:        events,
+		ticking:       true, // Init arms the first repaint tick
+		clientVersion: version.Version,
+	}
+	// The daemon's build version rides the hello handshake. The narrow tui.Client
+	// interface stays free of it (Attach-style optional surface): the production
+	// *protocol.Client reports it; a fake that does not simply yields no notice.
+	if bv, ok := c.(interface{ BuildVersion() string }); ok {
+		m.daemonVersion = bv.BuildVersion()
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -184,7 +230,13 @@ func boundedList(c Client) []protocol.SessionView {
 // probe runs asynchronously (detectCmd) so a slow prober never delays first paint
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen))
+	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen)}
+	if m.shouldAutoUpgrade() {
+		// An older daemon than this client: kick the auto-restart through Update, which
+		// owns model mutation (the banner + once-per-process guard live there).
+		cmds = append(cmds, func() tea.Msg { return beginUpgradeMsg{} })
+	}
+	return tea.Batch(cmds...)
 }
 
 // detectCmd probes for agent CLIs off the Update hot path and delivers the result
@@ -231,12 +283,58 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
-		// (B1 — never a silent failure). A success is a no-op; the new session arrives
-		// via the subscribe stream.
+		// (B1 — never a silent failure) and stay on the board.
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
 		}
+		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
+		// reusing the exact attach path Enter uses on a running row (the session is
+		// freshly launched, so read-write). A result with no id (a producer that does
+		// not carry it) stays on the board — the pre-stc behavior.
+		if msg.id != "" {
+			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
+			if m.attachRunner != nil {
+				return m, runAttach(m.attachRunner, s, false)
+			}
+			m.attach = attachModel{session: s, hasSession: true, width: m.width}
+			m.screen = screenAttach
+		}
 		return m, nil
+
+	case beginUpgradeMsg:
+		// The hello revealed an older daemon than this client (bd agents-tracker-5jl):
+		// auto-restart it instead of asking the user. Guard once per process against
+		// restart loops. Banner the upgrade, then fire the restart+reconnect command.
+		if m.restartAttempted || m.restarter == nil {
+			return m, nil
+		}
+		m.restartAttempted = true
+		banner := m.general.setBanner("upgrading daemon " + m.daemonVersion + " -> " + m.clientVersion + "...")
+		return m, tea.Batch(banner, restartDaemonCmd(m.restarter))
+
+	case daemonRestartedMsg:
+		// The restart+reconnect resolved. A failure banners the reason (never silent).
+		if msg.err != nil {
+			return m, m.general.setBanner("daemon upgrade failed: " + msg.err.Error())
+		}
+		// Swap to the fresh client and re-read its (now matching) build version, which
+		// clears the skew. Sessions survive the restart (shims own the PTYs), so the
+		// board stays accurate; we only re-subscribe for future events. The old client's
+		// pending waitForEvent is left blocked on its dead stream — a one-time,
+		// process-lifetime cost of the once-per-process upgrade.
+		m.client = msg.client
+		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
+			m.daemonVersion = bv.BuildVersion()
+		}
+		events, serr := msg.client.Subscribe()
+		if serr != nil {
+			// The reconnect succeeded but re-subscribing did not: surface it instead of
+			// silently leaving m.events nil (a live-looking board that never updates —
+			// codex+Fable item 3). Events stay nil, but the user is told, not left dark.
+			return m, m.general.setBanner("daemon upgraded but event stream failed: " + serr.Error())
+		}
+		m.events = events
+		return m, tea.Batch(m.general.setBanner("daemon upgraded"), waitForEvent(m.events))
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
@@ -255,17 +353,56 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.PasteMsg:
-		// Bracketed paste routes into the launch form's focused text field (newlines
-		// stripped for the single-line fields); elsewhere it is ignored.
-		if m.screen == screenLaunch {
+		// Bracketed paste routes into the launch form's focused text field, or into the
+		// general board's inline rename buffer when a rename is open (newlines stripped
+		// for these single-line fields); elsewhere it is ignored.
+		switch {
+		case m.screen == screenLaunch:
 			m.launch.paste(msg.Content)
+		case m.screen == screenGeneral && m.general.editing:
+			m.general.pasteEdit(msg.Content)
 		}
 		return m, nil
 
 	case attachDoneMsg:
 		// The passthrough returned (detached / session ended / error); come back to
-		// the general board and re-arm its repaint tick.
-		return m, m.enterGeneral()
+		// the general board and re-arm its repaint tick. A FAILURE is surfaced on the
+		// banner rather than silently dropping the user back on the board.
+		cmd := m.enterGeneral()
+		if msg.err != nil {
+			return m, tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
+		}
+		return m, cmd
+
+	case deleteDoneMsg:
+		// A delete succeeded: drop the row immediately (optimistic removal — the later
+		// daemon event is then a no-op) and acknowledge it, so the board never looks
+		// stale. A failure is surfaced instead of silently discarded.
+		if msg.err != nil {
+			return m, m.general.setBanner("delete failed: " + msg.err.Error())
+		}
+		m.general.remove(msg.id)
+		m.general.tombstone(msg.id) // a late buffered event must not resurrect the row (item 6)
+		return m, m.general.setBanner("session deleted")
+
+	case killDoneMsg:
+		// A kill failure is surfaced; a success is a no-op here — the daemon event
+		// transitions the (still-listed) row to completed.
+		if msg.err != nil {
+			return m, m.general.setBanner("kill failed: " + msg.err.Error())
+		}
+		return m, nil
+
+	case renameDoneMsg:
+		// A rename failed (an older daemon's skew refusal, or a rejected id): surface
+		// it on the banner rather than silently swallowing it. On success, update the
+		// row's label immediately (optimistic); the daemon's roster event re-applies
+		// the same name so all clients converge through the normal event path.
+		if msg.err != nil {
+			return m, m.general.setBanner("rename failed: " + msg.err.Error())
+		}
+		m.general.applyName(msg.id, msg.name)
+		return m, nil
 
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the
@@ -336,18 +473,158 @@ func (m rootModel) View() tea.View {
 // kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
 // (general.view) to the persistent bottom bar (A-5, ADR-006).
 func (m rootModel) generalStatus() string {
+	if m.general.editing {
+		return "type new name   ⏎ save   esc cancel"
+	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
 	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
 	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
-	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit"
+	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   ctrl+x kill   esc quit"
+}
+
+// DaemonRestarter restarts the daemon and returns a freshly-connected client to the
+// replacement (which reports its new build version via BuildVersion). It is the
+// client-side reuse of `swarm daemon restart` (cmd/swarm wires daemon.Restart +
+// protocol.Dial). A nil restarter disables auto-upgrade — the notice/no-op path.
+type DaemonRestarter func() (Client, error)
+
+// WithDaemonRestarter injects the auto-restart seam used when this client is newer
+// than the daemon it reached (bd agents-tracker-5jl). Without it the client only shows
+// the passive notice (and only for the direction it can self-heal — see classifySkew).
+func WithDaemonRestarter(r DaemonRestarter) Option {
+	return func(m *rootModel) { m.restarter = r }
+}
+
+// restartDaemonCmd runs the injected restart+reconnect off the update loop and reports
+// its outcome as a daemonRestartedMsg.
+func restartDaemonCmd(r DaemonRestarter) tea.Cmd {
+	return func() tea.Msg {
+		c, err := r()
+		return daemonRestartedMsg{client: c, err: err}
+	}
+}
+
+// shouldAutoUpgrade reports whether Init should auto-restart the daemon: a restarter is
+// injected, no restart has been attempted this process (the loop guard), and the daemon
+// is OLDER than this client (the direction the client can self-heal — see classifySkew).
+func (m rootModel) shouldAutoUpgrade() bool {
+	return m.restarter != nil && !m.restartAttempted && classifySkew(m.daemonVersion, m.clientVersion) == skewUpgrade
+}
+
+// skew classifies a daemon/client build-version pair into the reconciliation action.
+type skew int
+
+const (
+	skewNone    skew = iota // builds match, or either is a dev/empty build (always mismatch)
+	skewNotify              // daemon NEWER than client: passive notice (the client cannot self-heal)
+	skewUpgrade             // daemon OLDER than client: auto-restart to reconcile (bd agents-tracker-5jl)
+)
+
+// classifySkew compares the daemon and client build versions. It suppresses when either
+// side is a dev/unstamped build or no daemon version was reported (those always
+// mismatch). Otherwise the direction decides: a client newer than the daemon can restart
+// the daemon into its own (newer) build, so it auto-upgrades; a daemon newer than the
+// client is a state the client cannot fix by restarting, so it only warns.
+func classifySkew(daemonVer, clientVer string) skew {
+	if daemonVer == "" || clientVer == "" || daemonVer == "dev" || clientVer == "dev" {
+		return skewNone
+	}
+	switch compareSemver(daemonVer, clientVer) {
+	case 0:
+		return skewNone
+	case 1:
+		return skewNotify // daemon newer
+	default:
+		return skewUpgrade // daemon older
+	}
+}
+
+// skewNotice returns the persistent version-skew notice line, or "" when there is
+// nothing to warn about. It is now kept ONLY for the downgrade direction (daemon NEWER
+// than client): the client-newer direction auto-restarts the daemon (bd
+// agents-tracker-5jl), so it no longer nudges the manual restart there.
+func skewNotice(daemonVer, clientVer string) string {
+	if classifySkew(daemonVer, clientVer) != skewNotify {
+		return ""
+	}
+	return "daemon " + daemonVer + " differs from swarm " + clientVer + " - run: swarm daemon restart"
+}
+
+// compareSemver compares two version strings by SemVer precedence, returning -1, 0, or
+// +1. A leading "v" and any build ("+...") metadata are ignored. The dotted-numeric core
+// is compared first; when the cores are equal a version WITH a pre-release ("-...") sorts
+// BEFORE the same version without one (0.4.0-rc.1 < 0.4.0), and two pre-releases compare
+// by their suffix string (rc.1 < rc.2). This is what lets a client on the final build
+// recognize an rc daemon as OLDER and auto-upgrade it. A non-numeric core component
+// compares as 0. Pure and total.
+func compareSemver(a, b string) int {
+	aCore, aPre := splitSemver(a)
+	bCore, bPre := splitSemver(b)
+	an := semverParts(aCore)
+	bn := semverParts(bCore)
+	for i := 0; i < len(an) || i < len(bn); i++ {
+		var av, bv int
+		if i < len(an) {
+			av = an[i]
+		}
+		if i < len(bn) {
+			bv = bn[i]
+		}
+		switch {
+		case av < bv:
+			return -1
+		case av > bv:
+			return 1
+		}
+	}
+	// Numeric cores are equal: apply SemVer pre-release precedence.
+	switch {
+	case aPre == "" && bPre == "":
+		return 0
+	case aPre == "": // a is the release, b a pre-release of it -> a is greater
+		return 1
+	case bPre == "":
+		return -1
+	default:
+		return strings.Compare(aPre, bPre)
+	}
+}
+
+// splitSemver trims a leading "v" and any build metadata, then splits a version into its
+// numeric core and its pre-release suffix (everything after the first "-").
+func splitSemver(v string) (core, pre string) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i] // drop build metadata (never part of precedence)
+	}
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
+}
+
+// semverParts splits a version core (already stripped of its "v" prefix and any
+// pre-release/build suffix by splitSemver) into its dotted numeric components, stopping
+// at the first non-numeric component.
+func semverParts(core string) []int {
+	var parts []int
+	for _, seg := range strings.Split(core, ".") {
+		n, err := strconv.Atoi(seg)
+		if err != nil {
+			break
+		}
+		parts = append(parts, n)
+	}
+	return parts
 }
 
 // composeBoard anchors a one-line status bar on the bottom row of a full-screen
 // board: the body fills the rows above it — padded with blank rows, or clipped if it
-// would overflow — and the dim bar occupies the final row. Before the first
-// WindowSizeMsg (height unknown) the bar simply follows the body.
+// would overflow — and the dim bar occupies the final row. A version-skew notice, when
+// present, takes the row directly above the bar (persistent, distinct from a session
+// row). Before the first WindowSizeMsg (height unknown) the tail simply follows the body.
 func (m rootModel) composeBoard(body, status string) string {
 	// Clamp the status text to the terminal width (less its 2-cell indent) so the bar
 	// can never wrap onto a second row and break the fixed-height board contract. The
@@ -356,16 +633,48 @@ func (m rootModel) composeBoard(body, status string) string {
 		status = clampCells(status, m.width-2)
 	}
 	bar := "  " + styleDim.Render(status)
+
+	// The version-skew notice reserves its own row above the bar, clamped and styled the
+	// same way so it likewise cannot wrap.
+	notice := skewNotice(m.daemonVersion, m.clientVersion)
+	var noticeRow string
+	if notice != "" {
+		if m.width > 2 {
+			notice = clampCells(notice, m.width-2)
+		}
+		noticeRow = "  " + styleTitle.Render(notice)
+	}
+
 	if m.height <= 0 {
-		return body + "\n" + bar
+		// Height unknown (before the first WindowSizeMsg): the tail simply follows the body.
+		out := body
+		if noticeRow != "" {
+			out += "\n" + noticeRow
+		}
+		return out + "\n" + bar
+	}
+
+	// Build the tail within the height budget, dropping the notice FIRST when there is not
+	// room for both it and the bar, so the composed board never exceeds m.height. The
+	// status bar is the last-resort row (kept whenever height >= 1); the body fills what
+	// remains above it.
+	tail := []string{bar}
+	// The notice needs height >= 3 so it never evicts the entire body: below that the
+	// notice is dropped FIRST (policy: notice, then body; the bar is the last resort).
+	if noticeRow != "" && m.height >= 3 {
+		tail = []string{noticeRow, bar}
+	}
+	target := m.height - len(tail)
+	if target < 0 {
+		target = 0
 	}
 	lines := strings.Split(body, "\n")
-	if target := m.height - 1; len(lines) > target {
+	if len(lines) > target {
 		lines = lines[:target]
 	} else {
 		lines = append(lines, make([]string, target-len(lines))...)
 	}
-	return strings.Join(lines, "\n") + "\n" + bar
+	return strings.Join(append(lines, tail...), "\n")
 }
 
 // enterGeneral switches to the general view and restarts the repaint timer if it
@@ -447,6 +756,17 @@ func statusToken(g status.Group) string {
 
 // padRight pads s with spaces to a minimum display width; it never truncates, so
 // callers can rely on the original text surviving intact.
+// displayName is the identity shown for a session: its user-provided label when set,
+// else the bare agent name. The fallback keeps the identity column non-blank when a
+// session carries no name — an older, name-unaware daemon, or one launched before the
+// field existed (P2 / version-skew safety).
+func displayName(s protocol.SessionView) string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Agent
+}
+
 func padRight(s string, n int) string {
 	if w := lipgloss.Width(s); w < n {
 		return s + strings.Repeat(" ", n-w)

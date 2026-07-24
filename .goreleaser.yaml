@@ -31,6 +31,20 @@ builds:
       - -X github.com/Nathandela/swarm/internal/version.Commit={{ .Commit }}
       - -X github.com/Nathandela/swarm/internal/version.Date={{ .Date }}
 
+# Fuse the two darwin single-arch builds into one Mach-O universal (fat) binary
+# so a single download runs natively on both Apple Silicon and Intel Macs — the
+# artifact the homebrew cask points at. `replace: true` drops the darwin/amd64 and
+# darwin/arm64 single-arch binaries from the release, leaving exactly: one darwin
+# universal + linux/amd64 + linux/arm64. Reusing id `swarm` keeps the downstream
+# `ids: [swarm]` filters (archives, homebrew_casks) matching all three. Linux
+# artifacts are untouched.
+universal_binaries:
+  - id: swarm
+    ids:
+      - swarm
+    replace: true
+    name_template: swarm
+
 archives:
   - id: swarm
     ids:

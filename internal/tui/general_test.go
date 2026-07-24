@@ -8,12 +8,18 @@ import (
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 )
 
-// fullBoard returns one session per display group (the ui-preview set).
+// fullBoard returns one session per display group (the ui-preview set). Two rows
+// carry a user-provided name (P2 — the identity column shows it); the other two are
+// unnamed and fall back to the agent label, so the golden documents both behaviors.
 func fullBoard() *fakeClient {
+	s1 := sNeedsInput("endpoint/s1", "claude", "~/Code/quanthome-api", "Permission: run db migration?", 12*time.Minute)
+	s1.Name = "db-migration"
+	s3 := sReview("endpoint/s3", "claude", "~/Code/mcp-soml", "Turn finished, review the diff", 1*time.Hour)
+	s3.Name = "soml-review"
 	return newFakeClient(
-		sNeedsInput("endpoint/s1", "claude", "~/Code/quanthome-api", "Permission: run db migration?", 12*time.Minute),
+		s1,
 		sWorking("endpoint/s2", "codex", "~/Code/agents-tracker", "Writing adapter fixture tests", 3*time.Minute),
-		sReview("endpoint/s3", "claude", "~/Code/mcp-soml", "Turn finished, review the diff", 1*time.Hour),
+		s3,
 		sCompleted("endpoint/s4", "gemini", "~/Code/scratch", "exit 0", 2*time.Hour),
 	)
 }

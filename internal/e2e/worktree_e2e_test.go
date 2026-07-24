@@ -107,7 +107,7 @@ func launchWorktreeSession(t *testing.T, c *protocol.Client, repo, script string
 	}
 	_ = os.Chmod(spath, 0o644) // the daemon subprocess reads it when spawning
 
-	id, err := c.Launch(protocol.LaunchReq{
+	id, _, err := c.Launch(protocol.LaunchReq{
 		Agent:    "fake",
 		Cwd:      repo,
 		Worktree: true,
