@@ -213,6 +213,49 @@ func TestSnapshotCache_LatestPerSession(t *testing.T) {
 	}
 }
 
+// TestMailboxDemux_GapSurvivesKindDecodeFailure (round-4 re-audit, codex#3 + sonnet#2): the
+// receiver authenticates + seq-guards an envelope BEFORE the kind-specific decode runs, so a
+// real seq gap is already known the moment recv.Accept returns. A later kind-specific
+// json.Unmarshal failure (a forward-compat landmine: a malformed or future-version frame)
+// must not erase that gap -- every branch that returns after res is known must report the
+// TRUE res.Gap, not a hardcoded false. Against pre-fix code, every kind-specific
+// decode-failure branch returns "false, err", silently dropping a gap that coincided with
+// the decode failure.
+func TestMailboxDemux_GapSurvivesKindDecodeFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		bad  []byte // a json object so the "kind" discriminator peek succeeds, but a field
+		// type mismatch fails the kind-specific unmarshal.
+	}{
+		{name: "journal (kind-less)", bad: []byte(`{"cursor":"not-a-number"}`)},
+		{name: "terminal_snapshot", bad: []byte(`{"kind":"terminal_snapshot","lines":42}`)},
+		{name: "command_reply", bad: []byte(`{"kind":"command_reply","session_id":42}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := testContentKey()
+			router := NewMailboxRouter(key)
+
+			seed, err := json.Marshal(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "launched"})
+			if err != nil {
+				t.Fatalf("marshal seed: %v", err)
+			}
+			if _, err := router.Accept(sealFrame(t, key, 1, seed)); err != nil {
+				t.Fatalf("seed accept (seq 1): %v", err)
+			}
+
+			// seq 3 skips seq 2 (dropped by the relay) AND fails the kind-specific decode.
+			gap, err := router.Accept(sealFrame(t, key, 3, tc.bad))
+			if err == nil {
+				t.Fatalf("accept malformed %s frame = nil error; want a decode failure", tc.name)
+			}
+			if !gap {
+				t.Fatalf("accept malformed %s frame at seq 3 (after seq 1): gap=false; want true -- the authenticated seq gap must survive a coincident decode failure", tc.name)
+			}
+		})
+	}
+}
+
 // TestMailboxSeqGate_SharedJournalAndSnapshot: journal and snapshot frames interleaved on
 // ONE increasing seq stream through ONE MailboxReceiver are ALL accepted. The demux must
 // Accept exactly once per envelope then dispatch on kind -- a second Accept on the same

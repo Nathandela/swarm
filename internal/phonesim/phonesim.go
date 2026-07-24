@@ -191,9 +191,13 @@ func newPhone(cfg Config, g *crypto.EpochGrant, startCursor uint64) (*Phone, err
 // codex#5+sonnet#4). On a gap, drain marks the phone Stale() (sticky: Phase A has no resync to
 // clear it) and stops the sweep AT the gap, advancing/acking only the confirmed-good prefix
 // before it -- it never tells the relay it may compact past a point known to have a missing
-// frame. The gapped frame itself was already authenticated and applied by router.Accept (that
-// happens before the gap bool is even returned), so a later sweep resumes past it once its now-
-// duplicate re-read is rejected as a stale seq by the crypto guard.
+// frame. gap is checked BEFORE err: the seq gap is authenticated the moment the receiver's seq
+// guard sees it, even when the SAME frame also fails its kind-specific decode (an unrecognised
+// kind, or a malformed frame under a future protocol version) -- a decode failure must never
+// silently erase a real gap (round-4 re-audit, codex#3+sonnet#2). The gapped frame itself was
+// already authenticated (and applied, if it also decoded) by router.Accept before the gap bool
+// is even returned, so a later sweep resumes past it once its now-duplicate re-read is rejected
+// as a stale seq by the crypto guard.
 func (p *Phone) drain(ctx context.Context) error {
 	p.drainMu.Lock()
 	defer p.drainMu.Unlock()
@@ -210,17 +214,22 @@ func (p *Phone) drain(ctx context.Context) error {
 		advanced := false
 		for _, it := range items {
 			gap, err := p.router.Accept(it.Envelope)
+			// A gap is authenticated the moment the seq guard sees it, even when the SAME
+			// frame also fails its kind-specific decode (an unrecognised kind, or a malformed
+			// frame under a future protocol version) -- honor it regardless of err, or a
+			// decode failure would silently erase a real gap (round-4 re-audit, codex#3 +
+			// sonnet#2).
+			if gap {
+				p.markStale()
+				p.advanceCursor(cursor)
+				return p.relay.MailboxAck(ctx, cursor) // stop AT the gap: never ack past it
+			}
 			if err != nil {
 				if it.Cursor > cursor {
 					cursor = it.Cursor
 					advanced = true
 				}
 				continue // not a router frame, or a replay/reorder the receiver rejected
-			}
-			if gap {
-				p.markStale()
-				p.advanceCursor(cursor)
-				return p.relay.MailboxAck(ctx, cursor) // stop AT the gap: never ack past it
 			}
 			if it.Cursor > cursor {
 				cursor = it.Cursor

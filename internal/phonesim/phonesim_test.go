@@ -350,6 +350,53 @@ func TestPhone_Drain_DetectsGapAndDoesNotAckPastIt(t *testing.T) {
 	}
 }
 
+// ROUND-4 RE-AUDIT FINDING (codex#3 + sonnet#2): drain's err != nil branch does `continue`
+// WITHOUT inspecting gap, so even a correctly-plumbed router.Accept gap=true is discarded
+// when the SAME frame also fails its kind-specific decode (a forward-compat landmine: a
+// malformed or future-version frame that also happens to skip a seq). Stale() must still be
+// set and the sweep must still stop at the gap, exactly as it does when the frame decodes
+// cleanly.
+func TestPhone_Drain_GapSurvivesDecodeFailure(t *testing.T) {
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	key := keys.ContentKey
+
+	// seq 1: valid journal frame, establishes the high-water mark (no gap).
+	first := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
+	// seq 3 skips seq 2 (dropped by the relay) AND is malformed: a type-mismatched
+	// kind-less plaintext that authenticates fine but fails the journal decode.
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: testEpoch, Seq: 3}, []byte(`{"cursor":"not-a-number"}`))
+	if err != nil {
+		t.Fatalf("seal malformed frame: %v", err)
+	}
+	afterGap := env.Marshal()
+
+	fake := &fakeRelay{items: []relay.Item{
+		{Cursor: 1, Envelope: first},
+		{Cursor: 2, Envelope: afterGap},
+	}}
+
+	phone := &Phone{
+		relay:   fake,
+		router:  phonecore.NewMailboxRouter(key),
+		content: key,
+		epochID: testEpoch,
+	}
+
+	if _, err := phone.Observe(context.Background()); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	if !phone.Stale() {
+		t.Fatal("gap not surfaced: the frame both gapped and failed its kind-specific decode, but Phone.Stale() is still false -- the err!=nil branch discarded gap")
+	}
+	if fake.acked != 1 {
+		t.Fatalf("drain acked past the detected gap: acked=%d, want 1 (the last cursor before the gap)", fake.acked)
+	}
+}
+
 // gateRelay wraps fakeRelay and blocks the FIRST MailboxReadPage call until the test
 // releases it, letting a test hold one drain() sweep open while starting a second
 // concurrent one -- Finding 3 (sonnet#2): drainMu must serialize the WHOLE sweep (read +

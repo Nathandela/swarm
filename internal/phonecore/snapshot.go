@@ -192,8 +192,12 @@ func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) 
 // stashed for pairing / epoch-rotation (C5) to open; a push frame is reserved (dropped);
 // and ONLY a kind-less plaintext takes the existing journal path into the session cache. An
 // unrecognised kind fails closed rather than being mis-applied. gap=true reports a SKIPPED
-// seq (the phone should resync). A replayed/reordered seq or an unauthenticated frame
-// returns the error and mutates nothing (fail-closed, R-PHC.5).
+// seq (the phone should resync). The seq gap is authenticated the moment r.recv.Accept
+// returns, BEFORE any kind-specific decode runs; every branch that returns after that point
+// reports the TRUE res.Gap (never a hardcoded false), so a decode failure -- an unrecognised
+// kind, or a malformed frame under a future protocol version -- never silently erases a real
+// gap (round-4 re-audit, codex#3 + sonnet#2). A replayed/reordered seq or an unauthenticated
+// frame (res not yet known) returns false and mutates nothing (fail-closed, R-PHC.5).
 func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
@@ -208,19 +212,19 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(res.Plaintext, &disc); err != nil {
-		return false, err
+		return res.Gap, err
 	}
 	switch disc.Kind {
 	case kindTerminalSnapshot:
 		var f snapshotFrame
 		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
-			return false, err
+			return res.Gap, err
 		}
 		r.snapshots.Apply(Snapshot{Session: f.Session, Lines: f.Lines, Cols: f.Cols, Rows: f.Rows})
 	case kindCommandReply:
 		var f replyFrame
 		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
-			return false, err
+			return res.Gap, err
 		}
 		r.replies.Append(f.Control)
 	case kindEpochGrant:
@@ -237,7 +241,7 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 		// JournalReceiver.Accept (journal.go).
 		var rec protocol.JournalRecord
 		if err := json.Unmarshal(res.Plaintext, &rec); err != nil {
-			return false, err
+			return res.Gap, err
 		}
 		r.sessions.Apply(rec)
 	default:
