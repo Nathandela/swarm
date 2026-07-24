@@ -2,9 +2,10 @@
 
 **Epic**: agy + opencode adapter integration (issue agents-tracker-5gv), plan
 `.claude/tmp/cli-duo-implementation-plan.md` v6.
-**Status**: Phases A-G complete and closed out (R-H2, below); gates green at
-HEAD (R-H3); R-H4 (audit-committee pass) pending at orchestrator close. This
-file grows one section per phase; later phases append rather than replace.
+**Status**: COMPLETE. All 41 requirements closed out (R-H2 table below);
+gates green at HEAD (R-H3); final audit committee passed after two applied
+revision rounds (R-H4). This file grows one section per phase; later phases
+append rather than replace.
 
 ## Phase B: fixture provenance and marker memo
 
@@ -689,7 +690,7 @@ at HEAD while writing this section and are clean (not a full `-race` +
 | R-H1 delete exploration-phase artifacts | Met | `2765805`; `internal/adapter/trioproto/` and `internal/engine/trio_exploration_test.go` confirmed absent at HEAD (`ls` returns "No such file or directory" for both); `docs/verification/cli-trio-exploration/` confirmed still present (`drive_agy.txt`, `drive_oc.txt`, `drive_vibe.txt`, `fx_agy.json`, `fx_opencode.json`, `fx_vibe.json`, `README.md`). |
 | R-H2 evidence file | Met | This document, including this section. |
 | R-H3 gates green at HEAD | Met | Full gate set run at HEAD (post-R-H1, 2026-07-18): `go build ./...` clean, `go vet ./...` clean, `go test ./... -race -count=1` all 28 test packages ok (engine 57.7s, e2e 35.0s, shim 80.7s among the heaviest), `golangci-lint run` clean. One prior whole-suite run had a single failure: `internal/shim` `TestSocket_AttachDeliversSnapshot` (attach snapshot sampled before the fake agent's output rendered, empty grid) — a load-induced flake in a package this branch never touched (last shim commits are pre-existing S9 work); it passed 3/3 in isolation under `-race` and passed in the full re-run recorded here. |
-| R-H4 final audit-committee pass | Pending | Completed by orchestrator at close. **[ORCHESTRATOR: paste committee verdict here.]** |
+| R-H4 final audit-committee pass | Met | Committee: codex (GPT-5.6 sol), Sonnet, Opus (agy absent after three attempts — headless auto-deny, timeout, then empty output). Round 1 on f9f5bbd: codex REVISE (5 findings, incl. the opencode prose-`ses_` extraction bug), Sonnet REVISE (4 findings, incl. the settled-opencode Working-group consequence), Opus PASS (freeze-test forward-guard note). All findings applied in the 7-item fix wave `9be56e6`, independently reviewed (APPROVE). Round 2: codex confirmed every substantive fix, one docs-only REVISE (stale R-C5 rationale in three spots), applied in `604fda8`. Round 3: codex VERDICT: PASS ("all three updated locations now accurately describe the implementation"). Follow-up tracked: agents-tracker-93a (opencode idle-signal product decision). |
 
 ### TDD red-run evidence snippets (phases A-G)
 
