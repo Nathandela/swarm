@@ -406,3 +406,70 @@ func TestIdempotency_CompactFsyncsParentDir(t *testing.T) {
 		t.Fatalf("record %q lost by a successful Compact", op)
 	}
 }
+
+// TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable asserts that a
+// dir-sync failure firing AFTER the compacted log has already been atomically
+// renamed into place must NOT cost durability: records written by later
+// Prepare/Complete calls must survive a restart (reopening the store over the same
+// dir). Once os.Rename succeeds, logPath names the fresh (tmp) inode and the OLD
+// append handle names the unlinked (renamed-over) inode; if the store keeps writing
+// to that old handle on a post-rename failure, every later append fsyncs into a
+// ghost file that is GONE on restart -- the records vanish and a still-valid replay
+// could execute a second time, silently losing the idempotency guarantee.
+// "Usable" (the fd is still writable) is not "durable" (survives restart).
+func TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable(t *testing.T) {
+	dir := sdir(t)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Seed one record so Compact has something to rewrite.
+	const seedOp = "devA:01JSEED"
+	if _, _, err := s.Prepare(seedOp, "kill", "sess1"); err != nil {
+		t.Fatalf("seed Prepare: %v", err)
+	}
+	if err := s.Complete(seedOp, nil); err != nil {
+		t.Fatalf("seed Complete: %v", err)
+	}
+
+	// Inject a dir-sync failure that fires AFTER the (real) rename has swapped the
+	// compacted log into place: the rename itself still lands on disk; only the
+	// durability barrier reports an error. This is the genuine post-rename failure.
+	orig := syncDir
+	syncDir = func(string) error { return errors.New("injected dir-sync failure after rename") }
+	defer func() { syncDir = orig }()
+
+	if err := s.Compact(); err == nil {
+		t.Fatalf("Compact with an injected post-rename dir-sync failure returned nil; want the failure surfaced")
+	}
+
+	// Write NEW records AFTER the failed compaction. These must land on the live
+	// at-logPath inode, not the unlinked ghost the old handle would name.
+	const op = "devA:01JPOSTCOMPACT"
+	if _, _, err := s.Prepare(op, "kill", "sess2"); err != nil {
+		t.Fatalf("Prepare after failed Compact: %v", err)
+	}
+	if err := s.Complete(op, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("Complete after failed Compact: %v", err)
+	}
+
+	// Simulate a restart: reopen the store from disk. The post-compaction records
+	// MUST replay from the durable log. Today they were fsync'd into the unlinked
+	// inode and are gone.
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after failed Compact: %v", err)
+	}
+	rec, ok := s2.Get(op)
+	if !ok {
+		t.Fatalf("post-compaction record %q lost after restart -- it was appended to the unlinked (renamed-over) inode, so the idempotency record is not durable", op)
+	}
+	if rec.Phase != PhaseCompleted {
+		t.Fatalf("post-compaction record %q restored with phase %q; want completed", op, rec.Phase)
+	}
+	// A replay after restart must short-circuit rather than let the caller re-execute.
+	if _, existed, err := s2.Prepare(op, "kill", "sess2"); err != nil || !existed {
+		t.Fatalf("post-restart Prepare(%q): existed=%v err=%v; want existed=true (idempotency preserved across the failed compaction)", op, existed, err)
+	}
+}

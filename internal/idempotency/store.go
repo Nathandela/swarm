@@ -309,12 +309,16 @@ var syncDir = func(dir string) error {
 }
 
 // rewriteLocked replaces the log with kept, atomically (tmp+fsync+rename+dirsync),
-// then reopens the append handle on the fresh file. The OLD handle s.f is left
-// open and untouched until the replacement is durably in place AND the new handle
-// opens successfully: a failure at any step (create/write/sync/rename/dirsync/
-// reopen) returns an error while the store keeps working on the OLD log --
-// degrading to "not compacted this cycle" rather than leaving s.f closed/nil,
-// which would fail every later operation until process restart.
+// swapping the append handle onto the renamed file. Until the rename lands, the OLD
+// handle s.f is untouched, so a create/write/sync/rename failure returns an error
+// while the store keeps working on the pre-compaction log -- degrading to "not
+// compacted this cycle" rather than leaving s.f closed/nil. Once the rename lands the
+// store swaps s.f onto the tmp handle (which now names logPath) BEFORE the dir sync:
+// a successful rename unlinks the old inode, so continuing to write to the old handle
+// would fsync into a ghost that is gone on restart -- silently dropping records and
+// letting a still-valid replay execute twice ("usable" is not "durable"). A dir-sync
+// failure after the swap is surfaced, but the store is already on the durable
+// at-logPath inode.
 func (s *Store) rewriteLocked(kept []Record) error {
 	tmp, err := os.CreateTemp(s.dir, logFile+".tmp*")
 	if err != nil {
@@ -332,25 +336,24 @@ func (s *Store) rewriteLocked(kept []Record) error {
 		tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
 	logPath := filepath.Join(s.dir, logFile)
 	if err := renameLog(tmpName, logPath); err != nil {
-		return err // s.f untouched: still the valid pre-compaction handle
+		tmp.Close()
+		return err // rename never landed: s.f is still the valid pre-compaction handle
 	}
-	if err := syncDir(s.dir); err != nil {
-		return err // rename landed but s.f untouched: still usable this cycle
-	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err // s.f untouched: still usable, though pointed at the old log
-	}
+	// Rename landed: logPath now names tmp's inode, and the OLD s.f names the unlinked
+	// (renamed-over) inode. tmp already names logPath, so swap onto it NOW -- before
+	// the dir sync -- so even a syncDir failure leaves the store writing to the live
+	// at-logPath inode rather than the ghost. tmp is positioned at end-of-file and
+	// every append runs single-writer under s.mu, so it appends exactly like the
+	// O_APPEND handle it replaces.
 	if s.f != nil {
 		_ = s.f.Close()
 	}
-	s.f = f
-	return nil
+	s.f = tmp
+	// tmp's data is already fsync'd; syncDir makes the rename (the dir entry) durable.
+	// A failure here is surfaced but the store already writes to the durable inode.
+	return syncDir(s.dir)
 }
 
 func mustMarshal(rec Record) []byte {
