@@ -60,3 +60,46 @@ func TestReadSnapshot_PreambleWithNegotiationStillAccepted(t *testing.T) {
 		t.Fatalf("negotiated chunked snapshot: got (%q, %v), want (snap, nil)", snap, err)
 	}
 }
+
+// TestShimStream_TrailingChunkAfterExactCompletionIgnored pins the v2.2 spec
+// reconciliation end to end: a chunk stream whose declared length is satisfied
+// EXACTLY on a frame boundary, followed by a stray trailing TSnapshot frame,
+// delivers the snapshot correctly, silently ignores the stray frame, and
+// continues into live TDataOut frames without error. Detecting the trailing
+// frame as an error would require reading past completion — which would hang
+// an idle session (R1.2.2) — so tolerance is the DESIGN, and this test is its
+// positive pin (previously untested; C3 committee finding).
+func TestShimStream_TrailingChunkAfterExactCompletionIgnored(t *testing.T) {
+	cl, sv := net.Pipe()
+	t.Cleanup(func() { cl.Close(); sv.Close() })
+
+	want := []byte("exact-boundary-snapshot")
+	go func() {
+		// Fake shim peer: consume the attach request, then snapshot + stray + live.
+		if _, _, err := wire.ReadFrame(cl); err != nil {
+			return
+		}
+		body, _ := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSnapshotInfo, SnapshotLen: len(want)})
+		_ = wire.WriteFrame(cl, wire.TControl, body)
+		_ = wire.WriteFrame(cl, wire.TSnapshot, want) // exactly snapshot_len, one frame boundary
+		_ = wire.WriteFrame(cl, wire.TSnapshot, []byte("stray-trailing-chunk"))
+		_ = wire.WriteFrame(cl, wire.TDataOut, []byte("live"))
+	}()
+
+	st, err := newShimStream(sv, shimwire.Caps{SnapshotChunking: true})
+	if err != nil {
+		t.Fatalf("newShimStream: %v", err)
+	}
+	defer st.Close()
+	if got := st.Snapshot(); string(got) != string(want) {
+		t.Fatalf("snapshot = %q, want %q", got, want)
+	}
+	select {
+	case f := <-st.Frames():
+		if string(f) != "live" {
+			t.Fatalf("first live frame = %q, want %q (stray chunk leaked into the stream?)", f, "live")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("live stream did not continue after the trailing chunk")
+	}
+}
