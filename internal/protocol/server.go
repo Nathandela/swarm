@@ -106,6 +106,15 @@ const (
 	// frame. A grid snapshot can exceed wire.MaxFrame (maxDim=1000 → far over
 	// 1 MiB), so the Server chunks it across frames the client reassembles (F2).
 	snapshotChunkSize = wire.MaxFrame - 1
+
+	// maxPeekCols/maxPeekRows bound a remote terminal PEEK snapshot to the phone
+	// viewport so its single OpTerminalSnapshot control frame can never exceed
+	// wire.MaxFrame (A7 J). A session grid can be up to maxDim (1000) square, whose
+	// sanitized text would JSON-encode well past 1 MiB and be silently dropped by
+	// WriteFrame. v1 CLIPS the already-sanitized render to this bound (clipPeek);
+	// chunking a peek across frames like the lease snapshot is a future enhancement.
+	maxPeekCols = 300
+	maxPeekRows = 200
 )
 
 // pumpWriteTimeout bounds every controller-facing write (lease, snapshot chunk,
@@ -1534,22 +1543,76 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		// Emit the LOCAL session id (the gateway namespaces at egress). NEVER forward input
 		// from this path — it is read-only.
 		daemon.RenderTerminal(ctx, local, sub, func(r daemon.TerminalRender) {
+			// Re-check the kill switch before EVERY emission (A7 C): the FIRST gate only
+			// covers subscribe time, so `swarm remote off` (or revoking the last device)
+			// mid-peek must BLANK an established peek. A disabled switch cancels the render
+			// ctx — the loop returns and the deferred sub.Close releases the tap. Mirrors
+			// controlGateOpen clause 1 (the switch is re-checked on every keystroke).
+			if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+				cancel()
+				return
+			}
+			// Clip the sanitized render to the phone-viewport bound BEFORE encoding (A7 J), so
+			// a large grid (up to maxDim square, forwardResize-reachable) can never encode past
+			// wire.MaxFrame and be silently dropped by WriteFrame. SnapText already sanitized
+			// every line; clipping only bounds their count/width, never weakening sanitization.
+			lines, cols, rows := clipPeek(r.Lines, r.Cols, r.Rows)
 			body, err := EncodeControl(Control{
 				Op:         OpTerminalSnapshot,
 				EndpointID: cc.endpointID,
 				Terminal: &TerminalSnapshot{
 					Session: r.Session,
-					Lines:   r.Lines,
-					Cols:    r.Cols,
-					Rows:    r.Rows,
+					Lines:   lines,
+					Cols:    cols,
+					Rows:    rows,
 				},
 			})
 			if err != nil {
 				return
 			}
-			_ = cc.writeFrameDeadline(wire.TControl, body)
+			// Terminate the renderer on the FIRST write error (A7 #7): a readable-but-
+			// unwritable conn otherwise stalls pumpWriteTimeout per frame forever, pinning the
+			// renderer and its tap. Cancelling the ctx stops the loop and releases the tap
+			// within a bound (the deferred sub.Close runs when RenderTerminal returns).
+			if err := cc.writeFrameDeadline(wire.TControl, body); err != nil {
+				cancel()
+				return
+			}
 		})
 	}()
+}
+
+// clipPeek bounds an already-sanitized peek render to at most maxPeekRows lines of at most
+// maxPeekCols runes each, returning the clipped lines and clipped dimensions so the encoded
+// OpTerminalSnapshot frame stays under wire.MaxFrame (A7 J). SnapText ran upstream, so this
+// only bounds line count/width — it NEVER alters sanitization. The common case (a grid within
+// the bound) returns the input unchanged; only an oversized grid pays the copy/truncation.
+func clipPeek(lines []string, cols, rows int) ([]string, int, int) {
+	if len(lines) <= maxPeekRows && cols <= maxPeekCols {
+		return lines, cols, rows // within the viewport bound: nothing to clip
+	}
+	if len(lines) > maxPeekRows {
+		lines = lines[:maxPeekRows]
+		rows = maxPeekRows
+	}
+	if cols > maxPeekCols {
+		cols = maxPeekCols
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		// A line's byte length is an upper bound on its rune count, so a short line needs no
+		// rune decode; only a line wider than the cap is truncated at the rune boundary.
+		if len(line) <= maxPeekCols {
+			out[i] = line
+			continue
+		}
+		if rs := []rune(line); len(rs) > maxPeekCols {
+			out[i] = string(rs[:maxPeekCols])
+		} else {
+			out[i] = line
+		}
+	}
+	return out, cols, rows
 }
 
 // terminalTapper returns the backend's TerminalTapper if terminal_subscribe is available to

@@ -163,6 +163,43 @@ func TestRenderLoop_InitialSnapshotFromStream(t *testing.T) {
 	assertSanitized(t, renders)
 }
 
+// TestRenderLoop_InitialStatePreservedAcrossLiveFrame pins defect B: the loop must
+// SEED its emulator from the initial snapshot before consuming live frames, so the
+// first live frame is applied ON TOP of the initial screen rather than onto a blank
+// grid. The initial snapshot shows "READY" on row 0; a single live frame moves the
+// cursor elsewhere and writes one char WITHOUT touching row 0. The resulting render
+// must still contain "READY" (initial state preserved) AND the new char. An unseeded
+// emulator (the bug) starts blank, so "READY" is lost on the first live frame.
+func TestRenderLoop_InitialStatePreservedAcrossLiveFrame(t *testing.T) {
+	initial := snapBytes(t, 40, 10, []byte("READY")) // row 0 == "READY"
+	frames := make(chan []byte, 1)
+	// One live frame: CUP to row 5 col 10, then 'Z'. It never touches row 0, so a
+	// seeded emulator keeps READY there while adding Z; an unseeded one shows only Z.
+	frames <- []byte("\x1b[5;10HZ")
+	close(frames)
+
+	stream := &stubTerminalStream{snap: initial, frames: frames}
+	var c collector
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	RenderTerminal(ctx, "seed", stream, c.push)
+
+	renders := c.snapshots()
+	if len(renders) == 0 {
+		t.Fatal("no snapshots pushed")
+	}
+	last := renders[len(renders)-1]
+	joined := strings.Join(last.Lines, "")
+	if !strings.Contains(joined, "READY") {
+		t.Errorf("initial state LOST across the first live frame: render missing %q (unseeded emulator); grid=%q", "READY", joined)
+	}
+	if !strings.Contains(joined, "Z") {
+		t.Errorf("live frame not applied: render missing %q; grid=%q", "Z", joined)
+	}
+	assertSanitized(t, renders)
+}
+
 // TestRenderLoop_CoalescesBurst verifies a burst of many frames within the
 // debounce window yields FEWER pushed snapshots than frames (coalescing), and
 // the final snapshot reflects the latest accumulated state.

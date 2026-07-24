@@ -69,10 +69,21 @@ type TerminalRender struct {
 // the last push always reflects the latest state. It owns and closes its
 // emulator, leaving no goroutine behind.
 func RenderTerminal(ctx context.Context, session string, stream TerminalStream, push func(TerminalRender)) {
-	cols, rows := renderInitial(session, stream, push)
+	// Decode + push the initial snapshot ONCE and reuse the SAME decoded grid to seed the
+	// emulator, so the live loop starts from the real initial screen. Without the seed the
+	// first live frame is applied onto a BLANK grid and every initial cell is lost (mirrors
+	// skeleton.seedMirror, which feeds vt.RenderSnapshot(s) into a fresh emulator).
+	initial := renderInitial(session, stream, push)
 
+	cols, rows := renderDefaultCols, renderDefaultRows
+	if initial != nil {
+		cols, rows = initial.Cols, initial.Rows
+	}
 	emu := vt.NewEmulator(cols, rows)
 	defer emu.Close()
+	if initial != nil {
+		emu.Feed(vt.RenderSnapshot(initial)) // seed: repaint the initial grid into the emulator
+	}
 
 	// Reuse the journal delivery-layer debouncer for its window/coalesce timing
 	// rather than hand-rolling one. It only coalesces group_transition records,
@@ -110,16 +121,17 @@ func RenderTerminal(ctx context.Context, session string, stream TerminalStream, 
 	}
 }
 
-// renderInitial decodes and pushes the stream's initial snapshot and returns the
-// grid dimensions to size the emulator. An undecodable snapshot pushes nothing
-// and falls back to default dimensions so live frames still render.
-func renderInitial(session string, stream TerminalStream, push func(TerminalRender)) (cols, rows int) {
+// renderInitial decodes and pushes the stream's initial snapshot, returning the decoded
+// Snap so the caller can SEED the emulator from the SAME grid (so the first live frame is
+// applied on top of the initial screen, not a blank one). An undecodable snapshot pushes
+// nothing and returns nil, so the loop falls back to default dimensions and an empty grid.
+func renderInitial(session string, stream TerminalStream, push func(TerminalRender)) *vt.Snap {
 	snap, err := vt.DecodeSnapshot(stream.Snapshot())
 	if err != nil {
-		return renderDefaultCols, renderDefaultRows
+		return nil
 	}
 	push(TerminalRender{Session: session, Lines: vt.SnapText(snap), Cols: snap.Cols, Rows: snap.Rows})
-	return snap.Cols, snap.Rows
+	return snap
 }
 
 // renderEmulator snapshots the emulator's current grid, flattens it to sanitized
