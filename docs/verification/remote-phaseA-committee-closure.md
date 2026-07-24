@@ -192,3 +192,36 @@ in rounds 4 and 5). The majority verdict is SHIPS (sonnet + opus, rounds 4 + 5).
 are owner-side I/O-fault / degenerate-state edges and the standing Phase-B deferrals (live gateway
 epoch-reload, ME-1 relay-close, multi-device/SenderKeyID binding, admin tier, real-phone lifecycle glue +
 mobile app), all documented and none carrying a live relay-reachable hole. A confirmation round 6 follows.
+
+## Re-audit ROUND 6 (final confirmation, 2026-07-24) — codex REVISE / sonnet SHIPS / opus SHIPS -> majority SHIPS
+
+MILESTONE: all three reviewers independently confirmed NO relay-adversary-reachable confidentiality/
+integrity hole remains ("no remaining relay-only bypass" -- codex; end-to-end traces -- sonnet + opus).
+codex upgraded REJECT -> REVISE. Its findings were localized correctness bugs the round-5 commit
+introduced/left (owner-side, non-relay, self-healing); all fixed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| grant.Delete moved OUTSIDE lifecycleMu (round-5) races a concurrent re-pair of the same device id -> deletes the fresh grant, bricking the re-paired phone (codex#1 + opus#1 panic-safety) | Refactor the atomic core into a defer-Unlock closure with grant.Delete INSIDE the lock; only the network sever runs outside; both still fire on removed==true | `e01162b` |
+| Startup epoch-mismatch reconcile discarded Registry.Remove's error -> Serve could open remote.sock with a confirmed-stale device (codex#2) | reconcilePairedDevices returns an error on a stale-device Remove failure; Serve ABORTS (fail closed) | `e01162b` |
+| handleDeviceRevoke swallowed the error on removed==true, hiding a grant.Delete cleanup failure round-3 4b requires be surfaced (codex#3 + sonnet#2, consensus) | Handler severs on removed AND surfaces the error (replyError if err) | `e01162b` |
+
+### Recorded residuals (round 6, non-blocking, owner-side / Phase-B; none relay-reachable)
+- **machineid.Save lacks the (committed,err) distinction (sonnet#1):** a committed-but-dir-fsync-failed
+  epoch rotation makes RevokeDevice report failure (device stays registered, un-severed, a.pairing stale)
+  and a retry double-rotates. Same owner-side FS-fault class as the registry path before its round-3/5
+  fix; self-heals on a successful retry or on the startup epoch reconcile. Applying the (committed,err)
+  distinction to machineid.Save ripples to all Save callers (init); recorded as a fast-follow, not fixed.
+- **Epoch-equality reconcile is single-device-specific (opus#3):** serve.go removes any device whose
+  GrantedEpoch != current epoch. Correct for v1 (revoke removes the sole device). In MULTI-device (Phase B)
+  a legitimate survivor holds GrantedEpoch=N with no re-grant update path, so this reconcile must be
+  revisited in the multi-device/SenderKeyID ADR (it would wrongly delete a survivor on restart). Recorded.
+- **A rotate-fail / pre-rename-Remove-fail revoke leaves the device live and un-severed (opus#4):** a
+  failed revoke is a failed revoke; `swarm remote off` (SetRemoteControl(false) -> severRemoteControl,
+  independent of rotate/persist) is the working fail-safe kill switch. Operator-doc note.
+- AddSole committed-error enrolled-no-grant (self-healed by reconcile); gateway under PERMANENT registry
+  corruption; live gateway epoch-reload; ME-1 relay-close; multi-device/SenderKeyID; admin tier;
+  real-phone lifecycle glue + mobile app -- unchanged, all owner-side/degenerate/Phase-B, none
+  relay-reachable.
+
+Standing gate after round 6: `go build/vet/test -race ./...` -- 0 failures. A confirmation round 7 follows.
