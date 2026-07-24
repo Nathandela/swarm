@@ -462,3 +462,38 @@ The relay is mailbox-only; input rides the command-IN poll (default 500ms — un
 typing). Phase A proves the backend correct at any poll interval (phonesim uses a tight one);
 a live/long-poll transport (or a hard poll-interval drop) is a Phase B decision, not a blocker
 for the input backend.
+
+## Amendment 2026-07-24 — A7 review: concurrent multi-tier control + supersede seed fidelity
+
+The A7 cross-model review (docs/verification/remote-phaseA-a7-review.md, findings F and G)
+surfaced two design questions the shared per-session tap (A7 F1) raises. Both are resolved here
+for the PERSONAL single-owner v1; neither blocks Phase A.
+
+**Decision G — concurrent owner + phone control is ALLOWED in v1 (drifts from P-5, scoped).**
+The owner-tier controller (`d.srv`) and a remote take_control lease (`d.remoteSrv`) hold
+independent read-write leases on the SAME PTY via the shared tap; input interleaves and neither
+supersedes the other. system-spec P-5 ("exclusive controller lease; one controller per session in
+v1") and ADR-002 were written for a MULTI-USER contention model. For the personal v1 the owner and
+the phone user are the SAME person driving their own machine — concurrent control is not a
+contention hazard, and both controllers are authenticated (the phone via a signed take_control
+through requireRemoteAuthz). So P-5's exclusivity is **relaxed for the personal single-owner
+model**: concurrent owner + phone control is permitted. Multi-user exclusivity (locking or
+arbitration across tiers) is a later concern if remote control is ever shared across distinct
+people. **Recommended hardening (A4/TUI):** the TUI SHOULD show an indicator when a remote lease is
+active on a session, so the owner is aware a phone is driving (safety/awareness, not
+authorization). Recorded as an A4/TUI follow-up, not a Phase A blocker.
+
+**Decision F — an owner supersede concurrent with an active peek is mirror-seeded (accepted
+fidelity residual).** When a peek (or a remote lease) keeps the tap alive, an owner supersede
+becomes a LATE tap subscriber seeded from `mirror.Snapshot()` rather than a fresh shim re-dial
+(the shim is single-consumer — a fresh dial is impossible while the tap holds the upstream; that
+is precisely why the tap exists). The mirror's initial seed (`seedMirror` via `vt.RenderSnapshot`)
+drops pre-tap SGR pen + title + scrollback, so an owner repainted this way can miss pre-tap
+styling that the ADR-002 fresh-dial path preserves. This is **accepted for v1**: it occurs ONLY on
+the narrow "owner supersede WHILE a phone peek/lease is concurrently active" path, the loss is
+cosmetic (colors/title of the pre-tap screen; live-frame styling is tracked correctly by the
+emulator from that point on), and the alternative — forbidding concurrent peek so the owner can
+fresh-dial — is strictly worse UX. Full-fidelity concurrent supersede would require a lossless
+mirror (preserve SGR/title/scrollback in the mirror seed) — recorded as a future enhancement, not
+a Phase A blocker. The sole-subscriber (no concurrent peek) supersede stays byte-identical to
+today (tested).
