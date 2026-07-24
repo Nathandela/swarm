@@ -52,6 +52,82 @@ func marshalSnapshot(t *testing.T, session string, lines []string, cols, rows in
 	return plain
 }
 
+// marshalReply builds the committed sealed command-reply plaintext: a protocol.Control
+// plus a kind:"command_reply" tag, mirroring marshalSnapshot. It is the exact wire shape
+// the gateway's SealControlReply stamps, so the router can demux a reply off the shared
+// mailbox instead of mistaking it for a journal record.
+func marshalReply(t *testing.T, ctrl protocol.Control) []byte {
+	t.Helper()
+	plain, err := json.Marshal(replyFrame{Kind: kindCommandReply, Control: ctrl})
+	if err != nil {
+		t.Fatalf("marshal reply frame: %v", err)
+	}
+	return plain
+}
+
+// TestMailboxDemux_CommandReplyNotJournaled is the C8 regression (codex#7: "Observe can
+// swallow a reply before ReadReply"). A command reply sealed onto the SHARED mailbox (same
+// seq space as journal + snapshots) must be demuxed into the router's reply cache and
+// drainable there -- NEVER json.Unmarshaled into a JournalRecord and applied to the session
+// cache. Against pre-fix code Accept has no reply case, so the kind-less fallthrough opens
+// the Control as a JournalRecord and Apply materialises a bogus session -> both asserts fail.
+func TestMailboxDemux_CommandReplyNotJournaled(t *testing.T) {
+	key := testContentKey()
+	router := NewMailboxRouter(key)
+
+	reply := protocol.Control{Op: protocol.OpOK, SessionID: "m/s1", OperationID: "op-1"}
+	if _, err := router.Accept(sealFrame(t, key, 1, marshalReply(t, reply))); err != nil {
+		t.Fatalf("accept reply: %v", err)
+	}
+
+	// (a) The reply is retrievable via the router's reply accessor.
+	got, ok := router.Replies().Take()
+	if !ok {
+		t.Fatalf("reply cache empty; the router swallowed the command reply instead of routing it")
+	}
+	if got.Op != protocol.OpOK || got.OperationID != "op-1" {
+		t.Fatalf("reply = %+v; want Op ok, OperationID op-1 (verbatim)", got)
+	}
+	// (b) It was NOT applied to the session/snapshot caches (the core C8 regression).
+	if n := len(router.Sessions().List()); n != 0 {
+		t.Fatalf("session cache has %d entries; want 0 (a command reply is not a journal record)", n)
+	}
+	if n := router.Snapshots().Len(); n != 0 {
+		t.Fatalf("snapshot cache has %d entries; want 0", n)
+	}
+}
+
+// TestMailboxDemux_GrantAndPushNotJournaled pins the remaining explicit-kind routes: an
+// epoch_grant frame is stashed for C5 to open (drainable via TakeGrant) and a reserved
+// push frame is dropped -- neither is ever applied to the session cache, and an unknown
+// kind fails closed instead of being swallowed as journal.
+func TestMailboxDemux_GrantAndPushNotJournaled(t *testing.T) {
+	key := testContentKey()
+	router := NewMailboxRouter(key)
+
+	grantPlain := []byte(`{"kind":"epoch_grant","opaque":"c5-defines-this"}`)
+	if _, err := router.Accept(sealFrame(t, key, 1, grantPlain)); err != nil {
+		t.Fatalf("accept grant: %v", err)
+	}
+	if _, err := router.Accept(sealFrame(t, key, 2, []byte(`{"kind":"push"}`))); err != nil {
+		t.Fatalf("accept push: %v", err)
+	}
+	if _, err := router.Accept(sealFrame(t, key, 3, []byte(`{"kind":"who_knows"}`))); err == nil {
+		t.Fatalf("accept unknown kind = nil error; want fail-closed (never swallowed as journal)")
+	}
+
+	got, ok := router.TakeGrant()
+	if !ok || !bytes.Equal(got, grantPlain) {
+		t.Fatalf("TakeGrant = %q ok=%v; want the stashed grant plaintext verbatim", got, ok)
+	}
+	if _, ok := router.TakeGrant(); ok {
+		t.Fatalf("second TakeGrant returned a grant; want the FIFO drained")
+	}
+	if n := len(router.Sessions().List()); n != 0 {
+		t.Fatalf("session cache has %d entries; want 0 (grant/push/unknown are not journal records)", n)
+	}
+}
+
 // TestSnapshotFrame_WireShape pins the exact committed plaintext JSON shape (D matches
 // this): the kind discriminator plus the TerminalSnapshot fields, in order.
 func TestSnapshotFrame_WireShape(t *testing.T) {

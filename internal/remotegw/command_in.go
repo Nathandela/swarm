@@ -68,11 +68,28 @@ func OpenRemoteCommandGuarded(recv *crypto.MailboxReceiver, key crypto.ContentKe
 	return rc, nil
 }
 
+// kindCommandReply tags a mailbox plaintext as a daemon reply to a phone command. The
+// phone decoder (phonecore.MailboxRouter) demuxes it off the SHARED mailbox on this
+// discriminator so a reply is never mistaken for a kind-less journal record (C8 / codex#7);
+// it MUST match phonecore's kindCommandReply.
+const kindCommandReply = "command_reply"
+
+// replyFrame is the sealed command-reply plaintext: the daemon's protocol.Control fields
+// (promoted via anonymous embedding so its frozen json tags stay the single source of
+// truth) plus a kind tag. It mirrors phonecore's replyFrame exactly -- the phone unmarshals
+// this shape, and the tolerant OpenControlReply ignores the extra kind key.
+type replyFrame struct {
+	Kind            string `json:"kind"`
+	protocol.Control        // op, session_id, operation_id, ... (promoted)
+}
+
 // SealControlReply seals a daemon reply Control as a mailbox envelope under the epoch
 // content key so the gateway can return it to the phone through the untrusted relay
-// (the request/response counterpart of OpenCommandEnvelope). seq must be unique.
+// (the request/response counterpart of OpenCommandEnvelope). The plaintext carries an
+// explicit kind:"command_reply" tag so the phone routes it to its reply cache instead of
+// swallowing it into the session cache (C8). seq must be unique.
 func SealControlReply(key crypto.ContentKey, epochID uint32, seq uint64, reply protocol.Control) ([]byte, error) {
-	plaintext, err := json.Marshal(reply)
+	plaintext, err := json.Marshal(replyFrame{Kind: kindCommandReply, Control: reply})
 	if err != nil {
 		return nil, err
 	}
