@@ -210,10 +210,11 @@ func (p *Phone) TakeControl(ctx context.Context, session, operationID string) er
 
 // Type seals a keystroke burst as an input-frame envelope under the epoch content key
 // with the SHARED sequencer and appends it to the machine mailbox, where the gateway
-// routes it onto the focused session's lease conn -> the daemon -> the session's PTY. It
-// returns the raw wire bytes so a caller can Replay them (an adversarial redelivery).
-func (p *Phone) Type(ctx context.Context, data []byte) ([]byte, error) {
-	env, err := phonecore.SealInputData(p.content, p.epochID, p.seq.Next(), data)
+// routes it -- by the target session id bound INSIDE the sealed frame -- onto that
+// session's lease conn -> the daemon -> the session's PTY. It returns the raw wire bytes
+// so a caller can Replay them (an adversarial redelivery).
+func (p *Phone) Type(ctx context.Context, session string, data []byte) ([]byte, error) {
+	env, err := phonecore.SealInputData(p.content, p.epochID, p.seq.Next(), session, data)
 	if err != nil {
 		return nil, err
 	}
@@ -224,9 +225,9 @@ func (p *Phone) Type(ctx context.Context, data []byte) ([]byte, error) {
 }
 
 // Resize seals a terminal resize as an input-frame envelope with the SHARED sequencer and
-// appends it to the machine mailbox, mirroring Type.
-func (p *Phone) Resize(ctx context.Context, cols, rows int) error {
-	env, err := phonecore.SealInputResize(p.content, p.epochID, p.seq.Next(), cols, rows)
+// appends it to the machine mailbox, mirroring Type. session is the target session id.
+func (p *Phone) Resize(ctx context.Context, session string, cols, rows int) error {
+	env, err := phonecore.SealInputResize(p.content, p.epochID, p.seq.Next(), session, cols, rows)
 	if err != nil {
 		return err
 	}

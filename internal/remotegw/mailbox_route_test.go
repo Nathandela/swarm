@@ -102,15 +102,15 @@ func sealInputEnv(t *testing.T, key crypto.ContentKey, seq uint64, w inputFrameW
 
 // TestCommandBridge_RoutesInputVsCommand feeds ONE seq-ordered mailbox stream with
 // interleaved sealed frames drawn from a single seq allocator and proves the router
-// dispatches each on its decoded plaintext after a SINGLE Accept:
+// dispatches each on its decoded plaintext after a SINGLE Accept, routing every input
+// by the target session id sealed INSIDE the frame:
 //
-//	seq1 kill            -> Forwarder.ForwardCommand (a mutating op, fresh conn)
-//	seq2 take_control    -> LeaseRouter.Begin        (opens the session's lease; focuses it)
-//	seq3 input "data"    -> LeaseRouter.Input(m/s1)  (rides the focused session's lease)
-//	seq4 input "resize"  -> LeaseRouter.Input(m/s1)
-//	seq5 take_control_end -> LeaseRouter.End(m/s1)    (clears the focused session)
-//	seq6 input "data"    -> LeaseRouter.Input("")     (no focus after End: dropped/unfocused)
-//	seq3 REPLAY          -> dropped: ErrStaleSeq from the single Accept, NEVER reaches Input
+//	seq1 kill             -> Forwarder.ForwardCommand (a mutating op, fresh conn)
+//	seq2 take_control     -> LeaseRouter.Begin        (opens the session's lease)
+//	seq3 input "data"     -> LeaseRouter.Input(m/s1)  (routed by the frame's session id)
+//	seq4 input "resize"   -> LeaseRouter.Input(m/s1)
+//	seq5 take_control_end  -> LeaseRouter.End(m/s1)
+//	seq3 REPLAY           -> dropped: ErrStaleSeq from the single Accept, NEVER reaches Input
 func TestCommandBridge_RoutesInputVsCommand(t *testing.T) {
 	var key crypto.ContentKey
 	for i := range key {
@@ -127,11 +127,10 @@ func TestCommandBridge_RoutesInputVsCommand(t *testing.T) {
 	mb := &fakeMailbox{inbox: []relay.Item{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-kill", DeviceID: "d1", Sig: "sig-k"})},
 		{Cursor: 2, Envelope: sealRemoteCmd(t, key, 2, takeCtrl)},
-		{Cursor: 3, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Data: []byte("ls -la\r")})},
-		{Cursor: 4, Envelope: sealInputEnv(t, key, 4, inputFrameWire{T: "resize", Cols: 100, Rows: 40})},
+		{Cursor: 3, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Session: "m/s1", Data: []byte("ls -la\r")})},
+		{Cursor: 4, Envelope: sealInputEnv(t, key, 4, inputFrameWire{T: "resize", Session: "m/s1", Cols: 100, Rows: 40})},
 		{Cursor: 5, Envelope: sealRemoteCmd(t, key, 5, endCtrl)},
-		{Cursor: 6, Envelope: sealInputEnv(t, key, 6, inputFrameWire{T: "data", Data: []byte("after-end\r")})},
-		{Cursor: 7, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Data: []byte("ls -la\r")})}, // REPLAY of seq 3
+		{Cursor: 6, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Session: "m/s1", Data: []byte("ls -la\r")})}, // REPLAY of seq 3
 	}}
 
 	fwd := &fakeForwarder{}
@@ -147,12 +146,12 @@ func TestCommandBridge_RoutesInputVsCommand(t *testing.T) {
 
 	n, err := b.PollOnce(context.Background())
 
-	// The replayed seq surfaces once as ErrStaleSeq (aggregated), the other six process.
+	// The replayed seq surfaces once as ErrStaleSeq (aggregated), the other five process.
 	if !errors.Is(err, crypto.ErrStaleSeq) {
 		t.Fatalf("PollOnce err = %v, want it to wrap crypto.ErrStaleSeq (the replayed input seq)", err)
 	}
-	if n != 6 {
-		t.Fatalf("processed %d, want 6 (kill, take_control, 2 inputs, take_control_end, 1 input; replay dropped)", n)
+	if n != 5 {
+		t.Fatalf("processed %d, want 5 (kill, take_control, 2 inputs, take_control_end; replay dropped)", n)
 	}
 
 	// kill was forwarded; take_control / take_control_end / input were NOT.
@@ -175,19 +174,200 @@ func TestCommandBridge_RoutesInputVsCommand(t *testing.T) {
 		t.Fatalf("End calls = %v, want [m/s1]", mgr.ends)
 	}
 
-	// The replay was dropped at Accept: exactly THREE inputs reached the lease plane.
-	if len(mgr.inputs) != 3 {
-		t.Fatalf("Input calls = %d, want 3 (the replayed seq must be dropped before Input)", len(mgr.inputs))
+	// The replay was dropped at Accept: exactly TWO inputs reached the lease plane, each
+	// routed by the session id sealed into its own frame (m/s1).
+	if len(mgr.inputs) != 2 {
+		t.Fatalf("Input calls = %d, want 2 (the replayed seq must be dropped before Input)", len(mgr.inputs))
 	}
-	// input data + resize routed to the FOCUSED session (take_control's m/s1).
 	if mgr.inputs[0].session != "m/s1" || mgr.inputs[0].frame.Kind != "data" || !bytes.Equal(mgr.inputs[0].frame.Data, []byte("ls -la\r")) {
 		t.Fatalf("input[0] = %+v, want data 'ls -la\\r' on m/s1", mgr.inputs[0])
 	}
 	if mgr.inputs[1].session != "m/s1" || mgr.inputs[1].frame.Kind != "resize" || mgr.inputs[1].frame.Cols != 100 || mgr.inputs[1].frame.Rows != 40 {
 		t.Fatalf("input[1] = %+v, want resize 100x40 on m/s1", mgr.inputs[1])
 	}
-	// After take_control_end cleared the focus, the next input routes to "" (unfocused).
-	if mgr.inputs[2].session != "" || mgr.inputs[2].frame.Kind != "data" {
-		t.Fatalf("input[2] = %+v, want data on the cleared (empty) session after End", mgr.inputs[2])
+}
+
+// TestCommandBridge_DroppedTakeControlDoesNotMisrouteInput is the A7 finding-A
+// adversarial reproduction: the relay (the adversary) can DROP a sealed frame it
+// cannot forge or alter. The phone controls session A, then take_control(B); the relay
+// DROPS the take_control(B) envelope and delivers B's next keystroke. Under the old
+// focus-tracking router (route by mutable currentSession), the still-focused A absorbs
+// B's keystroke onto A's LIVE lease -- a cross-session misroute the daemon's per-lease
+// gate cannot catch (the frame legitimately matches A's lease).
+//
+// The fix binds the target session id INSIDE the sealed frame and routes by it, and
+// honors the receiver's gap bit: B's keystroke names B (found no lease -> never touches
+// A) AND arrives after a mailbox gap (the dropped take_control skipped a seq), so it is
+// dropped outright. Either way it MUST NOT ride A's lease.
+//
+//	seq1 take_control(A)          -> Begin(A)
+//	seq2 input(session=A, "keyA") -> Input(A)            (contiguous: no gap)
+//	seq3 take_control(B)          -> DROPPED by the relay (never appended)
+//	seq4 input(session=B, "keyB") -> Gap (seq 3 skipped): DROPPED, never routed to A
+func TestCommandBridge_DroppedTakeControlDoesNotMisrouteInput(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+
+	takeA := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
+		Action: protocol.ActionTakeControl, Session: "m/sA", OperationID: "op-tcA", DeviceID: "d1", Sig: "sig-tcA",
+	}}
+
+	// The take_control(B) at seq 3 is DROPPED by the adversarial relay: it is never
+	// appended, so the mailbox jumps from seq 2 straight to B's keystroke at seq 4.
+	mb := &fakeMailbox{inbox: []relay.Item{
+		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
+		{Cursor: 2, Envelope: sealInputEnv(t, key, 2, inputFrameWire{T: "data", Session: "m/sA", Data: []byte("keyA\r")})},
+		{Cursor: 3, Envelope: sealInputEnv(t, key, 4, inputFrameWire{T: "data", Session: "m/sB", Data: []byte("keyB\r")})},
+	}}
+
+	fwd := &fakeForwarder{}
+	mgr := &fakeLeaseRouter{}
+	b := NewCommandBridge(CommandBridgeConfig{
+		Mailbox:     mb,
+		Forwarder:   fwd,
+		Leases:      mgr,
+		Key:         key,
+		EpochID:     1,
+		ReplyTarget: "phone",
+	})
+
+	n, err := b.PollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("PollOnce err = %v, want nil (a gap is not an error; the gapped input is dropped, not failed)", err)
+	}
+	if n != 3 {
+		t.Fatalf("processed %d, want 3 (take_control, input A, input B; B dropped-but-processed)", n)
+	}
+
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+
+	// B's take_control was dropped, so only A ever opened a lease.
+	if len(mgr.begins) != 1 || mgr.begins[0].Session != "m/sA" {
+		t.Fatalf("Begin calls = %+v, want exactly [take_control m/sA] (B's take_control was dropped)", mgr.begins)
+	}
+
+	// THE SECURITY ASSERTION: B's keystroke must NEVER reach the lease plane. It names a
+	// session (B) whose take_control was dropped AND it follows a mailbox gap, so it is
+	// dropped -- exactly ONE input (A's own keystroke) rode a lease. Under the old
+	// currentSession router this is TWO, the second being B's "keyB" misrouted onto A.
+	if len(mgr.inputs) != 1 {
+		t.Fatalf("Input calls = %d, want 1: the gapped input for B (its take_control dropped) must be dropped, not misrouted onto A", len(mgr.inputs))
+	}
+	if mgr.inputs[0].session != "m/sA" || !bytes.Equal(mgr.inputs[0].frame.Data, []byte("keyA\r")) {
+		t.Fatalf("sole input = %+v, want A's own keystroke 'keyA\\r' on m/sA", mgr.inputs[0])
+	}
+	for _, in := range mgr.inputs {
+		if bytes.Equal(in.frame.Data, []byte("keyB\r")) {
+			t.Fatalf("B's keystroke reached the lease plane (routed to %q); a dropped take_control(B) must never let B's input ride any lease", in.session)
+		}
+	}
+}
+
+// TestCommandBridge_RoutesInputByEmbeddedSessionNotFocus proves the session-binding
+// defense independently of any gap: two sessions hold coexisting leases, and an input
+// routes to the session named INSIDE its own frame -- NOT to whichever session was
+// taken-control most recently. Under the old router the last take_control (B) is the
+// focus, so an input for A would misroute onto B even with a perfectly contiguous seq
+// stream (no gap to catch it).
+//
+//	seq1 take_control(A)          -> Begin(A)
+//	seq2 take_control(B)          -> Begin(B)   (both leases coexist)
+//	seq3 input(session=A, "toA")  -> Input(A)   (contiguous: no gap)
+//	seq4 input(session=B, "toB")  -> Input(B)
+func TestCommandBridge_RoutesInputByEmbeddedSessionNotFocus(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+
+	takeA := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
+		Action: protocol.ActionTakeControl, Session: "m/sA", OperationID: "op-tcA", DeviceID: "d1", Sig: "sig-tcA",
+	}}
+	takeB := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
+		Action: protocol.ActionTakeControl, Session: "m/sB", OperationID: "op-tcB", DeviceID: "d1", Sig: "sig-tcB",
+	}}
+
+	mb := &fakeMailbox{inbox: []relay.Item{
+		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
+		{Cursor: 2, Envelope: sealRemoteCmd(t, key, 2, takeB)},
+		{Cursor: 3, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Session: "m/sA", Data: []byte("toA\r")})},
+		{Cursor: 4, Envelope: sealInputEnv(t, key, 4, inputFrameWire{T: "data", Session: "m/sB", Data: []byte("toB\r")})},
+	}}
+
+	fwd := &fakeForwarder{}
+	mgr := &fakeLeaseRouter{}
+	b := NewCommandBridge(CommandBridgeConfig{
+		Mailbox:     mb,
+		Forwarder:   fwd,
+		Leases:      mgr,
+		Key:         key,
+		EpochID:     1,
+		ReplyTarget: "phone",
+	})
+
+	n, err := b.PollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("PollOnce err = %v, want nil", err)
+	}
+	if n != 4 {
+		t.Fatalf("processed %d, want 4", n)
+	}
+
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if len(mgr.inputs) != 2 {
+		t.Fatalf("Input calls = %d, want 2", len(mgr.inputs))
+	}
+	// Each input routes to the session sealed into ITS frame, not the last-focused (B).
+	if mgr.inputs[0].session != "m/sA" || !bytes.Equal(mgr.inputs[0].frame.Data, []byte("toA\r")) {
+		t.Fatalf("input[0] = %+v, want 'toA\\r' on m/sA -- routing must follow the sealed session id, not the most-recent take_control (m/sB)", mgr.inputs[0])
+	}
+	if mgr.inputs[1].session != "m/sB" || !bytes.Equal(mgr.inputs[1].frame.Data, []byte("toB\r")) {
+		t.Fatalf("input[1] = %+v, want 'toB\\r' on m/sB", mgr.inputs[1])
+	}
+}
+
+// TestCommandBridge_DropsInputWithNoSession proves an input frame that names no target
+// session is dropped, never routed onto whatever session happens to hold a lease.
+//
+//	seq1 take_control(A)        -> Begin(A)
+//	seq2 input(session="", ...) -> DROPPED (empty target)
+func TestCommandBridge_DropsInputWithNoSession(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+
+	takeA := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
+		Action: protocol.ActionTakeControl, Session: "m/sA", OperationID: "op-tcA", DeviceID: "d1", Sig: "sig-tcA",
+	}}
+
+	mb := &fakeMailbox{inbox: []relay.Item{
+		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
+		{Cursor: 2, Envelope: sealInputEnv(t, key, 2, inputFrameWire{T: "data", Data: []byte("orphan\r")})}, // no Session
+	}}
+
+	fwd := &fakeForwarder{}
+	mgr := &fakeLeaseRouter{}
+	b := NewCommandBridge(CommandBridgeConfig{
+		Mailbox:     mb,
+		Forwarder:   fwd,
+		Leases:      mgr,
+		Key:         key,
+		EpochID:     1,
+		ReplyTarget: "phone",
+	})
+
+	if _, err := b.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce err = %v, want nil", err)
+	}
+
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if len(mgr.inputs) != 0 {
+		t.Fatalf("Input calls = %d, want 0: an input naming no session must be dropped, not routed onto the leased session", len(mgr.inputs))
 	}
 }

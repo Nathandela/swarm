@@ -19,10 +19,11 @@ var ErrNotInputFrame = errors.New("remotegw: envelope is not an input frame")
 // would cycle), and protocol is off-limits this slice, so the small wire shape
 // is duplicated the way command_in.go keeps its opener local.
 type InputFrame struct {
-	Kind string
-	Data []byte
-	Cols int
-	Rows int
+	Kind    string
+	Session string // target namespaced session id, bound inside the sealed frame; the router dispatches by it
+	Data    []byte
+	Cols    int
+	Rows    int
 }
 
 // inputFrameWire is the phone -> machine input-frame wire shape; it mirrors
@@ -30,10 +31,11 @@ type InputFrame struct {
 // type. RemoteCommand carries no `t`, so decoding a command here yields Kind ""
 // and OpenInputFrame reports ErrNotInputFrame.
 type inputFrameWire struct {
-	T    string `json:"t"`
-	Data []byte `json:"data,omitempty"`
-	Cols int    `json:"cols,omitempty"`
-	Rows int    `json:"rows,omitempty"`
+	T       string `json:"t"`
+	Session string `json:"s,omitempty"`
+	Data    []byte `json:"data,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	Rows    int    `json:"rows,omitempty"`
 }
 
 // OpenInputFrame opens an input-frame envelope the phone sealed under the epoch
@@ -59,5 +61,5 @@ func OpenInputFrame(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw []b
 	if w.T != "data" && w.T != "resize" {
 		return InputFrame{}, ErrNotInputFrame
 	}
-	return InputFrame{Kind: w.T, Data: w.Data, Cols: w.Cols, Rows: w.Rows}, nil
+	return InputFrame{Kind: w.T, Session: w.Session, Data: w.Data, Cols: w.Cols, Rows: w.Rows}, nil
 }

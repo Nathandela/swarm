@@ -50,7 +50,7 @@ func TestSealInputFrame_SharedSeqSpaceRejectsReplay(t *testing.T) {
 	recv := crypto.NewMailboxReceiver()
 
 	dataSeq := seqr.Next()
-	rawData, err := SealInputData(key, epoch, dataSeq, []byte("ls -la\r"))
+	rawData, err := SealInputData(key, epoch, dataSeq, "machine1/sess1", []byte("ls -la\r"))
 	if err != nil {
 		t.Fatalf("SealInputData: %v", err)
 	}
@@ -61,12 +61,17 @@ func TestSealInputFrame_SharedSeqSpaceRejectsReplay(t *testing.T) {
 	if frameData.Kind != "data" {
 		t.Fatalf("data frame Kind = %q; want \"data\"", frameData.Kind)
 	}
+	// The target session id is bound INSIDE the sealed frame and recovered on open,
+	// so the machine can route the keystroke by it (never by mutable focus state).
+	if frameData.Session != "machine1/sess1" {
+		t.Fatalf("data frame Session = %q; want %q (session must be sealed into the frame)", frameData.Session, "machine1/sess1")
+	}
 	if !bytes.Equal(frameData.Data, []byte("ls -la\r")) {
 		t.Fatalf("data frame Data = %q; want %q", frameData.Data, "ls -la\r")
 	}
 
 	resizeSeq := seqr.Next()
-	rawResize, err := SealInputResize(key, epoch, resizeSeq, 120, 40)
+	rawResize, err := SealInputResize(key, epoch, resizeSeq, "machine1/sess1", 120, 40)
 	if err != nil {
 		t.Fatalf("SealInputResize: %v", err)
 	}
@@ -76,6 +81,9 @@ func TestSealInputFrame_SharedSeqSpaceRejectsReplay(t *testing.T) {
 	}
 	if frameResize.Kind != "resize" {
 		t.Fatalf("resize frame Kind = %q; want \"resize\"", frameResize.Kind)
+	}
+	if frameResize.Session != "machine1/sess1" {
+		t.Fatalf("resize frame Session = %q; want %q", frameResize.Session, "machine1/sess1")
 	}
 	if frameResize.Cols != 120 || frameResize.Rows != 40 {
 		t.Fatalf("resize frame = %dx%d; want 120x40", frameResize.Cols, frameResize.Rows)
@@ -110,7 +118,7 @@ func TestSealInputFrame_SharedSeqSpaceRejectsReplay(t *testing.T) {
 		t.Fatalf("guarded command #1 through shared receiver: %v", err)
 	}
 
-	rawIn1, err := SealInputData(key, epoch, sharedSeq.Next(), []byte("echo hi\r"))
+	rawIn1, err := SealInputData(key, epoch, sharedSeq.Next(), "machine1/sess1", []byte("echo hi\r"))
 	if err != nil {
 		t.Fatalf("SealInputData shared: %v", err)
 	}
@@ -126,7 +134,7 @@ func TestSealInputFrame_SharedSeqSpaceRejectsReplay(t *testing.T) {
 		t.Fatalf("guarded command #2 through shared receiver: %v", err)
 	}
 
-	rawIn2, err := SealInputResize(key, epoch, sharedSeq.Next(), 80, 24)
+	rawIn2, err := SealInputResize(key, epoch, sharedSeq.Next(), "machine1/sess1", 80, 24)
 	if err != nil {
 		t.Fatalf("SealInputResize shared: %v", err)
 	}

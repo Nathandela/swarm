@@ -74,10 +74,9 @@ type CommandBridge struct {
 	cfg  CommandBridgeConfig
 	recv *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
 
-	mu             sync.Mutex
-	cursor         uint64
-	replySeq       uint64
-	currentSession string // the session the phone last took control of; input frames route here
+	mu       sync.Mutex
+	cursor   uint64
+	replySeq uint64
 }
 
 // NewCommandBridge returns a bridge over cfg. The read cursor starts at 0; a caller
@@ -158,41 +157,49 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 }
 
 // handle opens ONE mailbox envelope (a single Accept advancing the shared seq
-// high-water) and routes it by kind: an input frame rides the focused session's
-// lease conn; a command dispatches on its action (take_control/take_control_end to
-// the lease plane, kill/delete/launch to the daemon). A replayed seq is rejected by
-// the single Accept before any dispatch, so it can neither double-lease nor
-// double-forward nor reach Input.
+// high-water) and routes it by kind: an input frame rides the lease conn of the
+// session named INSIDE its sealed plaintext; a command dispatches on its action
+// (take_control/take_control_end to the lease plane, kill/delete/launch to the
+// daemon). A replayed seq is rejected by the single Accept before any dispatch, so it
+// can neither double-lease nor double-forward nor reach Input.
 func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 	frame, err := OpenMailboxFrame(b.recv, b.cfg.Key, it.Envelope)
 	if err != nil {
 		return fmt.Errorf("open frame: %w", err)
 	}
 	if frame.Kind == FrameInput {
-		return b.routeInput(frame.Input)
+		return b.routeInput(frame)
 	}
 	return b.routeCommand(ctx, frame.Command)
 }
 
-// routeInput hands a keystroke/resize frame to the currently-focused session's lease
-// conn. The mailbox is seq-ordered, so a take_control always precedes its input
-// frames and currentSession names the right session by the time input arrives. With
-// no focus (or no input plane) the frame is routed to "" / dropped -- never wedged.
-func (b *CommandBridge) routeInput(f InputFrame) error {
+// routeInput hands a keystroke/resize frame to the lease conn of the session named
+// INSIDE the sealed frame (InputFrame.Session). Because that id is bound under the
+// AEAD, it is authentic end to end: the untrusted relay can drop or reorder sealed
+// frames but cannot alter their contents, so an input for session B always names B --
+// if B's take_control was dropped, B has no lease and the frame is dropped, never
+// riding another session's live lease (A7 cross-session misroute).
+//
+// The frame is dropped -- never routed -- when it names no target (empty Session) or
+// when it follows a mailbox gap (frame.Gap: a preceding seq was skipped, so a frame --
+// possibly the target's take_control -- was lost and the routing state is uncertain).
+// A dropped keystroke is safer than one misrouted onto another session's lease.
+func (b *CommandBridge) routeInput(f MailboxFrame) error {
 	if b.cfg.Leases == nil {
 		return nil
 	}
-	b.mu.Lock()
-	session := b.currentSession
-	b.mu.Unlock()
-	return b.cfg.Leases.Input(session, f)
+	if f.Input.Session == "" || f.Gap {
+		return nil
+	}
+	return b.cfg.Leases.Input(f.Input.Session, f.Input)
 }
 
 // routeCommand dispatches an opened RemoteCommand: take_control opens the session's
-// lease and focuses it; take_control_end tears it down and clears the focus; every
-// other action (kill/delete/launch) is forwarded to the daemon on a fresh conn and
-// its reply is sealed back to the phone. take_control and its teardown never go to
-// the daemon forwarder (the lease conn is the daemon path for control).
+// lease; take_control_end tears it down; every other action (kill/delete/launch) is
+// forwarded to the daemon on a fresh conn and its reply is sealed back to the phone.
+// take_control and its teardown carry their OWN target session, so no mutable focus
+// state is kept -- input frames route by the session sealed into each frame, not by
+// the last take_control (routeInput).
 func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteCommand) error {
 	switch rc.Action {
 	case protocol.ActionTakeControl:
@@ -202,9 +209,6 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		if err := b.cfg.Leases.Begin(rc); err != nil {
 			return fmt.Errorf("take_control: %w", err)
 		}
-		b.mu.Lock()
-		b.currentSession = rc.Session
-		b.mu.Unlock()
 		return nil
 	case protocol.OpTakeControlEnd:
 		// take_control_end has no signed Action constant; the daemon op string is its
@@ -213,11 +217,6 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 			return nil
 		}
 		b.cfg.Leases.End(rc.Session)
-		b.mu.Lock()
-		if b.currentSession == rc.Session {
-			b.currentSession = ""
-		}
-		b.mu.Unlock()
 		return nil
 	default:
 		return b.forward(ctx, rc)

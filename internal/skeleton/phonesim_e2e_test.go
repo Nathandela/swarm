@@ -324,8 +324,9 @@ func TestPhonesim_TakeControlTypeE2E(t *testing.T) {
 	// TAKE CONTROL: the phone signs a take_control (real Ed25519 over SHA256(gateToken))
 	// and seals it to the machine mailbox; the gateway's command-IN loop routes it to
 	// LeaseManager.Begin, which dials the daemon remote.sock and the daemon grants the
-	// controller lease. The mailbox is seq-ordered, so this take_control is processed
-	// (and focuses the session) before any input frame that follows it.
+	// controller lease. The mailbox is seq-ordered, so this take_control opens the
+	// session's lease before any input frame that follows it; each input then routes by
+	// the target session id sealed inside its own frame, not by any mutable focus state.
 	if err := phone.TakeControl(ctx, session, "devSIM:01JSIM000000000000TAKE1"); err != nil {
 		t.Fatalf("phonesim take_control: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestPhonesim_TakeControlTypeE2E(t *testing.T) {
 	// TYPE (first keystroke): the burst travels phone -> relay mailbox -> gateway
 	// (LeaseManager.Input) -> the lease conn -> the daemon -> the session's PTY, where the
 	// first `ask` consumes it. Capture the raw wire bytes so we can replay them.
-	rawFirst, err := phone.Type(ctx, []byte("first\n"))
+	rawFirst, err := phone.Type(ctx, session, []byte("first\n"))
 	if err != nil {
 		t.Fatalf("phonesim type (first keystroke): %v", err)
 	}
@@ -362,7 +363,7 @@ func TestPhonesim_TakeControlTypeE2E(t *testing.T) {
 	// TYPE (second, distinct keystroke): a fresh seq the gateway accepts. Now TWO
 	// distinct keystrokes have reached the PTY, so the second `ask` is satisfied and the
 	// script exits -- the milestone: the phone typed into the session end to end.
-	if _, err := phone.Type(ctx, []byte("second\n")); err != nil {
+	if _, err := phone.Type(ctx, session, []byte("second\n")); err != nil {
 		t.Fatalf("phonesim type (second keystroke): %v", err)
 	}
 	if !waitSessionExited(t, sk, meta.ID, 5*time.Second) {

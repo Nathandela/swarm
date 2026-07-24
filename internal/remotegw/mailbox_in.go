@@ -20,11 +20,16 @@ const (
 )
 
 // MailboxFrame is one opened phone -> machine mailbox envelope. Exactly one of
-// Command / Input is populated, per Kind.
+// Command / Input is populated, per Kind. Gap is the receiver's gap bit for this
+// envelope: it is set when a preceding mailbox seq was skipped (the relay dropped
+// a frame). The router honors it for input -- a keystroke that follows a gap is
+// dropped, since the lost frame may have been the target's take_control and the
+// routing state is therefore uncertain (A7 defense in depth).
 type MailboxFrame struct {
 	Kind    FrameKind
 	Command protocol.RemoteCommand
 	Input   InputFrame
+	Gap     bool
 }
 
 // OpenMailboxFrame opens ONE mailbox envelope through the shared MailboxReceiver,
@@ -56,11 +61,11 @@ func OpenMailboxFrame(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw [
 		return MailboxFrame{}, err
 	}
 	if w.T == "data" || w.T == "resize" {
-		return MailboxFrame{Kind: FrameInput, Input: InputFrame{Kind: w.T, Data: w.Data, Cols: w.Cols, Rows: w.Rows}}, nil
+		return MailboxFrame{Kind: FrameInput, Input: InputFrame{Kind: w.T, Session: w.Session, Data: w.Data, Cols: w.Cols, Rows: w.Rows}, Gap: res.Gap}, nil
 	}
 	var rc protocol.RemoteCommand
 	if err := json.Unmarshal(res.Plaintext, &rc); err != nil {
 		return MailboxFrame{}, err
 	}
-	return MailboxFrame{Kind: FrameCommand, Command: rc}, nil
+	return MailboxFrame{Kind: FrameCommand, Command: rc, Gap: res.Gap}, nil
 }
