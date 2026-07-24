@@ -12,10 +12,11 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [006](ADR-006-field-test-ux-revisions.md) | Field-test UX revisions — detach key Ctrl+q, full-screen chrome, auth inheritance | Accepted | 2026-07-18 |
 | [007](ADR-007-inconclusive-heuristic-preserves-status.md) | An inconclusive grid heuristic preserves the committed status (per-adapter grid signatures) | Accepted | 2026-07-18 |
 | [008](ADR-008-status-events-latest-state-coalescing.md) | Status events are level-triggered latest-state snapshots (coalescing permitted) | Accepted | 2026-07-18 |
+| [009](ADR-009-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Proposed | 2026-07-24 |
 
 ## Adding a new ADR
 
-1. Next sequential number (the next is ADR-009).
+1. Next sequential number (the next is ADR-010).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.
