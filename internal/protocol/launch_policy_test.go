@@ -71,7 +71,10 @@ func remoteLaunchControl(ep string, req LaunchReq) Control {
 // is DROPPED entirely, not filtered. RED today: FilterEnv keeps ANTHROPIC_API_KEY/PATH.
 func TestPolicy_RemoteLaunchDropsClientEnv(t *testing.T) {
 	stub := newStubDaemon()
-	sock := serveRemote(t, stub)
+	// This test is about R-POL.5 (env-drop), not R-POL.3 (cwd confinement), so wire a
+	// permissive LaunchPolicy — otherwise the F4 fail-closed-absent guard would refuse the
+	// launch before ClientEnv is ever inspected.
+	sock := serveRemoteAPI(t, allowAllLaunchPolicy{stub})
 	rc := rawDial(t, sock)
 	rep := rc.hello(Version, []string{CapRemoteGateway})
 
@@ -154,7 +157,10 @@ func TestPolicy_RemoteLaunchAllowsSafeOptions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newStubDaemon()
-			sock := serveRemote(t, stub)
+			// This test is about R-POL.4's VALUE-aware denylist, not R-POL.3 (cwd
+			// confinement), so wire a permissive LaunchPolicy — otherwise the F4
+			// fail-closed-absent guard would refuse the launch regardless of the option.
+			sock := serveRemoteAPI(t, allowAllLaunchPolicy{stub})
 			rc := rawDial(t, sock)
 			rep := rc.hello(Version, []string{CapRemoteGateway})
 

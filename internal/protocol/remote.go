@@ -180,9 +180,12 @@ type TerminalTapper interface {
 // RemoteLaunchAllowed(resolvedCwd); a non-nil error refuses the launch with CodePolicy —
 // AFTER authz but BEFORE the cwd stat / any daemon side effect (R-POL.2), so a resolved cwd
 // outside every root is refused with no side effect. An EMPTY root set denies every launch
-// (fail-closed). A backend that does NOT implement it is unaffected (additive, like
-// KillSwitch); production fail-closed is delivered by the assembly ALWAYS wiring a
-// config-derived policy (empty-allowed by default) onto the coreAPI.
+// (fail-closed). A backend that does NOT implement it AT ALL is refused too (F4,
+// fail-closed-absent): handleLaunch replies CodePolicy for every remote launch rather than
+// skipping confinement, mirroring requireRemoteAuthz's fail-closed-absent DeviceAuthenticator
+// handling. Production also delivers fail-closed via the assembly ALWAYS wiring a
+// config-derived policy (empty-allowed by default) onto the coreAPI; the protocol-layer
+// refusal is defense in depth against a misassembled backend, not the sole safeguard.
 type LaunchPolicy interface {
 	RemoteLaunchAllowed(resolvedCwd string) error
 }

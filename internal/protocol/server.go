@@ -1034,22 +1034,28 @@ func (cc *clientConn) handleLaunch(c Control) {
 			}
 		}
 	}
-	// R-POL.3/.2: on the remote tier, when the backend exposes a LaunchPolicy, confine the
-	// launch to its machine-configured cwd roots. Resolve the cwd (symlink-hardened) HERE so
-	// the RESOLVED real path is what the policy checks — a symlink textually under a root but
-	// resolving outside it is refused — and do it AFTER authz/denylist but BEFORE the cwd
-	// stat / any side effect. An unresolvable cwd (e.g. nonexistent) is refused CodePolicy.
+	// R-POL.3/.2: on the remote tier, confine the launch to the backend's machine-configured
+	// cwd roots. A backend that exposes NO LaunchPolicy at all is refused (F4, fail-closed on
+	// backend misassembly) rather than left unconfined — mirroring requireRemoteAuthz's
+	// fail-closed-absent handling of a missing DeviceAuthenticator. Resolve the cwd
+	// (symlink-hardened) HERE so the RESOLVED real path is what the policy checks — a symlink
+	// textually under a root but resolving outside it is refused — and do it AFTER
+	// authz/denylist but BEFORE the cwd stat / any side effect. An unresolvable cwd (e.g.
+	// nonexistent) is refused CodePolicy.
 	if cc.srv.remoteTier {
-		if lp, ok := cc.launchPolicy(); ok {
-			resolved, err := filepath.EvalSymlinks(req.Cwd)
-			if err != nil {
-				cc.replyErrorCode("launch: cwd is not a resolvable directory on the remote tier", CodePolicy)
-				return
-			}
-			if err := lp.RemoteLaunchAllowed(resolved); err != nil {
-				cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
-				return
-			}
+		lp, ok := cc.launchPolicy()
+		if !ok {
+			cc.replyErrorCode("launch: no remote launch policy configured", CodePolicy)
+			return
+		}
+		resolved, err := filepath.EvalSymlinks(req.Cwd)
+		if err != nil {
+			cc.replyErrorCode("launch: cwd is not a resolvable directory on the remote tier", CodePolicy)
+			return
+		}
+		if err := lp.RemoteLaunchAllowed(resolved); err != nil {
+			cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
+			return
 		}
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {

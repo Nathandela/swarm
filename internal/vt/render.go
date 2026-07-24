@@ -22,7 +22,9 @@ package vt
 //     compromised peer cannot inject ESC/OSC (e.g. an OSC 52 clipboard write)
 //     because every C0 control byte and DEL is stripped from run text before it is
 //     written (see stripControls). This is the render-time backstop to the
-//     producer-side N-6 filter in emulator.go.
+//     producer-side N-6 filter in emulator.go. stripControls also drops Unicode bidi
+//     formatting/override/isolate and zero-width characters, closing a Trojan-Source
+//     visual-spoofing path a control-byte-only filter would miss (F7).
 
 import (
 	"strconv"
@@ -115,13 +117,15 @@ func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 }
 
 // SnapText flattens a snapshot grid into plain-text lines, one string per grid
-// row, safe to display on a phone: no terminal control sequence can escape.
-// Unlike RenderSnapshot it emits NO ANSI — just each row's run text concatenated
-// with every control byte removed (stripControls: C0 incl. LF/CR, DEL, C1). It is
-// a sanitization choke point in its own right, stripping directly rather than
-// trusting the producer-side N-6 filter, so hostile bytes that reach a Snap by any
-// path still cannot smuggle an escape sequence to the viewer. A nil snapshot
-// yields nil.
+// row, safe to display on a phone: no terminal control sequence can escape, and no
+// Unicode bidi/zero-width rune can visually spoof what is displayed. Unlike
+// RenderSnapshot it emits NO ANSI — just each row's run text concatenated with every
+// control byte, bidi-formatting/override/isolate rune, and zero-width rune removed
+// (stripControls: C0 incl. LF/CR, DEL, C1, bidi, zero-width). It is a sanitization
+// choke point in its own right, stripping directly rather than trusting the
+// producer-side N-6 filter, so hostile bytes that reach a Snap by any path still
+// cannot smuggle an escape sequence or a Trojan-Source visual spoof to the viewer
+// (F7). A nil snapshot yields nil.
 func SnapText(s *Snap) []string {
 	if s == nil {
 		return nil
@@ -158,18 +162,36 @@ func clampCursor(v, limit int) int {
 }
 
 // stripControls removes C0 control runes (0x00-0x1f, including the ESC that
-// introduces any sequence), DEL (0x7f), and the C1 control range (U+0080-U+009F,
-// whose UTF-8-encoded CSI/OSC forms xterm-family terminals honor as controls)
-// from run text, keeping the ASCII space and every other multi-byte UTF-8 rune.
-// It is the render-time N-6 backstop: a skewed or compromised peer
+// introduces any sequence), DEL (0x7f), the C1 control range (U+0080-U+009F,
+// whose UTF-8-encoded CSI/OSC forms xterm-family terminals honor as controls),
+// Unicode bidirectional formatting/override/isolate characters, and zero-width
+// characters, from run text — keeping the ASCII space and every other multi-byte
+// UTF-8 rune. It is the render-time N-6 backstop: a skewed or compromised peer
 // cannot smuggle ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned
 // snapshot, because the control bytes are dropped before the text reaches the real
-// terminal. Clean single-grapheme run text (the overwhelming common case) passes
-// through unchanged.
+// terminal. The bidi/zero-width set closes a second smuggling path (F7): without it a
+// hostile PTY could emit a Trojan-Source style visual spoof (e.g. U+202E RIGHT-TO-LEFT
+// OVERRIDE reordering how text is DISPLAYED, or zero-width runes hiding/splicing
+// content) that no control-byte filter would catch. Dropped bidi runes: U+061C (ALM),
+// U+200E/U+200F (LRM/RLM), U+202A-U+202E (LRE/RLE/PDF/LRO/RLO), U+2066-U+2069
+// (LRI/RLI/FSI/PDI). Dropped zero-width runes: U+200B-U+200D (ZWSP/ZWNJ/ZWJ),
+// U+FEFF (zero width no-break space / BOM). Clean single-grapheme run text (the
+// overwhelming common case) passes through unchanged.
 func stripControls(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
-			return -1
+		switch {
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			return -1 // C0 (incl. ESC/LF/CR) / DEL / C1
+		case r == 0x061c:
+			return -1 // ALM
+		case r >= 0x200b && r <= 0x200f:
+			return -1 // ZWSP, ZWNJ, ZWJ, LRM, RLM
+		case r >= 0x202a && r <= 0x202e:
+			return -1 // LRE, RLE, PDF, LRO, RLO
+		case r >= 0x2066 && r <= 0x2069:
+			return -1 // LRI, RLI, FSI, PDI
+		case r == 0xfeff:
+			return -1 // zero width no-break space / BOM
 		}
 		return r
 	}, s)

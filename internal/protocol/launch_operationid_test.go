@@ -59,7 +59,10 @@ var _ DaemonAPI = (*idempotentLaunchStub)(nil)
 // (exactly one session spawned, not two).
 func TestProtocol_RemoteLaunchOperationIDEngagesIdempotency(t *testing.T) {
 	stub := newIdempotentLaunchStub()
-	sock := serveRemoteAPI(t, stub)
+	// This test is about the operation_id reaching the daemon LaunchSpec (C3), not R-POL.3
+	// (cwd confinement), so wire a permissive LaunchPolicy — otherwise the F4
+	// fail-closed-absent guard would refuse the launch before OperationID is ever inspected.
+	sock := serveRemoteAPI(t, allowAllLaunchPolicy{stub})
 	rc := rawDial(t, sock)
 	rep := rc.hello(Version, []string{CapRemoteGateway})
 

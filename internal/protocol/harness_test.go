@@ -286,6 +286,28 @@ type daemonOnly struct{ DaemonAPI }
 func (daemonOnly) RemoteControlEnabled() bool                  { return true }
 func (daemonOnly) ClaimOperation(_, _, _ string) (bool, error) { return false, nil }
 
+// remoteCapableBackend is DaemonAPI plus the optional interfaces the stubDaemon family
+// already implements (DeviceAuthenticator, KillSwitch, OperationClaimer) — the full set
+// allowAllLaunchPolicy needs to promote so wrapping ONLY adds RemoteLaunchAllowed.
+type remoteCapableBackend interface {
+	DaemonAPI
+	DeviceAuthenticator
+	KillSwitch
+	OperationClaimer
+}
+
+// allowAllLaunchPolicy grants every remote launch (F4/R-POL.3 satisfied trivially) on top
+// of an otherwise-complete remote backend. It exists so tests exercising a DIFFERENT
+// remote-launch guard (env-drop, option denylist, operation-id idempotency) are unaffected
+// by the F4 fail-closed-when-LaunchPolicy-absent fix: handleLaunch now REFUSES a remote
+// launch outright when the backend implements no LaunchPolicy at all, so any such test must
+// wire one explicitly. The negative case — a backend that truly omits LaunchPolicy — is
+// pinned directly against a plain *stubDaemon (which implements none of it) in
+// TestPolicy_LaunchPolicyAbsentRefused.
+type allowAllLaunchPolicy struct{ remoteCapableBackend }
+
+func (allowAllLaunchPolicy) RemoteLaunchAllowed(string) error { return nil }
+
 func newStubDaemon() *stubDaemon {
 	return &stubDaemon{events: make(chan persist.Meta, 64)}
 }

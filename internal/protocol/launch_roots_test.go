@@ -197,3 +197,32 @@ func TestPolicy_EmptyRootsFailClosed(t *testing.T) {
 		}
 	})
 }
+
+// TestPolicy_LaunchPolicyAbsentRefused (F4, R-POL.3 fail-closed-ABSENT): a remote-tier
+// Server whose backend implements NO LaunchPolicy at all (not even an empty-roots one —
+// contrast TestPolicy_EmptyRootsFailClosed, where the interface IS present but configures
+// zero roots) refuses every launch with CodePolicy instead of skipping confinement. Before
+// the fix, handleLaunch's `if lp, ok := cc.launchPolicy(); ok { ... }` had no else: ok==false
+// (backend misassembly — a DaemonAPI that forgot to wire LaunchPolicy) fell straight through
+// to an UNCONFINED launch, so a remote phone could launch into ANY cwd. RED today: the launch
+// below currently SUCCEEDS. *stubDaemon still provides a working DeviceAuthenticator/
+// KillSwitch/OperationClaimer (so the launch clears every OTHER remote-tier gate) but has
+// never implemented LaunchPolicy, isolating the absent-policy gate as the sole variable.
+func TestPolicy_LaunchPolicyAbsentRefused(t *testing.T) {
+	stub := newStubDaemon()
+	sock := serveRemote(t, stub)
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapRemoteGateway})
+
+	req := policyLaunchReq(t) // a valid, existing cwd — the ONLY defect is the missing policy
+	rc.writeControl(remoteLaunchControl(rep.EndpointID, req))
+
+	got := rc.readControl()
+	if got.Op != OpError || got.ErrorCode != CodePolicy {
+		t.Fatalf("remote launch against a backend with NO LaunchPolicy = op %q code %q; want error/policy "+
+			"(a backend that omits LaunchPolicy entirely must be refused, not left unconfined, F4)", got.Op, got.ErrorCode)
+	}
+	if n := len(stub.launchSpecs()); n != 0 {
+		t.Fatalf("daemon launched %d sessions under an absent LaunchPolicy; want 0 (fail-closed)", n)
+	}
+}
