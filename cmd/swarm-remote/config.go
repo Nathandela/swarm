@@ -8,7 +8,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -100,7 +99,12 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 			RelayAuthPub: id.RelayAuthPublic(),
 			Sign:         id.RelayAuthSign,
 		},
-		PhoneTarget:        hex.EncodeToString(rec.RoutingID),
+		// C5 (finding, re-audit): the relay keys the phone's mailbox by
+		// relay.RoutingID(its relay-auth pub) -- the SAME deriver the relay (client.go:
+		// RoutingID(auth.RelayAuthPub)) and machineid use. Derive PhoneTarget the same way,
+		// NOT from the phone's self-reported (unverifiable) rec.RoutingID: a phone that
+		// supplied a non-canonical routing id then cannot make the gateway misroute the grant.
+		PhoneTarget:        relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
 		Key:                id.EpochKeys().ContentKey,
 		EpochID:            id.EpochID(),
 		RecipientKeyID:     crypto.KeyID(rec.RecipientPub),

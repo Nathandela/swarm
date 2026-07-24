@@ -149,20 +149,26 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			result(protocol.PairResult{Err: err})
 			return
 		}
-		if err := a.devices.Add(res.Record); err != nil {
+		// C1 (finding, re-audit): commit the enrollment ATOMICALLY. The early Count()>0
+		// fast-reject above is only advisory (it races the background confirm); AddSole is
+		// the real gate -- under the registry mutex it refuses a SECOND, different device,
+		// so two concurrent owner pairings can never both enroll and brick the gateway.
+		if err := a.devices.AddSole(res.Record); err != nil {
 			result(protocol.PairResult{Err: err})
 			return
 		}
 		// C5 (daemon half, ADR-007 2026-07-24): persist the sealed grant addressable by
 		// device id so the separate gateway process can deliver it to the phone over the
-		// relay mailbox (BeginPairing used to DISCARD res.Grant). Persist AFTER Add so a
-		// confirmed+enrolled device is the precondition, and fail CLOSED on a write error:
-		// report failure rather than silently claim paired-without-grant. Documented edge
-		// (mirrors the enroll+Add-after-accept edge in ADR-007): the device is already
-		// Added, so a write failure here leaves an enrolled device whose grant was not
-		// delivered -- still fail-closed (the phone gets no ContentKey, so it can seal
-		// nothing), surfaced as a failure, recovered by revoke-then-pair.
+		// relay mailbox (BeginPairing used to DISCARD res.Grant). Persist AFTER AddSole so a
+		// confirmed+enrolled device is the precondition.
+		//
+		// C2 (finding, re-audit): enrollment is TRANSACTIONAL. A grant-write failure must
+		// leave NOTHING enrolled -- otherwise the device sits in the registry (Count=1),
+		// blocking re-pairing, yet reports failure, recoverable only by an explicit revoke.
+		// Roll the device back before reporting failure so a clean retry works. Fail CLOSED:
+		// the write error is the reported cause (the rollback itself is best-effort).
 		if err := grant.Save(a.registryDir(), res.Record.DeviceID, res.Grant); err != nil {
+			_, _ = a.devices.Remove(res.Record.DeviceID)
 			result(protocol.PairResult{Err: fmt.Errorf("persist epoch grant: %w", err)})
 			return
 		}

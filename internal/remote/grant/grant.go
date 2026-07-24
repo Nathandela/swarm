@@ -94,7 +94,30 @@ func Save(registryDir, deviceID string, g *crypto.EpochGrant) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, Path(registryDir, deviceID))
+	if err := os.Rename(tmpName, Path(registryDir, deviceID)); err != nil {
+		return err
+	}
+	// C3 (finding, re-audit): fsync the parent directory so the RENAME itself is durable
+	// across a crash -- mirroring internal/remotegw/seqstore.go's durable-rename. The temp
+	// file is fsynced above, but without this a power loss could lose the rename and revert
+	// the sidecar to absent, leaving a "paired" device with no deliverable bootstrap grant.
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// Delete removes the sealed grant sidecar for deviceID. An ABSENT sidecar is NOT an error
+// (idempotent, like device.Registry.Remove), so RevokeDevice can call it unconditionally
+// after a successful removal without leaking the orphaned file (finding C4: a
+// revoke-then-repair otherwise leaks one sidecar per cycle).
+func Delete(registryDir, deviceID string) error {
+	if err := os.Remove(Path(registryDir, deviceID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Load reads the sealed grant persisted for deviceID. An ABSENT sidecar yields

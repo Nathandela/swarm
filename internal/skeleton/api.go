@@ -18,6 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -169,6 +170,12 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 		return false, nil
 	}
 	removed, err := a.devices.Remove(deviceID)
+	// C4 (finding, re-audit): a successful removal must also clean the device's sealed grant
+	// sidecar, or every revoke-then-repair leaks one file. Delete is idempotent (absent is
+	// not an error), so it is safe even when no sidecar was ever persisted (a pre-grant pair).
+	if removed {
+		_ = grant.Delete(a.registryDir(), deviceID)
+	}
 	// C2a: if this removal took the LAST device (Count now 0), remote control has transitioned to
 	// disabled — proactively sever every live remote control lease + peek on the remote Server. The
 	// per-device C1 sever (handleDeviceRevoke) releases the revoked device's OWN lease on the

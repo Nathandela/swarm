@@ -170,6 +170,38 @@ func (r *Registry) Add(rec Record) error {
 	return nil
 }
 
+// AddSole atomically enrolls rec as the registry's SOLE device: under the registry mutex
+// it rejects the commit when a DIFFERENT device is already present, so two concurrent
+// single-device enrollments that both passed a Count()==0 pre-check cannot both commit
+// (finding C1 -- a non-atomic check-then-Add would leave two devices and brick the
+// gateway). Re-adding the SAME device id is an idempotent upsert. Like Add it validates,
+// persists durably, and rolls back the in-memory change on a write error. The general Add
+// stays uncapped; the single-device cap lives ONLY here, so the registry's multi-device
+// tests are unaffected.
+func (r *Registry) AddSole(rec Record) error {
+	if err := validateRecord(rec); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id := range r.byID {
+		if id != rec.DeviceID {
+			return fmt.Errorf("device: a different device is already paired (single-device v1)")
+		}
+	}
+	prev, had := r.byID[rec.DeviceID]
+	r.byID[rec.DeviceID] = cloneRecord(rec)
+	if err := r.persistLocked(); err != nil {
+		if had {
+			r.byID[rec.DeviceID] = prev
+		} else {
+			delete(r.byID, rec.DeviceID)
+		}
+		return err
+	}
+	return nil
+}
+
 // Get returns a copy of the record for deviceID, or ok=false if unknown.
 func (r *Registry) Get(deviceID string) (Record, bool) {
 	r.mu.Lock()

@@ -89,6 +89,34 @@ func TestLoad_AbsentIsNotAnError(t *testing.T) {
 	}
 }
 
+// TestDelete_RemovesSidecar (re-audit finding C4) proves Delete removes the persisted
+// sidecar so a revoke-then-repair does not leak the file, and that deleting an ABSENT
+// sidecar is not an error (idempotent, like device.Registry.Remove).
+func TestDelete_RemovesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	g := seededGrant(t)
+	const deviceID = "abc123"
+
+	if err := Save(dir, deviceID, g); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(Path(dir, deviceID)); err != nil {
+		t.Fatalf("precondition: sidecar not written: %v", err)
+	}
+
+	if err := Delete(dir, deviceID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(Path(dir, deviceID)); !os.IsNotExist(err) {
+		t.Fatalf("sidecar still present after Delete (stat err = %v); want gone", err)
+	}
+
+	// Idempotent: deleting an already-absent sidecar is a no-op, not an error.
+	if err := Delete(dir, deviceID); err != nil {
+		t.Fatalf("Delete(absent) err = %v, want nil", err)
+	}
+}
+
 // TestBootstrapFrame_RoundTrips proves the tagged plaintext wire frame the gateway
 // appends parses back to the exact grant, and that ParseBootstrap rejects non-bootstrap
 // items (so the phone can skip ContentKey-sealed mailbox items while scanning).
