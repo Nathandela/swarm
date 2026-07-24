@@ -148,19 +148,32 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			result(protocol.PairResult{Err: err})
 			return
 		}
-		// Finding 1 (re-audit, UNANIMOUS -- epoch-key coherence): cfg is the ENTRY snapshot the
-		// whole handshake ran under (its EpochID is baked into MachinePayload and the grant we are
-		// about to seal). A concurrent RevokeDevice may have ROTATED the machine epoch during the
-		// handshake (reassigning a.pairing under pairingMu). RE-VALIDATE at this commit point: if
-		// the live epoch no longer matches the one we negotiated, ABORT and enroll NOTHING (fail
-		// closed) -- otherwise we would seal the new device under a stale epoch whose content key
-		// the just-revoked device still holds. The operator retries and picks up the fresh epoch.
+		// Round-4 re-audit (finding 1, UNANIMOUS -- epoch-key coherence): the epoch re-check,
+		// enroll.Enroll, AddSole and grant.Save form the pairing COMMIT. Take the OUTERMOST
+		// lifecycle lock across the WHOLE commit -- but ONLY here, NEVER across the long handshake
+		// above -- so a concurrent RevokeDevice (which holds lifecycleMu across its own
+		// rotate+remove) cannot interleave between the re-check and AddSole. The round-3 re-check
+		// alone left that residual window open: a revoke could rotate N->N+1 and empty the registry
+		// after the re-check passed but before AddSole, letting AddSole commit the new device under
+		// the stale epoch N whose content key the just-revoked phone still holds. Pairing and revoke
+		// are both rare, human-driven owner-tier ops, so a coarse lock held briefly here is fine.
+		a.lifecycleMu.Lock()
+		defer a.lifecycleMu.Unlock()
+
+		// cfg is the ENTRY snapshot the whole handshake ran under (its EpochID is baked into
+		// MachinePayload and the grant we are about to seal). RE-VALIDATE the epoch at this commit
+		// point: if a revoke rotated the machine epoch, ABORT and enroll NOTHING (fail closed); the
+		// operator retries and picks up the fresh epoch. Under lifecycleMu no rotate can run
+		// concurrently, so this check + enroll + AddSole + grant.Save are atomic w.r.t. rotate/remove.
 		a.pairingMu.Lock()
 		cur := a.pairing
 		a.pairingMu.Unlock()
 		if cur == nil || cur.EpochID != cfg.EpochID {
 			result(protocol.PairResult{Err: errors.New("pairing aborted: machine epoch rotated during the handshake; retry")})
 			return
+		}
+		if a.lifecycleGate != nil {
+			a.lifecycleGate("pair-commit") // TEST-ONLY seam (nil in production): finding-1 window
 		}
 		res, err := enroll.Enroll(outcome, capTier, cfg.SignPriv, cfg.EpochID, cfg.GrantSeq, cfg.EpochKeys, now)
 		if err != nil {

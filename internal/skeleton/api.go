@@ -65,12 +65,29 @@ type coreAPI struct {
 	// until provisioned (a LATER slice: `swarm remote init`); a nil config makes
 	// BeginPairing fail closed, so pairing is simply unsupported until keys exist.
 	pairing *pairingConfig
+	// lifecycleMu is the OUTERMOST coreAPI lifecycle-transaction lock (round-4 re-audit,
+	// ADR-007). It serializes the WHOLE RevokeDevice transaction (rotateEpoch + Remove +
+	// last-device sever + grant.Delete) against the BeginPairing COMMIT section (epoch re-check
+	// + enroll + AddSole + grant.Save), and two concurrent revokes against each other. This
+	// closes the residual finding-1 epoch TOCTOU (a rotate+remove could interleave between the
+	// commit's re-check and AddSole, enrolling under a stale epoch) and finding-4 (two revokes
+	// both rotating the epoch key -- a lost update). Lock ORDER: lifecycleMu is taken FIRST;
+	// rotateEpoch's pairingMu and the sever's severMu are taken INSIDE it, NEVER the reverse, so
+	// no cycle can form (the sever callback takes only the remote Server's own locks, no coreAPI
+	// lock). BeginPairing takes it ONLY for the brief commit -- never across the long handshake.
+	lifecycleMu sync.Mutex
 	// pairingMu guards a.pairing. BeginPairing read it lock-free until revoke gained the
 	// power to MUTATE it: RevokeDevice rotates the machine epoch key and reassigns the
 	// snapshot (codex#1, ADR-007 2026-07-24). Held only for the pointer read/reassign,
-	// never across the long pairing handshake, and never nested with severMu/ksMu (revoke
-	// severs BEFORE it rotates), so no lock-ordering cycle can form.
+	// never across the long pairing handshake, and always INSIDE lifecycleMu when taken during
+	// a revoke/commit transaction (never the reverse), so no lock-ordering cycle can form.
 	pairingMu sync.Mutex
+	// lifecycleGate is a TEST-ONLY seam (nil in production, a no-op) invoked at the two
+	// lifecycle-transaction points the round-4 serialization fix makes atomic: the pairing
+	// commit's post-epoch-recheck window ("pair-commit") and the revoke's post-rotate window
+	// ("revoke-rotated"). It lets a concurrency test deterministically interleave the operation
+	// lifecycleMu must exclude (the residual finding-1 TOCTOU and the finding-4 double rotation).
+	lifecycleGate func(point string)
 
 	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
 	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
@@ -176,8 +193,18 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if a.devices == nil {
 		return false, nil
 	}
+	// Serialize the WHOLE revoke transaction under the outermost lifecycle lock (round-4
+	// re-audit, findings 1 & 4): the presence check + rotateEpoch + Remove + sever + grant.Delete
+	// are atomic against a concurrent pairing COMMIT and against another concurrent revoke. This
+	// is what makes a replacement device impossible to enroll under a stale epoch, and two revokes
+	// impossible to both rotate. lifecycleMu is the OUTERMOST lock; rotateEpoch's pairingMu and the
+	// sever's severMu are taken inside it.
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
-	// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch.
+	// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
+	// this check is atomic with the rotation, so a second concurrent revoke of the same device
+	// finds it already gone here and does not rotate a second time (finding 4).
 	if _, ok := a.devices.Get(deviceID); !ok {
 		return false, nil
 	}
@@ -244,6 +271,9 @@ func (a *coreAPI) rotateEpoch() error {
 	a.pairingMu.Lock()
 	a.pairing = pc
 	a.pairingMu.Unlock()
+	if a.lifecycleGate != nil {
+		a.lifecycleGate("revoke-rotated") // TEST-ONLY seam (nil in production): finding-4 window
+	}
 	return nil
 }
 
