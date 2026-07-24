@@ -61,7 +61,11 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 	confirm func(sas []string, deviceName string) (bool, error),
 	result func(protocol.PairResult)) (protocol.PairView, error) {
 
+	// Snapshot the pairing pointer under pairingMu (RevokeDevice reassigns it on an epoch
+	// rotation), then release BEFORE the long handshake -- cfg is an immutable snapshot.
+	a.pairingMu.Lock()
 	cfg := a.pairing
+	a.pairingMu.Unlock()
 	if cfg == nil {
 		return protocol.PairView{}, errors.New("pairing not configured on this daemon")
 	}

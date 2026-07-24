@@ -19,6 +19,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
+	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -64,6 +65,12 @@ type coreAPI struct {
 	// until provisioned (a LATER slice: `swarm remote init`); a nil config makes
 	// BeginPairing fail closed, so pairing is simply unsupported until keys exist.
 	pairing *pairingConfig
+	// pairingMu guards a.pairing. BeginPairing read it lock-free until revoke gained the
+	// power to MUTATE it: RevokeDevice rotates the machine epoch key and reassigns the
+	// snapshot (codex#1, ADR-007 2026-07-24). Held only for the pointer read/reassign,
+	// never across the long pairing handshake, and never nested with severMu/ksMu (revoke
+	// severs BEFORE it rotates), so no lock-ordering cycle can form.
+	pairingMu sync.Mutex
 
 	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
 	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
@@ -184,7 +191,51 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if removed && a.devices.Count() == 0 {
 		a.severRemoteControl()
 	}
+	// codex#1 (re-audit CONFIDENTIALITY, ADR-007 2026-07-24): rotate the machine epoch key
+	// on every successful removal so the revoked device's retained content key is dead for
+	// all future traffic. Done AFTER severRemoteControl so pairingMu never nests inside
+	// severMu. A rotation/persist failure is surfaced honestly (the device is already
+	// removed + severed, but the key custody failure must not be swallowed).
+	if removed {
+		if rerr := a.rotateEpoch(); rerr != nil {
+			return removed, rerr
+		}
+	}
 	return removed, err
+}
+
+// rotateEpoch rotates the machine epoch key after a device is revoked (codex#1): it
+// loads the persisted machine identity, mints a fresh epoch (RotateEpoch), re-persists
+// it atomically (temp+fsync+rename, 0600), and reloads the in-memory pairing snapshot so
+// the NEXT BeginPairing seals the new device's grant under the new epoch. A MISSING
+// machine identity is a no-op (pairing unprovisioned, nothing to rotate -- mirrors
+// loadPairingConfig's tri-state); a present-but-broken identity surfaces the error.
+func (a *coreAPI) rotateEpoch() error {
+	path := filepath.Join(a.stateDir, "remote", remoteIdentityFile)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil // pairing unprovisioned: no epoch to rotate
+		}
+		return err
+	}
+	id, err := machineid.Load(path)
+	if err != nil {
+		return err
+	}
+	if err := id.RotateEpoch(); err != nil {
+		return err
+	}
+	if err := id.Save(path); err != nil {
+		return err
+	}
+	pc, err := loadPairingConfig(a.stateDir)
+	if err != nil {
+		return err
+	}
+	a.pairingMu.Lock()
+	a.pairing = pc
+	a.pairingMu.Unlock()
+	return nil
 }
 
 // coreAPI ALSO satisfies protocol.DeviceRevoker so the assembled remote-tier Server

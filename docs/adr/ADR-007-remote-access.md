@@ -556,3 +556,33 @@ is now cheap to add when justified: the gateway holds an authenticated relay cli
 `deliverEpochGrant`), so on observing its paired device removed it would call relay `DeviceRevoke(
 RoutingID(rec.RelayAuthPub))` and shut down. Recorded as a Phase-B hardening item, not a v1 blocker,
 because the required C1 deliverable (daemon-side severance) is complete.
+
+## Amendment 2026-07-24 — Revoke ROTATES the machine epoch key (closes the re-audit codex#1 confidentiality gap)
+
+**Status**: accepted (operator-directed). The re-audit found that revoke removed the device record but
+did NOT rotate the shared machine epoch key: a revoked phone retains `K_content`, and because every
+device shares the one fixed epoch key (`machineid.Generate` set EpochID=1 once, no rotation), pairing a
+REPLACEMENT phone reuses the same key -- so the untrusted relay could copy the replacement phone's
+ciphertext to the revoked one, which still decrypts it (`recipient_key_id` is outside the AEAD). That
+breaks revocation confidentiality in the revoke-because-compromised case. Daemon-side severance (C1/C2a)
+stops the revoked device's LIVE ops but does nothing about the retained KEY being reused for a FUTURE
+device. sonnet+opus accepted this as a v1 residual; codex rated it a blocker; the operator directed
+that it be closed in v1.
+
+**Decision.** `RevokeDevice` ROTATES the epoch on every successful removal: `machineid.RotateEpoch()`
+mints fresh `crypto.NewEpochKeys()`, increments EpochID, resets GrantSeq=1, and re-persists the machine
+identity atomically (the existing `Identity.Save`: temp+fsync+rename, 0600). The daemon then reloads its
+in-memory pairing snapshot (`a.pairing`) so the NEXT pairing seals the new device's grant under the NEW
+epoch. The revoked device's retained old-epoch `K_content` is now dead for all future traffic.
+
+**Why this is sufficient + safe in single-device v1.** The crypto layer is rotation-ready: a higher
+EpochID is always accepted by `GrantReceiver` (a rotated grant opens cleanly on a fresh phone), and a new
+EpochID is a new `(sender, epoch)` mailbox bucket, so the durable outbound seq files need no reset. The
+GATEWAY reads the epoch ContentKey once at startup and has no live-reload path, so the running gateway
+still holds the OLD key until it restarts -- but this is safe because revoke drops device Count to 0,
+which (a) fires C2a severance (no live control/journal/peek) and (b) makes `resolveGatewayParams` refuse
+to start (`want exactly one device`). So NO traffic is sealed under the old key while deviceless; the
+natural single-device flow is revoke(+rotate) -> re-pair -> restart the gateway, which then seals under
+the new epoch. A LIVE gateway epoch-reload (fsnotify/signal) is a Phase-B refinement, not required for
+correctness because the deviceless window carries no traffic. `a.pairing` gains a mutex (it was read
+lock-free by BeginPairing; revoke now mutates it).

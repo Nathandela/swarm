@@ -337,3 +337,51 @@ func TestMachineIdentity_GenerateProducesDistinctKeys(t *testing.T) {
 		t.Error("Generate produced an all-zero recipient public key")
 	}
 }
+
+// TestMachineIdentity_RotateEpoch pins the epoch-rotation-on-revoke primitive
+// (codex#1, ADR-007 2026-07-24): RotateEpoch increments the epoch id, resets the
+// grant seq to 1, and mints DIFFERENT wake/content keys, and the rotation is
+// DURABLE across Save/Load. This is what makes a revoked device's retained old
+// content key dead for all future traffic.
+func TestMachineIdentity_RotateEpoch(t *testing.T) {
+	id := NewFromMaterial("rotate-host", stdMaterial(t)) // EpochID=7, GrantSeq=42
+	beforeEpoch := id.EpochID()
+	beforeKeys := id.EpochKeys()
+
+	if err := id.RotateEpoch(); err != nil {
+		t.Fatalf("RotateEpoch: %v", err)
+	}
+
+	if id.EpochID() != beforeEpoch+1 {
+		t.Errorf("EpochID = %d after rotate, want %d", id.EpochID(), beforeEpoch+1)
+	}
+	if id.GrantSeq() != 1 {
+		t.Errorf("GrantSeq = %d after rotate, want 1 (reset)", id.GrantSeq())
+	}
+	if id.EpochKeys().ContentKey == beforeKeys.ContentKey {
+		t.Error("ContentKey unchanged after rotate; the retained key would still be live")
+	}
+	if id.EpochKeys().WakeKey == beforeKeys.WakeKey {
+		t.Error("WakeKey unchanged after rotate")
+	}
+
+	// Durability: Save -> Load yields the incremented epoch and the NEW keys, not
+	// the pre-rotation ones.
+	path := filepath.Join(t.TempDir(), "machine.key")
+	if err := id.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if reloaded.EpochID() != beforeEpoch+1 {
+		t.Errorf("reloaded EpochID = %d, want %d", reloaded.EpochID(), beforeEpoch+1)
+	}
+	if reloaded.EpochKeys() != id.EpochKeys() {
+		t.Error("reloaded EpochKeys differ from the rotated in-memory keys")
+	}
+	if reloaded.EpochKeys().ContentKey == beforeKeys.ContentKey {
+		t.Error("reloaded ContentKey equals the pre-rotation key; rotation did not persist")
+	}
+}

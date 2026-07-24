@@ -46,5 +46,41 @@ TDD failing-first evidenced per fix (RED assertion named in each commit). No exi
 was weakened; several tests gained a now-required precondition (switch-on for journal, a permissive
 LaunchPolicy fixture, a registered device) with the justification recorded in each commit.
 
-## Re-audit
-The full `/audit-committee` is re-run against this closure; iterate until a clean verdict.
+## Re-audit ROUND 2 (2026-07-24) — codex REJECT / sonnet REVISE / opus REVISE
+
+The re-audit (codex + sonnet + opus; agy errored on repo access again) confirmed the crypto core +
+C1-C4/C6-C8/F4/F5/F7 sound, but found real bugs the first cycle missed or introduced. All addressed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| C8 not integrated in the phone path -- Observe/ReadReply swallow each other (codex#3, opus F1) | One `drain()` both call: every item through the router once, one cursor; ReadReply drains router.Replies(), OpenControlReply bypass removed | `475d1fa` |
+| C5 bootstrap poison-frame DoS + single-page read (sonnet#1, opus F2/F5, codex) | NewFromMailbox loops MailboxReadPage across pages, skips frames that fail to open, returns the first that opens | `475d1fa` |
+| No phone MailboxAck -> mailbox fills (codex#5) | drain() acks the consumed prefix each sweep (gap-resync deferred: needs a re-request channel) | `475d1fa` |
+| off/take_control race -> silent resume (codex#2) | severGen counter: take_control captures before authz, re-checks under ctlMu, releases + fails closed if a sever advanced it | `7768a83` |
+| Journal kill-switch gate not remoteTier-scoped -- owner tier wrongly gated (sonnet#2) | Gate journal ops + fan-out on cc.srv.remoteTier && remoteControlDisabled() | `7768a83` |
+| off leaves journal subs silently armed (codex#7, opus F7) | SeverAllRemoteControl closes remote journal subscribers -> fresh journal_read (resync) on reconnect | `7768a83` |
+| Launch check-on-resolved/use-on-original (opus F6) | Thread the resolved cwd into the launch spec (ADR-007 D8) | `7768a83` |
+| C6 single-device non-atomic -> concurrent pairings brick the gateway (codex#6, sonnet#6, opus F4) | Atomic Registry.AddSole (reject a 2nd distinct device under the mutex); pairing commits via it | `e8741db` |
+| Enrollment non-transactional; grant.Save no dir-fsync (codex#6, opus F8) | Roll back the device on grant-Save failure; fsync the grants dir after rename | `e8741db` |
+| Grant sidecar never cleaned on revoke (sonnet#5) | grant.Delete + call from RevokeDevice | `e8741db` |
+| Production PhoneTarget trusts a self-reported, untested routing id (opus F3) | Derive PhoneTarget = relay.RoutingID(rec.RelayAuthPub) (canonical); tested over real resolveGatewayParams | `e8741db` |
+| Idempotency compaction not crash-safe; dead-store on failure (codex#8) | fsync the dir after rename; keep the old handle usable on any failure (never dead-store) | `082a9ba` |
+| Outbound SenderKeyID asymmetry undocumented landmine (sonnet#3) | Documented the intentional sender-zero-for-replies bucket separation | `4fde9a1` |
+| Race-gate flake TestRemotePeek_LargeGridClipped... under load (codex#9) | Raise the shared test recvTimeout 2s -> 5s | `cadbbbd` |
+| **Revoke does not rotate the epoch key -> revoked phone reads a re-paired phone (codex#1)** | **Revoke ROTATES the machine epoch key (machineid.RotateEpoch + persist + reload pairing snapshot); revoked key dead for future traffic. Operator-directed. ADR-007 2026-07-24.** | _(this cycle)_ |
+
+### Honest deferrals (round 2)
+- **"A real phone can pair" -- lifecycle glue is Phase B.** The machine-side grant delivery + the
+  phone-core mailbox bootstrap are complete and tested (`b63a640`/`7f00f29` + the routing-id fix
+  `e8741db`), but there is no mobile app and no gateway auto-start/supervision post-pair (G3): the
+  operator runs `swarm remote pair` then (re)starts `swarm-remote`. Phase A proves the COMPONENTS and
+  the delivery/bootstrap path E2E; the production lifecycle glue + real device client are Phase B/C.
+- **Mailbox gap-resync deferred** (codex#5 second half): the phone acks and detects a seq gap but does
+  not yet re-request lost frames (no such channel exists; a full-resync request is a Phase-B protocol
+  addition). At-least-once + monotonic seq means a dropped frame surfaces as a gap, not silent corruption.
+- **ME-1 relay-close, multi-device/SenderKeyID binding, admin tier** -- unchanged Phase-B deferrals
+  (ADR-007 2026-07-24), reaffirmed honest by sonnet + opus.
+- **kind-string literal dedup** (sonnet#6, LOW) -- not done; C8's fail-closed default makes any drift a
+  loud error, not a silent misroute, so a shared-constants refactor is deferred as non-load-bearing.
+
+Standing gate after round 2: `go build/vet/test -race ./...` -- 0 failures. Re-audit round 3 follows.

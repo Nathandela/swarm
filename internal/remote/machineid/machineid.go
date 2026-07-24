@@ -136,6 +136,23 @@ func (id *Identity) RelayAuthSign(challenge []byte) []byte {
 	return ed25519.Sign(id.relayPriv, challenge)
 }
 
+// RotateEpoch mints a fresh epoch on revoke (codex#1, ADR-007 2026-07-24): new
+// crypto.NewEpochKeys(), the epoch id incremented, and the grant seq reset to 1 --
+// mirroring Generate's epoch block. A subsequent Save persists it, so the NEXT
+// paired device's grant seals under the new epoch and the revoked device's retained
+// old-epoch content key is dead for all future traffic. The fields are unexported
+// with no setters, so this MUST be an in-package method.
+func (id *Identity) RotateEpoch() error {
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		return fmt.Errorf("machineid: rotate epoch keys: %w", err)
+	}
+	id.epochKeys = keys
+	id.epochID++ // wraps at uint32 max (~4e9 revokes); GrantReceiver wants a higher id
+	id.grantSeq = 1
+	return nil
+}
+
 // EpochKeys returns the wake/content key split for the current epoch.
 func (id *Identity) EpochKeys() crypto.EpochKeys { return id.epochKeys }
 
