@@ -31,6 +31,8 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 		SenderKeyID:    p.SenderKeyID,
 		JournalSeq:     p.JournalSeq,
 		ReplySeq:       p.ReplySeq,
+		StateDir:       p.StateDir,
+		DeviceID:       p.DeviceID,
 	}
 }
 

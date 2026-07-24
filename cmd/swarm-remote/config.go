@@ -32,6 +32,11 @@ type gatewayParams struct {
 	EpochID        uint32
 	RecipientKeyID [8]byte
 	SenderKeyID    [8]byte
+	// Post-revocation confidentiality (codex#1): the gateway re-reads <StateDir>/devices on
+	// each journal reconnect and exits if DeviceID is gone, so a revoke-then-reconnect can no
+	// longer reseal epoch frames to the revoked device under the stale (pre-rotation) key.
+	StateDir string
+	DeviceID string
 	// Durable OUTBOUND seq high-waters (C2b): journal/terminal and command replies are
 	// two independent per-(sender,epoch) streams on the phone, so each has its own file.
 	// They resume STRICTLY ABOVE the phone's high-water after a restart instead of
@@ -113,6 +118,8 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		ReplySeq:           replySeq,
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
 		Grant:              sealedGrant,
+		StateDir:           stateDir,
+		DeviceID:           rec.DeviceID,
 	}, nil
 }
 

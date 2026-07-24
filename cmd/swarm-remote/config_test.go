@@ -133,6 +133,16 @@ func TestResolveGatewayParams_Populated(t *testing.T) {
 		t.Errorf("RelayURL = %q, want %q", got.RelayURL, "ws://127.0.0.1:9999")
 	}
 
+	// Post-revocation confidentiality (codex#1): the resolver must carry the stateDir and the
+	// paired device id so the running gateway can re-read the registry on reconnect and exit
+	// when the device is revoked (rotating the epoch key) instead of resealing under it.
+	if got.StateDir != stateDir {
+		t.Errorf("StateDir = %q, want %q", got.StateDir, stateDir)
+	}
+	if got.DeviceID != rec.DeviceID {
+		t.Errorf("DeviceID = %q, want %q", got.DeviceID, rec.DeviceID)
+	}
+
 	// PhoneTarget is the relay routing STRING the relay keys the phone's mailbox by:
 	// relay.RoutingID(the device's relay-auth pub) -- the SAME deriver the relay
 	// (client.go: RoutingID(auth.RelayAuthPub)) and machineid use. For this canonical

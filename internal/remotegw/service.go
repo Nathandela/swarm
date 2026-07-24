@@ -2,10 +2,14 @@ package remotegw
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/device"
 )
 
 // ServiceConfig configures the gateway runtime. The Service depends only on the
@@ -26,7 +30,21 @@ type ServiceConfig struct {
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 	JournalSeq     SeqSource         // durable outbound seq for journal + terminal frames (nil => in-memory)
 	ReplySeq       SeqSource         // durable outbound seq for command replies (nil => in-memory)
+	// Post-revocation confidentiality (codex#1): the epoch key + phone target are fixed for
+	// this process's lifetime, so after the owner revokes the paired device (rotating the
+	// epoch key) a still-running gateway would reconnect and reseal epoch frames to the
+	// revoked mailbox under the STALE key. On each journal reconnect the runtime re-reads
+	// <StateDir>/devices and, if DeviceID is gone, exits instead. Both empty disables the
+	// check (unit tests that do not provision a registry).
+	StateDir string // state dir whose <StateDir>/devices registry is re-read on reconnect
+	DeviceID string // this gateway's paired device; its removal triggers a graceful exit
 }
+
+// ErrDeviceRevoked is returned by Run when the gateway's paired device is no longer in the
+// registry: the owner revoked it (rotating the epoch key), so the gateway shuts down rather
+// than reconnecting and resealing epoch journal/snapshot frames to the revoked device's
+// mailbox under the now-stale key (codex#1 / post-revocation confidentiality).
+var ErrDeviceRevoked = errors.New("remotegw: paired device revoked; gateway exiting")
 
 // Service is the supervised gateway runtime (R-GW.1): it composes the journal-OUT
 // bridge (Gateway.RunJournal delivering to a RelaySink that seals and appends to the
@@ -104,33 +122,74 @@ func (s *Service) Run(ctx context.Context) error {
 	// connection (control gate or read-only tap) is left behind after the sidecar exits.
 	defer func() { _ = s.leases.Close() }()
 	defer func() { _ = s.watchers.Close() }()
+	// Derive a cancelable context so the journal loop can tear the WHOLE Service down (both
+	// loops) the moment it detects the paired device was revoked (codex#1).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var revoked atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.runJournal(ctx) }()
+	go func() {
+		defer wg.Done()
+		if s.runJournal(ctx) {
+			revoked.Store(true)
+			cancel() // stop the command loop too, so Run returns promptly
+		}
+	}()
 	go func() { defer wg.Done(); _ = s.bridge.Run(ctx, s.cfg.PollInterval) }()
 	wg.Wait()
+	if revoked.Load() {
+		return ErrDeviceRevoked
+	}
 	return ctx.Err()
 }
 
 // runJournal runs the journal bridge, reconnecting after ReconnectDelay whenever the
 // connection drops, until ctx is cancelled. RunJournal resumes from the last delivered
-// cursor, so a reconnect loses no events.
-func (s *Service) runJournal(ctx context.Context) {
+// cursor, so a reconnect loses no events. It returns true when it stopped because the
+// paired device was revoked (devicePaired) so the caller tears the whole Service down.
+func (s *Service) runJournal(ctx context.Context) (revoked bool) {
 	for {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		_ = s.gw.RunJournal(ctx)
 		if ctx.Err() != nil {
-			return
+			return false
+		}
+		// The daemon severed the journal connection. A device REVOKE severs it (C2a) and
+		// rotates the epoch key, so before reconnecting re-read the registry: if our paired
+		// device is gone we must NOT resume sealing epoch frames to its mailbox under the
+		// now-stale key (codex#1). A device still present is an ordinary transient drop ->
+		// back off and reconnect as before.
+		if !s.devicePaired() {
+			return true
 		}
 		// Back off before reconnecting, but wake immediately on cancel.
 		t := time.NewTimer(s.cfg.ReconnectDelay)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return
+			return false
 		case <-t.C:
 		}
 	}
+}
+
+// devicePaired reports whether this gateway's paired device is still in the on-disk
+// registry. It re-reads <StateDir>/devices FRESH on each call so a revocation (which
+// rotated the epoch key) is observed on the next journal reconnect. It is fail-closed: an
+// unreadable registry or a missing device both report false, so the gateway stops sealing
+// rather than risk resealing under a stale key. An empty StateDir or DeviceID disables the
+// check (returns true) -- used by unit tests that do not provision a registry.
+func (s *Service) devicePaired() bool {
+	if s.cfg.StateDir == "" || s.cfg.DeviceID == "" {
+		return true
+	}
+	reg, err := device.Open(filepath.Join(s.cfg.StateDir, "devices"))
+	if err != nil {
+		return false
+	}
+	_, ok := reg.Get(s.cfg.DeviceID)
+	return ok
 }
