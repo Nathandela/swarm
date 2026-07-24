@@ -117,20 +117,24 @@ func (c *Client) List() ([]SessionView, error) {
 	return resp.Sessions, nil
 }
 
-// Launch requests a new session and returns its namespaced id.
-func (c *Client) Launch(req LaunchReq) (string, error) {
+// Launch requests a new session and returns its namespaced id AND the daemon's
+// CANONICAL name for it (the server-sanitized/truncated label from the reply's
+// SessionView). Callers that only need the id can discard the name; the auto-attach
+// chrome uses the canonical name so the label matches what the daemon persisted (an
+// older daemon whose reply predates naming returns an empty name).
+func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 	r := req
 	resp, err := c.request(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if resp.Op == OpError {
-		return "", errors.New(resp.Error)
+		return "", "", errors.New(resp.Error)
 	}
 	if resp.Session == nil {
-		return "", errors.New("protocol: launch reply carried no session")
+		return "", "", errors.New("protocol: launch reply carried no session")
 	}
-	return resp.Session.ID, nil
+	return resp.Session.ID, resp.Session.Name, nil
 }
 
 // Kill terminates a session.
@@ -138,6 +142,22 @@ func (c *Client) Kill(id string) error { return c.simpleOp(OpKill, id) }
 
 // Delete removes a session.
 func (c *Client) Delete(id string) error { return c.simpleOp(OpDelete, id) }
+
+// Rename changes a session's user-provided display label (v0.5). The new name is
+// re-validated and sanitized server-side; the daemon updates the session meta,
+// persists it, and broadcasts a roster event so every client converges. An OLDER
+// daemon that predates the op replies with an error (unknown op), returned here so
+// the caller can surface it (skew-safe: banner the refusal, never crash).
+func (c *Client) Rename(id, name string) error {
+	resp, err := c.request(Control{Op: OpRename, EndpointID: c.endpointID, SessionID: id, Name: name})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
 
 func (c *Client) simpleOp(op, id string) error {
 	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})

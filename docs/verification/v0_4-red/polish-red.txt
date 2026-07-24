@@ -1,0 +1,22 @@
+v0.4 P2 hint-bar theming (dim not reverse) — FAILING-FIRST evidence (GG-5)
+Bead: agents-tracker-3sr (attach half: internal/attach hint styling)
+Captured: 2026-07-18T11:07:59Z
+Command: go test ./internal/attach/ -race -run TestPassthrough_ChromeSetsScrollRegionAndHint -count=1 -v
+Expectation: the pinning test now demands faint (SGR 2, \x1b[2m) and forbids reverse
+video (SGR 7, \x1b[7m). The implementation still emits \x1b[7m, so the test FAILS —
+proving the red before the one-line styling change flips it green.
+----------------------------------------------------------------------
+=== RUN   TestPassthrough_ChromeSetsScrollRegionAndHint
+    hintrow_test.go:87: chrome hint must contain "\x1b[2m"; got "\x1b[0m\x1b[2J\x1b[H\x1b[1;1H\x1b[0mGRID                                                                            \x1b[2;1H                                                                                \x1b[3;1H                                                                                \x1b[4;1H                                                                                \x1b[5;1H                                                                                \x1b[6;1H                                                                                \x1b[7;1H                                                                                \x1b[8;1H                                                                                \x1b[9;1H                                                                                \x1b[10;1H                                                                                \x1b[11;1H                                                                                \x1b[12;1H                                                                                \x1b[13;1H                                                                                \x1b[14;1H                                                                                \x1b[15;1H                                                                                \x1b[16;1H                                                                                \x1b[17;1H                                                                                \x1b[18;1H                                                                                \x1b[19;1H                                                                                \x1b[20;1H                                                                                \x1b[21;1H                                                                                \x1b[22;1H                                                                                \x1b[23;1H                                                                                \x1b[0m\x1b[?25h\x1b[1;5H\x1b7\x1b[?6l\x1b[1;23r\x1b[24;1H\x1b[7mclaude  ctrl+q returns to swarm\x1b[0m\x1b[K\x1b8"
+--- FAIL: TestPassthrough_ChromeSetsScrollRegionAndHint (0.05s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/attach	0.922s
+FAIL
+----------------------------------------------------------------------
+EXIT: 0
+
+======================================================================
+GREEN (after the one-line styling change: chromeHint emits \x1b[2m not \x1b[7m)
+Command: go test ./internal/attach/ -race -count=1
+ok  	github.com/Nathandela/swarm/internal/attach	4.342s
+gofmt -l internal: (empty = clean)

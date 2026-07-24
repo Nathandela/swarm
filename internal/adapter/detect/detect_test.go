@@ -112,6 +112,38 @@ func TestHostRun_BoundsAHangingProbe(t *testing.T) {
 	}
 }
 
+// crashingProbeAdapter names a "CLI" whose version probe exits NON-ZERO after
+// printing a diagnostic to stderr — the codex-on-Apple-Silicon case (bead 8c0):
+// `codex --version` throws "Missing optional dependency ... Reinstall Codex" and
+// exits 1. Detect must plumb that captured first line into Detection.ProbeErr
+// instead of discarding it, so the launch picker can show the CLI's own cause.
+type crashingProbeAdapter struct{ goAdapter }
+
+func (crashingProbeAdapter) Binary() string { return "sh" }
+func (crashingProbeAdapter) VersionArgs() []string {
+	return []string{"-c", "echo 'Missing optional dependency (@openai/codex-darwin-x64). Reinstall Codex.' 1>&2; exit 1"}
+}
+
+func TestDetect_CapturesProbeDiagnosticOnNonZeroExit(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH; cannot exercise the crashing-probe path")
+	}
+	det := adapter.Detect(crashingProbeAdapter{}, Host{})
+	if !det.Found {
+		t.Fatal("the binary resolves on PATH, so it must be Found even when the version probe crashes")
+	}
+	if det.Version != "" {
+		t.Errorf("a crashed probe must yield no version, got %q", det.Version)
+	}
+	if !strings.Contains(det.ProbeErr, "Reinstall Codex") {
+		t.Errorf("captured probe diagnostic lost on non-zero exit: ProbeErr = %q, want it to contain %q", det.ProbeErr, "Reinstall Codex")
+	}
+	// Only the FIRST non-empty line is kept, so a multi-line crash stays a one-line reason.
+	if strings.Contains(det.ProbeErr, "\n") {
+		t.Errorf("ProbeErr must be a single line, got %q", det.ProbeErr)
+	}
+}
+
 func TestHostRun_CapturesStderrVersion(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH; cannot exercise the stderr-capture path")
@@ -125,5 +157,41 @@ func TestHostRun_CapturesStderrVersion(t *testing.T) {
 	}
 	if !det.InRange {
 		t.Errorf("4.5.6 reported out of the wide-open range: %+v", det)
+	}
+}
+
+// slowVersionAdapter names a version probe that sleeps ~3s before printing its
+// banner (`sh -c 'sleep 3; echo ...'`): slower than a cold-starting Node CLI but
+// well within a real, non-hung run. R-A1: probeTimeout must be raised from 2s to
+// 5s so this probe's version is still captured rather than abandoned.
+type slowVersionAdapter struct{ goAdapter }
+
+func (slowVersionAdapter) Binary() string { return "sh" }
+func (slowVersionAdapter) VersionArgs() []string {
+	return []string{"-c", "sleep 3; echo slowtool 7.8.9"}
+}
+func (slowVersionAdapter) ParseVersion(out string) (string, bool) {
+	for _, f := range strings.Fields(out) {
+		if strings.Count(f, ".") == 2 {
+			return f, true
+		}
+	}
+	return "", false
+}
+
+func TestHostRun_ToleratesA3sProbe(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH; cannot exercise the raised-timeout path")
+	}
+	start := time.Now()
+	det := adapter.Detect(slowVersionAdapter{}, Host{})
+	if elapsed := time.Since(start); elapsed > 6*time.Second {
+		t.Fatalf("probe took %s; exceeded the test's runtime budget", elapsed)
+	}
+	if !det.Found {
+		t.Fatal("sh not Found")
+	}
+	if det.Version != "7.8.9" {
+		t.Errorf("Version = %q, want 7.8.9 (a ~3s probe must complete within the raised probeTimeout, not be abandoned at the old 2s bound)", det.Version)
 	}
 }

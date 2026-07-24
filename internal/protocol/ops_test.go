@@ -43,7 +43,7 @@ func TestOps_LaunchForwardsAndFiltersEnv(t *testing.T) {
 	sock := serveStub(t, stub)
 	c := dialClient(t, sock, nil)
 
-	id, err := c.Launch(LaunchReq{
+	id, _, err := c.Launch(LaunchReq{
 		Agent:   "claude",
 		Cwd:     t.TempDir(),
 		Options: map[string]string{"model": "opus"},

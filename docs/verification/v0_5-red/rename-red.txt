@@ -1,0 +1,39 @@
+=== RED evidence: v0.5 rename (agents-tracker-hki) ===
+date: 2026-07-18T15:59:35Z
+HEAD: f5b29f3
+
+$ go build ./...
+
+$ go test ./internal/protocol/ ./internal/daemon/ ./internal/tui/ -run Rename -count=1 2>&1 (compile-fail red)
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/rename_test.go:41:14: d.Rename undefined (type *Daemon has no field or method Rename)
+internal/daemon/rename_test.go:62:14: d.Rename undefined (type *Daemon has no field or method Rename)
+internal/daemon/rename_test.go:78:14: d.Rename undefined (type *Daemon has no field or method Rename)
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/rename_test.go:99:14: undefined: renameDoneMsg
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/rename_test.go:35:14: c.Rename undefined (type *Client has no field or method Rename)
+internal/protocol/rename_test.go:56:14: c.Rename undefined (type *Client has no field or method Rename)
+internal/protocol/rename_test.go:74:11: c.Rename undefined (type *Client has no field or method Rename)
+internal/protocol/rename_test.go:88:14: c.Rename undefined (type *Client has no field or method Rename)
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL
+
+--- RED interpretation ---
+The three target packages fail to COMPILE on the not-yet-existing production
+symbols (the repo's "undefined-only" red, per harness_test.go):
+  - internal/daemon:   *Daemon has no method Rename
+  - internal/protocol: *Client has no method Rename
+  - internal/tui:      undefined renameDoneMsg (inline-edit commit message)
+Test scaffolding (fake/stub Rename recorders, renameCall types) compiles; only the
+product code is missing. Implementing it turns these green (see v0_5 green gates).
+
+=== rename-race RED note (codex re-confirm HIGH-2, Sat Jul 18 19:13:09 CEST 2026) ===
+TestFanout_RenameNeverRevertedByConcurrentStatus passes 3/3 against the
+two-producer code: the losing window (between emitStatus's Get and its
+channel send, skeleton/api.go:280-284) is a few instructions wide and does
+not trip under a 120-round hammer. The race stands on codex's control-flow
+derivation; the fix is structural (poller becomes the sole snapshot
+producer) and the test remains as the permanent convergence guard.

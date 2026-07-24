@@ -23,6 +23,13 @@ var groupOrder = []status.Group{
 
 // Row column widths for the general view (display cells).
 const (
+	// colName is the session NAME column (the editable discussion name, v0.5). It is
+	// blank when a session carries no name — the separate agent column still
+	// identifies the row. Longer names are clamped so the columns stay aligned.
+	colName = 20
+	// colAgent is the agent-CLI column (claude/codex/gemini/opencode), split out from
+	// the name so the two are distinct fields (field test 4). Wide enough for the
+	// longest agent name.
 	colAgent   = 9
 	colCwd     = 24
 	colStatus  = 17
@@ -38,8 +45,22 @@ type generalModel struct {
 	confirmID   string // session the confirm targets, captured by identity when it opened
 	confirmKill bool   // whether that target was running (kill) vs. completed (delete) at open
 
+	// Inline rename edit (v0.5): 'e' opens a single-line edit of the selected row's
+	// name. editID captures the target by identity so a concurrent regroup cannot move
+	// the edit onto a neighbor; editBuf is the working buffer; editing gates the mode.
+	editing bool
+	editID  string
+	editBuf string
+
 	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
 	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
+
+	// tombstones records ids removed by a client-side delete, each with an expiry, so a
+	// late buffered status event (one already queued on the subscribe stream before the
+	// delete landed) cannot re-append the row. The daemon tombstones server-side too; this
+	// closes the client-side remainder. Expiry is checked in apply (the Update path), never
+	// in a view, so no wall-clock read reaches rendering.
+	tombstones map[string]time.Time
 
 	width int
 }
@@ -48,6 +69,11 @@ type generalModel struct {
 // auto-expires. Long enough to be read (and to still be present for the coordinated
 // TestLiveness in-view assertion), short enough to stay transient.
 const bannerDuration = 4 * time.Second
+
+// tombstoneTTL is how long a client-deleted id is remembered so a late buffered event
+// for it is dropped. It only needs to outlast the drain of events already queued on the
+// subscribe stream at delete time; a few seconds is ample.
+const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
@@ -148,6 +174,12 @@ func (m *generalModel) move(delta int) {
 // It returns a command that prints the notification banner when the session
 // transitions INTO needs_input or ready_for_review (V-5), else nil.
 func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
+	// A client-deleted session must not reappear from a late buffered event that was
+	// already in flight when the delete landed (item 6). The tombstone is checked here on
+	// the Update path, so no wall-clock read reaches a view.
+	if m.isTombstoned(s.ID) {
+		return nil
+	}
 	// Remember what is selected before the regroup shifts the flat indices.
 	selID := m.selectedID()
 
@@ -172,7 +204,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 		// where the former tea.Printf (which writes to scrollback above the program)
 		// was a no-op. It auto-expires after bannerDuration; the tick re-emits the
 		// frame at expiry so the banner disappears on time.
-		m.bannerText = s.Agent + " " + statusToken(s.Group)
+		m.bannerText = displayName(s) + " " + statusToken(s.Group)
 		m.bannerExpiry = time.Now().Add(bannerDuration)
 		return bannerTick()
 	}
@@ -206,6 +238,9 @@ func bannerGroup(g status.Group) bool {
 // ---------------------------------------------------------------------------
 
 func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.general.editing {
+		return m.updateRename(k)
+	}
 	if m.general.confirm {
 		return m.updateConfirm(k)
 	}
@@ -216,13 +251,18 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyUp || (k.Text == "k"):
 		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
-		// Route the attach at the selection captured now (this keypress). With an
-		// injected runner this is the raw passthrough (completed/lost rows go
-		// read-only, G3); without one it is the Epic 7 identify-only placeholder.
+		// Route the attach at the selection captured now (this keypress).
 		if s, ok := m.general.selected(); ok {
+			// An ended/lost row cannot be attached: the daemon refuses any attach to a
+			// non-running session (internal/daemon attach.go). Rather than dial a doomed
+			// attach and swallow the error (the field-test silent no-op), surface an
+			// actionable banner and never attempt it.
+			if s.Status.Process != status.ProcessRunning {
+				return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
+			}
 			if m.attachRunner != nil {
-				readOnly := s.Group == status.GroupCompleted
-				return m, runAttach(m.attachRunner, s, readOnly)
+				// Only running rows reach here, so the passthrough is always read-write.
+				return m, runAttach(m.attachRunner, s, false)
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
@@ -243,6 +283,16 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// captured conversation id.
 		if s, ok := m.general.selected(); ok && s.Status.Process != status.ProcessRunning {
 			return m, resumeCmd(m.client, s, m.width, m.height)
+		}
+	case k.Text == "e":
+		// Open an inline rename of the selected row (v0.5). Capture the target by
+		// identity so a concurrent regroup cannot move the edit onto a neighbor, and
+		// seed the buffer with the current name (editing an existing label, not
+		// starting blank).
+		if s, ok := m.general.selected(); ok {
+			m.general.editing = true
+			m.general.editID = s.ID
+			m.general.editBuf = s.Name
 		}
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
@@ -286,12 +336,129 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateRename handles the inline single-line name edit (v0.5): Enter commits the
+// rename op, Esc cancels (the name reverts to its persisted value), Backspace drops
+// the last rune, and any printable key appends. The target is the session captured
+// when the edit opened (editID), not the live selection.
+func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEnter:
+		id, name := m.general.editID, m.general.editBuf
+		m.general.closeEdit()
+		return m, renameCmd(m.client, id, name)
+	case k.Code == tea.KeyEsc:
+		m.general.closeEdit()
+	case k.Code == tea.KeyBackspace:
+		m.general.editBuf = dropLast(m.general.editBuf)
+	case k.Text != "":
+		m.general.editBuf += k.Text
+	}
+	return m, nil
+}
+
+// closeEdit exits the inline rename mode and clears its buffer/target.
+func (m *generalModel) closeEdit() {
+	m.editing = false
+	m.editID = ""
+	m.editBuf = ""
+}
+
+// pasteEdit appends bracketed-paste content into the inline rename buffer, stripping
+// the CR/LF a single-line name must never carry (mirrors the launch form's paste).
+func (m *generalModel) pasteEdit(s string) {
+	if !m.editing {
+		return
+	}
+	m.editBuf += strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 func isCtrlX(k tea.KeyPressMsg) bool {
 	return k.Code == 'x' && k.Mod == tea.ModCtrl
 }
 
+// deleteDoneMsg carries a delete's outcome so a success can optimistically drop the
+// row (and acknowledge it) and a failure can be surfaced, instead of relying on the
+// eventual daemon event (the field-test "nothing happens - looks stale").
+type deleteDoneMsg struct {
+	id  string
+	err error
+}
+
+// killDoneMsg carries a kill's outcome so a failure is surfaced rather than silently
+// discarded. A success is a no-op on the board: the daemon event transitions the row
+// to completed (it is not removed).
+type killDoneMsg struct {
+	id  string
+	err error
+}
+
 func killCmd(c Client, id string) tea.Cmd {
-	return func() tea.Msg { _ = c.Kill(id); return nil }
+	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
+}
+
+// renameDoneMsg carries a rename's outcome so a failure (including an older daemon's
+// skew refusal) is surfaced on the banner, and a success updates the row's label
+// optimistically — the daemon's roster event then re-applies the same name (F-safe).
+type renameDoneMsg struct {
+	id   string
+	name string
+	err  error
+}
+
+func renameCmd(c Client, id, name string) tea.Cmd {
+	return func() tea.Msg { return renameDoneMsg{id: id, name: name, err: c.Rename(id, name)} }
+}
+
+// tombstone records id as client-deleted (with an expiry) so a late buffered event for
+// it is dropped by apply. Called alongside remove on a successful delete.
+func (m *generalModel) tombstone(id string) {
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]time.Time)
+	}
+	m.tombstones[id] = time.Now().Add(tombstoneTTL)
+}
+
+// isTombstoned reports whether id was recently client-deleted, purging the entry once it
+// expires (so a later, legitimately new session reusing the id is not blocked forever).
+func (m *generalModel) isTombstoned(id string) bool {
+	exp, ok := m.tombstones[id]
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(exp) {
+		delete(m.tombstones, id)
+		return false
+	}
+	return true
+}
+
+// remove drops the session with id from the board (the optimistic removal on a
+// successful delete), keeping the selection pinned to its session by identity.
+func (m *generalModel) remove(id string) {
+	selID := m.selectedID()
+	kept := make([]protocol.SessionView, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		if s.ID != id {
+			kept = append(kept, s)
+		}
+	}
+	m.sessions = kept
+	if selID == id {
+		selID = "" // the selected row is gone; restoreSel clamps into range
+	}
+	m.restoreSel(selID)
+}
+
+// applyName optimistically updates a renamed session's label on the board so the
+// change shows immediately; the daemon's roster event later re-applies it (a no-op
+// once the names already match).
+func (m *generalModel) applyName(id, name string) {
+	for i := range m.sessions {
+		if m.sessions[i].ID == id {
+			m.sessions[i].Name = name
+			return
+		}
+	}
 }
 
 // defaultResumeCols/Rows size a resume launch when the window size is not yet known.
@@ -316,6 +483,7 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 	}
 	req := protocol.LaunchReq{
 		Agent:   s.Agent,
+		Name:    s.Name, // a resumed session keeps its label (P2); "" degrades to the agent name
 		Cwd:     s.Cwd,
 		Options: map[string]string{protocol.OptionResumeFrom: s.ID},
 		Env:     os.Environ(),
@@ -323,8 +491,13 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		Rows:    rows,
 	}
 	return func() tea.Msg {
-		_, err := c.Launch(req)
-		return launchResultMsg{err: err}
+		id, name, err := c.Launch(req)
+		if name == "" {
+			name = s.Name // skew fallback: an older daemon's reply carries no canonical name
+		}
+		// Carry the new session id + agent + name so a successful resume auto-attaches into
+		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
+		return launchResultMsg{id: id, agent: s.Agent, name: name, err: err}
 	}
 }
 
@@ -337,7 +510,7 @@ func (m *generalModel) setBanner(text string) tea.Cmd {
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {
-	return func() tea.Msg { _ = c.Delete(id); return nil }
+	return func() tea.Msg { return deleteDoneMsg{id: id, err: c.Delete(id)} }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,8 +571,12 @@ func (m generalModel) header() string {
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
 	gs := groupStyle(g)
 	icon := gs.Render(groupIcon(g))
+	// Two identity columns (field test 4): the session NAME (bold, editable) then the
+	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
+	// so padRight always leaves a separating space (no jamming, width discipline).
 	fields := icon + " " +
-		styleAgent.Render(padRight(s.Agent, colAgent)) +
+		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
+		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		gs.Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
@@ -418,6 +595,17 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		prefix = "  "
 	}
 	return prefix + fields
+}
+
+// nameCell is the text shown in the NAME column: the live inline-edit buffer plus a
+// cursor while THIS row is being renamed, else the session's name (blank when
+// unnamed — the agent column still identifies the row). The editing buffer is
+// clamped two cells short of the column so its cursor always fits within the width.
+func (m generalModel) nameCell(s protocol.SessionView) string {
+	if m.editing && s.ID == m.editID {
+		return clampCells(m.editBuf, colName-2) + "█"
+	}
+	return s.Name
 }
 
 // confirmPrompt is the confirm-specific token shown on the selected row: "kill?"

@@ -100,22 +100,30 @@ func TestAttach_EnterRunsPassthroughForRunningRow(t *testing.T) {
 	}
 }
 
-// E8.4/G3 — Enter on a completed/lost row invokes the runner READ-ONLY (the final
-// snapshot renders, no input is accepted).
-func TestAttach_EnterOnCompletedRowIsReadOnly(t *testing.T) {
+// E8.4/G3 (superseded by v0.3 d06 item 1) — the daemon refuses any attach to a
+// non-running session (internal/daemon attach.go: "session %q is not running"), so
+// the former read-only-attach-on-completed path was a dead, silent no-op in
+// production (the v0.3 field-test finding); the system spec never promised read-only
+// viewing of an ended session. Enter on an ended/lost row now surfaces an actionable
+// banner and NEVER invokes the runner. (Running-row read-write attach stays covered
+// by TestAttach_EnterRunsPassthroughForRunningRow.) The read-only-view idea is
+// preserved as a feature: bd agents-tracker-x5z (read-only view of an ended session's
+// final screen from the board).
+func TestAttach_EnterOnEndedRowBannersNoAttach(t *testing.T) {
 	f := newFakeClient(sCompleted("endpoint/done", "codex", "~/Code/y", "exited 0", 5*time.Minute))
 	r := &recordingRunner{}
 	m := New(f, detectMixed(), WithAttachRunner(r.run))
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
 
-	runAttachCmd(m)
+	// Do not use runAttachCmd here: Enter now returns the banner tick (a tea.Tick
+	// that would block), not the runner command. Assert the synchronous state.
+	m, _ = m.Update(keyEnter)
 
-	calls := r.recorded()
-	if len(calls) != 1 {
-		t.Fatalf("attach runner called %d times, want 1", len(calls))
+	if len(r.recorded()) != 0 {
+		t.Fatalf("Enter on an ended row must never attempt attach; runner called %d times", len(r.recorded()))
 	}
-	if !calls[0].readOnly {
-		t.Fatal("a completed/lost session must attach READ-ONLY (G3)")
+	if !strings.Contains(view(m), "session has ended") {
+		t.Fatalf("Enter on an ended row must surface an actionable banner:\n%s", view(m))
 	}
 }
 
@@ -144,10 +152,11 @@ func (b *blockingClient) List() ([]protocol.SessionView, error) {
 	<-b.release // never released in this test
 	return nil, nil
 }
-func (b *blockingClient) Launch(protocol.LaunchReq) (string, error) { return "", nil }
-func (b *blockingClient) Kill(string) error                         { return nil }
-func (b *blockingClient) Delete(string) error                       { return nil }
-func (b *blockingClient) Subscribe() (<-chan protocol.Event, error) { return nil, nil }
+func (b *blockingClient) Launch(protocol.LaunchReq) (string, string, error) { return "", "", nil }
+func (b *blockingClient) Kill(string) error                                 { return nil }
+func (b *blockingClient) Delete(string) error                               { return nil }
+func (b *blockingClient) Rename(string, string) error                       { return nil }
+func (b *blockingClient) Subscribe() (<-chan protocol.Event, error)         { return nil, nil }
 
 // E8 (bounded-dial carry-forward) — New must bound its eager List so a hung daemon
 // cannot stall the first paint. New returns promptly with an (empty) usable board.

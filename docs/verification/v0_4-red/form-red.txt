@@ -1,0 +1,158 @@
+=== v0.4 form-glitch RED evidence (beads 41b, 8c0, 3sr-keymap-half) ===
+Captured: 2026-07-18T11:15:32Z on darwin/amd64
+
+### internal/tui — form option-row leak / label overflow / selected dot / bool affordance (41b, 3sr)
+=== RUN   TestLaunch_CyclingAgentFullySwapsSchema
+--- PASS: TestLaunch_CyclingAgentFullySwapsSchema (0.01s)
+=== RUN   TestLaunch_OptionLabelKeepsSeparatorSpace
+    launch_formglitch_test.go:66: 12-char label must not jam against its value:
+        swarm · new session
+        
+          directory   /Users/Nathan/Code/swarm/internal/tui
+        ▌ agent       ◂ ○ claude   ○ codex (version probe failed - reinstall?) ▸
+          Model       (default)
+          Sandbox modeworkspace-write ▾
+          prompt      (optional)
+          worktree    [ ] isolate in a git worktree
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+          arrows change · tab/↑↓ next · enter launch · esc cancel
+--- FAIL: TestLaunch_OptionLabelKeepsSeparatorSpace (0.00s)
+=== RUN   TestLaunch_SelectedAgentRendersFilledDot
+    launch_formglitch_test.go:86: the selected agent must render the filled dot, even when unusable:
+        swarm · new session
+        
+          directory   /Users/Nathan/Code/swarm/internal/tui
+        ▌ agent       ◂ ○ claude   ○ codex (version probe failed - reinstall?) ▸
+          Model       (default)
+          Sandbox modeworkspace-write ▾
+          prompt      (optional)
+          worktree    [ ] isolate in a git worktree
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+          arrows change · tab/↑↓ next · enter launch · esc cancel
+--- FAIL: TestLaunch_SelectedAgentRendersFilledDot (0.00s)
+=== RUN   TestLaunch_BoolRowsShowSpaceAffordanceInline
+    launch_formglitch_test.go:100: the worktree bool row must show its 'space' affordance inline:
+        swarm · new session
+        
+        ▌ directory   /Users/Nathan/Code/swarm/internal/tui█
+          agent       ◂ ● claude   ○ codex (upgrade codex to >= 1.2.0)   ✕ gemini (install: npm i -g @google/gemini-cli) ▸
+          Model       opus ▾
+          prompt      (optional)
+          worktree    [ ] isolate in a git worktree
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+          type or paste · tab/↑↓ next · enter launch · esc cancel
+--- FAIL: TestLaunch_BoolRowsShowSpaceAffordanceInline (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.668s
+FAIL
+
+### internal/adapter/detect — probe diagnostic survives non-zero exit (8c0)
+# github.com/Nathandela/swarm/internal/adapter/detect [github.com/Nathandela/swarm/internal/adapter/detect.test]
+internal/adapter/detect/detect_test.go:138:27: det.ProbeErr undefined (type adapter.Detection has no field or method ProbeErr)
+internal/adapter/detect/detect_test.go:139:105: det.ProbeErr undefined (type adapter.Detection has no field or method ProbeErr)
+internal/adapter/detect/detect_test.go:142:26: det.ProbeErr undefined (type adapter.Detection has no field or method ProbeErr)
+internal/adapter/detect/detect_test.go:143:58: det.ProbeErr undefined (type adapter.Detection has no field or method ProbeErr)
+FAIL	github.com/Nathandela/swarm/internal/adapter/detect [build failed]
+FAIL
+
+### cmd/swarm — ProbeErr reason + Rosetta arch hint (8c0)
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/main_test.go:28:109: unknown field ProbeErr in struct literal of type adapter.Detection
+cmd/swarm/main_test.go:42:73: unknown field ProbeErr in struct literal of type adapter.Detection
+cmd/swarm/main_test.go:45:12: undefined: archAugmentedReason
+cmd/swarm/main_test.go:48:9: undefined: archAugmentedReason
+cmd/swarm/main_test.go:56:12: undefined: archAugmentedReason
+cmd/swarm/main_test.go:61:12: undefined: archAugmentedReason
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

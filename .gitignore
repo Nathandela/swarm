@@ -19,3 +19,9 @@
 
 # build artifacts
 /swarm
+
+# local agent scratch — plans and red-run evidence; snippets are embedded in docs/verification
+.claude/tmp/
+
+# Session-local Claude Code worktrees (parallel sessions), never committable
+.claude/worktrees/

@@ -144,7 +144,7 @@ func launchFakeSession(t *testing.T, c *protocol.Client, script string) string {
 	// Make the script world-readable — the daemon subprocess reads it when spawning.
 	_ = os.Chmod(spath, 0o644)
 
-	id, err := c.Launch(protocol.LaunchReq{
+	id, _, err := c.Launch(protocol.LaunchReq{
 		Agent:   "fake",
 		Cwd:     t.TempDir(),
 		Options: map[string]string{"script": spath},

@@ -1,16 +1,19 @@
 // Package registry is the Epic 11 adapter registry: the single table mapping a
-// stable agent name ("claude" / "codex" / "reference") to the constructor that
-// builds that adapter.Adapter. It is the ONE place the daemon's DetectFunc (which
-// greys the launch-form picker per L-2) and `swarm-char --adapter` resolve an
-// adapter by name, so adding a v1.1 CLI is a single entry here (T-5, T-7).
+// stable agent name ("agy" / "claude" / "codex" / "opencode" / "reference") to
+// the constructor that builds that adapter.Adapter. It is the ONE place the
+// daemon's DetectFunc (which greys the launch-form picker per L-2) and
+// `swarm-char --adapter` resolve an adapter by name, so adding a v1.1 CLI is a
+// single entry here (T-5, T-7).
 package registry
 
 import (
 	"sort"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/agy"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/adapter/codex"
+	"github.com/Nathandela/swarm/internal/adapter/opencode"
 	"github.com/Nathandela/swarm/internal/adapter/refadapter"
 )
 
@@ -19,8 +22,10 @@ import (
 // here — its empty-fixture fallback yields the "reference-cli" binary the picker
 // probes (E9.5).
 var constructors = map[string]func() adapter.Adapter{
+	"agy":       agy.New,
 	"claude":    claude.New,
 	"codex":     codex.New,
+	"opencode":  opencode.New,
 	"reference": func() adapter.Adapter { return refadapter.New(adapter.Fixture{}) },
 }
 
@@ -32,8 +37,10 @@ var constructors = map[string]func() adapter.Adapter{
 // registered here. A new production adapter must be added to BOTH constructors and
 // this set — the fail-closed default (absent ⇒ not launchable) is deliberate.
 var production = map[string]bool{
-	"claude": true,
-	"codex":  true,
+	"agy":      true,
+	"claude":   true,
+	"codex":    true,
+	"opencode": true,
 }
 
 // New constructs the adapter registered under name. ok is false for an unknown

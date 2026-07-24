@@ -209,28 +209,31 @@ func TestPassthrough_SessionEndReturnsAndRestores(t *testing.T) {
 	}
 }
 
-// E8.4 / A-5 — chrome is a single toggleable line. With Chrome the session name
-// and detach hint appear; without it, no chrome line is painted.
+// E8.4 / A-5 — chrome is a single toggleable reserved row. With Chrome the session
+// name and the return hint appear; without it, no hint is painted. (ADR-006 v0.3
+// moved the hint from a top-row banner to a reserved bottom row; the wording became
+// "<name>  ctrl+q returns to swarm". The reserved-row mechanics are exercised in
+// hintrow_test.go — this test pins only the toggle.)
 func TestPassthrough_ChromeToggle(t *testing.T) {
-	// Chrome on: name + detach hint present.
+	// Chrome on: name + return hint present.
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(mustSnap(t, "GRID"))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, Name: "claude"})
 	eventually(t, func() bool {
 		out := term.outBytes()
-		return bytes.Contains(out, []byte("claude")) && bytes.Contains(out, []byte("detach"))
+		return bytes.Contains(out, []byte("claude")) && bytes.Contains(out, []byte("returns to swarm"))
 	})
 	sess.endSession()
 	_ = waitResult(t, ch)
 
-	// Chrome off: the name must not be painted as chrome (only the grid).
+	// Chrome off: the return hint must not be painted (only the grid).
 	term2 := newFakeTerm(80, 24)
 	sess2 := newFakeSession(mustSnap(t, "GRID"))
 	ch2 := runInBackground(Config{Term: term2, Session: sess2, Chrome: false, Name: "claude"})
 	eventually(t, func() bool { return bytes.Contains(term2.outBytes(), []byte("GRID")) })
 	time.Sleep(50 * time.Millisecond)
-	if bytes.Contains(term2.outBytes(), []byte("detach")) {
-		t.Fatal("chrome-off attach must not paint the detach-hint line (A-5)")
+	if bytes.Contains(term2.outBytes(), []byte("returns to swarm")) {
+		t.Fatal("chrome-off attach must not paint the return hint (A-5)")
 	}
 	sess2.endSession()
 	_ = waitResult(t, ch2)

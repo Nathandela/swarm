@@ -55,7 +55,7 @@ func TestE2E_AdapterWiring_ClaudeLaunchAndHook(t *testing.T) {
 
 	binDir := fakeClaudeBinDir(t)
 	cwd := t.TempDir()
-	id, err := c.Launch(protocol.LaunchReq{
+	id, _, err := c.Launch(protocol.LaunchReq{
 		Agent:   "claude",
 		Cwd:     cwd,
 		Options: map[string]string{},

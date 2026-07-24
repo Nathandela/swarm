@@ -1,0 +1,11 @@
+# Real-shaped codex config.toml sample: a bare top-level `model` key (the -m slug)
+# followed by other top-level keys and then [table] sections. The parser must read
+# only the top-level `model`, never a `model` that appears inside a later table.
+model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+
+[mcp_servers.context7]
+command = "npx"
+
+[profiles.fast]
+model = "gpt-5.5"

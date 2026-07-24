@@ -122,7 +122,8 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)
-	// Field order: directory -> agent -> (Model option) -> prompt. Tab three times.
+	// Field order: directory -> name -> agent -> (Model option) -> prompt. Tab four times.
+	m = send(m, keyTab) // name (leave empty -> defaults at submit)
 	m = send(m, keyTab) // agent (leave default claude)
 	m = send(m, keyTab) // Model option (leave default opus)
 	m = send(m, keyTab) // prompt
@@ -152,21 +153,21 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 
 // v0.3 / form-nav — UP/DOWN move the field focus like Tab (down = next field, up =
 // previous), with the same wrap semantics; Tab still works. detectMixed carries one
-// option, so the L-1 field order is directory(0), agent(1), Model(2), prompt(3),
-// worktree(4).
+// option, so the L-1 field order is directory(0), name(1), agent(2), Model(3),
+// prompt(4), worktree(5).
 func TestLaunch_ArrowsNavigateFields(t *testing.T) {
 	m := openLaunch(t, newFakeClient())
 	if f := launchOf(m).focus; f != 0 {
 		t.Fatalf("form opens on the directory field, got focus %d", f)
 	}
-	m = send(m, keyDown) // 0 -> 1 (agent)
+	m = send(m, keyDown) // 0 -> 1 (name)
 	if f := launchOf(m).focus; f != 1 {
-		t.Fatalf("KeyDown from directory should focus agent (1), got %d", f)
+		t.Fatalf("KeyDown from directory should focus name (1), got %d", f)
 	}
-	m = send(m, keyDown) // 1 -> 2 (Model)
-	m = send(m, keyUp)   // 2 -> 1 (agent)
+	m = send(m, keyDown) // 1 -> 2 (agent)
+	m = send(m, keyUp)   // 2 -> 1 (name)
 	if f := launchOf(m).focus; f != 1 {
-		t.Fatalf("KeyUp should move to the previous field (agent=1), got %d", f)
+		t.Fatalf("KeyUp should move to the previous field (name=1), got %d", f)
 	}
 	// Wrap: Up from the first field lands on the last (worktree = fieldCount-1).
 	m = send(m, keyUp) // 1 -> 0
@@ -214,7 +215,8 @@ func TestLaunch_UnusableAgentSelectableAndRefusedWithReason(t *testing.T) {
 
 	// Focus the agent field and cycle right onto the unusable codex; the arrow must
 	// land on it rather than skip back to the only usable agent.
-	m = send(m, keyDown)  // directory -> agent
+	m = send(m, keyDown)  // directory -> name
+	m = send(m, keyDown)  // name -> agent
 	m = send(m, keyRight) // claude -> codex (unusable)
 	if got := launchOf(m).currentAgentName(); got != "codex" {
 		t.Fatalf("right arrow must land on the unusable codex, got %q", got)

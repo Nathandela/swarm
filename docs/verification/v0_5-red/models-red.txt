@@ -1,0 +1,24 @@
+===== v0.5 model discovery RED run =====
+The implementing agent was killed by an account session limit after writing the
+tests and stubs; the orchestrator ran the red suite before completing the
+implementation (TDD order preserved). Failing output at stub state:
+
+--- FAIL: TestTOMLTopLevelString (0.01s)
+    modelprobe_test.go:53: tomlTopLevelString(model) = "", want "gpt-5.6-sol" (top-level only, not the table key)
+        modelprobe_test.go:72: tomlTopLevelString("model = \"gpt-5.6-sol\"") = "", want "gpt-5.6-sol"
+        modelprobe_test.go:72: tomlTopLevelString("model = 'gpt-5.5'") = "", want "gpt-5.5"
+        modelprobe_test.go:72: tomlTopLevelString("model = \"gpt-5.5\"  # my default") = "", want "gpt-5.5"
+        modelprobe_test.go:72: tomlTopLevelString("# model = \"nope\"\nmodel = \"real\"") = "", want "real"
+--- FAIL: TestParseCodexModelsCache (0.00s)
+        want (list-only, priority-sorted): [{gpt-5.6-sol GPT-5.6-Sol} ...]
+(plus TestClaudeModelFromJSON / TestReadCapped / TestProbeModels_* failing on the same stubs)
+FAIL	github.com/Nathandela/swarm/internal/adapter/detect
+
+GREEN after implementing modelprobe.go: ok internal/adapter/detect (race).
+
+=== overlayModelOptions RED (codex HIGH-1, Sat Jul 18 18:42:51 CEST 2026) ===
+--- FAIL: TestOverlayModelOptions (0.00s)
+    main_test.go:137: model Default = "", want the configured model
+    main_test.go:140: model Suggest = [], want discovered IDs [gpt-5.6-sol gpt-5.5]
+    main_test.go:154: claude Default = "", want fable
+    main_test.go:157: claude Suggest = [sonnet opus haiku], want default-first dedup [fable sonnet opus haiku]

@@ -38,6 +38,7 @@ type Meta struct {
 	SchemaVersion  int               `json:"schema_version"`
 	ID             string            `json:"id"`
 	AgentType      string            `json:"agent_type"`
+	Name           string            `json:"name"` // user-provided session label; "" falls back to AgentType at display time
 	Cwd            string            `json:"cwd"`
 	LaunchOptions  map[string]string `json:"launch_options"`
 	Env            []string          `json:"env"`

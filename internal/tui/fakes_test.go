@@ -5,7 +5,7 @@
 //
 //	type Client interface {                       // narrow, stub-friendly (Attach is Epic 8)
 //	    List() ([]protocol.SessionView, error)
-//	    Launch(protocol.LaunchReq) (string, error)
+//	    Launch(protocol.LaunchReq) (id, name string, err error) // name: daemon canonical label
 //	    Kill(id string) error
 //	    Delete(id string) error
 //	    Subscribe() (<-chan protocol.Event, error)
@@ -51,11 +51,20 @@ type fakeClient struct {
 	events   chan protocol.Event
 	listErr  error
 
-	launched  []protocol.LaunchReq
-	killed    []string
-	deleted   []string
-	launchID  string
-	launchErr error // when set, Launch returns it (B1 error-surfacing tests)
+	launched   []protocol.LaunchReq
+	killed     []string
+	deleted    []string
+	renamed    []renameCall // (id, name) pairs passed to Rename, in order
+	launchID   string
+	launchName string // canonical name the daemon returns on the launch reply ("" = older daemon)
+	launchErr  error  // when set, Launch returns it (B1 error-surfacing tests)
+	renameErr  error  // when set, Rename returns it (skew-refusal banner tests)
+}
+
+// renameCall records one Client.Rename so a test can assert what the TUI committed.
+type renameCall struct {
+	id   string
+	name string
 }
 
 func newFakeClient(sessions ...protocol.SessionView) *fakeClient {
@@ -77,14 +86,14 @@ func (f *fakeClient) List() ([]protocol.SessionView, error) {
 	return out, nil
 }
 
-func (f *fakeClient) Launch(r protocol.LaunchReq) (string, error) {
+func (f *fakeClient) Launch(r protocol.LaunchReq) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launched = append(f.launched, r)
 	if f.launchErr != nil {
-		return "", f.launchErr
+		return "", "", f.launchErr
 	}
-	return f.launchID, nil
+	return f.launchID, f.launchName, nil
 }
 
 func (f *fakeClient) Kill(id string) error {
@@ -99,6 +108,13 @@ func (f *fakeClient) Delete(id string) error {
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, id)
 	return nil
+}
+
+func (f *fakeClient) Rename(id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renamed = append(f.renamed, renameCall{id: id, name: name})
+	return f.renameErr
 }
 
 func (f *fakeClient) Subscribe() (<-chan protocol.Event, error) { return f.events, nil }
@@ -122,6 +138,12 @@ func (f *fakeClient) deletedIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.deleted...)
+}
+
+func (f *fakeClient) renamedCalls() []renameCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]renameCall(nil), f.renamed...)
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +233,34 @@ func detectEditable() DetectFunc {
 	return func() []AgentInfo {
 		return []AgentInfo{
 			{Name: "claude", Installed: true, InRange: true, Options: editableSchema()},
+		}
+	}
+}
+
+// codexSchema mirrors the real codex option schema shape: an editable "Model"
+// string plus a "Sandbox mode" CHOICE whose 12-char label exercises the label
+// column (bead 41b: a label as wide as the column must still keep a separating
+// space before its value, not jam into "Sandbox modeworkspace-write").
+func codexSchema() []adapter.OptionSpec {
+	return []adapter.OptionSpec{
+		{Key: "model", Label: "Model", Type: "string"},
+		{Key: "sandbox", Label: "Sandbox mode", Type: "choice",
+			Choices: []string{"read-only", "workspace-write", "danger-full-access"}, Default: "workspace-write"},
+	}
+}
+
+// detectCodexSchema mirrors the production field case (bead 41b): claude is usable
+// and carries a one-option schema (Model); codex is INSTALLED but out of range
+// (unusable) yet still carries its FULL declarative schema (Model + Sandbox mode)
+// — exactly what adapter detection does, populating ad.Options() regardless of
+// usability. The two agents' option sets differ, so cycling between them
+// exercises the schema swap, the wide label, and the selected-dot marker on an
+// unusable-but-selected agent.
+func detectCodexSchema() DetectFunc {
+	return func() []AgentInfo {
+		return []AgentInfo{
+			{Name: "claude", Installed: true, InRange: true, Options: claudeSchema()},
+			{Name: "codex", Installed: true, InRange: false, Reason: "version probe failed - reinstall?", Options: codexSchema()},
 		}
 	}
 }

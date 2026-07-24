@@ -106,7 +106,8 @@ func TestLaunch_ModelStringOptionEditable(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // directory -> agent
+	m = send(m, keyTab) // directory -> name
+	m = send(m, keyTab) // name -> agent
 	m = send(m, keyTab) // agent -> model (string)
 
 	m = sendType(m, "opus")
@@ -129,8 +130,9 @@ func TestLaunch_ModelSuggestionsCycle(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // agent
-	m = send(m, keyTab) // model
+	m = send(m, keyTab) // directory -> name
+	m = send(m, keyTab) // name -> agent
+	m = send(m, keyTab) // agent -> model
 
 	// Suggest = [sonnet, opus, haiku]; from empty, right -> sonnet, right -> opus.
 	m = send(m, keyRight)
@@ -155,9 +157,10 @@ func TestLaunch_SpaceTogglesBoolOption(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // agent
-	m = send(m, keyTab) // model
-	m = send(m, keyTab) // skip (bool)
+	m = send(m, keyTab) // directory -> name
+	m = send(m, keyTab) // name -> agent
+	m = send(m, keyTab) // agent -> model
+	m = send(m, keyTab) // model -> skip (bool)
 
 	if got := launchOf(m).options["dangerously-skip-permissions"]; got != "false" {
 		t.Fatalf("default skip = %q, want false", got)
@@ -221,6 +224,10 @@ func TestLaunch_HintFooterFollowsFocus(t *testing.T) {
 	m = send(m, keyRune('n')) // focus: directory (text)
 	if v := view(m); !strings.Contains(v, "type or paste") {
 		t.Fatalf("directory hint missing 'type or paste':\n%s", v)
+	}
+	m = send(m, keyTab) // name (text)
+	if v := view(m); !strings.Contains(v, "type or paste") {
+		t.Fatalf("name hint missing 'type or paste':\n%s", v)
 	}
 	m = send(m, keyTab) // agent
 	if v := view(m); !strings.Contains(v, "arrows change") {

@@ -162,3 +162,61 @@ func TestIntegration_AttachRealSnapshotAndLease(t *testing.T) {
 		t.Fatalf("re-Attach after detach (L3): %v", err)
 	}
 }
+
+// TestIntegration_RenameFansOutRosterEvent proves the v0.5 rename converges every
+// client through the NORMAL event path against a REAL daemon: a rename over the
+// protocol persists the new label AND the roster poller (FromDaemon.watch, now
+// name-aware) fans it out as a Subscribe event so a second client sees it live —
+// not only on the next List. This is the end-to-end "all clients converge" guard a
+// stub cannot give (the stub pushes events by hand; here a real poller must detect
+// the name change).
+func TestIntegration_RenameFansOutRosterEvent(t *testing.T) {
+	d := realDaemon(t)
+	launchRealSession(t, d)
+
+	sock := tmpSock(t)
+	srv, err := Serve(FromDaemon(d), sock)
+	if err != nil {
+		t.Fatalf("Serve(FromDaemon): %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// One client subscribes (the observer that must converge); another issues the
+	// rename. A single client would also do, but two proves the fan-out crosses
+	// connections.
+	observer := dialClient(t, sock, nil)
+	events, err := observer.Subscribe()
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	renamer := dialClient(t, sock, nil)
+
+	if err := renamer.Rename(onlyViewID(t, renamer), "renamed-live"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	// The observer and renamer are distinct connections, so each stamps ids with its
+	// OWN endpoint namespace (the Serve path uses per-connection endpoint ids; the
+	// assembled daemon uses one stable id). Converge on the LOCAL id, which is stable
+	// across endpoints, plus the new label.
+	_, wantLocal, ok := ParseID(onlyViewID(t, renamer))
+	if !ok {
+		t.Fatalf("could not parse the session's local id")
+	}
+
+	// Drain the subscribe stream (it also carries the session's status changes) until
+	// a roster event carries the NEW label, or fail at the deadline.
+	deadline := time.After(launchTimeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("subscribe stream closed before the rename event arrived")
+			}
+			if _, evLocal, ok := ParseID(ev.Session.ID); ok && evLocal == wantLocal && ev.Session.Name == "renamed-live" {
+				return // converged: the roster event carried the new name to another client
+			}
+		case <-deadline:
+			t.Fatalf("no roster event with the new name within %s (rename did not fan out)", launchTimeout)
+		}
+	}
+}

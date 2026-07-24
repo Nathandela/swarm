@@ -75,6 +75,39 @@ the spec.
   first row carries content lost it to the bar. Snapshot fidelity wins by default;
   the board's persistent bottom status bar carries the detach-key hint
   ("ctrl+q returns") instead, and the Chrome seam remains for callers that want it.
+- Chrome is back ON by default (v0.3), but the overdraw problem above is designed
+  out rather than tolerated: the hint gets its OWN row the agent cannot touch. When
+  chrome is engaged the session PTY is sized to `rows-1` (both at attach and on every
+  SIGWINCH), a DECSTBM scroll region of `1..rows-1` keeps normal-mode scrolling off the
+  real bottom row, and the reverse-video hint is painted there under DECSC/DECRC so the
+  cursor is preserved. The snapshot paint is clipped to `rows-1` for the same reason.
+  The remaining trade-offs are small and bounded: (a) the agent sees one fewer row while
+  attached; (b) a full reset (`ESC c`), an `ED2` clear, an alt-screen swap, or a bare
+  `CSI r` from the agent can still transiently clobber the row, so the output pump
+  re-asserts region+hint after each frame batch — immediately on one of those damage
+  signatures (a cheap byte scan), otherwise throttled to at most once per ~250ms — which
+  self-heals the bare-`CSI r` region reset; and (c) a terminal of `rows<=2` is too small
+  to reserve a row, so the hint disables itself and the attach falls back to exactly the
+  Chrome:false passthrough. On detach the region is reset to full (`CSI r`) and the hint
+  row cleared before the board repaints.
+- v0.3.0 hardening: the re-assert injections are now **ground-state-gated**. A minimal,
+  allocation-free parser-state tracker is fed every agent output byte, and the pump (and
+  the trailing heal timer) inject region+hint bytes ONLY when the tracker is between
+  sequences (GROUND). PTY frames chunk at arbitrary byte offsets, so a frame can end mid
+  escape sequence; injecting there would abort the agent's pending sequence and render its
+  continuation as literal text. Gating on GROUND keeps raw-passthrough purity (A-1) intact
+  even across split escape sequences. A one-shot ~300 ms trailing heal timer, re-armed
+  after each frame batch and delivered through the main loop's nudge channel (never written
+  from the timer goroutine), re-asserts the row when damage lands in the last frame of a
+  burst with no further output — also bounding the one case DECSTBM cannot prevent, an
+  absolute `CSI 999;1H` stomp past the scroll region, to one timer period. `chromeHint` now
+  emits `CSI ?6l` (DECOM off) under the DECSC/DECRC save so the reserved-row CUP is absolute
+  even when the agent enabled origin mode. Teardown keys on whether chrome actually engaged,
+  so a Chrome:true run on a `rows<=2` terminal is byte-identical to Chrome:false. Known
+  residual trade-offs remain tracked as beads: an agent's persistent sub-regions are
+  re-asserted over (the row is ours while attached), a damage signature split across two
+  frames heals via the trailing timer rather than immediately (the per-frame scan is not
+  cross-frame), and the primary-screen DECSC/DECRC register is shared with the agent.
 
 ## Alternatives Considered
 

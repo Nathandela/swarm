@@ -51,6 +51,7 @@ func (a *daemonAdapter) List() []persist.Meta                                { r
 func (a *daemonAdapter) Launch(spec daemon.LaunchSpec) (persist.Meta, error) { return a.d.Launch(spec) }
 func (a *daemonAdapter) Kill(id string) error                                { return a.d.Kill(id) }
 func (a *daemonAdapter) Delete(id string) error                              { return a.d.Delete(id) }
+func (a *daemonAdapter) Rename(id, name string) error                        { return a.d.Rename(id, name) }
 func (a *daemonAdapter) Events() <-chan persist.Meta                         { return a.events }
 
 func (a *daemonAdapter) Attach(id string) (SessionStream, error) {
@@ -67,8 +68,17 @@ func (a *daemonAdapter) stopEvents() {
 	a.stopMu.Do(func() { close(a.stop) })
 }
 
+// rosterSnap is the per-session change key the poller diffs on: the status the
+// board groups by PLUS the display label, so a rename (which changes only the name)
+// fans out just like a status change. Both fields are comparable, so the whole key
+// compares with ==.
+type rosterSnap struct {
+	status status.Status
+	name   string
+}
+
 func (a *daemonAdapter) watch() {
-	seen := map[string]status.Status{}
+	seen := map[string]rosterSnap{}
 	t := time.NewTicker(eventPoll)
 	defer t.Stop()
 	for {
@@ -79,12 +89,13 @@ func (a *daemonAdapter) watch() {
 			present := map[string]struct{}{}
 			for _, m := range a.d.List() {
 				present[m.ID] = struct{}{}
-				if prev, ok := seen[m.ID]; ok && prev == m.Status {
+				cur := rosterSnap{status: m.Status, name: m.Name}
+				if prev, ok := seen[m.ID]; ok && prev == cur {
 					continue
 				}
 				select {
 				case a.events <- m:
-					seen[m.ID] = m.Status // mark seen ONLY once the change is queued (F4)
+					seen[m.ID] = cur // mark seen ONLY once the change is queued (F4)
 				case <-a.stop:
 					return
 				default:

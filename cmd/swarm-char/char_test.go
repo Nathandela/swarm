@@ -474,6 +474,94 @@ func TestRun_CLIWiresInputHooksAndSelectedAdapter(t *testing.T) {
 	}
 }
 
+// TestRun_AdapterFlagResolvesRegisteredProductionAdapter — R-A3: an -adapter name
+// not in the local fixture-driven table (adapterRegistry) falls back to the
+// registered production adapters (internal/adapter/registry), wrapped to ignore
+// the fixture argument since a production adapter is fixture-independent.
+// Driving -adapter claude against the fake agent must emit the CLAUDE adapter's
+// capability entry (Hooks:true from its hook events, Options:2 from its model +
+// skip-permissions options) — not the default refadapter's.
+func TestRun_AdapterFlagResolvesRegisteredProductionAdapter(t *testing.T) {
+	script := writeScript(t, "print hello\nexit 0\n")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-cli", "claude-code",
+		"-version", "2.1.0",
+		"-scenario", "resolves-claude",
+		"-adapter", "claude",
+		"-cwd", t.TempDir(),
+		"-timeout", "20s",
+		"--", fakeAgentBin, script,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run exit=%d, stderr:\n%s", code, stderr.String())
+	}
+	var entry adapter.CapabilityEntry
+	if err := json.Unmarshal(stderr.Bytes(), &entry); err != nil {
+		t.Fatalf("parse capability JSON from stderr (%q): %v", stderr.String(), err)
+	}
+	if !entry.Hooks {
+		t.Error("Hooks=false: -adapter claude did not resolve the registered claude adapter")
+	}
+	if entry.Options != 2 {
+		t.Errorf("Options=%d, want 2 (claude declares model + dangerously-skip-permissions)", entry.Options)
+	}
+}
+
+// TestRun_AdapterNoneIsFixtureOnly — R-A3: -adapter none records and validates
+// the fixture but derives NO capability entry. T-6 needs fixtures recorded
+// BEFORE the real adapter exists (Phase B fixtures land before the adapter
+// packages that read them), so characterization must not require resolving one.
+func TestRun_AdapterNoneIsFixtureOnly(t *testing.T) {
+	script := writeScript(t, "print hello\nexit 0\n")
+	fixturePath := filepath.Join(t.TempDir(), "fx.json")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-cli", "agy",
+		"-version", "1.1.4",
+		"-scenario", "fixture-only",
+		"-adapter", "none",
+		"-out", fixturePath,
+		"-cwd", t.TempDir(),
+		"-timeout", "20s",
+		"--", fakeAgentBin, script,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run exit=%d, stderr:\n%s", code, stderr.String())
+	}
+	fx, err := fixtureio.LoadFixture(fixturePath)
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	if err := fx.Validate(); err != nil {
+		t.Errorf("fixture-only mode produced an invalid fixture: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("-adapter none emitted capability output on stderr, want none: %q", stderr.String())
+	}
+}
+
+// TestRun_UnknownAdapterListsBothSources — the unknown-name error lists names
+// from BOTH the local fixture-driven table and the registered production
+// adapters, so a caller sees every valid -adapter value in one place.
+func TestRun_UnknownAdapterListsBothSources(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-cli", "x", "-version", "1", "-scenario", "s",
+		"-adapter", "bogus-adapter-xyz",
+		"--", fakeAgentBin,
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+	msg := stderr.String()
+	for _, want := range []string{"refadapter", "claude", "codex"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("unknown-adapter error %q missing %q (must list both the local and registered sources)", msg, want)
+		}
+	}
+}
+
 // TestResolveGeometry and TestParseScriptedInput cover the -geometry / -input
 // parsers directly (unit-level, no PTY).
 func TestResolveGeometry(t *testing.T) {

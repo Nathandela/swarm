@@ -1,0 +1,23 @@
+# v0.3 ended-session UX (bd agents-tracker-d06) — RED evidence
+# Failing-first run BEFORE implementation. Tests reference not-yet-existing
+# production symbols (skewNotice, deleteDoneMsg, killDoneMsg, rootModel.daemonVersion/
+# clientVersion) and the superseded G3 assertion — the package fails to compile,
+# the standard Go TDD red for undefined implementation symbols.
+# Command: go test ./internal/tui/ -run 'TestEnter_OnEnded|TestEnter_OnLost|TestDelete_|TestKill_|TestAttach_Failure|TestAttach_CleanReturn|TestSkewNotice|TestNew_CapturesDaemon|TestBoard_Shows|TestBoard_Skew|TestAttach_EnterOnEndedRow' -count=1
+# Date: 2026-07-18T09:41:02Z
+# ------------------------------------------------------------------------
+
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/sessionux_test.go:129:14: undefined: deleteDoneMsg
+internal/tui/sessionux_test.go:145:14: undefined: killDoneMsg
+internal/tui/sessionux_test.go:158:14: undefined: killDoneMsg
+internal/tui/sessionux_test.go:201:9: undefined: skewNotice
+internal/tui/sessionux_test.go:211:12: undefined: skewNotice
+internal/tui/sessionux_test.go:217:12: undefined: skewNotice
+internal/tui/sessionux_test.go:220:12: undefined: skewNotice
+internal/tui/sessionux_test.go:226:12: undefined: skewNotice
+internal/tui/sessionux_test.go:239:26: m.(rootModel).daemonVersion undefined (type rootModel has no field or method daemonVersion)
+internal/tui/sessionux_test.go:248:65: unknown field daemonVersion in struct literal of type rootModel
+internal/tui/sessionux_test.go:248:65: too many errors
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL

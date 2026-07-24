@@ -1,0 +1,95 @@
+=== v0.4 committee fix wave — RED evidence (failing-first) ===
+Date: 2026-07-18 (darwin/arm64)
+
+Adjudicated items:
+  1 HIGH  attach breaks after auto daemon-upgrade (per-attach fresh dial)
+  2 HIGH  compareSemver ignores pre-release suffixes (rc == final)
+  3 MED   post-upgrade Subscribe error dropped -> silently dead board
+  4 MED   auto-attach chrome uses client-side unsanitized name (daemon canonical must win)
+  5 MED   agent picker row renders unclamped (pushes selection off-screen)
+
+Reds are captured per package below. Behavioral reds (items 2,3,5) fail on
+assertions; symbol/signature reds (items 1,4) are the standard undefined-RED the
+suite uses for frozen-API additions (see v0_4-red/flow-red.txt precedent).
+
+============================================================================
+### items 2,3,5 — internal/tui behavioral RED (package compiles on current code)
+### go test ./internal/tui/ -run 'TestCompareSemver_...|TestClassifySkew_Prerelease...|TestDaemonRestarted_SubscribeFailureBanners|TestLaunch_AgentRow...'
+--- FAIL: TestLaunch_AgentRowClampsKeepingSelectedVisible (0.01s)
+    agentrow_test.go:34: agent row width = 182, must clamp to the form budget 106; row:
+        "◂ ○ codex (version probe failed - reinstall? (swarm is x86_64 under Rosetta; rebuild native ROSETTA-HINT-TAIL-MARKER))   ● claude (unsupported version 0.0.1 SELECTED-REASON-MARKER) ▸"
+--- FAIL: TestCompareSemver_PrereleaseOrdersBeforeRelease (0.00s)
+    upgrade_fixes_test.go:44: compareSemver("0.4.0-rc.1","0.4.0") = 1, want -1 (a pre-release sorts before its release)
+    upgrade_fixes_test.go:44: compareSemver("0.4.0","0.4.0-rc.1") = -1, want 1 (a release sorts after its pre-release)
+--- FAIL: TestClassifySkew_PrereleaseDirections (0.00s)
+    upgrade_fixes_test.go:53: rc daemon vs final client must auto-upgrade; got 1
+    upgrade_fixes_test.go:56: final daemon vs rc client must warn (cannot self-heal); got 2
+--- FAIL: TestDaemonRestarted_SubscribeFailureBanners (0.00s)
+    upgrade_fixes_test.go:95: a failed re-subscribe must banner the reason, never silently dead; view:
+        swarm                                                                                            0 running · 0 needs you
+        
+          ● daemon upgraded
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+          ↑↓ navigate   ⏎ attach (ctrl+q returns)   n new   ctrl+x kill   esc quit
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.677s
+FAIL
+
+============================================================================
+### item 1 — cmd/swarm undefined-RED (attachDialer not yet implemented; Launch not yet 3-return)
+### go test ./cmd/swarm/ -run TestAttachDialer_AttachesAfterAutoUpgrade
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/attach_upgrade_test.go:43:18: assignment mismatch: 3 variables but longLived.Launch returns 2 values
+cmd/swarm/attach_upgrade_test.go:92:10: undefined: attachDialer
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL
+
+============================================================================
+### item 4 — internal/protocol undefined-RED (Client.Launch not yet 3-return)
+### go test ./internal/protocol/ -run TestClient_LaunchReturnsCanonicalName
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/naming_test.go:106:19: assignment mismatch: 3 variables but c.Launch returns 2 values
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL
+
+### item 4 — internal/tui undefined-RED (fakeClient.launchName + Launch 3-return)
+### go test ./internal/tui/ -run 'TestLaunchCmd_UsesDaemonCanonicalName|TestLaunchCmd_FallsBackToReqNameWhenDaemonOmitsName'
+# github.com/Nathandela/swarm/internal/tui [github.com/Nathandela/swarm/internal/tui.test]
+internal/tui/naming_test.go:167:4: f.launchName undefined (type *fakeClient has no field or method launchName)
+FAIL	github.com/Nathandela/swarm/internal/tui [build failed]
+FAIL

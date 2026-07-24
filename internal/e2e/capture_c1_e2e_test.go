@@ -26,7 +26,7 @@ func TestE2E_ConversationCapture_DuringHeldAttach_C1(t *testing.T) {
 
 	const convID = "conv-REF-c1held"
 	binDir := fakeReferenceBinDir(t, convID)
-	id, err := c.Launch(protocol.LaunchReq{
+	id, _, err := c.Launch(protocol.LaunchReq{
 		Agent: "reference", Cwd: t.TempDir(), Options: map[string]string{},
 		Env: []string{"PATH=" + binDir + ":" + os.Getenv("PATH")}, Cols: 80, Rows: 24,
 	})

@@ -1,16 +1,15 @@
 // Package registry is the Epic 11 adapter REGISTRY: the single table mapping a
-// stable agent name ("claude" / "codex" / "reference") to the constructor that
-// builds that Adapter. It is the ONE place the daemon's DetectFunc (which greys the
-// launch-form picker per L-2) and `swarm-char --adapter` resolve an adapter by
-// name, so adding a v1.1 CLI is a single registry entry (T-5, T-7).
+// stable agent name ("agy" / "claude" / "codex" / "opencode" / "reference") to
+// the constructor that builds that Adapter. It is the ONE place the daemon's
+// DetectFunc (which greys the launch-form picker per L-2) and `swarm-char
+// --adapter` resolve an adapter by name (T-5, T-7).
 //
-// This FAILING-FIRST suite freezes the registry surface before implementation. It
-// COMPILES only once the package provides:
-//
-//	func New(name string) (adapter.Adapter, bool)  // construct by name
-//	func Names() []string                          // sorted registered names
-//
-// so the RED reason is "undefined: registry.New / registry.Names" until it lands.
+// R-F1 (.claude/tmp/cli-duo-implementation-plan.md Phase F) extends this
+// originally v1.0 (claude/codex) suite to the v1.1 CLI duo: agy + opencode
+// join as both constructors and production entries, FAILING-FIRST — this file
+// pins the expanded surface before registry.go registers them, so the RED
+// reason is "New(\"agy\"/\"opencode\") = (nil, false)" and a truncated
+// Names() until they land.
 package registry
 
 import (
@@ -20,19 +19,21 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 )
 
-// wantNames are the v1.0 registered adapters (T-7): the two real CLIs plus the
+// wantNames are the v1.1 registered adapters (T-7): the four real CLIs plus the
 // fixture-only reference adapter that proves the boundary (E9.5).
-var wantNames = []string{"claude", "codex", "reference"}
+var wantNames = []string{"agy", "claude", "codex", "opencode", "reference"}
 
 // wantBinary is the real PATH binary each named adapter detects.
 var wantBinary = map[string]string{
+	"agy":       "agy",
 	"claude":    "claude",
 	"codex":     "codex",
+	"opencode":  "opencode",
 	"reference": "reference-cli",
 }
 
-// TestNew_KnownAdapters — each v1.0 name constructs a non-nil adapter whose Binary
-// is the real CLI; an unknown name returns (nil, false).
+// TestNew_KnownAdapters — each v1.1 name constructs a non-nil adapter whose
+// Name and Binary match the registration; an unknown name returns (nil, false).
 func TestNew_KnownAdapters(t *testing.T) {
 	for _, name := range wantNames {
 		a, ok := New(name)
@@ -46,7 +47,28 @@ func TestNew_KnownAdapters(t *testing.T) {
 	}
 
 	if a, ok := New("gemini"); ok || a != nil {
-		t.Errorf("New(\"gemini\") = (%v, %v); want (nil, false) — Gemini is v1.1, unregistered", a, ok)
+		t.Errorf("New(\"gemini\") = (%v, %v); want (nil, false) — unregistered (agy, not a bare \"gemini\" name, is the Gemini-CLI-successor adapter)", a, ok)
+	}
+}
+
+// wantProduction is the T-7/GG-6 production set: every real CLI adapter, minus
+// the fixture-only "reference" adapter.
+var wantProduction = []string{"agy", "claude", "codex", "opencode"}
+
+// TestIsProduction — R-F1: every real CLI adapter is a launchable production
+// provider; "reference" and an unregistered name are not (the fail-closed
+// default a launch RPC's scope gate relies on).
+func TestIsProduction(t *testing.T) {
+	for _, name := range wantProduction {
+		if !IsProduction(name) {
+			t.Errorf("IsProduction(%q) = false; want true (v1.1 real CLI)", name)
+		}
+	}
+	if IsProduction("reference") {
+		t.Errorf("IsProduction(\"reference\") = true; want false (fixture-only, not launchable)")
+	}
+	if IsProduction("gemini") {
+		t.Errorf("IsProduction(\"gemini\") = true; want false (unregistered name)")
 	}
 }
 
