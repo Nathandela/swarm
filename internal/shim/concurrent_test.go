@@ -66,6 +66,15 @@ func TestConcurrent_SecondHelloSucceedsDuringAttach(t *testing.T) {
 // never corrupts the wire (per-connection write serialization, R1.3.2b/e).
 // Pre-fix the second client's hello blocks behind the first client's serve slot
 // (RED at setup).
+//
+// [C3 item B fixture amendment, coordinator-sanctioned] Only client 0 attaches:
+// an attach by every client made each successive attach an uncoordinated
+// supersede, and the C3 hardening now CLOSES a superseded connection (see
+// TestHub_SupersededConnGetsEOF), which would break the later hello-spam on
+// those connections for a reason unrelated to what this test pins. Secondary
+// clients are hello+spam-only; every assertion is unchanged — concurrent
+// serving, framing integrity under spam, and the live attach stream on the
+// spammed connection are all still exercised.
 func TestConcurrent_MultipleClientsServedWithCleanFraming(t *testing.T) {
 	cfg := helperConfig(t, modeStreamActive, nil, nil) // continuous DataOut on the active sub
 	ch := runShimAsync(cfg)
@@ -76,8 +85,10 @@ func TestConcurrent_MultipleClientsServedWithCleanFraming(t *testing.T) {
 		c := dialShim(t, cfg.SocketPath)
 		c.startReader()
 		c.hello(shimwire.Version) // pre-fix: for i>=1 this fatals (blocked) -> RED
-		c.attach()
-		c.firstSnapshot(3 * time.Second)
+		if i == 0 {
+			c.attach()
+			c.firstSnapshot(3 * time.Second)
+		}
 		cs[i] = c
 	}
 
