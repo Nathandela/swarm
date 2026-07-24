@@ -157,8 +157,11 @@ import (
 const (
 	// netTimeout bounds a single dial/handshake in the tests.
 	netTimeout = 5 * time.Second
-	// recvTimeout bounds waiting for one channel/frame delivery.
-	recvTimeout = 2 * time.Second
+	// recvTimeout bounds waiting for one channel/frame delivery. 5s (not 2s) so the heaviest
+	// render path (TestRemotePeek_LargeGridClippedUnderMaxFrame renders a 600x500 grid) stays
+	// green under CPU contention -- the 2s bound was a load-sensitive flake (re-audit codex#9);
+	// the pass case still returns immediately, only a genuine stall waits the full bound.
+	recvTimeout = 5 * time.Second
 	// oneSecond is the L1 fan-out latency bound asserted in fanout_test.
 	oneSecond = 1 * time.Second
 	// launchTimeout bounds a real-daemon launch + confirm in the integration test.
