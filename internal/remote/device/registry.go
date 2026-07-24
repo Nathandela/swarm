@@ -159,7 +159,9 @@ func (r *Registry) Add(rec Record) error {
 	defer r.mu.Unlock()
 	prev, had := r.byID[rec.DeviceID]
 	r.byID[rec.DeviceID] = cloneRecord(rec)
-	if err := r.persistLocked(); err != nil {
+	committed, err := r.persistLocked()
+	if err != nil && !committed {
+		// Pre-rename failure: disk is unchanged, so roll memory back to match it.
 		if had {
 			r.byID[rec.DeviceID] = prev
 		} else {
@@ -167,7 +169,9 @@ func (r *Registry) Add(rec Record) error {
 		}
 		return err
 	}
-	return nil
+	// err==nil (durable) or committed post-rename dir-fsync error: the on-disk roster
+	// already reflects rec, so memory stays as-is and any error is surfaced.
+	return err
 }
 
 // AddSole atomically enrolls rec as the registry's SOLE device: under the registry mutex
@@ -191,7 +195,9 @@ func (r *Registry) AddSole(rec Record) error {
 	}
 	prev, had := r.byID[rec.DeviceID]
 	r.byID[rec.DeviceID] = cloneRecord(rec)
-	if err := r.persistLocked(); err != nil {
+	committed, err := r.persistLocked()
+	if err != nil && !committed {
+		// Pre-rename failure: disk is unchanged, so roll memory back to match it.
 		if had {
 			r.byID[rec.DeviceID] = prev
 		} else {
@@ -199,7 +205,9 @@ func (r *Registry) AddSole(rec Record) error {
 		}
 		return err
 	}
-	return nil
+	// err==nil (durable) or committed post-rename dir-fsync error: the on-disk roster
+	// already reflects rec, so memory stays as-is and any error is surfaced.
+	return err
 }
 
 // Get returns a copy of the record for deviceID, or ok=false if unknown.
@@ -231,11 +239,16 @@ func (r *Registry) Remove(deviceID string) (bool, error) {
 		return false, nil
 	}
 	delete(r.byID, deviceID)
-	if err := r.persistLocked(); err != nil {
+	committed, err := r.persistLocked()
+	if err != nil && !committed {
+		// Pre-rename failure: disk still holds the record, so restore memory to match.
 		r.byID[deviceID] = prev
 		return false, err
 	}
-	return true, nil
+	// err==nil (durable) or committed post-rename dir-fsync error: the on-disk roster
+	// already reflects the removal, so memory stays removed and the removal is reported,
+	// surfacing any dir-fsync error.
+	return true, err
 }
 
 // Authorized reports whether the device may perform action a. It is fail-closed: an
@@ -269,37 +282,56 @@ func (r *Registry) sortedLocked() []Record {
 
 // persistLocked writes the whole registry atomically (temp+Sync+rename, 0600),
 // mirroring internal/persist's process-crash durability model. Caller holds mu.
-func (r *Registry) persistLocked() error {
+//
+// It reports committed to distinguish a PRE-rename failure from a POST-rename one
+// (finding codex#5, durability -- the same pre/post distinction idempotency.rewriteLocked
+// makes). committed is false while any failure could still be rolled back cleanly (the
+// on-disk roster is unchanged: marshal/create/write/sync/rename all failed before the
+// atomic swap). Once os.Rename lands, the NEW roster IS on disk, so committed is true even
+// if the trailing dir-fsync errors: the caller must NOT roll the in-memory change back
+// (that would leave memory holding the OLD roster while disk holds the NEW one). A
+// post-rename dir-fsync error is still surfaced -- durable-enough, just not
+// dir-fsync-confirmed -- but with committed=true so memory stays aligned with the renamed
+// inode.
+func (r *Registry) persistLocked() (committed bool, err error) {
 	env := envelope{SchemaVersion: registrySchemaVersion, Devices: r.sortedLocked()}
 	data, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmp, err := os.CreateTemp(r.dir, devicesFile+".tmp*") // os.CreateTemp creates 0600
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(tmpName, r.path); err != nil {
-		return err
+		return false, err
 	}
 	// Finding 4 (re-audit, durability): fsync the registry dir so the rename is durable across
 	// power loss (mirrors grant.Save). Without it a crash could revert the registry to a stale
 	// roster -- e.g. resurrecting a just-revoked device (reopening the R-POL.9 authorization it
-	// lost) or dropping a just-added one.
-	d, err := os.Open(r.dir)
+	// lost) or dropping a just-added one. The rename has already landed, so the change is
+	// committed: surface any dir-fsync error but do NOT let the caller roll memory back.
+	return true, syncDir(r.dir)
+}
+
+// syncDir fsyncs dir so a preceding rename within it is durable across a crash
+// (mirrors idempotency.syncDir / grant.Save). A package var so a test can inject a
+// failure that fires AFTER a successful rename, exercising the post-rename path.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
