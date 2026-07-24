@@ -62,6 +62,56 @@ func TestDistributeAllocsPerEvent(t *testing.T) {
 	}
 }
 
+// TestDistributeSharedBranchDeliversNameToEverySubscriber closes the coverage
+// gap the deployment-committee flagged (agents-tracker-tbw): the rename fan-out
+// integration test exercises only the per-connection FALLBACK branch (Serve /
+// endpointID == ""), so nothing proved the SHARED marshal-once branch
+// (NewServer with a real endpoint id) carries Session.Name to subscribers.
+// Distribute one event whose Meta has a Name across two subscribers sharing the
+// daemon's stable endpoint id, decode each received payload, and assert both see
+// the Name. Characterization: this pins existing-correct behavior (stampView
+// already stamps m.Name into the once-marshaled shared Control), it does not
+// change it.
+func TestDistributeSharedBranchDeliversNameToEverySubscriber(t *testing.T) {
+	s := NewServer(newStubDaemon(), "ep-daemon") // shared marshal-once branch (stable endpoint id)
+	defer s.Close()
+
+	makeConn := func() *clientConn {
+		serverSide, clientSide := net.Pipe()
+		t.Cleanup(func() { clientSide.Close() })
+		return &clientConn{
+			endpointID: s.endpointID, // both connections share the daemon's stable id
+			eventQ:     make(chan []byte, eventQueueCap),
+			conn:       serverSide,
+			done:       make(chan struct{}),
+		}
+	}
+	cc1, cc2 := makeConn(), makeConn()
+	s.subMu.Lock()
+	s.subs[cc1] = struct{}{}
+	s.subs[cc2] = struct{}{}
+	s.subMu.Unlock()
+
+	const wantName = "backend-refactor"
+	m := statusMeta("sess1", status.TurnActive, status.InteractionNone)
+	m.Name = wantName
+	s.distribute(m)
+
+	for i, cc := range []*clientConn{cc1, cc2} {
+		body := <-cc.eventQ
+		ctrl, err := DecodeControl(body)
+		if err != nil {
+			t.Fatalf("subscriber %d DecodeControl: %v", i, err)
+		}
+		if ctrl.Session == nil {
+			t.Fatalf("subscriber %d: OpEvent carried no Session", i)
+		}
+		if ctrl.Session.Name != wantName {
+			t.Errorf("subscriber %d Session.Name = %q, want %q (the shared marshal-once branch must carry the Name to every subscriber)", i, ctrl.Session.Name, wantName)
+		}
+	}
+}
+
 // TestDistributeFallbackNamespacesPerConnection pins that the per-connection
 // ep-<seq> fallback (Serve, or NewServer(d, "")) — where each connection has
 // its OWN endpoint id, so the marshal-once shortcut must NOT apply — still
