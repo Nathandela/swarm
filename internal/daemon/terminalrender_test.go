@@ -4,11 +4,16 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
 )
+
+// alwaysAllowed is the stillAllowed predicate for tests that never revoke the peek: the
+// render loop's per-tick liveness gate is always open, so behavior matches the pre-gate loop.
+func alwaysAllowed() bool { return true }
 
 // stubTerminalStream is a read-only session stream driven entirely by the test:
 // a fixed initial snapshot and a caller-controlled Frames() channel. It satisfies
@@ -110,7 +115,7 @@ func TestRenderLoop_HostilePTYCannotEscape(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "hostile", stream, c.push) // returns once frames closes
+	RenderTerminal(ctx, "hostile", stream, alwaysAllowed, c.push) // returns once frames closes
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -141,7 +146,7 @@ func TestRenderLoop_InitialSnapshotFromStream(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "s1", stream, c.push)
+	RenderTerminal(ctx, "s1", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -183,7 +188,7 @@ func TestRenderLoop_InitialStatePreservedAcrossLiveFrame(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "seed", stream, c.push)
+	RenderTerminal(ctx, "seed", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -198,6 +203,42 @@ func TestRenderLoop_InitialStatePreservedAcrossLiveFrame(t *testing.T) {
 		t.Errorf("live frame not applied: render missing %q; grid=%q", "Z", joined)
 	}
 	assertSanitized(t, renders)
+}
+
+// TestRenderLoop_TerminatesWhenDisallowed pins Blocker 1a: an IDLE peek (no output ever
+// arrives) must still terminate PROMPTLY once its stillAllowed predicate flips false (the
+// kill switch went OFF mid-peek). The pre-fix loop only re-checked the switch on an EMISSION,
+// so the ticker branch rendered nothing on an idle stream and the loop parked forever — the
+// render goroutine and its read-only tap lingered until the connection dropped. The ticker
+// branch must now check stillAllowed() EVERY tick, before the drain, and return when it is
+// false, so an idle peek terminates within the poll interval.
+func TestRenderLoop_TerminatesWhenDisallowed(t *testing.T) {
+	frames := make(chan []byte) // never fed, never closed: an IDLE peek parks on the ticker
+	stream := &stubTerminalStream{snap: snapBytes(t, 80, 24, nil), frames: frames}
+
+	var allowed atomic.Bool
+	allowed.Store(true)
+	var c collector
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		RenderTerminal(ctx, "idle", stream, allowed.Load, c.push)
+		close(done)
+	}()
+
+	// Let the loop settle on the ticker (no frames to render), then revoke the peek. No
+	// frame ever arrives, so ONLY a per-tick liveness check can unblock the loop.
+	time.Sleep(50 * time.Millisecond)
+	allowed.Store(false)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RenderTerminal parked on an idle stream after stillAllowed flipped false; " +
+			"the ticker branch must re-check liveness every tick and return (Blocker 1a)")
+	}
 }
 
 // TestRenderLoop_CoalescesBurst verifies a burst of many frames within the
@@ -216,7 +257,7 @@ func TestRenderLoop_CoalescesBurst(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "burst", stream, c.push)
+	RenderTerminal(ctx, "burst", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {

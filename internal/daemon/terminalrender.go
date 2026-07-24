@@ -61,14 +61,20 @@ type TerminalRender struct {
 	Rows    int
 }
 
-// RenderTerminal runs the render loop until ctx is cancelled or the stream's
-// Frames() channel closes. It pushes the stream's initial snapshot first, then
-// feeds each output frame into a private emulator, coalesces bursts with the
-// debouncer, and pushes a sanitized snapshot per debounced change. A final
-// snapshot is flushed when the stream closes with unrendered output pending, so
-// the last push always reflects the latest state. It owns and closes its
+// RenderTerminal runs the render loop until ctx is cancelled, the stream's Frames()
+// channel closes, or stillAllowed reports the peek is no longer permitted. It pushes the
+// stream's initial snapshot first, then feeds each output frame into a private emulator,
+// coalesces bursts with the debouncer, and pushes a sanitized snapshot per debounced
+// change. A final snapshot is flushed when the stream closes with unrendered output
+// pending, so the last push always reflects the latest state. It owns and closes its
 // emulator, leaving no goroutine behind.
-func RenderTerminal(ctx context.Context, session string, stream TerminalStream, push func(TerminalRender)) {
+//
+// stillAllowed is polled EVERY tick (not just on an emission): a remote peek's kill switch
+// can flip OFF mid-stream, and an IDLE peek (no output) would otherwise never re-check and
+// park forever, leaking the render goroutine and its read-only tap. A false result returns
+// promptly (within the poll interval), so `swarm remote off` terminates even a silent peek.
+// A nil stillAllowed means always-allowed (the loop is driven only by ctx / stream end).
+func RenderTerminal(ctx context.Context, session string, stream TerminalStream, stillAllowed func() bool, push func(TerminalRender)) {
 	// Decode + push the initial snapshot ONCE and reuse the SAME decoded grid to seed the
 	// emulator, so the live loop starts from the real initial screen. Without the seed the
 	// first live frame is applied onto a BLANK grid and every initial cell is lost (mirrors
@@ -113,6 +119,12 @@ func RenderTerminal(ctx context.Context, session string, stream TerminalStream, 
 			deb.Offer(journal.Record{Type: journal.TypeGroupTransition, SessionID: session})
 			dirty = true
 		case now := <-ticker.C:
+			// Liveness gate FIRST, before the drain: a peek revoked mid-stream (kill switch
+			// OFF) must terminate even with no pending output, so an idle peek never lingers
+			// (Blocker 1a). renderPollInterval bounds how long a revoked idle peek survives.
+			if stillAllowed != nil && !stillAllowed() {
+				return
+			}
 			if len(deb.Drain(now)) > 0 {
 				renderEmulator(emu, session, push)
 				dirty = false

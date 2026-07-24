@@ -32,7 +32,14 @@ type RelayConfig struct {
 	RecipientKeyID [8]byte           // routing key id of the phone (recipient)
 	SenderKeyID    [8]byte           // routing key id of this machine (sender)
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
+	AppendTimeout  time.Duration     // per-append upper bound (nil/0 => defaultAppendTimeout)
 }
+
+// defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
+// concurrent producers in seq order (R-GW.3), so an UNBOUNDED append against a hung relay would
+// pin that lock forever and wedge every producer AND Err(). Bounding it means a hung relay
+// surfaces a deadline error via Err() within this window instead (Blocker 2).
+const defaultAppendTimeout = 5 * time.Second
 
 // RelaySink is a JournalSink that forwards the daemon's journal to the phone via the
 // untrusted relay (R-GW.3): it seals each record under the epoch content key
@@ -147,7 +154,16 @@ func (s *RelaySink) seal(plaintext []byte) error {
 		s.setErrLocked(err)
 		return err
 	}
-	if _, err := s.cfg.Appender.MailboxAppend(context.Background(), s.cfg.Target, env.Marshal()); err != nil {
+	// Bounded append: a hung relay must not hold s.mu forever (Blocker 2). The deadline is
+	// generous (relay round-trips are fast); exceeding it surfaces an error via Err() rather
+	// than wedging RunJournal + every RunTerminal (all serialize on s.mu here).
+	timeout := s.cfg.AppendTimeout
+	if timeout <= 0 {
+		timeout = defaultAppendTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := s.cfg.Appender.MailboxAppend(ctx, s.cfg.Target, env.Marshal()); err != nil {
 		s.setErrLocked(err)
 		return err
 	}

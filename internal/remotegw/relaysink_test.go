@@ -108,6 +108,56 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 	}
 }
 
+// hangingAppender blocks in MailboxAppend until its ctx is cancelled, simulating a hung
+// relay. It returns the ctx error so a bounded-timeout caller surfaces a deadline error.
+type hangingAppender struct {
+	entered chan struct{}
+}
+
+func (h *hangingAppender) MailboxAppend(ctx context.Context, _ string, _ []byte) (uint64, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done() // hang until the sink's bounded append context expires
+	return 0, ctx.Err()
+}
+
+// TestRelaySink_AppendBounded pins Blocker 2: seal holds s.mu across MailboxAppend (ordering
+// is required so concurrent producers append in seq order), but a Background context let a
+// HUNG relay hold that lock FOREVER — wedging every producer (RunJournal + every RunTerminal)
+// AND Err() (which also takes s.mu). The append must run under a BOUNDED context so a hung
+// relay surfaces a timeout via Err() instead of wedging everything. The append here never
+// completes; the call must still return (with an error) within the bound, and Err() reports it.
+func TestRelaySink_AppendBounded(t *testing.T) {
+	var key crypto.ContentKey
+	app := &hangingAppender{entered: make(chan struct{}, 1)}
+	sink := NewRelaySink(RelayConfig{
+		Appender:      app,
+		Target:        "phone-routing-id",
+		EpochID:       7,
+		Key:           key,
+		Now:           func() time.Time { return time.Unix(1_700_000_000, 0) },
+		AppendTimeout: 100 * time.Millisecond,
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "s1", Type: "launched"}) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("hung relay: append returned nil; want the bounded-timeout error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("append blocked past its bounded timeout on a hung relay; a hung relay must not wedge " +
+			"producers forever under s.mu (Blocker 2)")
+	}
+	if sink.Err() == nil {
+		t.Fatal("hung relay: Err() is nil; the bounded-append timeout must surface via Err()")
+	}
+}
+
 func TestRelaySink_AppendErrorSurfaced(t *testing.T) {
 	var key crypto.ContentKey
 	app := &fakeAppender{err: context.DeadlineExceeded}

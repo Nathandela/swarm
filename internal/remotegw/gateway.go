@@ -178,12 +178,22 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 			if ctrl.Terminal == nil {
 				continue
 			}
+			// Don't forward a snapshot decoded just before a cancel (Unwatch/Close): a
+			// post-cancel frame would race a rewatch's fresh stream onto the phone.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			session := namespaceSessionID(dc.endpointID, ctrl.Terminal.Session)
 			if err := sink.Terminal(session, ctrl.Terminal.Lines, ctrl.Terminal.Cols, ctrl.Terminal.Rows); err != nil {
 				return err
 			}
 		case protocol.OpError:
-			return fmt.Errorf("daemon refused a terminal op: %s (%s)", ctrl.Error, ctrl.ErrorCode)
+			// The daemon ENDED the peek (idle kill-switch termination, session end, or a
+			// subscribe-time refusal while off, Blocker 1b). BLANK the phone's latest-wins
+			// cache so it stops showing the pre-teardown screen (Blocker 1d), then return so
+			// the watcher backs off and reconnects (resuming when the switch flips back ON).
+			_ = sink.Terminal(namespaceSessionID(dc.endpointID, session), nil, 0, 0)
+			return fmt.Errorf("daemon ended the terminal peek: %s (%s)", ctrl.Error, ctrl.ErrorCode)
 		default:
 			// The terminal_subscribe ack (OpOK) and any other control are ignored.
 		}

@@ -846,8 +846,12 @@ type clientConn struct {
 	// remote terminal peek (A7 F2): peekCancel cancels this connection's single in-flight
 	// terminal_subscribe render goroutine. A second terminal_subscribe cancels the first
 	// (mirrors handleAttach's one-lease-per-conn), so one connection never runs two peeks.
+	// peekGen distinguishes the CURRENT peek from a superseded one: when a render goroutine
+	// returns it only signals the gateway / clears the cancel if it is still the current peek
+	// (peekGen unchanged), so a newer peek that took over the conn is never disturbed.
 	peekMu     sync.Mutex
 	peekCancel context.CancelFunc
+	peekGen    uint64
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -1517,13 +1521,25 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 
 	// One peek per connection: a second terminal_subscribe cancels the first (mirrors
 	// handleAttach's one-lease-per-conn), so a connection never runs two render loops.
+	// peekGen tags this peek so its render goroutine, on exit, only acts (signal/clear) if
+	// it is STILL the current peek — a superseding second peek must not be disturbed.
 	ctx, cancel := context.WithCancel(context.Background())
 	cc.peekMu.Lock()
 	prev := cc.peekCancel
+	cc.peekGen++
+	myGen := cc.peekGen
 	cc.peekCancel = cancel
 	cc.peekMu.Unlock()
 	if prev != nil {
 		prev()
+	}
+
+	// stillAllowed is the render loop's per-tick liveness gate: an idle peek (no output)
+	// must terminate PROMPTLY once the kill switch flips OFF, not linger until the conn
+	// drops (Blocker 1a). A backend with no kill switch is always allowed.
+	stillAllowed := func() bool {
+		ks, ok := cc.killSwitch()
+		return !ok || ks.RemoteControlEnabled()
 	}
 
 	cc.srv.wg.Add(1)
@@ -1542,7 +1558,7 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		}()
 		// Emit the LOCAL session id (the gateway namespaces at egress). NEVER forward input
 		// from this path — it is read-only.
-		daemon.RenderTerminal(ctx, local, sub, func(r daemon.TerminalRender) {
+		daemon.RenderTerminal(ctx, local, sub, stillAllowed, func(r daemon.TerminalRender) {
 			// Re-check the kill switch before EVERY emission (A7 C): the FIRST gate only
 			// covers subscribe time, so `swarm remote off` (or revoking the last device)
 			// mid-peek must BLANK an established peek. A disabled switch cancels the render
@@ -1579,7 +1595,38 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 				return
 			}
 		})
+		// The render loop returned (idle kill-switch termination, stream end, or a write
+		// error). SIGNAL the gateway so its RunTerminal returns and reconnects instead of
+		// polling the now-silent conn forever (Blocker 1b) — but ONLY if this is still the
+		// current peek. A superseding second peek on this same conn has taken it over, so a
+		// stale signal here would break the live newer peek; skip it in that case.
+		cc.peekMu.Lock()
+		current := cc.peekGen == myGen
+		if current {
+			cc.peekCancel = nil
+		}
+		cc.peekMu.Unlock()
+		if current {
+			cc.sendPeekEnded(local)
+		}
 	}()
+}
+
+// sendPeekEnded tells a peeking gateway that its terminal peek has ended (idle kill-switch
+// termination, stream end, or write error), so Gateway.RunTerminal returns on the OpError
+// instead of polling the silent connection forever (Blocker 1b). Best-effort and deadline-
+// bounded: if the conn is already gone the write just fails, which is harmless.
+func (cc *clientConn) sendPeekEnded(local string) {
+	body, err := EncodeControl(Control{
+		Op:         OpError,
+		EndpointID: cc.endpointID,
+		SessionID:  NamespacedID(cc.endpointID, local),
+		Error:      "terminal peek ended",
+	})
+	if err != nil {
+		return
+	}
+	_ = cc.writeFrameDeadline(wire.TControl, body)
 }
 
 // clipPeek bounds an already-sanitized peek render to at most maxPeekRows lines of at most

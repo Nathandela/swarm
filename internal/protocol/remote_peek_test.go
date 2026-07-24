@@ -360,6 +360,49 @@ func TestRemotePeek_TerminatesOnKillSwitchFlip(t *testing.T) {
 	}
 }
 
+// TestRemotePeek_IdleKillSwitchFlipTerminatesAndSignals pins Blocker 1 (teardown + recovery):
+// the kill-switch re-check used to live ONLY in the push closure, which runs on an EMISSION —
+// so an IDLE peek (no output) never re-checked and lingered after `swarm remote off`, and the
+// daemon never told the gateway the peek was over (its RunTerminal polled the silent conn
+// forever, so OFF->ON never recovered). The fixed handler must, for an idle peek whose kill
+// switch flips OFF: (1) terminate the render loop within the poll interval (release the tap),
+// and (2) write an OpError control frame to the peek conn so Gateway.RunTerminal returns and
+// reconnects. NO output is ever fed here, so only a per-tick liveness gate can drive it.
+func TestRemotePeek_IdleKillSwitchFlipTerminatesAndSignals(t *testing.T) {
+	stub := newTerminalTapStub() // kill switch ON
+	sock := serveRemoteAPI(t, stub)
+
+	peek := rawDial(t, sock)
+	rep := peek.hello(Version, []string{CapRemoteGateway})
+	sid := rep.EndpointID + "/sess1"
+	peek.writeControl(Control{Op: OpTerminalSubscribe, EndpointID: rep.EndpointID, SessionID: sid})
+	if ack := nextControl(t, peek); ack.Op != OpOK {
+		t.Fatalf("terminal_subscribe reply = op %q code %q; want OpOK", ack.Op, ack.ErrorCode)
+	}
+	tap := stub.lastTap()
+	if tap == nil {
+		t.Fatalf("peek opened no tap")
+	}
+
+	// The peek is IDLE: no frame is ever fed. Flip the kill switch OFF (`swarm remote off`).
+	stub.ks.Store(false)
+
+	// (2) The daemon signals the gateway the peek ended: the NEXT control frame is an OpError,
+	// so Gateway.RunTerminal returns and reconnects instead of polling the silent conn forever.
+	got := nextControl(t, peek)
+	if got.Op != OpError {
+		t.Fatalf("idle peek after kill switch OFF: next frame op = %q; want OpError (the gateway-stop signal). "+
+			"Without it RunTerminal polls the silent conn forever and OFF->ON never recovers (Blocker 1b)", got.Op)
+	}
+
+	// (1) The render loop terminated and released the read-only tap (Blocker 1a): an idle peek
+	// must not linger past `swarm remote off`.
+	if !tap.waitClosed(recvTimeout) {
+		t.Fatalf("idle peek after kill switch OFF: tap never released; the render loop must terminate " +
+			"even with no output pending (Blocker 1a)")
+	}
+}
+
 // TestRemotePeek_TerminatesOnWriteError pins defect #7: the push closure ignores
 // writeFrameDeadline errors, so a readable-but-unwritable connection stalls pumpWriteTimeout
 // per frame FOREVER, retaining the renderer and its tap. On the first write error the loop

@@ -126,3 +126,88 @@ func (w *TerminalWatcher) numWatches() int {
 	defer w.mu.Unlock()
 	return len(w.watches)
 }
+
+// blockingRunner is a fake terminalRunner: each RunTerminal blocks until its ctx is cancelled,
+// then does a bit of teardown work (exitDelay) before returning. It tracks live and peak
+// concurrent invocations so a test can prove Unwatch JOINS the goroutine (live back to 0 when
+// Unwatch returns) and a rewatch never OVERLAPS the old peek (peak stays 1).
+type blockingRunner struct {
+	exitDelay time.Duration
+	mu        sync.Mutex
+	live      int
+	peak      int
+	starts    int
+}
+
+func (r *blockingRunner) RunTerminal(ctx context.Context, _ string) error {
+	r.mu.Lock()
+	r.live++
+	r.starts++
+	if r.live > r.peak {
+		r.peak = r.live
+	}
+	r.mu.Unlock()
+
+	<-ctx.Done() // park until Unwatch/Close cancels this peek
+
+	if r.exitDelay > 0 {
+		time.Sleep(r.exitDelay) // simulate tap-release teardown; a non-joining Unwatch would overlap here
+	}
+	r.mu.Lock()
+	r.live--
+	r.mu.Unlock()
+	return ctx.Err()
+}
+
+func (r *blockingRunner) stat() (live, peak, starts int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.live, r.peak, r.starts
+}
+
+// TestTerminalWatcher_UnwatchJoinsBeforeReturn pins Blocker 3: Unwatch must JOIN the peek's
+// goroutine before returning, so a rapid Unwatch->Watch never overlaps two RunTerminal
+// goroutines (two read-only taps) on the same session. The fake runner's teardown is delayed,
+// so a NON-joining Unwatch would return while the old peek is still live and the rewatch would
+// push peak concurrency to 2; the joining Unwatch keeps it at 1 and leaves live at 0.
+func TestTerminalWatcher_UnwatchJoinsBeforeReturn(t *testing.T) {
+	runner := &blockingRunner{exitDelay: 50 * time.Millisecond}
+	w := newTerminalWatcher(runner, 5*time.Millisecond)
+	t.Cleanup(func() { _ = w.Close() })
+
+	// Start a peek and wait until its goroutine is actually running.
+	w.Watch("m/s1")
+	waitFor(t, func() bool { _, _, starts := runner.stat(); return starts == 1 }, 2*time.Second,
+		"first peek never started")
+
+	// Unwatch must not return until the peek goroutine has fully exited (its teardown done).
+	w.Unwatch("m/s1")
+	if live, _, _ := runner.stat(); live != 0 {
+		t.Fatalf("after Unwatch returned, %d peek goroutine(s) still live; Unwatch must JOIN before returning (Blocker 3)", live)
+	}
+
+	// Rewatch immediately: because Unwatch joined, the old peek is gone, so the new one never
+	// overlaps it. A non-joining Unwatch would let this rewatch run concurrently with the still
+	// -tearing-down old peek (peak == 2).
+	w.Watch("m/s1")
+	waitFor(t, func() bool { _, _, starts := runner.stat(); return starts == 2 }, 2*time.Second,
+		"rewatch never started")
+	w.Unwatch("m/s1")
+
+	if _, peak, _ := runner.stat(); peak != 1 {
+		t.Fatalf("peak concurrent peeks on one session = %d, want 1; a rewatch overlapped a not-yet-joined peek (Blocker 3)", peak)
+	}
+}
+
+// waitFor polls cond until true or the deadline, failing with msg on timeout.
+func waitFor(t *testing.T, cond func() bool, within time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}

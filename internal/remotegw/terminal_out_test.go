@@ -194,6 +194,105 @@ func serveFakeTerminalDaemon(t *testing.T, ln net.Listener, endpointID string, s
 	_, _, _ = wire.ReadFrame(conn)
 }
 
+// serveFakeTerminalDaemonThenEnd is serveFakeTerminalDaemon that, AFTER streaming snaps,
+// sends an OpError control frame (the daemon's "peek ended" signal, Blocker 1b) instead of
+// holding the connection open. RunTerminal must return on it AND blank the phone (Blocker 1d).
+func serveFakeTerminalDaemonThenEnd(t *testing.T, ln net.Listener, endpointID string, snaps []protocol.TerminalSnapshot) {
+	t.Helper()
+	conn, err := ln.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	typ, body, err := wire.ReadFrame(conn)
+	if err != nil || typ != wire.TControl {
+		return
+	}
+	if hello, err := protocol.DecodeControl(body); err != nil || hello.Op != protocol.OpHello {
+		return
+	}
+	reply, err := protocol.EncodeControl(protocol.Control{Op: protocol.OpHello, EndpointID: endpointID, ProtocolVersion: protocol.Version})
+	if err != nil || wire.WriteFrame(conn, wire.TControl, reply) != nil {
+		return
+	}
+	if _, body, err = wire.ReadFrame(conn); err != nil { // the terminal_subscribe frame
+		return
+	}
+	for i := range snaps {
+		s := snaps[i]
+		frame, err := protocol.EncodeControl(protocol.Control{Op: protocol.OpTerminalSnapshot, EndpointID: endpointID, Terminal: &s})
+		if err != nil || wire.WriteFrame(conn, wire.TControl, frame) != nil {
+			return
+		}
+	}
+	// The daemon ends the peek (idle kill-switch termination): signal the gateway to stop.
+	endFrame, err := protocol.EncodeControl(protocol.Control{Op: protocol.OpError, EndpointID: endpointID, Error: "terminal peek ended"})
+	if err == nil {
+		_ = wire.WriteFrame(conn, wire.TControl, endFrame)
+	}
+}
+
+// TestGatewayRunTerminal_BlanksPhoneOnDaemonEnd pins Blocker 1d: when the daemon ENDS a peek
+// (an OpError frame, e.g. an idle peek cut off by `swarm remote off`), RunTerminal must seal a
+// BLANK terminal snapshot (empty Lines) to the phone so its latest-wins SnapshotCache stops
+// showing the pre-teardown screen — then return so the watcher reconnects. Without this the
+// phone would keep displaying the stale grid after the kill switch went OFF.
+func TestGatewayRunTerminal_BlanksPhoneOnDaemonEnd(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "gwtb")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	snaps := []protocol.TerminalSnapshot{{Session: "s1", Lines: []string{"hello"}, Cols: 80, Rows: 24}}
+	go serveFakeTerminalDaemonThenEnd(t, ln, "m", snaps)
+
+	sink := &recordingTerminalSink{done: make(chan protocol.TerminalSnapshot, 4)}
+	gw := New(sock, sink)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- gw.RunTerminal(ctx, "m/s1") }()
+
+	// First: the real rendered snapshot.
+	select {
+	case got := <-sink.done:
+		if len(got.Lines) != 1 || got.Lines[0] != "hello" {
+			t.Fatalf("first forwarded lines = %v, want [hello]", got.Lines)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTerminal did not forward the initial snapshot")
+	}
+
+	// Then: on the daemon's OpError, a BLANK snapshot for the SAME session so the phone blanks.
+	select {
+	case got := <-sink.done:
+		if got.Session != "m/s1" {
+			t.Errorf("blank snapshot session = %q, want m/s1", got.Session)
+		}
+		if len(got.Lines) != 0 {
+			t.Fatalf("daemon ended the peek but RunTerminal sealed lines %v; want a BLANK snapshot (empty Lines) so the phone stops showing the stale grid (Blocker 1d)", got.Lines)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTerminal did not blank the phone on the daemon's peek-ended signal (Blocker 1d)")
+	}
+
+	// RunTerminal returns on the OpError so the watcher can reconnect.
+	select {
+	case <-errc:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTerminal did not return after the daemon ended the peek")
+	}
+}
+
 // TestGatewayRunTerminal_SubscribesAndForwards: RunTerminal dials the daemon, sends a
 // terminal_subscribe frame, and forwards each decoded terminal_snapshot to the sink with
 // the session id namespaced to the endpoint (mirroring RunJournal's remote egress).

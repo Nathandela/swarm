@@ -63,7 +63,8 @@ type phonesimHarness struct {
 	phone    *phonesim.Phone
 	sk       *Daemon
 	rsock    string
-	deviceID string // the enrolled phone's device id, so a test can revoke it to flip the kill switch OFF
+	deviceID string        // the enrolled phone's device id, so a test can revoke it to flip the kill switch OFF
+	record   device.Record // the enrolled record, so a test can re-Add it to flip the kill switch back ON
 }
 
 // newPhonesimHarness performs the pair -> enroll -> gateway-up bootstrap shared by both
@@ -221,7 +222,7 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 		t.Fatalf("phonesim.New (AcceptGrant bootstrap): %v", err)
 	}
 
-	return phonesimHarness{ctx: ctx, phone: phone, sk: sk, rsock: rsock, deviceID: res.Record.DeviceID}
+	return phonesimHarness{ctx: ctx, phone: phone, sk: sk, rsock: rsock, deviceID: res.Record.DeviceID, record: res.Record}
 }
 
 func TestPhonesim_PairObserveKillE2E(t *testing.T) {
@@ -457,6 +458,98 @@ func TestPhonesim_ObserveTerminalE2E(t *testing.T) {
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
+}
+
+// TestPhonesim_ObserveTerminalRecoversAfterKillSwitchToggle is the OFF->ON recovery milestone
+// (the re-review's new HIGH): a peek that `swarm remote off` tears down must RESUME when remote
+// control is turned back ON, end to end. Before the Blocker-1 fixes an idle peek lingered after
+// OFF and the daemon never told the gateway the peek was over, so RunTerminal polled the silent
+// conn forever, the watcher never reconnected, and OFF->ON never recovered.
+//
+// The chain proven: OFF -> the daemon terminates the (idle) peek + signals the gateway (OpError)
+// -> RunTerminal returns and BLANKS the phone -> the watcher backs off and reconnects, refused at
+// subscribe time while OFF (bounded retry) -> ON -> a reconnect re-subscribes, the daemon renders
+// a FRESH snapshot, and it reaches the phone again.
+func TestPhonesim_ObserveTerminalRecoversAfterKillSwitchToggle(t *testing.T) {
+	h := newPhonesimHarness(t)
+	phone, sk, ctx := h.phone, h.sk, h.ctx
+
+	// A long-idle session whose first marker stays on screen the whole test, so a fresh peek
+	// after recovery re-renders it (proving a NEW snapshot flowed, not a cached stale one).
+	const mark = "HELLO-PEEK"
+	meta := launchFake(t, sk, "print "+mark+"\nidle 60s\n")
+	session := protocol.NamespacedID(sk.api.endpointID, meta.ID)
+
+	// WATCH -> the peek establishes and the marker snapshot reaches the phone.
+	if err := phone.Watch(ctx, session); err != nil {
+		t.Fatalf("phonesim watch: %v", err)
+	}
+	if !waitSnapshotContains(t, ctx, phone, session, mark, 5*time.Second) {
+		t.Fatalf("phone never received the initial peek snapshot containing %q", mark)
+	}
+
+	// FLIP OFF (`swarm remote off`): revoke the only device so RemoteControlEnabled -> false.
+	if _, err := sk.api.RevokeDevice(h.deviceID); err != nil {
+		t.Fatalf("revoke device (kill switch OFF): %v", err)
+	}
+	if sk.api.RemoteControlEnabled() {
+		t.Fatal("kill switch still enabled after revoking the only device")
+	}
+
+	// The peek tears down and the phone BLANKS: its latest-wins cache stops showing the marker
+	// (RunTerminal sealed an empty snapshot on the daemon's peek-ended signal).
+	if !waitSnapshotBlank(t, ctx, phone, session, mark, 5*time.Second) {
+		t.Fatalf("phone still showed %q after `swarm remote off`; the peek must tear down and blank (Blocker 1)", mark)
+	}
+
+	// FLIP ON: re-add the device so RemoteControlEnabled -> true (`swarm remote on`).
+	if err := sk.api.devices.Add(h.record); err != nil {
+		t.Fatalf("re-add device (kill switch ON): %v", err)
+	}
+	if !sk.api.RemoteControlEnabled() {
+		t.Fatal("kill switch still disabled after re-adding the device")
+	}
+
+	// RECOVERY: the watcher reconnects, the daemon renders a FRESH snapshot, and the marker
+	// reaches the phone AGAIN — proving the peek resumed after OFF->ON (the new HIGH).
+	if !waitSnapshotContains(t, ctx, phone, session, mark, 10*time.Second) {
+		t.Fatalf("phone never received a FRESH snapshot containing %q after the kill switch flipped back ON; "+
+			"the peek did not recover from OFF->ON (the watcher never reconnected)", mark)
+	}
+}
+
+// waitSnapshotContains polls Observe until the phone's cached snapshot for session contains
+// marker, or the deadline elapses.
+func waitSnapshotContains(t *testing.T, ctx context.Context, phone *phonesim.Phone, session, marker string, within time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := phone.Observe(ctx); err != nil {
+			t.Fatalf("phonesim observe: %v", err)
+		}
+		if lines, ok := phone.Snapshot(session); ok && linesContain(lines, marker) {
+			return true
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	return false
+}
+
+// waitSnapshotBlank polls Observe until the phone's cached snapshot for session NO LONGER
+// contains marker (it blanked), or the deadline elapses.
+func waitSnapshotBlank(t *testing.T, ctx context.Context, phone *phonesim.Phone, session, marker string, within time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := phone.Observe(ctx); err != nil {
+			t.Fatalf("phonesim observe: %v", err)
+		}
+		if lines, ok := phone.Snapshot(session); ok && !linesContain(lines, marker) {
+			return true
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	return false
 }
 
 // linesContain reports whether any rendered line contains marker.
