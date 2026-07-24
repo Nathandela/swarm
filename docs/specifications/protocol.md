@@ -274,6 +274,19 @@ tier has no unsigned `attach` and instead requires a signed `take_control`.
   conditions — the kill switch is still on, the control session exists, it has not
   expired (lazy, on the server clock), and it still targets the connection's current
   lease generation — and dropped otherwise.
+
+  **Input routing + best-effort delivery (A7).** Each sealed input frame carries its
+  target namespaced `session` INSIDE the AEAD-encrypted body, and the gateway routes it
+  by that sealed id — never by mutable focus state — so the untrusted relay cannot drop a
+  `take_control` and steer the following keystrokes onto another session's live lease.
+  The phone stamps commands AND input frames from ONE monotonic sequence (they share a
+  single machine `MailboxReceiver`), and the gateway opens each with EXACTLY ONE
+  `Accept`; a replayed/reordered/duplicate frame is rejected as a stale sequence, and a
+  frame that follows a sequence GAP (a preceding frame the relay dropped or reordered) is
+  DROPPED, not routed. The input plane is therefore **best-effort under relay
+  misbehavior**: an in-order relay never sets a gap, but a dropped/reordered frame may
+  cost a keystroke — fail-closed, since dropping a keystroke is strictly safer than
+  misrouting it.
 - **`take_control_end`** is the caller-scoped teardown of one's OWN control session:
   it carries the `session_id` and lease `generation` (mirroring `detach`; no device
   signature), clears the control session, and releases the lease — shutting the input
