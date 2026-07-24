@@ -127,3 +127,31 @@ race.** Lower priority than A-E.
 
 Core authz/crypto/injection/pump/R7 properties confirmed sound by both models; the fix-pack is
 integration + renderer composition + concurrency + one live routing bug, not a crypto/gate rework.
+
+## Fix-pack landed (2026-07-24)
+
+Every consensus finding is fixed, each RED->GREEN with independent review:
+- **A (CRITICAL, LIVE)** — `5abd036`: input frames now carry the target session id sealed INSIDE
+  the frame (AEAD-protected — the relay can drop/reorder but not alter it) and route by it, not
+  by mutable focus; `res.Gap` is honored (a gapped/empty-session frame is dropped). RED reproduced
+  the misroute (a keystroke sealed for A delivered to B); GREEN routes by sealed session.
+- **B/C/#7/J (HIGH/MED)** — `50f7785` (+ tests in `de59343`): the render loop seeds the emulator
+  from the initial snapshot; the peek re-checks the kill switch before every emission (cancels on
+  flip-off); terminates on the first write error; and clips the render to a 300x200 viewport so it
+  can't exceed MaxFrame.
+- **D/E (MED)** — `f8ae70d`: the tap sets `closed` atomically with the last-detection (TOCTOU gone,
+  a concurrent subscribe re-dials); RelaySink holds the lock across seal+append (no out-of-order seq).
+- **#8 (MED)** — `ba1ef77`: the journal-eviction test's healthy-sub survival is now load-independent
+  by construction (lockstep flood/drain bounds its queue < cap); 10/10 under 8x load, mutation-checked.
+- **#2 (CRITICAL, wiring)** — `de59343`: the terminal peek is composed end-to-end (RunTerminal carries
+  the session id; a supervised TerminalWatcher runs it per watched session; the phone requests a watch
+  via an unsigned terminal_watch and decodes snapshots via MailboxRouter). `TestPhonesim_ObserveTerminalE2E`
+  proves a server-rendered marker reaches the phone AND that `swarm remote off` blanks an established
+  peek (the C fix validated E2E).
+- **F/G (design/ADR)** — `a6b4971`: ADR-007 amendment resolves concurrent owner+phone control
+  (allowed in the personal single-owner v1, relaxing P-5; TUI indicator recommended) and the
+  lossy-mirror supersede seed (accepted v1 residual on the narrow concurrent-peek path).
+
+Both models found NO bypass on peek input-injection, pump raw-byte suppression, R7 authorization,
+double-Accept, or replay/reorder/dup — unchanged by the fix-pack. Remaining: a full -race sweep + a
+focused re-review confirming the fixes close the findings, then A7 is sound.
