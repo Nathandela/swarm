@@ -34,6 +34,9 @@ type Client struct {
 	eventsCh chan Event
 	att      *Attachment
 
+	pairMu  sync.Mutex      // one pairing in flight per client (mirrors the daemon host)
+	pairing *PairingSession // the in-flight pairing, routing pair_pending/pair_result pushes
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -266,6 +269,147 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Pairing — the async owner-tier pairing session (slice A4). The daemon HOSTS the
+// handshake (ADR-007 "Pairing host: Option A"): pair_start replies synchronously with
+// the rendezvous view, then the daemon PUSHES pair_pending (the SAS gate) and, after
+// the human decides, pair_result (the terminal outcome). Client.request is a strict
+// 1-req/1-resp round-trip, so those pushes get their own session-scoped channels
+// (mirrors the Subscribe eventsCh lifecycle + the dispatchControl routing).
+// ---------------------------------------------------------------------------
+
+// PairingPending is one SAS-gate prompt pushed by the daemon (pair_pending): the
+// short-authentication-string words the human compares and the requesting device's
+// name. The caller displays these and answers with PairingSession.Confirm.
+type PairingPending struct {
+	SAS        []string
+	DeviceName string
+}
+
+// PairingResult is the terminal outcome of a pairing pushed by the daemon
+// (pair_result). Paired is the sole success signal; the identity fields are set only
+// when Paired. A declined SAS gate, a TTL/rendezvous failure, or a dropped connection
+// all yield Paired=false — fail closed, nothing enrolled.
+type PairingResult struct {
+	Paired     bool
+	DeviceID   string
+	Name       string
+	Capability string
+}
+
+// pairingResultFromControl maps a pushed pair_result payload to a PairingResult. The
+// daemon sends a nil Pairing on failure and a populated one (with DeviceID) on success.
+func pairingResultFromControl(p *PairingControl) PairingResult {
+	if p == nil || p.DeviceID == "" {
+		return PairingResult{Paired: false}
+	}
+	return PairingResult{Paired: true, DeviceID: p.DeviceID, Name: p.Name, Capability: p.Capability}
+}
+
+// PairingSession is a client's handle to one in-flight owner-tier pairing. The
+// rendezvous view (QR/RendezvousID/ExpiresAt), from the synchronous pair_start reply,
+// is displayed to bootstrap the phone; Pending() delivers the SAS gate; Confirm answers
+// it; Result() delivers the single terminal outcome. Close (or a dropped connection)
+// ends the session fail-closed.
+type PairingSession struct {
+	c *Client
+
+	// The synchronous rendezvous view from the pair_start reply.
+	QR           string
+	RendezvousID string
+	ExpiresAt    *time.Time
+
+	pending chan PairingPending // SAS-gate pushes (pair_pending), buffered
+	result  chan PairingResult  // the single terminal outcome (pair_result / fail-closed)
+
+	resultOnce sync.Once
+}
+
+// StartPairing opens an owner-tier pairing session: it sends pair_start and returns a
+// PairingSession carrying the synchronous rendezvous view (QR + rendezvous id +
+// expiry). The daemon then HOSTS the handshake, PUSHING pair_pending (the SAS gate, on
+// Pending()) and, after Confirm, pair_result (the terminal outcome, on Result()). Only
+// ONE pairing may be in flight per client (mirrors the daemon's one-per-connection
+// host). The session ends fail-closed on Close or a dropped connection — a session that
+// never reaches a paired Result() enrolls nothing.
+func (c *Client) StartPairing(req PairStartReq) (*PairingSession, error) {
+	sess := &PairingSession{
+		c:       c,
+		pending: make(chan PairingPending, 1),
+		result:  make(chan PairingResult, 1),
+	}
+
+	// Register the session BEFORE writing pair_start so the daemon's pair_pending /
+	// pair_result PUSHES route to the session channels (dispatchControl) and never the
+	// request respCh — even if a push races ahead of the pair_start reply on the wire.
+	c.pairMu.Lock()
+	if c.pairing != nil {
+		c.pairMu.Unlock()
+		return nil, errors.New("protocol: a pairing is already in progress")
+	}
+	c.pairing = sess
+	c.pairMu.Unlock()
+
+	resp, err := c.request(Control{Op: OpPairStart, EndpointID: c.endpointID,
+		Pairing: &PairingControl{Capability: req.Capability, TTLSeconds: req.TTLSeconds}})
+	if err != nil {
+		c.clearPairing(sess)
+		return nil, err
+	}
+	if resp.Op == OpError {
+		c.clearPairing(sess)
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Op != OpPairStart || resp.Pairing == nil {
+		c.clearPairing(sess)
+		return nil, fmt.Errorf("protocol: pair_start expected a rendezvous view, got %q", resp.Op)
+	}
+	sess.QR = resp.Pairing.QR
+	sess.RendezvousID = resp.Pairing.RendezvousID
+	sess.ExpiresAt = resp.Pairing.ExpiresAt
+	return sess, nil
+}
+
+// Pending returns the SAS-gate stream: each pair_pending push the daemon sends while a
+// pairing is in flight.
+func (s *PairingSession) Pending() <-chan PairingPending { return s.pending }
+
+// Result returns the terminal-outcome channel; it delivers exactly one PairingResult
+// (the pair_result push, or a fail-closed non-paired result on disconnect/Close).
+func (s *PairingSession) Result() <-chan PairingResult { return s.result }
+
+// Confirm answers the SAS gate: it sends pair_confirm(Allow=allow). The daemon routes
+// the decision to its blocked confirm closure; there is no reply, so this is a
+// fire-and-forget write (an error means the connection is gone — fail closed).
+func (s *PairingSession) Confirm(allow bool) error {
+	return s.c.writeControl(Control{Op: OpPairConfirm, EndpointID: s.c.endpointID, Pairing: &PairingControl{Allow: allow}})
+}
+
+// Close ends the session: it stops routing further pushes and delivers a fail-closed
+// (non-paired) terminal result if none has arrived, so a caller blocked on Result()
+// unblocks. Safe to call more than once and after a disconnect.
+func (s *PairingSession) Close() {
+	s.c.clearPairing(s)
+	s.deliverResult(PairingResult{Paired: false})
+}
+
+// deliverResult delivers the one terminal outcome and ends the session. It is
+// idempotent: a real pair_result, a Close, and a fail-closed disconnect can all fire,
+// but resultOnce lets exactly one reach the (buffered, cap-1) channel without blocking.
+func (s *PairingSession) deliverResult(r PairingResult) {
+	s.resultOnce.Do(func() { s.result <- r })
+}
+
+// clearPairing releases this client's in-flight pairing slot if sess still holds it, so
+// no further pushes route to it.
+func (c *Client) clearPairing(sess *PairingSession) {
+	c.pairMu.Lock()
+	if c.pairing == sess {
+		c.pairing = nil
+	}
+	c.pairMu.Unlock()
+}
+
 // request performs one synchronous control round-trip.
 func (c *Client) request(req Control) (Control, error) {
 	c.reqMu.Lock()
@@ -356,8 +500,35 @@ func (c *Client) dispatchControl(ctrl Control) {
 		if att != nil {
 			att.closeFrames()
 		}
+	case OpPairPending:
+		// The daemon-hosted pairing PUSHES the SAS gate. Route it to the in-flight
+		// pairing session's channel, NEVER the request respCh (the pair_start reply,
+		// OpPairStart, is the only pairing frame that is a request response and it falls
+		// through to default below). Registered before pair_start is sent, so a push that
+		// races ahead of the reply still lands here.
+		c.pairMu.Lock()
+		ps := c.pairing
+		c.pairMu.Unlock()
+		if ps != nil && ctrl.Pairing != nil {
+			select {
+			case ps.pending <- PairingPending{SAS: ctrl.Pairing.SAS, DeviceName: ctrl.Pairing.DeviceName}:
+			case <-c.done:
+			}
+		}
+	case OpPairResult:
+		// The daemon PUSHES the terminal outcome. Route it to the session (nil Pairing =>
+		// a failed pairing), ending the session.
+		c.pairMu.Lock()
+		ps := c.pairing
+		if c.pairing == ps {
+			c.pairing = nil
+		}
+		c.pairMu.Unlock()
+		if ps != nil {
+			ps.deliverResult(pairingResultFromControl(ctrl.Pairing))
+		}
 	default:
-		// A response to a pending request (OpOK/OpError/OpList/OpLaunch/OpLease).
+		// A response to a pending request (OpOK/OpError/OpList/OpLaunch/OpLease/OpPairStart).
 		select {
 		case c.respCh <- ctrl:
 		default:
@@ -375,6 +546,16 @@ func (c *Client) closeReadLoop() {
 	c.mu.Unlock()
 	if att != nil {
 		att.closeFrames()
+	}
+	// Fail-closed pairing teardown: a dropped connection ENDS an in-flight pairing with
+	// a non-paired result, so a caller blocked on Result() unblocks and nothing enrolls
+	// (the daemon's connection-derived ctx cancels its confirm in parallel).
+	c.pairMu.Lock()
+	ps := c.pairing
+	c.pairing = nil
+	c.pairMu.Unlock()
+	if ps != nil {
+		ps.deliverResult(PairingResult{Paired: false})
 	}
 	c.Close()
 }
