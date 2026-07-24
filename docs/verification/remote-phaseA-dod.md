@@ -121,3 +121,39 @@ The end-of-phase gate (§3) runs the full committee; individual slices bake thes
 3. Full `/audit-committee` (codex + agy + sonnet + opus), brief = this DoD + the Phase A
    diff. Any consensus blocker or unresolved divergence => fix and re-run. **Phase A closes
    only on a clean committee verdict**, then iterate to Phase B.
+
+## 4. Remaining work + decisions (2026-07-24, code-grounded)
+
+Status: A1/A3/A5 DONE; A2 mostly (GW-H2 boundary-anchored seq design-locked pre-gate; G3
+launchd unit off-path); A6 core DONE (HI-3 deferred, zero live call sites); A7 CODE COMPLETE
+(renderer eddf356..2bf0fd7 + input data-plane e55c26f..5c30d51, + input Slice 7 E2E). A4 and
+A8 remain, plus the required gate artifacts.
+
+**A4 slices (order: off/on -> status -> pairing-API -> pair CLI -> TUI modal):**
+- **A4-off/on (durable manual kill switch):** add `ManualOff bool` to skeleton `remoteState`;
+  `RemoteControlEnabled()` becomes `devices.Count()>0 && !manualOff`; new owner-tier
+  `OpRemoteSetControl` (refused on the remote tier, CapPairing-gated) + `Client.SetRemoteControl`
+  + a coreAPI setter over the existing `writeRemoteState` durable path; `serve.go` loads it.
+  **Decision — "off severs the gateway":** scope `off` as durable-disable + DAEMON-SIDE
+  severance (the daemon re-checks the flag as the first gate on every remote mutating op AND
+  input-gate clause-1, so `off` immediately halts all remote ops + in-flight keystrokes at the
+  daemon choke point). Killing the separate `swarm-remote` PROCESS is a follow-up gated on G3
+  supervision — recorded, not blocking; the security-meaningful severance is at the daemon.
+- **A4-status:** `swarm remote status` reads the same durable state (devices via ListDevices,
+  manualOff + Count, config-file presence). No new read op.
+- **Async pairing client API (prerequisite for pair CLI + TUI):** `Client.StartPairing()` ->
+  `{SAS <-chan, Confirm(bool), Result <-chan}`, with new `dispatchControl` cases routing
+  `OpPairPending`/`OpPairResult` pushes to the pairing session (server side already exists).
+- **A4-pair CLI** + **A4-TUI pairing-confirm modal** (mock-flow test licensed) over that API.
+
+**A8:** the adversarial acceptance floor is ALREADY pinned at the unit/integration level for
+every R-E2E.3 scenario (evidence rollup will cite them) EXCEPT **#9 APNs dup/expiry** —
+**DECISION: defer to Phase C** (Phase A ships no live push; recorded here). Net-new A8 work =
+phonesim `DriveLaunch` + `DriveTakeControl`/type (Slice 7) so the phonesim E2E proves the full
+pair/observe/launch/type DoD sentence, + the evidence rollup.
+
+**Required gate artifacts (before the §3 committee):**
+- **A7 cross-model-review evidence file** (DoD §0 requires codex + opus on A7) — MISSING, run next.
+- Per-slice A1-A8 RED/GREEN evidence walk files (only a5 exists today).
+- **GW-H2** boundary-anchored roster seq (design-locked, deferred) — pre-gate slice or an
+  explicit deferral note.
