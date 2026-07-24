@@ -148,66 +148,64 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			result(protocol.PairResult{Err: err})
 			return
 		}
-		// Round-4 re-audit (finding 1, UNANIMOUS -- epoch-key coherence): the epoch re-check,
-		// enroll.Enroll, AddSole and grant.Save form the pairing COMMIT. Take the OUTERMOST
-		// lifecycle lock across the WHOLE commit -- but ONLY here, NEVER across the long handshake
-		// above -- so a concurrent RevokeDevice (which holds lifecycleMu across its own
-		// rotate+remove) cannot interleave between the re-check and AddSole. The round-3 re-check
-		// alone left that residual window open: a revoke could rotate N->N+1 and empty the registry
-		// after the re-check passed but before AddSole, letting AddSole commit the new device under
-		// the stale epoch N whose content key the just-revoked phone still holds. Pairing and revoke
-		// are both rare, human-driven owner-tier ops, so a coarse lock held briefly here is fine.
-		a.lifecycleMu.Lock()
-		defer a.lifecycleMu.Unlock()
+		// The COMMIT (epoch re-check + enroll.Enroll + AddSole + grant.Save) runs under the OUTERMOST
+		// lifecycle lock -- but ONLY here, NEVER across the long handshake above -- so a concurrent
+		// RevokeDevice (which holds lifecycleMu across its own rotate+remove) cannot interleave
+		// between the re-check and AddSole and let AddSole commit under a stale epoch (round-4
+		// finding 1, UNANIMOUS). Round-5 finding 2 (codex#5+sonnet#1): the commit computes the
+		// PairResult under the lock but the lock is RELEASED (the inner closure's defer) BEFORE the
+		// result(...) owner-socket write below, so a blocking notification never stalls a concurrent
+		// revoke/pair behind the lock. Pairing and revoke are both rare, human-driven owner-tier ops.
+		res := func() protocol.PairResult {
+			a.lifecycleMu.Lock()
+			defer a.lifecycleMu.Unlock()
 
-		// cfg is the ENTRY snapshot the whole handshake ran under (its EpochID is baked into
-		// MachinePayload and the grant we are about to seal). RE-VALIDATE the epoch at this commit
-		// point: if a revoke rotated the machine epoch, ABORT and enroll NOTHING (fail closed); the
-		// operator retries and picks up the fresh epoch. Under lifecycleMu no rotate can run
-		// concurrently, so this check + enroll + AddSole + grant.Save are atomic w.r.t. rotate/remove.
-		a.pairingMu.Lock()
-		cur := a.pairing
-		a.pairingMu.Unlock()
-		if cur == nil || cur.EpochID != cfg.EpochID {
-			result(protocol.PairResult{Err: errors.New("pairing aborted: machine epoch rotated during the handshake; retry")})
-			return
-		}
-		if a.lifecycleGate != nil {
-			a.lifecycleGate("pair-commit") // TEST-ONLY seam (nil in production): finding-1 window
-		}
-		res, err := enroll.Enroll(outcome, capTier, cfg.SignPriv, cfg.EpochID, cfg.GrantSeq, cfg.EpochKeys, now)
-		if err != nil {
-			result(protocol.PairResult{Err: err})
-			return
-		}
-		// C1 (finding, re-audit): commit the enrollment ATOMICALLY. The early Count()>0
-		// fast-reject above is only advisory (it races the background confirm); AddSole is
-		// the real gate -- under the registry mutex it refuses a SECOND, different device,
-		// so two concurrent owner pairings can never both enroll and brick the gateway.
-		if err := a.devices.AddSole(res.Record); err != nil {
-			result(protocol.PairResult{Err: err})
-			return
-		}
-		// C5 (daemon half, ADR-007 2026-07-24): persist the sealed grant addressable by
-		// device id so the separate gateway process can deliver it to the phone over the
-		// relay mailbox (BeginPairing used to DISCARD res.Grant). Persist AFTER AddSole so a
-		// confirmed+enrolled device is the precondition.
-		//
-		// C2 (finding, re-audit): enrollment is TRANSACTIONAL. A grant-write failure must
-		// leave NOTHING enrolled -- otherwise the device sits in the registry (Count=1),
-		// blocking re-pairing, yet reports failure, recoverable only by an explicit revoke.
-		// Roll the device back before reporting failure so a clean retry works. Fail CLOSED:
-		// the write error is the reported cause (the rollback itself is best-effort).
-		if err := grant.Save(a.registryDir(), res.Record.DeviceID, res.Grant); err != nil {
-			_, _ = a.devices.Remove(res.Record.DeviceID)
-			result(protocol.PairResult{Err: fmt.Errorf("persist epoch grant: %w", err)})
-			return
-		}
-		result(protocol.PairResult{
-			DeviceID:   res.Record.DeviceID,
-			Name:       res.Record.Name,
-			Capability: req.Capability,
-		})
+			// cfg is the ENTRY snapshot the whole handshake ran under (its EpochID is baked into
+			// MachinePayload and the grant we are about to seal). RE-VALIDATE the epoch at this commit
+			// point: if a revoke rotated the machine epoch, ABORT and enroll NOTHING (fail closed); the
+			// operator retries and picks up the fresh epoch. Under lifecycleMu no rotate can run
+			// concurrently, so this check + enroll + AddSole + grant.Save are atomic w.r.t. rotate/remove.
+			a.pairingMu.Lock()
+			cur := a.pairing
+			a.pairingMu.Unlock()
+			if cur == nil || cur.EpochID != cfg.EpochID {
+				return protocol.PairResult{Err: errors.New("pairing aborted: machine epoch rotated during the handshake; retry")}
+			}
+			if a.lifecycleGate != nil {
+				a.lifecycleGate("pair-commit") // TEST-ONLY seam (nil in production): finding-1 window
+			}
+			res, err := enroll.Enroll(outcome, capTier, cfg.SignPriv, cfg.EpochID, cfg.GrantSeq, cfg.EpochKeys, now)
+			if err != nil {
+				return protocol.PairResult{Err: err}
+			}
+			// C1 (finding, re-audit): commit the enrollment ATOMICALLY. The early Count()>0
+			// fast-reject above is only advisory (it races the background confirm); AddSole is
+			// the real gate -- under the registry mutex it refuses a SECOND, different device,
+			// so two concurrent owner pairings can never both enroll and brick the gateway.
+			if err := a.devices.AddSole(res.Record); err != nil {
+				return protocol.PairResult{Err: err}
+			}
+			// C5 (daemon half, ADR-007 2026-07-24): persist the sealed grant addressable by
+			// device id so the separate gateway process can deliver it to the phone over the
+			// relay mailbox (BeginPairing used to DISCARD res.Grant). Persist AFTER AddSole so a
+			// confirmed+enrolled device is the precondition.
+			//
+			// C2 (finding, re-audit): enrollment is TRANSACTIONAL. A grant-write failure must
+			// leave NOTHING enrolled -- otherwise the device sits in the registry (Count=1),
+			// blocking re-pairing, yet reports failure, recoverable only by an explicit revoke.
+			// Roll the device back before reporting failure so a clean retry works. Fail CLOSED:
+			// the write error is the reported cause (the rollback itself is best-effort).
+			if err := grant.Save(a.registryDir(), res.Record.DeviceID, res.Grant); err != nil {
+				_, _ = a.devices.Remove(res.Record.DeviceID)
+				return protocol.PairResult{Err: fmt.Errorf("persist epoch grant: %w", err)}
+			}
+			return protocol.PairResult{
+				DeviceID:   res.Record.DeviceID,
+				Name:       res.Record.Name,
+				Capability: req.Capability,
+			}
+		}()
+		result(res) // OUTSIDE lifecycleMu (round-5 finding 2): the owner-socket write cannot stall a revoke/pair
 	}()
 
 	ttl := time.Duration(req.TTLSeconds) * time.Second

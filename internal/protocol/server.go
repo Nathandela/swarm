@@ -1214,7 +1214,15 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 	if !cc.requireRemoteAuthz(c, ActionDeviceRevoke, c.TargetDeviceID, nil) {
 		return
 	}
-	if _, err := dr.RevokeDevice(c.TargetDeviceID); err != nil {
+	removed, err := dr.RevokeDevice(c.TargetDeviceID)
+	// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the sever must run whenever the
+	// device WAS removed, even if RevokeDevice ALSO returned a trailing durability (dir-fsync)
+	// error -- Registry.Remove returns (true, err) when the removal committed (rename landed) but
+	// the post-rename dir-fsync failed. The device IS durably revoked, so skipping the sever on
+	// that error would leave its live control lease/peek injecting into the session. ONLY a genuine
+	// failure with NOTHING removed (removed==false && err!=nil) reports an error and skips the
+	// sever; a committed-but-fsync-failed revoke replies OK (the operation succeeded) and severs.
+	if !removed && err != nil {
 		cc.replyError("device_revoke: " + err.Error())
 		return
 	}

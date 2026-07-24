@@ -66,15 +66,19 @@ type coreAPI struct {
 	// BeginPairing fail closed, so pairing is simply unsupported until keys exist.
 	pairing *pairingConfig
 	// lifecycleMu is the OUTERMOST coreAPI lifecycle-transaction lock (round-4 re-audit,
-	// ADR-007). It serializes the WHOLE RevokeDevice transaction (rotateEpoch + Remove +
-	// last-device sever + grant.Delete) against the BeginPairing COMMIT section (epoch re-check
-	// + enroll + AddSole + grant.Save), and two concurrent revokes against each other. This
-	// closes the residual finding-1 epoch TOCTOU (a rotate+remove could interleave between the
-	// commit's re-check and AddSole, enrolling under a stale epoch) and finding-4 (two revokes
-	// both rotating the epoch key -- a lost update). Lock ORDER: lifecycleMu is taken FIRST;
-	// rotateEpoch's pairingMu and the sever's severMu are taken INSIDE it, NEVER the reverse, so
-	// no cycle can form (the sever callback takes only the remote Server's own locks, no coreAPI
-	// lock). BeginPairing takes it ONLY for the brief commit -- never across the long handshake.
+	// ADR-007). It serializes the ATOMIC CORE of the RevokeDevice transaction (presence check +
+	// rotateEpoch + Remove + the Count()==0 sever DECISION) against the BeginPairing COMMIT section
+	// (epoch re-check + enroll + AddSole + grant.Save), and two concurrent revokes against each
+	// other. This closes the residual finding-1 epoch TOCTOU (a rotate+remove could interleave
+	// between the commit's re-check and AddSole, enrolling under a stale epoch) and finding-4 (two
+	// revokes both rotating the epoch key -- a lost update). Round-5 finding 2 (codex#5+sonnet#1):
+	// the SLOW follow-up work -- the sever's deadline-bounded socket writes and grant.Delete's fsync
+	// -- runs OUTSIDE this lock (the per-keystroke DeviceRegistered check is the independent
+	// backstop), so a concurrent revoke/pair never stalls behind blocking network writes. Lock
+	// ORDER: lifecycleMu is taken FIRST; rotateEpoch's pairingMu is taken INSIDE it, NEVER the
+	// reverse, so no cycle can form. The sever's severMu is now taken only AFTER lifecycleMu is
+	// released, so it never nests under lifecycleMu at all. BeginPairing takes it ONLY for the brief
+	// commit -- never across the long handshake, and it is released BEFORE the result() notification.
 	lifecycleMu sync.Mutex
 	// pairingMu guards a.pairing. BeginPairing read it lock-free until revoke gained the
 	// power to MUTATE it: RevokeDevice rotates the machine epoch key and reassigns the
@@ -193,19 +197,25 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if a.devices == nil {
 		return false, nil
 	}
-	// Serialize the WHOLE revoke transaction under the outermost lifecycle lock (round-4
-	// re-audit, findings 1 & 4): the presence check + rotateEpoch + Remove + sever + grant.Delete
-	// are atomic against a concurrent pairing COMMIT and against another concurrent revoke. This
-	// is what makes a replacement device impossible to enroll under a stale epoch, and two revokes
-	// impossible to both rotate. lifecycleMu is the OUTERMOST lock; rotateEpoch's pairingMu and the
-	// sever's severMu are taken inside it.
+	// Under the OUTERMOST lifecycle lock (ADR-007) do ONLY the atomic core of the transaction:
+	// presence check + rotateEpoch + Remove + the Count()==0 sever DECISION. This keeps a
+	// replacement device impossible to enroll under a stale epoch (against a concurrent pairing
+	// COMMIT) and two concurrent revokes impossible to both rotate (finding 4). lifecycleMu is the
+	// OUTERMOST lock; rotateEpoch's pairingMu is taken inside it.
+	//
+	// Round-5 finding 2 (codex#5 + sonnet#1): the sever's synchronous, deadline-bounded socket
+	// writes (severRemoteControl -> sendDetach per conn) and grant.Delete's fsync are SLOW and do
+	// NOT need lifecycleMu's atomicity (the per-keystroke DeviceRegistered check is the independent
+	// backstop). So RELEASE lifecycleMu (explicit Unlock, not defer) after the Count decision, then
+	// run the sever + grant.Delete OUTSIDE the lock -- a concurrent revoke/pair no longer stalls
+	// behind blocking network writes.
 	a.lifecycleMu.Lock()
-	defer a.lifecycleMu.Unlock()
 	// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
 	// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
 	// this check is atomic with the rotation, so a second concurrent revoke of the same device
 	// finds it already gone here and does not rotate a second time (finding 4).
 	if _, ok := a.devices.Get(deviceID); !ok {
+		a.lifecycleMu.Unlock()
 		return false, nil
 	}
 	// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
@@ -215,29 +225,44 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	// still severable) rather than removing under a stale, still-live key. Done BEFORE the sever
 	// so pairingMu (taken in rotateEpoch) never nests inside severMu.
 	if rerr := a.rotateEpoch(); rerr != nil {
+		a.lifecycleMu.Unlock()
 		return false, rerr
 	}
 	removed, err := a.devices.Remove(deviceID)
+	// Decide the last-device sever atomically under the lock (the Count read must be serialized
+	// with the Remove), then release before the slow work.
+	shouldSever := removed && a.devices.Count() == 0
+	a.lifecycleMu.Unlock()
+
+	// A genuine PRE-rename Remove failure, or a raced-away device (removed==false), leaves nothing
+	// removed: abort without severing. The device is still registered (and still severable) or was
+	// already gone -- either way there is no committed removal to follow up on.
+	if !removed {
+		return false, err
+	}
+	// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the device WAS durably removed --
+	// even if Registry.Remove ALSO returned a trailing post-rename dir-fsync durability error. The
+	// sever + grant.Delete MUST still run: skipping the last-device sever on a committed removal
+	// leaves a still-running gateway's stale-epoch journal subscription alive, so after a re-pair it
+	// re-seals the NEW session under the OLD key to the revoked device's mailbox. Surface the error
+	// AFTER the follow-up work, never before it.
+	if shouldSever {
+		// C2a: this removal took the LAST device (Count was 0) -> remote control transitions to
+		// disabled; proactively sever every live remote control lease + terminal peek (the per-device
+		// C1 sever in handleDeviceRevoke covers the revoked device's own lease; this covers any
+		// lingering lease once the switch goes off).
+		a.severRemoteControl()
+	}
+	// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar. Delete is idempotent (an
+	// absent sidecar -- e.g. a pre-grant pairing -- is not an error).
+	derr := grant.Delete(a.registryDir(), deviceID)
+	// Surface the durability error first (the device IS removed; the dir-fsync just wasn't
+	// confirmed), else the grant-cleanup error -- a stranded sidecar is a leak the operator must
+	// learn about.
 	if err != nil {
 		return removed, err
 	}
-	if !removed {
-		return false, nil // raced away between Get and Remove; the epoch is already rotated (safe)
-	}
-	// C2a: this removal took the LAST device (Count now 0) -> remote control transitions to
-	// disabled; proactively sever every live remote control lease + terminal peek. Fires AFTER
-	// Remove, exactly when Count hits 0 (the per-device C1 sever in handleDeviceRevoke covers the
-	// revoked device's own lease; this covers any lingering lease once the switch goes off).
-	if a.devices.Count() == 0 {
-		a.severRemoteControl()
-	}
-	// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar and SURFACE a delete
-	// failure instead of swallowing it -- a stranded sidecar is a leak the operator must learn
-	// about. Delete is idempotent (an absent sidecar -- e.g. a pre-grant pairing -- is not an error).
-	if derr := grant.Delete(a.registryDir(), deviceID); derr != nil {
-		return removed, derr
-	}
-	return removed, nil
+	return removed, derr
 }
 
 // rotateEpoch rotates the machine epoch key after a device is revoked (codex#1): it

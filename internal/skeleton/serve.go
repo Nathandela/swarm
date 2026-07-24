@@ -39,6 +39,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
+	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -163,7 +164,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// configured grant-based pairing flow, so an unconfigured daemon (no grant delivery at all)
 	// never spuriously clears a record. Reconcile on load so the slot frees and re-pairing works.
 	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, "remote", remoteIdentityFile)); statErr == nil {
-		reconcilePairedDevices(devReg, filepath.Join(cfg.StateDir, "devices"))
+		reconcilePairedDevices(devReg, cfg.StateDir)
 	}
 	d.api.devices = devReg
 	// R-KS.1: the coreAPI mirrors its device-derived remote-control kill-switch state to a
@@ -451,14 +452,31 @@ func (d *Daemon) Close() error {
 	return nil
 }
 
-// reconcilePairedDevices clears any device whose sealed grant sidecar is absent (Finding 5,
-// re-audit): such a device was never fully paired -- a crash between devices.AddSole and
-// grant.Save (pairing.go) left it registered with no deliverable bootstrap grant, holding the
-// single-device slot yet unrecoverable except by revoke. Removing it on load frees the slot.
-// Fail-safe: a sidecar-load ERROR (corrupt, unreadable) leaves the device untouched -- only a
-// definitively ABSENT sidecar clears the slot.
-func reconcilePairedDevices(reg *device.Registry, registryDir string) {
+// reconcilePairedDevices clears, at startup (single-threaded, before close(d.ready), so no pairing
+// races it), any device that a crash left in an incoherent state:
+//
+//   - Finding 5 (round-4): a device whose sealed grant sidecar is ABSENT was never fully paired --
+//     a crash between devices.AddSole and grant.Save (pairing.go) left it registered with no
+//     deliverable bootstrap grant, holding the single-device slot yet unrecoverable except by
+//     revoke. Removing it on load frees the slot.
+//   - Finding 3 (round-5, codex#1): a device whose GrantedEpoch != the CURRENT machine epoch was
+//     granted under a dead epoch -- a crash after rotateEpoch persisted N+1 but before Remove
+//     persisted leaves the revoked device (GrantedEpoch==N) registered. Left in place, remote
+//     control re-enables and a still-running old-epoch gateway resumes sealing under N to the
+//     revoked phone. Clearing it on load closes that residual confidentiality window.
+//
+// Fail-safe throughout: a sidecar-load ERROR (corrupt, unreadable) leaves the device untouched, and
+// the epoch check only fires on a CONFIRMED mismatch -- an unreadable machine identity (epochOK
+// false) leaves every device's epoch untouched, mirroring the missing-grant reconcile's fail-safe
+// gate. Only a definitively absent sidecar or a definitively stale epoch clears a slot.
+func reconcilePairedDevices(reg *device.Registry, stateDir string) {
+	registryDir := filepath.Join(stateDir, "devices")
+	curEpoch, epochOK := currentMachineEpoch(stateDir)
 	for _, rec := range reg.List() {
+		if epochOK && rec.GrantedEpoch != curEpoch {
+			_, _ = reg.Remove(rec.DeviceID) // stale epoch: the revoked device's content key is dead
+			continue
+		}
 		g, err := grant.Load(registryDir, rec.DeviceID)
 		if err != nil {
 			continue // ambiguous read: leave the device alone (fail-safe)
@@ -467,6 +485,17 @@ func reconcilePairedDevices(reg *device.Registry, registryDir string) {
 			_, _ = reg.Remove(rec.DeviceID) // no sidecar => not fully paired: free the slot
 		}
 	}
+}
+
+// currentMachineEpoch loads the current epoch id from the machine identity (Finding 3). It reports
+// ok=false on ANY read/parse error so the caller leaves devices untouched (fail-safe): a stale-epoch
+// removal must fire only on a CONFIRMED mismatch, never on an unreadable identity.
+func currentMachineEpoch(stateDir string) (uint32, bool) {
+	id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile))
+	if err != nil {
+		return 0, false
+	}
+	return id.EpochID(), true
 }
 
 // endpointID derives the daemon's stable federation endpoint id from its state
