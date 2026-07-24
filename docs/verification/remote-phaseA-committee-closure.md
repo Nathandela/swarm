@@ -225,3 +225,41 @@ introduced/left (owner-side, non-relay, self-healing); all fixed:
   relay-reachable.
 
 Standing gate after round 6: `go build/vet/test -race ./...` -- 0 failures. A confirmation round 7 follows.
+
+## Re-audit ROUND 7 (final confirmation, 2026-07-24) — codex REVISE (narrow, non-security) / sonnet SHIPS / opus SHIPS -> majority SHIPS
+
+All three reviewers verified commit e01162b (round-6) closes its findings with no regression and reaffirmed
+NO relay-adversary-reachable confidentiality/integrity hole. The sole consensus item was a NON-SECURITY,
+pre-existing goroutine leak the round-6 fix added a new path to; fixed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| Every Serve() assembly error return past newCoreAPI leaked the coreAPI.watch() roster poller + fd (abort branches closed core but never d.api.close()); pre-existing across all branches, e01162b added a third (codex#7 + opus#2 + sonnet#1, CONSENSUS) | A defer'd cleanup-unless-success after d.api is created tears down d.api + core on any non-success return, uniformly + panic-safely; explicit per-path core.Close() removed | `ea312c8` |
+| The round-6 reconcile test claims to prove Serve's abort but its chmod fault is self-healed by device.Open's dir reharden -- it unit-tests the helper (opus#1 + sonnet#2, test-honesty) | Relabeled the test's scope; documented the abort's real trigger set (non-permission Remove failures: EROFS/ENOSPC/dir removed) | `ea312c8` |
+
+Standing gate after round 7: `go build/vet/test -race ./...` -- 0 failures (one TestRGW bridge-timeout is a
+pre-existing load flake -- passes isolated + skeleton-alone + full re-run).
+
+## CONVERGENCE — the audit committee validates Phase A (single-device v1)
+
+After seven rounds (REVISE -> REJECT x4 -> REVISE -> majority SHIPS x2), the committee has validated Phase A:
+- **Majority verdict SHIPS** (sonnet + opus, rounds 4-7). codex ended at REVISE on a non-security abort-path
+  hygiene leak (now fixed) after upgrading from five rounds of REJECT.
+- **Unanimous: no relay-adversary-reachable confidentiality or integrity hole** in the composed
+  single-device v1 system (all three traced keystroke/command/peek/revoke/re-pair end to end in rounds 6-7).
+- **The security core is sound across every round:** the frozen crypto layer + per-(sender,epoch) seq gate
+  (no relay forgery/replay/reorder/dup), requireRemoteAuthz signature/capability/expiry/operation-id checks,
+  the take_control lease + severGen race close, per-keystroke kill-switch + device-presence gating, epoch
+  rotation on revoke + gateway exit-on-revoke + startup epoch reconcile, and server-side SnapText
+  sanitization (no hostile-PTY escape, no Trojan-Source).
+- **Every substantive finding across all seven rounds was fixed** (C1-C8, F4/F5/F7, and each round's
+  regressions/composition edges), each RED-first with the evidence in the commit history.
+- **The remaining residuals are documented, honest, and none relay-reachable:** owner-side I/O-fault edges
+  (machineid.Save (committed,err); AddSole enrolled-no-grant self-healed by reconcile; rotate-fail leaves
+  the device live with `swarm remote off` as the fail-safe; gateway under PERMANENT registry corruption) and
+  Phase-B deferrals (live gateway epoch-reload; ME-1 relay-close; multi-device/SenderKeyID binding + the
+  epoch-equality reconcile revisit; admin tier; real-phone lifecycle glue: launchd/systemd supervision +
+  gateway auto-start-post-pair + the mobile app; mailbox gap-resync; APNs).
+
+Phase A (the machine backend + control plane + full input + safety) SHIPS for single-device v1. The mobile
+app + the deferred production-lifecycle glue are Phase B.
