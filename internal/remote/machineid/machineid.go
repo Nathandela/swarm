@@ -332,5 +332,17 @@ func writeSecretFile(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	// Finding 4 (re-audit, durability): fsync the parent DIR so the RENAME survives power loss,
+	// mirroring grant.Save / remotegw's persistSeqCeiling. Machine key custody: without it a
+	// crash could lose a rotated-epoch rename and resurrect the OLD epoch key, reviving a
+	// revoked device's retained content key (reopens codex#1).
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

@@ -117,7 +117,18 @@ func Delete(registryDir, deviceID string) error {
 	if err := os.Remove(Path(registryDir, deviceID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return nil
+	// Finding 4b (re-audit, durability): fsync the parent dir so the UNLINK survives power loss,
+	// symmetric with Save's durable rename. Best-effort: an absent grants dir (nothing was ever
+	// persisted here) means there is nothing to make durable.
+	d, err := os.Open(filepath.Join(registryDir, grantsSubdir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // Load reads the sealed grant persisted for deviceID. An ABSENT sidecar yields

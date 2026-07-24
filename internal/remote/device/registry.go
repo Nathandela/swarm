@@ -292,7 +292,19 @@ func (r *Registry) persistLocked() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, r.path)
+	if err := os.Rename(tmpName, r.path); err != nil {
+		return err
+	}
+	// Finding 4 (re-audit, durability): fsync the registry dir so the rename is durable across
+	// power loss (mirrors grant.Save). Without it a crash could revert the registry to a stale
+	// roster -- e.g. resurrecting a just-revoked device (reopening the R-POL.9 authorization it
+	// lost) or dropping a just-added one.
+	d, err := os.Open(r.dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // cloneRecord deep-copies a record's byte slices so the registry's internal state

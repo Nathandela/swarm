@@ -148,6 +148,20 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			result(protocol.PairResult{Err: err})
 			return
 		}
+		// Finding 1 (re-audit, UNANIMOUS -- epoch-key coherence): cfg is the ENTRY snapshot the
+		// whole handshake ran under (its EpochID is baked into MachinePayload and the grant we are
+		// about to seal). A concurrent RevokeDevice may have ROTATED the machine epoch during the
+		// handshake (reassigning a.pairing under pairingMu). RE-VALIDATE at this commit point: if
+		// the live epoch no longer matches the one we negotiated, ABORT and enroll NOTHING (fail
+		// closed) -- otherwise we would seal the new device under a stale epoch whose content key
+		// the just-revoked device still holds. The operator retries and picks up the fresh epoch.
+		a.pairingMu.Lock()
+		cur := a.pairing
+		a.pairingMu.Unlock()
+		if cur == nil || cur.EpochID != cfg.EpochID {
+			result(protocol.PairResult{Err: errors.New("pairing aborted: machine epoch rotated during the handshake; retry")})
+			return
+		}
 		res, err := enroll.Enroll(outcome, capTier, cfg.SignPriv, cfg.EpochID, cfg.GrantSeq, cfg.EpochKeys, now)
 		if err != nil {
 			result(protocol.PairResult{Err: err})

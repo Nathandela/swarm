@@ -176,32 +176,41 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if a.devices == nil {
 		return false, nil
 	}
-	removed, err := a.devices.Remove(deviceID)
-	// C4 (finding, re-audit): a successful removal must also clean the device's sealed grant
-	// sidecar, or every revoke-then-repair leaks one file. Delete is idempotent (absent is
-	// not an error), so it is safe even when no sidecar was ever persisted (a pre-grant pair).
-	if removed {
-		_ = grant.Delete(a.registryDir(), deviceID)
+	// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
+	// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch.
+	if _, ok := a.devices.Get(deviceID); !ok {
+		return false, nil
 	}
-	// C2a: if this removal took the LAST device (Count now 0), remote control has transitioned to
-	// disabled — proactively sever every live remote control lease + peek on the remote Server. The
-	// per-device C1 sever (handleDeviceRevoke) releases the revoked device's OWN lease on the
-	// handling Server; this covers the cross-Server case (owner-path revoke leaving a remote lease)
-	// and any other lingering lease once the switch goes off.
-	if removed && a.devices.Count() == 0 {
+	// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
+	// invariant "device removed => epoch rotated" holds across a crash between the two. codex#1:
+	// the rotation kills the revoked device's retained content key for all future traffic. A
+	// rotation/persist fault ABORTS the revoke (return the error; the device stays registered and
+	// still severable) rather than removing under a stale, still-live key. Done BEFORE the sever
+	// so pairingMu (taken in rotateEpoch) never nests inside severMu.
+	if rerr := a.rotateEpoch(); rerr != nil {
+		return false, rerr
+	}
+	removed, err := a.devices.Remove(deviceID)
+	if err != nil {
+		return removed, err
+	}
+	if !removed {
+		return false, nil // raced away between Get and Remove; the epoch is already rotated (safe)
+	}
+	// C2a: this removal took the LAST device (Count now 0) -> remote control transitions to
+	// disabled; proactively sever every live remote control lease + terminal peek. Fires AFTER
+	// Remove, exactly when Count hits 0 (the per-device C1 sever in handleDeviceRevoke covers the
+	// revoked device's own lease; this covers any lingering lease once the switch goes off).
+	if a.devices.Count() == 0 {
 		a.severRemoteControl()
 	}
-	// codex#1 (re-audit CONFIDENTIALITY, ADR-007 2026-07-24): rotate the machine epoch key
-	// on every successful removal so the revoked device's retained content key is dead for
-	// all future traffic. Done AFTER severRemoteControl so pairingMu never nests inside
-	// severMu. A rotation/persist failure is surfaced honestly (the device is already
-	// removed + severed, but the key custody failure must not be swallowed).
-	if removed {
-		if rerr := a.rotateEpoch(); rerr != nil {
-			return removed, rerr
-		}
+	// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar and SURFACE a delete
+	// failure instead of swallowing it -- a stranded sidecar is a leak the operator must learn
+	// about. Delete is idempotent (an absent sidecar -- e.g. a pre-grant pairing -- is not an error).
+	if derr := grant.Delete(a.registryDir(), deviceID); derr != nil {
+		return removed, derr
 	}
-	return removed, err
+	return removed, nil
 }
 
 // rotateEpoch rotates the machine epoch key after a device is revoked (codex#1): it

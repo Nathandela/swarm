@@ -38,6 +38,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -154,6 +155,15 @@ func Serve(cfg Config) (*Daemon, error) {
 	devReg, err := device.Open(filepath.Join(cfg.StateDir, "devices"))
 	if err != nil {
 		return nil, err
+	}
+	// Finding 5 (re-audit): when pairing is configured, clear any device whose sealed grant
+	// sidecar is absent -- a crash between AddSole and grant.Save (pairing.go) leaves such a
+	// device registered with no deliverable bootstrap grant, holding the single-device slot yet
+	// inert. Gated on the machine identity's presence: that crash can only occur under a
+	// configured grant-based pairing flow, so an unconfigured daemon (no grant delivery at all)
+	// never spuriously clears a record. Reconcile on load so the slot frees and re-pairing works.
+	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, "remote", remoteIdentityFile)); statErr == nil {
+		reconcilePairedDevices(devReg, filepath.Join(cfg.StateDir, "devices"))
 	}
 	d.api.devices = devReg
 	// R-KS.1: the coreAPI mirrors its device-derived remote-control kill-switch state to a
@@ -439,6 +449,24 @@ func (d *Daemon) Close() error {
 		d.api.close() // stops the roster poller
 	})
 	return nil
+}
+
+// reconcilePairedDevices clears any device whose sealed grant sidecar is absent (Finding 5,
+// re-audit): such a device was never fully paired -- a crash between devices.AddSole and
+// grant.Save (pairing.go) left it registered with no deliverable bootstrap grant, holding the
+// single-device slot yet unrecoverable except by revoke. Removing it on load frees the slot.
+// Fail-safe: a sidecar-load ERROR (corrupt, unreadable) leaves the device untouched -- only a
+// definitively ABSENT sidecar clears the slot.
+func reconcilePairedDevices(reg *device.Registry, registryDir string) {
+	for _, rec := range reg.List() {
+		g, err := grant.Load(registryDir, rec.DeviceID)
+		if err != nil {
+			continue // ambiguous read: leave the device alone (fail-safe)
+		}
+		if g == nil {
+			_, _ = reg.Remove(rec.DeviceID) // no sidecar => not fully paired: free the slot
+		}
+	}
 }
 
 // endpointID derives the daemon's stable federation endpoint id from its state
