@@ -189,11 +189,18 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 	}
 
 	svc := remotegw.NewService(remotegw.ServiceConfig{
-		DaemonSocket:   rsock,
-		Relay:          machineRelay,
-		PhoneTarget:    phoneRelay.RoutingID(),
-		Key:            keys.ContentKey,
-		EpochID:        epochID,
+		DaemonSocket: rsock,
+		Relay:        machineRelay,
+		PhoneTarget:  phoneRelay.RoutingID(),
+		Key:          keys.ContentKey,
+		EpochID:      epochID,
+		// The machine's non-zero routing key id, exactly as production wires it
+		// (cmd/swarm-remote/config.go). Journal + snapshot frames are sealed under THIS
+		// sender while command replies are sealed under sender-zero (SealControlReply), so
+		// the phone's router keeps them in SEPARATE per-sender seq streams. Omitting it here
+		// (sender-zero for both) would collide the two independent seq counters and the
+		// router's seq guard would stale-drop the reply.
+		SenderKeyID:    crypto.KeyID(machineID.RecipientPublic()),
 		PollInterval:   20 * time.Millisecond,
 		ReconnectDelay: 50 * time.Millisecond,
 	})

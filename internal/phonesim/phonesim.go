@@ -29,6 +29,16 @@ import (
 // epoch_grant_bootstrap frame: with no ContentKey the phone can do nothing, so it fails closed.
 var errNoBootstrap = errors.New("phonesim: no epoch_grant_bootstrap frame in mailbox")
 
+// mailbox is the slice of *relay.Client the phone consumes: PAGED reads to drain its
+// mailbox, appends to reach the machine, and acks to compact what it has drained. Taking
+// an interface (not the concrete client) lets a test drive the phone with a scripted relay
+// -- the untrusted adversary controlling what each read returns.
+type mailbox interface {
+	MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]relay.Item, bool, error)
+	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
+	MailboxAck(ctx context.Context, cursor uint64) error
+}
+
 // Config wires a simulated phone to the pairing outcome and the relay. It mirrors what
 // a real device holds after pairing + enrollment: its key custody, the pinned machine
 // grant-signing pub, the sealed epoch grant, its relay connection, and the machine's
@@ -37,7 +47,7 @@ type Config struct {
 	KeyStore       crypto.KeyStore    // phone key custody (Noise/relay-auth/command-signing)
 	MachineSignPub []byte             // machine Ed25519 grant-signing pub pinned at pairing
 	Grant          *crypto.EpochGrant // sealed initial epoch grant delivered by the machine
-	Relay          *relay.Client      // the phone's authenticated relay connection
+	Relay          mailbox            // the phone's authenticated relay connection (*relay.Client in production)
 	MachineTarget  string             // machine mailbox routing id (where commands are appended)
 	Machine        string             // machine endpoint id, signed into each command tuple
 }
@@ -48,7 +58,7 @@ type Config struct {
 // mailbox seq stream into their respective caches), plus a monotonic command seq for DRIVE.
 type Phone struct {
 	ks            crypto.KeyStore
-	relay         *relay.Client
+	relay         mailbox
 	router        *phonecore.MailboxRouter
 	content       crypto.ContentKey // custody: recovered from the grant, never exported
 	epochID       uint32
@@ -77,30 +87,45 @@ func New(cfg Config) (*Phone, error) {
 
 // NewFromMailbox bootstraps the phone by READING the sealed grant off its relay mailbox --
 // the production topology (the gateway delivered it as a tagged plaintext bootstrap frame),
-// NOT in-process injection. It performs ONE forward scan from cursor 0, running
-// grant.ParseBootstrap over each item -- a ContentKey-sealed router/journal envelope parses
-// ok=false and is cleanly skipped -- and, on the FIRST well-formed bootstrap frame, AcceptGrants
-// it (verifying it against the pinned machine sign pub, opening it with the phone KeyStore) to
-// recover the epoch ContentKey and build the router, exactly as New does. The read cursor is
-// seeded to the CONSUMED frame's cursor, so a later Observe neither reprocesses the bootstrap
-// nor skips any real frame that followed it (frames read strictly-after that cursor). It fails
-// closed: a mailbox with no bootstrap frame (errNoBootstrap), or a grant that does not open
-// under the pinned key, is an error -- with no ContentKey the phone can do nothing. The
-// bootstrap is one-shot (a single consume the cursor never returns to), so it needs no
-// GrantReceiver: this IS the phone's first grant, the same non-monotonic AcceptGrant New runs.
+// NOT in-process injection. It scans forward across EVERY bounded page (MailboxReadPage until
+// has_more is false), running grant.ParseBootstrap over each item -- a ContentKey-sealed
+// router/journal envelope parses ok=false and is cleanly skipped. grant.ParseBootstrap is a
+// JSON-shape check only (no crypto), so a hostile relay can plant a well-formed-but-unopenable
+// POISON frame; on any frame that shape-accepts but fails to open (newPhone/AcceptGrant), the
+// scan CONTINUES rather than failing, so a single poison frame cannot permanently block pairing.
+// The FIRST grant that actually opens (verified against the pinned machine sign pub, opened with
+// the phone KeyStore) recovers the epoch ContentKey and builds the router, exactly as New does.
+// The read cursor is seeded to the CONSUMED frame's cursor, so a later Observe neither reprocesses
+// the bootstrap nor skips any real frame that followed it (frames read strictly-after that cursor).
+// It fails closed with errNoBootstrap only when the FULL paged scan opens nothing -- with no
+// ContentKey the phone can do nothing. The bootstrap is one-shot (a single consume the cursor
+// never returns to), so it needs no GrantReceiver: this IS the phone's first grant, the same
+// non-monotonic AcceptGrant New runs.
 func NewFromMailbox(ctx context.Context, cfg Config) (*Phone, error) {
-	items, err := cfg.Relay.MailboxRead(ctx, 0)
-	if err != nil {
-		return nil, err
-	}
-	for _, it := range items {
-		g, ok := grant.ParseBootstrap(it.Envelope)
-		if !ok {
-			continue // ContentKey-sealed router/journal envelope -- not the bootstrap frame
+	var cursor uint64
+	for {
+		items, hasMore, err := cfg.Relay.MailboxReadPage(ctx, cursor, 0)
+		if err != nil {
+			return nil, err
 		}
-		return newPhone(cfg, g, it.Cursor)
+		for _, it := range items {
+			if it.Cursor > cursor {
+				cursor = it.Cursor
+			}
+			g, ok := grant.ParseBootstrap(it.Envelope)
+			if !ok {
+				continue // ContentKey-sealed router/journal envelope -- not a bootstrap frame
+			}
+			phone, err := newPhone(cfg, g, it.Cursor)
+			if err != nil {
+				continue // a poison bootstrap (well-formed shape, unopenable) -- keep scanning
+			}
+			return phone, nil
+		}
+		if !hasMore {
+			return nil, errNoBootstrap
+		}
 	}
-	return nil, errNoBootstrap
 }
 
 // newPhone recovers the epoch ContentKey/EpochID from a sealed grant (verifying it against the
@@ -125,33 +150,53 @@ func newPhone(cfg Config, g *crypto.EpochGrant, startCursor uint64) (*Phone, err
 	}, nil
 }
 
-// Observe performs ONE forward scan of the phone's relay mailbox: it reads items past
-// the phone's cursor, runs each through the phonecore MailboxRouter (which authenticates
-// and seq-guards it, then demuxes journal records into the session cache and terminal
-// snapshots into the snapshot cache), advances the cursor, and returns the session cache's
-// current sessions. Items the router rejects (not a router frame, or a replay/reorder) are
-// skipped. Callers poll it until the cache holds the session (or Snapshot the peek) they
-// expect. Draining here populates BOTH caches, so a Snapshot getter reads whatever the
-// latest Observe pulled off the shared mailbox.
-func (p *Phone) Observe(ctx context.Context) ([]phonecore.CachedSession, error) {
+// drain performs ONE forward sweep of the phone's relay mailbox and is the SINGLE consumer
+// Observe and ReadReply share (C8). It reads every bounded page past the shared cursor
+// (MailboxReadPage until has_more is false) and routes EACH item through the phonecore
+// MailboxRouter EXACTLY ONCE -- the router authenticates + seq-guards it, then demuxes it by
+// kind: journal records into the session cache, terminal snapshots into the snapshot cache,
+// command replies into the reply cache (drained by ReadReply). Because every item goes through
+// Accept once, a reply lands in the reply cache and a journal frame in the session cache no
+// matter WHICH caller drove the read -- neither consumer advances the cursor past the other's
+// frames. It advances the cursor once and acks the consumed prefix so the untrusted relay
+// compacts what the phone has drained. Items the router rejects (not a router frame, or a
+// replay/reorder) are skipped. NOTE: router.Accept also reports a seq GAP (a dropped frame);
+// the phone does not yet resync on it (no resync channel exists) -- see the follow-up note.
+func (p *Phone) drain(ctx context.Context) error {
 	p.mu.Lock()
 	cursor := p.cursor
 	p.mu.Unlock()
 
-	items, err := p.relay.MailboxRead(ctx, cursor)
-	if err != nil {
+	for {
+		items, hasMore, err := p.relay.MailboxReadPage(ctx, cursor, 0)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			if it.Cursor > cursor {
+				cursor = it.Cursor
+			}
+			if _, err := p.router.Accept(it.Envelope); err != nil {
+				continue // not a router frame, or a replay/reorder the receiver rejected
+			}
+		}
+		if !hasMore {
+			break
+		}
+	}
+	p.advanceCursor(cursor)
+	return p.relay.MailboxAck(ctx, cursor)
+}
+
+// Observe drains the phone's relay mailbox (routing journal records into the session cache
+// and terminal snapshots into the snapshot cache via the shared drain) and returns the
+// session cache's current sessions. Callers poll it until the cache holds the session (or
+// Snapshot the peek) they expect. Draining populates BOTH caches, so a Snapshot getter reads
+// whatever the latest Observe pulled off the shared mailbox.
+func (p *Phone) Observe(ctx context.Context) ([]phonecore.CachedSession, error) {
+	if err := p.drain(ctx); err != nil {
 		return nil, err
 	}
-	maxCursor := cursor
-	for _, it := range items {
-		if it.Cursor > maxCursor {
-			maxCursor = it.Cursor
-		}
-		if _, err := p.router.Accept(it.Envelope); err != nil {
-			continue // not a router frame, or a replay/reorder the receiver rejected
-		}
-	}
-	p.advanceCursor(maxCursor)
 	return p.router.Sessions().List(), nil
 }
 
@@ -264,36 +309,19 @@ func (p *Phone) DriveLaunch(ctx context.Context, req *protocol.LaunchReq, operat
 	return nil
 }
 
-// ReadReply performs ONE forward scan of the phone's mailbox for the sealed control reply
-// the gateway returns after executing a command. It opens each item as a control reply and
-// returns the first OK/Error Control it finds (found=true). Journal envelopes and other
-// non-control items are skipped. The cursor is drained forward so a large journal backlog
-// cannot bury the reply behind a bounded page.
+// ReadReply returns the sealed control reply the gateway returns after executing a command.
+// It drains the mailbox through the SHARED drain -- routing every item through the router
+// exactly once, so a journal frame that arrives alongside the reply lands in the session
+// cache instead of being skipped past -- then pops the oldest demuxed reply off the router's
+// reply cache (found=false when none is pending). It does NOT re-scan raw items via
+// OpenControlReply: the drain is the one consumer that advances the shared cursor, so a reply
+// an earlier Observe already demuxed is still returned here (C8).
 func (p *Phone) ReadReply(ctx context.Context) (protocol.Control, bool, error) {
-	p.mu.Lock()
-	cursor := p.cursor
-	p.mu.Unlock()
-
-	items, err := p.relay.MailboxRead(ctx, cursor)
-	if err != nil {
+	if err := p.drain(ctx); err != nil {
 		return protocol.Control{}, false, err
 	}
-	maxCursor := cursor
-	for _, it := range items {
-		if it.Cursor > maxCursor {
-			maxCursor = it.Cursor
-		}
-		ctrl, err := phonecore.OpenControlReply(p.content, it.Envelope)
-		if err != nil {
-			continue // journal envelope or unrelated item -> not a control reply
-		}
-		if ctrl.Op == protocol.OpOK || ctrl.Op == protocol.OpError {
-			p.advanceCursor(maxCursor)
-			return ctrl, true, nil
-		}
-	}
-	p.advanceCursor(maxCursor)
-	return protocol.Control{}, false, nil
+	ctrl, ok := p.router.Replies().Take()
+	return ctrl, ok, nil
 }
 
 // TakeControl acquires the controller lease for a session (A7 input Slice 7). It signs a
