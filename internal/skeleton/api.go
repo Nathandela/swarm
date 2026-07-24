@@ -167,6 +167,23 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 // can serve device_revoke (slice A3.2).
 var _ protocol.DeviceRevoker = (*coreAPI)(nil)
 
+// DeviceRegistered makes coreAPI a protocol.DeviceRegistrar (C1): it reports whether deviceID
+// is still present in the pinned device registry, so the daemon's controlGateOpen severs a
+// revoked device's live control lease on the very next keystroke — independent of which Server
+// handled the revoke. A nil registry (never wired) reports not-registered (fail-closed, like
+// ListDevices/RevokeDevice).
+func (a *coreAPI) DeviceRegistered(deviceID string) bool {
+	if a.devices == nil {
+		return false
+	}
+	_, ok := a.devices.Get(deviceID)
+	return ok
+}
+
+// coreAPI ALSO satisfies protocol.DeviceRegistrar so the assembled remote-tier Server severs a
+// revoked device's live control lease per keystroke (C1).
+var _ protocol.DeviceRegistrar = (*coreAPI)(nil)
+
 // DescribePolicy makes coreAPI a protocol.PolicyDescriber (slice A3.1): it reports
 // the configured remote launch policy's allowed cwd roots. protocol.LaunchPolicy
 // itself only carries RemoteLaunchAllowed, so the roots are obtained by type-asserting

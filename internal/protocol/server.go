@@ -48,18 +48,23 @@ var remoteForbiddenOptions = map[string]string{
 // job (Epic 9), so it is left empty here. On the remote tier the client env is DROPPED
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
-func daemonLaunchSpec(req *LaunchReq, remote bool) daemon.LaunchSpec {
+func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
 	clientEnv := persist.FilterEnv(req.Env)
 	if remote {
 		clientEnv = nil // R-POL.5: remote launch carries no phone-supplied env
 	}
 	return daemon.LaunchSpec{
-		AgentType:     req.Agent,
-		Cwd:           req.Cwd,
-		ClientEnv:     clientEnv,
-		Cols:          req.Cols,
-		Rows:          req.Rows,
-		Options:       launchOptions(req),
+		AgentType: req.Agent,
+		Cwd:       req.Cwd,
+		ClientEnv: clientEnv,
+		Cols:      req.Cols,
+		Rows:      req.Rows,
+		Options:   launchOptions(req),
+		// OperationID carries the signed launch operation_id to the daemon so its launch
+		// idempotency engages — a replayed signed remote launch reuses the reserved session
+		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so
+		// they take no idempotency reservation, unchanged.
+		OperationID:   operationID,
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 	}
 }
@@ -149,6 +154,14 @@ func (s *Server) now() time.Time {
 // — when the caller sets one — now+TTLSeconds. The R5 lower-clamp keeps an overflowing
 // TTLSeconds from wrapping to a past (immediately-expired) instant.
 const maxControlSessionTTL = 30 * time.Minute
+
+// maxCommandValidity caps a device-signed command's ExpiresAt server-side (F5): a command
+// signed with a far-future expiry would otherwise stay cryptographically valid indefinitely,
+// widening the replay window without bound and outrunning the idempotency GC TTL.
+// requireRemoteAuthz rejects any command whose ExpiresAt is beyond now+maxCommandValidity, so
+// the replay-validity window is bounded to an hour (the parallel idempotency compaction TTL is
+// kept comfortably larger than this).
+const maxCommandValidity = 1 * time.Hour
 
 // serverCaps is the capability set the daemon supports; the handshake returns the
 // intersection with the client's offer. The remote-tier caps are advertised
@@ -858,14 +871,17 @@ type clientConn struct {
 }
 
 // controlSession records an established take_control lease: the target local session
-// id, the lease generation s.attach assigned (published via setAttach), and the
-// server-clock instant at which the session lazily expires (slice A5-b). Its fields are
-// set once at establishment and never mutated, so the input gate can capture the struct
-// under ctlMu and read them after releasing the lock. Slice A5-c adds the gate token.
+// id, the lease generation s.attach assigned (published via setAttach), the server-clock
+// instant at which the session lazily expires (slice A5-b), and the AUTHENTICATED device
+// id that established it (C1). Its fields are set once at establishment and never mutated,
+// so the input gate can capture the struct under ctlMu and read them after releasing the
+// lock. Slice A5-c adds the gate token; C1 adds deviceID so controlGateOpen can drop a
+// keystroke once the establishing device is revoked (per-keystroke sever).
 type controlSession struct {
 	target   string
 	leaseGen uint64
 	expiry   time.Time
+	deviceID string // the authenticated c.DeviceID that took control (C1 revoke sever)
 }
 
 // clientSrv is the subset of *Server a clientConn needs; it is *Server. (Named to
@@ -1046,7 +1062,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: cols/rows out of range")
 		return
 	}
-	spec := daemonLaunchSpec(req, cc.srv.remoteTier)
+	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		cc.replyError("launch: " + err.Error())
@@ -1171,7 +1187,58 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 		cc.replyError("device_revoke: " + err.Error())
 		return
 	}
+	// C1 [UNANIMOUS BLOCKER]: PROACTIVELY sever the revoked device's live control lease and
+	// terminal peek on THIS Server, so revoke does not merely refuse a FUTURE take_control.
+	// The per-keystroke controlGateOpen clause (device presence) is the cross-Server backstop;
+	// this closes the live lease + peek at once when the revoke reaches the Server holding them.
+	cc.srv.severRevokedDeviceControl(c.TargetDeviceID)
 	cc.replyOK(c.TargetDeviceID)
+}
+
+// severRevokedDeviceControl force-releases every control lease the revoked device established
+// on this Server and cancels every active terminal peek (C1). Leases are matched PRECISELY by
+// the establishing DeviceID recorded on the control session, so only the revoked device's
+// leases are released. Terminal peeks carry NO device identity (terminal_subscribe is
+// unsigned), so ALL active peeks are cancelled — coarse but safe (revoke is rare; other
+// devices simply reconnect). It snapshots the controllers + connections under s.mu, then acts
+// OUTSIDE the lock (releaseLease and the peek cancel take other locks), so no lock is held
+// across the sever.
+func (s *Server) severRevokedDeviceControl(deviceID string) {
+	s.mu.Lock()
+	controllers := make([]*clientConn, 0, len(s.leases))
+	for _, ls := range s.leases {
+		if ls.controller != nil {
+			controllers = append(controllers, ls.controller)
+		}
+	}
+	conns := make([]*clientConn, 0, len(s.conns))
+	for cc := range s.conns {
+		conns = append(conns, cc)
+	}
+	s.mu.Unlock()
+
+	// Release exactly the revoked device's control leases (precise by establishing DeviceID).
+	for _, cc := range controllers {
+		cc.ctlMu.Lock()
+		match := cc.control != nil && cc.control.deviceID == deviceID
+		var target string
+		var gen uint64
+		if match {
+			target, gen = cc.control.target, cc.control.leaseGen
+			cc.control = nil // shut the input gate for this connection
+		}
+		cc.ctlMu.Unlock()
+		if match {
+			// matchGen: release only if still the current generation (never clobber a newer
+			// lease); notify: send OpDetach so the client's Frames() closes.
+			s.releaseLease(cc, target, gen, true, true)
+		}
+	}
+
+	// Cancel every active terminal peek (coarse: peeks carry no device identity).
+	for _, cc := range conns {
+		cc.cancelPeek()
+	}
 }
 
 // handleRemoteSetControl serves the owner-tier remote_set_control op (A4) — the durable
@@ -1331,7 +1398,11 @@ func (cc *clientConn) handleTakeControl(c Control) {
 		expiry = *c.ExpiresAt
 	}
 	cc.ctlMu.Lock()
-	cc.control = &controlSession{target: local, leaseGen: gen, expiry: expiry}
+	// deviceID is the ALREADY-AUTHENTICATED c.DeviceID (requireRemoteAuthz verified the
+	// signature over the tuple that includes it), so controlGateOpen can drop this lease's
+	// keystrokes the moment the device is revoked, and handleDeviceRevoke can proactively
+	// release exactly the revoked device's leases (C1).
+	cc.control = &controlSession{target: local, leaseGen: gen, expiry: expiry, deviceID: c.DeviceID}
 	cc.ctlMu.Unlock()
 }
 
@@ -1361,14 +1432,16 @@ func (cc *clientConn) handleTakeControlEnd(c Control) {
 	cc.srv.releaseLease(cc, local, c.Generation, true, true)
 }
 
-// controlGateOpen is the slice A5-b four-clause gate: on the remote tier a keystroke or
-// resize reaches the shim ONLY inside a live, authorized control session. Every clause
-// must hold: (1) the kill switch is still ON (re-checked here so a mid-session `off`
-// halts input), (2) a control session exists (fail-closed default), (3) it has not
-// lazily expired on the server clock, and (4) it still targets this connection's current
-// lease (session + generation). Any clause false => drop. It captures the control-session
-// fields under ctlMu and the lease identity under attMu, releasing each lock before the
-// caller forwards, so ctlMu is never held across the lease locks forwardInput takes.
+// controlGateOpen is the slice A5-b gate (extended by C1): on the remote tier a keystroke or
+// resize reaches the shim ONLY inside a live, authorized control session. Every clause must
+// hold: (1) the kill switch is still ON (re-checked here so a mid-session `off` halts input),
+// (2) a control session exists (fail-closed default), (3) it has not lazily expired on the
+// server clock, (4) the lease-establishing device is STILL registered (C1 — so a device_revoke
+// severs this live lease per keystroke, even across the owner/remote Server split), and (5) it
+// still targets this connection's current lease (session + generation). Any clause false =>
+// drop. It captures the control-session fields under ctlMu and the lease identity under attMu,
+// releasing each lock before the caller forwards, so ctlMu is never held across the lease locks
+// forwardInput takes.
 func (cc *clientConn) controlGateOpen() bool {
 	// clause 1 — re-check the kill switch on every keystroke.
 	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
@@ -1385,7 +1458,15 @@ func (cc *clientConn) controlGateOpen() bool {
 	if !cc.srv.now().Before(ctl.expiry) {
 		return false
 	}
-	// clause 4 — still bound to this connection's current lease (session + generation).
+	// clause 4 — the lease-establishing device is STILL registered (C1). Re-checked on every
+	// keystroke so a device_revoke severs this live lease immediately — the daemon-side
+	// guarantee that holds even when the revoke was handled by a DIFFERENT Server sharing the
+	// backend registry but not this lease map (the production owner/remote split). Consulted
+	// only when the backend can answer device presence (optional, like the kill switch).
+	if reg, ok := cc.deviceRegistrar(); ok && !reg.DeviceRegistered(ctl.deviceID) {
+		return false
+	}
+	// clause 5 — still bound to this connection's current lease (session + generation).
 	cc.attMu.Lock()
 	sess, gen := cc.attSession, cc.attGen
 	cc.attMu.Unlock()
@@ -1664,6 +1745,19 @@ func (cc *clientConn) sendPeekEnded(local string) {
 		return
 	}
 	_ = cc.writeFrameDeadline(wire.TControl, body)
+}
+
+// cancelPeek cancels this connection's in-flight terminal peek, if any (C1): a device_revoke
+// terminates the peek's render loop (RenderTerminal returns on ctx.Done), which releases its
+// read-only tap and signals the gateway the peek ended. The CancelFunc is idempotent, so a
+// concurrent conn-drop or superseding peek that also cancels is harmless.
+func (cc *clientConn) cancelPeek() {
+	cc.peekMu.Lock()
+	cancel := cc.peekCancel
+	cc.peekMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // clipPeek bounds an already-sanitized peek render to at most maxPeekRows lines of at most
@@ -2113,6 +2207,14 @@ func (cc *clientConn) killSwitch() (KillSwitch, bool) {
 	return ks, ok
 }
 
+// deviceRegistrar returns the backend's DeviceRegistrar if it implements one (C1): the
+// per-keystroke device-presence check controlGateOpen consults so a revoked device's live
+// lease severs immediately.
+func (cc *clientConn) deviceRegistrar() (DeviceRegistrar, bool) {
+	reg, ok := cc.srv.d.(DeviceRegistrar)
+	return reg, ok
+}
+
 // launchPolicy returns the backend's LaunchPolicy if it implements one (R-POL.3).
 func (cc *clientConn) launchPolicy() (LaunchPolicy, bool) {
 	lp, ok := cc.srv.d.(LaunchPolicy)
@@ -2150,6 +2252,14 @@ func (cc *clientConn) requireRemoteAuthz(c Control, action string, session strin
 	}
 	if c.DeviceID == "" || c.DeviceSig == "" || c.ExpiresAt == nil {
 		cc.replyErrorCode("remote mutating op requires device_id, device_sig, and expires_at", CodeInvalidField)
+		return false
+	}
+	// F5: cap the device-signed validity window server-side. The authenticator still enforces
+	// not-past (the daemon-authoritative expiry); here we ALSO reject an expiry beyond
+	// now+maxCommandValidity, so a command signed with a far-future ExpiresAt cannot stay
+	// replay-valid indefinitely. Bounds the replay window and keeps the idempotency GC TTL safe.
+	if c.ExpiresAt.After(cc.srv.now().Add(maxCommandValidity)) {
+		cc.replyErrorCode("expires_at is beyond the maximum command validity window", CodeInvalidField)
 		return false
 	}
 	if err := auth.AuthorizeCommand(DeviceCommandAuth{

@@ -86,13 +86,16 @@ func TestTakeControl_ExpiryBoundToSignedExpiresAt(t *testing.T) {
 		t.Fatalf("keystroke dropped at base+90s; want REACHES — expiry must not clamp below the signed ExpiresAt (base+2m)")
 	}
 
-	// Property 2 (R7 + server cap): a signed ExpiresAt beyond the server max (base+90m) clamps
+	// Property 2 (R7 + server cap): a signed ExpiresAt beyond the server max (base+45m) clamps
 	// to base+max (30m). A keystroke at base+29m REACHES (the session lives to the cap, NOT the
-	// old 5m default) and one at base+31m is DROPPED (the signed 90m cannot exceed the cap).
-	if !controlSessionLiveAt(t, 90*time.Minute, 0, 29*time.Minute) {
-		t.Fatalf("keystroke dropped at base+29m with signed ExpiresAt=base+90m; want REACHES — the lifetime must extend to the server max (30m)")
+	// old 5m default) and one at base+31m is DROPPED (the signed 45m cannot exceed the cap).
+	// (45m is beyond the 30m session cap yet within the F5 command-validity cap of 1h, so the
+	// signed take_control is accepted and CLAMPED — the behavior under test — rather than
+	// refused as an over-cap command.)
+	if !controlSessionLiveAt(t, 45*time.Minute, 0, 29*time.Minute) {
+		t.Fatalf("keystroke dropped at base+29m with signed ExpiresAt=base+45m; want REACHES — the lifetime must extend to the server max (30m)")
 	}
-	if controlSessionLiveAt(t, 90*time.Minute, 0, 31*time.Minute) {
+	if controlSessionLiveAt(t, 45*time.Minute, 0, 31*time.Minute) {
 		t.Fatalf("keystroke reached at base+31m; want DROPPED — a signed ExpiresAt beyond the server max must clamp to base+30m")
 	}
 

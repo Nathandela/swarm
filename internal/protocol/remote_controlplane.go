@@ -25,3 +25,17 @@ type PolicyDescriber interface {
 type DeviceRevoker interface {
 	RevokeDevice(deviceID string) (bool, error)
 }
+
+// DeviceRegistrar is the optional interface a DaemonAPI implements to report whether a
+// device is still registered (present in the pinned device registry, backed by
+// device.Registry.Get in production). controlGateOpen re-checks it on EVERY remote
+// keystroke against the LEASE-ESTABLISHING device recorded on the control session, so a
+// revoked device's live lease severs immediately — the per-keystroke, daemon-side defense
+// that holds even when a device_revoke was handled by a DIFFERENT Server sharing the same
+// backend registry (the production owner/remote split). It is consulted only when the
+// backend implements it (skipped when absent, exactly like KillSwitch), so a backend
+// without a registry is behavior-unchanged. This is the C1 [UNANIMOUS BLOCKER] fix's
+// per-keystroke half; handleDeviceRevoke adds the proactive-release half.
+type DeviceRegistrar interface {
+	DeviceRegistered(deviceID string) bool
+}
