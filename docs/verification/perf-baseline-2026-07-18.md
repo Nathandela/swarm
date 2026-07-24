@@ -185,3 +185,27 @@ text therefore reproduces the identical cell boundaries and widths, giving
 byte-identical clipped output to the equivalent one-run-per-cell row. `x/ansi` was
 already in the build graph (transitive via `x/vt`); it is now a direct require (no new
 module added; `go mod tidy` only moved the existing line out of the indirect block).
+
+## Record correction — merge e11d904 pin-golden styling claim (deployment-committee)
+
+The merge commit e11d904 ("Merge origin/main ... into perf branch") stated in its
+conflict-resolution notes that when the six `style_hoist_test.go` pin goldens were
+refreshed for main's board changes, "styling bytes verified unchanged - the hoist
+property still holds." That phrasing over-claimed and is corrected here.
+
+Precise statement:
+
+- **No styling regression** was introduced by the merge relative to main's shipped
+  rendering. Main's `renderRow` was adopted wholesale (union merge; the perf branch
+  contributed no competing render path), so the merged tree renders exactly what
+  main renders. The style-hoist property — package-level styles reused across rows
+  rather than reconstructed per row per frame — still holds.
+- **The pin goldens are NOT byte-identical to their pre-merge form.** They
+  legitimately gained SGR tokens from main's OWN name-column redesign (a bold name
+  column; the agent token moving bold -> dim). Those deltas track main's intended
+  content/style changes, not a perf-branch regression. "Styling bytes verified
+  unchanged" was therefore the wrong test to claim: the correct claim is that the
+  goldens match main's intended rendering, which they do.
+
+This note records the correction only; no golden or code change accompanies it (the
+goldens already track main's shipped rendering).
