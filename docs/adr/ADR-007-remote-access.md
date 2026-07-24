@@ -577,12 +577,29 @@ epoch. The revoked device's retained old-epoch `K_content` is now dead for all f
 
 **Why this is sufficient + safe in single-device v1.** The crypto layer is rotation-ready: a higher
 EpochID is always accepted by `GrantReceiver` (a rotated grant opens cleanly on a fresh phone), and a new
-EpochID is a new `(sender, epoch)` mailbox bucket, so the durable outbound seq files need no reset. The
-GATEWAY reads the epoch ContentKey once at startup and has no live-reload path, so the running gateway
-still holds the OLD key until it restarts -- but this is safe because revoke drops device Count to 0,
-which (a) fires C2a severance (no live control/journal/peek) and (b) makes `resolveGatewayParams` refuse
-to start (`want exactly one device`). So NO traffic is sealed under the old key while deviceless; the
-natural single-device flow is revoke(+rotate) -> re-pair -> restart the gateway, which then seals under
-the new epoch. A LIVE gateway epoch-reload (fsnotify/signal) is a Phase-B refinement, not required for
-correctness because the deviceless window carries no traffic. `a.pairing` gains a mutex (it was read
-lock-free by BeginPairing; revoke now mutates it).
+EpochID is a new `(sender, epoch)` mailbox bucket, so the durable outbound seq files need no reset.
+`a.pairing` gains a mutex (it was read lock-free by BeginPairing; revoke now mutates it), and the
+rotation is coherent + crash-atomic with pairing (see the round-3 corrections below).
+
+**Round-3 corrections (the rotation must compose with the running gateway + concurrent pairing).** A
+re-audit found the first cut of this decision was INCOMPLETE, because the gateway reads the epoch
+ContentKey once at startup and reconnects forever with no reload path: after revoke -> re-pair the still
+-running gateway resumed sealing the NEW session to the REVOKED device's mailbox under the OLD key (which
+the revoked device holds), so rotation alone did not close the confidentiality gap. Also, a concurrent
+`RevokeDevice` could rotate the epoch DURING an in-flight `BeginPairing`, enrolling the replacement under
+the stale (about-to-be-revoked) epoch. Corrected:
+- The GATEWAY now EXITS when its paired device is no longer registered: on each journal reconnect (the
+  sever->reconnect cycle a revoke triggers) it re-reads the device registry, and if its device is gone it
+  returns `ErrDeviceRevoked` and shuts down, tearing down every peek + lease. This fires during the
+  Count==0 deviceless window, BEFORE any re-pair, so the stale-key gateway is gone before a replacement is
+  served. "Restart after pairing" is no longer an unenforced assumption. (A live in-place epoch-reload
+  stays Phase B; exit-on-revoke is the v1 closure.)
+- Rotation is CRASH-ATOMIC with removal: `RevokeDevice` rotates the epoch BEFORE removing the device (so
+  "device removed => epoch rotated" holds across a crash), and a rotation fault aborts the revoke.
+- Pairing re-validates the epoch at the COMMIT point: `BeginPairing` aborts fail-closed if `a.pairing`'s
+  EpochID changed since the handshake's entry snapshot, so a replacement is never enrolled under a stale
+  epoch. This composes with rotate-before-remove: when the re-check does not fire, the to-be-revoked
+  device is still present, so `AddSole`'s single-device guard fails the enrollment closed anyway.
+Together these make revoke -> (rotate + gateway-exit + sever) -> re-pair (fresh epoch) -> restart gateway
+(new epoch) leak nothing to the revoked device. ME-1's relay-socket close remains a Phase-B defense-in
+-depth item; it is no longer load-bearing for this property now that the gateway exits on revoke.

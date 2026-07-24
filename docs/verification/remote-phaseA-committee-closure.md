@@ -84,3 +84,36 @@ C1-C4/C6-C8/F4/F5/F7 sound, but found real bugs the first cycle missed or introd
   loud error, not a silent misroute, so a shared-constants refactor is deferred as non-load-bearing.
 
 Standing gate after round 2: `go build/vet/test -race ./...` -- 0 failures. Re-audit round 3 follows.
+
+## Re-audit ROUND 3 (2026-07-24) — codex REJECT / sonnet REVISE / opus REVISE
+
+Round 3 confirmed the round-2 security core sound (all three reviewers: severGen race, journal
+remoteTier scoping, AddSole atomicity, sequential mailbox demux, canonical routing, old ContentKey
+genuinely dead, no orphaned durable state). It found that the epoch-rotation fix did not fully compose,
+plus durability/DoS edges. All addressed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| Epoch TOCTOU: concurrent revoke rotates mid-BeginPairing -> replacement enrolled under stale epoch (codex/sonnet/opus UNANIMOUS) | Re-validate the epoch at the commit point; abort fail-closed if a.pairing.EpochID changed since the handshake snapshot | `6310280` |
+| Revoke not crash-atomic: rotate-after-remove reopens the hole on a crash between (codex#3, opus#3) | Rotate BEFORE remove ("removed => rotated" invariant); a rotation fault aborts the revoke | `6310280` |
+| machineid.Save / Registry.persistLocked miss dir-fsync; grant.Delete no dir-sync + error swallowed (codex#3, opus#5, sonnet#3) | dir-fsync after rename in both; grant.Delete dir-syncs the unlink; RevokeDevice surfaces the delete error | `6310280` |
+| Crash between AddSole and grant.Save leaves an inert device holding the slot (codex#6, sonnet#3, opus#4) | Startup reconcile clears a registered device with no grant sidecar (machine.key-gated, fail-safe) | `6310280` |
+| **Gateway keeps the old epoch key + serves the revoked device after re-pair (codex#1 CRITICAL, opus#2)** | **Gateway EXITS when its device is no longer registered (re-check on reconnect -> ErrDeviceRevoked), during the deviceless window before re-pair -- the v1 closure of codex#1 in the composed system** | `a48887c` |
+| Mailbox gap silently discarded (closure overstated "detects a gap") (codex#5, sonnet#4) | drain surfaces a sticky Stale() flag + stops acking past a detected gap (full resync stays Phase B) | `58c91ef` |
+| Hostile pagination spins forever on non-advancing has_more (codex#7) | Both scan loops break (errStuckPage) when a page fails to advance the cursor | `58c91ef` |
+| drain not concurrency-safe (application-order under concurrent Observe/ReadReply) (sonnet#2) | drainMu serializes the whole sweep (crypto seq dedup already prevented drop/double-count) | `58c91ef` |
+| Idempotency compaction loses records after a post-rename failure (old handle = unlinked inode) (codex#4) | Keep the tmp handle open through the rename; swap s.f = tmp before dir-sync (never the ghost inode) | `94d9b62` |
+
+### Deferrals reaffirmed / re-scoped (round 3)
+- **Mailbox gap RESYNC** stays Phase B, but the phone now DETECTS + SURFACES a gap (Stale()) and stops
+  acking past it, rather than silently trusting a stale cache -- the round-2 wording is now true.
+- **ME-1 relay-socket close** remains Phase-B, and is no longer load-bearing for the revoke
+  confidentiality property now that the gateway EXITS on revoke (opus#2 noted it had become load-bearing;
+  the gateway-exit fix removes that dependency).
+- **A live in-place gateway epoch-reload** (fsnotify/signal) stays Phase B; exit-on-revoke is the v1
+  closure. Real-phone lifecycle glue (mobile app, gateway supervision/G3), multi-device/SenderKeyID
+  binding, admin tier -- unchanged Phase-B deferrals.
+- **opus#6** (take_control fail-closed emits OpDetach not a distinct retry code) -- cosmetic client
+  nicety, deferred.
+
+Standing gate after round 3: `go build/vet/test -race ./...` -- 0 failures. Re-audit round 4 follows.
