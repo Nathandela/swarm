@@ -26,14 +26,19 @@ for line in SPEC.read_text().splitlines():
         (withdrawn if m.group(1) else defined).add(m.group(2))
 defined -= withdrawn
 
-owned = {}
+owned, errors_early = {}, []
 for raw in MANIFEST.read_text().splitlines():
     if not raw.strip() or raw.startswith("#"):
         continue
-    rid, slice_ = raw.split("\t")
+    parts = raw.split("\t")
+    if len(parts) != 2:
+        errors_early.append(f"PARSE     manifest line is not '<id>\\t<slice>': {raw!r}")
+        continue
+    rid, slice_ = parts
     owned.setdefault(rid, []).append(slice_)
 
-errors  = [f"UNOWNED   {r}" for r in sorted(defined) if r not in owned]
+errors  = list(errors_early)
+errors += [f"UNOWNED   {r}" for r in sorted(defined) if r not in owned]
 errors += [f"MULTIOWN  {r} -> {v}" for r, v in sorted(owned.items()) if len(v) > 1]
 errors += [f"PHANTOM   {r} (in manifest, not defined in the spec)" for r in sorted(set(owned) - defined)]
 errors += [f"WITHDRAWN {r} (withdrawn in the spec but still owned)" for r in sorted(set(owned) & withdrawn)]
@@ -51,8 +56,9 @@ for raw in SLICES.read_text().splitlines():
     deps[name] = [] if d.strip() == "-" else [x.strip() for x in d.split(",")]
 
 for rid, owners in owned.items():
-    if owners[0] not in deps:
-        errors.append(f"BADSLICE  {rid} owned by unknown slice {owners[0]}")
+    for o in owners:
+        if o not in deps:
+            errors.append(f"BADSLICE  {rid} owned by unknown slice {o}")
 for name, ds in deps.items():
     for d in ds:
         if d not in deps:
