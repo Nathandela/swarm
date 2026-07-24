@@ -334,10 +334,19 @@ func Run(cfg Config) (reason Reason, err error) {
 	// be mid-fault, so its chrome cleanup is best-effort.
 	finish := func(r Reason) (Reason, error) {
 		_ = cfg.Session.Detach()
-		teardownAlt() // restore main buffer/cursor/pen first (R4.2.2), then chrome
+		// Order matters when BOTH chrome and alt are active (deployment-committee,
+		// codex HIGH via agents-tracker-rs8): tear chrome down FIRST, then exit alt.
+		// chromeCleanup's bottom-row CUP+clear is BUFFER-LOCAL, so run before the
+		// alt-exit it clears the abandoned alt buffer's hint row (harmless); run after
+		// it (the old order) it lands on the freshly restored PRIMARY buffer and erases
+		// the user's shell line. The DECSTBM reset chromeCleanup carries is GLOBAL
+		// state, effective from either side of the buffer switch. Keying on
+		// chromeEngaged (not cfg.Chrome) keeps a too-small (rows<=2) run byte-identical
+		// to Chrome:false. teardownAlt is a no-op when the snapshot was never alt.
 		if chromeEngaged {
 			writeAll(out, chromeCleanup(curRows))
 		}
+		teardownAlt()
 		restore()
 		return r, nil
 	}

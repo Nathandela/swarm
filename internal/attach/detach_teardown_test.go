@@ -73,6 +73,42 @@ func TestDetachTeardown_NonAltSnapshotEmitsNoExitAlt(t *testing.T) {
 	}
 }
 
+// (d) — combined alt-screen snapshot + chrome (deployment-committee, codex HIGH
+// via agents-tracker-rs8): the chrome bottom-row cleanup must be emitted BEFORE the
+// alt-exit. Run before the alt-exit, chromeCleanup's bottom-row clear lands on the
+// abandoned alt buffer (harmless); run after it (the old order) it lands on the
+// freshly restored PRIMARY buffer and erases the user's shell line. The DECSTBM
+// reset chromeCleanup carries is global state, effective from either buffer.
+func TestDetachTeardown_ChromeCleanupPrecedesAltExit(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession(mustAltSnap(t, "ALT-GRID"))
+	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, Name: "claude"})
+
+	// Wait until the reserved-row region is established over the alt snapshot.
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("\x1b[1;23r")) })
+	term.feed([]byte{DefaultDetachKey})
+
+	res := waitResult(t, ch)
+	if res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+
+	out := term.outBytes()
+	chromeReset := bytes.LastIndex(out, []byte("\x1b[r")) // chrome cleanup DECSTBM reset (distinct from the 1;23r set)
+	altExit := bytes.Index(out, []byte("\x1b[?1049l"))    // teardownAlt exit-alt
+	if chromeReset < 0 {
+		t.Fatalf("chrome+alt detach must emit the scroll-region reset; got %q", out)
+	}
+	if altExit < 0 {
+		t.Fatalf("an alt snapshot must emit exit-alt on detach; got %q", out)
+	}
+	if chromeReset > altExit {
+		t.Fatalf("chrome cleanup must land on the abandoned alt buffer BEFORE the alt-exit, "+
+			"else its bottom-row clear erases the restored primary buffer; chromeReset=%d altExit=%d out=%q",
+			chromeReset, altExit, out)
+	}
+}
+
 // (c) — the alt flag is tracked from the snapshot alone (the client never
 // parses the live stream), so the restore sequence is emitted on EVERY teardown
 // path, not just an explicit key-press detach: here the live stream closes
