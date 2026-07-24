@@ -373,7 +373,7 @@ S0 and fixes which form of (a) applies.
 | PB-STATE-1 | The core persists and restores everything resume-critical: device keys, pinned machine static + sign pub + routing id, epoch id + keys, **outbound send-seq**, **per-(sender,epoch) receive high-water**, **the grant receiver's `(highest epoch, grant_seq)` watermark** — which `internal/remote/crypto/epoch.go:155,167` explicitly requires be "persisted across restart (F3)", or "a relay could replay an old correctly-signed grant after a phone/app restart" — the wake-envelope replay coordinate chosen by PB-PUSH-3, the relay mailbox cursor, session/snapshot caches, pending idempotent ops and their outcomes, and per-bucket stale flags. | Enumerated in one persisted schema; a test asserts each field survives a restart, including a grant-replay-after-restart test. |
 | PB-STATE-2 | **Process-death acceptance test**: kill the core process mid-session and restart. Typing, launch and kill must still succeed, and a frame captured before the kill must still be rejected as a replay. | The RED form of this test must first demonstrate today's stale-drop brick. This single test is the guard for §4.3 in both directions (liveness and replay). |
 | PB-STATE-3 | Send-seq durability must not cost an fsync per keystroke: reserve-a-ceiling-and-burn-the-gap (block size per §6.0), mirroring `internal/remotegw/seqstore.go`. **Because this deliberately creates outbound seq gaps, the gap consequence must be specified** — see PB-STATE-8. | Decision recorded; a test asserts no seq is ever reused across a crash at any point in the reservation window, including a crash between reservation and use. |
-| PB-STATE-4 | Writes are crash-atomic; corruption fails **closed**. **Rollback needs a named trust anchor**: AEAD and atomic writes detect corruption, not rollback — a valid older blob sealed by the same Keystore key stays valid, and KeyMint rollback-resistance protects key blobs, not arbitrary app state. **The v1 anchor is chosen here, not left to the implementer** (v3's "or an explicitly narrowed threat" let an implementation decline rollback protection entirely): **authenticated remote reconciliation on reconnect**, with **a distinct authority per coordinate** — v3.2 named the gateway's inbound high-water as *the* authority for all three, but it describes only phone->machine sequences and carries no information about the other two, so an implementation could pass while rollback still reset them. The authorities are: (a) **phone send-seq** -> the gateway's durable inbound accepted high-water (PB-GW-1); (b) **phone per-bucket receive high-waters** -> the gateway's durable *outbound* sequence ceilings (PB-GW-8's outbox); (c) **grant watermark** -> the daemon's epoch/grant issuance coordinate. Reserved-but-unused seq blocks (PB-STATE-3) must be accounted for in (a). When an authority is unreachable the phone fails closed for mutating ops, marks the affected channels stale, and reseeds. | Test rollback **per coordinate** — send-seq, every receive bucket, and the grant watermark — not send-seq alone; assert a retained machine frame and an older correctly-signed grant are both refused after a rollback. The test may not rely on hidden state unavailable after a real rollback. |
+| PB-STATE-4 | Writes are crash-atomic; corruption fails **closed**. **Rollback needs a named trust anchor**: AEAD and atomic writes detect corruption, not rollback — a valid older blob sealed by the same Keystore key stays valid, and KeyMint rollback-resistance protects key blobs, not arbitrary app state. **The v1 anchor is chosen here, not left to the implementer** (v3's "or an explicitly narrowed threat" let an implementation decline rollback protection entirely): **authenticated remote reconciliation on reconnect**, with **a distinct authority per coordinate** — v3.2 named the gateway's inbound high-water as *the* authority for all three, but it describes only phone->machine sequences and carries no information about the other two, so an implementation could pass while rollback still reset them. The authorities are: (a) **phone send-seq** -> the gateway's durable inbound accepted high-water (PB-GW-1); (b) **phone per-bucket receive high-waters** -> the gateway's durable *outbound* sequence ceilings, which are **per bucket**: the journal/terminal bucket's ceiling comes from PB-GW-8's outbox, while the command-reply bucket's authority is the already-durable `outbound-reply.seq` (`cmd/swarm-remote/config.go:95`) — not the journal outbox; (c) **grant watermark** -> the daemon's epoch/grant issuance coordinate. Reserved-but-unused seq blocks (PB-STATE-3) must be accounted for in (a). When an authority is unreachable the phone fails closed for mutating ops, marks the affected channels stale, and reseeds. | Test rollback **per coordinate** — send-seq, every receive bucket, and the grant watermark — not send-seq alone; assert a retained machine frame and an older correctly-signed grant are both refused after a rollback. The test may not rely on hidden state unavailable after a real rollback. |
 | PB-STATE-7 | **The receive path commits atomically.** Today the high-water advances inside `Accept` (`internal/remote/crypto/envelope.go:254`), caches mutate afterwards (`internal/phonecore/snapshot.go:201`), and the cursor/ack come later still — so a crash between them either loses a frame forever (stale-dropped on redelivery, never applied) or, if reordered, permits replay. `{high-water, relay cursor, decoded cache mutation, stale flags}` must commit as one transaction **before** the ack, with the ack idempotent on retry. | Crash injection at every boundary in the receive sequence; no frame is both acked and unapplied, and none is applied twice. |
 | PB-STATE-8 | **Phone->machine gap semantics.** PB-STATE-3 burns seqs, and the gateway currently *silently drops* input/resize frames whose `Gap` bit is set (`internal/remotegw/command_loop.go:208-216`) while ignoring `Gap` on commands — so the first post-restart keystroke can vanish with no signal. The invariant must be stated and tested: a burned gap is absorbed by the re-lease command frame, never by an input/resize frame. High-level operation gaps must trigger durable outcome reconciliation before later state is trusted; live-input gaps may be discarded, but only explicitly. | Test asserts the first post-restart input frame carries no `Gap` bit, and that an operation gap forces reconciliation. |
 | PB-STATE-9 | **Which tier seals which state** is specified, not left open: state the wake path must read while locked (push token, dedup coordinate) is sealed under the wake tier; send-seq, receive high-waters and decrypted caches are sealed under the content tier (PB-KEY-2). One undifferentiated "sealed" would let the implementer pick whichever tier passes. | Test asserts the locked-device process can read only the wake-tier state. |
@@ -883,3 +883,49 @@ So Phase B has two distinct end states, and the final audit must name which was 
 
 Declaring "done" without PB-E2E-5 is not permitted, and neither is quietly reclassifying
 PB-E2E-5 as a §10 limit: it is a deferred gate with a runbook, not an accepted gap.
+
+---
+
+## 14. Committee convergence on the requirements (rounds 1-5)
+
+The goal gated implementation on the committee agreeing the requirements are well-defined with
+complete coverage. That gate is met at v3.5.1.
+
+| Round | codex | opus | fable |
+|---|---|---|---|
+| 1 | REVISE | REVISE | REVISE |
+| 2 | REVISE | REVISE | REVISE |
+| 3 | REVISE | REVISE | REVISE |
+| 4 | REVISE | REVISE | REVISE |
+| 5 | REVISE (one blocking edge, now fixed) | **requirements-complete** | **nothing blocking; recommends converging on v3.5** |
+
+**Why this is convergence rather than fatigue.** codex's round-5 objection was a single missing
+DAG edge that left the slice owning the live-tail requirements unreachable from the exit
+demonstration. It is fixed in v3.4, and both other reviewers then re-derived the DAG
+independently and confirmed the fix — fable running six negative controls against the checker
+(deleted row, duplicate owner, orphaned slice, injected cycle, phantom id, withdrawn-but-owned;
+all fire, pristine passes) and opus injecting a cycle of its own. codex has not re-reviewed
+v3.5, which is stated here rather than glossed; it gets its say in the final implementation
+audit, which the goal also requires.
+
+**What the five rounds bought.** Each round found gaps that were fatal, not cosmetic: a phone
+that stops typing forever after one Android process kill; a QR with no encoder, then a QR with
+no destination; a keystroke path that could not be low-latency on either hop; an unrecoverable
+epoch-grant loss; a push transport with no producer; a supervisor that crash-loops after every
+revoke; a live tail whose budget could not close; a journal repair channel that is a no-op
+against the shipped phone cache; and two drain legs that bust the op quota mid-demonstration.
+
+It also caught four errors of mine: an overstated security claim (retracted), a bounded-age
+check that would have rejected every legitimate keystroke, a "never burn a seq" rule that would
+have caused silent data loss, and a rollback anchor that named authorities no frame can carry —
+which would have left the phone permanently fail-closed.
+
+**Structural outcome.** Two classes of error recurred until they were made mechanical rather
+than reviewed: requirement ownership (three rounds running) and slice reachability. Both are
+now enforced by `scripts/check-phaseb-manifest.py` over
+`remote-phaseB-manifest.tsv` + `remote-phaseB-slices.tsv`, verified by negative control.
+
+**Carried forward as non-blocking hygiene** (recorded, not gating): citation drift in body
+prose that §12 already corrects; the checker not yet wired into CI (S20); §11's readable table
+not cross-checked against the authoritative manifest; and the S19<-S4 edge being conservative
+(a Go E2E can run the gateway in-process).
