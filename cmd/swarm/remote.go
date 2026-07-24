@@ -298,6 +298,10 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// The independent second gate (ADR D3): the operator verifies the SAS emoji against
 	// the phone's screen and allows or denies at the desktop.
 	fmt.Fprintf(stdout, "Device: %s\n", pending.DeviceName)
+	// sonnet#4: echo the capability tier being granted so the operator sees the authority
+	// they are about to hand this device (default "full") before allowing -- the SAS proves
+	// WHICH phone, this line proves WHAT it may do.
+	fmt.Fprintf(stdout, "Capability to grant: %s\n", *capability)
 	fmt.Fprintf(stdout, "Verify these emoji match your phone: %s\n", strings.Join(pending.SAS, " "))
 	fmt.Fprint(stdout, "Allow this device? [y/N]: ")
 

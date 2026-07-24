@@ -13,6 +13,12 @@ import (
 // ForwardCommand; it never inspects or alters the device signature -- the daemon
 // verifies it (R-POL.9). Fail-closed: a malformed/wrong-key envelope or a non-command
 // plaintext returns an error and no command.
+//
+// UNGUARDED, TEST-ONLY (sonnet#6): this opener does NOT pass the envelope through the
+// per-(sender,epoch) MailboxReceiver, so it offers NO replay/reorder protection. It has
+// no production caller and MUST NOT gain one -- the live command-IN path is
+// OpenRemoteCommandGuarded. Retained only because cross-package test harnesses seal a
+// command and open it back to assert content; do not wire it into a gateway.
 func OpenCommandEnvelope(key crypto.ContentKey, raw []byte) (protocol.DeviceCommandAuth, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
@@ -32,6 +38,12 @@ func OpenCommandEnvelope(key crypto.ContentKey, raw []byte) (protocol.DeviceComm
 // OpenRemoteCommand opens a command envelope to the full RemoteCommand wrapper (the
 // signed tuple plus, for a launch, the LaunchReq spec). It is backward-compatible
 // with a bare-auth envelope (Launch is nil then). Fail-closed like OpenCommandEnvelope.
+//
+// UNGUARDED, TEST-ONLY (sonnet#6): like OpenCommandEnvelope it bypasses the
+// MailboxReceiver seq guard, so it has NO replay/reorder protection and NO production
+// caller. Production MUST use OpenRemoteCommandGuarded. Kept only for the cross-package
+// seal/open round-trip tests (including the ones that contrast it AGAINST the guarded
+// path to prove the guard rejects a replay); do not add a production caller.
 func OpenRemoteCommand(key crypto.ContentKey, raw []byte) (protocol.RemoteCommand, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {

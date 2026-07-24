@@ -228,6 +228,13 @@ func TestRemotePair_ShowsSASAndConfirms(t *testing.T) {
 		t.Errorf("pair output missing device name %q; got:\n%s", host.deviceName, out)
 	}
 
+	// sonnet#4: the confirm surface echoes the capability tier being granted, so the
+	// operator sees the authority they are about to grant (default "full") BEFORE allowing,
+	// not just the SAS/device name.
+	if !strings.Contains(out, "Capability to grant: full") {
+		t.Errorf("pair confirm output missing the granted-capability echo; got:\n%s", out)
+	}
+
 	// The confirm was SENT and approving: the host observed allow=true over the wire.
 	select {
 	case allow := <-host.confirmed:

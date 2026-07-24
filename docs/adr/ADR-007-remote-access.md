@@ -542,10 +542,17 @@ device; there is no admin/owner distinction among paired devices. For single-dev
 model (admin vs standard, who-may-revoke-whom) is required and gets its own ADR. Recorded here as a
 deliberate v1 scope decision, not an oversight.
 
-**Not resolved here — ME-1 relay-socket close on revoke.** C1 + C2a already sever a revoked (or
-kill-switched) device's lease + peek + journal at the DAEMON choke point immediately, and the daemon
-fail-closes every subsequent op from an unregistered device, so the injection/read hole is closed and
-tested. The relay-side live-socket close (ME-1, implemented at the relay but unreached from the
-daemon path) is defense-in-depth transport hygiene requiring cross-process revoke propagation
-(daemon -> gateway relay client). Its disposition (wire it atop C5's new gateway relay-control
-capability, or defer with justification) is decided after C5 lands; tracked in the committee evidence.
+**Decision ME-1 — relay-socket close on revoke is DEFERRED to a later phase (formal hardening
+ruling).** C1 + C2a already sever a revoked (or kill-switched) device's lease + peek + journal at the
+DAEMON choke point immediately, and the daemon fail-closes every subsequent op from an unregistered
+device, so the injection/read hole -- the unanimous C1 blocker -- is CLOSED and tested. The relay-side
+live-socket close (ME-1, fully implemented at the relay, `server.go` handleDeviceRevoke, but unreached
+from the daemon path) is defense-in-depth TRANSPORT hygiene: it would free the revoked device's relay
+socket and stop it holding a connection, but the daemon already rejects its every op and the gateway
+stops sealing new frames to its mailbox (C2a severs the journal/peek source), so its marginal security
+over the daemon severance is near-zero. Wiring it needs a cross-process revoke signal (daemon ->
+gateway) plus a gateway registry-watch loop -- disproportionate infrastructure for v1. The mechanism
+is now cheap to add when justified: the gateway holds an authenticated relay client (C5's
+`deliverEpochGrant`), so on observing its paired device removed it would call relay `DeviceRevoke(
+RoutingID(rec.RelayAuthPub))` and shut down. Recorded as a Phase-B hardening item, not a v1 blocker,
+because the required C1 deliverable (daemon-side severance) is complete.
