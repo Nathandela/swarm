@@ -73,6 +73,11 @@ type coreAPI struct {
 	ksMu        sync.Mutex
 	ksPersisted *bool
 
+	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
+	// it so the owner controller and the future remote peek can both observe one
+	// single-consumer shim session over a SINGLE upstream. Wired at construction.
+	tap *tapManager
+
 	events   chan persist.Meta
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -180,6 +185,15 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 		events:       make(chan persist.Meta, eventsBuffer),
 		stop:         make(chan struct{}),
 	}
+	// The tap's dial seam is exactly today's Attach path (DialSession + newShimStream);
+	// the tap tees that one upstream to N subscribers.
+	a.tap = newTapManager(func(id string) (protocol.SessionStream, error) {
+		conn, err := a.core.DialSession(id)
+		if err != nil {
+			return nil, err
+		}
+		return newShimStream(conn)
+	})
 	a.wg.Add(1)
 	go a.watch()
 	return a
@@ -476,13 +490,12 @@ func validateResumeSource(src, agentType, endpointID string, getSource func(loca
 	return local, m, nil
 }
 
-// Attach opens a real SessionStream over the daemon->shim connection.
+// Attach opens a SessionStream for id, multiplexed through the shared per-session
+// tap (A7 F1). The first attach opens the one upstream shim connection; concurrent
+// attaches (the owner controller and the future remote peek) SHARE it. The owner
+// tier attaches readWrite so its Input/Resize drive the session exactly as before.
 func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
-	conn, err := a.core.DialSession(id)
-	if err != nil {
-		return nil, err
-	}
-	return newShimStream(conn)
+	return a.tap.subscribe(id, readWrite)
 }
 
 // emitStatus routes an engine-derived status change through both halves of Epic
