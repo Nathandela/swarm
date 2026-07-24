@@ -567,6 +567,16 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 	defer s.wg.Done()
 	defer close(done)
 
+	// A REMOTE-tier controller (the phone, via take_control) gets OpLease + input acks
+	// ONLY: its terminal view is the sealed daemon-rendered snapshot stream (Slices
+	// C/D/E/F2), so raw output is suppressed — SnapshotLen 0, no TSnapshot chunks, no
+	// live TDataOut. Frames are STILL drained below so end-of-session and lease
+	// lifecycle are unchanged. The LOCAL (owner) tier path is byte-identical (A7/F3).
+	suppress := s.remoteTier
+	snapLen := len(snap)
+	if suppress {
+		snapLen = 0
+	}
 	// Lease grant carrying the snapshot's total length (for chunk reassembly),
 	// then the snapshot chunk frames, BEFORE any live frame (S10/F2).
 	body, err := EncodeControl(Control{
@@ -574,7 +584,7 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 		EndpointID:  cc.endpointID,
 		SessionID:   NamespacedID(cc.endpointID, local),
 		Generation:  gen,
-		SnapshotLen: len(snap),
+		SnapshotLen: snapLen,
 	})
 	if err != nil {
 		s.evictPump(cc, local)
@@ -590,19 +600,21 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 		s.evictPump(cc, local)
 		return
 	}
-	for off := 0; off < len(snap); off += snapshotChunkSize {
-		select {
-		case <-stop:
-			return // supersede/detach during the snapshot send: stop promptly, don't evict
-		default:
-		}
-		end := off + snapshotChunkSize
-		if end > len(snap) {
-			end = len(snap)
-		}
-		if werr := cc.writeFrameBy(wire.TSnapshot, snap[off:end], deadline); werr != nil {
-			s.evictPump(cc, local)
-			return
+	if !suppress {
+		for off := 0; off < len(snap); off += snapshotChunkSize {
+			select {
+			case <-stop:
+				return // supersede/detach during the snapshot send: stop promptly, don't evict
+			default:
+			}
+			end := off + snapshotChunkSize
+			if end > len(snap) {
+				end = len(snap)
+			}
+			if werr := cc.writeFrameBy(wire.TSnapshot, snap[off:end], deadline); werr != nil {
+				s.evictPump(cc, local)
+				return
+			}
 		}
 	}
 
@@ -615,6 +627,9 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 			if !ok {
 				s.releaseFromPump(cc, local, true)
 				return
+			}
+			if suppress {
+				continue // remote tier: drain the frame (end detection intact) but send no raw output
 			}
 			if werr := cc.writeFrameDeadline(wire.TDataOut, data); werr != nil {
 				s.evictPump(cc, local) // wedged/gone controller: evict within a bound (F3)
