@@ -138,7 +138,7 @@ func SnapshotOnly(conn net.Conn, caps shimwire.Caps) ([]byte, error) {
 		return nil, err
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(shimAttachTimeout))
-	defer conn.SetReadDeadline(time.Time{})
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	return readSnapshot(conn, caps.SnapshotChunking)
 }
 
