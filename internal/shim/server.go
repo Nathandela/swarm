@@ -31,11 +31,17 @@ const (
 	// reaches the emulator (panic/OOM guard).
 	resizeMin = 1
 	resizeMax = 1000
+	// snapshotChunkMax is the largest snapshot slice carried in one TSnapshot frame
+	// on the chunked shim->daemon hop (mirrors the daemon->client snapshotChunkSize):
+	// a payload of MaxFrame-1 is the biggest wire.WriteFrame accepts.
+	snapshotChunkMax = wire.MaxFrame - 1
 )
 
 // server owns the socket, the emulator/transcript pipeline, and the PTY master
-// for one session. Exactly one client connection is served at a time (v1 shim
-// pin).
+// for one session. Connections are served CONCURRENTLY (one goroutine each), so a
+// controller's held attach never blocks a fresh signal/hello connection (R1.3.2);
+// the hub still couples the pipeline to at most one live subscriber (S10), so a
+// later attach supersedes an earlier one.
 type server struct {
 	hub          *hub
 	ptmx         *os.File
@@ -56,8 +62,14 @@ type server struct {
 	escStop    chan struct{}
 	escDone    chan struct{}
 
-	mu      sync.Mutex
-	curConn net.Conn // the connection currently being served, or nil
+	// mu guards the connection set + closing flag; handlers tracks every in-flight
+	// serveConn so shutdown can close each connection AND join its handler (no leak,
+	// R1.3.2c). Once closing is set (by shutdown) acceptLoop refuses to serve any
+	// newly-accepted connection, so no handler is ever added after the join begins.
+	mu       sync.Mutex
+	conns    map[net.Conn]struct{}
+	closing  bool
+	handlers sync.WaitGroup
 }
 
 func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcript.Writer, ptmx *os.File, pgid int, grace time.Duration, m *Metrics) *server {
@@ -71,6 +83,7 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 		listener:     l,
 		escStop:      make(chan struct{}),
 		escDone:      make(chan struct{}),
+		conns:        make(map[net.Conn]struct{}),
 	}
 }
 
@@ -114,25 +127,40 @@ func (s *server) drain() {
 	}
 }
 
-// acceptLoop serves connections one at a time until the listener is closed.
+// acceptLoop serves connections concurrently until the listener is closed: each
+// accepted connection gets its own serveConn goroutine, tracked so shutdown can
+// close it and join its handler. A connection accepted after shutdown began
+// (closing set) is closed immediately and never served (its handler is not
+// tracked), so the shutdown join can never race a late Add.
 func (s *server) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			return
 		}
-		s.serveConn(conn)
+		s.mu.Lock()
+		if s.closing {
+			s.mu.Unlock()
+			conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
+		s.handlers.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.handlers.Done()
+			s.serveConn(conn)
+		}()
 	}
 }
 
 // serveConn drives one client connection to completion: it reads frames and
-// dispatches them, tearing down any active subscription when the connection
-// ends.
+// dispatches them, tearing down any active subscription when the connection ends.
+// All writes to the connection — this loop's hello replies and the attach writer
+// goroutine's snapshot/frames — go through one connWriter, so concurrent writers
+// on the same connection can never interleave a frame (R1.3.2b/e).
 func (s *server) serveConn(conn net.Conn) {
-	s.mu.Lock()
-	s.curConn = conn
-	s.mu.Unlock()
-
+	cw := &connWriter{conn: conn}
 	var sub *subscriber
 	var helloed bool // gate: no op is honored until a hello frame arrives
 	defer func() {
@@ -141,7 +169,7 @@ func (s *server) serveConn(conn net.Conn) {
 			<-sub.done
 		}
 		s.mu.Lock()
-		s.curConn = nil
+		delete(s.conns, conn)
 		s.mu.Unlock()
 		conn.Close()
 	}()
@@ -159,7 +187,13 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if ctrl.Type == shimwire.TypeHello {
 				helloed = true
-				writeControl(conn, shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version})
+				// Record whether the daemon advertised snapshot chunking (per-connection),
+				// and advertise the shim's own support in the reply. Both are OPTIONAL hello
+				// fields; a peer that sets neither degrades to the single-frame path (G-D).
+				// cw.chunkSnapshot is written and read only in this read-loop goroutine
+				// (hub.attach reads it), so it never races the attach writer goroutine.
+				cw.chunkSnapshot = ctrl.SnapshotChunking
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -174,7 +208,9 @@ func (s *server) serveConn(conn net.Conn) {
 					s.hub.detach(sub)
 					<-sub.done
 				}
-				sub = s.hub.attach(conn)
+				sub = s.hub.attach(cw)
+			case shimwire.TypeSnapshotReq:
+				s.hub.snapshotOnly(cw)
 			case shimwire.TypeResize:
 				s.resize(ctrl.Cols, ctrl.Rows)
 			case shimwire.TypeSignal:
@@ -252,10 +288,14 @@ func (s *server) finishEscalation() {
 	_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 }
 
-// shutdown flushes buffered DataOut to a connected client, emits the exit_report
-// control after it, then tears down the socket. It is called once, after the
-// agent has exited and the side-files are written.
+// shutdown flushes buffered DataOut to the attached client, emits the exit_report
+// control after it, then tears down the socket and EVERY connection. It is called
+// once, after the agent has exited and the side-files are written. It closes every
+// tracked connection and joins every serveConn handler, so no connection or
+// goroutine is left behind (R1.3.2c).
 func (s *server) shutdown(rep shimwire.Control) {
+	// 1. Publish the exit_report to the attached subscriber (if any) and let its
+	//    writer drain + emit it before we tear the connections down.
 	s.hub.mu.Lock()
 	s.hub.shutdown = true
 	s.hub.exitReport = rep
@@ -271,22 +311,33 @@ func (s *server) shutdown(rep shimwire.Control) {
 		}
 	}
 
+	// 2. Stop accepting, refuse any newly-accepted connection, and snapshot the set
+	//    of live connections to close.
+	s.mu.Lock()
+	s.closing = true
+	conns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+
 	s.listener.Close()
 	// net.UnixListener unlinks the socket on Close; remove it explicitly too so
 	// the session dir is left clean even if that ever changes (idempotent).
 	if s.socketPath != "" {
 		_ = os.Remove(s.socketPath)
 	}
-	s.mu.Lock()
-	conn := s.curConn
-	s.mu.Unlock()
-	if conn != nil {
-		conn.Close() // unblock a reader still parked on this connection
+
+	// 3. Close every connection to unblock its parked reader, then join every
+	//    handler so Run never returns with a serveConn still running.
+	for _, c := range conns {
+		c.Close()
 	}
+	s.handlers.Wait()
 }
 
 // hub couples the emulator/transcript pipeline to at most one live subscriber.
-// Its mutex is the single serialization point: the drain loop feeds + publishes
+// Its mutex is the single serialization point: the drain loop publishes + feeds
 // under it, and attach snapshots + subscribes under it, so the snapshot/stream
 // boundary is gapless and overlap-free (S10).
 type hub struct {
@@ -302,12 +353,23 @@ type hub struct {
 
 // feed advances the grid + transcript by one PTY chunk and publishes it to the
 // subscriber, dropping (and counting) the chunk if the bounded queue is full.
-// Feeding under mu keeps the grid state and the published byte stream in lock
-// step with attach's snapshot point.
+// The subscriber publish and transcript hand-off happen BEFORE the emulator
+// parse (R2.2.1/2.2): an attached client sees each raw chunk as soon as it
+// arrives rather than waiting behind emu.Feed's parse cost, which the S9
+// non-blocking drop-on-full send never depended on in the first place. This
+// does not change per-chunk throughput — the drain loop still holds h.mu for
+// the full duration of emu.Feed, so the ~3.7MB/s parse cap (R1.4.1(a))
+// remains the pipeline's aggregate bottleneck (R2.2.5 explicitly does not
+// decouple emu.Feed to its own goroutine); the reorder only removes parse
+// latency from what publish waits on. Feeding under mu keeps the grid state
+// and the published byte stream in lock step with attach's snapshot point:
+// attach's snapshot+install and feed's publish+parse each run under one
+// single h.mu hold, so per-chunk snapshot-inclusion XOR frame-delivery is
+// preserved regardless of which half of feed the boundary falls in (S10).
+// defer h.mu.Unlock() so a parser panic in emu.Feed cannot leak the hub mutex.
 func (h *hub) feed(data []byte) {
 	h.mu.Lock()
-	h.emu.Feed(data)
-	_, _ = h.tr.Write(data)
+	defer h.mu.Unlock()
 	if h.sub != nil {
 		select {
 		case h.sub.queue <- data:
@@ -315,41 +377,98 @@ func (h *hub) feed(data []byte) {
 			h.metrics.FramesDropped.Add(1)
 		}
 	}
-	h.mu.Unlock()
+	// data is a fresh per-read allocation (drain(), server.go) that no one
+	// mutates: the subscriber path only ever reads it (wire.WriteFrame copies
+	// into its own frame buffer before writing) and emu.Feed's parser also only
+	// reads. WriteOwned's no-copy handoff is therefore safe here (R3.3.3).
+	_, _ = h.tr.WriteOwned(data)
+	h.emu.Feed(data)
 }
 
 // attach atomically snapshots the grid and installs a fresh subscriber, then
-// spawns the connection's writer goroutine: it sends exactly that snapshot
-// first, then streams queued live frames, and emits the exit_report on a
-// shutdown-triggered close.
-func (h *hub) attach(conn net.Conn) *subscriber {
+// spawns the connection's writer goroutine: it sends exactly that snapshot first,
+// then streams queued live frames, and emits the exit_report on a shutdown-
+// triggered close.
+//
+// It tears down any EXISTING subscriber under h.mu before installing the new one:
+// the superseded subscriber's queue is closed so its writer exits (rather than
+// blocking forever on a never-closed queue) and the superseded client stops
+// receiving frames (R1.3.3). feed publishes under the same h.mu, so it never sends
+// to the closed queue (no send-on-closed race). If the hub is already shutting
+// down, the new subscriber is NOT installed as h.sub: its writer sends the
+// snapshot then the exit_report and exits, so a late attach still sees a final
+// screen without being left waiting on the drain.
+func (h *hub) attach(cw *connWriter) *subscriber {
+	// Read the per-connection chunking flag in the caller's (serveConn read-loop)
+	// goroutine and hand a copy to the writer goroutine, so the writer never races a
+	// later hello that might rewrite cw.chunkSnapshot.
+	chunk := cw.chunkSnapshot
 	h.mu.Lock()
+	old := h.sub
+	if old != nil {
+		old.closeQueue() // supersede: terminate the prior writer, free h.sub
+		h.sub = nil
+	}
 	snap, _ := h.emu.Snapshot()
-	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}
-	h.sub = sub
+	shuttingDown := h.shutdown
+	rep := h.exitReport
+	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{}), conn: cw.conn}
+	if !shuttingDown {
+		h.sub = sub
+	}
 	h.mu.Unlock()
+	// An UNCOORDINATED supersede (a second connection attaching while the prior
+	// subscriber's connection is still open) also closes the superseded CONNECTION,
+	// outside h.mu: its peer sees prompt EOF instead of a silently-frozen stream,
+	// and a writer wedged mid-Write on that socket is unblocked (R1.3.3 hardening,
+	// C3 committee). The daemon-coordinated supersede already closed the old
+	// connection before attaching anew, making this a no-op there; serveConn's own
+	// deferred Close makes the double-close harmless.
+	if old != nil && old.conn != nil {
+		_ = old.conn.Close()
+	}
 
 	go func() {
 		defer close(sub.done)
-		if err := wire.WriteFrame(conn, wire.TSnapshot, snap); err != nil {
+		if err := cw.sendSnapshot(snap, chunk); err != nil {
+			h.drainQueue(sub)
+			return
+		}
+		if shuttingDown {
+			cw.writeControl(rep) // agent already gone: snapshot then exit_report
 			h.drainQueue(sub)
 			return
 		}
 		for data := range sub.queue {
-			if err := wire.WriteFrame(conn, wire.TDataOut, data); err != nil {
+			if err := cw.writeFrame(wire.TDataOut, data); err != nil {
 				h.drainQueue(sub)
 				break
 			}
 		}
 		h.mu.Lock()
-		shuttingDown := h.shutdown
-		rep := h.exitReport
+		shuttingDownNow := h.shutdown
+		repNow := h.exitReport
 		h.mu.Unlock()
-		if shuttingDown {
-			writeControl(conn, rep)
+		if shuttingDownNow {
+			cw.writeControl(repNow)
 		}
 	}()
 	return sub
+}
+
+// snapshotOnly answers a TypeSnapshotReq: it snapshots the grid under h.mu and
+// writes it to the requesting connection with the SAME encoding an attach uses
+// (sendSnapshot: chunked iff this connection negotiated chunking) — and never
+// touches h.sub, so it cannot supersede an attached controller no matter how it
+// races an attach (the C3 tap-steal fix). Runs synchronously in the caller's
+// serveConn read loop; the per-connection connWriter serializes its frames
+// against any writer on the same connection.
+func (h *hub) snapshotOnly(cw *connWriter) {
+	chunk := cw.chunkSnapshot
+	h.mu.Lock()
+	snap, _ := h.emu.Snapshot()
+	h.mu.Unlock()
+	_ = cw.sendSnapshot(snap, chunk)
 }
 
 // drainQueue empties a subscriber's queue after its writer has stopped writing,
@@ -372,11 +491,14 @@ func (h *hub) detach(sub *subscriber) {
 	sub.closeQueue()
 }
 
-// subscriber is one attached client's outbound side: a bounded live-frame queue
-// and a done signal for its writer goroutine.
+// subscriber is one attached client's outbound side: a bounded live-frame queue,
+// a done signal for its writer goroutine, and the connection it writes to (so an
+// uncoordinated supersede can close the superseded peer's connection — see
+// hub.attach).
 type subscriber struct {
 	queue     chan []byte
 	done      chan struct{}
+	conn      net.Conn
 	closeOnce sync.Once
 }
 
@@ -384,14 +506,68 @@ func (s *subscriber) closeQueue() {
 	s.closeOnce.Do(func() { close(s.queue) })
 }
 
+// connWriter serializes every frame write to one client connection under a mutex,
+// so the reader loop's hello replies and the attach writer goroutine's snapshot/
+// frames can run concurrently without ever interleaving a frame on the wire
+// (R1.3.2b/e).
+//
+// chunkSnapshot records whether THIS connection's peer (the daemon) advertised
+// snapshot chunking in its hello: it is set once by serveConn from the hello frame
+// and read once by hub.attach (both in the connection's read-loop goroutine, so it
+// never races the attach writer goroutine, which uses a captured copy). It defaults
+// false, so a connection whose peer did not advertise chunking — an old daemon, or
+// any direct connWriter{} construction — uses today's single-frame snapshot path.
+type connWriter struct {
+	mu            sync.Mutex
+	conn          net.Conn
+	chunkSnapshot bool
+}
+
+func (w *connWriter) writeFrame(typ wire.Type, payload []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return wire.WriteFrame(w.conn, typ, payload)
+}
+
 // writeControl encodes and sends a shimwire.Control as a TControl frame,
 // best-effort (a broken connection is handled by the reader path).
-func writeControl(conn net.Conn, ctrl shimwire.Control) {
+func (w *connWriter) writeControl(ctrl shimwire.Control) {
 	b, err := shimwire.Encode(ctrl)
 	if err != nil {
 		return
 	}
-	_ = wire.WriteFrame(conn, wire.TControl, b)
+	_ = w.writeFrame(wire.TControl, b)
+}
+
+// sendSnapshot writes the attach snapshot to the connection, first (S10 — before any
+// live TDataOut the caller streams afterward). When the peer negotiated chunking it
+// emits a snapshot_info preamble declaring the total length up front, then the
+// snapshot as <= snapshotChunkMax TSnapshot chunk frames (an empty snapshot is the
+// preamble alone, so the reader completes without waiting for a chunk). Otherwise it
+// emits today's single TSnapshot frame — which wire.WriteFrame rejects past MaxFrame-1,
+// so an oversized grid still fails for a non-chunking (old-daemon) peer, no worse than
+// today (G-D). It returns the first write error so the caller can drain the queue.
+func (w *connWriter) sendSnapshot(snap []byte, chunk bool) error {
+	if !chunk {
+		return w.writeFrame(wire.TSnapshot, snap)
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSnapshotInfo, SnapshotLen: len(snap)})
+	if err != nil {
+		return err
+	}
+	if err := w.writeFrame(wire.TControl, body); err != nil {
+		return err
+	}
+	for off := 0; off < len(snap); off += snapshotChunkMax {
+		end := off + snapshotChunkMax
+		if end > len(snap) {
+			end = len(snap)
+		}
+		if err := w.writeFrame(wire.TSnapshot, snap[off:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // exitReport builds the exit_report control from the agent's exit outcome.

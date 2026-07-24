@@ -110,21 +110,14 @@ func TestCounterSequencesDriveEngineAcceptance(t *testing.T) {
 	}
 }
 
-// The legacy SWARM_HOOK_SEQ env fallback still composes a callback when no counter
-// file is injected, so the frozen FromEnv contract holds; a counter file, when
-// present, takes precedence.
-func TestSequenceFileTakesPrecedenceOverEnvInt(t *testing.T) {
-	seqFile := filepath.Join(t.TempDir(), "hook.seq")
-	env := map[string]string{
-		EnvToken:        "tok",
-		EnvSequence:     "99", // legacy fixed value; must be ignored when the file is present
-		EnvSequenceFile: seqFile,
-	}
-	cb, err := FromEnv(func(k string) string { return env[k] }, "e", nil)
-	if err != nil {
-		t.Fatalf("FromEnv: %v", err)
-	}
-	if cb.Sequence != 1 {
-		t.Fatalf("first counter-file sequence = %d, want 1 (env int 99 must not win)", cb.Sequence)
+// R3.4.3: the legacy SWARM_HOOK_SEQ env-int fallback is removed (committee-
+// verified safe: production injects only the counter file, no released build
+// used the legacy constant). A missing counter file is now an error even when a
+// legacy-shaped sequence value is present in the environment - there is no
+// second source to fall back to.
+func TestSequenceFromEnv_MissingSequenceFileIsError(t *testing.T) {
+	env := map[string]string{EnvToken: "tok", "SWARM_HOOK_SEQ": "99"}
+	if _, err := FromEnv(func(k string) string { return env[k] }, "e", nil); err == nil {
+		t.Fatalf("FromEnv with no EnvSequenceFile: got nil error, want failure (legacy fallback removed)")
 	}
 }

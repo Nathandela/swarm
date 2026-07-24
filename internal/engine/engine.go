@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -96,6 +97,17 @@ type Config struct {
 	PollInterval time.Duration
 	// Emit is called synchronously whenever a session's status changes.
 	Emit func(id string, s status.Status)
+	// Metrics holds test-observable counters. Optional; defaults to a fresh
+	// *Metrics when nil.
+	Metrics *Metrics
+}
+
+// Metrics holds test-observable counters. All fields are safe for concurrent
+// use.
+type Metrics struct {
+	// SamplerPanics counts CPUSampler calls Tick recovered from a panic (the
+	// session is skipped for that tick; see Tick's doc comment).
+	SamplerPanics atomic.Int64
 }
 
 // Engine is the per-daemon status authority. Its zero value is unusable; call
@@ -107,6 +119,7 @@ type Engine struct {
 	staleness time.Duration
 	poll      time.Duration
 	emit      func(id string, s status.Status)
+	metrics   *Metrics
 	sessions  map[string]*session
 }
 
@@ -155,12 +168,17 @@ func New(cfg Config) *Engine {
 	if emit == nil {
 		emit = func(string, status.Status) {}
 	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = &Metrics{}
+	}
 	return &Engine{
 		now:       now,
 		sampler:   sampler,
 		staleness: cfg.StalenessThreshold,
 		poll:      cfg.PollInterval,
 		emit:      emit,
+		metrics:   metrics,
 		sessions:  make(map[string]*session),
 	}
 }
@@ -346,14 +364,40 @@ func gridSignature(sources []adapter.SignalSource) string {
 	return ""
 }
 
-// Tick is the low-frequency, daemon-driven fallback poll. It samples each live
-// session's CPU exactly once and enforces the staleness guard (S7): a session
-// left turn=active with no output and no CPU past the threshold is downgraded to
-// unknown. The engine does periodic work ONLY here — it never self-polls.
+// Tick is the low-frequency, daemon-driven fallback poll. It enforces the
+// staleness guard (S7): a session left turn=active with no output and no CPU
+// past the threshold is downgraded to unknown. The engine does periodic work
+// ONLY here — it never self-polls.
 //
-// CPU is sampled outside the lock (a real sampler blocks on a sampling window),
-// so a Tick never stalls a concurrent hook callback's emit (L1); the flip is then
-// applied under the lock against the session's live state.
+// Sampling is gated at collection time (under e.mu) to sessions whose sample
+// Tick will actually consume: turn=active AND already past the staleness
+// threshold — the only case the commit check below can flip. Because time only
+// advances, a session already stale at collection is still stale once its
+// sample completes; a session not yet stale is simply left for a later Tick,
+// which costs it at most one poll interval. This is the same condition the
+// commit check re-verifies below (re-verified because a concurrent
+// HandleCallback/OnOutput may have changed the session in between).
+//
+// Gated sessions are sampled CONCURRENTLY, one goroutine per session (N is
+// capped at 128 by the daemon, so this is cheap), all joined before Tick
+// returns: wall-clock cost is ~one cpuSampleWindow regardless of N, not
+// Nx100ms. CPU is sampled outside any lock (a real sampler blocks on a
+// sampling window), so a Tick never stalls a concurrent hook callback's emit
+// (L1); each flip is then applied under the lock against the session's live
+// state, exactly as before.
+//
+// Tick takes no context. Engine.Run drives it from a ticker and calls it
+// synchronously, so a ctx cancellation that lands mid-Tick is observed only
+// once Tick returns — i.e. cancellation may wait up to one cpuSampleWindow for
+// the in-flight sampler goroutines to join (down from up to Nx100ms before
+// this change). A sampler that panics is recovered: that one session is
+// skipped for this tick (no flip, its state untouched), the panic is counted
+// in the engine's Metrics, and every other session's sampling and the engine
+// itself are unaffected. A sampler that never returns (blocks forever, as
+// opposed to panicking) is NOT bounded by anything here — its goroutine, and
+// therefore Tick and Run's next cancellation check, would block indefinitely;
+// this is accepted because the production sampler is a short, bounded local
+// syscall-based read, not an operation expected to hang.
 func (e *Engine) Tick() {
 	e.mu.Lock()
 	type job struct {
@@ -361,36 +405,60 @@ func (e *Engine) Tick() {
 		pid int
 		s   *session
 	}
+	now := e.now()
 	jobs := make([]job, 0, len(e.sessions))
 	for id, s := range e.sessions {
-		if s.alive {
+		if s.alive && s.status.Turn == status.TurnActive && now.Sub(s.lastSignalAt) >= e.staleness {
 			jobs = append(jobs, job{id, s.pid, s})
 		}
 	}
 	e.mu.Unlock()
 
+	var wg sync.WaitGroup
+	wg.Add(len(jobs))
 	for _, j := range jobs {
-		cpu, err := e.sampler(j.pid)
-		busy := err == nil && cpu > 0
+		go func(j job) {
+			defer wg.Done()
+			busy, panicked := e.sampleRecovered(j.pid)
+			if panicked {
+				e.metrics.SamplerPanics.Add(1)
+				return // session skipped this tick; no flip either way
+			}
 
-		j.s.emitMu.Lock()
-		e.mu.Lock()
-		cur, ok := e.sessions[j.id]
-		changed := false
-		var next status.Status
-		if ok && cur == j.s && j.s.alive && j.s.status.Turn == status.TurnActive && !busy &&
-			e.now().Sub(j.s.lastSignalAt) >= e.staleness {
-			next = j.s.status
-			next.Turn = status.TurnUnknown
-			changed = commit(j.s, next)
-		}
-		e.mu.Unlock()
+			j.s.emitMu.Lock()
+			e.mu.Lock()
+			cur, ok := e.sessions[j.id]
+			changed := false
+			var next status.Status
+			if ok && cur == j.s && j.s.alive && j.s.status.Turn == status.TurnActive && !busy &&
+				e.now().Sub(j.s.lastSignalAt) >= e.staleness {
+				next = j.s.status
+				next.Turn = status.TurnUnknown
+				changed = commit(j.s, next)
+			}
+			e.mu.Unlock()
 
-		if changed {
-			e.emit(j.id, next)
-		}
-		j.s.emitMu.Unlock()
+			if changed {
+				e.emit(j.id, next)
+			}
+			j.s.emitMu.Unlock()
+		}(j)
 	}
+	wg.Wait()
+}
+
+// sampleRecovered calls e.sampler(pid), reporting busy the same way the
+// unrecovered call would (err == nil && cpu > 0), except a panic inside the
+// sampler is caught and reported via panicked instead of propagating — the
+// caller then skips this session for the tick rather than crashing Tick.
+func (e *Engine) sampleRecovered(pid int) (busy, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+		}
+	}()
+	cpu, err := e.sampler(pid)
+	return err == nil && cpu > 0, false
 }
 
 // Run drives the fallback poll (E10.8): it calls Tick every Config.PollInterval

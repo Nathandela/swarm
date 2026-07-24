@@ -38,6 +38,8 @@ import (
 	"testing"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // updateGolden regenerates testdata/golden/*.txt from the current
@@ -99,7 +101,10 @@ func renderGrid(s *Snap) string {
 	return g.String()
 }
 
-// runAt returns the run covering 0-based cell column col on line l.
+// runAt returns the cell covering 0-based column col on line l: the single grapheme
+// cluster at that column carrying its run's style. Runs are style-merged spans since
+// item 4.3, so the covering run's Text can be many cells wide; this helper narrows it
+// to the one cell so cell-level assertions (Text == "Z") keep working unchanged.
 func runAt(l Line, col int) (Run, bool) {
 	x := 0
 	for _, r := range l.Runs {
@@ -108,11 +113,30 @@ func runAt(l Line, col int) (Run, bool) {
 			w = utf8.RuneCountInString(r.Text)
 		}
 		if col >= x && col < x+w {
-			return r, true
+			cell := r
+			cell.Text, cell.Width = graphemeAtWidth(r.Text, col-x)
+			return cell, true
 		}
 		x += w
 	}
 	return Run{}, false
+}
+
+// graphemeAtWidth returns the grapheme cluster covering display-width offset off in s
+// and that cluster's width, walking with the same segmentation + width authority the
+// emulator used to assign cell widths (ansi.GraphemeWidth), so a merged run resolves
+// back to its original cells.
+func graphemeAtWidth(s string, off int) (string, int) {
+	acc := 0
+	for rest := s; len(rest) > 0; {
+		cluster, cw := ansi.FirstGraphemeCluster(rest, ansi.GraphemeWidth)
+		if off < acc+cw {
+			return cluster, cw
+		}
+		acc += cw
+		rest = rest[len(cluster):]
+	}
+	return "", 0
 }
 
 func mustRunAt(t *testing.T, s *Snap, row, col int) Run {

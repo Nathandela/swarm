@@ -122,15 +122,11 @@ func firstUsable(agents []AgentInfo) int {
 	return 0
 }
 
-// agentReason is the human-readable cause an agent is unusable, preferring the
-// derived Reason and falling back to the legacy InstallHint. It is shown greyed in
-// the picker and quoted in the launch-guard refusal so the user learns why an agent
-// cannot launch (L-2).
+// agentReason is the human-readable cause an agent is unusable. It is shown
+// greyed in the picker and quoted in the launch-guard refusal so the user learns
+// why an agent cannot launch (L-2).
 func agentReason(a AgentInfo) string {
-	if a.Reason != "" {
-		return a.Reason
-	}
-	return a.InstallHint
+	return a.Reason
 }
 
 // loadAgentOptions resets the option schema/values to the currently chosen
@@ -491,7 +487,7 @@ func (m launchModel) view() string {
 
 	b.WriteString("\n")
 	if m.errMsg != "" {
-		b.WriteString("  " + lipgloss.NewStyle().Foreground(colNeedsInput).Render(m.errMsg) + "\n\n")
+		b.WriteString("  " + styleError.Render(m.errMsg) + "\n\n")
 	}
 	// The contextual field hint is promoted to the router's persistent bottom bar
 	// (composeBoard uses m.hint()), so it is no longer rendered inline here.
@@ -541,14 +537,14 @@ func (m launchModel) agentNote() string {
 	default:
 		return ""
 	}
-	return "  " + lipgloss.NewStyle().Foreground(colAmber).Render(note)
+	return "  " + styleAmber.Render(note)
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.
 func (m launchModel) fieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
-		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
+		prefix = styleAmber.Render("▌") + " "
 	}
 	return prefix + styleDim.Render(padLabel(label)) + value + "\n"
 }
@@ -633,7 +629,7 @@ func (m launchModel) buildAgentRow(showOtherReasons bool, selReasonBudget int) s
 			}
 		}
 		if a.usable() && i == m.agentIdx {
-			text = lipgloss.NewStyle().Foreground(colAmber).Render(text)
+			text = styleAmber.Render(text)
 		} else if !a.usable() {
 			text = styleDim.Render(text)
 		}

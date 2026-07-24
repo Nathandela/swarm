@@ -1,0 +1,211 @@
+# Perf + lint baseline — 2026-07-18 (item 1.4, agents-tracker-4rp)
+
+Item 1.4 of the swarm performance implementation plan (`.claude/tmp/perf-implementation-plan.md`):
+in-repo benchmarks (R1.4.1), local golangci-lint reproducibility (R1.4.2), and
+the firstpaint gate p95 capture (R1.4.4). This is a measurement baseline, not
+a regression gate — later items (2.x, 3.x) are compared against these numbers.
+
+## Environment
+
+- Git commit: `632d5c1c241a49f3395e5f967f8e971ee732621d` (branch worktree-perf-audit)
+- `go version`: go1.26.1 darwin/amd64
+- `go env GOOS GOARCH`: darwin / amd64 (this machine is an Apple M1; the Go
+  toolchain installed here is the amd64 build, so benchmarks run under Rosetta
+  2 translation, not natively on arm64 — recorded as-is per instruction, no
+  cross-build was forced)
+- `cpu:` line reported by `go test -bench`: `VirtualApple @ 2.50GHz` (Rosetta's
+  presented CPU string; the physical CPU per `sysctl -n machdep.cpu.brand_string`
+  is `Apple M1`)
+- Command: `go test -run='^$' -bench=. -benchmem -benchtime=1s ./internal/...`
+  (run per-package below; single run each, as authorized)
+
+## R1.4.1 benchmark baseline
+
+New files (one per package, internal test files so they can reach unexported
+state — hub, distribute, clientConn, etc.):
+
+- `internal/vt/feed_bench_test.go` — (a) Feed throughput, (b) Snapshot build+Marshal, DecodeSnapshot
+- `internal/wire/frame_bench_test.go` — (c) frame round-trip over net.Pipe
+- `internal/shim/hubfeed_bench_test.go` — (d) hub.feed fanout
+- `internal/protocol/fanout_bench_test.go` — (e) status-fanout distribute path
+- `internal/persist/save_bench_test.go` — (f) Save latency
+
+Run: `go test -bench=. -benchmem -run='^$' ./internal/...` (all other packages
+have no benchmarks, so this is equivalent to targeting the five above).
+
+| Benchmark | ns/op | throughput | B/op | allocs/op |
+|---|---:|---:|---:|---:|
+| Feed_Plain_80x24 | 554,484 | 3.55 MB/s | 235,262 | 1,944 |
+| Feed_Plain_200x50 | 3,699,339 | 2.73 MB/s | 1,268,161 | 10,050 |
+| Feed_Styled_80x24 | 624,431 | 7.15 MB/s | 235,248 | 1,944 |
+| Feed_Styled_200x50 | 3,602,896 | 6.33 MB/s | 1,268,107 | 10,050 |
+| Snapshot_80x24 (build+Marshal) | 833,572 | — | 218,594 | 1,867 |
+| Snapshot_200x50 (build+Marshal) | 4,278,356 | — | 1,143,208 | 9,853 |
+| DecodeSnapshot_80x24 | 1,722,867 | 41.87 MB/s | 473,072 | 2,048 |
+| DecodeSnapshot_200x50 | 8,940,215 | 42.24 MB/s | 2,056,753 | 10,267 |
+| FrameRoundTrip_256B | 1,945 | 131.62 MB/s | 580 | 3 |
+| FrameRoundTrip_32KiB | 15,098 | 2,170.31 MB/s | 81,925 | 3 |
+| HubFeed (fanout, 1 subscriber) | 22,380 | 2.68 MB/s | 6,446 | 51 |
+| Distribute_1Sub | 178 | — | 208 | 2 |
+| Distribute_16Subs | 2,529 | — | 3,328 | 32 |
+| Distribute_128Subs | 23,777 | — | 26,624 | 256 |
+| Save (persist.Store.Save) | 7,820,862 | — | 4,230 | 29 |
+
+Notes:
+
+- `Feed_Styled_*` is faster in wall-clock ns/op than `Feed_Plain_*` at 80x24
+  despite doing more parsing work per byte (SGR transitions every 4 cells):
+  the styled payload is smaller per row (interleaved escape sequences replace
+  literal glyph runs at the same visual width), so MB/s (which normalizes by
+  payload bytes) is the more informative column there, not ns/op.
+- `Distribute_*` scales close to linearly with subscriber count (~155ns and
+  2 allocs per subscriber beyond a small fixed cost), consistent with the
+  per-subscriber `Control`+`SessionView` allocation in `server.go:294`. The
+  benchmark drains each fake subscriber's queue synchronously after every
+  `distribute()` call rather than via a background goroutine racing the timed
+  loop — an unthrottled tight loop (unlike production's serial `fanoutLoop`,
+  which is paced by real event arrival) can otherwise outrun the drain
+  goroutines and trip the S9 wedged-subscriber eviction path mid-benchmark,
+  silently degrading later iterations into iterating an emptied `s.subs` map.
+- `HubFeed` covers the shim-side single-subscriber fanout (`hub.feed`,
+  `internal/shim/server.go`): emulator Feed + transcript Write + one bounded
+  channel send, all under `h.mu`.
+- `Save` includes a real `fsync` (`tmp.Sync()` in `persist.go`); it is disk-
+  bound, not CPU-bound — the ~7.8ms/op is consistent with this machine's disk
+  fsync latency, not marshal cost.
+- All five benchmark files also passed `go test -race -bench=. -benchtime=1x`
+  (one iteration each) with no data races and no panics, and the full
+  `go test ./...` / `go test -race ./...` suites pass unchanged.
+
+## R1.4.2 golangci-lint
+
+CI pins `golangci-lint-action@v6` at `version: v1.64` (`.github/workflows/ci.yml`),
+which resolves to the latest v1.64.x patch. No repo `.golangci.yml` exists, so
+CI runs golangci-lint's default ruleset.
+
+Local install (version-matched):
+
+```
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+```
+
+Verified: `golangci-lint --version` → `golangci-lint has version v1.64.8 built
+with go1.26.1`.
+
+Run at repo root: `golangci-lint run ./...` → clean (exit 0, no findings),
+both before and after adding the five benchmark files above. No stricter
+`.golangci.yml` was added — R1.4.2(c) treats that as an optional, separate
+decision, deferred (not made in this item).
+
+## R1.4.4 firstpaint gate p95
+
+Command: `go test -v -run TestFirstPaintGate ./internal/tui/`
+
+Result: `TestFirstPaintGate_RealDaemon_FiftySessions_P95` — PASS.
+First-paint p95 over 25 runs @ 50 real sessions: **3.179417ms** (raceEnabled=false),
+against the N-1 budget of 100ms.
+
+## Addendum — item 4.3 snapshot run-merging (agents-tracker-ut0)
+
+Appended, not rewriting the 1.4 baseline above. `buildLine` now coalesces adjacent
+cells that share every style field into one Run (text concatenated, width summed);
+`RenderSnapshotClipped` clips a straddling merged run intra-run to the fitting
+grapheme-cluster prefix. Schema unchanged (SnapshotVersion still 1), so old-shim
+single-run-per-cell snapshots still decode and render identically — merging is a
+value-level change (fewer, larger runs), proven by the merged-vs-unmerged byte-parity
+tests in `internal/vt/render_clip_test.go`.
+
+### Snapshot build+Marshal and DecodeSnapshot (R4.3.5)
+
+"Before" = the 1.4 baseline table above (one-run-per-cell, commit 632d5c1, same
+`genStyledFrame` = SGR every 4 cells). "After" = current HEAD with merging. B/op and
+allocs/op are deterministic and are the primary evidence; **ns/op is NOT compared —
+these runs share the machine with other agents (Rosetta), so wall-clock is too noisy
+to attribute.** The `genStyledFrame` fixture merges in groups of 4 (each 4-cell color
+span), so the expected run-length factor is ~4x.
+
+| Benchmark | B/op before | B/op after | allocs before | allocs after |
+|---|---:|---:|---:|---:|
+| Snapshot_80x24 (build+Marshal) | 218,594 | 141,976 | 1,867 | 2,447 |
+| Snapshot_200x50 (build+Marshal) | 1,143,208 | ~663,000 | 9,853 | 12,603 |
+| DecodeSnapshot_80x24 | 473,072 | 111,224 | 2,048 | 1,076 |
+| DecodeSnapshot_200x50 | 2,056,753 | 498,136 | 10,267 | 5,262 |
+
+- **Decode is the first-paint hot path (client-side, per attach): B/op −76% and
+  allocs −47/49%**, tracking the ~4x fewer runs to unmarshal.
+- **Snapshot build B/op drops −35/−42%** (smaller JSON: one styled Run's fixed fields
+  per span instead of per cell). Build **allocs rise +28/+31%**: a multi-cell merged
+  run must allocate one string for its concatenated text (a `strings.Builder`,
+  amortized-growth, one buffer per merged run), where the pre-merge path aliased each
+  cell's text with no allocation. This is inherent to producing merged text and is
+  offset by the far cheaper decode and the size drop below; build is a one-time
+  shim-side cost, decode+size is the repeated first-paint cost. The Builder is
+  DEFERRED (promoted only when a second same-style cell joins), so the no-merge worst
+  case — every adjacent cell a different style — keeps aliasing and adds ZERO build
+  allocs versus pre-merge.
+
+### New typical snapshot byte sizes (R4.3.5)
+
+Decoded via `Emulator.Snapshot()` at HEAD with merging; "before" is the one-run-per-
+cell size for the same feed.
+
+| Fixture | dims | before bytes | after bytes | factor | runs after |
+|---|---|---:|---:|---:|---:|
+| plain (`x`-fill) | 80x24 | 44,531 | 2,843 | 15.7x | 24 |
+| plain (`x`-fill) | 200x50 | 230,658 | 11,858 | 19.5x | 50 |
+| genStyled (SGR/4 cells) | 80x24 | 72,131 | 19,334 | 3.7x | 461 |
+| genStyled (SGR/4 cells) | 200x50 | 377,658 | 101,332 | 3.7x | 2,451 |
+| heavyStyled (uniform SGR/row) | 80x24 | 207,651 | 4,882 | 42.5x | 24 |
+| heavyStyled (uniform SGR/row) | 200x50 | 1,096,058 | 16,185 | 67.7x | 50 |
+| blank grid | 200x50 | ~230,000 | 11,857 | ~19x | 50 |
+
+The styled `genStyled` case shrinks by the ~3.7x run-length factor as expected; plain
+and uniform-per-row content (one run per row) shrink far more. The heavyStyled 200x50
+snapshot falls from 1.05 MiB to 16 KiB — this is why it no longer exceeds
+`wire.MaxFrame` and no longer exercises the item-1.2 chunked path (flagged to the
+coordinator; the 1.2 oversized fixtures need per-cell-varying styling to stay above
+`MaxFrame`, since they paint each row with a single uniform style).
+
+### Decode reassembly cap (R4.3.5)
+
+`internal/protocol/client.go` `maxSnapshotBytes` is unchanged. Its comment is updated
+to state the one-run-per-cell size as the WORST case (reached only when no two
+adjacent cells share a style) rather than an invariant: merging replaces N per-cell
+runs' fixed JSON with a single copy and carries the same per-cell-clamped text
+concatenated, so a merged snapshot never exceeds the one-run-per-cell bound the cap is
+sized for. The cap stays a valid upper bound; only real (smaller) snapshots change.
+
+### Width authority for intra-run clipping
+
+`RenderSnapshotClipped` walks a straddling merged run with
+`ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)` — the SAME grapheme segmentation
+and display-width (`clipperhouse/displaywidth`) the in-shim emulator (`charm x/vt`
+`utf8.go flushGrapheme`) used to assign each cell's Width. Re-walking the concatenated
+text therefore reproduces the identical cell boundaries and widths, giving
+byte-identical clipped output to the equivalent one-run-per-cell row. `x/ansi` was
+already in the build graph (transitive via `x/vt`); it is now a direct require (no new
+module added; `go mod tidy` only moved the existing line out of the indirect block).
+
+## Record correction — merge e11d904 pin-golden styling claim (deployment-committee)
+
+The merge commit e11d904 ("Merge origin/main ... into perf branch") stated in its
+conflict-resolution notes that when the six `style_hoist_test.go` pin goldens were
+refreshed for main's board changes, "styling bytes verified unchanged - the hoist
+property still holds." That phrasing over-claimed and is corrected here.
+
+Precise statement:
+
+- **No styling regression** was introduced by the merge relative to main's shipped
+  rendering. Main's `renderRow` was adopted wholesale (union merge; the perf branch
+  contributed no competing render path), so the merged tree renders exactly what
+  main renders. The style-hoist property — package-level styles reused across rows
+  rather than reconstructed per row per frame — still holds.
+- **The pin goldens are NOT byte-identical to their pre-merge form.** They
+  legitimately gained SGR tokens from main's OWN name-column redesign (a bold name
+  column; the agent token moving bold -> dim). Those deltas track main's intended
+  content/style changes, not a perf-branch regression. "Styling bytes verified
+  unchanged" was therefore the wrong test to claim: the correct claim is that the
+  goldens match main's intended rendering, which they do.
+
+This note records the correction only; no golden or code change accompanies it (the
+goldens already track main's shipped rendering).

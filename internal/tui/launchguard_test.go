@@ -11,8 +11,8 @@ import (
 func detectNoneUsable() DetectFunc {
 	return func() []AgentInfo {
 		return []AgentInfo{
-			{Name: "codex", Installed: true, InRange: false, InstallHint: "upgrade codex to >= 1.2.0"},
-			{Name: "gemini", Installed: false, InRange: false, InstallHint: "install: npm i -g @google/gemini-cli"},
+			{Name: "codex", Installed: true, InRange: false, Reason: "upgrade codex to >= 1.2.0"},
+			{Name: "gemini", Installed: false, InRange: false, Reason: "install: npm i -g @google/gemini-cli"},
 		}
 	}
 }

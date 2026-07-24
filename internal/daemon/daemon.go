@@ -30,14 +30,12 @@ const (
 	monitorPoll = 100 * time.Millisecond // liveness poll for reconnected shims
 	dialTimeout = 3 * time.Second        // dial a shim's per-session socket
 	helloIO     = 3 * time.Second        // per-op deadline on a shim handshake
-	deleteWait  = 10 * time.Second       // bound Delete's wait for a shim to exit
 )
 
-// Registry is the read view of the session roster (frozen API).
-type Registry interface {
-	List() []persist.Meta
-	Get(id string) (persist.Meta, bool)
-}
+// deleteWait bounds Delete's wait for a shim to exit after termination, and
+// killSpawnedShim's wait for an aborting shim. It is a var (not a const) so a test
+// can shorten it to exercise the termination-timeout path quickly.
+var deleteWait = 10 * time.Second
 
 // Config configures a daemon instance.
 type Config struct {
@@ -264,7 +262,6 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	}
 	m.Status = next
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 	written, err := d.saveMetaLocked(m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -303,7 +300,6 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 	}
 	m.ConversationID = convID
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 	written, err := d.saveMetaLocked(m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -399,7 +395,6 @@ func (d *Daemon) abandon() {
 // the onMetaSave observer. Writes are serialized by writeMu.
 func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
 
 	d.writeMu.Lock()
 	written, err := d.saveMetaLocked(m)
@@ -422,6 +417,15 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // can never recreate the session dir after it is removed (F3). It returns
 // written=false for a tombstoned id, leaving disk and memory untouched. Firing the
 // onMetaSave observer is the caller's job, done after writeMu is released.
+//
+// m.Env is NOT re-filtered here (R3.1.2 dedup): store.Save is the sole allowlist
+// enforcement point (persist.go, ADR-004), and every caller of saveMeta/
+// saveMetaLocked already carries pre-filtered Env — freshly filtered at Meta
+// construction (launch.go) or inherited unchanged from a previously-persisted,
+// already-filtered Meta (reconcile scan, sess.meta). A future caller that
+// constructs a Meta from a raw, unfiltered env source must filter before
+// reaching here, or the unfiltered value will reach the in-memory registry
+// (store.Save only protects disk, since it filters its own copy of m).
 func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
@@ -455,9 +459,9 @@ func processRank(p status.Process) int {
 // clobber each other (S1). compute derives the target meta from the CURRENT meta;
 // the write is applied ONLY if it advances the process rank (exited > lost >
 // running), so a late lost can never overwrite an authoritative exited+code and no
-// finalizer regresses a more-terminal state. Returns whether it wrote, and fires
-// the onMetaSave observer on a write (mirrors saveMeta).
-func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) bool {
+// finalizer regresses a more-terminal state. Fires the onMetaSave observer on a
+// write (mirrors saveMeta).
+func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) {
 	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
@@ -468,25 +472,23 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 	d.mu.Unlock()
 	if !ok {
 		d.writeMu.Unlock()
-		return false
+		return
 	}
 	next := compute(cur)
 	if processRank(next.Status.Process) <= processRank(cur.Status.Process) {
 		d.writeMu.Unlock()
-		return false // would not advance the terminal state: refuse (S1)
+		return // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
-	next.Env = persist.FilterEnv(next.Env)
 	written, err := d.saveMetaLocked(next)
 	d.writeMu.Unlock()
 	if err != nil {
 		d.logf("finalize: persist terminal meta for %s: %v", id, err)
-		return false
+		return
 	}
 	if written && d.cfg.onMetaSave != nil {
 		d.cfg.onMetaSave(next)
 	}
-	return written
 }
 
 // isDeleted reports whether id has been tombstoned by Delete (F3).

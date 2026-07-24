@@ -67,7 +67,13 @@ func TestRunRespectsPollIntervalNoBusyPoll(t *testing.T) {
 		PollInterval:       20 * time.Millisecond,
 		Emit:               func(string, status.Status) {},
 	})
-	e.RegisterSession("s1", "tok1", 1, kinds("hook"))
+	// Seeded active via RegisterSession's initialStatus (not HandleCallback), so
+	// its zero-value lastSignalAt is already far past staleness: Tick's sampling
+	// gate (R2.3.2, agents-tracker-jmk) only samples turn=active-and-stale
+	// sessions, so this fixture must seed exactly that state to remain a valid
+	// Tick-cadence probe (coordinator ruling, perf-implementation-plan.md 2.3
+	// "v2.1").
+	e.RegisterSession("s1", "tok1", 1, kinds("hook"), status.Status{Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

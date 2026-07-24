@@ -33,8 +33,15 @@ func TestClampBytes_RuneBoundary(t *testing.T) {
 // grapheme run and an absurdly long window title both serialize to bounded fields.
 func TestSnapshot_ClampsHostileTextAndTitle(t *testing.T) {
 	e := NewEmulator(20, 5)
-	// One cell fed a base char + thousands of combining marks (one grapheme cluster).
-	e.Feed([]byte("a" + strings.Repeat("́", 4000)))
+	// One cell fed thousands of combining marks (a single, absurdly long grapheme
+	// cluster). Wrapped in its own SGR (red) so item 4.3 run-merging keeps it a
+	// SINGLE-cell run distinct from the trailing default blanks — otherwise the
+	// hostile cell would merge with those blanks and the per-run length below would
+	// measure the whole span, not the per-cell clamp. (A base char + marks would
+	// instead split into two same-style cells that re-merge, so the marks stand
+	// alone here.) The N-6 aggregate bound is unchanged: a merged line's text is
+	// still <= cols * SnapshotTextMax.
+	e.Feed([]byte("\x1b[31m" + strings.Repeat("́", 4000) + "\x1b[0m"))
 	// An absurdly long OSC window title.
 	e.Feed([]byte("\x1b]0;" + strings.Repeat("T", 4000) + "\x07"))
 

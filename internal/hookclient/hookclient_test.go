@@ -48,11 +48,17 @@ func (r *localRecorder) last() (status.Status, bool) {
 
 // FromEnv composes a Callback from the injected env plus the event/payload args.
 func TestFromEnvComposesCallback(t *testing.T) {
+	// Seed the counter file at 6 so the first invocation's increment yields 7,
+	// matching this test's original (pre-EnvSequenceFile) asserted value.
+	seqFile := filepath.Join(t.TempDir(), "hook.seq")
+	if err := os.WriteFile(seqFile, []byte("6"), 0o600); err != nil {
+		t.Fatalf("seed sequence file: %v", err)
+	}
 	env := map[string]string{
-		EnvSessionID: "sess-1",
-		EnvToken:     "tok-abc",
-		EnvSocket:    "/run/swarm/daemon.sock",
-		EnvSequence:  "7",
+		EnvSessionID:    "sess-1",
+		EnvToken:        "tok-abc",
+		EnvSocket:       "/run/swarm/daemon.sock",
+		EnvSequenceFile: seqFile,
 	}
 	cb, err := FromEnv(func(k string) string { return env[k] }, "Stop", map[string]string{"turn": "idle"})
 	if err != nil {
@@ -78,7 +84,7 @@ func TestFromEnvComposesCallback(t *testing.T) {
 // A hook invocation without its per-session token cannot compose a callback:
 // FromEnv fails rather than emit a tokenless callback (S6, client side).
 func TestFromEnvRejectsMissingToken(t *testing.T) {
-	env := map[string]string{EnvSessionID: "sess-1", EnvSocket: "/x.sock", EnvSequence: "1"}
+	env := map[string]string{EnvSessionID: "sess-1", EnvSocket: "/x.sock"}
 	if _, err := FromEnv(func(k string) string { return env[k] }, "Stop", nil); err == nil {
 		t.Fatalf("FromEnv with no token: got nil error, want failure")
 	}
@@ -129,10 +135,10 @@ func TestPostRoundTripAppliesStatus(t *testing.T) {
 	}()
 
 	env := map[string]string{
-		EnvSessionID: "sess-1",
-		EnvToken:     "tok-abc",
-		EnvSocket:    sock,
-		EnvSequence:  "1",
+		EnvSessionID:    "sess-1",
+		EnvToken:        "tok-abc",
+		EnvSocket:       sock,
+		EnvSequenceFile: filepath.Join(t.TempDir(), "hook.seq"),
 	}
 	cb, err := FromEnv(func(k string) string { return env[k] }, "Stop", map[string]string{"turn": "idle"})
 	if err != nil {

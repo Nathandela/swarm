@@ -209,9 +209,9 @@ func claudeSchema() []adapter.OptionSpec {
 func detectMixed() DetectFunc {
 	return func() []AgentInfo {
 		return []AgentInfo{
-			{Name: "claude", Installed: true, InRange: true, InstallHint: "", Options: claudeSchema()},
-			{Name: "codex", Installed: true, InRange: false, InstallHint: "upgrade codex to >= 1.2.0"},
-			{Name: "gemini", Installed: false, InRange: false, InstallHint: "install: npm i -g @google/gemini-cli"},
+			{Name: "claude", Installed: true, InRange: true, Options: claudeSchema()},
+			{Name: "codex", Installed: true, InRange: false, Reason: "upgrade codex to >= 1.2.0"},
+			{Name: "gemini", Installed: false, InRange: false, Reason: "install: npm i -g @google/gemini-cli"},
 		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/vt"
 )
 
 func TestAttachDialer_AttachesAfterAutoUpgrade(t *testing.T) {
@@ -110,8 +111,15 @@ func TestAttachDialer_AttachesAfterAutoUpgrade(t *testing.T) {
 	if cleanup == nil {
 		t.Fatal("the per-attach dialer must return a cleanup that closes the fresh conn")
 	}
-	// The attach is live: a snapshot is retrievable (the reserved snapshot, possibly the
-	// idle grid) without a panic, and the lease detaches cleanly via the cleanup.
-	_ = sess.Snapshot()
+	// The attach is live: the reserved snapshot (S10 — exactly one snapshot before any
+	// live frame) must be retrievable, non-empty, and decode as a structured vt snapshot
+	// (the idle grid, not raw bytes), and the lease detaches cleanly via the cleanup.
+	snap := sess.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("attach after auto-upgrade returned an empty snapshot (S10 requires one snapshot before any live frame)")
+	}
+	if _, derr := vt.DecodeSnapshot(snap); derr != nil {
+		t.Fatalf("the post-upgrade attach snapshot must decode as a structured vt snapshot; got %v", derr)
+	}
 	cleanup()
 }

@@ -308,14 +308,35 @@ func (s *Server) fanoutLoop() {
 	}
 }
 
+// distribute fans one status change out to every subscriber. Production
+// always assigns every connection the SAME stable endpoint id (skeleton's
+// NewServer(d.api, epID) assembly), so every subscriber's OpEvent Control is
+// byte-identical: the JSON marshal happens ONCE per event and the same
+// encoded frame is shared across every subscriber's queue, instead of
+// rebuilding + re-marshaling a near-identical Control per subscriber
+// (R3.3.1). Only the per-connection ep-<seq> fallback (Serve, or
+// NewServer(d, "")) still marshals individually, since each connection's
+// endpoint id — and therefore its namespaced session id — differs there.
 func (s *Server) distribute(m persist.Meta) {
 	group := status.Derive(m.Status)
+
+	var shared []byte
+	if s.endpointID != "" {
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group)})
+	}
+
 	s.subMu.Lock()
 	var dead []*clientConn
 	for sc := range s.subs {
-		ev := Control{Op: OpEvent, EndpointID: sc.endpointID, Session: sc.stampView(m, group)}
+		body := shared
+		if body == nil {
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group)})
+			if body == nil {
+				continue // Control marshaling cannot fail in practice; skip defensively
+			}
+		}
 		select {
-		case sc.eventQ <- ev:
+		case sc.eventQ <- body:
 		default:
 			dead = append(dead, sc)
 		}
@@ -336,6 +357,19 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Lock()
 	delete(s.subs, cc)
 	s.subMu.Unlock()
+}
+
+// IsControlled reports whether local currently has a controller lease — attached
+// or mid-attach (controller is set at claim, before the pump is installed, and
+// cleared on detach/eviction/release). The daemon's grid tap consults it to SKIP a
+// controlled session, so a tap attach never steals a live controller's stream
+// under concurrent shim serving (R1.3.7); this preserves exactly today's heuristic
+// blindness while a session is attached.
+func (s *Server) IsControlled(local string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ls := s.leases[local]
+	return ls != nil && ls.controller != nil
 }
 
 // attach installs cc as the controller of local at a new, higher generation (S2),
@@ -686,9 +720,11 @@ type clientConn struct {
 
 	writeMu sync.Mutex
 
-	// subscription
+	// subscription. eventQ carries pre-encoded TControl bodies (R3.3.1): the
+	// marshal happens in distribute(), once per event (shared across
+	// subscribers when they share one endpoint id), not per subscriber here.
 	subOnce sync.Once
-	eventQ  chan Control
+	eventQ  chan []byte
 
 	// controller state (this conn as the controller of attSession)
 	attMu      sync.Mutex
@@ -918,7 +954,7 @@ func (cc *clientConn) handleResize(c Control) {
 
 func (cc *clientConn) handleSubscribe() {
 	cc.subOnce.Do(func() {
-		cc.eventQ = make(chan Control, eventQueueCap)
+		cc.eventQ = make(chan []byte, eventQueueCap)
 		// Start the writer BEFORE registering, so the bounded queue is always being
 		// drained the moment distribute can see this subscriber — no fill window that
 		// could wrongly evict a healthy subscriber. Register BEFORE the ack, so a
@@ -943,15 +979,17 @@ func (cc *clientConn) handleDataIn(payload []byte) {
 }
 
 // eventWriter drains this subscriber's bounded queue to the socket; a write error
-// (including one provoked by a disconnect) tears the subscriber down.
+// (including one provoked by a disconnect) tears the subscriber down. Each
+// queued value is already an encoded TControl body (distribute marshals it
+// once, R3.3.1), so this just frames and writes it.
 func (cc *clientConn) eventWriter() {
 	defer cc.srv.wg.Done()
 	for {
 		select {
 		case <-cc.done:
 			return
-		case ev := <-cc.eventQ:
-			if err := cc.writeControl(ev); err != nil {
+		case body := <-cc.eventQ:
+			if err := cc.writeFrame(wire.TControl, body); err != nil {
 				cc.close()
 				return
 			}
@@ -990,9 +1028,17 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
+	return stampView(cc.endpointID, m, group)
+}
+
+// stampView builds one general-view row (V-4) for the given endpoint id. It is
+// a free function (not just a *clientConn method) so distribute can stamp a
+// SHARED view once for every subscriber on a stable endpoint id (R3.3.1)
+// without needing a specific connection.
+func stampView(endpointID string, m persist.Meta, group status.Group) *SessionView {
 	return &SessionView{
-		EndpointID:   cc.endpointID,
-		ID:           NamespacedID(cc.endpointID, m.ID),
+		EndpointID:   endpointID,
+		ID:           NamespacedID(endpointID, m.ID),
 		Agent:        m.AgentType,
 		Name:         m.Name, // P2: carry the persisted label; "" degrades to Agent at display
 		Cwd:          m.Cwd,

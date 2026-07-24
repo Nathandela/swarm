@@ -10,7 +10,6 @@ package vt
 //     the correct buffer).
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 )
@@ -139,21 +138,6 @@ func TestRenderSnapshotClipped_ClampsCursorIntoBounds(t *testing.T) {
 	}
 }
 
-// item 2 — 0,0 disables clipping: RenderSnapshotClipped(s, 0, 0) is byte-identical to
-// the unclipped RenderSnapshot, so existing callers are unaffected.
-func TestRenderSnapshotClipped_ZeroZeroMatchesUnclipped(t *testing.T) {
-	s := &Snap{
-		Version: SnapshotVersion, Cols: 3, Rows: 2, CursorX: 1, CursorY: 1, CursorVisible: true,
-		Lines: []Line{
-			{Runs: []Run{{Text: "a", Width: 1}, {Text: "b", Width: 1}, {Text: "c", Width: 1}}},
-			{Runs: []Run{{Text: " ", Width: 1}, {Text: " ", Width: 1}, {Text: " ", Width: 1}}},
-		},
-	}
-	if !bytes.Equal(RenderSnapshotClipped(s, 0, 0), RenderSnapshot(s)) {
-		t.Fatalf("clipping disabled (0,0) must be byte-identical to the unclipped RenderSnapshot")
-	}
-}
-
 // item 4 — a snapshot recorded in the alternate screen enters the alt buffer
 // (CSI ?1049h) BEFORE the first cell write, so a later ?1049l from the live stream
 // restores the correct (primary) buffer.
@@ -209,4 +193,57 @@ func TestRenderSnapshot_StripsC1ControlRunes(t *testing.T) {
 			t.Errorf("printable %q lost by the C1 strip", want)
 		}
 	}
+}
+
+// R4.2.1 (agents-tracker-rs8) — stripControls must REPLACE a control rune with a
+// space rather than delete it, so a run's rendered character count keeps pace
+// with its declared Run.Width. RenderSnapshotClipped positions only the start of
+// each row (one absolute CUP); every run after that relies on the terminal's own
+// cursor auto-advance, so deleting a control rune shortens the written text
+// without shortening Width, shifting every following run on the row one column
+// too far left. This test builds a hostile run (an embedded ESC still counted in
+// the run's declared Width, as a producer-bypassed snapshot might claim) and
+// checks the run written immediately after it lands at the column the Width
+// promised — it fails under delete semantics and passes once the control rune is
+// replaced with a space.
+func TestStripControls_ReplacesRatherThanDeletesPreservingFollowingRunAlignment(t *testing.T) {
+	s := &Snap{
+		Version: SnapshotVersion, Cols: 4, Rows: 1, CursorVisible: true,
+		Lines: []Line{{Runs: []Run{
+			{Text: "a\x1bc", Width: 3, Bold: true}, // hostile: ESC counted in Width=3
+			{Text: "X", Width: 1},
+		}}},
+	}
+	out := render(s)
+	visible := stripCSI(out)
+
+	if idx := strings.IndexByte(visible, 'X'); idx != 3 {
+		t.Fatalf("following run must land at column index 3 (Width=3 for the preceding hostile run); got visible text %q (full render %q)", visible, out)
+	}
+}
+
+// stripCSI removes every CSI sequence ("\x1b[" ... final byte) the renderer's own
+// framing emits (CUP positioning, SGR styling), leaving only the literal
+// characters written as cell content. Any control byte originally embedded in
+// hostile run text is neutralized by stripControls before it reaches this point
+// (turned into a space, never a real ESC), so this only ever strips the
+// renderer's genuine framing sequences.
+func stripCSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) {
+				j++ // consume the final byte
+			}
+			i = j
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }

@@ -35,7 +35,9 @@ const (
 //     object's opening brace;
 //   - a framed protocol client (protocol.Dial) — a wire frame whose 4-byte length
 //     prefix always begins 0x00 (the max frame is 2^20, so the length's most-
-//     significant byte is 0x00).
+//     significant byte is 0x00; wire.MaxFrame carries a compile-time guard
+//     pinning it below 2^24 so this assumption cannot silently break, see
+//     internal/wire/wire.go).
 //
 // The three leading bytes are disjoint ('V' vs '{' vs 0x00), so a single first-byte
 // read routes every connection deterministically and immediately. Only the version

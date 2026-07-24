@@ -79,29 +79,25 @@ func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
 }
 
-// flat returns the sessions in display order: by group (fixed order), then by
-// arrival order within each group. The selection index is a position in this
-// list.
-func (m generalModel) flat() []protocol.SessionView {
-	out := make([]protocol.SessionView, 0, len(m.sessions))
+// selected returns the currently-selected session, or (zero, false) when the
+// board is empty. It walks sessions in display order (by group, fixed order,
+// then arrival order within each group — the same order restoreSel searches)
+// without building a full copy of the board (R4.1.2): m.sel is a position in
+// that order, and finding one element at a position needs no allocation.
+func (m generalModel) selected() (protocol.SessionView, bool) {
+	i := 0
 	for _, g := range groupOrder {
 		for _, s := range m.sessions {
-			if s.Group == g {
-				out = append(out, s)
+			if s.Group != g {
+				continue
 			}
+			if i == m.sel {
+				return s, true
+			}
+			i++
 		}
 	}
-	return out
-}
-
-// selected returns the currently-selected session, or (zero, false) when the
-// board is empty.
-func (m generalModel) selected() (protocol.SessionView, bool) {
-	flat := m.flat()
-	if len(flat) == 0 || m.sel < 0 || m.sel >= len(flat) {
-		return protocol.SessionView{}, false
-	}
-	return flat[m.sel], true
+	return protocol.SessionView{}, false
 }
 
 // selectedID is the id of the selected session, or "" when the board is empty.
@@ -126,14 +122,22 @@ func (m generalModel) sessionByID(id string) (protocol.SessionView, bool) {
 
 // restoreSel re-points the selection at the row whose session id is id, so the
 // same session stays selected by identity across a regroup (apply reorders the
-// flat list on every event). If that session is gone, the index is clamped to
-// stay in range.
+// display order on every event). If that session is gone, the index is clamped
+// to stay in range. Walks in the same display order as selected (R4.1.2): no
+// full-board copy, and it stops as soon as id is found.
 func (m *generalModel) restoreSel(id string) {
 	if id != "" {
-		for i, s := range m.flat() {
-			if s.ID == id {
-				m.sel = i
-				return
+		i := 0
+		for _, g := range groupOrder {
+			for _, s := range m.sessions {
+				if s.Group != g {
+					continue
+				}
+				if s.ID == id {
+					m.sel = i
+					return
+				}
+				i++
 			}
 		}
 	}
@@ -221,7 +225,7 @@ func (m generalModel) bannerLine() string {
 	if m.bannerText == "" || !time.Now().Before(m.bannerExpiry) {
 		return ""
 	}
-	return "  " + lipgloss.NewStyle().Foreground(colAmber).Bold(true).Render("● "+m.bannerText)
+	return "  " + styleTitle.Render("● "+m.bannerText)
 }
 
 // bannerGroup reports whether a transition into g raises a notification banner.
@@ -529,7 +533,7 @@ func (m generalModel) view() string {
 		if len(rows) == 0 {
 			continue // empty groups are omitted (V-1)
 		}
-		hdr := lipgloss.NewStyle().Foreground(groupColor(g)).Bold(true).Render(groupHeader(g))
+		hdr := groupHeaderStyle(g).Render(groupHeader(g))
 		b.WriteString("  " + hdr + "\n")
 		for _, s := range rows {
 			b.WriteString(m.renderRow(s, g, idx == m.sel) + "\n")
@@ -565,8 +569,8 @@ func (m generalModel) header() string {
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
-	gc := groupColor(g)
-	icon := lipgloss.NewStyle().Foreground(gc).Render(groupIcon(g))
+	gs := groupStyle(g)
+	icon := gs.Render(groupIcon(g))
 	// Two identity columns (field test 4): the session NAME (bold, editable) then the
 	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
 	// so padRight always leaves a separating space (no jamming, width discipline).
@@ -574,7 +578,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
 		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
-		lipgloss.NewStyle().Foreground(gc).Render(padRight(statusToken(g), colStatus)) +
+		gs.Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
 
 	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
@@ -584,9 +588,9 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	var prefix string
 	switch {
 	case m.confirm && s.ID == m.confirmID:
-		prefix = lipgloss.NewStyle().Foreground(colNeedsInput).Render(confirmPrompt(s)) + " "
+		prefix = styleError.Render(confirmPrompt(s)) + " "
 	case selected:
-		prefix = lipgloss.NewStyle().Foreground(colAmber).Render("▌") + " "
+		prefix = styleAmber.Render("▌") + " "
 	default:
 		prefix = "  "
 	}

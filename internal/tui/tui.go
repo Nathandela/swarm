@@ -11,7 +11,6 @@
 package tui
 
 import (
-	"image/color"
 	"os"
 	"strconv"
 	"strings"
@@ -44,15 +43,14 @@ type Client interface {
 }
 
 // AgentInfo describes one detected agent CLI for the launch-form picker: whether
-// it is installed and within the supported version range, the install/upgrade
-// hint shown when it is not usable (L-2), and its declarative option schema.
+// it is installed and within the supported version range, the reason shown when
+// it is not usable (L-2), and its declarative option schema.
 type AgentInfo struct {
-	Name        string
-	Installed   bool
-	InRange     bool
-	InstallHint string
-	Reason      string // human-readable cause when unusable (e.g. "unsupported version 3.0.0"); falls back to InstallHint
-	Options     []adapter.OptionSpec
+	Name      string
+	Installed bool
+	InRange   bool
+	Reason    string // human-readable cause when unusable (e.g. "unsupported version 3.0.0")
+	Options   []adapter.OptionSpec
 }
 
 // usable reports whether the agent can actually be launched (installed and in a
@@ -74,6 +72,19 @@ const (
 
 // eventMsg carries one Subscribe status-change into the update loop.
 type eventMsg struct{ ev protocol.Event }
+
+// connectionLostMsg signals the Subscribe stream's channel closed: the daemon
+// connection is gone for good (pump eviction, daemon crash/restart all look the
+// same from here — protocol.Client closes eventsCh once its read loop dies).
+// waitForEvent deliberately does not re-arm after this (agents-tracker-1uq).
+//
+// from is the events channel this loss was observed on (channels are comparable).
+// A successful auto-upgrade swaps m.events to a fresh subscription while the OLD
+// client's read loop closes its eventsCh, so its stale waitForEvent fires a
+// connectionLostMsg stamped with the now-dead OLD channel. The Update handler
+// ignores any loss whose from != m.events, so a pre-upgrade loss can never poison
+// the live post-upgrade board regardless of arrival order (deployment-committee 3/3).
+type connectionLostMsg struct{ from <-chan protocol.Event }
 
 // repaintMsg drives the periodic re-render that refreshes the live elapsed-time
 // column (see repaintTick).
@@ -160,6 +171,12 @@ type rootModel struct {
 	events   <-chan protocol.Event
 	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
 	ticking  bool // whether a repaint tick is in flight (only on the general view)
+
+	// connectionLost is PERSISTENT (unlike the transient V-5 banner): once the
+	// daemon connection is gone for good, the roster is frozen forever for the
+	// life of this process, so the indicator must survive past bannerDuration
+	// instead of fading while the freeze remains (agents-tracker-1uq).
+	connectionLost bool
 
 	// Build identities for the version-skew notice (E13.2): the daemon's build,
 	// reported on the hello (via the optional Client.BuildVersion surface), and this
@@ -251,7 +268,9 @@ func detectCmd(detect DetectFunc, gen uint64) tea.Cmd {
 }
 
 // waitForEvent reads one event from the stream. A nil channel (no subscription)
-// yields no command.
+// yields no command. A closed channel (the connection is gone for good) yields
+// connectionLostMsg instead of a bare nil, so Update can surface it (agents-
+// tracker-1uq) rather than the caller silently hanging or looping forever.
 func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -259,7 +278,7 @@ func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return nil
+			return connectionLostMsg{from: ch}
 		}
 		return eventMsg{ev}
 	}
@@ -280,6 +299,26 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
 		return m, tea.Batch(banner, waitForEvent(m.events))
+
+	case connectionLostMsg:
+		// Stale-source guard (deployment-committee 3/3): ignore a loss reported on a
+		// channel that is no longer our subscription. After a successful auto-upgrade
+		// m.events points at the fresh stream while the OLD client's read loop closes
+		// its eventsCh, firing this message stamped with the dead OLD channel. Acting
+		// on it would freeze a perfectly live board. A genuine loss on the CURRENT
+		// channel still matches and sets the state below (the 1uq behavior).
+		if msg.from != m.events {
+			return m, nil
+		}
+		// The daemon connection is gone for good: set the PERSISTENT indicator (see
+		// generalStatus) so it survives past the transient banner's bannerDuration —
+		// a 4s banner would fade while the roster stays frozen, looking like false
+		// liveness. The transient banner still fires too, for immediacy. waitForEvent
+		// is deliberately NOT re-armed here, and the next repaintMsg halts its own
+		// tick (see repaintMsg case) — there is nothing left to wait on or refresh
+		// (agents-tracker-1uq).
+		m.connectionLost = true
+		return m, m.general.setBanner("connection to daemon lost - restart swarm to reconnect")
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
@@ -320,8 +359,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Swap to the fresh client and re-read its (now matching) build version, which
 		// clears the skew. Sessions survive the restart (shims own the PTYs), so the
 		// board stays accurate; we only re-subscribe for future events. The old client's
-		// pending waitForEvent is left blocked on its dead stream — a one-time,
-		// process-lifetime cost of the once-per-process upgrade.
+		// pending waitForEvent does NOT stay blocked — the old daemon's death closes its
+		// eventsCh, so that stale waitForEvent fires a connectionLostMsg stamped with the
+		// dead OLD channel. The stale-source guard (connectionLostMsg case) drops it, and
+		// clearing connectionLost here covers the reverse ordering where it landed first.
 		m.client = msg.client
 		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
 			m.daemonVersion = bv.BuildVersion()
@@ -334,7 +375,17 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.general.setBanner("daemon upgraded but event stream failed: " + serr.Error())
 		}
 		m.events = events
-		return m, tea.Batch(m.general.setBanner("daemon upgraded"), waitForEvent(m.events))
+		// Clear any connection-lost state a stale pre-upgrade loss may have set, and
+		// resume the elapsed-column repaint tick if it was halted while on the general
+		// view (mirrors enterGeneral's single-tick guard). Without this the board would
+		// stay frozen when the stale loss arrived before the restart completed.
+		m.connectionLost = false
+		cmds := []tea.Cmd{m.general.setBanner("daemon upgraded"), waitForEvent(m.events)}
+		if m.screen == screenGeneral && !m.ticking {
+			m.ticking = true
+			cmds = append(cmds, repaintTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
@@ -366,8 +417,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case attachDoneMsg:
 		// The passthrough returned (detached / session ended / error); come back to
-		// the general board and re-arm its repaint tick. A FAILURE is surfaced on the
-		// banner rather than silently dropping the user back on the board.
+		// the general board and re-arm its repaint tick. A FAILURE (e.g. the attach
+		// dial failing) is surfaced on the banner rather than silently dropping the
+		// user back on the board (agents-tracker-1uq; both branches implemented the
+		// identical behavior independently).
 		cmd := m.enterGeneral()
 		if msg.err != nil {
 			return m, tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
@@ -415,6 +468,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case repaintMsg:
+		if m.connectionLost {
+			// The roster is frozen forever once the connection is lost — halt the
+			// timer for good so the elapsed-time column stops advancing over data
+			// that will never update again (false liveness, agents-tracker-1uq).
+			m.ticking = false
+			return m, nil
+		}
 		if m.screen != screenGeneral {
 			// The live elapsed column only shows on the general view, so let the
 			// timer lapse elsewhere (N-3: no idle repaints on the launch/attach
@@ -471,8 +531,13 @@ func (m rootModel) View() tea.View {
 
 // generalStatus is the context-key line for the general board — or, during a pending
 // kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
-// (general.view) to the persistent bottom bar (A-5, ADR-006).
+// (general.view) to the persistent bottom bar (A-5, ADR-006). A lost connection
+// (agents-tracker-1uq) takes priority over both: the roster is frozen and staying
+// frozen, which outranks a mid-confirm prompt or the normal keymap.
 func (m rootModel) generalStatus() string {
+	if m.connectionLost {
+		return "daemon connection lost - restart swarm"
+	}
 	if m.general.editing {
 		return "type new name   ⏎ save   esc cancel"
 	}
@@ -695,6 +760,12 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 
 // Group palette (matches docs/design/ui-preview.html). Colors degrade to plain
 // text without a TTY, so unit tests — which strip ANSI — never see them.
+//
+// Every Style below is a package-level var (R4.1.1): general.go/launch.go's
+// render paths reuse these instead of constructing a fresh lipgloss.NewStyle()
+// on every render. styleGroup*/styleGroupHeader* mirror groupStyle/
+// groupHeaderStyle's switch so a per-group color+bold combination is built once
+// at init, not once per row per frame.
 var (
 	colNeedsInput = lipgloss.Color("#ff5f5f")
 	colWorking    = lipgloss.Color("#5fafff")
@@ -705,18 +776,46 @@ var (
 	styleTitle = lipgloss.NewStyle().Foreground(colAmber).Bold(true)
 	styleDim   = lipgloss.NewStyle().Foreground(colCompleted)
 	styleAgent = lipgloss.NewStyle().Bold(true)
+	styleAmber = lipgloss.NewStyle().Foreground(colAmber)
+	styleError = lipgloss.NewStyle().Foreground(colNeedsInput)
+
+	styleGroupNeedsInput = styleError
+	styleGroupWorking    = lipgloss.NewStyle().Foreground(colWorking)
+	styleGroupReview     = lipgloss.NewStyle().Foreground(colReview)
+	styleGroupCompleted  = styleDim
+
+	styleGroupHeaderNeedsInput = styleGroupNeedsInput.Bold(true)
+	styleGroupHeaderWorking    = styleGroupWorking.Bold(true)
+	styleGroupHeaderReview     = styleGroupReview.Bold(true)
+	styleGroupHeaderCompleted  = styleGroupCompleted.Bold(true)
 )
 
-func groupColor(g status.Group) color.Color {
+// groupStyle returns the pre-built plain per-group color style (mirrors the
+// group->color mapping formerly in groupColor, now folded in here directly).
+func groupStyle(g status.Group) lipgloss.Style {
 	switch g {
 	case status.GroupNeedsInput:
-		return colNeedsInput
+		return styleGroupNeedsInput
 	case status.GroupWorking:
-		return colWorking
+		return styleGroupWorking
 	case status.GroupReadyForReview:
-		return colReview
+		return styleGroupReview
 	default:
-		return colCompleted
+		return styleGroupCompleted
+	}
+}
+
+// groupHeaderStyle returns the pre-built bold per-group header style.
+func groupHeaderStyle(g status.Group) lipgloss.Style {
+	switch g {
+	case status.GroupNeedsInput:
+		return styleGroupHeaderNeedsInput
+	case status.GroupWorking:
+		return styleGroupHeaderWorking
+	case status.GroupReadyForReview:
+		return styleGroupHeaderReview
+	default:
+		return styleGroupHeaderCompleted
 	}
 }
 

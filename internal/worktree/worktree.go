@@ -8,20 +8,15 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
-// idRE mirrors internal/persist's path-safe session-id pattern (ADR-004).
-var idRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
-
 // validID reports whether id is safe to use as a path component and as a git
-// branch-name suffix: it must match idRE and must not be ".", "..", or start
-// with "-" (ADR-004), the same rule internal/persist enforces for session ids.
+// branch-name suffix (ADR-004); it delegates to persist.ValidID, the single
+// source of truth for the path-safe session-id pattern.
 func validID(id string) bool {
-	if !idRE.MatchString(id) {
-		return false
-	}
-	return id != "." && id != ".." && id[0] != '-'
+	return persist.ValidID(id)
 }
 
 // worktreeDir returns the on-disk path for session id's worktree under repoDir.

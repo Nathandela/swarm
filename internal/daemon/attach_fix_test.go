@@ -44,7 +44,7 @@ func TestDialSession_IdentityMismatch_NoDial(t *testing.T) {
 		ShimStartTime: realStart + 1, // deliberately wrong
 	})
 
-	conn, err := d.DialSession(id)
+	conn, _, err := d.DialSession(id)
 	if err == nil {
 		if conn != nil {
 			_ = conn.Close()

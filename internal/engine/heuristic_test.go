@@ -143,9 +143,15 @@ func TestHeuristicInconclusivePreservesCommittedTurn(t *testing.T) {
 func TestNoBusyPoll(t *testing.T) {
 	clk := newClock()
 	rec := &emitRecorder{}
-	cpu := &countingCPU{value: 0}
+	cpu := &countingCPU{value: 25.0} // busy: Turn stays active, so the gate (R2.3.2) keeps sampling it on both ticks
 	e := newEngine(clk, cpu.sample, rec, 30*time.Second, time.Second)
-	e.RegisterSession("s1", "tok1", 1, kinds("hook", "heuristic"))
+	// Seeded active via RegisterSession's initialStatus (not HandleCallback), so
+	// setup itself emits nothing (rec.count()==0 below holds) while the zero-value
+	// lastSignalAt is already far past staleness: Tick's sampling gate (R2.3.2,
+	// agents-tracker-jmk) only samples turn=active-and-stale sessions, so this
+	// fixture must seed exactly that state to remain a valid Tick-cadence probe
+	// (coordinator ruling, perf-implementation-plan.md 2.3 "v2.1").
+	e.RegisterSession("s1", "tok1", 1, kinds("hook", "heuristic"), status.Status{Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
 
 	clk.advance(10 * time.Minute)
 	if cpu.calls() != 0 {

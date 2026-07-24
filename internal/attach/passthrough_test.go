@@ -96,7 +96,11 @@ func TestPassthrough_KeystrokesForwardedToSession(t *testing.T) {
 
 // E8.2 / A-2 — the detach key (default Ctrl+q = 0x11) detaches: Run returns
 // ReasonDetached, the key is NOT forwarded to the session, and the terminal is
-// restored.
+// restored. This is also the D4-RULED (agents-tracker-rs8) solo-byte pin: the
+// detach key arrives here alone in its own read (n==1), the case detach
+// recognition is scoped to. The companion multi-byte pin (a detach-key byte
+// arriving amid other bytes in one read is forwarded, not detected) is
+// TestDetachKey_WithinMultiByteReadIsForwardedNotDetach in detachkey_test.go.
 func TestPassthrough_DetachKeyDetachesAndIsNotForwarded(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession([]byte("S"))

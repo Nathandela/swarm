@@ -1,9 +1,7 @@
 package skeleton
 
 import (
-	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,17 +13,13 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
-	"github.com/Nathandela/swarm/internal/wire"
 )
 
 const (
 	// eventPoll is how often the roster is sampled for status changes (well within
 	// the L1 <=1 s bound). It mirrors protocol.FromDaemon's cadence.
 	eventPoll = 200 * time.Millisecond
-	// shimAttachTimeout bounds waiting for a shim's snapshot on attach.
-	shimAttachTimeout = 10 * time.Second
 	// eventsBuffer sizes the roster event channel the Server fans out from.
 	eventsBuffer = 64
 )
@@ -260,13 +254,40 @@ func validateResumeSource(src, agentType, endpointID string, getSource func(loca
 	return local, m, nil
 }
 
-// Attach opens a real SessionStream over the daemon->shim connection.
+// Attach opens a real SessionStream over the daemon->shim connection, via the
+// single shared shim-wire implementation in internal/protocol (protocol.FromDaemon
+// uses the same code internally; see protocol.NewShimStream).
 func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
-	conn, err := a.core.DialSession(id)
+	conn, caps, err := a.core.DialSession(id)
 	if err != nil {
 		return nil, err
 	}
-	return newShimStream(conn)
+	return protocol.NewShimStream(conn, caps)
+}
+
+// SampleSnapshot fetches one session's current grid snapshot for the tap
+// (serve.go sampleGrid). Against a shim advertising SnapshotOnly it uses the
+// non-subscribing snapshot_req — which CANNOT supersede a controller's stream,
+// closing the C3 tap-steal TOCTOU race by construction. Against an old shim
+// (capability absent) it falls back to the pre-C3 attach-based sample, whose
+// exposure is limited to the tapOnce controlled-skip exactly as before (G-D:
+// old-shim degradation no worse than today).
+func (a *coreAPI) SampleSnapshot(id string) ([]byte, error) {
+	conn, caps, err := a.core.DialSession(id)
+	if err != nil {
+		return nil, err
+	}
+	if caps.SnapshotOnly {
+		defer conn.Close()
+		return protocol.SnapshotOnly(conn, caps)
+	}
+	stream, err := protocol.NewShimStream(conn, caps) // owns conn from here
+	if err != nil {
+		return nil, err
+	}
+	snap := stream.Snapshot()
+	_ = stream.Close()
+	return snap, nil
 }
 
 // emitStatus routes an engine-derived status change through both halves of Epic
@@ -370,118 +391,4 @@ func (a *coreAPI) watch() {
 			return
 		}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// shimStream — a protocol.SessionStream backed by a live daemon->shim connection.
-// It mirrors protocol.FromDaemon's shim stream (that type is unexported), so the
-// assembly can serve attach without depending on FromDaemon's bundled poller.
-// ---------------------------------------------------------------------------
-
-type shimStream struct {
-	conn   net.Conn
-	snap   []byte
-	frames chan []byte
-
-	writeMu   sync.Mutex
-	closeOnce sync.Once
-	done      chan struct{}
-}
-
-// newShimStream sends the attach request over an already-helloed shim connection
-// and reads the one snapshot frame the shim emits first (S10), then starts
-// streaming live output frames.
-func newShimStream(conn net.Conn) (*shimStream, error) {
-	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeAttach})
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := wire.WriteFrame(conn, wire.TControl, body); err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(shimAttachTimeout))
-	snap, err := readSnapshot(conn)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	_ = conn.SetReadDeadline(time.Time{})
-
-	st := &shimStream{
-		conn:   conn,
-		snap:   snap,
-		frames: make(chan []byte, 256),
-		done:   make(chan struct{}),
-	}
-	go st.readLoop()
-	return st, nil
-}
-
-// readSnapshot reads frames until the shim's single TSnapshot arrives.
-func readSnapshot(conn net.Conn) ([]byte, error) {
-	for {
-		typ, payload, err := wire.ReadFrame(conn)
-		if err != nil {
-			return nil, err
-		}
-		if typ == wire.TSnapshot {
-			return payload, nil
-		}
-		if typ == wire.TDataOut {
-			return nil, errors.New("skeleton: shim sent a live frame before the snapshot")
-		}
-	}
-}
-
-func (st *shimStream) readLoop() {
-	defer close(st.frames)
-	for {
-		typ, payload, err := wire.ReadFrame(st.conn)
-		if err != nil {
-			return
-		}
-		switch typ {
-		case wire.TDataOut:
-			select {
-			case st.frames <- payload:
-			case <-st.done:
-				return
-			}
-		case wire.TControl:
-			c, derr := shimwire.Decode(payload)
-			if derr == nil && c.Type == shimwire.TypeExitReport {
-				return // session ended
-			}
-		}
-	}
-}
-
-func (st *shimStream) Snapshot() []byte      { return st.snap }
-func (st *shimStream) Frames() <-chan []byte { return st.frames }
-
-func (st *shimStream) Input(p []byte) error {
-	st.writeMu.Lock()
-	defer st.writeMu.Unlock()
-	return wire.WriteFrame(st.conn, wire.TDataIn, p)
-}
-
-func (st *shimStream) Resize(cols, rows int) error {
-	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeResize, Cols: cols, Rows: rows})
-	if err != nil {
-		return err
-	}
-	st.writeMu.Lock()
-	defer st.writeMu.Unlock()
-	return wire.WriteFrame(st.conn, wire.TControl, body)
-}
-
-func (st *shimStream) Close() error {
-	st.closeOnce.Do(func() {
-		close(st.done)
-		st.conn.Close()
-	})
-	return nil
 }

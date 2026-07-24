@@ -107,11 +107,31 @@ func isRepaintFrame(p []byte) bool {
 // outright rather than being appended. Any other frame (or Flush/Close)
 // commits whatever repaint frame is currently held.
 func (w *Writer) Write(p []byte) (int, error) {
-	n := len(p)
-	if n == 0 {
+	if len(p) == 0 {
 		return 0, nil
 	}
-	cp := append([]byte(nil), p...) // own copy: caller may reuse p after Write returns
+	return w.enqueue(append([]byte(nil), p...)) // own copy: caller may reuse p after Write returns
+}
+
+// WriteOwned is Write's no-copy counterpart: it queues p WITHOUT copying, so
+// the caller must never mutate or reuse p after this call — ownership of the
+// backing array transfers to the Writer (R3.3.3). It exists for a caller whose
+// chunk is already exclusively owned and single-use, such as hub.feed's
+// freshly-allocated PTY read (internal/shim/server.go), where the extra copy
+// Write makes for safety is pure overhead. Otherwise identical to Write: same
+// (len(p), nil) contract, same repaint-frame collapse, never blocks.
+func (w *Writer) WriteOwned(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return w.enqueue(p)
+}
+
+// enqueue is Write and WriteOwned's shared body: cp is queued (or collapsed
+// into the held repaint frame) as-is, so the caller decides whether cp is a
+// defensive copy or a transferred-ownership slice.
+func (w *Writer) enqueue(cp []byte) (int, error) {
+	n := len(cp)
 	repaint := isRepaintFrame(cp)
 
 	w.mu.Lock()

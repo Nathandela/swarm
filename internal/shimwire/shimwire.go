@@ -22,6 +22,23 @@ const (
 	TypeResize     = "resize"
 	TypeSignal     = "signal"
 	TypeExitReport = "exit_report"
+	// TypeSnapshotInfo is the shim->daemon preamble that precedes a CHUNKED
+	// snapshot: it declares the snapshot's total byte length up front (SnapshotLen)
+	// so the daemon reader knows how many TSnapshot chunk bytes to reassemble
+	// WITHOUT waiting for a following frame (an idle session must not hang). It is
+	// sent only when snapshot chunking was negotiated at hello (see SnapshotChunking);
+	// otherwise the shim sends today's single TSnapshot frame. Mirrors the
+	// daemon->client OpLease.SnapshotLen preamble.
+	TypeSnapshotInfo = "snapshot_info"
+	// TypeSnapshotReq is a daemon->shim one-shot snapshot request: the shim
+	// answers on the SAME connection with its current grid snapshot (the same
+	// encoding an attach snapshot uses, chunked iff SnapshotChunking was
+	// negotiated) WITHOUT installing a subscriber — it never supersedes an
+	// attached controller's stream, by construction. Sent only to a shim whose
+	// hello reply advertised SnapshotOnly; callers use a DEDICATED connection
+	// (a snapshot interleaved into an active attach stream on one connection is
+	// unsupported). Added by the C3 fix wave for the grid tap.
+	TypeSnapshotReq = "snapshot_req"
 )
 
 // Signal vocabulary for a Control{Type: TypeSignal}.
@@ -40,6 +57,37 @@ type Control struct {
 	Sig         string `json:"sig,omitempty"`          // signal: SigTerm|SigKill
 	ExitCode    *int   `json:"exit_code,omitempty"`    // exit_report
 	ExitSignal  string `json:"exit_signal,omitempty"`  // exit_report
+	// SnapshotChunking is an OPTIONAL hello capability advertised by BOTH peers:
+	// the daemon sets it in its hello to tell the shim it can reassemble a chunked
+	// snapshot, and the shim sets it in its hello reply to tell the daemon it will
+	// chunk. It is negotiated at hello WITHOUT bumping WireVersion (it stays 1);
+	// Decode tolerates it as an unknown field on an old peer, which never sets it,
+	// so an old<->new pair degrades to today's single-frame snapshot path (G-D).
+	SnapshotChunking bool `json:"snapshot_chunking,omitempty"` // hello (both directions)
+	// SnapshotOnly is an OPTIONAL hello capability advertised by the SHIM: it
+	// will answer TypeSnapshotReq with a non-subscribing one-shot snapshot. An
+	// old shim never sets it, so a new daemon falls back to attach-based
+	// sampling (G-D); an old daemon ignores it entirely.
+	SnapshotOnly bool `json:"snapshot_only,omitempty"` // hello (shim reply)
+	// SnapshotLen is the snapshot's total byte length, carried in a TypeSnapshotInfo
+	// preamble so the daemon reader reassembles exactly that many chunk bytes.
+	SnapshotLen int `json:"snapshot_len,omitempty"` // snapshot_info
+}
+
+// Caps is the set of OPTIONAL capabilities a peer advertised in its hello
+// message (all negotiated without bumping WireVersion; an old peer that sets
+// none degrades to the pre-capability behavior, G-D). The daemon captures the
+// shim's reply Caps at hello and threads them to the code that must ENFORCE
+// them (e.g. protocol.readSnapshot reassembles a chunked snapshot only when
+// SnapshotChunking was advertised — R1.2.2).
+type Caps struct {
+	SnapshotChunking bool
+	SnapshotOnly     bool
+}
+
+// Caps extracts the capability fields from a hello Control.
+func (c Control) Caps() Caps {
+	return Caps{SnapshotChunking: c.SnapshotChunking, SnapshotOnly: c.SnapshotOnly}
 }
 
 // Encode serializes c to its JSON wire form.

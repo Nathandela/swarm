@@ -107,6 +107,12 @@ const inputBufSize = 4096
 // column.
 const snapshotUnavailableNotice = "[swarm: snapshot unavailable - live output follows]\r\n"
 
+// altExitSeq exits the alternate screen, shows the cursor, and resets the pen. It is
+// idempotent on a terminal already back in the main buffer (exit-alt is a no-op there;
+// cursor-show and SGR-reset are always safe), so both teardown paths — the normal
+// finish() and the panic recover — emit it whenever the snapshot paint entered alt.
+const altExitSeq = "\x1b[?1049l\x1b[?25h\x1b[0m"
+
 // Run blocks driving the passthrough and ALWAYS restores the terminal before it
 // returns. It paints the snapshot exactly once (raw-then-paint), then streams live
 // frames to Out while forwarding keystrokes (except the detach key) and resizes to
@@ -144,17 +150,35 @@ func Run(cfg Config) (reason Reason, err error) {
 	var (
 		chromeEngaged    bool
 		curCols, curRows int
+		// wasAlt records whether the snapshot paint entered the alternate screen
+		// (render.go's RenderSnapshotClipped writes CSI ?1049h when the snapshot was
+		// captured there). It is the ONLY source of truth for exiting alt: the client
+		// never parses the live passthrough stream (R4.2.2), so it cannot know whether
+		// the agent's own output already exited alt by teardown time. Declared here,
+		// above the recover-defer, so the PANIC path can exit alt too; it is ASSIGNED
+		// below once the snapshot is decoded, and read by teardownAlt.
+		wasAlt bool
 	)
 	// A fault anywhere in the loop (e.g. a mid-render write panic) is recovered so the user
 	// lands back on a sane terminal and the general view, never a wrecked screen behind a
 	// crashed TUI (E8.2). The deferred restore above still runs.
 	defer func() {
 		if r := recover(); r != nil {
-			if chromeEngaged {
-				// Best-effort: out may be mid-fault, so guard the write against a re-panic.
+			// Best-effort teardown: out may be mid-fault, so guard the writes against a
+			// re-panic. Same order as finish() (item 2): chrome cleanup FIRST (its
+			// bottom-row clear is buffer-local, harmless on the abandoned alt buffer),
+			// then exit alt (global state). Without the alt-exit a recovered panic after
+			// an alt snapshot paint would strand the terminal in the alternate screen
+			// (deployment-committee via agents-tracker-rs8).
+			if chromeEngaged || wasAlt {
 				func() {
 					defer func() { _ = recover() }()
-					writeAll(out, chromeCleanup(curRows))
+					if chromeEngaged {
+						writeAll(out, chromeCleanup(curRows))
+					}
+					if wasAlt {
+						writeAll(out, []byte(altExitSeq))
+					}
 				}()
 			}
 			reason, err = ReasonError, fmt.Errorf("attach: recovered panic: %v", r)
@@ -197,6 +221,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// (GROUND) — never mid escape sequence (A-1, ADR-006 v0.3.0).
 	var parser outParser
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
+		wasAlt = snap.AltScreen
 		// Clip the snapshot to the reserved area (rows-1 when chrome is on) so it never
 		// paints over the hint row.
 		rendered := vt.RenderSnapshotClipped(snap, cols, ptyRows(rows))
@@ -250,6 +275,14 @@ func Run(cfg Config) (reason Reason, err error) {
 		buf := make([]byte, inputBufSize)
 		for {
 			n, e := in.Read(buf)
+			// Detach recognition is deliberately solo-byte (D4 RULED,
+			// agents-tracker-rs8): only a read that yields the detach key ALONE
+			// (n==1) detaches. The pump has no bracketed-paste state machine, so
+			// scanning every read for the byte would risk detaching mid-paste on
+			// any input that happens to carry it; solo-read is overwhelmingly the
+			// common case for a real keypress, and a missed detach under an input
+			// flood is rare and recoverable by pressing again. Documented
+			// limitation, not a bug: revisit only on field evidence.
 			if n == 1 && buf[0] == detachKey {
 				signalDetach()
 				return
@@ -292,6 +325,19 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 	}()
 
+	// teardownAlt undoes the alt-screen entry the initial snapshot paint made
+	// (R4.2.2, agents-tracker-rs8). It is idempotent on a terminal already back
+	// in the main buffer — exit-alt (CSI ?1049l) is a no-op there, and
+	// cursor-show/SGR-reset are always safe — so emitting it unconditionally
+	// whenever wasAlt is true is safe regardless of whether the live stream
+	// already exited alt itself. wasAlt false (never entered alt) emits nothing,
+	// so a main-buffer session's terminal is never touched here.
+	teardownAlt := func() {
+		if wasAlt {
+			writeAll(out, []byte(altExitSeq))
+		}
+	}
+
 	// Termination signals (registered above, before raw mode) restore the terminal
 	// before the loop tears down, so a raw-mode client killed by SIGINT/SIGTERM/
 	// SIGHUP never leaves a wrecked terminal behind (E8.2).
@@ -305,9 +351,19 @@ func Run(cfg Config) (reason Reason, err error) {
 	// be mid-fault, so its chrome cleanup is best-effort.
 	finish := func(r Reason) (Reason, error) {
 		_ = cfg.Session.Detach()
+		// Order matters when BOTH chrome and alt are active (deployment-committee,
+		// codex HIGH via agents-tracker-rs8): tear chrome down FIRST, then exit alt.
+		// chromeCleanup's bottom-row CUP+clear is BUFFER-LOCAL, so run before the
+		// alt-exit it clears the abandoned alt buffer's hint row (harmless); run after
+		// it (the old order) it lands on the freshly restored PRIMARY buffer and erases
+		// the user's shell line. The DECSTBM reset chromeCleanup carries is GLOBAL
+		// state, effective from either side of the buffer switch. Keying on
+		// chromeEngaged (not cfg.Chrome) keeps a too-small (rows<=2) run byte-identical
+		// to Chrome:false. teardownAlt is a no-op when the snapshot was never alt.
 		if chromeEngaged {
 			writeAll(out, chromeCleanup(curRows))
 		}
+		teardownAlt()
 		restore()
 		return r, nil
 	}

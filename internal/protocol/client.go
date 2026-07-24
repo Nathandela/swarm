@@ -346,15 +346,32 @@ func (c *Client) dispatchControl(ctrl Control) {
 }
 
 // closeReadLoop runs when the read loop exits: it closes any live attachment's
-// Frames() channel (from the read-loop goroutine, so no send races the close) and
-// closes the client.
+// Frames() channel and eventsCh (from the read-loop goroutine, so no send races
+// the close), then closes the client.
+//
+// This is the single convergence point for BOTH teardown paths (agents-tracker-
+// 1uq): an explicit Close() closes c.conn, which makes the read loop's
+// wire.ReadFrame error out and return, running this deferred call; a dead peer
+// (pump eviction, daemon crash/restart) makes wire.ReadFrame fail the same way.
+// Either way, closeReadLoop only runs once — it is the sole defer of the sole
+// invocation of readLoop (started once, in Dial) — and only after readLoop's for
+// loop has permanently exited. dispatchControl's OpEvent case, the only other
+// sender to eventsCh, runs synchronously inside that same for loop, so by the
+// time this method closes eventsCh no send can still be in flight: closer and
+// sender are the same goroutine, strictly sequenced by the loop's exit. No
+// sync.Once is needed beyond that ordering.
 func (c *Client) closeReadLoop() {
 	c.mu.Lock()
 	att := c.att
 	c.att = nil
+	ch := c.eventsCh
+	c.eventsCh = nil
 	c.mu.Unlock()
 	if att != nil {
 		att.closeFrames()
+	}
+	if ch != nil {
+		close(ch)
 	}
 	c.Close()
 }
@@ -468,26 +485,35 @@ func (a *Attachment) Detach() error {
 
 // maxSnapshotBytes caps a reassembled snapshot so a garbage or oversized
 // snapshot_len can never OOM the client, while still admitting the LARGEST snapshot
-// the shim can LEGALLY produce. The vt emulator serializes ONE JSON run per grid
-// cell (Epic 2's accepted no-run-merging decision) and CLAMPS the two free-form
-// fields producer-side (vt.SnapshotTextMax per cell, vt.SnapshotTitleMax for the
-// title), so the largest legal snapshot at maxDim x maxDim is bounded. The cap is
-// finite (a garbage/huge/negative length is rejected without allocation) yet large
-// enough that no legal snapshot is rejected. It DEPENDS on the vt producer-side
-// limits it references — if those or maxDim change, the cap tracks them.
+// the shim can LEGALLY produce. The vt emulator serializes at most ONE JSON run per
+// grid cell — the WORST case, reached only when no two adjacent cells share a style.
+// Since item 4.3 (agents-tracker-ut0) it MERGES adjacent same-style cells into one
+// run, which can only SHRINK a snapshot: a merged run replaces N per-cell runs'
+// fixed JSON with a single copy and carries those cells' still-per-cell-clamped
+// texts concatenated, never more bytes than the N runs it replaces. The emulator
+// also CLAMPS the two free-form fields producer-side (vt.SnapshotTextMax per cell,
+// vt.SnapshotTitleMax for the title), so the largest legal snapshot at maxDim x maxDim
+// stays bounded by the one-run-per-cell worst case below. The cap is finite (a
+// garbage/huge/negative length is rejected without allocation) yet large enough that
+// no legal snapshot is rejected. It DEPENDS on the vt producer-side limits it
+// references — if those or maxDim change, the cap tracks them.
 //
-// Derivation:
+// Derivation (one-run-per-cell worst case; merging always comes in under it):
 //   - per cell: a fully-styled Run's fixed JSON fields (~124 B) + the clamped cell
 //     text. A cell's Text is ONE grapheme (vt), so at most its base rune is
 //     JSON-escapable (< > & -> \uXXXX, 6 B); combining marks are emitted verbatim.
-//     So escaped text <= vt.SnapshotTextMax + a small escape slack.
+//     So escaped text <= vt.SnapshotTextMax + a small escape slack. A merged run
+//     carries the SAME summed cell text under a SINGLE fixed-field overhead, so it
+//     never exceeds this per-cell sum.
 //   - per line: the {"runs":[ ... ]} array framing.
 //   - once: the title (free-form, so every byte may escape to \uXXXX) + the Snap
 //     wrapper (version/cols/rows/cursor/keys).
 //
-// Epic 8 note (N-1 first-paint budget): per-cell run serialization still makes a
-// worst-case snapshot large (~190 MiB at maxDim=1000); run-merging in the snapshot
-// format is the eventual optimization if first-paint latency suffers.
+// Epic 8 note (N-1 first-paint budget): the one-run-per-cell WORST case is still
+// large (~190 MiB at maxDim=1000, every adjacent cell differing in style); item 4.3
+// run-merging shrinks the TYPICAL styled snapshot by the run-length factor (~68x on
+// a uniform-per-row 200x50 grid), which is where the real first-paint win lands. The
+// cap is unchanged: it must still admit the worst case.
 const (
 	snapshotRunFixedMax     = 128                    // fully-styled Run JSON, empty text, + separator
 	snapshotCellTextMax     = vt.SnapshotTextMax + 8 // clamped one-grapheme text, escaped worst case
@@ -554,9 +580,13 @@ func (a *Attachment) failSnapshot() {
 
 // deliverFrame delivers one live frame. It is only ever called from the client
 // read-loop goroutine, so it never races closeFrames (also read-loop-driven).
+// p is not copied: wire.ReadFrame allocates a fresh body slice per frame
+// (wire.go) and the read loop never touches p again after this call returns
+// (checked against the TSnapshot/chunking path too), so ownership transfers
+// onto the channel without a redundant copy (R3.3.2).
 func (a *Attachment) deliverFrame(done <-chan struct{}, p []byte) {
 	select {
-	case a.frames <- append([]byte(nil), p...):
+	case a.frames <- p:
 	case <-a.closed:
 	case <-done:
 	}

@@ -48,11 +48,14 @@ const SnapshotTextMax = 64
 // unbounded title. The Epic 6 reassembly cap is derived from this too.
 const SnapshotTitleMax = 256
 
-// Run is the projection of a single grapheme cell: its content and style. Runs
-// are per-cell (a cell is never merged with a neighbor), so a run's Text is one
-// grapheme, or a single space for a blank cell. A double-width grapheme keeps
-// its one grapheme in Text and carries Width 2, accounting for the spacer cell
-// that follows it. Text never contains ESC/C0/C1/DEL bytes.
+// Run is a maximal span of adjacent grapheme cells that share an identical style
+// (item 4.3): its Text is the spanned cells' content concatenated and its Width
+// is their widths summed. A single-cell run holds one grapheme, or a single
+// space for a blank cell; a double-width grapheme contributes its one grapheme
+// to Text and 2 to Width, accounting for the spacer cell that follows it.
+// Merging shrinks a styled snapshot without changing the reconstructed line text
+// (consumers concatenate Run.Text) or the width invariant (Widths still sum to
+// Cols). Text never contains ESC/C0/C1/DEL bytes.
 type Run struct {
 	Text      string `json:"text"`
 	Width     int    `json:"width"`
@@ -283,12 +286,33 @@ func (e *Emulator) buildSnap() *Snap {
 	return s
 }
 
-// buildLine walks a row's cells left to right, emitting one run per grapheme
-// cell. A wide grapheme's content cell yields a run of Width 2, and its spacer
-// cell is skipped by advancing past it. A blank cell yields a single space.
-// Caller holds mu.
+// buildLine walks a row's cells left to right and coalesces adjacent cells that
+// share every style field into one run (item 4.3): the run's Text is the cells'
+// content concatenated and its Width is their widths summed. A wide grapheme's
+// content cell contributes Width 2 (its spacer cell is skipped by the x += w
+// advance, exactly as before merging), and a blank cell contributes a single
+// space. Caller holds mu.
 func (e *Emulator) buildLine(y int) Line {
-	runs := make([]Run, 0, e.cols)
+	var runs []Run
+	// cur is the open run. A lone cell keeps cur.Text aliasing its own cell text
+	// (zero extra allocation, as before merging); only when a SECOND same-style
+	// cell joins is the text promoted into curB, so a multi-cell run costs one
+	// amortized-growth buffer rather than a fresh string per appended cell.
+	var cur Run
+	var curB strings.Builder
+	var open, building bool
+	flush := func() {
+		if !open {
+			return
+		}
+		if building {
+			cur.Text = curB.String()
+			curB.Reset()
+			building = false
+		}
+		runs = append(runs, cur)
+		open = false
+	}
 	for x := 0; x < e.cols; {
 		c := e.term.CellAt(x, y)
 		w := 1
@@ -308,10 +332,39 @@ func (e *Emulator) buildLine(y int) Line {
 		if x+w > e.cols {
 			w = e.cols - x
 		}
-		runs = append(runs, styleRun(st, sanitizeText(content), w))
+		// Each cell's Text is still clamped per-cell inside styleRun, so a merged
+		// run's Text is bounded by cell-count * SnapshotTextMax and never exceeds
+		// the one-run-per-cell byte count the client's reassembly cap is sized for.
+		r := styleRun(st, sanitizeText(content), w)
+		if open && sameRunStyle(cur, r) {
+			if !building { // promote on the first merge: seed curB with cur.Text
+				curB.WriteString(cur.Text)
+				building = true
+			}
+			curB.WriteString(r.Text)
+			cur.Width += r.Width
+		} else {
+			flush()
+			cur = r // aliases this cell's Text and Width until a merge promotes it
+			open = true
+		}
 		x += w
 	}
+	flush()
 	return Line{Runs: runs}
+}
+
+// sameRunStyle reports whether two runs carry identical style — every field
+// except Text and Width. Only cells matching on all of these may merge, so a
+// merged run has a single unambiguous SGR at render time.
+func sameRunStyle(a, b Run) bool {
+	return a.Fg == b.Fg &&
+		a.Bg == b.Bg &&
+		a.Bold == b.Bold &&
+		a.Faint == b.Faint &&
+		a.Italic == b.Italic &&
+		a.Underline == b.Underline &&
+		a.Reverse == b.Reverse
 }
 
 // DecodeSnapshot parses snapshot bytes and validates the schema version.
