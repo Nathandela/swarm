@@ -1,7 +1,9 @@
 # Phase B requirements — Android handset (the v1 milestone)
 
-**Status**: v2, revised after audit-committee round 1 (codex REVISE / opus REVISE / fable REVISE).
-**Date**: 2026-07-24.
+**Status**: v3, revised after audit-committee rounds 1 and 2 (both rounds: codex REVISE /
+opus REVISE / fable REVISE). Round 2 additionally surfaced a **live Phase A security hole**
+(§4.6), now tracked as PB-GW-*.
+**Date**: 2026-07-25.
 **Binds**: the Phase B implementation. Refines `docs/research/remote-v1-roadmap.md` §"Phase B"
 into testable requirements.
 **Predecessor**: Phase A is closed (`docs/verification/remote-phaseA-committee-closure.md`,
@@ -39,7 +41,7 @@ From the roadmap, verbatim:
 | Build tools | 35.0.0 | `$ANDROID_HOME/build-tools` |
 | NDK | 27.2.12479018 | `$ANDROID_HOME/ndk` |
 | gomobile / gobind | installed 2026-07-24 | `~/go/bin` |
-| Gradle | 9.6.1 system; wrapper pins 8.11.1 (generation verified) | checked-in wrapper |
+| Gradle | 9.6.1 system; wrapper **generation** verified in a scratch build pinning 8.11.1. The wrapper is **not yet checked in** — that is PB-TOOL-4. | scratch build |
 | Emulator + AVD | `swarmtest`, Android 15, `google_apis/arm64-v8a`; boots headless in ~30 s, adb attaches | `$ANDROID_HOME/emulator` |
 | Host CPU | Apple M1 (arm64) | — |
 | Go | 1.26.1 toolchain (module declares `go 1.24.2`, `go.mod:3`) | system |
@@ -82,7 +84,8 @@ defenses, they are the discharge of an existing ADR promise.
 | **Other apps + the Android platform itself** | not modeled | **new**: backup/restore extraction, notification listeners, exported components and intents, overlay/tapjacking, third-party IMEs, accessibility services, clipboard, ADB/heap dumps, logs |
 | **Mobile build supply chain** | not modeled | **new**: Gradle/Maven/gomobile dependencies |
 
-Only the third and fourth rows are genuinely new. They drive PB-SEC-10..14.
+Only the **fourth and fifth** rows are genuinely new (the stolen handset, row three, is
+explicitly pre-existing). They drive PB-SEC-10..14.
 
 ---
 
@@ -94,7 +97,7 @@ These reorder the phase. None was in the roadmap's Phase B plan.
 
 `internal/phonecore/journal.go:1` documents the package as "gomobile-ready". **The claim is
 unenforced — no test guards it**, and it is false. Verified failures include
-`crypto.ContentKey [32]byte` (`internal/remote/crypto/epoch.go:64`, an array, in 8 exported
+`crypto.ContentKey [32]byte` (`internal/remote/crypto/epoch.go:64`, an array, in **9** exported
 signatures); unsigned `uint32`/`uint64` epoch and seq throughout; `AcceptGrant` returning
 **four** values (`accept.go:21`); `[]CachedSession` and `Snapshot.Lines []string`; `(T, bool)`
 returns on `SessionCache.Get`, `ReplyCache.Take`, `SnapshotCache.Get`, `MailboxRouter.TakeGrant`;
@@ -113,7 +116,8 @@ produce the true number mechanically.)*
 Verified with `go list -deps`: `internal/phonecore` -> `internal/protocol` -> `internal/daemon`,
 pulling in `internal/shim`, `internal/engine`, `internal/vt`, `internal/transcript`,
 `internal/persist`, `internal/shimwire`, plus `github.com/creack/pty`, `charmbracelet/x/vt`,
-`ultraviolet`, `xo/terminfo`, `muesli/cancelreader` — **53 non-stdlib packages**. Also,
+`ultraviolet`, `xo/terminfo`, `muesli/cancelreader` — **52 non-stdlib packages** (`go list -deps
+-f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/phonecore | sort -u | wc -l`). Also,
 `gobind`'s generated wrapper lives outside the module's `internal/` boundary, so an
 `internal/...` package cannot be bound at all.
 
@@ -171,6 +175,48 @@ PB-NET-5 on its merits — **as a protocol change covering both hops**.
 
 ---
 
+### 4.6 The GATEWAY's inbound replay guard is also in-memory — a live Phase A hole (opus round 2, verified)
+
+§4.3 found the phone's durable-state gap. The machine side has the **same defect, and it is
+relay-adversary-reachable**, which §4.3's is not in the same way:
+
+- `NewCommandBridge` builds `crypto.NewMailboxReceiver()` fresh on every start
+  (`internal/remotegw/command_loop.go:106`) and its read cursor starts at 0 (`:96`). Its own doc
+  says a caller "resuming across a restart should seed it via `SetCursor` from durable state" —
+  and **`SetCursor` is never called from production startup**; its only call site is `:152`,
+  advancing within the same run. The gateway binary opens `OpenSeqSource` for
+  `outbound-journal.seq` and `outbound-reply.seq` only (`cmd/swarm-remote/config.go:91,95`) —
+  **no inbound state is persisted at all**.
+- In `Accept` the staleness test is `hi, seen := r.highest[mk]; if seen && Seq <= hi`
+  (`internal/remote/crypto/envelope.go:254-256`). On a fresh receiver `seen == false`, so the
+  check is **skipped entirely** and `gap := seen && ...` is false — the first replayed frame at
+  any seq is accepted with no gap signal, and so is every contiguous frame after it.
+- `NewMailboxReceiver` leaves `maxAge == 0` (`envelope.go:219-221`), so the bounded-age check
+  at `:263` is **disabled on the production inbound path**. There is no age backstop.
+- Input frames carry **no signature and no expiry** (`internal/phonecore/input.go:21-27`,
+  `internal/remotegw/input_in.go:20-26`), unlike commands, which the daemon bounds by
+  `ExpiresAt`. `routeInput` drops only on `Gap` or empty session (`command_loop.go:208-216`),
+  so a replayed keystroke routes to `Leases.Input` and reaches the PTY.
+- The epoch survives reboot — rotation happens only in `RevokeDevice`
+  (`internal/skeleton/api.go:231`), which is precisely the premise `seqstore.go` exists for.
+
+**Attack**: the relay is the declared adversary, so it simply retains phone->machine frames
+instead of honoring ack-deletion. After any gateway restart it re-serves them from cursor 0;
+they are accepted, and any that are input frames are injected into whatever lease is live —
+so the adversary can replay previously-observed keystroke bursts into a real session.
+
+Phase A recorded the durable-seq problem (committee finding C2b) for the **outbound** direction
+only and closed on "NO relay-adversary-reachable confidentiality/integrity hole"
+(`docs/verification/remote-phaseA-committee-closure.md`). **That claim is falsified for the
+integrity direction across a gateway restart.** It is not in Phase A's recorded residual lists.
+
+This is a Phase A defect, but it lands in Phase B for two reasons: PB-LIFE-1/-5 mandate
+restart-on-exit supervision, which turns a rare event into a routine one; and it is the exact
+mirror of PB-STATE, so fixing them together is the only coherent option. It is tracked as
+**PB-GW-*** and must also be recorded as a correction to the Phase A closure (PB-DOC-5).
+
+---
+
 ## 5. Scope decisions taken in this revision
 
 Three contradictions the reviewers surfaced are resolved here rather than left to the implementer.
@@ -188,25 +234,65 @@ Three contradictions the reviewers surfaced are resolved here rather than left t
 Testable acceptance criteria. TDD mandatory with an evidenced RED run (GG-5).
 **New in v2**: PB-STATE, PB-PAIR, PB-KEY, PB-RUN, PB-TIME, PB-INPUT, PB-PUSH-0.
 
+### 6.0 The numeric budget (binding; round 2 required real numbers, not "a stated bound")
+
+Round 2 correctly objected that v2 said "stated bound" everywhere, so an implementation could
+choose 10-second typing latency and still pass. These are the binding values. They are chosen
+to be consistent with the Phase A constants already in the tree (`RendezvousTTL` 60 s,
+`HandshakeTimeout` 30 s, `maxControlSessionTTL` 30 m, `maxCommandValidity` 1 h,
+`MailboxAppendPerMin` 600, `OpsPerMin` 600, `RetentionCap` 7 d). Changing any value requires
+committee agreement, not implementer discretion.
+
+| Budget | Value | Where it binds |
+|---|---|---|
+| Input latency, phone `Type` -> PTY write, local relay | p50 <= 150 ms, p95 <= 400 ms, p99 <= 800 ms, n >= 200 | PB-NET-5 |
+| Append latency while a wait is outstanding | <= 50 ms for the append call to complete | PB-NET-5(a) |
+| Server-side wait (long-poll) maximum | 25 s (under common 30-60 s idle-proxy timeouts) | PB-NET-5 |
+| Non-wait request timeout | 10 s | PB-NET-7 |
+| Reconnect backoff | initial 500 ms, factor 2, ceiling 30 s, jitter +/-20% | PB-NET-4 |
+| **Input frame rate (client-side coalescing)** | <= 8 frames/s sustained, coalescing a 30 Hz autorepeat burst into one frame per 125 ms | PB-INPUT-5 — must stay under `MailboxAppendPerMin: 600` (= 10/s) |
+| Callback queue | 256 items, drop-oldest with a surfaced overflow signal | PB-BIND-6 |
+| Idempotent op queue | 64 ops, reject-new with an error (never a silent drop) | PB-NET-4 |
+| Resync rate | <= 1 per stream per 5 s, <= 12 per 5 min | PB-SYNC-6 |
+| Biometric freshness | 60 s for input/take_control; **per-use** (`CryptoObject`) for revoke, kill switch, launch, kill | PB-SEC-2 |
+| Seq reservation block | 256 (bounds seqs burned per crash) | PB-STATE-3 |
+| Clock skew | reject and surface distinctly beyond +/-30 s | PB-TIME-1 |
+| Push coalescing window | 30 s per session | PB-PUSH-0 |
+| Local pairing state TTL | 10 min (relay `RendezvousTTL` is 60 s) | PB-PAIR-4 |
+
+### 6.0b PB-GW — durable gateway inbound state (NEW; closes §4.6, the live Phase A hole)
+
+| ID | Requirement | Acceptance criteria |
+|---|---|---|
+| PB-GW-1 | The gateway persists its inbound per-`(sender, epoch)` replay high-water and its mailbox read cursor, and **seeds them on start** via the existing `SetCursor`/`SeedHighWater` seams, which production currently never calls. | RED test: restart the gateway and assert a retained frame is refused with `ErrStaleSeq`. Today it is accepted. |
+| PB-GW-2 | The inbound receiver enables the bounded-age check (`maxAge > 0`), which `NewMailboxReceiver` leaves disabled — giving an age backstop even if a high-water is lost. | Test: an authenticated but too-old envelope is refused with `ErrStaleAge`. |
+| PB-GW-3 | The inbound commit is atomic with the same discipline PB-STATE-7 requires of the phone: high-water + cursor commit before the relay ack. | Crash-injection test at each boundary; no accepted-but-unpersisted frame and no unapplied-but-acked frame. |
+| PB-GW-4 | A gateway kill/restart replay test symmetric to PB-STATE-2, run against a **retaining (adversarial) relay**, not an honest one. | The adversarial relay fake retains acked items and re-serves from cursor 0; no keystroke reaches the PTY twice. |
+| PB-GW-5 | The Phase A closure is corrected rather than left claiming a property that does not hold. | PB-DOC-5. |
+
 ### 6.1 PB-STATE — durable on-device state (NEW; the most severe gap, §4.3)
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-STATE-1 | The core persists and restores everything resume-critical: device keys, pinned machine static + sign pub + routing id, epoch id + keys, **outbound send-seq**, **per-(sender,epoch) receive high-water**, relay mailbox cursor, session/snapshot caches, pending idempotent ops and their outcomes, and per-stream stale flags. | Enumerated in one persisted schema; a test asserts each field survives a restart. |
+| PB-STATE-1 | The core persists and restores everything resume-critical: device keys, pinned machine static + sign pub + routing id, epoch id + keys, **outbound send-seq**, **per-(sender,epoch) receive high-water**, **the grant receiver's `(highest epoch, grant_seq)` watermark** — which `internal/remote/crypto/epoch.go:155,167` explicitly requires be "persisted across restart (F3)", or "a relay could replay an old correctly-signed grant after a phone/app restart" — the wake-envelope replay coordinate chosen by PB-PUSH-3, the relay mailbox cursor, session/snapshot caches, pending idempotent ops and their outcomes, and per-bucket stale flags. | Enumerated in one persisted schema; a test asserts each field survives a restart, including a grant-replay-after-restart test. |
 | PB-STATE-2 | **Process-death acceptance test**: kill the core process mid-session and restart. Typing, launch and kill must still succeed, and a frame captured before the kill must still be rejected as a replay. | The RED form of this test must first demonstrate today's stale-drop brick. This single test is the guard for §4.3 in both directions (liveness and replay). |
-| PB-STATE-3 | Send-seq durability must not cost an fsync per keystroke. The strategy is a stated decision (reserve-a-ceiling-and-burn-the-gap, mirroring `internal/remotegw/seqstore.go`), not an accident. | Decision recorded; a test asserts no seq is ever reused across a crash at any point in the reservation window, including a crash between reservation and use. |
-| PB-STATE-4 | Writes are crash-atomic; corruption or detected rollback fails **closed** (refuse to operate, prompt re-pair) rather than resetting counters. | Tests inject truncation, corruption, and a rolled-back state file; none results in seq reuse or a reset high-water. |
+| PB-STATE-3 | Send-seq durability must not cost an fsync per keystroke: reserve-a-ceiling-and-burn-the-gap (block size per §6.0), mirroring `internal/remotegw/seqstore.go`. **Because this deliberately creates outbound seq gaps, the gap consequence must be specified** — see PB-STATE-8. | Decision recorded; a test asserts no seq is ever reused across a crash at any point in the reservation window, including a crash between reservation and use. |
+| PB-STATE-4 | Writes are crash-atomic; corruption fails **closed**. **Rollback needs a named trust anchor**: AEAD and atomic writes detect corruption, not rollback — a valid older blob sealed by the same Keystore key stays valid, and KeyMint rollback-resistance protects key blobs, not arbitrary app state. The anchor is one of: remote high-water reconciliation on reconnect, rollback-resistant key evolution, a hardware counter where available, or an explicitly narrowed threat. | The chosen anchor is implemented and tested; the test may not rely on hidden state unavailable after a real rollback. |
+| PB-STATE-7 | **The receive path commits atomically.** Today the high-water advances inside `Accept` (`internal/remote/crypto/envelope.go:254`), caches mutate afterwards (`internal/phonecore/snapshot.go:201`), and the cursor/ack come later still — so a crash between them either loses a frame forever (stale-dropped on redelivery, never applied) or, if reordered, permits replay. `{high-water, relay cursor, decoded cache mutation, stale flags}` must commit as one transaction **before** the ack, with the ack idempotent on retry. | Crash injection at every boundary in the receive sequence; no frame is both acked and unapplied, and none is applied twice. |
+| PB-STATE-8 | **Phone->machine gap semantics.** PB-STATE-3 burns seqs, and the gateway currently *silently drops* input/resize frames whose `Gap` bit is set (`internal/remotegw/command_loop.go:208-216`) while ignoring `Gap` on commands — so the first post-restart keystroke can vanish with no signal. The invariant must be stated and tested: a burned gap is absorbed by the re-lease command frame, never by an input/resize frame. High-level operation gaps must trigger durable outcome reconciliation before later state is trusted; live-input gaps may be discarded, but only explicitly. | Test asserts the first post-restart input frame carries no `Gap` bit, and that an operation gap forces reconciliation. |
+| PB-STATE-9 | **Which tier seals which state** is specified, not left open: state the wake path must read while locked (push token, dedup coordinate) is sealed under the wake tier; send-seq, receive high-waters and decrypted caches are sealed under the content tier (PB-KEY-2). One undifferentiated "sealed" would let the implementer pick whichever tier passes. | Test asserts the locked-device process can read only the wake-tier state. |
 | PB-STATE-5 | A schema version with a forward-migration path; an app upgrade must not lose state or reset counters. | Migration test from vN to vN+1; an unknown future version fails closed. |
-| PB-STATE-6 | State at rest is sealed per PB-KEY-2 and excluded from Android backup (PB-SEC-10). | Asserted jointly with those requirements. |
+| PB-STATE-6 | State at rest is sealed per PB-KEY-2/PB-STATE-9 and excluded from Android backup (PB-SEC-10). *(Verified in slice S15, after Android key custody exists — in v2 this sat in the state slice and created a dependency cycle.)* | Asserted jointly with those requirements. |
+| PB-STATE-10 | **Fail-closed must not mean bricked.** PB-STATE-4 fails closed and prompts re-pair, but PB-KEY-3 establishes that re-pairing is *refused* while a device is registered (`BeginPairing` fail-fasts on a non-empty registry), so the phone could brick into a state whose only exit is physical access to the machine. This path must inherit PB-KEY-3's documented machine-side unblock. | Test drives corruption -> fail-closed -> documented unblock -> working re-pair, with no step requiring undocumented knowledge. |
 
 ### 6.2 PB-BIND — bindability (§4.1, §4.2)
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-BIND-0 | The bound package's dependency closure is constrained by an **allowlist**, not a denylist: closure ⊆ {crypto, wire/protocol leaf types, relay client, stdlib, x/mobile}. (v1 used a denylist that already omitted `internal/shimwire`.) | A test computes `go list -deps` and fails on any package outside the allowlist. Phase A suite green through the extraction. |
+| PB-BIND-0 | The bound package's dependency closure is constrained by an **executable allowlist of exact import paths**, not categories and not a denylist. (v1 used a denylist that already omitted `internal/shimwire`; v2's categories were not machine-checkable and omitted required transitive deps such as `github.com/coder/websocket`, `github.com/flynn/noise`, and `golang.org/x/crypto`.) The allowlist is a checked-in file of fully-qualified paths, and adding one is a reviewed change. | A test computes `go list -deps` and fails on any package outside the checked-in allowlist file. Phase A suite green through the extraction. |
 | PB-BIND-1 | A single façade package at a **non-internal** path is the only bound surface. | `gomobile bind` succeeds on the façade; nothing else is bound. |
 | PB-BIND-2 | Only gomobile-legal types (no arrays, unsigned ints, maps, non-`[]byte` slices, generics, variadics, channels, or `(T, bool)`; multi-return only `(T, error)`). | **A Go test runs `gobind` over the façade and fails on any bind-illegal export** — the standing guard §4.1 showed was missing. It also emits the true legal/illegal counts. |
-| PB-BIND-3 | The façade covers every capability the v1 screens need: pairing (QR decode, SAS, confirm, cancel), roster + presence, sessions with Group, journal read/subscribe, snapshot peek, take_control acquire/release, input + resize, launch, interrupt/kill, revoke, kill switch, push-token registration, connection/stale state, resync, and state lifecycle (Start/Stop/restore). | A traceability table maps every screen element to a method; a Go test exercises every method against a real in-process backend. Any screen element with no method is a coverage failure. |
+| PB-BIND-3 | The façade covers every capability the v1 screens need: pairing (QR decode, SAS, confirm, cancel), roster + presence, sessions with Group, journal read/subscribe, snapshot peek, take_control acquire/release, input + resize, launch, interrupt/kill, revoke, kill switch, push-token registration, connection/stale state, resync, state lifecycle (Start/Stop/restore), **`terminal_watch`/`terminal_unwatch`** (`internal/protocol/remote.go:88-89`, routed at `internal/remotegw/command_loop.go:238-256` — first-class verbs PB-APP-4's live tail depends on, and without `unwatch` the peek plane leaks per-session server render work), and **push preferences** (see PB-PUSH-8). | A traceability table maps every screen element to a method; a Go test exercises every method against a real in-process backend. Any screen element with no method is a coverage failure. |
 | PB-BIND-4 | The JNI boundary carries no *unnecessary* secret. The one deliberate exception is the key-custody artifact defined by PB-KEY-1, which must be named, directional, and justified. (v1's absolute phrasing contradicted PB-SEC-1 — opus H2, fable F5.) | Test asserts no exported method returns raw long-term private keys; PB-KEY-1's artifact is the sole documented crossing. |
 | PB-BIND-5 | No Go panic crosses the boundary (a panic through JNI kills the app). | Every entry point recovers into an `error`; a test injects a panic per entry point. |
 | PB-BIND-6 | Documented threading/lifecycle contract: any-thread safe; `Start`/`Stop` idempotent; callbacks arrive on a Go goroutine (UI must marshal); a slow callback must not stall the core, with a **stated** queue bound and overflow behavior. | `-race` test hammering concurrent calls and repeated Start/Stop; a deliberately slow callback does not wedge the core and its overflow is observable. |
@@ -228,7 +314,10 @@ Testable acceptance criteria. TDD mandatory with an evidenced RED run (GG-5).
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
 | PB-KEY-1 | The **JNI key-custody contract**: exactly which artifact crosses the boundary, in which direction, and why that is acceptable — reconciling the Go core's native-heap keys with the Java-only Android Keystore API. | Contract documented in the ADR and in the façade package doc; a test pins the crossing to that one artifact. |
-| PB-KEY-2 | ADR-007 A15's **two-tier split is honored on Android**: the wake key is after-first-unlock and readable by the push path; the content key is user-authentication-gated and **not** readable by the push path or derivable from the wake key. | Tests assert the push path cannot obtain the content key, and that a locked device cannot decrypt session content. |
+| PB-KEY-2 | ADR-007 A15's **two-tier split is honored on Android**: the wake key is after-first-unlock and readable by the push path; the content key is user-authentication-gated and **not** readable by the push path or derivable from the wake key. **The enforcement mechanism must be stated**: on iOS A15 relies on NSE process isolation, but on Android `FirebaseMessagingService` runs in the app process, so enforcement is Keystore auth-gating (unwrap fails while locked) plus code discipline — *not* OS isolation. The emulator's software Keystore proves the code path, not the hardware guarantee (§10). | Tests assert the push path cannot obtain the content key and a locked device cannot decrypt session content; the test states which of the two properties it actually proves. |
+| PB-KEY-5 | **Custody tier per role**, not one undifferentiated "core key". `crypto.KeyStore` is a single interface over `NoiseStatic`, `OpenSealedBox`, `SignCommand`, `SignRelayAuth` (`internal/remote/crypto/keystore.go:47-56`), and background reconnect needs `SignRelayAuth` while locked, while `OpenSealedBox` recovers **both** wake and content keys from a grant. If the recipient key is therefore after-first-unlock, then a stolen once-unlocked handset **plus the persisted sealed grant** yields the content key — falsifying ADR-007:89 in the very phase meant to implement it. Assign a tier to each of `{NoiseStatic, Recipient, CommandSign, RelayAuth}` and state whether the sealed grant blob is discarded after opening or retained under the content tier. | Test: an attacker with after-first-unlock access and everything at rest reaches no content key. |
+| PB-KEY-6 | **`crypto.KeyStore` must become failable.** `SignCommand(msg []byte) []byte` is errorless and `NoiseStatic() *NoiseStatic` exports raw private material — neither is implementable against Android Keystore, which never exports private keys and whose every operation can fail (user-auth-required, and permanent invalidation on biometric-enrollment change, which PB-SEC-2 explicitly requires). PB-SEC-2's "Keystore-enforced sign authorization" is unimplementable until this changes. `crypto` is inside PB-BIND-0's allowlist, so this is a cross-cutting interface change that must be owned by a slice. | Interface returns errors; a test drives an auth-required failure and a key-invalidated failure through every signing path. |
+| PB-KEY-7 | **Lock purges live memory.** Invalidating the biometric gate is not enough: `MailboxRouter` holds `ContentKey` by value for its lifetime and caches decrypted sessions/snapshots (`internal/phonecore/snapshot.go:88,132`), so "locked device cannot decrypt" can pass while the process still holds the key and already-decrypted content. On lock, background, or auth expiry the core must stop content operations, zeroize/discard native key custody, purge decrypted session/snapshot/reply caches and sensitive UI state, and require a fresh unwrap before restoring content. | Test asserts no content key and no decrypted session content remains reachable after lock. |
 | PB-KEY-3 | **Epoch-grant recovery.** Today a grant can be lost with no recovery: the relay refuses appends past the mailbox depth cap (`server.go:743-747`) and `SweepRetention` purges items older than `RetentionCap` (**default 7 days**, `config.go:90`) **even if never acked** (`server.go:1136-1139`); no re-grant verb exists anywhere. A phone offline across a rotation is then permanently unable to decrypt, and re-pairing is refused because `BeginPairing` fail-fasts while a device is registered. | Either a re-grant request path, or a defined user-legible terminal state plus a documented machine-side unblock. A test drives the offline-across-rotation scenario to a defined, recoverable end — not an indefinite decrypt-failure loop. |
 | PB-KEY-4 | Key rotation while the app is backgrounded/offline is handled without data loss or silent breakage. | Test: rotate while offline, reconnect, converge. |
 
@@ -240,7 +329,7 @@ Testable acceptance criteria. TDD mandatory with an evidenced RED run (GG-5).
 | PB-NET-2 | TLS verified by default; a pinned self-signed cert is an explicit opt-in for self-hosted relays; cleartext refused **except** an explicit, narrowly-scoped loopback carve-out for the in-process test relay — which is `ws://`-only today (`server.go:228`), making v1's unconditional ban self-contradictory (fable F6). The Go client's **trust-root source on Android must be stated** (embedded bundle vs pinning-only); `x509.SystemCertPool` is not usable as on desktop (opus H3). | Tests: bad cert fails closed; non-loopback cleartext rejected; the carve-out cannot be enabled in a release build; pinning accepts only the pinned cert. |
 | PB-NET-3 | The transport handles only opaque sealed frames and never holds content keys. | Test asserts a known plaintext marker never appears on the wire. |
 | PB-NET-4 | Resilience: automatic reconnect, bounded exponential backoff with **stated numeric** ceiling and jitter, re-auth after reconnect, connection state surfaced. **Input and resize are never queued or replayed** (ADR-007 D7 `:60-62`: live-only, "delivery unknown / not sent"); only high-level idempotent ops may queue, with a stated bound. | Tests against a flapping relay assert the retry ceiling, state transitions, re-auth, that no keystroke is ever replayed, and the idempotent-op queue's bound and drop signal. |
-| PB-NET-5 | **Low-latency input across BOTH hops.** The mechanism is a stated protocol change — request-id correlation with concurrent dispatch, or an explicit server-push frame — because §4.5 proves a naive long-poll head-of-line-blocks the keystroke path and a second connection is not available. It must also drop the gateway's 500 ms command-IN poll (`service.go:27`), which ADR-007:461 calls "unusable for live typing"; a phone-side-only fix passes v1's criterion while typing stays 500 ms-gated (fable F4). Interaction with presence must be stated: a phone parked in a wait keeps `presence.connected = true`, suppressing the presence-timeout wake push (`server.go:1112-1132`). | **Acceptance is end-to-end and bidirectional**: (a) with a wait outstanding, a keystroke append from the same client still completes within a stated bound; (b) phone `Type` -> PTY write measured end-to-end with stated p50/p95/p99, sample count, and timeout; (c) cancellation, max pending waits, quota accounting, and reconnect behavior each tested; (d) the Phase A per-source connection cap and cumulative handshake deadline still hold. |
+| PB-NET-5 | **Low-latency input across BOTH hops.** The mechanism is a stated protocol change — request-id correlation with concurrent dispatch, or an explicit server-push frame — because §4.5 proves a naive long-poll head-of-line-blocks the keystroke path and a second connection is not available. It must also drop the gateway's 500 ms command-IN poll (`service.go:27`), which ADR-007:461 calls "unusable for live typing"; a phone-side-only fix passes v1's criterion while typing stays 500 ms-gated (fable F4). Interaction with presence must be stated. *(v2 described this wrongly: `SweepPresence` (`internal/remote/relay/server.go:1105-1132`) fires when the MACHINE's presence entry times out, toward paired-peer tokens — the phone's own connectivity is never consulted. The interactions actually worth stating are that a GATEWAY parked in a wait keeps the machine's presence online, and that pushes fire redundantly at an already-connected phone.)* | **Acceptance is end-to-end and bidirectional, against §6.0's numbers**: (a) with a wait outstanding, a keystroke append from the same client completes within 50 ms; (b) phone `Type` -> PTY write measured end-to-end at p50 <= 150 ms / p95 <= 400 ms / p99 <= 800 ms over n >= 200; (c) cancellation, max pending waits, quota accounting, and reconnect behavior each tested; (d) the Phase A per-source connection cap and cumulative handshake deadline still hold, and the newest-wins takeover property is not weakened. |
 | PB-NET-6 | Phase A's relay-adversary properties hold through the real client **across process restarts** — seq gating, replay/reorder/dup rejection, mailbox cap, hostile-pagination termination. (v1's single-process criterion was satisfiable while the property was false on a handset — opus M1.) | The Phase A adversarial suite runs against the real client, **plus** the PB-STATE-2 restart case. |
 | PB-NET-7 | Hygiene: timeouts everywhere, cancellation honored, no goroutine leaks across connect/disconnect cycles. | `-race` + goroutine-leak assertion over repeated Start/Stop. |
 
@@ -256,7 +345,7 @@ coordinate at all.
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-SYNC-1 | Stale state is tracked and repaired **per stream** (journal, terminal, command-reply, grant), not globally. | Test: a gap in one stream marks only that stream stale. |
+| PB-SYNC-1 | **Staleness is tracked per SEQ BUCKET; repair is per CHANNEL.** v2 required "a gap in one stream marks only that stream stale", which round 2 proved **impossible**: journal and terminal frames share one `(sender, epoch)` sequence space, and `MailboxResult` carries only `{Plaintext, Gap bool}` (`internal/remote/crypto/envelope.go:195-200`) — a bare boolean with no frame kind — so a skipped seq cannot be attributed to journal-vs-terminal. There are **three buckets** (shared journal+terminal, command-reply via the deliberate `SenderKeyID=0` split, grant) and **four repair channels**. A gap in the shared bucket must conservatively stale **both** journal and terminal. | Test: a gap in the shared bucket marks journal AND terminal stale; a command-reply gap marks neither. Attributing a shared-bucket gap to one channel is a failing implementation. |
 | PB-SYNC-2 | Repair per stream: journal via an atomic roster+events snapshot; terminal via a fresh full snapshot (a journal reseed cannot repair a missed grid); command replies via the durable operation outcome, or the stream stays unresolved; grant via PB-KEY-3. | Test per stream, including that a journal reseed alone does **not** clear terminal staleness. |
 | PB-SYNC-3 | `Stale()` clears only after a successful reseed **of that stream**, committed atomically with the matching transport watermark. Failed resync stays stale (fail-closed). | Test asserts no optimistic clearing and no watermark/coordinate confusion. |
 | PB-SYNC-4 | **Authorization is specified correctly.** v1 claimed the resync rides `requireRemoteAuthz`; it does not — `handleJournalRead` gates on the negotiated `journal` capability and the kill switch only (`internal/protocol/server.go:1657-1683`), while `requireRemoteAuthz` guards the mutating ops. The requirement must state which gate applies. | The chosen gate is implemented and tested; an unauthorized resync is refused. |
@@ -271,12 +360,14 @@ coordinate at all.
 | PB-INPUT-2 | Lease lifecycle is defined across gateway restart, daemon restart, session exit under the user, app backgrounding, and process death; input is suppressed until a new lease is visibly confirmed. | Test per event; no keystroke is ever sent without a confirmed current lease generation. |
 | PB-INPUT-3 | Lease TTL expiry mid-use (`maxControlSessionTTL = 30m`, `internal/protocol/server.go:156`) has defined UX. | Test drives expiry and asserts the state. |
 | PB-INPUT-4 | Retry policy is keyed on stable server error codes, never blind resend. | Test maps each error class to its policy. |
+| PB-INPUT-5 | **Input must be coalesced to stay under the relay's quotas.** `MailboxAppendPerMin: 600` and `OpsPerMin: 600` (`internal/remote/relay/config.go:24-25,39-44`) allow 10 appends/s, so a ~30 Hz key-autorepeat or fast interactive typing trips `codeQuotaExceeded` mid-lease after roughly 20 s — while short-burst latency tests still pass. Coalescing bound per §6.0 (<= 8 frames/s sustained, one frame per 125 ms). | **A sustained-typing acceptance test** (not a burst): continuous input for >= 60 s at autorepeat rate stays within quota and loses no keystrokes. |
 
 ### 6.8 PB-TIME — clock skew (NEW; codex, opus Md1, fable F7)
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-TIME-1 | The phone signs `ExpiresAt = now + 1 minute` and the daemon rejects expired commands (`internal/skeleton/deviceauth.go:73-75`) and also `ExpiresAt > now + 1h` (`server.go:164`). The usable window is therefore roughly "phone ≤1 min slow" — a handset two minutes behind fails **every** command with an opaque "not authorized". Skew must be detected, bounded, and surfaced distinctly. | Test with a skewed phone clock asserts a distinct, user-legible error (not the generic authorization failure) and a defined tolerance or negotiated TTL. |
+| PB-TIME-1 | The phone signs `ExpiresAt = now + 1 minute` and the daemon rejects expired commands (`internal/skeleton/deviceauth.go:74-76`) and also `ExpiresAt > now + maxCommandValidity` (1 h; const at `internal/protocol/server.go:164`, enforced in `requireRemoteAuthz`). The usable window is therefore roughly "phone ≤1 min slow" — a handset two minutes behind fails **every** command with an opaque "not authorized". Skew must be detected, bounded (§6.0: ±30 s), and surfaced distinctly. | Test with a skewed phone clock asserts a distinct, user-legible error (not the generic authorization failure). |
+| PB-TIME-2 | **Every security-relevant timestamp** has a stated authoritative clock and skew behavior, not just command expiry: envelope `IssuedAt` (and the PB-GW-2 bounded-age check that consumes it), push expiry/replay, QR/rendezvous expiry display (`RendezvousTTL` 60 s), lease TTL display (`maxControlSessionTTL` 30 m), reconnect timers, and cached-state freshness. | Each timestamp's authority and tolerance recorded and tested. |
 
 ### 6.9 PB-RUN — Android runtime model (NEW; codex#6, opus Md3, fable F9)
 
@@ -319,6 +410,8 @@ today is the presence-timeout sweep. FCM will be the first real backend *and* ne
 | PB-PUSH-5 | Missing/invalid credentials degrade gracefully and loudly; the system works without push. | Test: misconfigured sink -> no crash, explicit error, core paths unaffected. |
 | PB-PUSH-6 | Push tokens survive a relay restart, or the loss is an accepted, recorded residual. Today `tokens` is an in-memory map (`server.go:173`, sole write `:830`) — a relay restart silently disables push exactly when it is needed. | Persisted and tested, or explicitly recorded with its user-visible consequence. |
 | PB-PUSH-7 | The single-token-per-routing-id limitation is documented as acceptable for single-device v1 or fixed. | Decision + a test pinning the behavior. |
+| PB-PUSH-8 | **The push toggles need a transport verb.** PB-APP-7 requires toggles that "demonstrably suppress delivery", but delivery is decided by PB-PUSH-0's *gateway-side* trigger, and no push-preference op exists in the signed action set (`internal/protocol/remote.go:74-79,88-89`). Local filtering is not sufficient: the push would still have been sent and the provider would still see token/timing/size, contradicting PB-PUSH-3. A device->machine preference verb is therefore required — which drags in PB-SYNC-5's problem (a new `Action*` constant, an `actionClass` mapping, and a capability-tier decision). | Verb implemented and gated; test asserts a disabled toggle means **no push is sent**, verified at the sender, not the receiver. |
+| PB-PUSH-9 | **Client-side FCM token lifecycle**: initial `getToken`, `onNewToken` rotation, re-registration on every authenticated reconnect (which also largely neutralizes PB-PUSH-6's relay-restart loss), deletion on revoke/disable, and correct behavior across process death and app upgrade. A façade method can exist while no Android code ever calls it. | End-to-end test with a fake FCM and a real relay: rotate the token and assert delivery still works; restart the relay and assert re-registration restores it. |
 
 ### 6.12 PB-SEC — handset security (expanded; §3)
 
@@ -346,7 +439,7 @@ Verified: **31 distinct** `--p-*` tokens (v1 said 38 — corrected) across 4 dir
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
 | PB-TOK-1 | One machine-readable token source (JSON) is the single origin for the Android theme. | Theme generated from or asserted against the JSON. |
-| PB-TOK-2 | Exactly one skin is chosen for v1 and recorded. | Decision in the ADR; app implements one. |
+| PB-TOK-2 | Exactly one skin is chosen for v1 and recorded, and **the app is pinned to that fixed dark theme** — since §5 defers light mode, a system-light handset must not render the app unstyled or low-contrast (and PB-E2E-2's screenshots are the evidence artifact). | Decision in the ADR; a test asserts the app does not follow the system `uiMode`. |
 | PB-TOK-3 | The terminal peek keeps the phosphor-green monospace treatment; purple stays retired. | Asserted against the token source + emulator evidence. |
 
 *(v1's light-mode authoring and HTML<->JSON drift test are cut per §5; the four-direction HTML is
@@ -395,16 +488,27 @@ a prototype, and one skin has one consumer.)*
 | PB-E2E-2 | On-emulator smoke: APK installs, pairs against a local relay + daemon, SAS matches, observes, takes control, types — **including one process death mid-session** (PB-STATE-2 on a real runtime). | Evidence (log + screenshots) + reproducible runbook. |
 | PB-E2E-3 | Evidence files per repo convention with a RED-first run per slice, and each evidence file states **what it proves**, not merely that it exists. | GG-5 satisfied per slice. |
 | PB-E2E-4 | No Phase A regression at any slice boundary. | Full suite + four gates green. |
+| PB-E2E-5 | **A physical-handset gate.** The exit criterion says "your Android phone", and §10's honesty clause — while it does prevent a false "production-ready" label — otherwise defines that criterion away (codex#5). The gate covers: pair via the real camera, lock/unlock, process death, reboot, observe, launch, lease, type, Wi-Fi<->cellular handoff, and revoke, on hardware-backed Keystore with real biometrics. | **Until this runs, Phase B is "provisionally implemented", not done** (§13). It cannot be executed on this machine (no handset), so it is an explicitly deferred gate with a named owner and a runbook — not a silently accepted limit. |
 
 ### 6.18 PB-OPS — operability
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-OPS-1 | Reproducible relay deployment with TLS termination guidance; `swarm-relay` released or a pinned deploy image. | Image/unit builds; runbook executed with an artifact as evidence. |
-| PB-OPS-2 | Key/identity backup and recovery documented **and exercised** (restore actually performed once). | Restore evidence artifact, not a document review. |
-| PB-OPS-3 | Operator runbook: install, pair, revoke, kill switch, device loss, push configuration. | Each step executed once during verification. |
-| PB-OPS-4 | Honest metadata disclosure covering relay operator and push provider. | ADR section consistent with PB-PUSH-3 and ADR-007 D11. |
-| PB-OPS-5 | Relay operational floor: TLS renewal/expiry, backup/restore of relay state, resource limits, disk-full behavior, log rotation, health check, and phone/gateway/relay version compatibility. | Each addressed or explicitly deferred with its risk stated (codex#13). |
+**Scope correction (round 2, codex#14):** v2 silently pulled Phase C work into Phase B. The
+roadmap puts relay ops — "Dockerfile / systemd unit, TLS termination runbook, VPS provisioning,
+key-backup UX, onboarding docs" — in **C2** (`docs/research/remote-v1-roadmap.md:263`). Phase B
+keeps only what the handset demonstration actually needs; the rest returns to Phase C.
+
+| ID | Requirement | Acceptance criteria |
+|---|---|---|
+| PB-OPS-1 | A **local/TLS relay runbook sufficient for the handset demonstration** — enough to stand up a reachable relay with a pinned or real certificate. Production deployment, VPS provisioning and image publishing return to Phase C. | Runbook executed once with an artifact as evidence. |
+| PB-OPS-2 | Operator runbook for the flows Phase B introduces: install, pair, revoke, kill switch, device loss, push configuration. | Each step executed once during verification. |
+| PB-OPS-3 | Honest metadata disclosure covering relay operator and push provider. | ADR section consistent with PB-PUSH-3 and ADR-007 D11. |
+| PB-OPS-4 | `swarm-relay` and `swarm-remote` are buildable release artifacts (today `.goreleaser.yaml` builds `./cmd/swarm` only, and its own comment at `:9-11` is stale — it names `swarm-char`/`swarm-fake-agent` but not `swarm-relay`). One change serves this and PB-LIFE-6. | Both binaries built by the release path. |
+
+*(Returned to Phase C: production backup/restore, disk-full behavior, log rotation, health
+checks, TLS renewal automation, resource limits, and cross-version compatibility — recorded in
+§7 rather than dropped.)*
 
 ### 6.19 PB-DOC
 
@@ -414,6 +518,8 @@ a prototype, and one skin has one consumer.)*
 | PB-DOC-2 | Phase B exit criteria in `implementation-goals.md`; a verification file maps every PB-* ID to evidence. | Full ID coverage. |
 | PB-DOC-3 | Residuals recorded in the Phase A closure style: what, why, adversary-reachable or not. | Reviewed in the final round. |
 | PB-DOC-4 | `docs/research/remote-v1-roadmap.md:286` ("Implementers are sonnet/opus subagents — never fable/haiku") is amended rather than silently contradicted by §11's model assignment. | Roadmap updated. |
+| PB-DOC-5 | **The Phase A closure is corrected.** `docs/verification/remote-phaseA-committee-closure.md` states "no relay-adversary-reachable confidentiality/integrity hole"; §4.6 falsifies that for the integrity direction across a gateway restart, and the defect is in none of its residual lists. The closure must record the finding, its fix (PB-GW-*), and that the original claim was scoped to a single gateway run. | Closure amended; the correction is visible where the original claim lives, not only here. |
+| PB-DOC-6 | ADR-007:313 attributes "light+dark token sets" to `remote-control-design-directions.html`, but that file is **dark-only** (31 `--p-*` tokens, four direction blocks, all near-black grounds). The amendment must say the statement was never true of its own cited artifact, rather than presenting the deferral as a change of plan. | ADR amendment states it. |
 
 ---
 
@@ -462,6 +568,33 @@ a prototype, and one skin has one consumer.)*
 | Relay ops floor | codex#13 | PB-OPS-5 |
 | Sequencing | all three | §11 |
 
+### Round 2
+
+| Finding | Raised by | Lands in |
+|---|---|---|
+| **Gateway inbound replay guard + cursor in memory — a live relay-adversary integrity hole** | opus H1 | §4.6, PB-GW-1..5, PB-DOC-5 |
+| "Stated bound" everywhere — numbers still delegated to the implementer | codex#1 | §6.0 budget table |
+| PB-SYNC-1 impossible: shared seq bucket, `Gap` carries no kind | codex#2, fable#2 | PB-SYNC-1 |
+| Receive path has no atomic commit; crash loses or replays a frame | codex#3, fable#8 | PB-STATE-7 |
+| Lock invalidates auth but does not purge the key/caches in Go memory | codex#4 | PB-KEY-7 |
+| Emulator evidence defines the "your Android phone" criterion away | codex#5 | PB-E2E-5, §13 |
+| Grant replay high-water omitted from persisted state | codex#6 | PB-STATE-1 |
+| Burn-the-gap creates outbound gaps; gateway silently drops gapped input | codex#7, opus H5, fable#1 | PB-STATE-8 |
+| FCM token lifecycle unwired (getToken/onNewToken/re-register) | codex#8, fable#7 | PB-PUSH-9 |
+| Rollback detection has no trust anchor | codex#9 | PB-STATE-4 |
+| S3<->S4 cycle; PB-STATE-6 cycle; PB-KEY-2 homeless; missing edges | codex#10/11, opus H3, fable#9 | §11 (rebuilt DAG) |
+| PB-BIND-0 allowlist not executable; omits transitive deps | codex#12 | PB-BIND-0 |
+| PB-TIME covers only command expiry | codex#13 | PB-TIME-2 |
+| PB-OPS silently pulled Phase C work into Phase B | codex#14 | §6.18 scope correction |
+| Per-role custody tiers; sealed grant is a content-key equivalent; `KeyStore` must be failable | opus H2 | PB-KEY-5, PB-KEY-6 |
+| Push toggles have no transport verb; `terminal_watch`/`unwatch` missing from the façade | opus H4 | PB-PUSH-8, PB-BIND-3 |
+| Input coalescing vs `MailboxAppendPerMin` (autorepeat trips quota) | fable#4 | PB-INPUT-5, §6.0 |
+| Nothing pins a fixed dark theme; ADR attributes light+dark to a dark-only artifact | opus M8 | PB-TOK-2, PB-DOC-6 |
+| Which tier seals which state | opus M9 | PB-STATE-9 |
+| Fail-closed dead-ends on the re-pair block | opus M6 | PB-STATE-10 |
+| Presence-interaction mechanism described wrongly | opus L1, fable#3 | PB-NET-5 |
+| Ten further falsified claims | opus M1-M5, fable#5/6 | §12 round-2 table |
+
 ---
 
 ## 9. Criteria discipline
@@ -504,29 +637,52 @@ reviewer do not share context); TDD with an evidenced RED run per slice.
 Reordered per unanimous round-1 feedback: architecture and custody decisions move **before** the
 façade is frozen.
 
+Round 2 found a real **cycle** (PB-STATE-6 sat in the state slice but required Android backup
+exclusion, which depended transitively back on it), a second cycle (the transport slice owned
+PB-NET-1, which needs the façade that depended on it), a **homeless requirement** (PB-KEY-2's
+tests need an Android project that no listed dependency provided), and four missing edges. The
+graph below is an acyclic DAG: Go-only work first, Android work second, integration last.
+
+**Stage 1 — Go core (no Android toolchain needed)**
+
 | Slice | Requirements | Model | Depends on |
 |---|---|---|---|
-| **S0 ADR: custody, tiers, state model, transport change** | PB-KEY-1/2, PB-DOC-1 (decisions only) | opus | — |
-| **S1 Dependency-edge surgery (allowlist)** | PB-BIND-0 | opus | — |
-| **S2 Durable state layer** | PB-STATE-* | opus | S0, S1 |
-| **S3 Transport: correlation + both-hop latency + TLS/resilience** | PB-NET-* | opus | S1 |
-| **S4 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1 | opus | S2, S3, S0 |
-| **S5 Per-stream resync** | PB-SYNC-*, PB-KEY-3/4 | opus | S3, S4 |
-| S6 Input/lease semantics + clock skew | PB-INPUT-*, PB-TIME-1 | opus | S4 |
-| S7 QR: machine renderer + phone decode | PB-PAIR-1..6 | opus | S4 |
-| S8 Gateway supervision (3 states) + release | PB-LIFE-* | opus | — |
-| S9 Push: trigger + seam + FCM sender | PB-PUSH-0..3, 5..7 | opus | S0 |
-| S10 Tokens | PB-TOK-* | fable | — |
-| S11 Android skeleton + build + CI + runtime policy | PB-TOOL-*, PB-RUN-* | fable | S4 |
-| S12 Handset security | PB-SEC-* | opus | S11, S0 |
-| S13 Screens | PB-APP-*, PB-SAS-3 | fable, opus review | S11, S10, S5, S6 |
-| S14 Push receiver | PB-PUSH-4 | fable | S11, S9, S12 |
-| S15 E2E + emulator smoke | PB-E2E-* | opus | all |
-| S16 Docs / ops runbooks | PB-DOC-*, PB-OPS-* | fable, opus review | all |
+| **S0 ADR decisions**: custody tiers, state model, transport change, resync buckets, single-machine, light-mode deferral | PB-DOC-1 (decisions only) | opus | — |
+| **S1 Dependency-edge surgery** (executable allowlist) | PB-BIND-0 | opus | — |
+| **S2 Gateway inbound durability** (the §4.6 security hole) | PB-GW-*, PB-DOC-5 | opus | — |
+| **S3 QR renderer** (machine-side; zero façade coupling — startable immediately) | PB-PAIR-1 | opus | — |
+| S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-*, PB-OPS-4 | opus | — |
+| S5 Design tokens | PB-TOK-* | fable | — |
+| **S6 Transport primitives**: request-id correlation, both-hop latency, TLS/resilience | PB-NET-2..7 | opus | S1 |
+| **S7 Durable phone state** (Go-side; the Android sealing parts are S12) | PB-STATE-1..5, 7, 8 | opus | S0, S1 |
+| **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1 | opus | S6, S7 |
+| S9 Façade<->transport integration | PB-NET-1 | opus | S8 |
+| S10 Per-bucket resync + grant recovery | PB-SYNC-*, PB-KEY-3/4 | opus | S8, S9 |
+| S11 Input/lease semantics, coalescing, clock skew | PB-INPUT-*, PB-TIME-* | opus | S8 |
+| S12 Push: trigger, seam rename, FCM sender, preference verb | PB-PUSH-0..3, 5..9 (machine side) | opus | S0 |
 
-S0/S1/S8/S9/S10 start in parallel. Each slice gate: evidenced RED -> implementation (independent
-agent) -> independent review -> `go build/vet/test -race ./...` (plus the Gradle gate once S11
-lands) green before any dependent slice starts.
+**Stage 2 — Android**
+
+| Slice | Requirements | Model | Depends on |
+|---|---|---|---|
+| S13 Android skeleton + build + CI + runtime policy | PB-TOOL-*, PB-RUN-* | fable | S8 |
+| **S14 Key custody on Android** (resolves PB-KEY-2's homelessness) | PB-KEY-1/2/5/6/7, PB-SEC-1/2 | opus | S13, S0 |
+| S15 State sealing + backup exclusion (breaks the v2 cycle) | PB-STATE-6/9, PB-SEC-10 | opus | S14, S7 |
+| S16 Screens + phone-side pairing | PB-APP-*, PB-PAIR-2..6, PB-SAS-3 | fable, opus review | S13, S5, S3, S10, S11, S12 |
+| S17 Push receiver | PB-PUSH-4 | fable | S13, S12, S14 |
+| S18 App security hardening | PB-SEC-3..9, 11..14 | opus | S16, S17 |
+
+**Stage 3 — integration**
+
+| Slice | Requirements | Model | Depends on |
+|---|---|---|---|
+| S19 E2E + emulator smoke | PB-E2E-1..4 | opus | all |
+| S20 Docs / ADR / ops runbooks | PB-DOC-*, PB-OPS-1..3 | fable, opus review | all |
+| S21 Physical-handset gate (deferred; no device here) | PB-E2E-5 | — | S19 |
+
+S0/S1/S2/S3/S4/S5 start in parallel. Each slice gate: evidenced RED -> implementation
+(independent agent) -> independent review -> `go build/vet/test -race ./...` (plus the Gradle
+gate once S13 lands) green before any dependent slice starts.
 
 ---
 
@@ -543,6 +699,21 @@ lands) green before any dependent slice starts.
 | W7 | PB-BIND-0 denylist | omitted `internal/shimwire`; converted to an **allowlist** |
 | W8 | "stolen phone is new in Phase B" | ADR-007:10/:89 makes it a founding threat; Phase B implements/verifies it (§3) |
 | W9 | "emulator is x86_64" | host is Apple M1; the AVD is `arm64-v8a`, the shipping ABI |
+
+### Round-2 corrections (v2 -> v3)
+
+| # | v2 claim | Correction |
+|---|---|---|
+| X1 | "`ContentKey` in 8 exported signatures" | **9** exported non-test signatures in `internal/phonecore` (scope now stated; repo-wide the count is higher, which is why the scope matters) |
+| X2 | "53 non-stdlib packages" | **52**, by `go list -deps -f '{{if not .Standard}}...'` and by an explicit stdlib filter — both agree (one reviewer reported 53) |
+| X3 | §3 "only the third and fourth rows are new" | the **fourth and fifth**; the stolen handset (row three) is explicitly pre-existing |
+| X4 | "capability pinned at `pairing.go:205`" | ambiguous and half-wrong: `internal/remote/pairing/pairing.go:205` is the rate limiter; the pin is `internal/skeleton/pairing.go:205`. Two reviewers "disagreed" because each read a different file — exactly the W4 hazard |
+| X5 | W3's own correction | also wrong: `server.go:199` initializes the token map, `:830` is the sole write, `:843`/`:935` delete |
+| X6 | W4 "all citations now qualified" | self-falsifying; several `server.go`/`config.go` citations remained unqualified. Load-bearing ones are now qualified, and the claim is narrowed to that |
+| X7 | "ADR-007 D5 (`:50`) mandates gateway persistence" | an over-read: `:50`'s subject is process isolation; persistence appears only in a subordinate parenthetical. §4.3's argument stands on the code, which is the right ground |
+| X8 | §2 "checked-in wrapper" | not checked in at `8cf5bee` — wrapper **generation** was verified in a scratch build; checking it in is PB-TOOL-4 |
+| X9 | PB-SYNC-1 "per-stream staleness" | **impossible** as written; corrected to per-seq-bucket staleness with per-channel repair |
+| X10 | citation off-by-N | `deviceauth.go:73-75`->`:74-76`; `cmd/swarm-remote/config.go:76`->`:77-78`; relay `server.go:1136-1139`->`:1135-1140`, `:743-747`->`:743-749`; `protocol/server.go:164` is the const, enforcement is in `requireRemoteAuthz` |
 
 ---
 
@@ -561,8 +732,16 @@ Phase B is done when:
 5. ADR amendment + verification evidence merged.
 6. The committee agrees, with residuals documented, non-adversary-reachable, and accepted.
 
-**Honesty clause.** Without a physical handset, real FCM credentials, and a deployed relay, the
-strongest defensible claim at the end of Phase B is **"implementation complete and
-emulator-verified; production validation pending on-device gate"** — not "production-ready".
-The final audit must state which of the two was actually achieved rather than allowing the
-stronger phrase by default.
+**Completion status, and why "done" is not available here.** Round 2 objected that v2's honesty
+clause, while it did block a false "production-ready" label, otherwise defined the binding exit
+criterion away — the criterion says "your Android phone", and emulator evidence is not that.
+So Phase B has two distinct end states, and the final audit must name which was reached:
+
+- **Provisionally implemented** — items 1-6 above hold, with PB-E2E-5 (the physical-handset
+  gate) outstanding. This is the ceiling achievable on this machine: no handset, no Firebase
+  project, no deployed relay. Hardware-backed Keystore, real biometrics, Doze, cellular
+  handoff, and real camera pairing remain unverified.
+- **Done** — additionally PB-E2E-5 has been executed on real hardware.
+
+Declaring "done" without PB-E2E-5 is not permitted, and neither is quietly reclassifying
+PB-E2E-5 as a §10 limit: it is a deferred gate with a runbook, not an accepted gap.
