@@ -151,6 +151,21 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	// Round-7 re-audit (codex/opus/sonnet consensus): newCoreAPI already started the
+	// coreAPI.watch() roster poller, so EVERY assembly error return past this point must tear it
+	// down (and the core) or that goroutine + its fd leak. Harmless in production (a Serve error is
+	// a fatal startup -> the process exits and the OS reclaims), but wrong for tests / any
+	// in-process Serve retry. A defer'd cleanup-unless-success covers all error paths uniformly and
+	// panic-safely; the explicit per-path core.Close() calls below are now redundant (removed).
+	// coreAPI.close() is idempotent (stopOnce) and never touches core, so the later Daemon.Close()
+	// stays a no-op double-call.
+	assembled := false
+	defer func() {
+		if !assembled {
+			d.api.close()
+			_ = core.Close()
+		}
+	}()
 	// Open the pinned-device registry that backs R-POL.9 remote-command authorization.
 	// A corrupt registry fails assembly (fail-closed): the daemon must not start unable
 	// to authorize -- or worse, silently unable to enumerate -- its paired devices.
@@ -168,8 +183,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		// Finding 2 (round-6): fail CLOSED. If a confirmed-stale device cannot be reconciled away,
 		// ABORT assembly rather than open remote.sock still serving it.
 		if err := reconcilePairedDevices(devReg, cfg.StateDir); err != nil {
-			_ = core.Close()
-			return nil, err
+			return nil, err // defer'd cleanup tears down d.api + core
 		}
 	}
 	d.api.devices = devReg
@@ -196,8 +210,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// the daemon must not start with pairing silently broken (machine key custody).
 	pc, err := loadPairingConfig(cfg.StateDir)
 	if err != nil {
-		_ = core.Close()
-		return nil, err
+		return nil, err // defer'd cleanup tears down d.api + core
 	}
 	d.api.pairing = pc
 	d.srv = protocol.NewServer(d.api, epID)
@@ -210,8 +223,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	if cfg.RemoteSocketPath != "" {
 		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID)
 		if rerr != nil {
-			_ = core.Close()
-			return nil, rerr
+			return nil, rerr // defer'd cleanup tears down d.api + core
 		}
 		d.remoteSrv = rs
 		// C2a: `swarm remote off` (or removing the last device) must proactively SEVER every live
@@ -230,7 +242,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.tapWG.Add(1)
 	go func() { defer d.tapWG.Done(); d.tapGrids(ctx) }() // shim->engine output tap (seam b)
 
-	close(d.ready) // assembly complete: the ConnHandler may now serve
+	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
+	close(d.ready)   // assembly complete: the ConnHandler may now serve
 	return d, nil
 }
 

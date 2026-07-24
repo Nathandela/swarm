@@ -89,10 +89,17 @@ func TestRevokeDevice_ConcurrentRepairGrantSurvives(t *testing.T) {
 // TestReconcilePairedDevices_FailsClosedOnStaleRemoveError (Finding 2, round-6): the startup
 // epoch-mismatch reconcile must fail CLOSED. A stale-epoch device whose Remove FAILS (an unwritable
 // devices dir makes the atomic persist fail pre-rename, so the registry RESTORES the stale device in
-// memory) must make reconcilePairedDevices return an error, so Serve aborts assembly rather than
-// open remote.sock still serving the confirmed-stale record. A machine-identity read error or a
-// current-epoch device must NOT abort -- covered by the existing TestServe_Reconciles* tests, which
-// still expect Serve to come up.
+// memory) must make reconcilePairedDevices return an error, so its Serve caller aborts assembly
+// rather than open remote.sock still serving the confirmed-stale record. A machine-identity read
+// error or a current-epoch device must NOT abort -- covered by the existing TestServe_Reconciles*
+// tests, which still expect Serve to come up.
+//
+// SCOPE (round-7, opus#1/sonnet#2): this is a UNIT test of reconcilePairedDevices -- it corrupts the
+// registry AFTER opening it, so it exercises the helper's fail-closed error return, NOT Serve's full
+// abort. At the Serve level a chmod-based fault is self-healed because device.Open rehardens the dir
+// to 0700 immediately before reconcile runs (registry.go); the Serve abort remains correct + is
+// defer-covered, but its real trigger set is non-permission Remove failures (EROFS/ENOSPC/dir
+// removed). A Serve-level integration test would need such a fault; not added here.
 func TestReconcilePairedDevices_FailsClosedOnStaleRemoveError(t *testing.T) {
 	stateDir, err := os.MkdirTemp("/tmp", "swrec")
 	if err != nil {
