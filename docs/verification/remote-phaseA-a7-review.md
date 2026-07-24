@@ -153,5 +153,30 @@ Every consensus finding is fixed, each RED->GREEN with independent review:
   lossy-mirror supersede seed (accepted v1 residual on the narrow concurrent-peek path).
 
 Both models found NO bypass on peek input-injection, pump raw-byte suppression, R7 authorization,
-double-Accept, or replay/reorder/dup — unchanged by the fix-pack. Remaining: a full -race sweep + a
-focused re-review confirming the fixes close the findings, then A7 is sound.
+double-Accept, or replay/reorder/dup — unchanged by the fix-pack.
+
+## Second review cycle — re-review (2026-07-24)
+
+The full -race sweep passed (40 pkgs), and BOTH re-reviewers (codex + opus) confirmed the fix-pack
+CLOSED A, B, #7, J, D, E-ordering, #2-composition, #8, F/G — and found NO regression on the security
+core (misroute closed, no injection, no post-OFF content stream, sanitization intact, R7/authz/replay
+unchanged). BUT both returned **NOT SOUND** on the kill-switch TEARDOWN/RECOVERY path (one root):
+- **C incomplete + new HIGH:** the kill-switch re-check only fired on an emission, so an IDLE peek
+  never terminated on `swarm remote off` (renderer + tap lingered); and on cancel the daemon didn't
+  close/detach, so Gateway.RunTerminal polled a silent conn forever and the TerminalWatcher never
+  recovered (OFF->ON did not restore). Fails CLOSED (no leak) — a safety-intent + availability gap.
+- **new MED (E-liveness):** RelaySink held its mutex across an UNBOUNDED MailboxAppend.
+- **new LOW-MED:** Unwatch didn't join the cancelled goroutine (rewatch overlap).
+- non-blocking: the input plane is best-effort under relay reorder (drop-on-Gap) — documented in
+  protocol.md (`87d5b9a`).
+
+**Fixed (`7de9515`):** RenderTerminal polls a `stillAllowed` predicate every ticker tick (idle peek
+terminates within ~4ms); the handler writes OpError on peek end (peekGen-guarded) so RunTerminal
+returns and the watcher reconnects — refused at the subscribe gate while OFF (bounded retry),
+resumed on ON; the gateway blanks the phone on cutoff + re-checks ctx before forwarding; Unwatch
+joins; RelaySink bounds the append (5s). `TestPhonesim_ObserveTerminalRecoversAfterKillSwitchToggle`
+proves OFF->ON recovery end to end. Also hardened the sibling load-sensitive
+`TestFanout_WedgedSubscriberDisconnectedWithinBound` (same class as #8).
+
+Remaining: full -race sweep under load + a focused confirmation that the teardown blocker is closed;
+then A7 is SOUND. The security core was confirmed sound across BOTH review cycles.
