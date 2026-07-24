@@ -153,3 +153,42 @@ either. The remaining items are hardening fast-follows; all genuine ones are clo
   hole in the single-device model (confirmed by sonnet + opus).
 
 Standing gate after round 4: `go build/vet/test -race ./...` -- 0 failures. A confirmation round 5 follows.
+
+## Re-audit ROUND 5 (confirmation, 2026-07-24) — codex REJECT / sonnet SHIPS / opus SHIPS -> majority SHIPS
+
+Round 5 confirmed the round-4 fixes sound (lifecycleMu no deadlock, watcher parenting, gap plumbing,
+registry (committed,err) at the registry layer, no new relay-reachable hole in the composed keystroke/
+command/peek/revoke/re-pair paths). codex + opus both caught one REGRESSION the round-4 registry change
+introduced, plus a crash-window confidentiality residual and a lock-placement cost. All fixed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| **REGRESSION (codex#2 + opus#1): a committed-but-dir-sync-failed Remove (post-rename) made RevokeDevice + handleDeviceRevoke early-return BEFORE the sever -> gateway journal sub survives -> re-pair re-seals under the old key to the revoked mailbox** | Sever + grant.Delete now fire whenever removed==true (not gated on err); handleDeviceRevoke severs on removed and replies OK | `2a1a761` |
+| lifecycleMu spanned the sever's blocking socket writes + BeginPairing's result() write -> stalls concurrent revoke/pair (codex#5 + sonnet#1, CONSENSUS) | Hold lifecycleMu only across the atomic core (Get+rotate+Remove+Count decision); run sever + grant.Delete + result() OUTSIDE the lock (removes lock nesting; -race clean) | `2a1a761` |
+| Crash after rotate before Remove leaves a stale-epoch device registered -> old-epoch gateway resumes after restart (codex#1, confidentiality) | Startup reconcile also removes any device whose GrantedEpoch != current machine epoch (fail-safe on read error) | `2a1a761` |
+
+### Recorded residuals (round 5, accepted by sonnet + opus as non-blocking, not relay-reachable)
+- **AddSole committed-error symmetry (codex#4/opus#2):** a committed (post-rename dir-fsync-failed)
+  AddSole makes BeginPairing report failure while the device is durably enrolled without a grant
+  (enrolled-but-grant-less). Integrity/availability only (no key delivered => the phone can do nothing),
+  and SELF-HEALED by the startup reconcile, which clears an enrolled-no-grant device on the next restart.
+  Not fixed (owner-side dir-fsync-fault residual class); recorded.
+- **Gateway under a PERMANENTLY unreadable registry (codex#3):** deviceRevoked() keeps the gateway
+  reconnecting on any read error (the round-4 fix for the transient-error DoS). A revoke coinciding with
+  PERMANENT local corruption would delay the gateway's exit; if a re-pair then re-enabled the kill switch
+  during that window, the stale gateway could re-seal. Requires a degenerate local-FS corruption (not a
+  transient hiccup, not relay-reachable) plus adversarial re-pair timing; sonnet + opus judged the current
+  binary check acceptable (the kill switch blocks the source while deviceless). A tri-state "suspend
+  reconnects until a confirmed read" is a Phase-B hardening; recorded.
+
+Standing gate after round 5: `go build/vet/test -race ./...` -- 0 failures.
+
+## Overall status after five rounds
+The security CORE (frozen crypto, per-(sender,epoch) seq gating, requireRemoteAuthz signature/capability/
+expiry, severGen take_control race, kill-switch gating, epoch rotation on revoke, gateway exit-on-revoke)
+is confirmed sound by all three reviewers across every round; no relay-adversary-reachable confidentiality
+or integrity hole survives in the composed single-device v1 system (sonnet + opus traced this end-to-end
+in rounds 4 and 5). The majority verdict is SHIPS (sonnet + opus, rounds 4 + 5). The remaining residuals
+are owner-side I/O-fault / degenerate-state edges and the standing Phase-B deferrals (live gateway
+epoch-reload, ME-1 relay-close, multi-device/SenderKeyID binding, admin tier, real-phone lifecycle glue +
+mobile app), all documented and none carrying a live relay-reachable hole. A confirmation round 6 follows.
