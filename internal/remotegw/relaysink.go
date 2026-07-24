@@ -33,6 +33,7 @@ type RelayConfig struct {
 	SenderKeyID    [8]byte           // routing key id of this machine (sender)
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 	AppendTimeout  time.Duration     // per-append upper bound (nil/0 => defaultAppendTimeout)
+	Seq            SeqSource         // durable outbound seq high-water (nil => in-memory, non-durable)
 }
 
 // defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
@@ -44,26 +45,33 @@ const defaultAppendTimeout = 5 * time.Second
 // RelaySink is a JournalSink that forwards the daemon's journal to the phone via the
 // untrusted relay (R-GW.3): it seals each record under the epoch content key
 // (XChaCha20-Poly1305, so the relay sees only ciphertext) and appends it to the phone's
-// mailbox. Envelope Seq is a strictly increasing per-sink counter so the phone can
-// order and dedup. Append failures are surfaced via Err(); the durable-cursor /
-// relay-ack backpressure (R-GW.5) is a later refinement.
+// mailbox. Envelope Seq is a strictly increasing per-sink counter (cfg.Seq) so the phone
+// can order and dedup; a durable Seq resumes above the phone's high-water after a gateway
+// restart (C2b) instead of resetting to 1 and being stale-dropped. Append failures are
+// surfaced via Err(); the durable-cursor / relay-ack backpressure (R-GW.5) is a later
+// refinement.
 type RelaySink struct {
 	cfg RelayConfig
 	now func() time.Time
+	seq SeqSource
 
 	mu      sync.Mutex
-	seq     uint64
 	lastErr error
 }
 
 // NewRelaySink returns a sink that seals records under cfg.Key and appends them to
-// cfg.Target's mailbox via cfg.Appender.
+// cfg.Target's mailbox via cfg.Appender. A nil cfg.Seq defaults to a non-durable
+// in-memory source (the seq resets on restart) -- production wires a durable one.
 func NewRelaySink(cfg RelayConfig) *RelaySink {
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &RelaySink{cfg: cfg, now: now}
+	seq := cfg.Seq
+	if seq == nil {
+		seq, _ = OpenSeqSource("") // in-memory, cannot error
+	}
+	return &RelaySink{cfg: cfg, now: now, seq: seq}
 }
 
 // Snapshot seals and forwards each roster record as-of the read cursor, returning on
@@ -139,8 +147,15 @@ func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 func (s *RelaySink) seal(plaintext []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seq++
-	seq := s.seq
+	// Allocate seq inside s.mu so allocation order == append order (concurrent producers
+	// must append in seq order, else the phone's single MailboxReceiver stale-drops a
+	// lower seq that arrives after a higher one). A durable Seq may fsync here once per
+	// reservation block; on a persist fault it fails closed (no seq issued) via Err().
+	seq, err := s.seq.Next()
+	if err != nil {
+		s.setErrLocked(err)
+		return err
+	}
 
 	env, err := crypto.SealMailbox(s.cfg.Key, crypto.EnvelopeHeader{
 		Version:        crypto.VersionV1,

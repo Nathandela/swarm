@@ -70,6 +70,7 @@ type CommandBridgeConfig struct {
 	Key         crypto.ContentKey   // K_epoch content key shared with the phone
 	EpochID     uint32              // the epoch the content key belongs to
 	ReplyTarget string              // the phone's relay routing id (where replies are appended)
+	ReplySeq    SeqSource           // durable reply seq high-water (nil => in-memory, non-durable)
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -85,18 +86,24 @@ type CommandBridgeConfig struct {
 // the good items still process. The daemon's own two-phase idempotency (D6) dedups a
 // command that is redelivered after a crash before the cursor was persisted.
 type CommandBridge struct {
-	cfg  CommandBridgeConfig
-	recv *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
+	cfg      CommandBridgeConfig
+	recv     *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
+	replySeq SeqSource               // OUTBOUND reply seq (durable across restart, C2b)
 
-	mu       sync.Mutex
-	cursor   uint64
-	replySeq uint64
+	mu     sync.Mutex
+	cursor uint64
 }
 
 // NewCommandBridge returns a bridge over cfg. The read cursor starts at 0; a caller
-// resuming across a restart should seed it via SetCursor from durable state.
+// resuming across a restart should seed it via SetCursor from durable state. A nil
+// cfg.ReplySeq defaults to a non-durable in-memory reply seq (resets on restart) --
+// production wires a durable one so the phone never stale-drops a post-restart reply.
 func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
-	return &CommandBridge{cfg: cfg, recv: crypto.NewMailboxReceiver()}
+	replySeq := cfg.ReplySeq
+	if replySeq == nil {
+		replySeq, _ = OpenSeqSource("") // in-memory, cannot error
+	}
+	return &CommandBridge{cfg: cfg, recv: crypto.NewMailboxReceiver(), replySeq: replySeq}
 }
 
 // Cursor is the highest relay mailbox cursor the bridge has consumed (its durable
@@ -263,10 +270,10 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
-	b.mu.Lock()
-	b.replySeq++
-	seq := b.replySeq
-	b.mu.Unlock()
+	seq, err := b.replySeq.Next()
+	if err != nil {
+		return fmt.Errorf("reply seq: %w", err)
+	}
 	env, err := SealControlReply(b.cfg.Key, b.cfg.EpochID, seq, reply)
 	if err != nil {
 		return fmt.Errorf("seal reply: %w", err)

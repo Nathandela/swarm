@@ -24,6 +24,8 @@ type ServiceConfig struct {
 	ReconnectDelay time.Duration     // journal reconnect backoff (default 1s)
 	LeaseAwait     time.Duration     // how long take_control waits for the lease grant (default 5s)
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
+	JournalSeq     SeqSource         // durable outbound seq for journal + terminal frames (nil => in-memory)
+	ReplySeq       SeqSource         // durable outbound seq for command replies (nil => in-memory)
 }
 
 // Service is the supervised gateway runtime (R-GW.1): it composes the journal-OUT
@@ -61,6 +63,7 @@ func NewService(cfg ServiceConfig) *Service {
 		RecipientKeyID: cfg.RecipientKeyID,
 		SenderKeyID:    cfg.SenderKeyID,
 		Now:            cfg.Now,
+		Seq:            cfg.JournalSeq,
 	})
 	gw := New(cfg.DaemonSocket, sink)
 	forwarder := cfg.Forwarder
@@ -82,6 +85,7 @@ func NewService(cfg ServiceConfig) *Service {
 		Key:         cfg.Key,
 		EpochID:     cfg.EpochID,
 		ReplyTarget: cfg.PhoneTarget,
+		ReplySeq:    cfg.ReplySeq,
 	})
 	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases, watchers: watchers}
 }

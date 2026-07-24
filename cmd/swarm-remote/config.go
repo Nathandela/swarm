@@ -17,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // gatewayParams is everything remotegw.Service needs to run, minus the
@@ -30,6 +31,12 @@ type gatewayParams struct {
 	EpochID        uint32
 	RecipientKeyID [8]byte
 	SenderKeyID    [8]byte
+	// Durable OUTBOUND seq high-waters (C2b): journal/terminal and command replies are
+	// two independent per-(sender,epoch) streams on the phone, so each has its own file.
+	// They resume STRICTLY ABOVE the phone's high-water after a restart instead of
+	// resetting to 1 and being stale-dropped.
+	JournalSeq remotegw.SeqSource
+	ReplySeq   remotegw.SeqSource
 }
 
 // resolveGatewayParams loads the machine identity, relay URL, and the single
@@ -58,6 +65,16 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	}
 	rec := devices[0]
 
+	remoteDir := filepath.Join(stateDir, "remote")
+	journalSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-journal.seq"))
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open outbound journal seq: %w", err)
+	}
+	replySeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-reply.seq"))
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open outbound reply seq: %w", err)
+	}
+
 	return gatewayParams{
 		DaemonSocket: daemonSocket,
 		RelayURL:     relayURL,
@@ -70,6 +87,8 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		EpochID:        id.EpochID(),
 		RecipientKeyID: crypto.KeyID(rec.RecipientPub),
 		SenderKeyID:    crypto.KeyID(id.RecipientPublic()),
+		JournalSeq:     journalSeq,
+		ReplySeq:       replySeq,
 	}, nil
 }
 
