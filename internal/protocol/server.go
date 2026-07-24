@@ -192,6 +192,14 @@ type Server struct {
 	// must carry an operation_id (amendment D.0-A1/A4).
 	remoteTier bool
 
+	// severGen is a monotonic counter bumped on every severControl (re-audit finding A).
+	// take_control captures it BEFORE authorizing and re-checks it AFTER publishing
+	// cc.control under ctlMu; if a concurrent sever advanced it, the just-established lease
+	// escaped the sever's snapshot (a silent-resume hole `on` would reopen with no fresh
+	// take_control), so take_control fails closed. Atomic because the bump (before s.mu in
+	// severControl) and the re-check (under ctlMu) cross lock domains.
+	severGen atomic.Uint64
+
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
 	leases map[string]*sessionLease // keyed by local session id
@@ -425,9 +433,10 @@ func (s *Server) distributeJournal(rec JournalRecord) {
 	// C2a: stop streaming journal events while remote control is disabled — a phone that
 	// subscribed before `off` must stop receiving session lifecycle events on the next event
 	// (the subscribe-time gate blocks NEW subscriptions; this blanks the live stream). Cheap
-	// (one global switch read per record, not per subscriber); a backend without a KillSwitch
-	// is never disabled, so the owner tier is unaffected.
-	if s.remoteControlDisabled() {
+	// (one switch read per record, not per subscriber). REMOTE-TIER ONLY (finding B): the owner
+	// Server shares the same KillSwitch-implementing coreAPI, so gating unconditionally would
+	// wrongly blank the OWNER-tier journal too; the kill switch gates the remote tier alone.
+	if s.remoteTier && s.remoteControlDisabled() {
 		return
 	}
 	s.jsubMu.Lock()
@@ -1042,6 +1051,10 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// textually under a root but resolving outside it is refused — and do it AFTER
 	// authz/denylist but BEFORE the cwd stat / any side effect. An unresolvable cwd (e.g.
 	// nonexistent) is refused CodePolicy.
+	// resolvedCwd is the symlink-resolved launch cwd on the remote tier (empty on the owner
+	// tier). ADR-007 D8 (finding D): the RESOLVED real path the policy checked must be the path
+	// the shim uses, so a symlink validated here cannot be re-pointed before the launch.
+	var resolvedCwd string
 	if cc.srv.remoteTier {
 		lp, ok := cc.launchPolicy()
 		if !ok {
@@ -1057,6 +1070,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 			cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
 			return
 		}
+		resolvedCwd = resolved
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
@@ -1077,6 +1091,9 @@ func (cc *clientConn) handleLaunch(c Control) {
 		return
 	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
+	if resolvedCwd != "" {
+		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated
+	}
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		cc.replyError("launch: " + err.Error())
@@ -1218,6 +1235,10 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 // cancelled regardless of the lease predicate — coarse but safe (sever is rare; other devices
 // simply reconnect).
 func (s *Server) severControl(match func(*controlSession) bool) {
+	// Bump the sever generation BEFORE snapshotting (re-audit finding A): a take_control that
+	// publishes its lease/cc.control after this snapshot re-checks the generation under ctlMu
+	// and, seeing it advanced, fails closed rather than escaping the sever.
+	s.severGen.Add(1)
 	s.mu.Lock()
 	controllers := make([]*clientConn, 0, len(s.leases))
 	for _, ls := range s.leases {
@@ -1273,6 +1294,31 @@ func (s *Server) severRevokedDeviceControl(deviceID string) {
 // daemon's cross-package hooks are wired as callbacks).
 func (s *Server) SeverAllRemoteControl() {
 	s.severControl(func(*controlSession) bool { return true })
+	// Finding C: on the DISABLE transition also TERMINATE remote journal subscriber
+	// connections. While off, distributeJournal merely DROPS records (no envelope, so no
+	// sequence gap) — a surviving subscription would silently resume mid-stream on `on`,
+	// missing the off-interval events undetectably. Closing the connection forces a fresh
+	// journal_read (full resync) on reconnect. Remote-tier only (mirrors finding B): the owner
+	// tier's journal is never kill-switch-severed.
+	if s.remoteTier {
+		s.severJournalSubscribers()
+	}
+}
+
+// severJournalSubscribers closes every journal subscriber connection (finding C): the disable
+// transition tears them down like the control leases/peeks, so resuming journal delivery
+// requires a fresh journal_read. It snapshots under jsubMu and closes OUTSIDE the lock (cc.close
+// is idempotent, and the connection's cleanup unregisters it from jsubs).
+func (s *Server) severJournalSubscribers() {
+	s.jsubMu.Lock()
+	subs := make([]*clientConn, 0, len(s.jsubs))
+	for sc := range s.jsubs {
+		subs = append(subs, sc)
+	}
+	s.jsubMu.Unlock()
+	for _, sc := range subs {
+		sc.close()
+	}
 }
 
 // remoteControlDisabled reports whether the backend exposes a kill switch that is currently OFF.
@@ -1386,6 +1432,10 @@ func (cc *clientConn) handleTakeControl(c Control) {
 		h := sha256.Sum256([]byte(c.GateToken))
 		contentHash = h[:]
 	}
+	// Capture the sever generation BEFORE authorizing (re-audit finding A). It is re-checked
+	// after cc.control is published; a sever that ran in between (an `off`/revoke racing this
+	// take_control) will have advanced it, so the lease is failed closed instead of escaping.
+	severAtStart := cc.srv.severGen.Load()
 	if !cc.requireRemoteAuthz(c, ActionTakeControl, c.SessionID, contentHash) {
 		return
 	}
@@ -1441,6 +1491,17 @@ func (cc *clientConn) handleTakeControl(c Control) {
 		expiry = *c.ExpiresAt
 	}
 	cc.ctlMu.Lock()
+	// Re-audit finding A: re-check the sever generation while STILL holding ctlMu — the same
+	// lock a sever clears cc.control under. If it advanced since severAtStart, a sever (`off`/
+	// revoke) ran concurrently and may have snapshotted its live leases BEFORE this one was
+	// published (a silent escape that a later `on` would resume with NO fresh take_control). So
+	// FAIL CLOSED: do not publish cc.control, and release the just-established lease below. A
+	// fresh take_control (new biometric gate) is then required to resume control.
+	if cc.srv.severGen.Load() != severAtStart {
+		cc.ctlMu.Unlock()
+		cc.srv.releaseLease(cc, local, gen, true, true)
+		return
+	}
 	// deviceID is the ALREADY-AUTHENTICATED c.DeviceID (requireRemoteAuthz verified the
 	// signature over the tuple that includes it), so controlGateOpen can drop this lease's
 	// keystrokes the moment the device is revoked, and handleDeviceRevoke can proactively
@@ -1587,7 +1648,9 @@ func (cc *clientConn) handleJournalRead(c Control) {
 	}
 	// C2a: blank the journal when remote control is disabled — a journal_read is a leak of
 	// session lifecycle metadata, so `off` must refuse it (mirrors the terminal peek's gate).
-	if cc.srv.remoteControlDisabled() {
+	// REMOTE-TIER ONLY (finding B): the owner tier shares the KillSwitch-implementing coreAPI
+	// and must never be gated.
+	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
 		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
 		return
 	}
@@ -1615,8 +1678,9 @@ func (cc *clientConn) handleJournalSubscribe() {
 	}
 	// C2a: refuse a new subscription when remote control is disabled, so a still-open phone
 	// cannot re-arm the journal stream after `off` (the fan-out below also stops streaming to
-	// existing subscribers while off — gate at subscribe + on the next event).
-	if cc.srv.remoteControlDisabled() {
+	// existing subscribers while off — gate at subscribe + on the next event). REMOTE-TIER ONLY
+	// (finding B): the owner tier shares the KillSwitch-implementing coreAPI and is never gated.
+	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
 		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
 		return
 	}
