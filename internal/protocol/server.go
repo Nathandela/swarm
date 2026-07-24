@@ -422,6 +422,14 @@ func (s *Server) journalFanoutLoop(source <-chan JournalRecord) {
 }
 
 func (s *Server) distributeJournal(rec JournalRecord) {
+	// C2a: stop streaming journal events while remote control is disabled — a phone that
+	// subscribed before `off` must stop receiving session lifecycle events on the next event
+	// (the subscribe-time gate blocks NEW subscriptions; this blanks the live stream). Cheap
+	// (one global switch read per record, not per subscriber); a backend without a KillSwitch
+	// is never disabled, so the owner tier is unaffected.
+	if s.remoteControlDisabled() {
+		return
+	}
 	s.jsubMu.Lock()
 	var dead []*clientConn
 	for sc := range s.jsubs {
@@ -1195,15 +1203,15 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 	cc.replyOK(c.TargetDeviceID)
 }
 
-// severRevokedDeviceControl force-releases every control lease the revoked device established
-// on this Server and cancels every active terminal peek (C1). Leases are matched PRECISELY by
-// the establishing DeviceID recorded on the control session, so only the revoked device's
-// leases are released. Terminal peeks carry NO device identity (terminal_subscribe is
-// unsigned), so ALL active peeks are cancelled — coarse but safe (revoke is rare; other
-// devices simply reconnect). It snapshots the controllers + connections under s.mu, then acts
-// OUTSIDE the lock (releaseLease and the peek cancel take other locks), so no lock is held
-// across the sever.
-func (s *Server) severRevokedDeviceControl(deviceID string) {
+// severControl force-releases every control lease whose establishing control session matches the
+// predicate and cancels every active terminal peek. It is the shared severance machinery behind
+// the C1 device-revoke sever (match by establishing DeviceID) and the C2a kill-switch sever (match
+// all). It snapshots the controllers + connections under s.mu, then acts OUTSIDE the lock
+// (releaseLease and cancelPeek take other locks), so no lock is held across the sever. Terminal
+// peeks carry NO device identity (terminal_subscribe is unsigned), so ALL active peeks are
+// cancelled regardless of the lease predicate — coarse but safe (sever is rare; other devices
+// simply reconnect).
+func (s *Server) severControl(match func(*controlSession) bool) {
 	s.mu.Lock()
 	controllers := make([]*clientConn, 0, len(s.leases))
 	for _, ls := range s.leases {
@@ -1217,18 +1225,18 @@ func (s *Server) severRevokedDeviceControl(deviceID string) {
 	}
 	s.mu.Unlock()
 
-	// Release exactly the revoked device's control leases (precise by establishing DeviceID).
+	// Release every matching control lease, clearing cc.control so the input gate shuts.
 	for _, cc := range controllers {
 		cc.ctlMu.Lock()
-		match := cc.control != nil && cc.control.deviceID == deviceID
+		matched := cc.control != nil && match(cc.control)
 		var target string
 		var gen uint64
-		if match {
+		if matched {
 			target, gen = cc.control.target, cc.control.leaseGen
 			cc.control = nil // shut the input gate for this connection
 		}
 		cc.ctlMu.Unlock()
-		if match {
+		if matched {
 			// matchGen: release only if still the current generation (never clobber a newer
 			// lease); notify: send OpDetach so the client's Frames() closes.
 			s.releaseLease(cc, target, gen, true, true)
@@ -1239,6 +1247,35 @@ func (s *Server) severRevokedDeviceControl(deviceID string) {
 	for _, cc := range conns {
 		cc.cancelPeek()
 	}
+}
+
+// severRevokedDeviceControl force-releases exactly the revoked device's live control leases
+// (matched PRECISELY by the establishing DeviceID recorded on the control session) and cancels
+// every active terminal peek on this Server (C1).
+func (s *Server) severRevokedDeviceControl(deviceID string) {
+	s.severControl(func(ctl *controlSession) bool { return ctl.deviceID == deviceID })
+}
+
+// SeverAllRemoteControl force-releases EVERY remote control lease and cancels EVERY active terminal
+// peek on this Server (C2a). It is the PROACTIVE teardown the kill switch invokes when remote
+// control transitions to DISABLED (`swarm remote off`, or the last paired device removed): the
+// per-keystroke controlGateOpen clause-1 drop only PAUSES a live lease, so turning the switch back
+// ON before the signed expiry would silently RESUME it without a fresh take_control (no new
+// biometric gate). This SEVERS the lease instead — clearing cc.control and closing its upstream
+// stream — so resuming control requires a new take_control. Exported so the assembly's coreAPI
+// kill-switch setter can signal the remote Server across the package boundary (mirroring how the
+// daemon's cross-package hooks are wired as callbacks).
+func (s *Server) SeverAllRemoteControl() {
+	s.severControl(func(*controlSession) bool { return true })
+}
+
+// remoteControlDisabled reports whether the backend exposes a kill switch that is currently OFF.
+// Journal ops and the journal fan-out consult it so `swarm remote off` blanks the phone's journal
+// stream too (mirroring the terminal peek's kill-switch gate); a backend without a KillSwitch is
+// never disabled (behavior unchanged, e.g. the owner tier's non-remote backends).
+func (s *Server) remoteControlDisabled() bool {
+	ks, ok := s.d.(KillSwitch)
+	return ok && !ks.RemoteControlEnabled()
 }
 
 // handleRemoteSetControl serves the owner-tier remote_set_control op (A4) — the durable
@@ -1542,6 +1579,12 @@ func (cc *clientConn) handleJournalRead(c Control) {
 	if !ok {
 		return
 	}
+	// C2a: blank the journal when remote control is disabled — a journal_read is a leak of
+	// session lifecycle metadata, so `off` must refuse it (mirrors the terminal peek's gate).
+	if cc.srv.remoteControlDisabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return
+	}
 	res, err := jb.JournalReadFrom(c.Cursor)
 	if err != nil {
 		cc.replyError("journal_read: " + err.Error())
@@ -1562,6 +1605,13 @@ func (cc *clientConn) handleJournalRead(c Control) {
 // events stream as journal_event frames via the journal fan-out.
 func (cc *clientConn) handleJournalSubscribe() {
 	if _, ok := cc.journalBackend(); !ok {
+		return
+	}
+	// C2a: refuse a new subscription when remote control is disabled, so a still-open phone
+	// cannot re-arm the journal stream after `off` (the fan-out below also stops streaming to
+	// existing subscribers while off — gate at subscribe + on the next event).
+	if cc.srv.remoteControlDisabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
 		return
 	}
 	cc.jSubOnce.Do(func() {

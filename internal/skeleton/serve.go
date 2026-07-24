@@ -197,6 +197,11 @@ func Serve(cfg Config) (*Daemon, error) {
 			return nil, rerr
 		}
 		d.remoteSrv = rs
+		// C2a: `swarm remote off` (or removing the last device) must proactively SEVER every live
+		// remote control lease + terminal peek on the remote Server, not merely pause per-keystroke
+		// input. Wire the coreAPI kill-switch setter to the remote Server's teardown seam. Set
+		// before close(d.ready) below, so no served op can read the observer before it is wired.
+		d.api.SetRemoteControlObserver(rs.SeverAllRemoteControl)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

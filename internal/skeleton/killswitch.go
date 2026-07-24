@@ -46,6 +46,13 @@ func (a *coreAPI) RemoteControlEnabled() bool {
 // Enabled mirror.
 func (a *coreAPI) SetRemoteControl(enabled bool) error {
 	a.manualOff.Store(!enabled)
+	// C2a: turning remote control OFF must PROACTIVELY sever every live remote control lease and
+	// terminal peek — not merely pause per-keystroke input — else turning ON again before the
+	// signed expiry would silently resume the lease without a fresh take_control. Signal the remote
+	// Server (invoked outside ksMu; it takes the Server's own locks).
+	if !enabled {
+		a.severRemoteControl()
+	}
 	if a.stateDir == "" {
 		return nil // no durable home (test seam); the in-memory override still applies
 	}
@@ -58,6 +65,29 @@ func (a *coreAPI) SetRemoteControl(enabled bool) error {
 	}
 	a.ksPersisted = &derived
 	return nil
+}
+
+// SetRemoteControlObserver registers the callback invoked when remote control transitions to
+// DISABLED (C2a). The assembly wires it to the remote Server's SeverAllRemoteControl AFTER the
+// server is built, so `swarm remote off` (and removing the last device) proactively tears down
+// every live remote control lease + terminal peek. Set once at assembly; nil (no remote Server)
+// leaves severRemoteControl a no-op.
+func (a *coreAPI) SetRemoteControlObserver(fn func()) {
+	a.severMu.Lock()
+	a.onRemoteControlDisabled = fn
+	a.severMu.Unlock()
+}
+
+// severRemoteControl invokes the registered disable observer (the remote Server's proactive
+// teardown), if any. Called when SetRemoteControl(false) or removing the last device disables
+// remote control. The callback takes the Server's own locks, so it is invoked WITHOUT ksMu held.
+func (a *coreAPI) severRemoteControl() {
+	a.severMu.Lock()
+	fn := a.onRemoteControlDisabled
+	a.severMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // coreAPI ALSO satisfies protocol.KillSwitch so the assembled remote-tier Server refuses

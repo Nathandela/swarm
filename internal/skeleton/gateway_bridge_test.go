@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -84,6 +85,11 @@ func (s *collectSink) waitFor(t *testing.T, id string, within time.Duration) {
 
 func TestRGW_GatewayBridgesRosterThenLiveEvents(t *testing.T) {
 	sk, rsock := assembleWithRemote(t)
+	// C2a precondition: the gateway's journal bridge (journal_read + journal_subscribe) is now
+	// kill-switch-gated, so pair a device to turn remote control ON — a phone only receives the
+	// bridged journal when a device is paired, which is also this test's realistic state. The
+	// bridging assertions below are unchanged.
+	registerPhone(t, sk, device.CapFull)
 
 	// A session live BEFORE the gateway connects: it must be enumerable via the atomic
 	// roster snapshot (or the snapshot's launched event).

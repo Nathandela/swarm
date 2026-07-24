@@ -79,6 +79,14 @@ type coreAPI struct {
 	// op) is lock-free, and it is loaded from remote-state.json at assembly so an owner who
 	// severs remote control stays severed across a restart.
 	manualOff atomic.Bool
+	// onRemoteControlDisabled, when set, is invoked whenever remote control transitions to
+	// DISABLED — `swarm remote off` (SetRemoteControl(false)) or the last paired device removed
+	// (RevokeDevice dropping Count to 0). The assembly wires it to the remote Server's
+	// SeverAllRemoteControl so `off` PROACTIVELY tears down every live remote control lease +
+	// terminal peek (C2a), not merely pausing per-keystroke input. Guarded by severMu; nil until
+	// wired (no remote Server) and a no-op then. Mirrors the daemon's cross-package hook callbacks.
+	severMu                 sync.Mutex
+	onRemoteControlDisabled func()
 
 	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
 	// it so the owner controller and the future remote peek can both observe one
@@ -160,7 +168,16 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if a.devices == nil {
 		return false, nil
 	}
-	return a.devices.Remove(deviceID)
+	removed, err := a.devices.Remove(deviceID)
+	// C2a: if this removal took the LAST device (Count now 0), remote control has transitioned to
+	// disabled — proactively sever every live remote control lease + peek on the remote Server. The
+	// per-device C1 sever (handleDeviceRevoke) releases the revoked device's OWN lease on the
+	// handling Server; this covers the cross-Server case (owner-path revoke leaving a remote lease)
+	// and any other lingering lease once the switch goes off.
+	if removed && a.devices.Count() == 0 {
+		a.severRemoteControl()
+	}
+	return removed, err
 }
 
 // coreAPI ALSO satisfies protocol.DeviceRevoker so the assembled remote-tier Server

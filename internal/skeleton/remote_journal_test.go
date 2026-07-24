@@ -58,6 +58,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -152,6 +153,12 @@ func (r *rawRemote) readTry(within time.Duration) (protocol.Control, error) {
 // satisfy protocol.JournalBackend and the server refuses with OpError.
 func TestSkeleton_RemoteJournalReadReturnsRealJournalData(t *testing.T) {
 	sk := assemble(t)
+	// C2a precondition: journal is now kill-switch-gated (refused CodeKillSwitch when
+	// RemoteControlEnabled()==false), so a device must be paired to turn remote control ON before
+	// journal serves — the same switch-on precondition the peek's E2E establishes (phonesim). This
+	// only sets the precondition the new security contract requires; the journal-plumbing assertion
+	// below is unchanged (a paired phone is also the realistic state in which a phone reads journal).
+	registerPhone(t, sk, device.CapFull)
 	// A journalworthy transition: launching a session appends a `launched` record to
 	// the daemon's durable journal (daemon/journal.go journalRecordFor).
 	launchFake(t, sk, "print HELLO\nidle 60s\n")
@@ -204,6 +211,10 @@ func TestSkeleton_RemoteJournalReadReturnsRealJournalData(t *testing.T) {
 // under parallel load; this test does not share that property.
 func TestSkeleton_RemoteJournalSubscribeStreamsLiveEvent(t *testing.T) {
 	sk := assemble(t)
+	// C2a precondition: journal_subscribe is now kill-switch-gated, so pair a device to turn remote
+	// control ON before subscribing (mirrors the peek E2E's switch-on precondition; the streaming
+	// assertion below is unchanged).
+	registerPhone(t, sk, device.CapFull)
 	sock := serveRemoteAssembled(t, sk)
 	rc := dialRemote(t, sock, protocol.CapRemoteGateway, protocol.CapJournal)
 
