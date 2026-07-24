@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" viewBox="0 0 900 600" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace" role="img" aria-label="swarm architecture: a thin TUI client talks over a Unix socket to a replaceable supervisor daemon, which reconnects to per-session shim processes that own the PTYs. Sessions survive terminal close and daemon crash or upgrade.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5A616A"/>
+    </marker>
+    <style>
+      .lbl   { fill:#8A877D; font-size:11px; }
+      .box   { fill:#101418; stroke:#23262B; }
+      .chip  { fill:#14181D; stroke:#23262B; }
+      .ctext { fill:#E8E6E1; font-size:12.5px; }
+      .band  { font-size:11px; letter-spacing:1.2px; font-weight:600; }
+      .flow  { stroke:#5A616A; stroke-width:1.4; fill:none; }
+    </style>
+  </defs>
+
+  <rect x="16" y="16" width="868" height="568" rx="14" fill="#0E1114" stroke="#23262B"/>
+
+  <!-- ============ CLIENT / TERMINAL ============ -->
+  <rect x="92" y="54" width="356" height="66" rx="9" fill="#12161A" stroke="#8A877D" stroke-dasharray="4 4"/>
+  <text x="106" y="74" class="band" fill="#8A877D">CLIENT · your terminal (disposable)</text>
+  <rect x="196" y="84" width="148" height="28" rx="7" class="chip"/>
+  <text x="270" y="102" text-anchor="middle" font-size="12.5" fill="#E2AC4F" font-weight="600">swarm TUI · Bubble Tea</text>
+
+  <!-- connector -->
+  <line x1="270" y1="120" x2="270" y2="150" class="flow" marker-end="url(#arrow)"/>
+  <text x="292" y="139" class="lbl">UDS · NDJSON control + binary data frames · exclusive attach lease</text>
+
+  <!-- ============ DAEMON ============ -->
+  <rect x="70" y="150" width="400" height="142" rx="10" fill="#12161A" stroke="#E2AC4F66"/>
+  <text x="86" y="172" class="band" fill="#E2AC4F">swarm daemon (replaceable)</text>
+  <rect x="86"  y="186" width="176" height="40" rx="7" class="box"/>
+  <text x="174" y="211" text-anchor="middle" class="ctext">protocol server</text>
+  <rect x="278" y="186" width="176" height="40" rx="7" class="box"/>
+  <text x="366" y="211" text-anchor="middle" class="ctext">registry (rebuildable)</text>
+  <rect x="86"  y="236" width="176" height="40" rx="7" class="box"/>
+  <text x="174" y="261" text-anchor="middle" class="ctext">status engine</text>
+  <rect x="278" y="236" width="176" height="40" rx="7" class="box"/>
+  <text x="366" y="261" text-anchor="middle" class="ctext">adapters: claude · codex</text>
+
+  <!-- connectors to shims -->
+  <line x1="200" y1="292" x2="200" y2="332" class="flow" marker-end="url(#arrow)"/>
+  <line x1="200" y1="332" x2="200" y2="384" class="flow"/>
+  <line x1="200" y1="384" x2="200" y2="408" class="flow" marker-end="url(#arrow)"/>
+  <text x="230" y="316" class="lbl">reconnects on restart</text>
+
+  <!-- ============ SHIMS ============ -->
+  <rect x="70" y="332" width="400" height="160" rx="10" fill="#12161A" stroke="#23262B"/>
+  <text x="86" y="354" class="band" fill="#8A877D">PER-SESSION SHIMS · survive the daemon</text>
+
+  <rect x="86" y="366" width="238" height="42" rx="7" class="chip"/>
+  <text x="205" y="392" text-anchor="middle" class="ctext">shim · PTY · VT grid · transcript</text>
+  <line x1="324" y1="387" x2="360" y2="387" class="flow" marker-end="url(#arrow)"/>
+  <rect x="360" y="366" width="94" height="42" rx="7" fill="#1B1710" stroke="#E2AC4F55"/>
+  <text x="407" y="392" text-anchor="middle" font-size="12.5" fill="#E2AC4F">claude</text>
+
+  <rect x="86" y="420" width="238" height="42" rx="7" class="chip"/>
+  <text x="205" y="446" text-anchor="middle" class="ctext">shim · PTY · VT grid · transcript</text>
+  <line x1="324" y1="441" x2="360" y2="441" class="flow" marker-end="url(#arrow)"/>
+  <rect x="360" y="420" width="94" height="42" rx="7" fill="#1B1710" stroke="#E2AC4F55"/>
+  <text x="407" y="446" text-anchor="middle" font-size="12.5" fill="#E2AC4F">codex</text>
+
+  <!-- disk -->
+  <line x1="270" y1="492" x2="270" y2="520" class="flow" marker-end="url(#arrow)"/>
+  <g>
+    <path d="M180 524 a90 10 0 0 1 180 0 v30 a90 10 0 0 1 -180 0 z" fill="#101418" stroke="#23262B"/>
+    <ellipse cx="270" cy="524" rx="90" ry="10" fill="#14181D" stroke="#23262B"/>
+    <text x="270" y="546" text-anchor="middle" font-size="11.5" fill="#8A877D">state dir · meta.json per session</text>
+  </g>
+
+  <!-- ============ CALLOUT ============ -->
+  <rect x="524" y="150" width="328" height="220" rx="10" fill="#14181D" stroke="#23262B"/>
+  <rect x="524" y="150" width="3.5" height="220" rx="2" fill="#E2AC4F"/>
+  <text x="548" y="180" font-size="14" font-weight="700" fill="#E2AC4F">Survives everything</text>
+  <text x="548" y="208" font-size="12.5" fill="#E8E6E1">Close the terminal — the TUI is a thin</text>
+  <text x="548" y="226" font-size="12.5" fill="#E8E6E1">client, so the agents keep running.</text>
+  <text x="548" y="252" font-size="12.5" fill="#E8E6E1">Crash or <tspan fill="#E2AC4F">brew upgrade swarm</tspan> — the next</text>
+  <text x="548" y="270" font-size="12.5" fill="#E8E6E1">daemon rebuilds its registry from</text>
+  <text x="548" y="288" font-size="12.5" fill="#E8E6E1">meta.json and reconnects to the shims.</text>
+  <text x="548" y="314" font-size="12.5" fill="#8A877D">Nothing is lost — verified by process</text>
+  <text x="548" y="332" font-size="12.5" fill="#8A877D">identity (PID + start time).</text>
+  <text x="548" y="358" font-size="11.5" fill="#57606A">ADR-001 · per-session shim processes</text>
+</svg>
