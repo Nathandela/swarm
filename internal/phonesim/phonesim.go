@@ -188,6 +188,37 @@ func (p *Phone) DriveKill(ctx context.Context, session, operationID string) erro
 	return nil
 }
 
+// DriveLaunch signs a launch with the phone command-signing key over the reserved
+// LaunchSessionSentinel (a launch has no target session yet), binding the LaunchReq spec
+// into the signature via ContentHash = LaunchContentHash(req) so a relay/gateway cannot
+// alter the agent/cwd/options/prompt of a validly-signed launch. It seals command AND spec
+// into one envelope under the epoch content key with the SHARED sequencer and appends it to
+// the machine mailbox, where the gateway forwards it (OpLaunch) and the daemon verifies the
+// signature + capability + launch policy and spawns the session. It mirrors DriveKill; seq
+// is the shared per-epoch counter SealLaunchEnvelope requires to be unique.
+func (p *Phone) DriveLaunch(ctx context.Context, req *protocol.LaunchReq, operationID string) error {
+	cmd, err := phonecore.SignCommand(p.ks, phonecore.CommandInput{
+		Action:      protocol.ActionLaunch,
+		Machine:     p.machine,
+		Session:     protocol.LaunchSessionSentinel,
+		OperationID: operationID,
+		ExpiresAt:   time.Now().Add(time.Minute),
+		ContentHash: protocol.LaunchContentHash(req),
+	})
+	if err != nil {
+		return err
+	}
+
+	env, err := phonecore.SealLaunchEnvelope(p.content, p.epochID, p.seq.Next(), cmd, req)
+	if err != nil {
+		return err
+	}
+	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ReadReply performs ONE forward scan of the phone's mailbox for the sealed control reply
 // the gateway returns after executing a command. It opens each item as a control reply and
 // returns the first OK/Error Control it finds (found=true). Journal envelopes and other

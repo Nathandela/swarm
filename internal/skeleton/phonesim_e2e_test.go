@@ -36,12 +36,15 @@ package skeleton
 import (
 	"context"
 	"crypto/ed25519"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/phonesim"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -294,6 +297,160 @@ func TestPhonesim_PairObserveKillE2E(t *testing.T) {
 	}
 	if !gotReply {
 		t.Fatal("phonesim never received the sealed OK reply (command round-trip broken)")
+	}
+}
+
+// TestPhonesim_LaunchE2E is the A8 launch acceptance milestone: a phone LAUNCHES a new
+// session on the machine end to end over the real in-process relay + gateway + daemon,
+// and then OBSERVES it — proving the "launch" verb of the DoD sentence "pair, observe,
+// launch, type".
+//
+// The full chain exercised: phone.DriveLaunch (SignCommand over LaunchSessionSentinel with
+// ContentHash = LaunchContentHash(spec), SealLaunchEnvelope carrying the spec) -> relay
+// mailbox -> gateway (routeCommand -> forward -> ForwardCommand OpLaunch) -> daemon
+// handleLaunch (device authz + remote launch POLICY: the cwd must resolve within a
+// configured root) -> the daemon spawns the session. The launch targets a t.TempDir()
+// cwd, which lives under os.TempDir() — the exact root newPhonesimHarness (via
+// assembleWithRemote) seeds into remote-policy.json — so it PASSES policy.
+//
+// Two assertions close the milestone:
+//  1. LAUNCH SPAWNED: a NEW session (absent from the pre-launch roster) appears on the
+//     machine's daemon roster within a bound.
+//  2. PHONE OBSERVES IT: the gateway journals a roster card for the new session, namespaced
+//     to the id the phone commands against; the phone's Observe demuxes it into its session
+//     cache, so phone.Session(namespaced).Present goes true.
+func TestPhonesim_LaunchE2E(t *testing.T) {
+	h := newPhonesimHarness(t)
+	phone, sk, ctx := h.phone, h.sk, h.ctx
+
+	// Roster snapshot BEFORE the launch, so the NEW session id is unambiguous (the harness
+	// launches nothing, so this is normally empty — but diffing is robust regardless).
+	before := map[string]bool{}
+	for _, m := range sk.Core().List() {
+		before[m.ID] = true
+	}
+
+	// A real fake-agent script the remote launch will run, in an ALLOWED cwd: a t.TempDir()
+	// lives under os.TempDir(), the root the harness policy permits, so the launch passes
+	// the remote launch policy (R-POL.3).
+	scriptPath := filepath.Join(t.TempDir(), "script.txt")
+	if err := os.WriteFile(scriptPath, []byte("print REMOTE_LAUNCH\nidle 60s\n"), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	launch := &protocol.LaunchReq{
+		Agent:   "fake",
+		Cwd:     t.TempDir(),
+		Options: map[string]string{"script": scriptPath},
+		Cols:    80,
+		Rows:    24,
+	}
+
+	// DRIVE LAUNCH: the phone signs+seals the launch (bound to its spec via LaunchContentHash)
+	// and appends it to the machine mailbox; the running gateway forwards it and the daemon,
+	// having verified authz + policy, spawns the session.
+	if err := phone.DriveLaunch(ctx, launch, "op-phonesim-launch-1"); err != nil {
+		t.Fatalf("phonesim drive launch: %v", err)
+	}
+
+	// ASSERT 1: a NEW session appears on the machine roster (the real lifecycle effect).
+	var newMeta persist.Meta
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && newMeta.ID == "" {
+		for _, m := range sk.Core().List() {
+			if !before[m.ID] {
+				newMeta = m
+				break
+			}
+		}
+		if newMeta.ID == "" {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	if newMeta.ID == "" {
+		t.Fatal("no NEW session appeared on the machine after the phonesim launch (command-IN launch did not spawn)")
+	}
+	// Terminate the launched shim's process group at teardown (idle 60s would otherwise leak).
+	if newMeta.ShimPID > 0 {
+		t.Cleanup(func() { _ = syscall.Kill(newMeta.ShimPID, syscall.SIGTERM) })
+	}
+
+	// ASSERT 2: the phone OBSERVES the launched session. The gateway namespaces the roster
+	// card at its remote egress, so the id the phone sees is the id it would command against.
+	namespaced := protocol.NamespacedID(sk.api.endpointID, newMeta.ID)
+	sawSession := false
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !sawSession {
+		if _, err := phone.Observe(ctx); err != nil {
+			t.Fatalf("phonesim observe: %v", err)
+		}
+		if cs, ok := phone.Session(namespaced); ok && cs.Present {
+			sawSession = true
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if !sawSession {
+		t.Fatal("phone never observed the launched session over the relay (launch journal-OUT broken)")
+	}
+}
+
+// TestPhonesim_LaunchDisallowedCwdRefused is the negative half of the A8 launch milestone:
+// a phone launch whose cwd lies OUTSIDE every configured root is REFUSED by the remote
+// launch policy (R-POL.3, CodePolicy) and produces NO daemon side effect — the refusal
+// precedes the cwd stat / spawn. "/" resolves fine (so the refusal is policy, not an
+// unresolvable-cwd error) but is not within os.TempDir(), the only seeded root.
+func TestPhonesim_LaunchDisallowedCwdRefused(t *testing.T) {
+	h := newPhonesimHarness(t)
+	phone, sk, ctx := h.phone, h.sk, h.ctx
+
+	before := len(sk.Core().List())
+
+	scriptPath := filepath.Join(t.TempDir(), "script.txt")
+	if err := os.WriteFile(scriptPath, []byte("print NOPE\nidle 60s\n"), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	launch := &protocol.LaunchReq{
+		Agent:   "fake",
+		Cwd:     "/", // resolvable, but OUTSIDE the seeded os.TempDir() root -> policy refusal
+		Options: map[string]string{"script": scriptPath},
+		Cols:    80,
+		Rows:    24,
+	}
+
+	if err := phone.DriveLaunch(ctx, launch, "op-phonesim-launch-deny-1"); err != nil {
+		t.Fatalf("phonesim drive launch (disallowed cwd): %v", err)
+	}
+
+	// The phone reads a sealed OpError reply carrying CodePolicy — the policy refusal
+	// round-trips back over the relay.
+	gotRefusal := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !gotRefusal {
+		reply, ok, err := phone.ReadReply(ctx)
+		if err != nil {
+			t.Fatalf("phonesim read reply: %v", err)
+		}
+		if ok && reply.Op == protocol.OpError {
+			if reply.ErrorCode != protocol.CodePolicy {
+				t.Fatalf("disallowed-cwd launch refused with code %q; want %q (policy)", reply.ErrorCode, protocol.CodePolicy)
+			}
+			gotRefusal = true
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if !gotRefusal {
+		t.Fatal("phone never received the policy refusal for a disallowed-cwd launch (the refusal must round-trip)")
+	}
+
+	// NO session was spawned: a policy-refused launch has no daemon side effect. Settle a
+	// window several gateway poll cycles long to catch a session that spawned late.
+	settle := time.Now().Add(1 * time.Second)
+	for time.Now().Before(settle) {
+		if got := len(sk.Core().List()); got != before {
+			t.Fatalf("a disallowed-cwd launch created %d new session(s); a policy-refused launch must have NO side effect", got-before)
+		}
+		time.Sleep(30 * time.Millisecond)
 	}
 }
 
