@@ -753,7 +753,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-*, PB-OPS-4 | opus | — |
 | S5 Design tokens | PB-TOK-* | fable | — |
 | **S6 Transport primitives**: request-id correlation, both-hop latency, TLS/resilience | PB-NET-2..7 | opus | S1 |
-| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2** (PB-STATE-4's rollback anchor *is* PB-GW-1's durable high-water, so it cannot ship first) |
+| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2, S2b** (PB-STATE-4's rollback authorities *are* PB-GW-1's inbound high-water and PB-GW-8's outbound ceilings, so neither can ship after it) |
 | **S7b Gateway age check** (split out: it depends on the phone seal change) | PB-GW-2 | opus | S2, S7 |
 | **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2** (sole owner; S19 contributes emulator evidence but does not own it) | opus | S6, S7 |
 | S9 Façade<->transport integration | PB-NET-1 | opus | S8 |
@@ -777,7 +777,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 
 | Slice | Requirements | Model | Depends on |
 |---|---|---|---|
-| S19 E2E + emulator smoke | PB-E2E-1..4 | opus | S9, S10, S11, S16, S17, S18, S18b |
+| S19 E2E + emulator smoke | PB-E2E-1..4 | opus | S4, S7b, S9, S10, S11, S15, S16, S17, S18, S18b |
 | S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3 *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
 | S21 Physical-handset gate (deferred; no device here) | PB-E2E-5 | — | S19 |
 
@@ -793,6 +793,15 @@ time the requirement was written into §6 and never wired into the DAG, and each
 careful human reader caught it. The checker is verified against a negative control (deleting a
 row fails the run). v3 also gave both S19 and S20 the dependency "all", which read literally
 made each depend on the other; every edge is now enumerated.
+
+The DAG itself is machine-readable in `docs/specifications/remote-phaseB-slices.tsv` and the
+same checker enforces acyclicity **and that no slice is an orphan** — unreachable from S19, the
+exit demonstration. Round 5 found S2b in exactly that state: it owned the exit-criterion-fatal
+live-tail requirement, yet nothing depended on it, so S19 could have passed every gate without
+it ever being built. Running the check then caught a second orphan the reviewers had not
+flagged, S4 (gateway supervision) — PB-E2E-1's `pair -> ... -> revoke` flow needs the gateway
+running after pairing, so S19 depends on it too. Ownership and reachability are both mechanical
+now; neither is asserted in prose.
 
 S0/S1/S2/S3/S4/S5 start in parallel. Each slice gate: evidenced RED -> implementation
 (independent agent) -> independent review -> `go build/vet/test -race ./...` (plus the Gradle
