@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="536" viewBox="0 0 900 536" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace" role="img" aria-label="swarm general view: sessions grouped by status — Needs input, Working, Ready for review, Completed — with a keyboard legend at the bottom.">
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- window -->
+  <rect x="16" y="16" width="868" height="504" rx="14" fill="#0E1114" stroke="#23262B" filter="url(#shadow)"/>
+  <!-- title bar -->
+  <circle cx="44" cy="40" r="6" fill="#E0604F"/>
+  <circle cx="66" cy="40" r="6" fill="#E2AC4F"/>
+  <circle cx="88" cy="40" r="6" fill="#4DBD86"/>
+  <text x="450" y="45" text-anchor="middle" font-size="13" fill="#8A877D"><tspan fill="#E2AC4F" font-weight="600">swarm</tspan>  —  general view</text>
+  <line x1="16" y1="64" x2="884" y2="64" stroke="#23262B"/>
+
+  <!-- ============ NEEDS INPUT ============ -->
+  <text x="40" y="106" font-size="13" fill="#E0604F">●</text>
+  <text x="62" y="106" font-size="12.5" letter-spacing="1.5" font-weight="600" fill="#E0604F">NEEDS INPUT</text>
+  <text x="176" y="106" font-size="12" fill="#57606A">· 1</text>
+
+  <!-- selected row -->
+  <rect x="28" y="118" width="844" height="46" rx="7" fill="#E2AC4F14"/>
+  <rect x="28" y="118" width="3" height="46" rx="1.5" fill="#E2AC4F"/>
+  <text x="44" y="140" font-size="14" fill="#E0604F">●</text>
+  <text x="64" y="140" font-size="13.5" font-weight="600" fill="#E8E6E1">claude</text>
+  <text x="140" y="140" font-size="13" fill="#8A877D">~/Code/quanthome-api</text>
+  <text x="856" y="140" text-anchor="end" font-size="12.5" fill="#8A877D">12m</text>
+  <text x="64" y="158" font-size="13" fill="#E8E6E1">Permission: run db migration?</text>
+
+  <!-- ============ WORKING ============ -->
+  <text x="40" y="188" font-size="13" fill="#5B9DD9">◐</text>
+  <text x="62" y="188" font-size="12.5" letter-spacing="1.5" font-weight="600" fill="#5B9DD9">WORKING</text>
+  <text x="146" y="188" font-size="12" fill="#57606A">· 2</text>
+
+  <!-- codex -->
+  <text x="44" y="217" font-size="14" fill="#5B9DD9">◐</text>
+  <text x="64" y="217" font-size="13.5" font-weight="600" fill="#E8E6E1">codex</text>
+  <text x="140" y="217" font-size="13" fill="#8A877D">~/Code/agents-tracker</text>
+  <text x="856" y="217" text-anchor="end" font-size="12.5" fill="#8A877D">3m</text>
+  <text x="64" y="235" font-size="13" fill="#A6A29A">Writing adapter fixture tests…</text>
+
+  <!-- agy -->
+  <text x="44" y="263" font-size="14" fill="#5B9DD9">◐</text>
+  <text x="64" y="263" font-size="13.5" font-weight="600" fill="#E8E6E1">agy</text>
+  <text x="140" y="263" font-size="13" fill="#8A877D">~/Code/nathan-site</text>
+  <text x="856" y="263" text-anchor="end" font-size="12.5" fill="#8A877D">41s</text>
+  <text x="64" y="281" font-size="13" fill="#A6A29A">Refactoring nav component</text>
+
+  <!-- ============ READY FOR REVIEW ============ -->
+  <text x="40" y="311" font-size="13" fill="#4DBD86">✓</text>
+  <text x="62" y="311" font-size="12.5" letter-spacing="1.5" font-weight="600" fill="#4DBD86">READY FOR REVIEW</text>
+  <text x="238" y="311" font-size="12" fill="#57606A">· 1</text>
+
+  <!-- claude review -->
+  <text x="44" y="340" font-size="14" fill="#4DBD86">✓</text>
+  <text x="64" y="340" font-size="13.5" font-weight="600" fill="#E8E6E1">claude</text>
+  <text x="140" y="340" font-size="13" fill="#8A877D">~/Code/mcp-soml ⎇wt</text>
+  <text x="856" y="340" text-anchor="end" font-size="12.5" fill="#8A877D">1h</text>
+  <text x="64" y="358" font-size="13" fill="#A6A29A">Turn finished — 14 files changed</text>
+
+  <!-- ============ COMPLETED ============ -->
+  <text x="40" y="388" font-size="13" fill="#8A8F98">─</text>
+  <text x="62" y="388" font-size="12.5" letter-spacing="1.5" font-weight="600" fill="#8A8F98">COMPLETED</text>
+  <text x="166" y="388" font-size="12" fill="#57606A">· 1</text>
+
+  <!-- gemini done -->
+  <text x="44" y="417" font-size="14" fill="#8A8F98">─</text>
+  <text x="64" y="417" font-size="13.5" font-weight="600" fill="#9A978F">gemini</text>
+  <text x="140" y="417" font-size="13" fill="#6F6B60">~/Code/scratch</text>
+  <text x="856" y="417" text-anchor="end" font-size="12.5" fill="#6F6B60">2h</text>
+  <text x="64" y="435" font-size="13" fill="#6F6B60">exit 0</text>
+
+  <!-- footer -->
+  <line x1="16" y1="470" x2="884" y2="470" stroke="#23262B"/>
+  <text x="40" y="497" font-size="12.5" fill="#8A877D"><tspan fill="#E8E6E1">↑↓</tspan> navigate    <tspan fill="#E8E6E1">⏎</tspan> attach <tspan fill="#57606A">(ctrl+q returns)</tspan>    <tspan fill="#E8E6E1">e</tspan> rename    <tspan fill="#E8E6E1">n</tspan> new    <tspan fill="#E8E6E1">ctrl+x</tspan> kill    <tspan fill="#E8E6E1">esc</tspan> quit</text>
+</svg>

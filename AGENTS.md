@@ -1,6 +1,6 @@
 # Agent Instructions
 
-swarm is a terminal application that centralizes every coding-agent CLI session on a machine into one keyboard-driven, Agent View-style dashboard. A Go + Bubble Tea client talks to a per-user supervisor daemon, which orchestrates per-session shim processes that own the PTYs — so sessions survive terminal close and daemon crash/upgrade alike. Design is approved (Gate 3); the codebase is currently docs-and-scaffolding only (Epic 0).
+swarm is a terminal application that centralizes every coding-agent CLI session on a machine into one keyboard-driven, Agent View-style dashboard. A Go + Bubble Tea client talks to a per-user supervisor daemon, which orchestrates per-session shim processes that own the PTYs — so sessions survive terminal close and daemon crash/upgrade alike. Public and released (latest v0.5.1); epics 0-14 are implemented with verification evidence under docs/verification/.
 
 This file is a map, not a manual — read the linked source of truth before acting, don't rely on this summary.
 
