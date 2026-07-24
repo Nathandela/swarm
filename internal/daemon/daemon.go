@@ -35,6 +35,21 @@ const (
 	deleteWait  = 10 * time.Second       // bound Delete's wait for a shim to exit
 )
 
+// Idempotency-store retention (C4 / R-IDP.4 / A5 review R6). Without these the log
+// grows unbounded: every remote kill/delete/take_control/launch appends a permanent
+// fsync'd record replayed IN FULL on every restart. A device-signed command's
+// ExpiresAt is capped server-side at now+1h (F5), so no accepted command can be
+// valid past ~1h. The store GCs on UpdatedAt (not ExpiresAt), so a 24h TTL — far
+// larger than the 1h validity cap — can NEVER drop a record whose command is still
+// replayable: by the time a record ages out, any command it guards is long expired,
+// closing the R6 hole by construction. MaxEntries is a backstop against pathological
+// growth (the newest are kept); the interval bounds steady-state disk use.
+const (
+	idempotencyTTL             = 24 * time.Hour
+	idempotencyMaxEntries      = 100_000
+	idempotencyCompactInterval = time.Hour
+)
+
 // Registry is the read view of the session roster (frozen API).
 type Registry interface {
 	List() []persist.Meta
@@ -193,7 +208,8 @@ func Open(cfg Config) (*Daemon, error) {
 		_ = releaseLock(lockFile)
 		return nil, err
 	}
-	idem, err := idempotency.Open(filepath.Join(cfg.StateDir, "idempotency"))
+	idem, err := idempotency.OpenWithOptions(filepath.Join(cfg.StateDir, "idempotency"),
+		idempotency.Options{TTL: idempotencyTTL, MaxEntries: idempotencyMaxEntries})
 	if err != nil {
 		_ = jrnl.Close()
 		listener.Close()
@@ -231,10 +247,41 @@ func Open(cfg Config) (*Daemon, error) {
 	// Runs after reconcile so d.sessions already reflects the reconnected world.
 	d.resolveStaleLaunches()
 
+	// Bound the idempotency log (C4): compact once at startup — AFTER
+	// resolveStaleLaunches has seen the full replayed set — so the NEXT restart's
+	// replay is bounded, then keep it bounded with a lifecycle-tied ticker. Both drop
+	// only TTL-expired / over-cap records; a within-validity command's replay guard is
+	// never GC'd (R6, see idempotencyTTL). The initial Compact is best-effort: a
+	// failure must not block serving, so it is logged, not fatal.
+	if err := d.idem.Compact(); err != nil {
+		d.logf("idempotency compact (startup): %v", err)
+	}
+	d.wg.Add(1)
+	go d.compactLoop()
+
 	d.wg.Add(1)
 	go d.acceptLoop()
 
 	return d, nil
+}
+
+// compactLoop periodically compacts the idempotency store so its durable log stays
+// bounded over the daemon's lifetime (C4). It is registered on d.wg and returns on
+// d.stopCh, so Close drains it — no goroutine leak. Mirrors pollMonitor's shape.
+func (d *Daemon) compactLoop() {
+	defer d.wg.Done()
+	t := time.NewTicker(idempotencyCompactInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.stopCh:
+			return
+		case <-t.C:
+			if err := d.idem.Compact(); err != nil {
+				d.logf("idempotency compact: %v", err)
+			}
+		}
+	}
 }
 
 // List returns a snapshot of every session's meta.
