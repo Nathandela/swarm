@@ -14,14 +14,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
+
+// errNoBootstrap is returned when NewFromMailbox scans the mailbox and finds no
+// epoch_grant_bootstrap frame: with no ContentKey the phone can do nothing, so it fails closed.
+var errNoBootstrap = errors.New("phonesim: no epoch_grant_bootstrap frame in mailbox")
 
 // Config wires a simulated phone to the pairing outcome and the relay. It mirrors what
 // a real device holds after pairing + enrollment: its key custody, the pinned machine
@@ -59,13 +65,51 @@ type Phone struct {
 	cursor uint64 // phone mailbox read cursor (drained forward by Observe + ReadReply)
 }
 
-// New bootstraps the phone from the sealed grant: it AcceptGrants (verifying the grant
-// against the pinned machine sign pub and opening it with the phone KeyStore) to recover
-// the epoch ContentKey/EpochID, then builds a MailboxRouter bound to that key (its one
-// seq guard demuxes journal records and terminal snapshots off the shared mailbox stream).
-// It fails closed on any grant that does not open under the pinned key.
+// New bootstraps the phone from an IN-PROCESS sealed grant (cfg.Grant): it AcceptGrants
+// (verifying the grant against the pinned machine sign pub and opening it with the phone
+// KeyStore) to recover the epoch ContentKey/EpochID, then builds a MailboxRouter bound to
+// that key (its one seq guard demuxes journal records and terminal snapshots off the shared
+// mailbox stream). It fails closed on any grant that does not open under the pinned key.
+// NewFromMailbox is the production path that recovers the grant off the relay instead.
 func New(cfg Config) (*Phone, error) {
-	epochID, _, keys, err := phonecore.AcceptGrant(cfg.KeyStore, cfg.MachineSignPub, cfg.Grant)
+	return newPhone(cfg, cfg.Grant, 0)
+}
+
+// NewFromMailbox bootstraps the phone by READING the sealed grant off its relay mailbox --
+// the production topology (the gateway delivered it as a tagged plaintext bootstrap frame),
+// NOT in-process injection. It performs ONE forward scan from cursor 0, running
+// grant.ParseBootstrap over each item -- a ContentKey-sealed router/journal envelope parses
+// ok=false and is cleanly skipped -- and, on the FIRST well-formed bootstrap frame, AcceptGrants
+// it (verifying it against the pinned machine sign pub, opening it with the phone KeyStore) to
+// recover the epoch ContentKey and build the router, exactly as New does. The read cursor is
+// seeded to the CONSUMED frame's cursor, so a later Observe neither reprocesses the bootstrap
+// nor skips any real frame that followed it (frames read strictly-after that cursor). It fails
+// closed: a mailbox with no bootstrap frame (errNoBootstrap), or a grant that does not open
+// under the pinned key, is an error -- with no ContentKey the phone can do nothing. The
+// bootstrap is one-shot (a single consume the cursor never returns to), so it needs no
+// GrantReceiver: this IS the phone's first grant, the same non-monotonic AcceptGrant New runs.
+func NewFromMailbox(ctx context.Context, cfg Config) (*Phone, error) {
+	items, err := cfg.Relay.MailboxRead(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		g, ok := grant.ParseBootstrap(it.Envelope)
+		if !ok {
+			continue // ContentKey-sealed router/journal envelope -- not the bootstrap frame
+		}
+		return newPhone(cfg, g, it.Cursor)
+	}
+	return nil, errNoBootstrap
+}
+
+// newPhone recovers the epoch ContentKey/EpochID from a sealed grant (verifying it against the
+// pinned machine sign pub, opening it with the phone KeyStore) and assembles the Phone with a
+// MailboxRouter bound to that key and its mailbox read cursor seeded to startCursor. It fails
+// closed on any grant that does not open. Shared by New (grant injected in-process, cursor 0)
+// and NewFromMailbox (grant read off the mailbox, cursor at the consumed bootstrap frame).
+func newPhone(cfg Config, g *crypto.EpochGrant, startCursor uint64) (*Phone, error) {
+	epochID, _, keys, err := phonecore.AcceptGrant(cfg.KeyStore, cfg.MachineSignPub, g)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +121,7 @@ func New(cfg Config) (*Phone, error) {
 		epochID:       epochID,
 		machineTarget: cfg.MachineTarget,
 		machine:       cfg.Machine,
+		cursor:        startCursor,
 	}, nil
 }
 
