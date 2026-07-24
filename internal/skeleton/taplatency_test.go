@@ -8,7 +8,8 @@ package skeleton
 //
 // TestTapLatency_GridChangeReachesSubscriberWithin1s drives the REAL tap path
 // (gridPoll ticker -> tapOnce -> sampleGridAsync -> sampleGrid -> a real shim
-// attach+snapshot -> engine.OnOutput -> emit -> protocol fan-out) against a real
+// snapshot via the non-subscribing snapshot_req (C3; attach-based against an
+// old shim) -> engine.OnOutput -> emit -> protocol fan-out) against a real
 // assembled daemon and a real shim session, and measures from the moment the
 // session's grid actually changes to the moment a real subscriber receives the
 // resulting status event.
