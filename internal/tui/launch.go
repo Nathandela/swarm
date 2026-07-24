@@ -485,8 +485,8 @@ func (m launchModel) view() string {
 	b.WriteString(m.fieldLine("prompt", m.promptValue(), m.isPrompt()))
 	b.WriteString(m.fieldLine("worktree", m.worktreeValue(), m.isWorktree()))
 
-	if auth := m.authLine(); auth != "" {
-		b.WriteString("\n" + auth + "\n")
+	if note := m.agentNote(); note != "" {
+		b.WriteString("\n" + note + "\n")
 	}
 
 	b.WriteString("\n")
@@ -521,15 +521,27 @@ func (m launchModel) isChoiceFocused() bool {
 	return ok
 }
 
-// authLine surfaces which auth a claude launch will inherit from the client env.
-// It is neutral and purely informational: swarm mirrors the launching terminal
-// (spec scenario 18) and never alters the env, so it states the fact without any
-// advice. Shown only when the selected agent is claude and the key is present.
-func (m launchModel) authLine() string {
-	if !m.apiKeyInEnv || m.currentAgentName() != "claude" {
+// agentNote surfaces one short, neutral per-agent note below the form fields:
+// which auth a claude launch will inherit from the client env, or a known
+// status-signal-quality limitation for adapters that have one. It states facts
+// without advice — swarm mirrors the launching terminal (spec scenario 18) and
+// never alters the env. Empty when the selected agent has nothing to say.
+func (m launchModel) agentNote() string {
+	var note string
+	switch m.currentAgentName() {
+	case "claude":
+		if !m.apiKeyInEnv {
+			return ""
+		}
+		note = "auth: ANTHROPIC_API_KEY from env (API billing)"
+	case "opencode":
+		// R-H4 committee finding: opencode declares no idle rule (T-4), so a
+		// settled turn reads unknown and never trips the completion banner.
+		note = "status: busy-only (no idle signal)"
+	default:
 		return ""
 	}
-	return "  " + lipgloss.NewStyle().Foreground(colAmber).Render("auth: ANTHROPIC_API_KEY from env (API billing)")
+	return "  " + lipgloss.NewStyle().Foreground(colAmber).Render(note)
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.

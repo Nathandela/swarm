@@ -29,16 +29,41 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/refadapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 )
 
+// adapterNone is the -adapter value selecting FIXTURE-ONLY mode (R-A3):
+// characterize records and validates the fixture but derives no capability
+// entry. T-6 needs a fixture recorded BEFORE the real adapter package exists
+// (the Phase B fixtures land before the adapters that read them), so
+// characterization must not require resolving one.
+const adapterNone = "none"
+
 // adapterRegistry maps an -adapter name to the constructor that builds it from a
-// recorded fixture. The reference adapter is the default (the worked example for
-// the fake agent); Epic 11 registers the real claude/codex adapters here, and
-// that is the ONLY change needed to characterize a new CLI (T-5). It is a var so
-// tests can register a distinctive adapter and prove selection is honored.
+// recorded fixture — the LOCAL, fixture-driven entries only (refadapter's worked
+// examples). A real production adapter (claude, codex, ...) is NOT added here:
+// resolveAdapter falls back to the internal/adapter/registry package for those,
+// wrapping registry.New's fixture-independent constructor to match this map's
+// shape (T-5: registering a new production CLI never touches this file). It is a
+// var so tests can register a distinctive adapter and prove selection is honored.
 var adapterRegistry = map[string]func(adapter.Fixture) adapter.Adapter{
 	"refadapter": refadapter.New,
 	"reference":  refadapter.New,
+}
+
+// resolveAdapter resolves -adapter name to a fixture-consuming constructor,
+// checking the local fixture-driven entries FIRST and falling back to the
+// registered production adapters (registry.New), wrapped to ignore the fixture
+// argument since a production adapter is stateless / fixture-independent. ok is
+// false for a name known to neither source.
+func resolveAdapter(name string) (func(adapter.Fixture) adapter.Adapter, bool) {
+	if ctor, ok := adapterRegistry[name]; ok {
+		return ctor, true
+	}
+	if a, ok := registry.New(name); ok {
+		return func(adapter.Fixture) adapter.Adapter { return a }, true
+	}
+	return nil, false
 }
 
 func main() {
@@ -62,7 +87,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "write the fixture JSON here (default: stdout)")
 	input := fs.String("input", "", "scripted stdin keystrokes: a file path, or inline `<delay> <data>` lines")
 	hookSink := fs.String("hook-sink", "", "unix socket path the CLI's hooks post JSON payloads to")
-	adapterName := fs.String("adapter", "refadapter", "adapter used to derive the capability entry (see registry)")
+	adapterName := fs.String("adapter", "refadapter", `adapter used to derive the capability entry: a local fixture-driven name (reference/refadapter), a registered production adapter name, or "none" for fixture-only mode (record + validate the fixture, emit no capability entry)`)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -85,10 +110,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	ctor, ok := adapterRegistry[*adapterName]
-	if !ok {
-		fmt.Fprintf(stderr, "swarm-char: unknown -adapter %q (known: %s)\n", *adapterName, strings.Join(knownAdapters(), ", "))
-		return 2
+	// -adapter none selects fixture-only mode (R-A3): ctor stays nil and
+	// capability derivation is skipped below. Any other name must resolve
+	// against either source, or the run fails fast before spawning the CLI.
+	var ctor func(adapter.Fixture) adapter.Adapter
+	if *adapterName != adapterNone {
+		var ok bool
+		ctor, ok = resolveAdapter(*adapterName)
+		if !ok {
+			fmt.Fprintf(stderr, "swarm-char: unknown -adapter %q (known: %s, %s)\n", *adapterName, adapterNone, strings.Join(knownAdapters(), ", "))
+			return 2
+		}
 	}
 
 	fx, err := characterize(charSpec{
@@ -113,6 +145,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if ctor == nil {
+		return 0 // -adapter none: fixture-only mode, no capability entry to derive
+	}
+
 	// Emit the capability entry from the SELECTED adapter, rendering the grid at
 	// the characterization geometry (never a hardcoded refadapter or a fixed size).
 	entry, err := deriveCapability(ctor(fx), fx, c, r)
@@ -129,10 +165,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// knownAdapters returns the registered adapter names, sorted.
+// knownAdapters returns every -adapter name resolveAdapter can resolve — the
+// local fixture-driven entries plus the registered production adapters — sorted
+// and de-duplicated (both sources register "reference"), for the unknown-name
+// error message.
 func knownAdapters() []string {
-	names := make([]string, 0, len(adapterRegistry))
+	set := make(map[string]bool, len(adapterRegistry))
 	for n := range adapterRegistry {
+		set[n] = true
+	}
+	for _, n := range registry.Names() {
+		set[n] = true
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
 		names = append(names, n)
 	}
 	sort.Strings(names)

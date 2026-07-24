@@ -1,0 +1,4 @@
+6s Say OK and nothing else.
+500ms \r
+25s 
+400ms 

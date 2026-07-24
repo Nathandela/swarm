@@ -116,6 +116,7 @@ type session struct {
 	token   string
 	pid     int
 	sources []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
+	rules   gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
 	alive   bool
 
 	// emitMu serializes this session's commit→emit so its emits stay ordered (G6)
@@ -190,6 +191,7 @@ func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.Si
 		token:   token,
 		pid:     pid,
 		sources: sources,
+		rules:   parseGridRules(sources),
 		alive:   true,
 		status:  st,
 	}
@@ -304,7 +306,20 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 		e.mu.Unlock()
 		return // a fresher typed signal outranks the heuristic
 	}
-	turn, interaction, conclusive := evaluateGridSig(snap, gridSignature(s.sources))
+	var (
+		turn        status.Turn
+		interaction status.Interaction
+		conclusive  bool
+	)
+	if len(s.rules.busy) > 0 || len(s.rules.idle) > 0 {
+		// Declarative descriptor rules (agy/opencode, R-C1/R-C2). Conclusive iff a
+		// declared rule or the generic fallback classified the frame; an unknown
+		// reading is inconclusive and preserves the committed status (ADR-007).
+		turn, interaction = evaluateGridWithRules(snap, s.rules)
+		conclusive = turn != status.TurnUnknown
+	} else {
+		turn, interaction, conclusive = evaluateGridSig(snap, gridSignature(s.sources))
+	}
 	if !conclusive {
 		e.mu.Unlock()
 		return // inconclusive grid tap: preserve the committed status (ADR-007)
