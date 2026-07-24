@@ -73,7 +73,7 @@ The daemon starts automatically the first time, and you land on the general view
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill it (or delete a finished one) — confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Quit the TUI — your agents keep running |
 
-Attach is raw passthrough: the agent CLI's own interface, full-screen and untouched. swarm adds a single thin line (session name and the detach key), and even that is toggleable.
+Attach is raw passthrough: the agent CLI's own interface, full-screen and untouched. swarm adds a single thin line (session name and the detach key), and even that is toggleable. Ended sessions offer <kbd>r</kbd> to resume them as a fresh, linked session where the agent supports it.
 
 ### Status groups
 
@@ -86,7 +86,7 @@ swarm tracks three orthogonal signals per session — process, turn, and interac
 | **Ready for review** | The turn finished. Attach, review the diff, send the next prompt. |
 | **Completed** | Exited (code shown) or lost. Stays listed until you delete it. |
 
-Detection is typed-event-first (Claude Code hooks, the Codex app-server), falling back to screen-grid heuristics when a CLI offers no typed signal.
+Detection is typed-event-first where a CLI exposes structured events — Claude Code drives it through settings-configured hooks — with screen-grid heuristics (reading the emulated screen, never raw bytes) as the fallback.
 
 ## Supported agents
 
