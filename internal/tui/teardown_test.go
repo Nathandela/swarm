@@ -44,7 +44,7 @@ func TestUpdate_ConnectionLost_SetsBannerAndPersistentState(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute))
 	m := newModel(t, f, detectMixed())
 
-	m2, _ := m.Update(connectionLostMsg{})
+	m2, _ := m.Update(connectionLostMsg{from: m.(rootModel).events})
 
 	if !m2.(rootModel).connectionLost {
 		t.Fatal("connectionLostMsg must set the persistent connectionLost state")
@@ -64,7 +64,7 @@ func TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute))
 	m := newModel(t, f, detectMixed())
 
-	m, _ = m.Update(connectionLostMsg{})
+	m, _ = m.Update(connectionLostMsg{from: m.(rootModel).events})
 
 	status := m.(rootModel).generalStatus()
 	if !strings.Contains(status, "daemon connection lost") {

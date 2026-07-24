@@ -77,7 +77,14 @@ type eventMsg struct{ ev protocol.Event }
 // connection is gone for good (pump eviction, daemon crash/restart all look the
 // same from here — protocol.Client closes eventsCh once its read loop dies).
 // waitForEvent deliberately does not re-arm after this (agents-tracker-1uq).
-type connectionLostMsg struct{}
+//
+// from is the events channel this loss was observed on (channels are comparable).
+// A successful auto-upgrade swaps m.events to a fresh subscription while the OLD
+// client's read loop closes its eventsCh, so its stale waitForEvent fires a
+// connectionLostMsg stamped with the now-dead OLD channel. The Update handler
+// ignores any loss whose from != m.events, so a pre-upgrade loss can never poison
+// the live post-upgrade board regardless of arrival order (deployment-committee 3/3).
+type connectionLostMsg struct{ from <-chan protocol.Event }
 
 // repaintMsg drives the periodic re-render that refreshes the live elapsed-time
 // column (see repaintTick).
@@ -271,7 +278,7 @@ func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return connectionLostMsg{}
+			return connectionLostMsg{from: ch}
 		}
 		return eventMsg{ev}
 	}
@@ -294,6 +301,15 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(banner, waitForEvent(m.events))
 
 	case connectionLostMsg:
+		// Stale-source guard (deployment-committee 3/3): ignore a loss reported on a
+		// channel that is no longer our subscription. After a successful auto-upgrade
+		// m.events points at the fresh stream while the OLD client's read loop closes
+		// its eventsCh, firing this message stamped with the dead OLD channel. Acting
+		// on it would freeze a perfectly live board. A genuine loss on the CURRENT
+		// channel still matches and sets the state below (the 1uq behavior).
+		if msg.from != m.events {
+			return m, nil
+		}
 		// The daemon connection is gone for good: set the PERSISTENT indicator (see
 		// generalStatus) so it survives past the transient banner's bannerDuration —
 		// a 4s banner would fade while the roster stays frozen, looking like false
@@ -343,8 +359,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Swap to the fresh client and re-read its (now matching) build version, which
 		// clears the skew. Sessions survive the restart (shims own the PTYs), so the
 		// board stays accurate; we only re-subscribe for future events. The old client's
-		// pending waitForEvent is left blocked on its dead stream — a one-time,
-		// process-lifetime cost of the once-per-process upgrade.
+		// pending waitForEvent does NOT stay blocked — the old daemon's death closes its
+		// eventsCh, so that stale waitForEvent fires a connectionLostMsg stamped with the
+		// dead OLD channel. The stale-source guard (connectionLostMsg case) drops it, and
+		// clearing connectionLost here covers the reverse ordering where it landed first.
 		m.client = msg.client
 		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
 			m.daemonVersion = bv.BuildVersion()
@@ -357,7 +375,17 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.general.setBanner("daemon upgraded but event stream failed: " + serr.Error())
 		}
 		m.events = events
-		return m, tea.Batch(m.general.setBanner("daemon upgraded"), waitForEvent(m.events))
+		// Clear any connection-lost state a stale pre-upgrade loss may have set, and
+		// resume the elapsed-column repaint tick if it was halted while on the general
+		// view (mirrors enterGeneral's single-tick guard). Without this the board would
+		// stay frozen when the stale loss arrived before the restart completed.
+		m.connectionLost = false
+		cmds := []tea.Cmd{m.general.setBanner("daemon upgraded"), waitForEvent(m.events)}
+		if m.screen == screenGeneral && !m.ticking {
+			m.ticking = true
+			cmds = append(cmds, repaintTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
