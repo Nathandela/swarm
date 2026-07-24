@@ -34,10 +34,25 @@ type CommandForwarder interface {
 	ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error)
 }
 
+// LeaseRouter is the live-input seam the command loop routes take_control and input
+// frames through (A7 input Slice 5): Begin opens+leases a session's persistent conn,
+// Input rides a keystroke/resize on that conn, End tears it down. It is the routing
+// subset of *LeaseManager (Close is the runtime's, not the router's), extracted so
+// the loop's dispatch is unit-testable with a fake. *LeaseManager satisfies it.
+type LeaseRouter interface {
+	Begin(cmd protocol.RemoteCommand) error
+	Input(session string, f InputFrame) error
+	End(session string)
+}
+
+// *LeaseManager is the production LeaseRouter. Pinned at compile time.
+var _ LeaseRouter = (*LeaseManager)(nil)
+
 // CommandBridgeConfig configures a CommandBridge.
 type CommandBridgeConfig struct {
 	Mailbox     Mailbox           // the machine's own relay mailbox (read) + the phone's (append)
-	Forwarder   CommandForwarder  // forwards opened commands to the daemon remote.sock
+	Forwarder   CommandForwarder  // forwards opened mutating commands to the daemon remote.sock
+	Leases      LeaseRouter       // routes take_control + input frames to per-session lease conns (nil => input plane disabled)
 	Key         crypto.ContentKey // K_epoch content key shared with the phone
 	EpochID     uint32            // the epoch the content key belongs to
 	ReplyTarget string            // the phone's relay routing id (where replies are appended)
@@ -59,9 +74,10 @@ type CommandBridge struct {
 	cfg  CommandBridgeConfig
 	recv *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
 
-	mu       sync.Mutex
-	cursor   uint64
-	replySeq uint64
+	mu             sync.Mutex
+	cursor         uint64
+	replySeq       uint64
+	currentSession string // the session the phone last took control of; input frames route here
 }
 
 // NewCommandBridge returns a bridge over cfg. The read cursor starts at 0; a caller
@@ -141,13 +157,76 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 	}
 }
 
-// handle opens one command envelope, forwards it to the daemon, and seals the reply
-// back to the phone mailbox.
+// handle opens ONE mailbox envelope (a single Accept advancing the shared seq
+// high-water) and routes it by kind: an input frame rides the focused session's
+// lease conn; a command dispatches on its action (take_control/take_control_end to
+// the lease plane, kill/delete/launch to the daemon). A replayed seq is rejected by
+// the single Accept before any dispatch, so it can neither double-lease nor
+// double-forward nor reach Input.
 func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
-	rc, err := OpenRemoteCommandGuarded(b.recv, b.cfg.Key, it.Envelope)
+	frame, err := OpenMailboxFrame(b.recv, b.cfg.Key, it.Envelope)
 	if err != nil {
-		return fmt.Errorf("open command: %w", err)
+		return fmt.Errorf("open frame: %w", err)
 	}
+	if frame.Kind == FrameInput {
+		return b.routeInput(frame.Input)
+	}
+	return b.routeCommand(ctx, frame.Command)
+}
+
+// routeInput hands a keystroke/resize frame to the currently-focused session's lease
+// conn. The mailbox is seq-ordered, so a take_control always precedes its input
+// frames and currentSession names the right session by the time input arrives. With
+// no focus (or no input plane) the frame is routed to "" / dropped -- never wedged.
+func (b *CommandBridge) routeInput(f InputFrame) error {
+	if b.cfg.Leases == nil {
+		return nil
+	}
+	b.mu.Lock()
+	session := b.currentSession
+	b.mu.Unlock()
+	return b.cfg.Leases.Input(session, f)
+}
+
+// routeCommand dispatches an opened RemoteCommand: take_control opens the session's
+// lease and focuses it; take_control_end tears it down and clears the focus; every
+// other action (kill/delete/launch) is forwarded to the daemon on a fresh conn and
+// its reply is sealed back to the phone. take_control and its teardown never go to
+// the daemon forwarder (the lease conn is the daemon path for control).
+func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteCommand) error {
+	switch rc.Action {
+	case protocol.ActionTakeControl:
+		if b.cfg.Leases == nil {
+			return nil
+		}
+		if err := b.cfg.Leases.Begin(rc); err != nil {
+			return fmt.Errorf("take_control: %w", err)
+		}
+		b.mu.Lock()
+		b.currentSession = rc.Session
+		b.mu.Unlock()
+		return nil
+	case protocol.OpTakeControlEnd:
+		// take_control_end has no signed Action constant; the daemon op string is its
+		// wire action. Tearing down the lease conn (End) is the phone's take_control_end.
+		if b.cfg.Leases == nil {
+			return nil
+		}
+		b.cfg.Leases.End(rc.Session)
+		b.mu.Lock()
+		if b.currentSession == rc.Session {
+			b.currentSession = ""
+		}
+		b.mu.Unlock()
+		return nil
+	default:
+		return b.forward(ctx, rc)
+	}
+}
+
+// forward sends a mutating command to the daemon and seals its reply back to the
+// phone mailbox.
+func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) error {
 	op, err := opForAction(rc.Action, rc.Launch)
 	if err != nil {
 		return err

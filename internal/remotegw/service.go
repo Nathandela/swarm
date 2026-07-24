@@ -22,6 +22,7 @@ type ServiceConfig struct {
 	SenderKeyID    [8]byte           // this machine's routing key id
 	PollInterval   time.Duration     // command-IN poll cadence (default 500ms)
 	ReconnectDelay time.Duration     // journal reconnect backoff (default 1s)
+	LeaseAwait     time.Duration     // how long take_control waits for the lease grant (default 5s)
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 }
 
@@ -35,6 +36,7 @@ type Service struct {
 	cfg    ServiceConfig
 	gw     *Gateway
 	bridge *CommandBridge
+	leases *LeaseManager
 }
 
 // NewService builds a runtime over cfg. It wires a RelaySink onto a Gateway for the
@@ -46,6 +48,9 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 	if cfg.ReconnectDelay <= 0 {
 		cfg.ReconnectDelay = time.Second
+	}
+	if cfg.LeaseAwait <= 0 {
+		cfg.LeaseAwait = 5 * time.Second
 	}
 	sink := NewRelaySink(RelayConfig{
 		Appender:       cfg.Relay,
@@ -61,14 +66,18 @@ func NewService(cfg ServiceConfig) *Service {
 	if forwarder == nil {
 		forwarder = gw
 	}
+	// The input plane: take_control opens a persistent lease conn on the daemon
+	// remote.sock, and every keystroke/resize for that session rides THAT conn.
+	leases := NewLeaseManager(cfg.DaemonSocket, cfg.LeaseAwait)
 	bridge := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     cfg.Relay,
 		Forwarder:   forwarder,
+		Leases:      leases,
 		Key:         cfg.Key,
 		EpochID:     cfg.EpochID,
 		ReplyTarget: cfg.PhoneTarget,
 	})
-	return &Service{cfg: cfg, gw: gw, bridge: bridge}
+	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases}
 }
 
 // Gateway exposes the underlying journal bridge (e.g. to seed or read its cursor).
@@ -81,6 +90,9 @@ func (s *Service) CommandBridge() *CommandBridge { return s.bridge }
 // loops are independent: a failing journal connection (retried with ReconnectDelay)
 // does not stall the command loop, and vice versa.
 func (s *Service) Run(ctx context.Context) error {
+	// Tear down every live lease conn on shutdown so no daemon connection is left
+	// holding a control gate after the sidecar exits.
+	defer func() { _ = s.leases.Close() }()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); s.runJournal(ctx) }()
