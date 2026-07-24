@@ -201,6 +201,36 @@ func TestPassthrough_PanicWithChromeResetsRegion(t *testing.T) {
 	}
 }
 
+// item 3 (deployment-committee via agents-tracker-rs8): a recovered panic AFTER an
+// alt snapshot paint must also EXIT alt, not merely reset the chrome region —
+// otherwise the terminal is stranded in the alternate screen. The ordering matches
+// finish() (item 2): chrome cleanup first (buffer-local), then the alt-exit (global).
+func TestPassthrough_PanicAfterAltSnapshotExitsAlt(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	term.panicSentinel = []byte("BOOM")
+	sess := newFakeSession(mustAltSnap(t, "ALT-SNAP"))
+	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, Name: "claude"})
+
+	// Panic only AFTER chrome is engaged over the alt snapshot (region set).
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("\x1b[1;23r")) })
+	sess.pushFrame([]byte("BOOM")) // the render write for this frame panics
+
+	res := waitResult(t, ch)
+	if res.reason != ReasonError {
+		t.Fatalf("a mid-frame panic must surface as ReasonError; got %v", res.reason)
+	}
+	out := term.outBytes()
+	altExit := bytes.Index(out, []byte("\x1b[?1049l"))
+	if altExit < 0 {
+		t.Fatalf("a recovered panic after an alt snapshot must exit alt (\\x1b[?1049l), not strand the terminal in the alternate screen; out=%q", out)
+	}
+	// Same order as finish(): the chrome cleanup (bare \x1b[r) precedes the alt-exit.
+	chromeReset := bytes.LastIndex(out, []byte("\x1b[r"))
+	if chromeReset < 0 || chromeReset > altExit {
+		t.Fatalf("panic cleanup must reset the chrome region before exiting alt; chromeReset=%d altExit=%d out=%q", chromeReset, altExit, out)
+	}
+}
+
 // codex re-confirm blocker — the RESIZE path must obey the same ground-state gate as
 // the frame and heal paths: a resize landing while the agent's stream is mid escape
 // sequence must defer its region/hint bytes to the next safe boundary, never splice
