@@ -121,7 +121,14 @@ pulling in `internal/shim`, `internal/engine`, `internal/vt`, `internal/transcri
 `ultraviolet`, `xo/terminfo`, `muesli/cancelreader` — **52 non-stdlib packages** (`go list -deps
 -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/phonecore | sort -u | wc -l`). Also,
 `gobind`'s generated wrapper lives outside the module's `internal/` boundary, so an
-`internal/...` package cannot be bound at all.
+`internal/...` package cannot be bound **directly**.
+
+**Verified empirically (2026-07-25), since PB-BIND-1's design rests on it**: a *non-internal*
+façade that **imports** `internal/...` packages binds cleanly. A probe module — `internal/core`
+holding a `[32]byte` key type and an unsigned-seq function (mimicking `phonecore`'s two worst
+bind offenders), wrapped by a non-internal `mobile` façade — produced a working AAR. Only the
+bound package itself must be non-internal; it may consume the internal tree freely. This
+removes the risk that §4.1 and §4.2 together would have forced `phonecore` itself to relocate.
 
 Shipping the PTY and VT emulator to a device an adversary may hold also cuts against ADR-007
 Decision 2, which deliberately keeps them off the network-facing edge.
