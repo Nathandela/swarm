@@ -46,8 +46,10 @@ longer true. Installed and **proven by producing a real AAR containing `jni/arm6
 | Build tools | 35.0.0 | `$ANDROID_HOME/build-tools` |
 | NDK | 27.2.12479018 | `$ANDROID_HOME/ndk` |
 | gomobile / gobind | installed 2026-07-24 | `~/go/bin` |
-| Gradle | system (wrapper to be checked in, PB-TOOL-4) | Homebrew |
-| Go | 1.26.1 darwin/amd64 (module declares `go 1.24.2`, `go.mod:3`) | system |
+| Gradle | 9.6.1 system; wrapper pins 8.11.1 (generation verified, PB-TOOL-4) | Homebrew / checked-in wrapper |
+| Emulator + AVD | `swarmtest`, Android 15, `google_apis/arm64-v8a` — boots headless in ~30 s, adb attaches | `$ANDROID_HOME/emulator` |
+| Host CPU | Apple M1 (arm64) | — |
+| Go | 1.26.1 darwin/amd64 toolchain on an arm64 host (module declares `go 1.24.2`, `go.mod:3`) | system |
 
 Two toolchain facts learned by doing, which the build scripts must encode:
 
@@ -364,7 +366,7 @@ is the subset Phase B genuinely needs.
 | No Firebase project | Real FCM delivery unverifiable here | Full implementation + fake-endpoint tests + credential runbook; PB-PUSH-5 keeps the system functional without push |
 | No physical handset | Hardware-backed Keystore and real biometrics are emulator-approximated | Code path exercised; the hardware guarantee is not proven here |
 | No provisioned VPS relay | Real-network latency/NAT unverified | Local relay proves protocol correctness; PB-OPS-1 makes deployment reproducible |
-| Emulator is x86_64 | arm64 native lib is built but the smoke runs x86_64 | Build all target ABIs; Go code is architecture-independent |
+| ~~Emulator ABI mismatch~~ **CLOSED** | Not a limit: this host is an Apple M1, and the AVD runs `google_apis/arm64-v8a` on Android 15 — the SAME ABI as a real handset. Verified booting headless in ~30 s with adb attached (`ro.product.cpu.abi` = `arm64-v8a`). | n/a — the emulator exercises the shipping ABI |
 
 The final audit must confirm this list is **complete**, not merely present.
 
