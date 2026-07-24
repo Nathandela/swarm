@@ -1,8 +1,10 @@
 # Phase B requirements — Android handset (the v1 milestone)
 
-**Status**: v3, revised after audit-committee rounds 1 and 2 (both rounds: codex REVISE /
-opus REVISE / fable REVISE). Round 2 additionally surfaced a **live Phase A security hole**
-(§4.6), now tracked as PB-GW-*.
+**Status**: v3.1, revised after audit-committee rounds 1-3. Rounds 1 and 2 returned REVISE from
+all three reviewers. **Round 3 disproved v3's own claim** that §4.6 was a live Phase A security
+hole; the claim is withdrawn and the finding is now correctly scoped as a durability /
+defense-in-depth defect with no reproduced exploit (PB-GW-*). Recording that retraction
+prominently is deliberate: an unnecessary amendment to a committee-signed closure is its own harm.
 **Date**: 2026-07-25.
 **Binds**: the Phase B implementation. Refines `docs/research/remote-v1-roadmap.md` §"Phase B"
 into testable requirements.
@@ -200,20 +202,43 @@ relay-adversary-reachable**, which §4.3's is not in the same way:
 - The epoch survives reboot — rotation happens only in `RevokeDevice`
   (`internal/skeleton/api.go:231`), which is precisely the premise `seqstore.go` exists for.
 
-**Attack**: the relay is the declared adversary, so it simply retains phone->machine frames
-instead of honoring ack-deletion. After any gateway restart it re-serves them from cursor 0;
-they are accepted, and any that are input frames are injected into whatever lease is live —
-so the adversary can replay previously-observed keystroke bursts into a real session.
+**Claimed exploit, and its retraction (round 3).** v3 initially asserted that an adversarial
+relay retaining phone->machine frames could, after a gateway restart, re-inject observed
+keystrokes into a live lease. **That claim was wrong and is withdrawn.** Round 3 disproved it
+and the disproof was independently re-verified; every link holds:
 
-Phase A recorded the durable-seq problem (committee finding C2b) for the **outbound** direction
-only and closed on "NO relay-adversary-reachable confidentiality/integrity hole"
-(`docs/verification/remote-phaseA-committee-closure.md`). **That claim is falsified for the
-integrity direction across a gateway restart.** It is not in Phase A's recorded residual lists.
+- Gateway shutdown tears down every lease conn and a restart builds a **fresh, empty**
+  `LeaseManager` (`internal/remotegw/service.go:91,120`).
+- `LeaseManager.Input` **drops** input for a session with no lease conn — "Input for an unknown
+  or ended session (no conn in the map) is DROPPED" (`internal/remotegw/leasemanager.go:62-70`).
+- A retained `take_control` cannot recreate the old lease: it is expiry-checked and its
+  `operation_id` is **single-use**, a duplicate being refused as a replay with no attach
+  (`internal/protocol/server.go:1452-1456`).
+- Commands and input draw from **one** monotonic sequencer (`internal/phonecore/input.go:28-32`,
+  `SenderKeyID` stays zero). So a *new* legitimate `take_control` carries a seq above every old
+  input frame; once it is accepted the fresh receiver's high-water exceeds them all and each
+  replayed input is `ErrStaleSeq`.
 
-This is a Phase A defect, but it lands in Phase B for two reasons: PB-LIFE-1/-5 mandate
-restart-on-exit supervision, which turns a rare event into a routine one; and it is the exact
-mirror of PB-STATE, so fixing them together is the only coherent option. It is tracked as
-**PB-GW-*** and must also be recorded as a correction to the Phase A closure (PB-DOC-5).
+Replayed old input therefore arrives either before any lease exists (dropped) or after a
+higher-seq re-lease (stale-dropped). High-level mutating commands may be re-forwarded, but the
+daemon's two-phase durable idempotency is the documented downstream defense
+(`internal/remotegw/command_loop.go:83`).
+
+**What is actually true**: a real **durability / defense-in-depth defect** with **no reproduced
+exploit**. It is worth fixing because the safety currently rests on incidental properties (an
+empty lease map, a shared sequencer, single-use operation ids) rather than on the replay guard
+that is supposed to provide it — so a future routing or sequencing change could convert a
+latent defect into a live one. Narrower effects (replayed unsigned watch/unwatch state, wasted
+render work) are plausible but must be demonstrated per action class rather than assumed.
+
+**Consequence for the Phase A closure**: it must NOT be amended to say a
+confidentiality/integrity hole existed — that would be a false correction to a signed document,
+which is its own harm. PB-DOC-5 records only what was reproduced: the missing durable inbound
+high-water and the disabled bounded-age check, plus the fact that the original "no
+relay-adversary-reachable hole" claim was scoped to a single gateway run.
+
+It lands in Phase B because PB-LIFE-1/-5 mandate restart-on-exit supervision (making restarts
+routine) and because it is the exact mirror of PB-STATE.
 
 ---
 
@@ -264,11 +289,11 @@ committee agreement, not implementer discretion.
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-GW-1 | The gateway persists its inbound per-`(sender, epoch)` replay high-water and its mailbox read cursor, and **seeds them on start** via the existing `SetCursor`/`SeedHighWater` seams, which production currently never calls. | RED test: restart the gateway and assert a retained frame is refused with `ErrStaleSeq`. Today it is accepted. |
-| PB-GW-2 | The inbound receiver enables the bounded-age check (`maxAge > 0`), which `NewMailboxReceiver` leaves disabled — giving an age backstop even if a high-water is lost. | Test: an authenticated but too-old envelope is refused with `ErrStaleAge`. |
-| PB-GW-3 | The inbound commit is atomic with the same discipline PB-STATE-7 requires of the phone: high-water + cursor commit before the relay ack. | Crash-injection test at each boundary; no accepted-but-unpersisted frame and no unapplied-but-acked frame. |
-| PB-GW-4 | A gateway kill/restart replay test symmetric to PB-STATE-2, run against a **retaining (adversarial) relay**, not an honest one. | The adversarial relay fake retains acked items and re-serves from cursor 0; no keystroke reaches the PTY twice. |
-| PB-GW-5 | The Phase A closure is corrected rather than left claiming a property that does not hold. | PB-DOC-5. |
+| PB-GW-1 | The gateway persists its inbound per-`(sender, epoch)` replay high-water and its mailbox read cursor, and seeds them on start. **A new bridge seam is required**: `CommandBridge.recv` is private (`internal/remotegw/command_loop.go:88`) and exposes no high-water seeding method — `SeedHighWater` exists only on the nested receiver, so v3's claim that production could "seed via the existing seams" was false. `SetCursor` exists but is never called from startup. | RED test: restart the gateway against a retaining relay and assert a retained frame is refused with `ErrStaleSeq` at the receiver — asserted **at the replay guard**, not at a downstream side effect that other mechanisms already prevent. |
+| PB-GW-2 | The inbound receiver enables the bounded-age check, which `NewMailboxReceiver` leaves at `maxAge == 0` — an age backstop even if a high-water is lost. **Value: 10 minutes** (well above the 60 s command TTL and any plausible delivery delay, well below the 7 d retention cap). | Test: an authenticated envelope older than the bound is refused with `ErrStaleAge`. |
+| PB-GW-3 | **A per-frame-class crash matrix**, not a single "atomic commit". A local transaction cannot atomically span the persisted high-water, the persisted cursor, an external PTY/daemon side effect, and the relay ack, so the rule differs by class: live input may persist consumption *before* the PTY write and accept loss on crash (it is live-only per ADR-007 D7); high-level operations rely on the daemon's durable two-phase idempotency for duplicate suppression; watch/unwatch needs an idempotent convergence rule. | Each class has a stated allowed-loss / duplicate-prevention rule and a crash-injection test at each boundary. |
+| PB-GW-4 | **Per-action-class replay tests** against a retaining (adversarial) relay across a restart: input, take_control, take_control_end, idempotent mutations, and terminal watch/unwatch. v3's single "no keystroke reaches the PTY twice" test would have **passed against today's unfixed code** because the restarted lease manager is empty — it proved nothing. | Each class asserts its own outcome at the guard that is supposed to enforce it; each test must fail against the unfixed code for the right reason. |
+| PB-GW-5 | The Phase A closure records **only what was reproduced** (see §4.6): a missing durable inbound high-water and a disabled age check, with the original claim scoped to a single gateway run. It must not be amended to assert an exploit that was disproved. | PB-DOC-5. |
 
 ### 6.1 PB-STATE — durable on-device state (NEW; the most severe gap, §4.3)
 
@@ -518,7 +543,7 @@ checks, TLS renewal automation, resource limits, and cross-version compatibility
 | PB-DOC-2 | Phase B exit criteria in `implementation-goals.md`; a verification file maps every PB-* ID to evidence. | Full ID coverage. |
 | PB-DOC-3 | Residuals recorded in the Phase A closure style: what, why, adversary-reachable or not. | Reviewed in the final round. |
 | PB-DOC-4 | `docs/research/remote-v1-roadmap.md:286` ("Implementers are sonnet/opus subagents — never fable/haiku") is amended rather than silently contradicted by §11's model assignment. | Roadmap updated. |
-| PB-DOC-5 | **The Phase A closure is corrected.** `docs/verification/remote-phaseA-committee-closure.md` states "no relay-adversary-reachable confidentiality/integrity hole"; §4.6 falsifies that for the integrity direction across a gateway restart, and the defect is in none of its residual lists. The closure must record the finding, its fix (PB-GW-*), and that the original claim was scoped to a single gateway run. | Closure amended; the correction is visible where the original claim lives, not only here. |
+| PB-DOC-5 | **The Phase A closure gains a scoped note, not a retraction.** §4.6's exploit claim was disproved in round 3, so the closure's "no relay-adversary-reachable confidentiality/integrity hole" statement stands. What it must record is the narrower true finding: the gateway's inbound replay guard and read cursor do not survive a restart and the bounded-age check is disabled, so that property currently rests on incidental downstream mechanisms rather than on the guard itself, and the original claim was verified within a single gateway run. | Closure amended with the reproduced finding only; a note stating explicitly that the stronger exploit claim was investigated and **disproved**, so future readers do not resurrect it. |
 | PB-DOC-6 | ADR-007:313 attributes "light+dark token sets" to `remote-control-design-directions.html`, but that file is **dark-only** (31 `--p-*` tokens, four direction blocks, all near-black grounds). The amendment must say the statement was never true of its own cited artifact, rather than presenting the deferral as a change of plan. | ADR amendment states it. |
 
 ---
