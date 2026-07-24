@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/enroll"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 )
 
@@ -62,6 +64,24 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 	cfg := a.pairing
 	if cfg == nil {
 		return protocol.PairView{}, errors.New("pairing not configured on this daemon")
+	}
+
+	// C6 (single-device v1, ADR-007 2026-07-24): the gateway assumes exactly one paired
+	// device, so refuse a second pairing FAIL-FAST -- before minting any rendezvous
+	// id/secret/QR or spawning a handshake -- and leave the existing device untouched.
+	// Re-pairing is revoke-then-pair (revoke drops Count to 0). Single-owner-serial: two
+	// concurrent owner pairings is out of scope (pairing is owner-tier, one in flight per
+	// connection). The Registry itself stays uncapped; enforcement lives here at the
+	// pairing layer so the registry's own tests are unaffected.
+	if a.devices != nil && a.devices.Count() > 0 {
+		return protocol.PairView{}, errors.New("a device is already paired; revoke it first (single-device v1)")
+	}
+
+	// C7: a nil rendezvous seam means no relay is configured (relay.json absent, see
+	// pairing_config.go). Guard the unconditional cfg.NewRendezvous call below, which
+	// would otherwise panic on the nil func, and return a clean, actionable error.
+	if cfg.NewRendezvous == nil {
+		return protocol.PairView{}, errors.New("relay not configured; run `swarm remote init` with a relay URL before pairing")
 	}
 
 	// The capability the new device is granted (fail-closed: an unknown or empty tier
@@ -133,6 +153,19 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			result(protocol.PairResult{Err: err})
 			return
 		}
+		// C5 (daemon half, ADR-007 2026-07-24): persist the sealed grant addressable by
+		// device id so the separate gateway process can deliver it to the phone over the
+		// relay mailbox (BeginPairing used to DISCARD res.Grant). Persist AFTER Add so a
+		// confirmed+enrolled device is the precondition, and fail CLOSED on a write error:
+		// report failure rather than silently claim paired-without-grant. Documented edge
+		// (mirrors the enroll+Add-after-accept edge in ADR-007): the device is already
+		// Added, so a write failure here leaves an enrolled device whose grant was not
+		// delivered -- still fail-closed (the phone gets no ContentKey, so it can seal
+		// nothing), surfaced as a failure, recovered by revoke-then-pair.
+		if err := grant.Save(a.registryDir(), res.Record.DeviceID, res.Grant); err != nil {
+			result(protocol.PairResult{Err: fmt.Errorf("persist epoch grant: %w", err)})
+			return
+		}
 		result(protocol.PairResult{
 			DeviceID:   res.Record.DeviceID,
 			Name:       res.Record.Name,
@@ -151,6 +184,12 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		ExpiresAt:    &expiresAt,
 	}, nil
 }
+
+// registryDir is where the device registry and its per-device sealed-grant sidecars
+// live (<stateDir>/devices), matching serve.go's device.Open and the gateway's
+// resolveGatewayParams. The grant sidecar (internal/remote/grant) is co-located so the
+// gateway process locates it by the same convention.
+func (a *coreAPI) registryDir() string { return filepath.Join(a.stateDir, "devices") }
 
 // coreAPI ALSO satisfies protocol.PairingHost so an assembled owner-tier Server can host
 // a real pairing (slice A3.3-d). A nil pairingConfig makes BeginPairing fail closed.

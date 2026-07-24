@@ -497,3 +497,55 @@ fresh-dial — is strictly worse UX. Full-fidelity concurrent supersede would re
 mirror (preserve SGR/title/scrollback in the mirror seed) — recorded as a future enhancement, not
 a Phase A blocker. The sole-subscriber (no concurrent peek) supersede stays byte-identical to
 today (tested).
+
+## Amendment 2026-07-24 — Phase-A audit-committee closure: grant delivery, single-device v1, admin tier
+
+Resolves three committee findings (docs/verification/remote-phaseA-committee.md C5, C6, sonnet#3).
+None changes the frozen crypto layer. Refines D3 (pairing), D5 (gateway), D8/D9 (launch/relay).
+
+**Decision C5 — sealed EpochGrant delivery is WIRED via the gateway mailbox (implements the
+2026-07-23 deferral).** The pairing host mints `res.Grant` (a `crypto.EpochGrant` sealed to the
+device RECIPIENT key and signed by the machine grant key) in `enroll.Enroll`, but `BeginPairing`
+discarded it, so a real (non-in-process) phone could never recover the epoch ContentKey. Delivery
+now follows the topology already chosen 2026-07-23 (out-of-band over the relay mailbox, NOT in-band
+in the frozen decision frame): (1) the daemon PERSISTS the sealed grant addressable by device id at
+enroll time (opaque at rest — recipient-sealed, only the phone's recipient private key opens it, so
+storing it owner-uid and forwarding it through the untrusted relay leaks nothing); (2) the GATEWAY —
+the process that already holds an authenticated relay `Client` with the device `RoutingID` — on
+connect calls relay `authorize_device` for the paired device (closing HI-3's unused-authorize gap)
+and `MailboxAppend`s the sealed grant to the device mailbox; (3) the phone BOOTSTRAPS by reading the
+grant from its mailbox and `AcceptGrant`-ing it BEFORE it can build the ContentKey-keyed
+`MailboxRouter` — the grant is NOT a router frame (it is recipient-sealed, not ContentKey-sealed:
+it is what DELIVERS the ContentKey, a chicken-and-egg the router cannot resolve). Delivery is
+idempotent (the phone dedups by grant seq), so at-least-once mailbox semantics are fine and no
+synchronous ack couples the `swarm remote pair` CLI to the relay round-trip; the SAS confirm remains
+the security gate and the registry commit remains the pairing completion. **Why gateway not daemon:**
+the pairing daemon holds only a raw per-pairing `DialRaw` rendezvous `Conn` (burned before the grant
+exists) with no `MailboxAppend`; giving it a standing authenticated relay client would relocate more
+surface into the trusted process than the gateway (which must hold that client regardless) already
+carries.
+
+**Decision C6 — single device enforced at the daemon for v1 (the gateway already assumes it).**
+`Registry.Add` had no count cap, but `cmd/swarm-remote` refuses `len(devices) != 1` at startup, so a
+2nd pairing bricked the gateway on the next restart. v1 is single-device by construction: pairing
+REJECTS enrollment when a device is already registered (fail-closed, transactional — the 2nd
+handshake declines rather than adding an unusable record). Multi-device is DEFERRED to a later phase
+and requires (a) binding a nonzero per-device `SenderKeyID` into every inbound envelope + lease so a
+device is cryptographically attributable past the shared seq high-water (a FROZEN-CRYPTO change
+needing its own ADR — today `SenderKeyID` is uniformly zero inbound, the accepted A7 residual), and
+(b) an admin capability tier (below). Until both land, more than one device is neither attributable
+nor serviceable, so admitting a 2nd is strictly a footgun.
+
+**Decision sonnet#3 — no admin tier in v1 (formal deferral).** Any `CapFull` device can revoke any
+device; there is no admin/owner distinction among paired devices. For single-device v1 this is moot
+(one device cannot revoke a peer that does not exist). When multi-device lands, a formal capability
+model (admin vs standard, who-may-revoke-whom) is required and gets its own ADR. Recorded here as a
+deliberate v1 scope decision, not an oversight.
+
+**Not resolved here — ME-1 relay-socket close on revoke.** C1 + C2a already sever a revoked (or
+kill-switched) device's lease + peek + journal at the DAEMON choke point immediately, and the daemon
+fail-closes every subsequent op from an unregistered device, so the injection/read hole is closed and
+tested. The relay-side live-socket close (ME-1, implemented at the relay but unreached from the
+daemon path) is defense-in-depth transport hygiene requiring cross-process revoke propagation
+(daemon -> gateway relay client). Its disposition (wire it atop C5's new gateway relay-control
+capability, or defer with justification) is decided after C5 lands; tracked in the committee evidence.

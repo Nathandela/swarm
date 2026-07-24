@@ -7,6 +7,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remotegw"
@@ -37,6 +39,14 @@ type gatewayParams struct {
 	// resetting to 1 and being stale-dropped.
 	JournalSeq remotegw.SeqSource
 	ReplySeq   remotegw.SeqSource
+
+	// C5 grant delivery (ADR-007 2026-07-24): the paired device's relay-auth pub is the
+	// AuthorizeDevice target that opens the machine->device mailbox route; Grant is the
+	// persisted sealed EpochGrant the gateway appends to that mailbox as the phone's
+	// bootstrap. Grant is nil when no sidecar was persisted (a pre-grant pairing), which
+	// deliverEpochGrant treats as a no-op.
+	DeviceRelayAuthPub ed25519.PublicKey
+	Grant              *crypto.EpochGrant
 }
 
 // resolveGatewayParams loads the machine identity, relay URL, and the single
@@ -65,6 +75,14 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	}
 	rec := devices[0]
 
+	// Load the paired device's sealed grant sidecar (persisted by the daemon at enroll,
+	// co-located with the registry). Absent -> nil (a pre-grant pairing; delivery no-ops);
+	// present-but-corrupt -> fail closed, like the registry itself.
+	sealedGrant, err := grant.Load(filepath.Join(stateDir, "devices"), rec.DeviceID)
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("load device grant: %w", err)
+	}
+
 	remoteDir := filepath.Join(stateDir, "remote")
 	journalSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-journal.seq"))
 	if err != nil {
@@ -82,13 +100,15 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 			RelayAuthPub: id.RelayAuthPublic(),
 			Sign:         id.RelayAuthSign,
 		},
-		PhoneTarget:    hex.EncodeToString(rec.RoutingID),
-		Key:            id.EpochKeys().ContentKey,
-		EpochID:        id.EpochID(),
-		RecipientKeyID: crypto.KeyID(rec.RecipientPub),
-		SenderKeyID:    crypto.KeyID(id.RecipientPublic()),
-		JournalSeq:     journalSeq,
-		ReplySeq:       replySeq,
+		PhoneTarget:        hex.EncodeToString(rec.RoutingID),
+		Key:                id.EpochKeys().ContentKey,
+		EpochID:            id.EpochID(),
+		RecipientKeyID:     crypto.KeyID(rec.RecipientPub),
+		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
+		JournalSeq:         journalSeq,
+		ReplySeq:           replySeq,
+		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
+		Grant:              sealedGrant,
 	}, nil
 }
 

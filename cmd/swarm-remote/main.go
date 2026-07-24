@@ -42,6 +42,12 @@ func run(ctx context.Context, p gatewayParams) error {
 	}
 	defer client.Close()
 
+	// C5: authorize the paired device and deliver its sealed epoch grant over the mailbox
+	// before the bridge starts (idempotent; the phone dedups by grant seq).
+	if err := deliverEpochGrant(ctx, client, p); err != nil {
+		return fmt.Errorf("deliver epoch grant: %w", err)
+	}
+
 	svc := remotegw.NewService(serviceConfigFromParams(p, client))
 	return svc.Run(ctx)
 }
