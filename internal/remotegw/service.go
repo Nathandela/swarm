@@ -126,6 +126,10 @@ func (s *Service) Run(ctx context.Context) error {
 	// loops) the moment it detects the paired device was revoked (codex#1).
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Parent the peek watchers to the Service ctx so a revoke (cancel below) stops every peek
+	// reconnecting IMMEDIATELY and structurally -- not incidentally via the kill switch, and not
+	// only when the deferred watchers.Close runs after wg.Wait returns (opus#2).
+	s.watchers.bindParent(ctx)
 	var revoked atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -147,7 +151,8 @@ func (s *Service) Run(ctx context.Context) error {
 // runJournal runs the journal bridge, reconnecting after ReconnectDelay whenever the
 // connection drops, until ctx is cancelled. RunJournal resumes from the last delivered
 // cursor, so a reconnect loses no events. It returns true when it stopped because the
-// paired device was revoked (devicePaired) so the caller tears the whole Service down.
+// paired device was definitively revoked (deviceRevoked) so the caller tears the whole
+// Service down.
 func (s *Service) runJournal(ctx context.Context) (revoked bool) {
 	for {
 		if ctx.Err() != nil {
@@ -159,10 +164,10 @@ func (s *Service) runJournal(ctx context.Context) (revoked bool) {
 		}
 		// The daemon severed the journal connection. A device REVOKE severs it (C2a) and
 		// rotates the epoch key, so before reconnecting re-read the registry: if our paired
-		// device is gone we must NOT resume sealing epoch frames to its mailbox under the
-		// now-stale key (codex#1). A device still present is an ordinary transient drop ->
-		// back off and reconnect as before.
-		if !s.devicePaired() {
+		// device is CONFIRMED gone we must NOT resume sealing epoch frames to its mailbox under
+		// the now-stale key (codex#1). A device still present -- or a registry we cannot read
+		// right now -- is an ordinary reconnect: back off and re-check next cycle.
+		if s.deviceRevoked() {
 			return true
 		}
 		// Back off before reconnecting, but wake immediately on cancel.
@@ -176,20 +181,33 @@ func (s *Service) runJournal(ctx context.Context) (revoked bool) {
 	}
 }
 
-// devicePaired reports whether this gateway's paired device is still in the on-disk
-// registry. It re-reads <StateDir>/devices FRESH on each call so a revocation (which
-// rotated the epoch key) is observed on the next journal reconnect. It is fail-closed: an
-// unreadable registry or a missing device both report false, so the gateway stops sealing
-// rather than risk resealing under a stale key. An empty StateDir or DeviceID disables the
-// check (returns true) -- used by unit tests that do not provision a registry.
-func (s *Service) devicePaired() bool {
+// deviceRevoked reports whether this gateway's paired device is DEFINITIVELY revoked: the
+// on-disk registry read SUCCEEDED and this gateway's DeviceID is ABSENT (the owner revoked it,
+// rotating the epoch key). It re-reads <StateDir>/devices FRESH on each call so a revocation is
+// observed on the next journal reconnect.
+//
+// It deliberately distinguishes "definitively gone" from "cannot read right now": a device.Open
+// error (a torn read, a transiently-unavailable/network-mounted stateDir, a MkdirAll/ReadFile
+// hiccup) is NOT a confirmed revocation, so it returns false and the caller keeps reconnecting
+// and re-checks next cycle. This check runs on EVERY routine daemon reconnect, so treating a
+// transient FS error as a revocation (the prior behavior) would let one coincidental hiccup
+// silently and permanently kill remote control until a human restarts the sidecar (Finding 1,
+// codex#6 / sonnet#3 / opus#1). The fail-closed intent is preserved for the case we can actually
+// confirm -- a successful read showing the device gone still exits promptly. An empty StateDir or
+// DeviceID disables the check (returns false) -- used by unit tests that do not provision a
+// registry.
+//
+// Follow-up: device.Open does MkdirAll/Chmod on the registry dir on this read path; a read-only
+// registry accessor would avoid writing during the liveness check, but adding one means editing
+// device/registry.go (owned elsewhere), so it is deferred.
+func (s *Service) deviceRevoked() bool {
 	if s.cfg.StateDir == "" || s.cfg.DeviceID == "" {
-		return true
+		return false
 	}
 	reg, err := device.Open(filepath.Join(s.cfg.StateDir, "devices"))
 	if err != nil {
-		return false
+		return false // cannot read the registry right now: not a confirmed revocation -- retry next cycle
 	}
 	_, ok := reg.Get(s.cfg.DeviceID)
-	return ok
+	return !ok
 }

@@ -199,6 +199,58 @@ func TestTerminalWatcher_UnwatchJoinsBeforeReturn(t *testing.T) {
 	}
 }
 
+// countingRunner is a fake terminalRunner whose RunTerminal returns IMMEDIATELY, so the
+// supervised loop keeps backing off and RECONNECTING. It counts invocations so a test can
+// observe whether the peek is still reconnecting or has stopped.
+type countingRunner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *countingRunner) RunTerminal(_ context.Context, _ string) error {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return nil // return at once so run() parks on backoff and reconnects
+}
+
+func (r *countingRunner) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// TestTerminalWatcher_ParentCancelStopsReconnecting pins Finding 2 (defense-in-depth, opus#2):
+// the peek watchers must be parented to the Service context so a revoke (Service ctx cancel)
+// stops them reconnecting IMMEDIATELY and structurally -- not incidentally via the kill switch,
+// and not only once Close runs after Run returns. bindParent re-roots the watch tree at the
+// Service ctx; cancelling that ctx (WITHOUT calling Close) must halt the reconnect loop. A
+// watcher rooted at context.Background() (the pre-fix structure) would keep reconnecting here.
+func TestTerminalWatcher_ParentCancelStopsReconnecting(t *testing.T) {
+	runner := &countingRunner{}
+	w := newTerminalWatcher(runner, 5*time.Millisecond)
+	t.Cleanup(func() { _ = w.Close() })
+
+	parent, cancelParent := context.WithCancel(context.Background())
+	w.bindParent(parent)
+	w.Watch("m/s1")
+
+	// Under a live parent ctx the peek reconnects on the backoff cadence: invocations climb.
+	waitFor(t, func() bool { return runner.count() >= 3 }, 2*time.Second,
+		"peek never reconnected under a live parent ctx")
+
+	// Cancel the PARENT (Service) ctx -- NOT Close(): on revoke the peek must stop reconnecting.
+	cancelParent()
+
+	// Let any in-flight attempt settle, then confirm invocations have stopped climbing.
+	time.Sleep(40 * time.Millisecond) // ~8 backoff ticks: a still-reconnecting loop would keep counting
+	stable := runner.count()
+	time.Sleep(40 * time.Millisecond)
+	if got := runner.count(); got != stable {
+		t.Fatalf("peek reconnected %d more time(s) after the parent ctx was cancelled; want 0 (watcher must be parented to the Service ctx so revoke tears down peeks immediately)", got-stable)
+	}
+}
+
 // waitFor polls cond until true or the deadline, failing with msg on timeout.
 func waitFor(t *testing.T, cond func() bool, within time.Duration, msg string) {
 	t.Helper()

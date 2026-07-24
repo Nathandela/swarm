@@ -16,6 +16,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -116,5 +117,52 @@ func TestService_RunExitsWhenDeviceRevoked(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not exit after the paired device was revoked (gateway is reconnecting-and-resealing under the stale key)")
+	}
+}
+
+// TestService_RunSurvivesTransientRegistryError pins Finding 1 (availability regression,
+// codex#6 / sonnet#3 / opus#1): the reconnect-time liveness check must distinguish a
+// DEFINITIVE revocation (registry read succeeded, device absent -> exit) from a TRANSIENT read
+// error (registry momentarily unreadable -> keep running, re-check next cycle). The pre-fix
+// check treated ANY device.Open error as "revoked" and exited the whole Service, so a
+// coincidental FS hiccup on a routine daemon reconnect would silently, permanently kill remote
+// control until a human restarts the sidecar. Here <StateDir>/devices is a FILE, so device.Open
+// (which MkdirAll's that path) errors -- standing in for a torn read / transiently-unavailable
+// (e.g. network-mounted) stateDir. Run must NOT exit while the registry is unreadable.
+func TestService_RunSurvivesTransientRegistryError(t *testing.T) {
+	stateDir := t.TempDir()
+	// A regular file where the registry directory is expected makes device.Open fail
+	// deterministically (mkdir over a non-directory), simulating an unreadable registry.
+	if err := os.WriteFile(filepath.Join(stateDir, "devices"), []byte("transient"), 0o600); err != nil {
+		t.Fatalf("seed unreadable registry: %v", err)
+	}
+
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 2)
+	}
+	svc := NewService(ServiceConfig{
+		DaemonSocket:   "/nonexistent/remote.sock", // RunJournal fails fast -> the reconnect loop spins the check
+		Relay:          &scriptedMailbox{},
+		PhoneTarget:    "phone",
+		Key:            key,
+		EpochID:        1,
+		StateDir:       stateDir,
+		DeviceID:       "phone-device", // non-empty enables the check; Open fails before the id is used
+		PollInterval:   10 * time.Millisecond,
+		ReconnectDelay: 10 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(ctx) }()
+
+	// Across many reconnect ticks the transient Open error must NOT exit the Service: an
+	// unconfirmable read is retried, never mistaken for a revocation.
+	select {
+	case err := <-done:
+		t.Fatalf("Run exited with %v on a transient registry read error; an unreadable registry must be retried, not treated as a revocation", err)
+	case <-time.After(120 * time.Millisecond):
 	}
 }

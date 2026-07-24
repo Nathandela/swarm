@@ -57,6 +57,23 @@ type TerminalWatcher struct {
 	closed  bool
 }
 
+// bindParent re-roots the watcher's peek-context tree at parent so that cancelling parent (the
+// Service ctx, e.g. on revoke) stops every peek reconnecting IMMEDIATELY and structurally --
+// not incidentally via the kill switch, and not only when the deferred Close runs after Run
+// returns (opus#2 / defense-in-depth). Service.Run calls it once at start, before any Watch, so
+// the constructor's context.Background() root (used by unit tests that never bind) is replaced
+// with a child of the Service ctx. It is a no-op after Close; the deferred Close still joins the
+// peek goroutines. Normal Watch/Unwatch/reconnect behavior is unchanged.
+func (w *TerminalWatcher) bindParent(parent context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	w.cancel() // release the constructor's Background-rooted ctx (no watches derive from it yet)
+	w.ctx, w.cancel = context.WithCancel(parent)
+}
+
 // NewTerminalWatcher returns a watcher whose peeks run RunTerminal against gw and reconnect
 // after backoff (defaulting to 1s) when a peek's connection drops.
 func NewTerminalWatcher(gw *Gateway, backoff time.Duration) *TerminalWatcher {
