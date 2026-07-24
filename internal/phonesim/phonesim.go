@@ -12,6 +12,8 @@ package phonesim
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 
@@ -47,9 +49,14 @@ type Phone struct {
 	machineTarget string
 	machine       string
 
+	// seq stamps EVERY phone -> machine mailbox envelope -- kill/take_control commands AND
+	// input frames alike -- from ONE per-epoch allocator, because the gateway opens them
+	// all through a single (sender, epoch) MailboxReceiver: a per-kind counter would
+	// collide and the receiver would reject the second stream as a replayed seq.
+	seq phonecore.Sequencer
+
 	mu     sync.Mutex
 	cursor uint64 // phone mailbox read cursor (drained forward by Observe + ReadReply)
-	seq    uint64 // monotonic per-epoch seq for sealed command envelopes
 }
 
 // New bootstraps the phone from the sealed grant: it AcceptGrants (verifying the grant
@@ -125,12 +132,7 @@ func (p *Phone) DriveKill(ctx context.Context, session, operationID string) erro
 		return err
 	}
 
-	p.mu.Lock()
-	p.seq++
-	seq := p.seq
-	p.mu.Unlock()
-
-	env, err := phonecore.SealCommandEnvelope(p.content, p.epochID, seq, cmd)
+	env, err := phonecore.SealCommandEnvelope(p.content, p.epochID, p.seq.Next(), cmd)
 	if err != nil {
 		return err
 	}
@@ -170,6 +172,76 @@ func (p *Phone) ReadReply(ctx context.Context) (protocol.Control, bool, error) {
 	}
 	p.advanceCursor(maxCursor)
 	return protocol.Control{}, false, nil
+}
+
+// TakeControl acquires the controller lease for a session (A7 input Slice 7). It signs a
+// take_control with the phone command-signing key (binding a freshly-minted one-shot gate
+// token into the signature via ContentHash = SHA256(token)), seals it under the epoch
+// content key with the SHARED sequencer, and appends it to the machine mailbox. The
+// gateway routes it to LeaseManager.Begin, which opens a persistent lease conn on the
+// daemon; the daemon verifies the signature + capability + kill switch and grants the
+// lease. Subsequent Type/Resize frames ride THAT lease conn.
+func (p *Phone) TakeControl(ctx context.Context, session, operationID string) error {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	gateToken := hex.EncodeToString(raw)
+
+	cmd, err := phonecore.SignTakeControl(p.ks, phonecore.TakeControlInput{
+		Machine:     p.machine,
+		Session:     session,
+		OperationID: operationID,
+		ExpiresAt:   time.Now().Add(time.Minute),
+		GateToken:   gateToken,
+	})
+	if err != nil {
+		return err
+	}
+	env, err := phonecore.SealTakeControlEnvelope(p.content, p.epochID, p.seq.Next(), cmd, gateToken, 3600)
+	if err != nil {
+		return err
+	}
+	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Type seals a keystroke burst as an input-frame envelope under the epoch content key
+// with the SHARED sequencer and appends it to the machine mailbox, where the gateway
+// routes it onto the focused session's lease conn -> the daemon -> the session's PTY. It
+// returns the raw wire bytes so a caller can Replay them (an adversarial redelivery).
+func (p *Phone) Type(ctx context.Context, data []byte) ([]byte, error) {
+	env, err := phonecore.SealInputData(p.content, p.epochID, p.seq.Next(), data)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+// Resize seals a terminal resize as an input-frame envelope with the SHARED sequencer and
+// appends it to the machine mailbox, mirroring Type.
+func (p *Phone) Resize(ctx context.Context, cols, rows int) error {
+	env, err := phonecore.SealInputResize(p.content, p.epochID, p.seq.Next(), cols, rows)
+	if err != nil {
+		return err
+	}
+	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Replay re-appends an already-sealed envelope to the machine mailbox, simulating a relay
+// that redelivers a captured ciphertext. It reuses the exact wire bytes (same epoch + seq),
+// so the gateway's single MailboxReceiver.Accept must reject it as a stale/replayed seq.
+func (p *Phone) Replay(ctx context.Context, env []byte) error {
+	_, err := p.relay.MailboxAppend(ctx, p.machineTarget, env)
+	return err
 }
 
 // advanceCursor moves the shared mailbox read cursor forward, never backward.
