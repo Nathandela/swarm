@@ -117,3 +117,39 @@ plus durability/DoS edges. All addressed:
   nicety, deferred.
 
 Standing gate after round 3: `go build/vet/test -race ./...` -- 0 failures. Re-audit round 4 follows.
+
+## Re-audit ROUND 4 (2026-07-24) — codex REJECT / sonnet SHIPS / opus SHIPS -> **majority SHIPS**
+
+Both sonnet and opus independently traced codex's two round-4 CRITICALs and found NEITHER is
+relay-adversary-reachable: the gateway-exit path genuinely closes the composition gap for single-device
+v1 (kill-switch refusal + device-check exit during the deviceless window, verified against a live
+severance), and the epoch-TOCTOU residual produces a self-bricked DEAD device (owner-self-race, outside
+the relay threat model), not a leak. No adversary-exploitable confidentiality/integrity hole was found by
+either. The remaining items are hardening fast-follows; all genuine ones are closed:
+
+| Finding (reviewer) | Resolution | Commit |
+|---|---|---|
+| Fail-closed registry read exits the gateway on a TRANSIENT FS error -> permanent outage (codex#6 + sonnet#3 + opus#1, CONSENSUS) | deviceRevoked() exits ONLY on a confirmed-absent device (successful read + id gone); an I/O error keeps reconnecting | `3ddfe4d` |
+| Epoch TOCTOU residual (re-check -> AddSole window) + concurrent-revoke lost rotation (codex#2/#4, sonnet#1/#4, opus#4) | One outermost lifecycleMu serializes RevokeDevice's whole transaction against BeginPairing's commit section (re-check+enroll+AddSole+grant.Save), never across the handshake; two revokes serialize | `79f0c7f` |
+| TerminalWatcher rooted at context.Background() -> peek teardown on revoke incidental to the kill switch (opus#2) | bindParent re-roots the watch tree at the Service ctx; revoke cancels peeks immediately + structurally | `3ddfe4d` |
+| Registry persist rolls back memory on a POST-rename dir-sync failure -> memory/disk divergence (codex#5) | persistLocked returns (committed, err); callers roll back only on pre-rename failure (mirrors the idempotency fix) | `f66fb02` |
+| Mailbox gap dropped when it coincides with a kind-decode failure (codex#3, sonnet#2) | Accept returns the true res.Gap in every post-seq-gate branch; drain honors gap regardless of err | `4193164` |
+
+### Recorded residuals (non-blocking, per sonnet+opus)
+- **Rotated-but-registered across a mid-revoke crash (opus#3, integrity-only):** rotate-before-remove makes
+  "removed => rotated" hold (closing the confidentiality gap across a crash), but the CONVERSE can fail --
+  a crash after rotateEpoch persists but before Remove persists leaves the epoch rotated AND the
+  compromised device still registered, so on restart it can still issue signed kill/launch/take_control
+  ops (R-POL.9 authorizes) until the operator re-runs revoke. Confidentiality is preserved (the rotated
+  epoch means it cannot read re-sealed journal/peeks); this is an integrity-only residual in a narrow,
+  operator-directed crash window across two files. Deferred (genuinely hard to make atomic across two
+  files); recorded here rather than framed as a pure win.
+- **Concurrent revoke+pair -> dead device (sonnet#1/opus#4 residual):** now closed by lifecycleMu; the
+  earlier residual (a non-functional device requiring re-pair, never a leak) no longer occurs.
+- **Read-only registry accessor for the gateway liveness check:** device.Open does MkdirAll/Chmod on the
+  read path; a read-only accessor is a device-pkg follow-up (noted in a code comment).
+- Live gateway epoch-reload, ME-1 relay-close, multi-device/SenderKeyID, admin tier, real-phone lifecycle
+  glue, opus#6 retry code -- unchanged Phase-B deferrals; none carries a live confidentiality/integrity
+  hole in the single-device model (confirmed by sonnet + opus).
+
+Standing gate after round 4: `go build/vet/test -race ./...` -- 0 failures. A confirmation round 5 follows.

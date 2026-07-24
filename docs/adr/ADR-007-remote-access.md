@@ -594,8 +594,17 @@ the stale (about-to-be-revoked) epoch. Corrected:
   Count==0 deviceless window, BEFORE any re-pair, so the stale-key gateway is gone before a replacement is
   served. "Restart after pairing" is no longer an unenforced assumption. (A live in-place epoch-reload
   stays Phase B; exit-on-revoke is the v1 closure.)
-- Rotation is CRASH-ATOMIC with removal: `RevokeDevice` rotates the epoch BEFORE removing the device (so
-  "device removed => epoch rotated" holds across a crash), and a rotation fault aborts the revoke.
+- Rotation is CRASH-ATOMIC with removal (confidentiality direction): `RevokeDevice` rotates the epoch
+  BEFORE removing the device (so "device removed => epoch rotated" holds across a crash), and a rotation
+  fault aborts the revoke. **Recorded residual (round 4, opus#3, integrity-only):** the CONVERSE is not
+  atomic across the two files -- a crash after the rotate persists but before the Remove persists leaves
+  the epoch rotated AND the device still registered, so on restart it retains signed command authority
+  (kill/launch/take_control) until the operator re-runs revoke. Confidentiality is preserved (the rotated
+  epoch means the device cannot read re-sealed journal/peeks); the integrity residual in this narrow
+  operator-directed crash window is deferred (a two-file atomic commit is out of scope for v1).
+- Revoke and pairing are SERIALIZED by one outermost `lifecycleMu` (round 4): RevokeDevice holds it across
+  its whole transaction and BeginPairing across its commit section only (never the handshake), so a
+  replacement can never be enrolled under a stale epoch mid-rotation and two revokes cannot both rotate.
 - Pairing re-validates the epoch at the COMMIT point: `BeginPairing` aborts fail-closed if `a.pairing`'s
   EpochID changed since the handshake's entry snapshot, so a replacement is never enrolled under a stale
   epoch. This composes with rotate-before-remove: when the re-check does not fire, the to-be-revoked
