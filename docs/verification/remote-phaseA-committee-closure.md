@@ -67,7 +67,7 @@ C1-C4/C6-C8/F4/F5/F7 sound, but found real bugs the first cycle missed or introd
 | Idempotency compaction not crash-safe; dead-store on failure (codex#8) | fsync the dir after rename; keep the old handle usable on any failure (never dead-store) | `082a9ba` |
 | Outbound SenderKeyID asymmetry undocumented landmine (sonnet#3) | Documented the intentional sender-zero-for-replies bucket separation | `4fde9a1` |
 | Race-gate flake TestRemotePeek_LargeGridClipped... under load (codex#9) | Raise the shared test recvTimeout 2s -> 5s | `cadbbbd` |
-| **Revoke does not rotate the epoch key -> revoked phone reads a re-paired phone (codex#1)** | **Revoke ROTATES the machine epoch key (machineid.RotateEpoch + persist + reload pairing snapshot); revoked key dead for future traffic. Operator-directed. ADR-007 2026-07-24.** | _(this cycle)_ |
+| **Revoke does not rotate the epoch key -> revoked phone reads a re-paired phone (codex#1)** | **Revoke ROTATES the machine epoch key (machineid.RotateEpoch + persist + reload pairing snapshot); revoked key dead for future traffic. Operator-directed. ADR-007 2026-07-24.** | `a653089` |
 
 ### Honest deferrals (round 2)
 - **"A real phone can pair" -- lifecycle glue is Phase B.** The machine-side grant delivery + the
