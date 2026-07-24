@@ -100,6 +100,15 @@ type replyFrame struct {
 // (the request/response counterpart of OpenCommandEnvelope). The plaintext carries an
 // explicit kind:"command_reply" tag so the phone routes it to its reply cache instead of
 // swallowing it into the session cache (C8). seq must be unique.
+//
+// INTENTIONAL SenderKeyID asymmetry (re-audit sonnet#3): the header leaves SenderKeyID at
+// its zero value, whereas journal/terminal frames (relaysink.go) stamp the machine key id.
+// The phone's MailboxReceiver buckets seq high-water strictly by (SenderKeyID, EpochID), so
+// sender-zero keeps command replies in a SEPARATE seq bucket from journal/terminal -- which
+// is what lets the gateway drive them from two INDEPENDENT durable seq sources (C2b:
+// outbound-journal.seq + outbound-reply.seq) without collision. Do NOT "unify" SenderKeyID
+// across outbound kinds without also merging those two seq counters, or the streams will
+// collide and half of one drops as ErrStaleSeq.
 func SealControlReply(key crypto.ContentKey, epochID uint32, seq uint64, reply protocol.Control) ([]byte, error) {
 	plaintext, err := json.Marshal(replyFrame{Kind: kindCommandReply, Control: reply})
 	if err != nil {
