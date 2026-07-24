@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -164,7 +165,12 @@ func Serve(cfg Config) (*Daemon, error) {
 	// configured grant-based pairing flow, so an unconfigured daemon (no grant delivery at all)
 	// never spuriously clears a record. Reconcile on load so the slot frees and re-pairing works.
 	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, "remote", remoteIdentityFile)); statErr == nil {
-		reconcilePairedDevices(devReg, cfg.StateDir)
+		// Finding 2 (round-6): fail CLOSED. If a confirmed-stale device cannot be reconciled away,
+		// ABORT assembly rather than open remote.sock still serving it.
+		if err := reconcilePairedDevices(devReg, cfg.StateDir); err != nil {
+			_ = core.Close()
+			return nil, err
+		}
 	}
 	d.api.devices = devReg
 	// R-KS.1: the coreAPI mirrors its device-derived remote-control kill-switch state to a
@@ -469,12 +475,21 @@ func (d *Daemon) Close() error {
 // the epoch check only fires on a CONFIRMED mismatch -- an unreadable machine identity (epochOK
 // false) leaves every device's epoch untouched, mirroring the missing-grant reconcile's fail-safe
 // gate. Only a definitively absent sidecar or a definitively stale epoch clears a slot.
-func reconcilePairedDevices(reg *device.Registry, stateDir string) {
+//
+// Finding 2 (round-6, codex#2): the stale-epoch removal must fail CLOSED. Registry.Remove restores
+// the stale device in memory on a persistence failure, so discarding its (removed, err) would let
+// Serve open remote.sock still serving a CONFIRMED-stale record -- defeating the crash-confidentiality
+// reconcile. When a stale-epoch device cannot be removed (removed==false), return an error so Serve
+// ABORTS assembly. A committed post-rename dir-fsync error (removed==true) has already dropped the
+// device from the live set, so it is tolerated like the missing-grant path below.
+func reconcilePairedDevices(reg *device.Registry, stateDir string) error {
 	registryDir := filepath.Join(stateDir, "devices")
 	curEpoch, epochOK := currentMachineEpoch(stateDir)
 	for _, rec := range reg.List() {
 		if epochOK && rec.GrantedEpoch != curEpoch {
-			_, _ = reg.Remove(rec.DeviceID) // stale epoch: the revoked device's content key is dead
+			if removed, err := reg.Remove(rec.DeviceID); !removed { // stale epoch: the revoked device's content key is dead
+				return fmt.Errorf("reconcile: stale-epoch device %q could not be removed (still registered): %w", rec.DeviceID, err)
+			}
 			continue
 		}
 		g, err := grant.Load(registryDir, rec.DeviceID)
@@ -485,6 +500,7 @@ func reconcilePairedDevices(reg *device.Registry, stateDir string) {
 			_, _ = reg.Remove(rec.DeviceID) // no sidecar => not fully paired: free the slot
 		}
 	}
+	return nil
 }
 
 // currentMachineEpoch loads the current epoch id from the machine identity (Finding 3). It reports

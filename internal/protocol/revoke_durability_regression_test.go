@@ -1,11 +1,15 @@
 package protocol
 
-// FAILING-FIRST (TDD RED) test for the ROUND-5 re-audit REGRESSION at the protocol layer
-// (codex#2 + opus#1): device.Registry.Remove now returns (true, err) on a POST-RENAME dir-fsync
-// failure -- the device is DURABLY removed, but the trailing dir-fsync errored. handleDeviceRevoke
-// early-returned on err!=nil (replyError) BEFORE severRevokedDeviceControl, so a committed-but-
-// fsync-failed revoke left the revoked device's LIVE control lease + peek intact. Since the device
-// IS revoked, the sever must run REGARDLESS of the durability error, and the reply is OK.
+// TDD test for the revoke-durability path at the protocol layer. device.Registry.Remove returns
+// (true, err) on a POST-RENAME dir-fsync failure -- the device is DURABLY removed, but the trailing
+// dir-fsync errored. handleDeviceRevoke must SEVER the revoked device's LIVE control lease + peek
+// whenever removed==true (the security property), REGARDLESS of the durability error.
+//
+// Round-6 (codex#3 + sonnet#2, CONSENSUS): the round-5 fix replied OpOK and SWALLOWED that error.
+// The handler must instead SURFACE it -- sever on removed==true, then reply error if err != nil.
+// internal/protocol has no logger, so a swallowed error is otherwise invisible; this mirrors
+// round-3's TestRevokeDevice_SurfacesGrantDeleteError requirement (the grant.Delete error too must
+// be surfaced). The device is revoked + severed, so the client's idempotent retry is harmless.
 //
 // Reuses the same-package harness (serveRemoteAPI, rawDial, takeControlDev, nextControl, wire).
 
@@ -69,8 +73,8 @@ var (
 
 // TestProtocol_RevokeSeversLiveLease_OnCommittedDurabilityError: device B holds a live control
 // lease; device A revokes B and the backend reports (removed=true, durabilityErr). The revoke
-// still severs B's live lease and replies OK -- the device is durably revoked, so a trailing
-// dir-fsync error must NOT skip the sever nor turn the reply into an error.
+// STILL severs B's live lease (the device is durably revoked) AND surfaces the durability error as
+// the reply (round-6): a trailing dir-fsync error must not skip the sever, and must not be swallowed.
 func TestProtocol_RevokeSeversLiveLease_OnCommittedDurabilityError(t *testing.T) {
 	stub := newRevokeCommittedErrStub("devA", "devB")
 	sock := serveRemoteAPI(t, stub)
@@ -101,16 +105,22 @@ func TestProtocol_RevokeSeversLiveLease_OnCommittedDurabilityError(t *testing.T)
 		DeviceID:       "devA", DeviceSig: "sig", ExpiresAt: &exp,
 		TargetDeviceID: "devB",
 	})
-	// The device IS durably revoked: the reply must be OK, NOT an error, despite the dir-fsync error.
-	if got := nextControl(t, rcA); got.Op != OpOK {
-		t.Fatalf("device_revoke(devB) with a committed durability error = op %q code %q; want OpOK "+
-			"(the device is durably revoked; a dir-fsync error must not turn the revoke into a failure)", got.Op, got.ErrorCode)
+	// Finding 3 (round-6, codex#3 + sonnet#2): the device IS durably revoked AND severed, but the
+	// trailing durability error must be SURFACED, not swallowed (there is no logger in
+	// internal/protocol, so a swallowed error is invisible; round-3's grant.Delete-error surfacing
+	// regressed the same way). The reply is now an ERROR carrying the durability failure; the client's
+	// idempotent retry is harmless because the device is already revoked + severed.
+	if got := nextControl(t, rcA); got.Op != OpError {
+		t.Fatalf("device_revoke(devB) with a committed durability error = op %q code %q; want OpError "+
+			"(the device is revoked+severed, but the durability error must be surfaced, not swallowed)", got.Op, got.ErrorCode)
 	}
 
-	// And the live lease was PROACTIVELY severed: its upstream stream is closed.
+	// And the live lease was STILL PROACTIVELY severed despite the surfaced error: its upstream
+	// stream is closed. This security property must NOT weaken -- the device is revoked, so its live
+	// lease/peek must die regardless of the reply code.
 	if !st.waitClosed(recvTimeout) {
-		t.Fatal("Finding 1 (round-5 REGRESSION): device_revoke did NOT sever the revoked device's live control lease " +
-			"when RevokeDevice returned a committed (removed=true) durability error; the early-return skipped the sever")
+		t.Fatal("Finding 3 (round-6): device_revoke did NOT sever the revoked device's live control lease " +
+			"when RevokeDevice returned a committed (removed=true) durability error; the sever must fire on removed==true")
 	}
 
 	// B's NEXT keystroke is REFUSED -- it does not reach the shim.

@@ -197,72 +197,74 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 	if a.devices == nil {
 		return false, nil
 	}
-	// Under the OUTERMOST lifecycle lock (ADR-007) do ONLY the atomic core of the transaction:
-	// presence check + rotateEpoch + Remove + the Count()==0 sever DECISION. This keeps a
-	// replacement device impossible to enroll under a stale epoch (against a concurrent pairing
-	// COMMIT) and two concurrent revokes impossible to both rotate (finding 4). lifecycleMu is the
-	// OUTERMOST lock; rotateEpoch's pairingMu is taken inside it.
+	// The ATOMIC CORE of the transaction runs under the OUTERMOST lifecycle lock (ADR-007):
+	// presence check + rotateEpoch + Remove + grant.Delete + the Count()==0 sever DECISION. These are
+	// fast LOCAL ops that all need the transaction's atomicity. In particular grant.Delete must stay
+	// INSIDE the lock (round-6 finding 1, codex#1): a concurrent BeginPairing COMMIT of the SAME
+	// device id (a re-pair, also serialized on lifecycleMu) would otherwise slip its AddSole +
+	// grant.Save into the window between this revoke's Unlock and an outside-the-lock grant.Delete,
+	// and the delete would then wipe the freshly-sealed sidecar -- bricking the re-paired phone (a
+	// registered device with no deliverable grant). The closure uses defer Unlock so a panic in any
+	// step still releases the lock (panic-safe, opus#1, mirroring BeginPairing's commit). lifecycleMu
+	// is the OUTERMOST lock; rotateEpoch's pairingMu is taken inside it.
 	//
-	// Round-5 finding 2 (codex#5 + sonnet#1): the sever's synchronous, deadline-bounded socket
-	// writes (severRemoteControl -> sendDetach per conn) and grant.Delete's fsync are SLOW and do
-	// NOT need lifecycleMu's atomicity (the per-keystroke DeviceRegistered check is the independent
-	// backstop). So RELEASE lifecycleMu (explicit Unlock, not defer) after the Count decision, then
-	// run the sever + grant.Delete OUTSIDE the lock -- a concurrent revoke/pair no longer stalls
-	// behind blocking network writes.
-	a.lifecycleMu.Lock()
-	// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
-	// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
-	// this check is atomic with the rotation, so a second concurrent revoke of the same device
-	// finds it already gone here and does not rotate a second time (finding 4).
-	if _, ok := a.devices.Get(deviceID); !ok {
-		a.lifecycleMu.Unlock()
-		return false, nil
-	}
-	// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
-	// invariant "device removed => epoch rotated" holds across a crash between the two. codex#1:
-	// the rotation kills the revoked device's retained content key for all future traffic. A
-	// rotation/persist fault ABORTS the revoke (return the error; the device stays registered and
-	// still severable) rather than removing under a stale, still-live key. Done BEFORE the sever
-	// so pairingMu (taken in rotateEpoch) never nests inside severMu.
-	if rerr := a.rotateEpoch(); rerr != nil {
-		a.lifecycleMu.Unlock()
-		return false, rerr
-	}
-	removed, err := a.devices.Remove(deviceID)
-	// Decide the last-device sever atomically under the lock (the Count read must be serialized
-	// with the Remove), then release before the slow work.
-	shouldSever := removed && a.devices.Count() == 0
-	a.lifecycleMu.Unlock()
+	// Round-5 finding 2 (codex#5 + sonnet#1): ONLY the slow network sever (severRemoteControl ->
+	// sendDetach's deadline-bounded socket writes) runs OUTSIDE this lock -- the per-keystroke
+	// DeviceRegistered check is its independent backstop -- so a concurrent revoke/pair never stalls
+	// behind blocking network writes. severMu is thus taken only AFTER lifecycleMu is released.
+	removed, shouldSever, err := func() (bool, bool, error) {
+		a.lifecycleMu.Lock()
+		defer a.lifecycleMu.Unlock()
+		// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
+		// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
+		// this check is atomic with the rotation, so a second concurrent revoke of the same device
+		// finds it already gone here and does not rotate a second time (finding 4).
+		if _, ok := a.devices.Get(deviceID); !ok {
+			return false, false, nil
+		}
+		// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
+		// invariant "device removed => epoch rotated" holds across a crash between the two. codex#1:
+		// the rotation kills the revoked device's retained content key for all future traffic. A
+		// rotation/persist fault ABORTS the revoke (return the error; the device stays registered and
+		// still severable) rather than removing under a stale, still-live key. Done BEFORE the sever
+		// so pairingMu (taken in rotateEpoch) never nests inside severMu.
+		if rerr := a.rotateEpoch(); rerr != nil {
+			return false, false, rerr
+		}
+		removed, err := a.devices.Remove(deviceID)
+		// A genuine PRE-rename Remove failure, or a raced-away device (removed==false), leaves nothing
+		// removed: abort without severing or deleting a grant. The device is still registered (and
+		// still severable) or was already gone -- either way there is no committed removal to follow.
+		if !removed {
+			return false, false, err
+		}
+		// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the device WAS durably removed --
+		// even if Registry.Remove ALSO returned a trailing post-rename dir-fsync durability error. The
+		// sever + grant.Delete MUST still run: skipping the last-device sever on a committed removal
+		// leaves a still-running gateway's stale-epoch journal subscription alive, so after a re-pair
+		// it re-seals the NEW session under the OLD key to the revoked device's mailbox. Decide the
+		// last-device sever atomically under the lock (the Count read must be serialized with Remove).
+		shouldSever := a.devices.Count() == 0
+		// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar, INSIDE the lock (round-6
+		// finding 1). Delete is idempotent (an absent sidecar -- e.g. a pre-grant pairing -- is not an
+		// error). Surface the durability error first (the device IS removed; the dir-fsync just wasn't
+		// confirmed), else the grant-cleanup error -- a stranded sidecar is a leak the operator must
+		// learn about.
+		derr := grant.Delete(a.registryDir(), deviceID)
+		if err != nil {
+			return true, shouldSever, err
+		}
+		return true, shouldSever, derr
+	}()
 
-	// A genuine PRE-rename Remove failure, or a raced-away device (removed==false), leaves nothing
-	// removed: abort without severing. The device is still registered (and still severable) or was
-	// already gone -- either way there is no committed removal to follow up on.
-	if !removed {
-		return false, err
-	}
-	// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the device WAS durably removed --
-	// even if Registry.Remove ALSO returned a trailing post-rename dir-fsync durability error. The
-	// sever + grant.Delete MUST still run: skipping the last-device sever on a committed removal
-	// leaves a still-running gateway's stale-epoch journal subscription alive, so after a re-pair it
-	// re-seals the NEW session under the OLD key to the revoked device's mailbox. Surface the error
-	// AFTER the follow-up work, never before it.
 	if shouldSever {
 		// C2a: this removal took the LAST device (Count was 0) -> remote control transitions to
-		// disabled; proactively sever every live remote control lease + terminal peek (the per-device
-		// C1 sever in handleDeviceRevoke covers the revoked device's own lease; this covers any
-		// lingering lease once the switch goes off).
+		// disabled; proactively sever every live remote control lease + terminal peek OUTSIDE the lock
+		// (the per-device C1 sever in handleDeviceRevoke covers the revoked device's own lease; this
+		// covers any lingering lease once the switch goes off).
 		a.severRemoteControl()
 	}
-	// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar. Delete is idempotent (an
-	// absent sidecar -- e.g. a pre-grant pairing -- is not an error).
-	derr := grant.Delete(a.registryDir(), deviceID)
-	// Surface the durability error first (the device IS removed; the dir-fsync just wasn't
-	// confirmed), else the grant-cleanup error -- a stranded sidecar is a leak the operator must
-	// learn about.
-	if err != nil {
-		return removed, err
-	}
-	return removed, derr
+	return removed, err
 }
 
 // rotateEpoch rotates the machine epoch key after a device is revoked (codex#1): it

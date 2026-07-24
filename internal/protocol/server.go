@@ -1215,22 +1215,27 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 		return
 	}
 	removed, err := dr.RevokeDevice(c.TargetDeviceID)
-	// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the sever must run whenever the
-	// device WAS removed, even if RevokeDevice ALSO returned a trailing durability (dir-fsync)
-	// error -- Registry.Remove returns (true, err) when the removal committed (rename landed) but
-	// the post-rename dir-fsync failed. The device IS durably revoked, so skipping the sever on
-	// that error would leave its live control lease/peek injecting into the session. ONLY a genuine
-	// failure with NOTHING removed (removed==false && err!=nil) reports an error and skips the
-	// sever; a committed-but-fsync-failed revoke replies OK (the operation succeeded) and severs.
-	if !removed && err != nil {
+	// C1 [UNANIMOUS BLOCKER] + round-5 finding 1: PROACTIVELY sever the revoked device's live control
+	// lease + terminal peek on THIS Server whenever the device WAS removed -- even if RevokeDevice
+	// ALSO returned a trailing durability (dir-fsync) error. Registry.Remove returns (true, err) when
+	// the removal committed (rename landed) but the post-rename dir-fsync failed: the device IS
+	// durably revoked, so its live lease/peek must die regardless of the error. (The per-keystroke
+	// controlGateOpen presence check is the cross-Server backstop; this closes the live lease + peek
+	// at once when the revoke reaches the Server holding them.)
+	if removed {
+		cc.srv.severRevokedDeviceControl(c.TargetDeviceID)
+	}
+	// Round-6 finding 3 (codex#3 + sonnet#2, CONSENSUS -- regressed round-3's Finding 4b): SURFACE
+	// the error honestly. The round-5 handler replied OpOK once removed==true, SWALLOWING a
+	// grant.Delete cleanup failure or a committed-registry durability error -- and internal/protocol
+	// has no logger, so the failure became invisible. Reply error whenever RevokeDevice reported one:
+	// the device is already revoked + severed above, so the client's idempotent retry is harmless,
+	// but the operator must learn of a stranded sidecar / unconfirmed durability. Only a clean
+	// (err==nil) revoke -- whether it removed a device or was an idempotent no-op -- replies OK.
+	if err != nil {
 		cc.replyError("device_revoke: " + err.Error())
 		return
 	}
-	// C1 [UNANIMOUS BLOCKER]: PROACTIVELY sever the revoked device's live control lease and
-	// terminal peek on THIS Server, so revoke does not merely refuse a FUTURE take_control.
-	// The per-keystroke controlGateOpen clause (device presence) is the cross-Server backstop;
-	// this closes the live lease + peek at once when the revoke reaches the Server holding them.
-	cc.srv.severRevokedDeviceControl(c.TargetDeviceID)
 	cc.replyOK(c.TargetDeviceID)
 }
 
