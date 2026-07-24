@@ -21,10 +21,10 @@ import (
 //
 // Package seam: internal/protocol already imports internal/daemon, so this
 // package cannot import protocol. The loop therefore takes a daemon-local
-// terminalStream (a structural subset of protocol.SessionStream) and emits a
-// daemon-local terminalRender; the live fan-out and the mapping onto
-// protocol.TerminalSnapshot are wired in slice F, on the daemon->gateway side
-// where both types are visible.
+// TerminalStream (a structural subset of protocol.SessionStream) and emits a
+// daemon-local TerminalRender; the terminal_subscribe handler (slice F2) drives
+// this loop over a read-only tap and maps each TerminalRender onto
+// protocol.TerminalSnapshot on the daemon->gateway side where both types are visible.
 
 const (
 	// renderDebounceWindow coalesces a burst of output frames into a single
@@ -41,34 +41,34 @@ const (
 	renderDefaultRows = 24
 )
 
-// terminalStream is the read-only half of a session's shim pipe the render loop
+// TerminalStream is the read-only half of a session's shim pipe the render loop
 // consumes: the initial grid snapshot and the live output frames. It is a
 // structural subset of protocol.SessionStream, so a real SessionStream satisfies
 // it without this package importing protocol.
-type terminalStream interface {
+type TerminalStream interface {
 	Snapshot() []byte
 	Frames() <-chan []byte
 }
 
-// terminalRender is one server-rendered, sanitized terminal snapshot: a session's
+// TerminalRender is one server-rendered, sanitized terminal snapshot: a session's
 // VT grid flattened to plain-text rows. It mirrors protocol.TerminalSnapshot
-// (which this package cannot name, see the seam note above); slice F maps one to
-// the other at the daemon->gateway boundary.
-type terminalRender struct {
+// (which this package cannot name, see the seam note above); the terminal_subscribe
+// handler maps one to the other at the daemon->gateway boundary.
+type TerminalRender struct {
 	Session string
 	Lines   []string
 	Cols    int
 	Rows    int
 }
 
-// renderTerminal runs the render loop until ctx is cancelled or the stream's
+// RenderTerminal runs the render loop until ctx is cancelled or the stream's
 // Frames() channel closes. It pushes the stream's initial snapshot first, then
 // feeds each output frame into a private emulator, coalesces bursts with the
 // debouncer, and pushes a sanitized snapshot per debounced change. A final
 // snapshot is flushed when the stream closes with unrendered output pending, so
 // the last push always reflects the latest state. It owns and closes its
 // emulator, leaving no goroutine behind.
-func renderTerminal(ctx context.Context, session string, stream terminalStream, push func(terminalRender)) {
+func RenderTerminal(ctx context.Context, session string, stream TerminalStream, push func(TerminalRender)) {
 	cols, rows := renderInitial(session, stream, push)
 
 	emu := vt.NewEmulator(cols, rows)
@@ -113,19 +113,19 @@ func renderTerminal(ctx context.Context, session string, stream terminalStream, 
 // renderInitial decodes and pushes the stream's initial snapshot and returns the
 // grid dimensions to size the emulator. An undecodable snapshot pushes nothing
 // and falls back to default dimensions so live frames still render.
-func renderInitial(session string, stream terminalStream, push func(terminalRender)) (cols, rows int) {
+func renderInitial(session string, stream TerminalStream, push func(TerminalRender)) (cols, rows int) {
 	snap, err := vt.DecodeSnapshot(stream.Snapshot())
 	if err != nil {
 		return renderDefaultCols, renderDefaultRows
 	}
-	push(terminalRender{Session: session, Lines: vt.SnapText(snap), Cols: snap.Cols, Rows: snap.Rows})
+	push(TerminalRender{Session: session, Lines: vt.SnapText(snap), Cols: snap.Cols, Rows: snap.Rows})
 	return snap.Cols, snap.Rows
 }
 
 // renderEmulator snapshots the emulator's current grid, flattens it to sanitized
 // plain text, and pushes it. A snapshot/decode error pushes nothing rather than
 // emitting a partial or unsanitized render.
-func renderEmulator(emu *vt.Emulator, session string, push func(terminalRender)) {
+func renderEmulator(emu *vt.Emulator, session string, push func(TerminalRender)) {
 	b, err := emu.Snapshot()
 	if err != nil {
 		return
@@ -134,5 +134,5 @@ func renderEmulator(emu *vt.Emulator, session string, push func(terminalRender))
 	if err != nil {
 		return
 	}
-	push(terminalRender{Session: session, Lines: vt.SnapText(snap), Cols: snap.Cols, Rows: snap.Rows})
+	push(TerminalRender{Session: session, Lines: vt.SnapText(snap), Cols: snap.Cols, Rows: snap.Rows})
 }

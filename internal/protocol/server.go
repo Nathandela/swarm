@@ -834,6 +834,12 @@ type clientConn struct {
 	ctlMu   sync.Mutex
 	control *controlSession
 
+	// remote terminal peek (A7 F2): peekCancel cancels this connection's single in-flight
+	// terminal_subscribe render goroutine. A second terminal_subscribe cancels the first
+	// (mirrors handleAttach's one-lease-per-conn), so one connection never runs two peeks.
+	peekMu     sync.Mutex
+	peekCancel context.CancelFunc
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -912,6 +918,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleJournalRead(c)
 	case OpJournalSubscribe:
 		cc.handleJournalSubscribe()
+	case OpTerminalSubscribe:
+		cc.handleTerminalSubscribe(c)
 	case OpDeviceList:
 		cc.handleDeviceList()
 	case OpPolicyQuery:
@@ -1457,6 +1465,107 @@ func (cc *clientConn) journalBackend() (JournalBackend, bool) {
 		return nil, false
 	}
 	return jb, true
+}
+
+// handleTerminalSubscribe serves the A7 F2 remote terminal peek: a READ-ONLY window onto a
+// session's screen. It renders the session server-side (daemon.RenderTerminal over a read-only
+// tap) and streams sanitized OpTerminalSnapshot frames — the phone's ONLY terminal view. It is
+// SECURITY-CRITICAL and read-only on three independent layers: (1) this handler NEVER forwards
+// input; (2) RenderTerminal only reads the stream; (3) the backend's tap is read-only
+// (Input/Resize no-ops). It NEVER supersedes the local controller — the tap is a separate
+// upstream subscriber, not the interactive lease/pump — so a peek cannot touch the owner's
+// generation.
+//
+// Gate order is load-bearing. The kill switch is the FIRST gate, fail-closed: terminal content
+// is more sensitive than journal metadata, so `swarm remote off` must BLANK the phone (refuse
+// with CodeKillSwitch before opening any tap or streaming a frame) even for this read. Then the
+// remote-gateway capability + a TerminalTapper backend are required (mirrors journalBackend()).
+// A second terminal_subscribe on the same connection cancels the first (one peek per conn,
+// mirroring handleAttach's one lease per conn); the render goroutine's ctx is bound to the
+// connection lifetime, so a dropped conn cancels the peek and closes its tap.
+func (cc *clientConn) handleTerminalSubscribe(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	// FIRST GATE (fail-closed): a disabled remote-control kill switch blanks the phone —
+	// refuse before any tap is opened or a single frame is streamed (R-KS.1). A valid peek
+	// must never survive `swarm remote off`.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return
+	}
+	tt, ok := cc.terminalTapper()
+	if !ok {
+		return
+	}
+	sub, err := tt.TerminalTap(local)
+	if err != nil {
+		cc.replyError("terminal_subscribe: " + err.Error())
+		return
+	}
+	cc.replyOK("")
+
+	// One peek per connection: a second terminal_subscribe cancels the first (mirrors
+	// handleAttach's one-lease-per-conn), so a connection never runs two render loops.
+	ctx, cancel := context.WithCancel(context.Background())
+	cc.peekMu.Lock()
+	prev := cc.peekCancel
+	cc.peekCancel = cancel
+	cc.peekMu.Unlock()
+	if prev != nil {
+		prev()
+	}
+
+	cc.srv.wg.Add(1)
+	go func() {
+		defer cc.srv.wg.Done()
+		defer cancel()    // stop the ctx-watcher below when the render loop returns
+		defer sub.Close() // read-only tap released on exit (drops this peek's upstream ref)
+		// Bind the render ctx to the connection lifetime: a dropped conn (or a superseding
+		// second peek) cancels the loop, which returns promptly on ctx.Done().
+		go func() {
+			select {
+			case <-cc.done:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		// Emit the LOCAL session id (the gateway namespaces at egress). NEVER forward input
+		// from this path — it is read-only.
+		daemon.RenderTerminal(ctx, local, sub, func(r daemon.TerminalRender) {
+			body, err := EncodeControl(Control{
+				Op:         OpTerminalSnapshot,
+				EndpointID: cc.endpointID,
+				Terminal: &TerminalSnapshot{
+					Session: r.Session,
+					Lines:   r.Lines,
+					Cols:    r.Cols,
+					Rows:    r.Rows,
+				},
+			})
+			if err != nil {
+				return
+			}
+			_ = cc.writeFrameDeadline(wire.TControl, body)
+		})
+	}()
+}
+
+// terminalTapper returns the backend's TerminalTapper if terminal_subscribe is available to
+// this connection (negotiated remote-gateway cap AND a tapping backend), replying with an
+// error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) terminalTapper() (TerminalTapper, bool) {
+	if !cc.hasCap(CapRemoteGateway) {
+		cc.replyError("remote gateway capability not negotiated")
+		return nil, false
+	}
+	tt, ok := cc.srv.d.(TerminalTapper)
+	if !ok {
+		cc.replyError("terminal_subscribe not supported by this daemon")
+		return nil, false
+	}
+	return tt, true
 }
 
 // handleDeviceList serves device_list (slice A3.1): the backend's full

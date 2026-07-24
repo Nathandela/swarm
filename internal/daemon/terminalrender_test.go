@@ -12,7 +12,7 @@ import (
 
 // stubTerminalStream is a read-only session stream driven entirely by the test:
 // a fixed initial snapshot and a caller-controlled Frames() channel. It satisfies
-// the render loop's terminalStream dependency (a structural subset of
+// the render loop's TerminalStream dependency (a structural subset of
 // protocol.SessionStream) without dragging in the protocol package.
 type stubTerminalStream struct {
 	snap   []byte
@@ -42,19 +42,19 @@ func snapBytes(t *testing.T, cols, rows int, feed []byte) []byte {
 // its own goroutine when driven by the ticker path).
 type collector struct {
 	mu  sync.Mutex
-	got []terminalRender
+	got []TerminalRender
 }
 
-func (c *collector) push(r terminalRender) {
+func (c *collector) push(r TerminalRender) {
 	c.mu.Lock()
 	c.got = append(c.got, r)
 	c.mu.Unlock()
 }
 
-func (c *collector) snapshots() []terminalRender {
+func (c *collector) snapshots() []TerminalRender {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]terminalRender(nil), c.got...)
+	return append([]TerminalRender(nil), c.got...)
 }
 
 // assertSanitized is the core security invariant: no rendered line may carry any
@@ -62,7 +62,7 @@ func (c *collector) snapshots() []terminalRender {
 // SnapText sanitizes at) so a legitimate multi-byte UTF-8 rune whose continuation
 // bytes fall in 0x80-0x9f is never a false positive, while every real C0/C1/DEL
 // control and embedded newline is caught.
-func assertSanitized(t *testing.T, renders []terminalRender) {
+func assertSanitized(t *testing.T, renders []TerminalRender) {
 	t.Helper()
 	for i, r := range renders {
 		for j, line := range r.Lines {
@@ -110,7 +110,7 @@ func TestRenderLoop_HostilePTYCannotEscape(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	renderTerminal(ctx, "hostile", stream, c.push) // returns once frames closes
+	RenderTerminal(ctx, "hostile", stream, c.push) // returns once frames closes
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -141,7 +141,7 @@ func TestRenderLoop_InitialSnapshotFromStream(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	renderTerminal(ctx, "s1", stream, c.push)
+	RenderTerminal(ctx, "s1", stream, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -179,7 +179,7 @@ func TestRenderLoop_CoalescesBurst(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	renderTerminal(ctx, "burst", stream, c.push)
+	RenderTerminal(ctx, "burst", stream, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {

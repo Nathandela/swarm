@@ -498,6 +498,18 @@ func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
 	return a.tap.subscribe(id, readWrite)
 }
 
+// TerminalTap makes coreAPI a protocol.TerminalTapper (A7 F2): it opens a READ-ONLY tap on
+// the shared per-session multiplexer, so a remote peek observes the session's output over the
+// SAME single upstream the owner controller uses, WITHOUT injecting input — readOnly makes the
+// returned tapSub's Input/Resize no-ops, so the peek can never drive the session.
+func (a *coreAPI) TerminalTap(local string) (protocol.SessionStream, error) {
+	return a.tap.subscribe(local, readOnly)
+}
+
+// coreAPI ALSO satisfies protocol.TerminalTapper so the assembled remote-tier Server can serve
+// terminal_subscribe (A7 F2).
+var _ protocol.TerminalTapper = (*coreAPI)(nil)
+
 // emitStatus routes an engine-derived status change through both halves of Epic
 // 10's status wiring (the Epic 11 carry-forward, now wired):
 //

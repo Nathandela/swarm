@@ -140,6 +140,19 @@ type KillSwitch interface {
 	RemoteControlEnabled() bool
 }
 
+// TerminalTapper is the optional interface a remote-tier DaemonAPI implements to expose a
+// READ-ONLY terminal tap (A7 renderer slice F2): TerminalTap opens a per-session output
+// stream the Server renders server-side and streams to the phone as sanitized
+// terminal_snapshot frames. The tap is READ-ONLY — the returned stream's Input/Resize are
+// no-ops — so a remote peek OBSERVES without ever driving the session, and the
+// terminal_subscribe handler NEVER forwards input on this path. The Server serves
+// terminal_subscribe only when its backend satisfies this AND the remote-gateway capability
+// was negotiated (mirrors JournalBackend's cap+backend seam), and refuses fail-closed when
+// the kill switch is off (terminal content is more sensitive than journal metadata).
+type TerminalTapper interface {
+	TerminalTap(local string) (SessionStream, error)
+}
+
 // LaunchPolicy confines a remote launch to machine-configured cwd roots (R-POL.3). On the
 // remote tier, handleLaunch resolves the request cwd with filepath.EvalSymlinks and calls
 // RemoteLaunchAllowed(resolvedCwd); a non-nil error refuses the launch with CodePolicy —
