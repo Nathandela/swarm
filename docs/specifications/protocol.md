@@ -3,7 +3,7 @@
 This is the normative, field-level specification of the **client ⇄ daemon control
 surface** — the low-reversibility wire contract (ADR-002) that the TUI (Epic 7)
 and the attach path (Epic 8) consume. It is versioned; CI diffs this document's
-field set against the Go message structs in `internal/protocol` (the GG-7 drift
+field set against the Go message structs in `internal/protocol/schema` (the GG-7 drift
 check), so this file and the code move together.
 
 Implementation: `internal/protocol` (`types.go`, `codec.go`, `client.go`,

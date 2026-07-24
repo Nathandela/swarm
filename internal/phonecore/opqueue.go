@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 // ErrQueueFull is returned by Enqueue when the bounded queue is at capacity. The queue
@@ -17,10 +17,10 @@ var ErrQueueFull = errors.New("phonecore: op queue full")
 // launch spec for a launch. The command is signed ONCE at enqueue time; it is never
 // re-signed or re-keyed on replay, so the daemon's idempotency dedups a redelivery.
 type QueuedOp struct {
-	Op        string                     `json:"op"`
-	SessionID string                     `json:"session_id"`
-	Cmd       protocol.DeviceCommandAuth `json:"cmd"`
-	Launch    *protocol.LaunchReq        `json:"launch,omitempty"`
+	Op        string                   `json:"op"`
+	SessionID string                   `json:"session_id"`
+	Cmd       schema.DeviceCommandAuth `json:"cmd"`
+	Launch    *schema.LaunchReq        `json:"launch,omitempty"`
 }
 
 // OpQueue is the phone's bounded, durable, in-order offline queue of mutating ops

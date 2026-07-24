@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -22,18 +22,18 @@ import (
 // envelope's Seq. It is fail-closed: a malformed envelope, a wrong/mismatched key, or a
 // non-record plaintext all return an error and NO record (R-PHC.5: reject, never
 // log-and-continue, an item that does not authenticate).
-func OpenJournalEnvelope(key crypto.ContentKey, raw []byte) (protocol.JournalRecord, uint64, error) {
+func OpenJournalEnvelope(key crypto.ContentKey, raw []byte) (schema.JournalRecord, uint64, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
-		return protocol.JournalRecord{}, 0, err
+		return schema.JournalRecord{}, 0, err
 	}
 	plain, err := crypto.OpenMailbox(key, env)
 	if err != nil {
-		return protocol.JournalRecord{}, 0, err
+		return schema.JournalRecord{}, 0, err
 	}
-	var rec protocol.JournalRecord
+	var rec schema.JournalRecord
 	if err := json.Unmarshal(plain, &rec); err != nil {
-		return protocol.JournalRecord{}, 0, err
+		return schema.JournalRecord{}, 0, err
 	}
 	return rec, env.Header.Seq, nil
 }
@@ -58,17 +58,17 @@ func NewJournalReceiver(key crypto.ContentKey) *JournalReceiver {
 // crypto.ErrStaleSeq and a zero record (the caller must NOT apply it). A valid but
 // SKIPPED seq returns gap=true alongside the decoded record, so the phone
 // journal_read-resyncs instead of trusting contiguity.
-func (r *JournalReceiver) Accept(raw []byte) (rec protocol.JournalRecord, gap bool, err error) {
+func (r *JournalReceiver) Accept(raw []byte) (rec schema.JournalRecord, gap bool, err error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
-		return protocol.JournalRecord{}, false, err
+		return schema.JournalRecord{}, false, err
 	}
 	res, err := r.recv.Accept(r.key, env)
 	if err != nil {
-		return protocol.JournalRecord{}, false, err
+		return schema.JournalRecord{}, false, err
 	}
 	if err := json.Unmarshal(res.Plaintext, &rec); err != nil {
-		return protocol.JournalRecord{}, false, err
+		return schema.JournalRecord{}, false, err
 	}
 	return rec, res.Gap, nil
 }
@@ -107,7 +107,7 @@ func NewSessionCache() *SessionCache {
 // is a stale replay/reorder (defense in depth behind the JournalReceiver seq guard): it
 // mutates nothing and returns false. An equal cursor still applies -- a roster snapshot
 // shares one read cursor across all its sessions.
-func (c *SessionCache) Apply(rec protocol.JournalRecord) (applied bool) {
+func (c *SessionCache) Apply(rec schema.JournalRecord) (applied bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if rec.Cursor < c.cursor {

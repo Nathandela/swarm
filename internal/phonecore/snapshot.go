@@ -7,45 +7,45 @@ package phonecore
 // "kind" discriminator on the authenticated plaintext, and routes -- a terminal snapshot
 // into a thin per-session cache (text lines only; no VT emulator on-device, A7 split), a
 // kind-less plaintext down the EXISTING journal path (byte-identical to journal.go's
-// JournalReceiver.Accept: json.Unmarshal into protocol.JournalRecord, then SessionCache).
+// JournalReceiver.Accept: json.Unmarshal into schema.JournalRecord, then SessionCache).
 
 import (
 	"encoding/json"
 	"fmt"
 	"sync"
 
-	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
 
 // The kind discriminator names each frame family the phone demuxes off the ONE shared
 // relay mailbox. A plaintext with an empty/absent kind is a journal record (backward-
-// compatible: the bare protocol.JournalRecord has no kind field, so the journal producer
+// compatible: the bare schema.JournalRecord has no kind field, so the journal producer
 // is not restamped). Every other family carries an explicit kind so Accept can route it
 // instead of swallowing it into the session cache (C8 / codex#7).
 const (
 	kindTerminalSnapshot = "terminal_snapshot" // server-rendered terminal grid -> snapshot cache
 	kindCommandReply     = "command_reply"     // daemon reply to a phone command -> reply cache
-	kindEpochGrant       = "epoch_grant"        // sealed epoch-rotation grant -> pending-grant slot (C5 consumes)
-	kindPush             = "push"               // reserved: no live push in Phase A
+	kindEpochGrant       = "epoch_grant"       // sealed epoch-rotation grant -> pending-grant slot (C5 consumes)
+	kindPush             = "push"              // reserved: no live push in Phase A
 )
 
 // snapshotFrame is the wire shape of a sealed terminal-snapshot mailbox plaintext: the
-// protocol.TerminalSnapshot fields (promoted via anonymous embedding, so its frozen json
+// schema.TerminalSnapshot fields (promoted via anonymous embedding, so its frozen json
 // tags -- session/lines/cols/rows -- stay the single source of truth) plus a "kind" tag.
 // The daemon-side encoder MUST marshal this exact shape.
 type snapshotFrame struct {
-	Kind                      string `json:"kind"`
-	protocol.TerminalSnapshot        // session, lines, cols, rows (promoted)
+	Kind                    string `json:"kind"`
+	schema.TerminalSnapshot        // session, lines, cols, rows (promoted)
 }
 
 // replyFrame is the wire shape of a sealed command-reply mailbox plaintext: the daemon's
-// protocol.Control (promoted via anonymous embedding so its frozen json tags stay the
+// schema.Control (promoted via anonymous embedding so its frozen json tags stay the
 // single source of truth) plus a kind tag. The gateway's SealControlReply MUST marshal
 // this exact shape so the router demuxes a reply instead of decoding it as a journal record.
 type replyFrame struct {
-	Kind            string `json:"kind"`
-	protocol.Control        // op, session_id, operation_id, ... (promoted)
+	Kind           string `json:"kind"`
+	schema.Control        // op, session_id, operation_id, ... (promoted)
 }
 
 // ReplyCache is a FIFO of the command replies the router demuxed off the shared mailbox,
@@ -53,25 +53,25 @@ type replyFrame struct {
 // (C8 / codex#7). Concurrency-safe, mirroring SnapshotCache.
 type ReplyCache struct {
 	mu      sync.Mutex
-	replies []protocol.Control
+	replies []schema.Control
 }
 
 // NewReplyCache returns an empty cache.
 func NewReplyCache() *ReplyCache { return &ReplyCache{} }
 
 // Append enqueues a demuxed reply.
-func (c *ReplyCache) Append(ctrl protocol.Control) {
+func (c *ReplyCache) Append(ctrl schema.Control) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.replies = append(c.replies, ctrl)
 }
 
 // Take pops the oldest cached reply (found=false when empty).
-func (c *ReplyCache) Take() (protocol.Control, bool) {
+func (c *ReplyCache) Take() (schema.Control, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.replies) == 0 {
-		return protocol.Control{}, false
+		return schema.Control{}, false
 	}
 	ctrl := c.replies[0]
 	c.replies = c.replies[1:]
@@ -237,9 +237,9 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 		// mis-applied as a journal record (the core C8 regression).
 	case "":
 		// Kind-less plaintext is a journal record (backward-compatible: the bare
-		// protocol.JournalRecord has no kind field), decoded byte-identically to
+		// schema.JournalRecord has no kind field), decoded byte-identically to
 		// JournalReceiver.Accept (journal.go).
-		var rec protocol.JournalRecord
+		var rec schema.JournalRecord
 		if err := json.Unmarshal(res.Plaintext, &rec); err != nil {
 			return res.Gap, err
 		}

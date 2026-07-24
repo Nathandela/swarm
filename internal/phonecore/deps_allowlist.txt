@@ -1,0 +1,51 @@
+# PB-BIND-0 -- executable allowlist of exact import paths for the gomobile-bound
+# dependency closure (docs/specifications/remote-phaseB-requirements.md 6.2).
+#
+# Enforced by deps_allowlist_test.go. Every NON-STANDARD package reported by
+# `go list -deps` on the guarded package must appear here verbatim; anything else
+# fails the test. Standard-library packages are implicitly allowed -- gomobile ships
+# the Go runtime regardless. This is an allowlist, not a denylist and not a set of
+# categories: v1's denylist already omitted internal/shimwire and v2's categories
+# were not machine-checkable (PB-BIND-0).
+#
+# Adding a line here is a REVIEWED CHANGE. Justify it: the bound package runs on a
+# handset an adversary may hold, so every entry is code shipped to that device.
+#
+# The guarded package is internal/phonecore until the non-internal facade of
+# PB-BIND-1 exists; the guard then moves to the facade, which is the only bound
+# surface. Transitive deps the facade will add (github.com/coder/websocket for the
+# real relay client, PB-NET-1) are deliberately NOT pre-authorized here -- they land
+# with the slice that introduces them.
+#
+# One import path per line. Blank lines and # comments ignored.
+
+# --- the core itself
+github.com/Nathandela/swarm/internal/phonecore
+
+# --- wire and leaf types
+# S1 took the extraction route this note anticipated: the daemon-free wire message
+# types now live in internal/protocol/schema (which internal/protocol aliases, so the
+# wire and its other importers are unchanged), and THAT path is the reviewed addition.
+# internal/protocol itself is deliberately NOT listed and must not be: it still wraps a
+# daemon.Daemon, so blocker 4.2's edge phonecore -> protocol -> daemon -- which drags
+# the PTY and the VT emulator onto the handset, against ADR-007 Decision 2 -- fails this
+# test the moment anyone reintroduces it. schema's own closure is stdlib + status only.
+github.com/Nathandela/swarm/internal/protocol/schema
+github.com/Nathandela/swarm/internal/status
+
+# --- crypto: sealing, Noise, epoch keys, SAS
+github.com/Nathandela/swarm/internal/remote/crypto
+github.com/Nathandela/swarm/internal/remote/device
+github.com/flynn/noise
+golang.org/x/crypto/blake2b
+golang.org/x/crypto/blake2s
+golang.org/x/crypto/chacha20
+golang.org/x/crypto/chacha20poly1305
+golang.org/x/crypto/curve25519
+golang.org/x/crypto/hkdf
+golang.org/x/crypto/internal/alias
+golang.org/x/crypto/internal/poly1305
+golang.org/x/crypto/nacl/box
+golang.org/x/crypto/nacl/secretbox
+golang.org/x/crypto/salsa20/salsa
+golang.org/x/sys/cpu
