@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -28,8 +30,8 @@ const remoteUsage = `usage: swarm remote <command>
 
 // runRemote is the `swarm remote` role: it dispatches to a remote-control verb.
 // With no verb it prints usage (nonzero exit); an unrecognized verb is an error
-// (nonzero exit). `init`, `devices`, `revoke`, the `off`/`on` manual kill switch, and
-// the `status` read are wired; `pair` is later work.
+// (nonzero exit). `init`, `devices`, `revoke`, `pair`, the `off`/`on` manual kill
+// switch, and the `status` read are wired.
 func runRemote(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, remoteUsage)
@@ -42,6 +44,8 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 		return runRemoteDevices(args[1:], stdout, stderr)
 	case "revoke":
 		return runRemoteRevoke(args[1:], stdout, stderr)
+	case "pair":
+		return runRemotePair(args[1:], os.Stdin, stdout, stderr)
 	case "off":
 		return runRemoteSetControl(false, stdout, stderr)
 	case "on":
@@ -239,6 +243,99 @@ func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	return 0
+}
+
+// runRemotePair is the `swarm remote pair` verb: it runs the OWNER side of pairing — the
+// local desktop confirm, the independent SECOND gate (ADR D3). It dials the owner daemon
+// (CapPairing, like runRemoteDevices), starts the handshake via StartPairing, prints the
+// QR + rendezvous for the phone to scan, blocks until the phone reaches the SAS gate and
+// shows the SAS emoji + the requesting device name, reads the operator's allow/deny from
+// stdin (INJECTED so the confirm is testable without a TTY — never os.Stdin here), sends
+// the decision, then blocks on the terminal result and prints it. A declined, dropped, or
+// failed pairing exits nonzero — fail closed, nothing enrolled.
+func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("remote pair", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	capability := fs.String("capability", "full", "capability tier to grant the new device")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	sess, err := client.StartPairing(protocol.PairStartReq{Capability: *capability})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		return 1
+	}
+	defer sess.Close()
+
+	// The rendezvous view bootstraps the phone: scanning the QR recovers the rendezvous
+	// id + single-use pairing secret it drives the device leg with.
+	fmt.Fprintln(stdout, "Scan this QR on your phone to pair:")
+	fmt.Fprintln(stdout, sess.QR)
+	fmt.Fprintf(stdout, "rendezvous: %s\n", sess.RendezvousID)
+	if sess.ExpiresAt != nil {
+		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
+	}
+
+	// Block until the phone reaches the SAS gate. A terminal result arriving FIRST (a
+	// rendezvous/TTL failure or a dropped session, before any gate) unblocks here fail
+	// closed rather than hanging.
+	var pending protocol.PairingPending
+	select {
+	case pending = <-sess.Pending():
+	case <-sess.Result():
+		fmt.Fprintln(stderr, "remote pair: pairing ended before the device connected")
+		return 1
+	}
+
+	// The independent second gate (ADR D3): the operator verifies the SAS emoji against
+	// the phone's screen and allows or denies at the desktop.
+	fmt.Fprintf(stdout, "Device: %s\n", pending.DeviceName)
+	fmt.Fprintf(stdout, "Verify these emoji match your phone: %s\n", strings.Join(pending.SAS, " "))
+	fmt.Fprint(stdout, "Allow this device? [y/N]: ")
+
+	allow := readYesNo(stdin)
+	if err := sess.Confirm(allow); err != nil {
+		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		return 1
+	}
+
+	// The single terminal outcome: a real pair_result, or a fail-closed non-paired result
+	// on a dropped session / Close.
+	res := <-sess.Result()
+	if !res.Paired {
+		if !allow {
+			fmt.Fprintln(stdout, "pairing declined")
+		} else {
+			fmt.Fprintln(stderr, "remote pair: pairing failed")
+		}
+		return 1
+	}
+	name := res.Name
+	if name == "" {
+		name = res.DeviceID
+	}
+	fmt.Fprintf(stdout, "paired %s\n", name)
+	return 0
+}
+
+// readYesNo reads one line from r and reports whether it is an affirmative answer
+// (y/yes, case-insensitive). EOF or anything else is a NO: the confirm gate fails closed
+// on absent or ambiguous input.
+func readYesNo(r io.Reader) bool {
+	sc := bufio.NewScanner(r)
+	if !sc.Scan() {
+		return false
+	}
+	ans := strings.ToLower(strings.TrimSpace(sc.Text()))
+	return ans == "y" || ans == "yes"
 }
 
 // runRemoteStatus is the `swarm remote status` verb: a READ-ONLY operator report that
