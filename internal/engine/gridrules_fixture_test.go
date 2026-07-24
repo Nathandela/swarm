@@ -4,8 +4,10 @@ package engine
 // fixtures committed in Phase B through evaluateGridWithRules with each CLI's
 // declared rule set (docs/verification/cli-duo-adapters-evidence.md's frozen
 // marker table): BYTE granularity inside agy's busy window (agy declares an
-// idle rule, so false-idle is the safety property), 64-byte steps inside
-// opencode's (no idle rule -> false idle impossible by construction), coarse
+// idle rule, so false-idle is the safety property), 64-byte steps for opencode
+// from busy start through capture end (no idle rule declared, so the rules
+// layer cannot emit idle; the generic fallback's parked-cursor idle path is a
+// residual risk the whole-capture never-idle sweep regression-checks), coarse
 // (<=1KB) steps outside. Permanent regression tests for the Opus offset~6132
 // false-idle repro and the agy [6228,6299] marker transient: never idle
 // mid-turn; the transient classifies ACTIVE via the generic spinner fallback.

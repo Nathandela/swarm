@@ -49,9 +49,11 @@ func snapAtOffset(t *testing.T, capture []byte, n int) *vt.Snap {
 // in coarse <=1KB steps elsewhere (clamped so a coarse step never reads past a
 // fine span's start). fineStep=1 is the byte-exact mode required where an
 // idle rule is declared (false-idle is the safety property); a coarser
-// fineStep is legitimate for CLIs with no idle rule, where idle emissions are
-// impossible by construction and the sweep only regression-checks busy
-// coverage. After every step it decodes the snapshot, evaluates it
+// fineStep is legitimate for CLIs with no idle rule, where the rules layer
+// cannot emit idle and only the generic fallback's parked-cursor path could —
+// a residual risk the sweep itself regression-checks (byte-exact opencode
+// replay measured >10min in normal builds, so sampled coverage is the
+// affordable proof). After every step it decodes the snapshot, evaluates it
 // via evaluateGridWithRules(snap, rules), and calls visit(offset, turn,
 // interaction) where offset is the cumulative byte count fed so far.
 func replayFixture(t *testing.T, capture []byte, rules gridRules, fineSpans [][2]int, fineStep int, visit func(offset int, turn status.Turn, inter status.Interaction)) {
