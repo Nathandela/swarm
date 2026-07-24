@@ -40,6 +40,7 @@
 package idempotency
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -304,5 +305,104 @@ func TestIdempotency_TTLCompaction(t *testing.T) {
 	}
 	if _, ok := s.Get(fresh); !ok {
 		t.Fatalf("in-window record %q was dropped by Compact", fresh)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Re-audit finding — Compact durability/availability: the rename that swaps in
+// the compacted log must be fsync'd (parent dir), and a failed Compact must
+// degrade to "not compacted this cycle", never a dead store.
+// ---------------------------------------------------------------------------
+
+// TestIdempotency_CompactRenameFailureKeepsStoreUsable asserts a Compact whose
+// rename step fails still leaves the store fully usable afterward (Prepare /
+// Begin / Complete / Get all succeed, and pre-existing records are still
+// readable). TODAY rewriteLocked closes s.f BEFORE attempting the rename, so a
+// rename failure leaves s.f closed/nil: every later idempotent operation fails
+// until process restart (a live availability outage) -- this is the dead-store
+// failure mode the finding calls out.
+func TestIdempotency_CompactRenameFailureKeepsStoreUsable(t *testing.T) {
+	dir := sdir(t)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Seed one record so Compact has something to rewrite.
+	const seedOp = "devA:01JSEED"
+	if _, _, err := s.Prepare(seedOp, "kill", "sess1"); err != nil {
+		t.Fatalf("seed Prepare: %v", err)
+	}
+	if err := s.Complete(seedOp, nil); err != nil {
+		t.Fatalf("seed Complete: %v", err)
+	}
+
+	orig := renameLog
+	renameLog = func(oldpath, newpath string) error { return errors.New("injected rename failure") }
+	defer func() { renameLog = orig }()
+
+	if err := s.Compact(); err == nil {
+		t.Fatalf("Compact with injected rename failure returned nil error; want the failure surfaced")
+	}
+
+	// The store must remain usable on the OLD append handle: Prepare/Begin/Complete
+	// must all still succeed, and the pre-Compact record must still be readable.
+	const op = "devA:01JPOSTFAIL"
+	if _, _, err := s.Prepare(op, "kill", "sess2"); err != nil {
+		t.Fatalf("Prepare after failed Compact: %v -- store left unusable (dead-store bug)", err)
+	}
+	if err := s.Begin(op); err != nil {
+		t.Fatalf("Begin after failed Compact: %v -- store left unusable (dead-store bug)", err)
+	}
+	if err := s.Complete(op, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("Complete after failed Compact: %v -- store left unusable (dead-store bug)", err)
+	}
+	if rec, ok := s.Get(op); !ok || rec.Phase != PhaseCompleted {
+		t.Fatalf("record lost/incomplete after failed Compact: ok=%v phase=%q", ok, rec.Phase)
+	}
+	if _, ok := s.Get(seedOp); !ok {
+		t.Fatalf("pre-Compact record %q lost after a failed Compact", seedOp)
+	}
+}
+
+// TestIdempotency_CompactFsyncsParentDir asserts a successful Compact fsyncs the
+// store's parent directory AFTER the rename, so the rename itself is durable
+// across a crash (mirrors remotegw.persistSeqCeiling's tmp+fsync+rename+dirsync
+// idiom). TODAY Compact never syncs the directory: a power loss can lose the
+// rename and resurrect the pre-compaction log, reopening replay risk.
+func TestIdempotency_CompactFsyncsParentDir(t *testing.T) {
+	dir := sdir(t)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	const op = "devA:01JDIRSYNC"
+	if _, _, err := s.Prepare(op, "kill", "sess1"); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := s.Complete(op, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	orig := syncDir
+	synced := false
+	syncDir = func(d string) error {
+		synced = true
+		if d != dir {
+			t.Fatalf("syncDir called with %q; want store dir %q", d, dir)
+		}
+		return orig(d)
+	}
+	defer func() { syncDir = orig }()
+
+	if err := s.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if !synced {
+		t.Fatalf("Compact did not fsync the parent directory after the rename; a power loss could lose the rename and resurrect the pre-compaction log")
+	}
+	// The happy path must still round-trip: the record survives compaction.
+	if _, ok := s.Get(op); !ok {
+		t.Fatalf("record %q lost by a successful Compact", op)
 	}
 }

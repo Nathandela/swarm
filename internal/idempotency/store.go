@@ -7,8 +7,9 @@
 // `outcome_unknown`, never a claimed exactly-once.
 //
 // Durability is a fsync'd append-only log replayed on Open (last-write-wins per
-// operation_id); Compact rewrites it atomically (tmp+rename) dropping expired /
-// over-cap records.
+// operation_id); Compact rewrites it atomically (tmp+fsync+rename+dirsync)
+// dropping expired / over-cap records, degrading to "not compacted this cycle"
+// rather than losing the store if any step fails.
 package idempotency
 
 import (
@@ -288,15 +289,39 @@ func (s *Store) appendLocked(rec Record) error {
 	return s.f.Sync()
 }
 
-// rewriteLocked replaces the log with kept, atomically (tmp+fsync+rename), and
-// reopens the append handle on the fresh file.
+// renameLog is os.Rename, a test seam so a Compact failure at the rename step can
+// be injected to verify the store degrades to "not compacted this cycle" rather
+// than being left dead.
+var renameLog = os.Rename
+
+// syncDir fsyncs dir so a preceding rename within it is durable across a crash
+// (mirrors remotegw.persistSeqCeiling's tmp+fsync+rename+dirsync idiom). Without
+// this a power loss can lose the rename and resurrect the pre-compaction log,
+// reopening replay risk. A package var so tests can spy on / inject a failure
+// into this step.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// rewriteLocked replaces the log with kept, atomically (tmp+fsync+rename+dirsync),
+// then reopens the append handle on the fresh file. The OLD handle s.f is left
+// open and untouched until the replacement is durably in place AND the new handle
+// opens successfully: a failure at any step (create/write/sync/rename/dirsync/
+// reopen) returns an error while the store keeps working on the OLD log --
+// degrading to "not compacted this cycle" rather than leaving s.f closed/nil,
+// which would fail every later operation until process restart.
 func (s *Store) rewriteLocked(kept []Record) error {
 	tmp, err := os.CreateTemp(s.dir, logFile+".tmp*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
 	for _, rec := range kept {
 		if _, err := tmp.Write(append(mustMarshal(rec), '\n')); err != nil {
 			tmp.Close()
@@ -310,15 +335,19 @@ func (s *Store) rewriteLocked(kept []Record) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	logPath := filepath.Join(s.dir, logFile)
+	if err := renameLog(tmpName, logPath); err != nil {
+		return err // s.f untouched: still the valid pre-compaction handle
+	}
+	if err := syncDir(s.dir); err != nil {
+		return err // rename landed but s.f untouched: still usable this cycle
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err // s.f untouched: still usable, though pointed at the old log
+	}
 	if s.f != nil {
 		_ = s.f.Close()
-	}
-	if err := os.Rename(tmpName, filepath.Join(s.dir, logFile)); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(filepath.Join(s.dir, logFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
 	}
 	s.f = f
 	return nil
