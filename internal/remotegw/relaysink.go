@@ -122,11 +122,18 @@ func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 // appends the opaque envelope to the phone's mailbox. Journal records and terminal
 // snapshots both flow through here so they share one strictly increasing seq stream
 // (R-GW.3; the phone orders and dedups on that single seq).
+//
+// The whole seq-allocate -> append is held under s.mu so RunJournal and RunTerminal (two
+// goroutines sharing one sink) can never append out of seq order: releasing the lock
+// after allocating seq would let a later seq reach the phone's single MailboxReceiver
+// first, which drops the earlier one as ErrStaleSeq and forces a spurious resync. Appends
+// are the gateway's outbound path (not hot), so serializing them is cheap. setErrLocked
+// is used inside the critical section because setErr re-acquires s.mu.
 func (s *RelaySink) seal(plaintext []byte) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.seq++
 	seq := s.seq
-	s.mu.Unlock()
 
 	env, err := crypto.SealMailbox(s.cfg.Key, crypto.EnvelopeHeader{
 		Version:        crypto.VersionV1,
@@ -137,11 +144,11 @@ func (s *RelaySink) seal(plaintext []byte) error {
 		IssuedAt:       s.now().UnixMilli(),
 	}, plaintext)
 	if err != nil {
-		s.setErr(err)
+		s.setErrLocked(err)
 		return err
 	}
 	if _, err := s.cfg.Appender.MailboxAppend(context.Background(), s.cfg.Target, env.Marshal()); err != nil {
-		s.setErr(err)
+		s.setErrLocked(err)
 		return err
 	}
 	return nil
@@ -156,8 +163,14 @@ func (s *RelaySink) Err() error {
 
 func (s *RelaySink) setErr(err error) {
 	s.mu.Lock()
+	s.setErrLocked(err)
+	s.mu.Unlock()
+}
+
+// setErrLocked records the first error; the caller must hold s.mu (seal calls it inside
+// its critical section, where setErr's own Lock would deadlock).
+func (s *RelaySink) setErrLocked(err error) {
 	if s.lastErr == nil {
 		s.lastErr = err
 	}
-	s.mu.Unlock()
 }

@@ -216,6 +216,13 @@ func (t *tap) teardown() {
 	up, mirror := t.up, t.mirror
 	t.mu.Unlock()
 
+	t.releaseResources(up, mirror)
+}
+
+// releaseResources drops the tap from the map and closes the shared upstream and mirror.
+// It runs after t.closed has been set under t.mu (by teardown or removeSub), so exactly
+// one teardown path reaches it per tap; Close is idempotent on both handles regardless.
+func (t *tap) releaseResources(up protocol.SessionStream, mirror *vt.Emulator) {
 	t.mgr.removeTap(t.id, t)
 	if up != nil {
 		_ = up.Close()
@@ -225,19 +232,38 @@ func (t *tap) teardown() {
 	}
 }
 
-// removeSub drops sub on its Close. When the last subscriber leaves (refcount -> 0)
-// it tears the tap down, closing the single shared upstream.
+// hookAfterLastDetach, when non-nil, fires in removeSub after the last subscriber has
+// detached and t.mu has been released, before the shared upstream is torn down. It is a
+// TEST SEAM only (nil in production, so production behavior is unchanged); it exists to
+// widen the post-detach window and prove a concurrent subscribe is never handed a dead
+// subscriber on the dying tap.
+var hookAfterLastDetach func()
+
+// removeSub drops sub on its Close. When the last subscriber leaves (refcount -> 0) it
+// tears the tap down, closing the single shared upstream. The last-subscriber detection
+// and the t.closed transition are ATOMIC under one t.mu hold: closed is set BEFORE the
+// lock is released, so a subscribe that interleaves after this either already joined
+// (then it is not last and the tap stays open) or sees t.closed and re-dials a fresh tap
+// -- it can never register on this dying tap and be evicted by the teardown that follows.
 func (t *tap) removeSub(sub *tapSub) {
 	t.mu.Lock()
 	if _, ok := t.subs[sub]; ok {
 		delete(t.subs, sub)
 		sub.evict() // detach closes the subscriber's frames so its consumer unwinds
 	}
-	last := len(t.subs) == 0 && !t.closed
-	t.mu.Unlock()
-	if last {
-		t.teardown()
+	if len(t.subs) != 0 || t.closed {
+		t.mu.Unlock()
+		return
 	}
+	// Last subscriber: commit the close under the lock so it is atomic with the
+	// last-detection, then release the shared resources after unlocking.
+	t.closed = true
+	up, mirror := t.up, t.mirror
+	t.mu.Unlock()
+	if hookAfterLastDetach != nil {
+		hookAfterLastDetach()
+	}
+	t.releaseResources(up, mirror)
 }
 
 // tapSub is one subscriber's view of the shared session: its own snapshot, its own

@@ -9,6 +9,7 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,5 +115,77 @@ func TestRelaySink_AppendErrorSurfaced(t *testing.T) {
 	sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "s1", Type: "launched"})
 	if sink.Err() == nil {
 		t.Fatalf("a failed mailbox append was not surfaced via Err()")
+	}
+}
+
+// seqOrderAppender records the envelope Seq of every append in ARRIVAL order and
+// yields briefly inside MailboxAppend to exercise the window between seq allocation
+// and append. RunJournal (Event) and RunTerminal (Terminal) drive one shared sink from
+// separate goroutines; the phone gates a single MailboxReceiver on seq (seq<=hi ->
+// ErrStaleSeq, seq>hi+1 -> Gap), so if a higher seq is appended before a lower one the
+// phone drops the lower record and spuriously resyncs. The seq allocation and the append
+// MUST therefore be serialized so appends arrive in strictly increasing seq order.
+type seqOrderAppender struct {
+	mu    sync.Mutex
+	seqs  []uint64
+	delay time.Duration
+}
+
+func (a *seqOrderAppender) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
+	parsed, err := crypto.ParseEnvelope(env)
+	if err != nil {
+		return 0, err
+	}
+	if a.delay > 0 {
+		// Widen the seq-alloc -> append gap so a concurrent higher seq can overtake a
+		// lower one when the seq counter is unlocked before the append (the bug).
+		time.Sleep(a.delay)
+	}
+	a.mu.Lock()
+	a.seqs = append(a.seqs, parsed.Header.Seq)
+	n := uint64(len(a.seqs))
+	a.mu.Unlock()
+	return n, nil
+}
+
+func TestRelaySink_ConcurrentProducersPreserveSeqAppendOrder(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	app := &seqOrderAppender{delay: 200 * time.Microsecond}
+	sink := newTestRelaySink(t, app, key)
+
+	// Many concurrent journal Events and terminal snapshots through the ONE sink, all
+	// released together to maximize contention on the shared seq counter.
+	const producers = 64
+	var wg sync.WaitGroup
+	wg.Add(producers)
+	start := make(chan struct{})
+	for i := 0; i < producers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				_ = sink.Event(protocol.JournalRecord{Cursor: uint64(i), SessionID: "s", Type: "launched"})
+			} else {
+				_ = sink.Terminal("s", []string{"line"}, 80, 24)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if len(app.seqs) != producers {
+		t.Fatalf("recorded %d appends; want %d", len(app.seqs), producers)
+	}
+	for i := 1; i < len(app.seqs); i++ {
+		if app.seqs[i] <= app.seqs[i-1] {
+			t.Fatalf("append %d has seq %d, not strictly greater than the previous append's seq %d: "+
+				"concurrent seals allocated seq under the lock but appended out of order once it was released",
+				i, app.seqs[i], app.seqs[i-1])
+		}
 	}
 }

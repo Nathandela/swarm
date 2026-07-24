@@ -290,6 +290,86 @@ func TestSessionTap_OverflowEvictsThatSubOnly(t *testing.T) {
 	_ = b.Close()
 }
 
+// TestSessionTap_LastCloseDoesNotStrandConcurrentSubscribe pins the teardown TOCTOU
+// invariant: the last-subscriber detection and the tap's closed transition must be
+// atomic under ONE t.mu hold. If they are not, a subscribe that interleaves in the
+// window (t.closed still false, t.up != nil) registers a NEW subscriber on the
+// still-open tap, and the ensuing teardown evicts it -- handing the caller a live
+// subscriber whose frame channel is closed out from under it (a spurious detach right
+// after attaching).
+//
+// The test uses the hookAfterLastDetach seam to widen the post-detach window and drive a
+// concurrent subscribe into it, then asserts the returned subscriber's channel is NOT
+// closed. Pre-fix (closed set only inside teardown, after the window) the concurrent
+// subscriber joins the dying tap and its channel is closed by teardown -> the receive
+// observes the close and fails. Post-fix (closed set atomically before the window) the
+// concurrent subscribe sees closed, re-dials a fresh live tap, and its channel stays
+// open.
+func TestSessionTap_LastCloseDoesNotStrandConcurrentSubscribe(t *testing.T) {
+	var mu sync.Mutex
+	var ups []*fakeUpstream
+	mgr := newTapManager(func(string) (protocol.SessionStream, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		u := newFakeUpstream(mustSnap(t, "x"))
+		ups = append(ups, u)
+		return u, nil
+	})
+
+	a, err := mgr.subscribe("s1", readWrite)
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+
+	// The seam fires once, from inside a's last-detach, after t.mu is released. It kicks
+	// off a concurrent subscribe and holds the window open long enough for that subscribe
+	// to interleave, exactly reproducing the race deterministically.
+	var once sync.Once
+	var got *tapSub
+	var gotErr error
+	var subWG sync.WaitGroup
+	hookAfterLastDetach = func() {
+		once.Do(func() {
+			subWG.Add(1)
+			started := make(chan struct{})
+			go func() {
+				defer subWG.Done()
+				close(started)
+				got, gotErr = mgr.subscribe("s1", readWrite)
+			}()
+			<-started
+			time.Sleep(30 * time.Millisecond) // widen the post-detach window
+		})
+	}
+	t.Cleanup(func() { hookAfterLastDetach = nil })
+
+	// Last close: refcount -> 0 triggers teardown, and the seam drives a concurrent
+	// subscribe into the teardown window.
+	_ = a.Close()
+	subWG.Wait()
+
+	if gotErr != nil {
+		t.Fatalf("concurrent subscribe errored: %v", gotErr)
+	}
+	if got == nil {
+		t.Fatal("concurrent subscribe returned no subscriber")
+	}
+
+	// The freshly-returned subscriber must be live: its channel must NOT be closed out
+	// from under it. Pre-fix, teardown evicts it and the receive sees the closed channel;
+	// post-fix it is on a fresh re-dialed tap and stays open past the teardown window.
+	select {
+	case _, ok := <-got.Frames():
+		if !ok {
+			t.Fatal("last-close stranded a concurrent subscriber: its frame channel was closed immediately after subscribe returned")
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Still open well past when teardown would have run -> not stranded.
+	}
+
+	_ = got.Close()
+}
+
 // waitClosed polls an upstream until it reports closed or the deadline passes.
 func waitClosed(up *fakeUpstream, d time.Duration) bool {
 	deadline := time.Now().Add(d)
