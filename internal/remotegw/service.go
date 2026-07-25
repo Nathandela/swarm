@@ -31,12 +31,16 @@ type ServiceConfig struct {
 	GrantSeq       uint64            // the machine identity's grant-issuance seq (authority (c), see gatewayAuthorities)
 	RecipientKeyID [8]byte           // phone routing key id stamped on sealed journal envelopes
 	SenderKeyID    [8]byte           // this machine's routing key id
-	PollInterval   time.Duration     // command-IN poll cadence (default 500ms)
-	ReconnectDelay time.Duration     // journal reconnect backoff (default 1s)
-	LeaseAwait     time.Duration     // how long take_control waits for the lease grant (default 5s)
-	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
-	JournalSeq     SeqSource         // durable outbound seq for journal + terminal frames (nil => in-memory)
-	ReplySeq       SeqSource         // durable outbound seq for command replies (nil => in-memory)
+	// NOTE: there is deliberately NO command-IN poll cadence here. PB-NET-5 requires
+	// the old 500 ms poll to be DROPPED, not tuned: the command loop is driven by the
+	// relay's bounded server-side wait (CommandBridge.Run), and re-introducing an
+	// interval field would re-introduce the failure ADR-007:461 calls "unusable for
+	// live typing".
+	ReconnectDelay time.Duration    // journal reconnect backoff (default 1s)
+	LeaseAwait     time.Duration    // how long take_control waits for the lease grant (default 5s)
+	Now            func() time.Time // envelope issued-at clock (nil => time.Now)
+	JournalSeq     SeqSource        // durable outbound seq for journal + terminal frames (nil => in-memory)
+	ReplySeq       SeqSource        // durable outbound seq for command replies (nil => in-memory)
 	// Durable OUTBOUND journal outbox (PB-GW-8): {journal cursor, sealed envelope, relay
 	// outcome}, which is what makes the resume point survive a restart AND makes a
 	// delivery-unknown append recoverable by re-appending the identical envelope. Nil =>
@@ -82,9 +86,6 @@ type Service struct {
 // journal-OUT direction and a CommandBridge for the command-IN direction, both bound
 // to the same content key and phone target.
 func NewService(cfg ServiceConfig) *Service {
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = 500 * time.Millisecond
-	}
 	if cfg.ReconnectDelay <= 0 {
 		cfg.ReconnectDelay = time.Second
 	}
@@ -225,7 +226,7 @@ func (s *Service) Run(ctx context.Context) error {
 			cancel() // stop the command loop too, so Run returns promptly
 		}
 	}()
-	go func() { defer wg.Done(); _ = s.bridge.Run(ctx, s.cfg.PollInterval) }()
+	go func() { defer wg.Done(); _ = s.bridge.Run(ctx) }()
 	wg.Wait()
 	if revoked.Load() {
 		return ErrDeviceRevoked

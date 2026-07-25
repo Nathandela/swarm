@@ -168,7 +168,8 @@ type Server struct {
 	sweepWG    sync.WaitGroup
 
 	mu         sync.Mutex
-	sessions   map[string]*serverConn // rid -> active authenticated conn
+	sessions   map[string]*serverConn  // rid -> active authenticated conn
+	waits      map[string]*pendingWait // rid -> its single parked server-side wait (§6.0 caps it at 1)
 	presence   map[string]*presenceEntry
 	tokens     map[string]string // rid -> APNs token (ephemeral)
 	rendezvous map[string]*rdvSlot
@@ -195,6 +196,7 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 		clk:         realClock{},
 		logger:      log.New(io.Discard, "", 0),
 		sessions:    make(map[string]*serverConn),
+		waits:       make(map[string]*pendingWait),
 		presence:    make(map[string]*presenceEntry),
 		tokens:      make(map[string]string),
 		rendezvous:  make(map[string]*rdvSlot),
@@ -327,8 +329,16 @@ type serverConn struct {
 	// window, it cannot be reset by a drip of harmless pre-auth frames.
 	acceptedAt time.Time
 
-	authed     bool
-	rid        string
+	authed bool
+	rid    string
+	// wait is this connection's parked server-side wait, or nil. It is guarded by
+	// Server.mu, NOT by the connection's own goroutine, because the wait is
+	// released from three places under that lock (its own goroutine's release, a
+	// newest-wins takeover, and removeConn). Holding the pointer here rather than
+	// re-deriving it from rid is what makes the release exact: rid can be rewritten
+	// by a re-authentication, and a lookup by the current value would orphan the
+	// slot under the old one.
+	wait       *pendingWait
 	authNonce  []byte
 	pendingPub ed25519.PublicKey
 	pendingRID string
@@ -419,6 +429,9 @@ func (s *Server) removeConn(sc *serverConn) {
 			slot.detach(sc)
 		}
 	}
+	// A dead connection's wait slot is freed here as well as by serveWait's own
+	// defer, so the slot is never held by a connection that no longer exists.
+	s.severWaitLocked(sc, waitCancelled)
 	if sc.authed {
 		if cur, ok := s.sessions[sc.rid]; ok && cur == sc {
 			delete(s.sessions, sc.rid)
@@ -549,6 +562,10 @@ func (sc *serverConn) dispatch(tag MsgType, payload []byte) error {
 			return sc.handleAuthorizeDevice(payload)
 		case "mailbox_read":
 			return sc.handleMailboxRead(payload)
+		case "mailbox_wait":
+			return sc.handleMailboxWait(payload)
+		case "mailbox_wait_cancel":
+			return sc.handleMailboxWaitCancel(payload)
 		case "mailbox_ack":
 			return sc.handleMailboxAck(payload)
 		case "token_register":
@@ -678,6 +695,12 @@ func (s *Server) registerSession(sc *serverConn) {
 	sc.rid = sc.pendingRID // write rid under the lock: removeConn scans other.rid here (R1b review HIGH-1)
 	if old, ok := s.sessions[sc.rid]; ok && old != sc {
 		old.superseded.Store(true)
+		// A superseded connection issues no further requests, so a wait parked on it
+		// would never learn it lost the routing id: it would sit out its whole
+		// ceiling holding the single per-client wait slot, and THIS connection could
+		// not park its own — live typing dead for up to a ceiling after every
+		// reconnect (PB-NET-5(d): newest-wins must not be weakened).
+		s.severWaitLocked(old, waitSuperseded)
 	}
 	s.sessions[sc.rid] = sc
 	p := s.presence[sc.rid]
@@ -759,6 +782,9 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	if err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	// Wake the target's parked wait BEFORE replying: the appender's own round-trip
+	// is not on the recipient's latency path, and the recipient is the one typing.
+	sc.s.notifyMailbox(req.Target)
 	return sc.replyOK(map[string]any{"cursor": cur})
 }
 

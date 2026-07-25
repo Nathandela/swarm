@@ -108,6 +108,14 @@ func (m *ackPurgingMailbox) MailboxRead(_ context.Context, cursor uint64) ([]rel
 	return out, nil
 }
 
+// MailboxWait is the S6b low-latency seam, answered from the same durable store
+// MailboxRead reads, so the purge-on-ack behaviour this fake exists to model is
+// identical whichever way the bridge fetches.
+func (m *ackPurgingMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+	items, err := m.MailboxRead(ctx, cursor)
+	return items, false, err
+}
+
 func (m *ackPurgingMailbox) MailboxAppend(_ context.Context, target string, env []byte) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

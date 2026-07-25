@@ -65,6 +65,13 @@ type Config struct {
 	PresenceTimeout time.Duration `json:"presence_timeout"`
 	// RendezvousTTL is the hard relay-side pairing-rendezvous lifetime (R-PAIR.6).
 	RendezvousTTL time.Duration `json:"rendezvous_ttl"`
+	// MaxServerWait is the ceiling on a bounded server-side wait (mailbox_wait,
+	// ADR-007 B7): with nothing to deliver the relay answers a clean empty page
+	// rather than holding the socket open indefinitely. §6.0 sets 25 s, chosen to
+	// sit under the 30-60 s idle timeout common to intermediaries, so the relay
+	// always answers before a proxy severs the connection. A value <= 0 selects
+	// defaultMaxServerWait.
+	MaxServerWait time.Duration `json:"max_server_wait"`
 	// RetentionCap purges mailbox items this old even if never acked (R-REL.10).
 	RetentionCap time.Duration `json:"retention_cap"`
 	// SweepInterval is the cadence at which Start runs the clock-driven maintenance
@@ -87,6 +94,7 @@ func DefaultConfig() Config {
 		HandshakeTimeout: 30 * time.Second,
 		PresenceTimeout:  30 * time.Second,
 		RendezvousTTL:    60 * time.Second,
+		MaxServerWait:    defaultMaxServerWait,
 		RetentionCap:     7 * 24 * time.Hour,
 		Quotas: Quotas{
 			MaxConcurrentRendezvous:  1024,

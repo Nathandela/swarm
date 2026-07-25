@@ -10,6 +10,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/transport"
 )
 
 // The production relay client is a Mailbox (read + append). This assertion pins the
@@ -24,6 +25,13 @@ var _ CommandForwarder = (*Gateway)(nil)
 // replies to the phone's mailbox. relay.Client satisfies it.
 type Mailbox interface {
 	MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error)
+	// MailboxWait is the low-latency inbound seam (PB-NET-5, ADR-007 B7): it
+	// blocks SERVER-side until an item past cursor exists and returns that bounded
+	// page, so the command loop is driven by arrivals instead of by a cadence. It
+	// is on THIS interface rather than an optional side interface a call site
+	// type-asserts, because an optional wait would silently fall back to polling —
+	// which is exactly the phone-side-only fix PB-NET-5 forbids.
+	MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error)
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
 	MailboxAck(ctx context.Context, cursor uint64) error
 }
@@ -186,6 +194,26 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	processed, maxCursor, errs := b.processBatch(ctx, items)
+	if maxCursor > 0 {
+		// Ack durably purges consumed items from the relay's mailbox store, so a
+		// restarted bridge never re-reads them. A failed ack surfaces as an error but
+		// must not lose the cursor advance above -- the next poll will simply try to
+		// ack forward again. The ack is an OPTIMISATION, never the guard: a relay that
+		// does not honour it can still replay nothing, because the durable high-water
+		// refuses every retained frame.
+		if err := b.cfg.Mailbox.MailboxAck(ctx, maxCursor); err != nil {
+			errs = append(errs, fmt.Errorf("ack cursor %d: %w", maxCursor, err))
+		}
+	}
+	return processed, errors.Join(errs...)
+}
+
+// processBatch handles one batch of mailbox items and returns how many forwarded
+// successfully, the highest cursor consumed (0 when the batch was empty), and the
+// per-item failures. It is shared by the wait-driven Run and by PollOnce, which
+// differ only in how the batch was fetched and where the ack goes.
+func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (int, uint64, []error) {
 	processed := 0
 	var errs []error
 	var maxCursor uint64
@@ -208,37 +236,76 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 		if err := b.saveCheckpoint(); err != nil {
 			errs = append(errs, fmt.Errorf("persist cursor %d: %w", maxCursor, err))
 		}
-		// Ack durably purges consumed items from the relay's mailbox store, so a
-		// restarted bridge never re-reads them. A failed ack surfaces as an error but
-		// must not lose the cursor advance above -- the next poll will simply try to
-		// ack forward again. The ack is an OPTIMISATION, never the guard: a relay that
-		// does not honour it can still replay nothing, because the durable high-water
-		// refuses every retained frame.
-		if err := b.cfg.Mailbox.MailboxAck(ctx, maxCursor); err != nil {
-			errs = append(errs, fmt.Errorf("ack cursor %d: %w", maxCursor, err))
-		}
 	}
-	return processed, errors.Join(errs...)
+	return processed, maxCursor, errs
 }
 
-// Run polls in a loop every interval until ctx is cancelled, returning ctx.Err().
-// Poll errors are non-fatal (a transient relay error should not tear the bridge down) but
+// Run drives the command-IN path off the relay's BOUNDED SERVER-SIDE WAIT until ctx is
+// cancelled, returning ctx.Err().
+//
+// There is NO poll cadence, and dropping it is half of PB-NET-5, not a detail: the fixed
+// 500 ms command-IN poll this replaces is what ADR-007:461 calls "unusable for live
+// typing", and a phone-side-only fix passes the letter of the acceptance criterion while
+// typing stays 500 ms-gated. Tuning the interval down is not the fix either -- it trades
+// the latency failure for a quota one, since a 100 ms poll is 10 reads/s against §6.0's
+// 3 reads/s per hop.
+//
+// The same §6.0 budget and the same adaptive pacer bind BOTH hops, so this loop uses the
+// transport package's DrainPacer and AckBatcher rather than restating either. Acks ride
+// the batcher, off the delivery path: a relay ack is one synchronous bolt fsync (p50
+// 30.8 ms / max 129.2 ms measured) and taking one between an item's arrival and the next
+// wait would put most of the p50 input budget on the keystroke path.
+//
+// Wait errors are non-fatal (a transient relay error should not tear the bridge down) but
 // they are not swallowed: the first is stashed for Err(), so a bridge that is dropping
 // every inbound frame is observable rather than silent.
-func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
-	t := time.NewTicker(interval)
-	defer t.Stop()
+func (b *CommandBridge) Run(ctx context.Context) error {
+	acks := transport.NewAckBatcher(func(actx context.Context, cursor uint64) error {
+		return b.cfg.Mailbox.MailboxAck(actx, cursor)
+	})
+	ackCtx, stopAcks := context.WithCancel(ctx)
+	acksDone := make(chan struct{})
+	go func() { defer close(acksDone); acks.Run(ackCtx) }()
+	defer func() { stopAcks(); <-acksDone }()
+
+	pacer := transport.NewDrainPacer()
 	for {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := pacer.Pace(ctx); err != nil {
 			return ctx.Err()
-		case <-t.C:
-			if _, err := b.PollOnce(ctx); err != nil {
-				b.setErr(err)
+		}
+		items, _, err := b.cfg.Mailbox.MailboxWait(ctx, b.Cursor())
+		pacer.Observe(len(items))
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			b.setErr(err)
+			// Back off, or a relay that refuses every wait becomes a spin loop.
+			t := time.NewTimer(commandRetryDelay)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return ctx.Err()
+			case <-t.C:
+			}
+			continue
+		}
+		_, maxCursor, errs := b.processBatch(ctx, items)
+		if maxCursor > 0 {
+			acks.Record(maxCursor)
+		}
+		if err := errors.Join(errs...); err != nil {
+			b.setErr(err)
 		}
 	}
 }
+
+// commandRetryDelay bounds how fast the wait loop retries a failing relay. It is not a
+// poll cadence: it applies only after an error, and a healthy loop never reaches it.
+const commandRetryDelay = 250 * time.Millisecond
 
 // setErr records the first poll error; later ones are dropped so Err() keeps pointing at
 // the root cause (RelaySink.setErrLocked's rule).

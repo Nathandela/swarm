@@ -83,7 +83,6 @@ func TestService_RunExitsWhenDeviceRevoked(t *testing.T) {
 		EpochID:        1,
 		StateDir:       stateDir,
 		DeviceID:       deviceID,
-		PollInterval:   10 * time.Millisecond,
 		ReconnectDelay: 10 * time.Millisecond,
 	})
 
@@ -149,7 +148,6 @@ func TestService_RunSurvivesTransientRegistryError(t *testing.T) {
 		EpochID:        1,
 		StateDir:       stateDir,
 		DeviceID:       "phone-device", // non-empty enables the check; Open fails before the id is used
-		PollInterval:   10 * time.Millisecond,
 		ReconnectDelay: 10 * time.Millisecond,
 	})
 

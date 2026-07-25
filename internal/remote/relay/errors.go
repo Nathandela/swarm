@@ -1,6 +1,9 @@
 package relay
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors returned by Client/Conn operations. Each maps to a stable wire
 // error code so a caller can errors.Is against it after a round-trip. Every
@@ -17,6 +20,11 @@ var (
 	// ErrDuplicateConnection is returned to a connection that has been
 	// superseded by a newer connection for the same routing id (takeover).
 	ErrDuplicateConnection = errors.New("relay: connection superseded by a newer one")
+	// ErrWaitInProgress refuses a SECOND concurrent bounded server-side wait on
+	// one client. §6.0 caps pending waits per client at 1 and REFUSES the extra
+	// one rather than queueing it: a queue would let a client pin unbounded
+	// server-side wait state on one connection and make cancellation ambiguous.
+	ErrWaitInProgress = errors.New("relay: a mailbox wait is already outstanding on this client")
 	// ErrRendezvousFull is returned when a third party claims a rendezvous that
 	// already has two participants.
 	ErrRendezvousFull = errors.New("relay: rendezvous already has two participants")
@@ -38,6 +46,7 @@ const (
 	codeNotAuthorized    = "not_authorized"
 	codeRevoked          = "revoked"
 	codeDuplicateConn    = "duplicate_connection"
+	codeWaitInProgress   = "wait_in_progress"
 	codeRendezvousFull   = "rendezvous_full"
 	codeRendezvousTTL    = "rendezvous_expired"
 	codeRendezvousUsed   = "rendezvous_burned"
@@ -53,6 +62,7 @@ var codeToErr = map[string]error{
 	codeNotAuthorized:    ErrNotAuthorized,
 	codeRevoked:          ErrRevoked,
 	codeDuplicateConn:    ErrDuplicateConnection,
+	codeWaitInProgress:   ErrWaitInProgress,
 	codeRendezvousFull:   ErrRendezvousFull,
 	codeRendezvousTTL:    ErrRendezvousExpired,
 	codeRendezvousUsed:   ErrRendezvousBurned,
@@ -63,4 +73,15 @@ var codeToErr = map[string]error{
 type errorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message,omitempty"`
+}
+
+// errForCode maps a wire error code to its sentinel, or to a generic error
+// naming the code. A MsgWaitReply carries its refusal as a code rather than as
+// an r_error frame (it must reach the parked waiter, not the request queue), so
+// both reply shapes resolve to the same sentinel through here.
+func errForCode(code string) error {
+	if e, ok := codeToErr[code]; ok {
+		return e
+	}
+	return fmt.Errorf("relay: %s", code)
 }

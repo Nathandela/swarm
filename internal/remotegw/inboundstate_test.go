@@ -189,6 +189,12 @@ var errPollFailed = errors.New("relay unreachable")
 func (readFailingMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
 	return nil, errPollFailed
 }
+
+// MailboxWait fails too: a wait IS a read on this seam, and this fake exists to be
+// the cheapest stand-in for "every inbound fetch fails".
+func (readFailingMailbox) MailboxWait(context.Context, uint64) ([]relay.Item, bool, error) {
+	return nil, false, errPollFailed
+}
 func (readFailingMailbox) MailboxAppend(context.Context, string, []byte) (uint64, error) {
 	return 0, nil
 }
@@ -207,7 +213,7 @@ func TestCommandBridge_RunSurfacesPollError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
-	go func() { defer close(done); _ = b.Run(ctx, time.Millisecond) }()
+	go func() { defer close(done); _ = b.Run(ctx) }()
 
 	waitFor(t, func() bool { return b.Err() != nil }, 2*time.Second,
 		"Run swallowed the poll error: a gateway dropping every inbound frame must be observable")

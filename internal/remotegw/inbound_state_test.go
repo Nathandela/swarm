@@ -75,6 +75,13 @@ func (r *retainingRelay) MailboxRead(_ context.Context, cursor uint64) ([]relay.
 	return out, nil
 }
 
+// MailboxWait is the S6b low-latency seam, answered from the retained inbox so this
+// fake's "an ack the gateway cannot verify" behaviour is unchanged.
+func (r *retainingRelay) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+	items, err := r.MailboxRead(ctx, cursor)
+	return items, false, err
+}
+
 func (r *retainingRelay) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

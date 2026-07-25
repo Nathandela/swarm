@@ -39,6 +39,14 @@ const (
 	MsgRelay MsgType = 0x02
 	// MsgMailboxAppend is the dedicated tag for the hot mailbox-append path.
 	MsgMailboxAppend MsgType = 0x03
+	// MsgWaitReply is the server->client reply to a bounded server-side wait
+	// (mailbox_wait). It carries its own tag rather than riding MsgOK/MsgError
+	// because it is the ONE reply that arrives out of order with respect to the
+	// connection's serialised request/reply exchanges: the tag is what lets the
+	// client demux it straight to the parked waiter, and the wait_id inside it is
+	// what discards the reply to a wait the client has already withdrawn
+	// (ADR-007 B7 request-id correlation).
+	MsgWaitReply MsgType = 0x04
 )
 
 // ErrFrameTooLarge is returned when a payload (WriteFrame) or a declared length

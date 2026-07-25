@@ -55,6 +55,7 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	mu     sync.Mutex // serialises one request/response exchange
+	wmu    sync.Mutex // serialises socket writes: a parked wait writes OUTSIDE mu
 
 	// frames is non-nil on a PUMPED connection: a background reader owns every
 	// socket read, so the connection's death is observed while the caller is
@@ -66,6 +67,18 @@ type Conn struct {
 	// next request discards that many replies first, so an abandoned exchange
 	// can never hand its answer to a later, unrelated one.
 	pending int
+
+	// The bounded server-side wait's client half (ADR-007 B7). A wait is the one
+	// exchange that does NOT hold mu across write-then-read: it registers a
+	// correlated waiter, writes its request, and parks on waitCh while ordinary
+	// requests keep flowing through roundtrip. pump routes MsgWaitReply frames
+	// straight here, which is the demux that stops a parked wait from
+	// head-of-line-blocking the keystrokes it exists to accelerate. §6.0 caps
+	// pending waits at one per client, so a single slot is the whole structure.
+	waitMu  sync.Mutex
+	waitSeq uint64
+	waitID  uint64
+	waitCh  chan waitReplyBody
 
 	done      chan struct{}
 	doneOnce  sync.Once
@@ -121,6 +134,14 @@ func (c *Conn) pump() {
 		} else {
 			f.tag, f.payload, f.err = ReadFrame(bytes.NewReader(data))
 		}
+		// A wait reply is CORRELATED by its request id and handed straight to the
+		// parked waiter, so it neither queues behind nor jumps ahead of the
+		// serialised request/reply exchanges (ADR-007 B7). It also never blocks the
+		// pump, which is what keeps an outstanding wait from stalling the socket.
+		if f.err == nil && f.tag == MsgWaitReply {
+			c.deliverWait(f.payload)
+			continue
+		}
 		select {
 		case c.frames <- f:
 		case <-c.ctx.Done():
@@ -150,6 +171,10 @@ func (c *Conn) writeFrame(ctx context.Context, tag MsgType, payload []byte) erro
 	if err := WriteFrame(&buf, tag, payload); err != nil {
 		return err
 	}
+	// wmu, not mu: a parked wait writes its request and its cancellation without
+	// holding the request/reply lock, so two writers can reach the socket at once.
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
 	return c.ws.Write(ctx, websocket.MessageBinary, buf.Bytes())
 }
 
@@ -446,6 +471,100 @@ func (c *Client) MailboxReadPage(ctx context.Context, cursor uint64, limit int) 
 		return nil, false, err
 	}
 	return r.Items, r.HasMore, nil
+}
+
+// MailboxWait blocks SERVER-side until at least one item past cursor exists in
+// this client's own mailbox, and returns that bounded page — the same
+// {items, has_more} shape as MailboxReadPage. At Config.MaxServerWait it returns
+// an empty page and a nil error, so a caller's loop is a wait, not a poll.
+//
+// It returns the ITEMS, not a bare signal: a signal a caller then had to read
+// would cost two metered ops per batch, which §6.0's inbound drain budget cannot
+// absorb. It meters exactly ONCE per call however many items come back, so
+// batching under load actually buys something.
+//
+// §6.0 caps pending waits per client at one. A second concurrent wait is refused
+// with ErrWaitInProgress, never queued — a queue would make cancellation
+// ambiguous and let one connection pin unbounded server-side wait state.
+func (c *Client) MailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, error) {
+	return c.conn.mailboxWait(ctx, cursor)
+}
+
+func (c *Conn) mailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, error) {
+	c.waitMu.Lock()
+	if c.waitCh != nil {
+		c.waitMu.Unlock()
+		return nil, false, ErrWaitInProgress
+	}
+	c.waitSeq++
+	id := c.waitSeq
+	ch := make(chan waitReplyBody, 1)
+	c.waitID, c.waitCh = id, ch
+	c.waitMu.Unlock()
+
+	defer func() {
+		c.waitMu.Lock()
+		if c.waitID == id {
+			c.waitCh = nil
+		}
+		c.waitMu.Unlock()
+	}()
+
+	body, err := json.Marshal(map[string]any{"op": "mailbox_wait", "cursor": cursor, "wait_id": id})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.writeFrame(ctx, MsgRelay, body); err != nil {
+		return nil, false, err
+	}
+	select {
+	case r := <-ch:
+		if r.Code != "" {
+			return nil, false, errForCode(r.Code)
+		}
+		return r.Items, r.HasMore, nil
+	case <-ctx.Done():
+		// Release the SERVER's slot too. An orphaned wait would hold the single
+		// pending-wait slot until its ceiling elapsed, so the next wait — the one a
+		// reconnecting live tail parks — would be refused and typing would be dead
+		// for the remainder of the ceiling.
+		c.cancelWait(id)
+		return nil, false, fmt.Errorf("relay: mailbox wait cancelled: %w", ctx.Err())
+	case <-c.done:
+		return nil, false, errConnClosed
+	}
+}
+
+// cancelWait withdraws a parked wait. It is fire-and-forget and carries the wait
+// id: the withdrawal and any later wait travel the same stream in order, so the
+// server frees the slot before it sees the replacement, and the correlation id
+// makes the abandoned wait's reply discardable rather than mis-delivered.
+func (c *Conn) cancelWait(id uint64) {
+	body, err := json.Marshal(map[string]any{"op": "mailbox_wait_cancel", "wait_id": id})
+	if err != nil {
+		return
+	}
+	_ = c.writeFrame(c.ctx, MsgRelay, body) // the caller's ctx is already done
+}
+
+// deliverWait routes one MsgWaitReply to the parked waiter it names. A reply for
+// any other id is dropped: it belongs to a wait this client already withdrew.
+func (c *Conn) deliverWait(payload []byte) {
+	var r waitReplyBody
+	if err := json.Unmarshal(payload, &r); err != nil {
+		return
+	}
+	c.waitMu.Lock()
+	defer c.waitMu.Unlock()
+	if c.waitCh == nil || c.waitID != r.WaitID {
+		return
+	}
+	// This send cannot block, which matters because it happens on the read pump
+	// under waitMu: the channel is created per wait with capacity 1, and it is
+	// cleared here under the same lock, so even a relay that replied twice to one
+	// wait id finds waitCh nil on the second frame and is dropped above.
+	c.waitCh <- r
+	c.waitCh = nil
 }
 
 // MailboxAck compacts away every item at or below cursor.

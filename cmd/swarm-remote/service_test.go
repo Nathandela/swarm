@@ -36,6 +36,10 @@ func (noopMailbox) MailboxRead(_ context.Context, _ uint64) ([]relay.Item, error
 	return nil, nil
 }
 
+func (noopMailbox) MailboxWait(_ context.Context, _ uint64) ([]relay.Item, bool, error) {
+	return nil, false, nil
+}
+
 func (noopMailbox) MailboxAppend(_ context.Context, _ string, _ []byte) (uint64, error) {
 	return 0, nil
 }

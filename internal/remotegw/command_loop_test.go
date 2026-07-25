@@ -48,6 +48,14 @@ func (f *fakeMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Ite
 	return out, nil
 }
 
+// MailboxWait is the S6b low-latency seam. This fake models no blocking: it answers
+// from whatever is already in the inbox, which is what its tests (which drive PollOnce
+// directly) need to keep meaning exactly what they meant before.
+func (f *fakeMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+	items, err := f.MailboxRead(ctx, cursor)
+	return items, false, err
+}
+
 func (f *fakeMailbox) MailboxAppend(_ context.Context, target string, env []byte) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

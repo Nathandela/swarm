@@ -48,6 +48,14 @@ func (m *scriptedMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay
 	return out, nil
 }
 
+// MailboxWait is the S6b low-latency seam. The scripted inbox is finite, so a wait
+// that blocked would stall Service.Run's command loop after the script is drained;
+// answering immediately keeps this fake's shape (serve the script, then nothing).
+func (m *scriptedMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+	items, err := m.MailboxRead(ctx, cursor)
+	return items, false, err
+}
+
 func (m *scriptedMailbox) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -82,7 +90,6 @@ func TestService_RunStopsOnCancel(t *testing.T) {
 		PhoneTarget:    "phone",
 		Key:            key,
 		EpochID:        1,
-		PollInterval:   10 * time.Millisecond,
 		ReconnectDelay: 10 * time.Millisecond,
 	})
 
@@ -122,7 +129,6 @@ func TestService_CommandLoopDrainsQueuedCommand(t *testing.T) {
 		PhoneTarget:    "phone",
 		Key:            key,
 		EpochID:        1,
-		PollInterval:   10 * time.Millisecond,
 		ReconnectDelay: time.Hour, // keep the journal side quiet
 	})
 
