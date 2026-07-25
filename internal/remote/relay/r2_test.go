@@ -302,6 +302,19 @@ func TestRelay_SweepLoopPresenceSilentPushNoManualCall(t *testing.T) {
 		t.Fatalf("machine.Close: %v", err)
 	}
 
+	// removeConn stamps disconnectedAt on the SERVER's goroutine, which runs after Close
+	// has returned client-side. Advancing the fake clock before that stamp lands writes the
+	// already-advanced time into disconnectedAt, and since this clock never moves again,
+	// SweepPresence's now.Sub(disconnectedAt) stays 0 < PresenceTimeout forever: the push can
+	// then never fire and the wait below fails permanently. That is a wedge, not a slow-machine
+	// flake, so lengthening the wait would not help -- observe the disconnect first instead.
+	eventually(t, 3*time.Second, func() bool {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		p := srv.presence[RoutingID(mPub)]
+		return p != nil && !p.connected
+	}, "the server never observed the machine's disconnect")
+
 	// Advance the injected clock past the presence timeout. The background sweep loop
 	// — NOT a manual call — must fire exactly one silent push to the device token.
 	clk.Advance(31 * time.Second)
