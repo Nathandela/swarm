@@ -21,7 +21,7 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-18 of 140 shipped, 9 in review, 113 remaining. The completed slices were deliberately the
+20 of 140 shipped, 120 remaining (8 of 27 slices). The completed slices were deliberately the
 blockers and the security-critical machine-side work -- dependency surgery, gateway durability
 in both directions, the transport, the reconciliation frame -- because they gate everything
 downstream. The remaining 113 are weighted toward the Android app and end-to-end verification.
@@ -38,6 +38,8 @@ downstream. The remaining 113 are weighted toward the Android app and end-to-end
 | S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | **next** -- all parallel roots, startable immediately |
 | S1b protocol additions | PB-SYNC-7 | **SHIPPED** (`689c8e8`) -- reconcile frame, lease confirmation, reply correlation |
 | S6 transport resilience | PB-NET-2,3,4,6,7 | **SHIPPED** (`078ac63`) -- cleartext-via-redirect hole found by review and closed |
+| S2b gateway outbound durability | PB-GW-7, PB-GW-8 | **SHIPPED** (`5aaacef`) -- live tail was refusing 81% of appends; coalescing + outbox |
+| S7 durable phone state | PB-STATE-* | in progress (RED) -- the most severe committee finding |
 | S6b low-latency input path | PB-NET-5 | not started (split out of S6) |
 | S7..S21 | see §11 of the spec | not started |
 
