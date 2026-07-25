@@ -52,7 +52,9 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-Go toolchain >= 1.24 (raised by the VT emulator dependency, ADR-005).
+Go toolchain >= 1.25 (raised from 1.22 by the VT emulator dependency, ADR-005; raised again to
+1.25 by Phase B's mandatory `golang.org/x/mobile` tool directive, ADR-008 — the VT emulator
+reason still holds, it is simply no longer the binding constraint).
 
 ```bash
 go build ./...

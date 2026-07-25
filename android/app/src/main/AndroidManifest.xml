@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- PB-RUN-2. Both are requested at runtime and both have a denial path; see
+         PermissionStateResolver. A permission the resolver handles but the manifest omits can
+         only ever resolve to DENIED, which makes every denial path dead code. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- PB-RUN-5. Without it the boot receiver below is declared and never invoked, which is
+         silent rather than broken. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- PB-PAIR-2 has a manual-entry fallback, so the camera is not a hardware requirement.
+         Declaring it required would also remove the app from Play for camera-less devices. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- No foreground service is declared: ADR-007 B16 disconnects on backgrounding, so no
+         state in android/connectivity-policy.tsv holds one. No REQUEST_IGNORE_BATTERY_-
+         OPTIMIZATIONS either: an exemption would opt out of the constraints that policy
+         exists to describe. -->
+
+    <application
+        android:name=".SwarmApplication"
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Swarm">
+
+        <receiver
+            android:name=".runtime.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

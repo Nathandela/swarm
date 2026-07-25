@@ -19,3 +19,20 @@
 
 # build artifacts
 /swarm
+
+# Android (S13)
+android/.gradle/
+android/build/
+android/app/build/
+# PB-TOOL-2: the AAR and its sources jar are build outputs of android/build-aar.sh.
+android/app/libs/
+*.aar
+
+# PB-TOOL-3: release signing material is operator-supplied and never enters the repository.
+# local.properties additionally carries the machine's SDK path.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.bks
+local.properties

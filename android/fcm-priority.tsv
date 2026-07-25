@@ -1,0 +1,21 @@
+# PB-RUN-4 -- FCM message priority, chosen deliberately and recorded per message class.
+#
+# Under ADR-007 B16 the socket is closed in every background state, so push is the ONLY path
+# from the machine to a phone that is not in the user's hand. That makes the priority
+# load-bearing rather than a preference: normal-priority messages are DEFERRED until Doze
+# ends, so the one state that needs the wake is the one state the cheap priority cannot
+# reach. android/gate/connectivity_test.go joins this table to connectivity-policy.tsv in
+# both directions -- a push wake path in Doze requires high, and high with no push wake path
+# is a quota paid for nothing.
+#
+# High priority is quota'd per app per device and Google publishes no number, so the
+# exhaustion behaviour is half the decision and is recorded here rather than discovered in
+# production. `coalesce` is what D6 and PB-PUSH-0 already do: pending wakes collapse into one
+# message, so a burst of agent activity spends the quota once.
+#
+# Columns, tab-separated:
+#   message_class       the class of push; new classes added by later slices get a row here,
+#                       and both the Go gate and PushMessageClass force them to
+#   priority            high | normal
+#   on_quota_exhausted  degrade_to_normal | drop | coalesce | n/a
+wake	high	coalesce

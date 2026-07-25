@@ -1,0 +1,21 @@
+# PB-RUN-1 -- the supported Android version matrix. One row per API level the app claims to
+# support, so the claim is contiguous and its endpoints are checkable rather than implied.
+#
+# The floor is ADR-007 B16's: Curve25519 entered KeyMint only in Android 13 (API 33), and
+# below it the NoiseStatic/Recipient roles cannot be Keystore-native, which would silently
+# degrade PB-KEY-8's central property on old devices. 33 makes PB-KEY-8 clean by construction
+# instead of forcing a fallback matrix nobody exercises.
+#
+# The target is 35: it is the highest platform the toolchain pin provisions, it is Play's
+# current floor for new and updated apps, and every behaviour change the connectivity policy
+# reasons about (mandatory foregroundServiceType, the API 34 dataSync cap) is already in force
+# at 34, so targeting 35 opts into nothing this slice has not already priced. compileSdk is 35
+# for the same reason -- the app cannot opt into behaviour it cannot compile against.
+#
+# Note that none of these is gomobile's -androidapi, which is the NDK's floor (21) and a
+# different decision; see SWARM_ANDROID_API in android/toolchain.env.
+#
+# Columns, tab-separated: api, Android release, role (min | supported | target).
+33	Android 13	min
+34	Android 14	supported
+35	Android 15	target

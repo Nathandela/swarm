@@ -45,7 +45,8 @@ From the roadmap, verbatim:
 | Build tools | 35.0.0 | `$ANDROID_HOME/build-tools` |
 | NDK | 27.2.12479018 | `$ANDROID_HOME/ndk` |
 | gomobile / gobind | installed 2026-07-24 | `~/go/bin` |
-| Gradle | 9.6.1 system; wrapper **generation** verified in a scratch build pinning 8.11.1. The wrapper is **not yet checked in** — that is PB-TOOL-4. | scratch build |
+| Gradle | 9.5.1 wrapper, checked in and pinned by distribution SHA-256 (PB-TOOL-4, closed by S13). 9.6.1 is what the host has; 9.6.0 removed an internal API AGP 8.x needs, and AGP 9 rejects the Kotlin Android plugin PB-TOOL-6 requires. | `android/gradle/wrapper` |
+| Android Gradle Plugin / Kotlin | AGP 8.13.2, Kotlin 2.3.21 | `android/build.gradle.kts` |
 | Emulator + AVD | `swarmtest`, Android 15, `google_apis/arm64-v8a`; boots headless in ~30 s, adb attaches | `$ANDROID_HOME/emulator` |
 | Host CPU | Apple M1 (arm64) | — |
 | Go | 1.26.1 toolchain (module declares `go 1.25.0`, `go.mod:3`) | system |
@@ -59,6 +60,14 @@ build scripts must encode:
   the daemon binaries.
 - NDK 27 supports API 21..35 but gomobile defaults to API 16 and **fails**; every build must
   pass `-androidapi >= 21`. (This is the NDK floor, **not** the app's `minSdk` — PB-RUN-1.)
+
+Both are now encoded in **`android/toolchain.env`**, which S13 checked in as PB-TOOL-1's pin;
+the table above records the versions and the pin records where they are found. A third fact was
+established while closing PB-TOOL-2 and belongs here: `-trimpath` removes the module-cache and
+GOROOT prefixes from `libgojni.so` but **not** the builder's checkout path, because `gomobile
+bind` synthesises a throwaway module whose `go.mod` replaces the main module with an absolute
+directory, and the linker records replacement directories in the build-info blob verbatim.
+`-ldflags "-X=runtime.modinfo="` is what removes it, at the cost of the embedded module graph.
 
 **Not available, bounding what "verified" can mean (§10):** no Xcode/Apple account (iOS is
 Phase C by design), **no physical Android handset**, no Firebase project, no provisioned VPS relay.

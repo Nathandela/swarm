@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      PB-TOK-4. The parent is the fixed-dark Theme.AppCompat, never Theme.AppCompat.DayNight:
+      a DayNight parent resolves to the LIGHT variant on a system-light handset, and section 5
+      defers light mode, so the app would render unstyled or low-contrast on exactly the
+      configuration nobody tests on.
+
+      Blocking that route alone is not enough. The other two are a -night qualified resource
+      directory (there is none, and android/gate/theme_test.go walks res/ to check) and
+      AppCompatDelegate's default night mode, which is MODE_NIGHT_FOLLOW_SYSTEM and leaves no
+      trace in any resource file at all. See SwarmTheme.applyDefaultNightMode.
+    -->
+    <style name="Theme.Swarm" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:colorBackground">@color/swarm_background</item>
+        <item name="android:textColorPrimary">@color/swarm_text_primary</item>
+        <item name="android:textColorSecondary">@color/swarm_text_secondary</item>
+    </style>
+</resources>

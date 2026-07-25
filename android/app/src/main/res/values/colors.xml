@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      PB-TOK-4: one fixed set, deliberately not split across values/ and values-night/.
+      Section 5 defers light mode to Phase C, so there is no light variant to resolve to and
+      the app must not vary with the system uiMode.
+
+      These are placeholders for the skeleton. PB-TOK-1/PB-TOK-2 own the real token source and
+      S16 owns the screens that paint with them; the values are duplicated as literals in
+      SwarmTheme.EXPECTED_DARK_COLORS so ThemeNightModeTest compares the resolved theme
+      against a recorded number rather than against itself.
+    -->
+    <color name="swarm_background">#FF101114</color>
+    <color name="swarm_text_primary">#FFE6E8EB</color>
+    <color name="swarm_text_secondary">#FF9BA1A8</color>
+</resources>
