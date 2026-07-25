@@ -9,24 +9,24 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped | 100 |
-| Remaining | 43 |
+| Shipped | 117 |
+| Remaining | 26 |
 | **Shipped with NO evidence file** | **0** |
 
 ## Every requirement
 
 | Requirement | Slice | Status | Evidence |
 |---|---|---|---|
-| PB-APP-1 | S16 | pending | — |
-| PB-APP-2 | S16 | pending | — |
-| PB-APP-3 | S16 | pending | — |
-| PB-APP-4 | S16 | pending | — |
-| PB-APP-5 | S16 | pending | — |
-| PB-APP-6 | S16 | pending | — |
-| PB-APP-7 | S16 | pending | — |
-| PB-APP-8 | S16 | pending | — |
-| PB-APP-9 | S16 | pending | — |
-| PB-APP-10 | S16 | pending | — |
+| PB-APP-1 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-7 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-8 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-9 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-10 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-BIND-0 | S1 | shipped | `docs/verification/remote-phaseB-s1-evidence.md` |
 | PB-BIND-1 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-BIND-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
@@ -90,11 +90,11 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-OPS-4 | S4 | shipped | `docs/verification/remote-phaseB-s4-evidence.md` |
 | PB-OPS-5 | S20 | pending | — |
 | PB-PAIR-1 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
-| PB-PAIR-2 | S16 | pending | — |
-| PB-PAIR-3 | S16 | pending | — |
-| PB-PAIR-4 | S16 | pending | — |
-| PB-PAIR-5 | S16 | pending | — |
-| PB-PAIR-6 | S16 | pending | — |
+| PB-PAIR-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-7 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PUSH-0 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-1 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
@@ -114,7 +114,7 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-RUN-5 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-SAS-1 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
-| PB-SAS-3 | S16 | pending | — |
+| PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-SEC-2 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-SEC-3 | S18 | pending | — |
@@ -149,7 +149,7 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-TIME-1 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-2 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-3 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
-| PB-TOK-1 | S16 | pending | — |
+| PB-TOK-1 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-TOK-2 | S5 | shipped | `docs/verification/remote-phaseB-s5-evidence.md` |
 | PB-TOK-3 | S5 | shipped | `docs/verification/remote-phaseB-s5-evidence.md` |
 | PB-TOK-4 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |

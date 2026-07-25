@@ -133,7 +133,7 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-**98 of 143 shipped, 45 remaining (21 of 29 slices).** Counted from the manifest, not estimated.
+**117 of 143 shipped, 26 remaining (23 of 29 slices).** Counted from the manifest, not estimated.
 The completed slices were deliberately the blockers and the security-critical machine-side work --
 dependency surgery, gateway durability in both directions, the transport, the reconciliation frame,
 the bound facade, the custody seam, the push transport -- because they gate everything downstream.

@@ -27,7 +27,7 @@ VERIF = os.path.join(ROOT, "docs/verification")
 SHIPPED = [
     "S0", "S1", "S1b", "S2", "S2b", "S3", "S4", "S4b", "S5", "S6", "S6b",
     "S7", "S7b", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S14a",
-    "S15",
+    "S15", "S16",
 ]
 
 
