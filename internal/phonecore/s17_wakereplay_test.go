@@ -493,3 +493,50 @@ func TestS17_AWakeThatIsNotAnEnvelopeIsRefusedWithoutPanicking(t *testing.T) {
 	}
 	s17WakePathStillWorks(t, core, p, 1)
 }
+
+// TestS17_AKeylessPhoneReportsNoWakeKeyRatherThanAnEpochMismatch pins the ORDER of the two
+// checks at the top of AcceptWake, which nothing held before.
+//
+// The comment there calls the keyless-before-epoch order "the requirement", and an independent
+// reviewer demonstrated that SWAPPING the two survived the entire S17 suite. It survived
+// because every other test in this file runs against a PAIRED phone, whose epoch id is set by
+// the pairing, so the two orders agree: the epoch matches and the keyless arm answers either
+// way. The state that separates them is a phone that holds epoch ZERO.
+//
+// THAT PHONE IS REACHABLE, which is what makes this a fence rather than a formality.
+// PushTokens.requestInitialToken runs from Application.onCreate unconditionally -- before any
+// pairing -- and relay registration is open, so an install that has never paired can be holding
+// a registered push token. A wake delivered to it (the relay is the declared adversary under
+// PB-SYNC-6 and handles every wake) reaches AcceptWake with EpochID 0. Keyless-first answers
+// ErrNoWakeKey, which the facade classes ErrClassAwaitingKey: "waiting", remedy nothing.
+// Epoch-first answers a bare epoch mismatch, which classes ErrClassInvalidRequest: the app
+// telling a healthy user their request was invalid, for a condition they cannot act on.
+func TestS17_AKeylessPhoneReportsNoWakeKeyRatherThanAnEpochMismatch(t *testing.T) {
+	// NOT s17Provision: that seeds the epoch and the keys, which is the paired phone the rest
+	// of this file uses and the exact state in which the two orders are indistinguishable.
+	p := &s17Phone{dir: t.TempDir(), wake: s14aNewSealer(t), content: s14aNewSealer(t)}
+	core := p.resume(t)
+	if got := core.State().EpochID; got != 0 {
+		t.Fatalf("fixture: the phone holds epoch %d, want 0 -- this test measures nothing at any "+
+			"other epoch, because a matching epoch makes both orders answer identically", got)
+	}
+
+	// Somebody else's wake key, and an epoch this phone has never held: the two facts a wake
+	// arriving at a never-granted phone carries.
+	foreign, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("crypto.NewEpochKeys: %v", err)
+	}
+	err = core.AcceptWake(s17Wake(t, foreign.WakeKey, s17Epoch, 1, time.Now()))
+	if !errors.Is(err, ErrNoWakeKey) {
+		t.Errorf("PB-APP-10: a wake at a phone with NO epoch wake key was refused with %v, want "+
+			"ErrNoWakeKey.\nThe keyless test has to come FIRST: a phone that has never been granted "+
+			"anything holds epoch 0, so an epoch check placed above it answers \"this names epoch "+
+			"%d, not 0\" -- an invalid-request verdict, mapped by the facade to a class that tells a "+
+			"healthy user their app sent something wrong. The condition is PB-APP-10's third state: "+
+			"the phone is WAITING, the remedy is nothing, and it clears itself", err, s17Epoch)
+	}
+	if got := core.State().WakeReplay; got != 0 {
+		t.Errorf("PB-PUSH-3: a refused wake moved the replay coordinate to %d, want 0", got)
+	}
+}

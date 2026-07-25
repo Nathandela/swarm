@@ -73,7 +73,14 @@ func s17KotlinMain(t *testing.T) string {
 // relying on this.
 func s17Bodies(t *testing.T) map[string]string {
 	t.Helper()
-	src := s17KotlinMain(t)
+	return s17BodiesIn(s17KotlinMain(t))
+}
+
+// s17BodiesIn is the same over an explicit source string, so the walk itself can be driven
+// against synthetic Kotlin. A reader that silently understands nothing is the failure mode
+// these helpers are most exposed to, and it cannot be measured against the production tree --
+// there, a walk that finds nothing and a codebase that does nothing wrong look identical.
+func s17BodiesIn(src string) map[string]string {
 	out := map[string]string{}
 	for _, m := range s17FunDecl.FindAllStringSubmatchIndex(src, -1) {
 		name := src[m[2]:m[3]]
@@ -121,11 +128,23 @@ func s17BodyAt(src string, from int) (string, bool) {
 			break
 		}
 	}
-	// Find the opening brace of the body, refusing to run past an expression-bodied
-	// declaration or the next declaration.
+	// Find the body. Kotlin declares one in TWO shapes and both have to be read: a braced
+	// block, and an expression body (`fun f(x) = expr`). The expression form used to return
+	// no body at all, so an expression-bodied helper never entered the body map and the
+	// reachability walk stopped dead at the call site -- silently satisfying every EXCLUSION
+	// assertion in this file, which is the one carrying PB-PUSH-4's security property. It is
+	// idiomatic Kotlin, so this was not an exotic bypass; it was the shape a reviewer reads
+	// past. Fenced by TestS17_TheReachabilityWalkFollowsExpressionBodiedHelpers.
 	for ; i < len(src); i++ {
 		if src[i] == '{' {
 			break
+		}
+		// `=` here opens an expression body -- but not `==`/`!=`/`<=`/`>=`, which can appear in
+		// a default-free return position (`fun f(): Boolean = a == b`) and whose FIRST `=` is
+		// the one that opens the body anyway.
+		if src[i] == '=' && (i+1 >= len(src) || src[i+1] != '=') &&
+			!strings.ContainsRune("=!<>", rune(src[i-1])) {
+			return s17ExprBodyAt(src, i+1)
 		}
 		if src[i] == '\n' && i+1 < len(src) && src[i+1] != ' ' && src[i+1] != '\t' {
 			return "", false
@@ -149,6 +168,53 @@ func s17BodyAt(src string, from int) (string, bool) {
 	return "", false
 }
 
+// s17ExprBodyAt returns the expression that forms the body of `fun f(...) = <here>`.
+//
+// It runs to the end of the DECLARATION, not to the end of the line, because both idiomatic
+// forms have to read: the one-liner (`= app.roster()`) and the far more common shape in this
+// tree, where the `=` ends the line and the expression is a `when`/builder/lambda on the lines
+// below (FacadeBridge and LifecycleConvergence are almost entirely this). Stopping at the
+// first newline would have read the first form and silently returned NOTHING for the second,
+// which is the same class of hole one layer along. So it stops at a newline outside every
+// bracket whose next non-blank text begins a new declaration.
+//
+// Crude in the same way the rest of this reader is crude, and in the same direction: it never
+// runs past the declaration it was pointed at.
+func s17ExprBodyAt(src string, from int) (string, bool) {
+	depth := 0
+	for i := from; i < len(src); i++ {
+		switch src[i] {
+		case '(', '{', '[':
+			depth++
+		case ')', '}', ']':
+			depth--
+		case '\n':
+			if depth <= 0 && s17StartsDeclaration(src[i+1:]) {
+				return src[from:i], strings.TrimSpace(src[from:i]) != ""
+			}
+		}
+	}
+	return src[from:], strings.TrimSpace(src[from:]) != ""
+}
+
+// s17StartsDeclaration reports whether the next non-blank text opens a new declaration rather
+// than continuing the expression above it. A continuation (`.map { }`, `?: x`, `else ->`)
+// never starts with one of these; a declaration or the closing brace of the enclosing class
+// always does.
+func s17StartsDeclaration(rest string) bool {
+	rest = strings.TrimLeft(rest, " \t\r\n")
+	if rest == "" || strings.HasPrefix(rest, "}") || strings.HasPrefix(rest, "@") {
+		return true
+	}
+	for _, kw := range []string{"fun", "val", "var", "private", "internal", "public",
+		"protected", "override", "companion", "object", "class", "init", "constructor"} {
+		if strings.HasPrefix(rest, kw+" ") {
+			return true
+		}
+	}
+	return false
+}
+
 // s17Reachable is the text reachable from entry, following calls up to depth hops.
 //
 // The depth bound is what keeps this honest in both directions. Unbounded, one helper that
@@ -158,7 +224,10 @@ func s17BodyAt(src string, from int) (string, bool) {
 // indirection between an OS callback and a facade call is itself worth failing on.
 func s17Reachable(t *testing.T, entry string, depth int) (string, bool) {
 	t.Helper()
-	bodies := s17Bodies(t)
+	return s17ReachableIn(s17Bodies(t), entry, depth)
+}
+
+func s17ReachableIn(bodies map[string]string, entry string, depth int) (string, bool) {
 	root, ok := bodies[entry]
 	if !ok {
 		return "", false
@@ -235,6 +304,100 @@ func s17StripComments(src string) string {
 		}
 	}
 	return b.String()
+}
+
+// ---------------------------------------------------------------------------
+// The reader is fenced against itself, because a reader that understands nothing passes
+// everything.
+// ---------------------------------------------------------------------------
+
+// TestS17_TheReachabilityWalkFollowsExpressionBodiedHelpers.
+//
+// DEMONSTRATED, not hypothetical: a content fetch routed through an expression-bodied Kotlin
+// helper -- `private fun sessionsFor(app: App) = app.roster()` -- called from the wake
+// renderer passed TestS17_TheWakeCallbackReachesNoContentVerb. s17BodyAt looked only for an
+// opening brace, so an `= expr` declaration yielded no body at all, the name never entered the
+// body map, and the walk stopped at the call site. The forbidden-verb guard then went quiet on
+// the one thing it exists to catch. Expression bodies are idiomatic Kotlin and the shape a
+// reviewer would read straight past, and this is the guard carrying PB-PUSH-4's actual
+// security property rather than a wiring convention.
+//
+// It is driven against SYNTHETIC Kotlin on purpose. Against the production tree a walk that
+// understands nothing and a codebase that does nothing wrong are indistinguishable -- which is
+// exactly how this survived. The braced control below is what makes the expression-bodied case
+// a measurement of the reader rather than of the fixture.
+func TestS17_TheReachabilityWalkFollowsExpressionBodiedHelpers(t *testing.T) {
+	const braced = `
+class SwarmMessagingService : FirebaseMessagingService() {
+    override fun onMessageReceived(message: RemoteMessage) {
+        renderWake(phoneOf(this))
+    }
+
+    private fun sessionsFor(app: App): String {
+        return app.roster()
+    }
+
+    private fun renderWake(app: App) {
+        notifyUser(sessionsFor(app))
+    }
+}
+`
+	// The SAME class with one helper written in the other idiomatic form. Nothing else differs.
+	const expressionBodied = `
+class SwarmMessagingService : FirebaseMessagingService() {
+    override fun onMessageReceived(message: RemoteMessage) {
+        renderWake(phoneOf(this))
+    }
+
+    private fun sessionsFor(app: App) = app.roster()
+
+    private fun renderWake(app: App) {
+        notifyUser(sessionsFor(app))
+    }
+}
+`
+	// The form that DOMINATES this tree -- `=` ends the line and the expression is a
+	// when/builder/lambda below it (FacadeBridge, ConnectionUi, LifecycleConvergence are almost
+	// entirely this). A reader that stopped at the first newline would read the one-liner above
+	// and silently return nothing here, which is the same hole one shape along.
+	const expressionBodiedOverTwoLines = `
+class SwarmMessagingService : FirebaseMessagingService() {
+    override fun onMessageReceived(message: RemoteMessage) {
+        renderWake(phoneOf(this))
+    }
+
+    private fun sessionsFor(app: App): String =
+        when (app.isReady()) {
+            true -> app.roster()
+            else -> ""
+        }
+
+    private fun renderWake(app: App) {
+        notifyUser(sessionsFor(app))
+    }
+}
+`
+	for _, tc := range []struct{ name, src string }{
+		{"braced control", braced},
+		{"expression body", expressionBodied},
+		{"expression body over two lines", expressionBodiedOverTwoLines},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, ok := s17ReachableIn(s17BodiesIn(tc.src), "onMessageReceived", 3)
+			if !ok {
+				t.Fatalf("the walk found no onMessageReceived body in:\n%s", tc.src)
+			}
+			if !s17NamesVerb(s17StripComments(body), "Roster") {
+				t.Errorf("PB-PUSH-4: the reachability walk does not see App.roster() two hops from "+
+					"onMessageReceived when the helper carrying it is written as `%s`.\n"+
+					"Every EXCLUSION assertion in this file -- the forbidden content verbs, which are "+
+					"the security property PB-PUSH-4 is actually about -- is silently satisfied by any "+
+					"fetch routed through a function shape s17BodyAt cannot read. A guard that cannot "+
+					"fail is worth less than no guard, because it is reported as coverage.\n"+
+					"reachable from onMessageReceived:\n%s", tc.name, s17Indent(body))
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +691,18 @@ func TestS17_TheNotificationAndItsChannelAreLockScreenSecret(t *testing.T) {
 // A Kotlin string template is the shape this defect takes: setContentText("Session $id needs
 // input") is one edit away from setContentText("Swarm has an update for you") and reads almost
 // the same in review.
+//
+// WHAT IT CANNOT SEE, RECORDED RATHER THAN LEFT TO BE REDISCOVERED: it inspects the DIRECT
+// argument text of the four setters, so text built in a helper and passed in by name
+// (`setContentText(wakeLine(session))`) is invisible to it. Closing that needs the argument
+// resolved back to its definition, which is dataflow rather than the brace matching this file
+// does, and it is deliberately NOT attempted here -- a half-done version would report as
+// coverage. It is bounded by what sits above it rather than left open: whatever a helper
+// interpolates has to come from somewhere, and the two somewheres on this path are the payload
+// (content-free by construction, ADR-007 B20) and a content read, which
+// TestS17_TheWakeCallbackReachesNoContentVerb forbids by REACHABILITY -- through helpers,
+// including expression-bodied ones, since
+// TestS17_TheReachabilityWalkFollowsExpressionBodiedHelpers.
 func TestS17_TheNotificationTextIsNotBuiltByInterpolation(t *testing.T) {
 	var offenders []string
 	setters := 0

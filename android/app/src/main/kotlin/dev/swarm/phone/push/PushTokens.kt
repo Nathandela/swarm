@@ -62,11 +62,26 @@ object PushTokens {
         //
         // Loudly, not silently: the failure is logged. Push is the only thing that stops
         // working, and the phone is fully usable while the user is in it.
+        //
+        // IllegalStateException and not Throwable. The catch is scoped to the ONE failure that
+        // is a deliberate property of this build, so a genuine fault -- a Firebase library that
+        // is broken rather than unconfigured -- still surfaces instead of being logged as "no
+        // project configured" and explained away. Broadening it back is how the guard stops
+        // being a guard.
         try {
-            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                register(context, token)
-            }
-        } catch (e: Throwable) {
+            FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token -> register(context, token) }
+                // THE OTHER HALF OF "LOUDLY". getInstance() succeeding only means a FirebaseApp
+                // exists; the fetch itself still fails -- no network at launch, a revoked
+                // project, an unavailable Play Services -- and it fails ASYNCHRONOUSLY, so the
+                // catch below cannot see it. Without this arm a CONFIGURED build loses its
+                // token silently and the phone is simply unreachable by push until the next
+                // launch retries. It heals, but PB-PUSH-5 asks for graceful AND loud.
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "push token fetch failed; this launch registered no token and the " +
+                        "phone will not receive background wakes until the next one", e)
+                }
+        } catch (e: IllegalStateException) {
             Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " +
                 "the phone works without push and will not receive background wakes", e)
         }

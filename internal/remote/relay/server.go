@@ -765,9 +765,11 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
-	// ADR-007 B22: this also LIFTS any ban standing against deviceRID. See
-	// store.authorizePair for why the owner's machine is the only party that can
-	// reach it, and therefore why un-banning here is the owner's own decision.
+	// ADR-007 B22: this also LIFTS a ban standing against deviceRID — but ONLY one
+	// sc.rid itself placed (B24). requireAuth above proves an identity and nothing
+	// more: relay auth is open registration, so "authenticated" does not mean "the
+	// owner's machine", and the ownership test therefore lives in the ban itself.
+	// See store.authorizePair.
 	if err := sc.s.st.authorizePair(sc.rid, deviceRID); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
