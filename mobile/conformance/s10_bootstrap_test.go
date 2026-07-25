@@ -160,7 +160,12 @@ func (m *s10Machine) pairWith(secret [32]byte, rid [16]byte) (qr string, sasSeen
 		if perr != nil {
 			return
 		}
+		// Under m.mu: this goroutine outlives pairWith, and enrollAndDeliver reads Outcome
+		// from the TEST goroutine. Sequencing them by wall-clock order is not a
+		// happens-before, and -race reports it as the data race it is.
+		m.mu.Lock()
 		m.Outcome = out
+		m.mu.Unlock()
 	}()
 	select {
 	case <-rz.created:
@@ -184,10 +189,13 @@ func (m *s10Machine) pairWith(secret [32]byte, rid [16]byte) (qr string, sasSeen
 // an epoch key where a real phone can reach it.
 func (m *s10Machine) enrollAndDeliver() {
 	m.t.Helper()
-	if m.Outcome == nil {
+	m.mu.Lock()
+	outcome := m.Outcome
+	m.mu.Unlock()
+	if outcome == nil {
 		m.t.Fatalf("the machine side of the pairing produced no outcome; nothing can be enrolled")
 	}
-	res, err := enroll.Enroll(m.Outcome, device.CapFull, m.signPriv,
+	res, err := enroll.Enroll(outcome, device.CapFull, m.signPriv,
 		s10BootstrapEpoch, 1, m.keys, time.Now())
 	if err != nil {
 		m.t.Fatalf("enroll.Enroll: %v", err)
@@ -319,6 +327,9 @@ func runPairing(t *testing.T, app *swarmmobile.App, m *s10Machine) {
 	if err != nil {
 		t.Fatalf("App.BeginPairing: %v", err)
 	}
+	// PB-PAIR-6 (S16): BeginPairing joins nothing now. The destination is displayed and
+	// confirmed first, and ConfirmOrigin is what dials.
+	s16PassOriginGate(t, p)
 	var phoneSAS string
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && phoneSAS == "" {
