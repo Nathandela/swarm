@@ -131,6 +131,66 @@ real server's behaviour.
 `TestS14A_AnHonestSealedContainerStillOpens` (untampered container opens, including with the content
 tier locked) and `TestS14A_APurgeIsRecoverableNotABrick`.
 
+## Re-audit round 2 — five more findings, and one of them was INTRODUCED by round 1's fix
+
+The round-1 remediation was itself re-reviewed (cross-model, isolated worktree). It found two
+blocking defects in work that had already passed two reviews and my own reading.
+
+| # | Finding | Class | Disposition |
+|---|---|---|---|
+| B1 | **The public-key binding was bypassable.** `openKeyStore` fell back to adopting a raw 128-byte `device.key` on nothing but its length, and that layout has **no public half** for `checkPublic` to verify against | introduced surface, still open | FIXED `47809f0` — **deleted** |
+| B2 | The lock purge was **fail-open**: the memory clear, which cannot fail, was gated behind the durable write, which can | (iv) | FIXED `47809f0` |
+| B3 | An **epoch rotation** was still inferred from an all-zero key, carrying the old epoch's sealed key forward under the new epoch id | (ii) | FIXED `47809f0` |
+| B4 | The purge was **resurrectable** by a Save built from a pre-purge `State` snapshot — a direct consequence of round 1's own fix | (iv) | FIXED `47809f0` |
+| B5 | Decrypted replies survived the purge, and were **refilled into the cache by the purge's own rebind** | PB-KEY-7 clause | FIXED `47809f0` |
+
+### B1: deleted, not authenticated
+
+A format with no public half **cannot** be authenticated, so the only honest fix was removal. Both
+premises were verified before acting, and the producer claim is stronger than first stated: outside
+the frozen `internal/remote/crypto`, **every** reference to `NewFileKeyStore`/`OpenFileKeyStore` is
+in a `_test.go` file save one comment — and because the package is frozen, a new producer cannot
+appear without an ADR. No Phase B phone app has shipped, so there is no installed base (the same
+reasoning this file already uses for the absent v2 -> v3 migration). All seventeen S14a test names
+were checked for one whose *subject* was the legacy migration: none.
+
+Two fixtures outside the package changed, **including the PB-SEC-1 acceptance gate**. That is the
+change most deserving of suspicion, so the record is explicit: no assertion was relaxed. The gate now
+lets the core generate material and recovers it through the production writer, instead of hand-seeding
+a format that no longer exists — the old fixture was itself a small instance of testing a path
+production does not take. Proven by mutation: a `sealDeviceKeys` that also drops an unwrapped copy
+beside the container still fires both byte-level fences with the full got/want diagnosis, and round
+1's public-binding fence still fires on all four subtests with `checkPublic` neutered.
+
+**Why it mattered more than it looked**: while the app ships `InsecureCleartextSealer` the container
+is forgeable anyway, which masked this. Once S14 lands a real Keystore KEK and the container becomes
+unforgeable, this was the **only remaining unauthenticated ingress to the device identity** — the
+seam's entire purpose defeated by a file length.
+
+### B3: scoped to the epoch, rather than a second destroy verb
+
+`sealedTier` gained an `epoch`, and carry-verbatim now requires `prev.epoch == epoch`. Both
+alternatives were considered and rejected on stated grounds: a second destroy verb makes rotation a
+**caller obligation** that the next rotation path will forget, and clearing `opened == false` "once
+the sealer demonstrably works" requires probing the content KEK — the one thing that legitimately
+refuses, so a failed probe is indistinguishable from a locked tier. Scoping to the epoch states the
+actual invariant (an epoch key is meaningless outside its epoch) and covers rotation paths that do
+not exist yet.
+
+### B4: a stale Save loses its key material, rather than being refused
+
+`State` carries an unexported purge stamp; a Save built from a pre-purge snapshot has its key
+material and decrypted caches dropped while the rest of the write proceeds. Refusing the Save
+outright was rejected because it would satisfy the security assertion while bricking every
+subsequent write — the same acceptance-test-green-product-broken shape this slice keeps producing.
+
+This required touching PB-STATE-1's reflective fence, which is why it is recorded here rather than
+left in a diff: reflection cannot call `.Interface()` on an unexported field at all, so skipping them
+is **forced**, not chosen. The exemption was converted into a stated property by adding the converse
+assertion — the bookkeeping must NOT survive a restart, since a restored purge count would make a
+fresh process refuse the first Save of every legitimate caller. Exported fields, the only ones any
+caller can set, are covered exactly as before.
+
 ## Accepted residuals
 
 - **The shipped app still writes both keys in the clear** — the standing disclosure. The acceptance
@@ -197,6 +257,18 @@ tier locked) and `TestS14A_APurgeIsRecoverableNotABrick`.
   adversary as F5. Recorded, not fixed.
 - **Unsealed plaintext buffers are not zeroized after use.** Same posture as the pre-existing
   software store; hardware custody is the real fix.
+- **A pre-seam `device.key` is now a named refusal**, not an adoption: "clear the app's data to
+  discard it, then pair again". There is no installed base to migrate, and no way to authenticate
+  the format if there were.
+- **PB-KEY-7's purge is memory-first at all three layers**, and the `Store` contract now states
+  explicitly that a returned error means **the blobs at rest survived** — never that nothing was
+  purged. The App-facing half of that contract is in `mobile/doc.go`. Dropping the tier records even
+  on a failed write is deliberate: the next Save that succeeds finishes the purge instead of
+  resurrecting the blob.
+- **`mobile/commands.go` `resolveSend` copies the content key into a `sendCtx` and seals with it
+  afterwards**, so an operation already in flight continues past a concurrent purge. In-memory and
+  in-flight, not a durable resurrection, and out of scope for the custody rounds — but it is the one
+  place a purged key is still used. **Owner: whoever next touches the facade send path.**
 - **Nothing mechanically pins the crypto package's exported surface.** The freeze is
   process-enforced; the golden pin covers the mobile facade only. Pre-existing.
 

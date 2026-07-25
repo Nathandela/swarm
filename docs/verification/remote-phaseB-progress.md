@@ -535,8 +535,25 @@ record of what was intended rather than what shipped — standing class (ii), ap
   authority. Changing a daemon reply was outside S11's fence, so the precedence is pinned by test
   now (`Lease_TheMachinesExpiryWinsOverThePhonesSignedHorizon`) to stop a later slice wiring the
   real value through and having it silently ignored. Wants a follow-up.
-- **Known pre-existing flake**: `TestRemotePeek_LargeGridClippedUnderMaxFrame` (i/o timeout
-  under full-suite load; passes isolated). Predates Phase B. A second, same shape:
-  `relay TestRelay_SweepLoopPresenceSilentPushNoManualCall` fails only under loaded full-suite
-  runs and passes 3/3 in isolation.
-- The final full-committee audit against all 139 requirements is still owed, per the goal.
+- **The load-sensitive test family.** On a QUIET machine the full suite is green at HEAD — verified
+  in a pristine clone. These fail only under concurrent agent load, which the orchestration itself
+  creates, and pass in isolation. **Do not dismiss a real regression as one of these: re-run in
+  isolation before concluding.**
+  - `internal/tui TestRemotePeek_LargeGridClippedUnderMaxFrame` (predates Phase B)
+  - `internal/remotegw TestS6B_GatewayInputLatencyIsNotPollGated`
+  - `cmd/swarm TestTUI_OpensAndRestoresOverPTY`
+  - `mobile/conformance TestPBBIND6_SlowCallbackDoesNotStallTheCore` (confirmed failing identically
+    at the parent commit)
+  - `internal/tui TestFirstPaintGate_RealDaemon_FiftySessions_P95`
+  - `mobile/conformance TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT` — a **cleanup** failure
+    (`TempDir RemoveAll: directory not empty`) from harness goroutines writing during teardown; the
+    test body passes. Attributed properly rather than assumed: reproduced identically in a
+    `git archive` of the parent commit, 1 of 5 loaded runs, 3/3 clean quiet on both sides.
+- **`relay TestRelay_SweepLoopPresenceSilentPushNoManualCall` was NOT a flake and is FIXED**
+  (`3dfbab7`). It raced its own setup: `removeConn` stamps `disconnectedAt` on the server goroutine
+  after `Close` returns client-side, so advancing the fake clock first wrote the already-advanced
+  time into it, and since the clock never moves again the elapsed comparison stayed 0 **forever**. A
+  permanent wedge, not a slow machine — which is why it passed whole-package runs and failed under
+  `-run` filtering, a trap for anyone bisecting. It now waits for the server to observe the
+  disconnect. No assertion changed.
+- The final full-committee audit against all **142** requirements is still owed, per the goal.
