@@ -6,10 +6,18 @@
 The final audit validates against every REQUIREMENT, not every slice. This is the per-row
 view: owner, whether that owner has shipped, and where the evidence is.
 
+**READ THE TWO COUNTS BELOW DIFFERENTLY — they have different provenance.** *Shipped* is
+the orchestrator ASSERTING that a slice landed and gated; it is maintained by hand in
+`scripts/phaseb-traceability.py` and no code checks it, so it is exactly as reliable as
+that bookkeeping. *Evidenced* is MEASURED: the evidence file is on disk. A requirement
+counted as shipped but not evidenced has no durable record an auditor can read, and the
+gap between the two numbers is the honest size of what is asserted rather than shown.
+
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped | 120 |
+| Shipped (asserted by hand) | 120 |
+| Evidenced (measured on disk) | 117 |
 | Remaining | 23 |
 | **Shipped with NO evidence file** | **3** |
 

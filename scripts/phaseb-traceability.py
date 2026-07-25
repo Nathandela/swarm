@@ -24,6 +24,12 @@ VERIF = os.path.join(ROOT, "docs/verification")
 # Slices whose implementation has landed on the branch. Kept explicit rather than
 # inferred from git: a slice is shipped when its work is committed AND gated, and
 # only the orchestrator knows the second half.
+#
+# THIS LIST IS AN ASSERTION, NOT A MEASUREMENT, and the report says so where it is
+# read. Nothing here verifies that a named slice landed or that its gate was green --
+# editing one string makes 5 requirements read as shipped. It is the one input to this
+# report that cannot be checked by running it, so the report prints the MEASURED
+# evidenced count beside it rather than letting a single number carry both meanings.
 SHIPPED = [
     "S0", "S1", "S1b", "S2", "S2b", "S3", "S4", "S4b", "S5", "S6", "S6b",
     "S7", "S7b", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S14a",
@@ -71,9 +77,16 @@ def main():
     out("`python3 scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md`.\n\n")
     out("The final audit validates against every REQUIREMENT, not every slice. This is the per-row\n")
     out("view: owner, whether that owner has shipped, and where the evidence is.\n\n")
+    out("**READ THE TWO COUNTS BELOW DIFFERENTLY — they have different provenance.** *Shipped* is\n")
+    out("the orchestrator ASSERTING that a slice landed and gated; it is maintained by hand in\n")
+    out("`scripts/phaseb-traceability.py` and no code checks it, so it is exactly as reliable as\n")
+    out("that bookkeeping. *Evidenced* is MEASURED: the evidence file is on disk. A requirement\n")
+    out("counted as shipped but not evidenced has no durable record an auditor can read, and the\n")
+    out("gap between the two numbers is the honest size of what is asserted rather than shown.\n\n")
     out("| | count |\n|---|---|\n")
     out("| Requirements | %d |\n" % len(rows))
-    out("| Shipped | %d |\n" % n_shipped)
+    out("| Shipped (asserted by hand) | %d |\n" % n_shipped)
+    out("| Evidenced (measured on disk) | %d |\n" % (n_shipped - n_no_evidence))
     out("| Remaining | %d |\n" % (len(rows) - n_shipped))
     out("| **Shipped with NO evidence file** | **%d** |\n\n" % n_no_evidence)
 
