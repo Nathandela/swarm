@@ -1407,10 +1407,24 @@ without this the handset shows revoked until the Android process is rebuilt, whi
 hours. A bounded 30-second grace covers the genuinely unorderable race between the phone's first
 post-pairing dial and the machine's authorize.
 
-**The property that keeps (b) honest**: the connection state stays **revoked** throughout the grace
-window. Nothing hides behind a spinner, so PB-APP-10's "explicit re-pair prompt, not a failure loop"
-is untouched — and a generation still *running* is left alone, so the ordinary case of an owner
-revoking an online phone stays terminal, as its test still asserts.
+**The property that keeps (b) honest**, CORRECTED against measurement — the original wording said
+the state "stays revoked throughout the grace window", and that is not what the code does. The
+re-armed generation opens with `first=true`, so `connecting` is set before the first dial resolves.
+The measured sequence on the event plane is:
+
+- **generation 1 (stranded)**: `connecting` -> `revoked` (run returns; `setConn(offline)` is never reached)
+- **generation 2 (after re-arm)**: `connecting` -> `revoked` -> `online`
+
+After that first refusal the state **is** `revoked` and is held across every retry — `run`'s guard
+skips the `reconnecting` overwrite — so the *held* state is genuinely revoked, just not from the
+first instant. **The property that actually matters is that `reconnecting` never appears**, because
+that, not `connecting`, is the failure loop PB-APP-10 forbids. Nothing hides behind a spinner. A
+generation still *running* is left alone, so the ordinary case of an owner revoking an online phone
+stays terminal, as its test still asserts.
+
+The correction is recorded rather than quietly reworded: the original claim was stronger than the
+code, it was never false in a way a user would see, and it would have read as verified in the audit.
+A test now pins the exact post-pairing triple, so the wording is checked rather than asserted.
 
 **Also accepted here: a second error class, `swarm/device-unsupported`.** Giving the
 key-reprovisioning recovery its own route needs a destination, and every existing no-user-action row
