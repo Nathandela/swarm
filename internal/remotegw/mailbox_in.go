@@ -30,6 +30,13 @@ type MailboxFrame struct {
 	Command protocol.RemoteCommand
 	Input   InputFrame
 	Gap     bool
+	// Stream and Seq are the envelope's (sender, epoch) stream identity and sequence
+	// number -- the coordinate the DURABLE inbound high-water is keyed by (PB-GW-1). They
+	// are set only on a frame that passed the replay guard, so recording them is exactly
+	// "this seq has been consumed on this stream". Both come from the authenticated
+	// header: a relay that rewrites either cannot also produce a valid AEAD tag.
+	Stream InboundStream
+	Seq    uint64
 }
 
 // OpenMailboxFrame opens ONE mailbox envelope through the shared MailboxReceiver,
@@ -56,16 +63,21 @@ func OpenMailboxFrame(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw [
 	// has `t` "data"/"resize" (and its data/cols/rows land here in the same pass); a
 	// RemoteCommand has no `t`, so w.T is "" and we re-decode as a command. Only ONE
 	// Accept (one decrypt) has run; the second Unmarshal is over the same plaintext.
+	stream := InboundStream{Sender: env.Header.SenderKeyID, Epoch: env.Header.EpochID}
 	var w inputFrameWire
 	if err := json.Unmarshal(res.Plaintext, &w); err != nil {
 		return MailboxFrame{}, err
 	}
 	if w.T == "data" || w.T == "resize" {
-		return MailboxFrame{Kind: FrameInput, Input: InputFrame{Kind: w.T, Session: w.Session, Data: w.Data, Cols: w.Cols, Rows: w.Rows}, Gap: res.Gap}, nil
+		return MailboxFrame{
+			Kind:  FrameInput,
+			Input: InputFrame{Kind: w.T, Session: w.Session, Data: w.Data, Cols: w.Cols, Rows: w.Rows},
+			Gap:   res.Gap, Stream: stream, Seq: env.Header.Seq,
+		}, nil
 	}
 	var rc protocol.RemoteCommand
 	if err := json.Unmarshal(res.Plaintext, &rc); err != nil {
 		return MailboxFrame{}, err
 	}
-	return MailboxFrame{Kind: FrameCommand, Command: rc, Gap: res.Gap}, nil
+	return MailboxFrame{Kind: FrameCommand, Command: rc, Gap: res.Gap, Stream: stream, Seq: env.Header.Seq}, nil
 }

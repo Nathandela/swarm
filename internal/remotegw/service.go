@@ -30,6 +30,11 @@ type ServiceConfig struct {
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 	JournalSeq     SeqSource         // durable outbound seq for journal + terminal frames (nil => in-memory)
 	ReplySeq       SeqSource         // durable outbound seq for command replies (nil => in-memory)
+	// Durable INBOUND checkpoint (PB-GW-1): the mailbox read cursor and the
+	// per-(sender,epoch) replay high-water, seeded into the command bridge at
+	// construction. Nil => in-memory (resets on restart), which leaves the replay guard
+	// blind after a restart -- production always wires the file.
+	Inbound InboundState
 	// Post-revocation confidentiality (codex#1): the epoch key + phone target are fixed for
 	// this process's lifetime, so after the owner revokes the paired device (rotating the
 	// epoch key) a still-running gateway would reconnect and reseal epoch frames to the
@@ -104,6 +109,7 @@ func NewService(cfg ServiceConfig) *Service {
 		EpochID:     cfg.EpochID,
 		ReplyTarget: cfg.PhoneTarget,
 		ReplySeq:    cfg.ReplySeq,
+		Inbound:     cfg.Inbound,
 	})
 	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases, watchers: watchers}
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -112,42 +111,12 @@ func loadSeqCeiling(path string) (uint64, error) {
 	return binary.BigEndian.Uint64(buf), nil
 }
 
-// persistSeqCeiling atomically writes the 8-byte big-endian ceiling: a temp file in the
-// same dir, fsynced, renamed over the target, then the parent dir fsynced so the rename
-// itself is durable. Without the dir fsync a power loss could resurrect an OLDER ceiling
-// and reuse seqs -- so the durability guarantee the resume-higher scheme relies on would
-// not hold. Mirrors machineid.writeSecretFile's temp+fsync+rename, plus the dir sync.
+// persistSeqCeiling atomically writes the 8-byte big-endian ceiling through
+// writeFileAtomic (temp + fsync + rename + dir fsync, inboundstate.go). Without the dir
+// fsync a power loss could resurrect an OLDER ceiling and reuse seqs -- so the durability
+// guarantee the resume-higher scheme relies on would not hold.
 func persistSeqCeiling(path string, ceiling uint64) error {
 	var val [8]byte
 	binary.BigEndian.PutUint64(val[:], ceiling)
-
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".outbound-seq-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
-
-	if _, err := tmp.Write(val[:]); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	// fsync the directory so the rename is durable across a crash.
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return writeFileAtomic(path, ".outbound-seq-*", val[:])
 }

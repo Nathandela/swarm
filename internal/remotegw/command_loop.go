@@ -71,6 +71,7 @@ type CommandBridgeConfig struct {
 	EpochID     uint32              // the epoch the content key belongs to
 	ReplyTarget string              // the phone's relay routing id (where replies are appended)
 	ReplySeq    SeqSource           // durable reply seq high-water (nil => in-memory, non-durable)
+	Inbound     InboundState        // durable INBOUND checkpoint: read cursor + per-stream replay high-water (nil => in-memory, non-durable)
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -83,27 +84,72 @@ type CommandBridgeConfig struct {
 // The read cursor advances past every item it reads -- INCLUDING a malformed or
 // unforwardable one -- so a poisoned envelope can neither wedge the loop nor be
 // retried forever; per-item failures are aggregated into the returned error while
-// the good items still process. The daemon's own two-phase idempotency (D6) dedups a
-// command that is redelivered after a crash before the cursor was persisted.
+// the good items still process. Both the read cursor and the per-(sender,epoch) replay
+// high-water are DURABLE (PB-GW-1, see the Inbound seam), so a restart resumes where the
+// previous run stopped and refuses anything the relay retained beyond it. The daemon's own
+// two-phase idempotency (D6) covers only the one bounded re-delivery a crash between a
+// daemon forward and its persist can produce (see handle).
 type CommandBridge struct {
 	cfg      CommandBridgeConfig
 	recv     *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
 	replySeq SeqSource               // OUTBOUND reply seq (durable across restart, C2b)
+	inbound  InboundState            // INBOUND checkpoint custody (durable across restart, PB-GW-1)
 
-	mu     sync.Mutex
-	cursor uint64
+	mu      sync.Mutex
+	cursor  uint64
+	highest map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
+	pollErr error                    // first error the Run loop's polls hit (see Err)
 }
 
-// NewCommandBridge returns a bridge over cfg. The read cursor starts at 0; a caller
-// resuming across a restart should seed it via SetCursor from durable state. A nil
-// cfg.ReplySeq defaults to a non-durable in-memory reply seq (resets on restart) --
-// production wires a durable one so the phone never stale-drops a post-restart reply.
+// NewCommandBridge returns a bridge over cfg, SEEDED from its durable inbound checkpoint
+// (PB-GW-1). Seeding restores both halves of the guard: every persisted (sender, epoch)
+// high-water goes into the receiver via crypto.MailboxReceiver.SeedHighWater, and the
+// persisted read cursor into the mailbox cursor. Without the high-water half a restarted
+// bridge's fresh receiver has seen == false for every stream and SKIPS the staleness check
+// entirely (crypto/envelope.go), so a relay that never honoured an ack has every frame it
+// still retains RE-ACCEPTED AT THE GUARD -- keystrokes included. (Only at the guard: §4.6
+// WITHDREW the claim that a replayed keystroke reaches a PTY, which additionally requires a
+// seq-regressed phone; see inbound_replay_class_test.go's scope note.)
+//
+// A nil cfg.Inbound defaults to non-durable in-memory state (resets on restart), as does a
+// nil cfg.ReplySeq; production wires durable files for both. Seeding cannot fail:
+// OpenInboundState validated custody at open, so Load is infallible and this signature
+// stays unchanged.
 func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 	replySeq := cfg.ReplySeq
 	if replySeq == nil {
 		replySeq, _ = OpenSeqSource("") // in-memory, cannot error
 	}
-	return &CommandBridge{cfg: cfg, recv: crypto.NewMailboxReceiver(), replySeq: replySeq}
+	inbound := cfg.Inbound
+	if inbound == nil {
+		inbound, _ = OpenInboundState("", "") // in-memory, cannot error
+	}
+	b := &CommandBridge{
+		cfg:      cfg,
+		recv:     crypto.NewMailboxReceiver(),
+		replySeq: replySeq,
+		inbound:  inbound,
+		highest:  map[InboundStream]uint64{},
+	}
+	ck := inbound.Load()
+	for st, seq := range ck.Highest {
+		b.recv.SeedHighWater(st.Sender, st.Epoch, seq)
+		b.highest[st] = seq
+	}
+	b.cursor = ck.Cursor
+	return b
+}
+
+// Err returns the FIRST error the Run loop's polls hit, or nil -- the root cause, not the
+// latest symptom, mirroring RelaySink.Err. Run's poll errors are non-fatal, but they are
+// not nothing: a state dir that is full or read-only fails every checkpoint persist, and
+// live input persists BEFORE the PTY write (handle), so the bridge then DROPS every
+// keystroke for as long as the condition lasts. Without this an operator has no signal at
+// all that it is happening.
+func (b *CommandBridge) Err() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pollErr
 }
 
 // Cursor is the highest relay mailbox cursor the bridge has consumed (its durable
@@ -147,13 +193,21 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 		}
 		processed++
 	}
-	// Advance past every item read, so a poisoned envelope is not retried forever.
+	// Advance past every item read, so a poisoned envelope is not retried forever, and
+	// persist that advance so a restart does not re-read it either. Only the READ CURSOR
+	// moves here: the per-stream replay high-water is advanced by consume, per frame, in
+	// the order its action class requires.
 	if maxCursor > 0 {
 		b.SetCursor(maxCursor)
+		if err := b.saveCheckpoint(); err != nil {
+			errs = append(errs, fmt.Errorf("persist cursor %d: %w", maxCursor, err))
+		}
 		// Ack durably purges consumed items from the relay's mailbox store, so a
-		// restarted bridge (fresh in-memory cursor) never re-reads them. A failed
-		// ack surfaces as an error but must not lose the in-memory cursor advance
-		// above -- the next poll will simply try to ack forward again.
+		// restarted bridge never re-reads them. A failed ack surfaces as an error but
+		// must not lose the cursor advance above -- the next poll will simply try to
+		// ack forward again. The ack is an OPTIMISATION, never the guard: a relay that
+		// does not honour it can still replay nothing, because the durable high-water
+		// refuses every retained frame.
 		if err := b.cfg.Mailbox.MailboxAck(ctx, maxCursor); err != nil {
 			errs = append(errs, fmt.Errorf("ack cursor %d: %w", maxCursor, err))
 		}
@@ -162,8 +216,9 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 }
 
 // Run polls in a loop every interval until ctx is cancelled, returning ctx.Err().
-// Poll errors are non-fatal (a transient relay error should not tear the bridge
-// down); the caller may log them via a wrapped Mailbox if desired.
+// Poll errors are non-fatal (a transient relay error should not tear the bridge down) but
+// they are not swallowed: the first is stashed for Err(), so a bridge that is dropping
+// every inbound frame is observable rather than silent.
 func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -172,9 +227,21 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			_, _ = b.PollOnce(ctx)
+			if _, err := b.PollOnce(ctx); err != nil {
+				b.setErr(err)
+			}
 		}
 	}
+}
+
+// setErr records the first poll error; later ones are dropped so Err() keeps pointing at
+// the root cause (RelaySink.setErrLocked's rule).
+func (b *CommandBridge) setErr(err error) {
+	b.mu.Lock()
+	if b.pollErr == nil {
+		b.pollErr = err
+	}
+	b.mu.Unlock()
 }
 
 // handle opens ONE mailbox envelope (a single Accept advancing the shared seq
@@ -183,15 +250,69 @@ func (b *CommandBridge) Run(ctx context.Context, interval time.Duration) error {
 // (take_control/take_control_end to the lease plane, kill/delete/launch to the
 // daemon). A replayed seq is rejected by the single Accept before any dispatch, so it
 // can neither double-lease nor double-forward nor reach Input.
+//
+// PERSIST ORDERING (PB-GW-3). No local transaction can atomically span the persisted
+// high-water, the persisted cursor, an external PTY/daemon side effect and the relay ack,
+// so the order of the persist relative to the dispatch is chosen PER CLASS by which
+// failure is cheaper:
+//
+//   - LIVE INPUT persists BEFORE the PTY write. A crash in between LOSES the keystroke,
+//     which the user retypes; the alternative -- a keystroke replayed into a live shell --
+//     is a corrupted command line. Input is live-only by ADR-007 D7, so loss is allowed and
+//     duplication is not. A failed persist therefore DROPS the frame rather than typing it.
+//   - EVERY OTHER CLASS dispatches BEFORE persisting, because loss is not allowed there: a
+//     dropped kill is a live session its owner believes is dead. A crash in between
+//     re-delivers exactly once more (the retained frame is re-served, the high-water was
+//     never raised), carrying the SAME operation_id so the daemon's durable two-phase
+//     idempotency suppresses the duplicate; watch/unwatch is idempotent per session and
+//     simply converges. Once the persist lands the window CLOSES -- the next restart
+//     refuses the retained frame at the guard.
 func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 	frame, err := OpenMailboxFrame(b.recv, b.cfg.Key, it.Envelope)
 	if err != nil {
 		return fmt.Errorf("open frame: %w", err)
 	}
 	if frame.Kind == FrameInput {
+		if err := b.consume(frame, it.Cursor); err != nil {
+			return err
+		}
 		return b.routeInput(frame)
 	}
-	return b.routeCommand(ctx, frame.Command)
+	if err := b.routeCommand(ctx, frame.Command); err != nil {
+		return err
+	}
+	return b.consume(frame, it.Cursor)
+}
+
+// consume records that frame's seq has been taken off its (sender, epoch) stream at
+// mailbox cursor, and persists that fact. It is the ONLY writer of the inbound replay
+// high-water: after it returns nil, a restarted bridge seeded from this checkpoint refuses
+// that seq -- and every seq below it -- with crypto.ErrStaleSeq.
+func (b *CommandBridge) consume(frame MailboxFrame, cursor uint64) error {
+	b.mu.Lock()
+	if frame.Seq > b.highest[frame.Stream] {
+		b.highest[frame.Stream] = frame.Seq
+	}
+	if cursor > b.cursor {
+		b.cursor = cursor
+	}
+	b.mu.Unlock()
+	if err := b.saveCheckpoint(); err != nil {
+		return fmt.Errorf("persist inbound seq %d: %w", frame.Seq, err)
+	}
+	return nil
+}
+
+// saveCheckpoint hands the current in-memory checkpoint to durable custody. The custody
+// merges monotonically, so a concurrent poll can never lower what another already wrote.
+func (b *CommandBridge) saveCheckpoint() error {
+	b.mu.Lock()
+	ck := InboundCheckpoint{Cursor: b.cursor, Highest: make(map[InboundStream]uint64, len(b.highest))}
+	for st, seq := range b.highest {
+		ck.Highest[st] = seq
+	}
+	b.mu.Unlock()
+	return b.inbound.Save(ck)
 }
 
 // routeInput hands a keystroke/resize frame to the lease conn of the session named

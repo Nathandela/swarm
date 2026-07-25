@@ -43,6 +43,11 @@ type gatewayParams struct {
 	// resetting to 1 and being stale-dropped.
 	JournalSeq remotegw.SeqSource
 	ReplySeq   remotegw.SeqSource
+	// Durable INBOUND checkpoint (PB-GW-1): the mailbox read cursor and the
+	// per-(sender,epoch) replay high-water. Without it a restarted gateway builds a fresh
+	// receiver, whose staleness check is SKIPPED on the first frame of every stream, so a
+	// relay that never honoured an ack can replay everything it still retains.
+	Inbound remotegw.InboundState
 
 	// C5 grant delivery (ADR-007 2026-07-24): the paired device's relay-auth pub is the
 	// AuthorizeDevice target that opens the machine->device mailbox route; Grant is the
@@ -96,6 +101,20 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open outbound reply seq: %w", err)
 	}
+	// Bind the checkpoint to THIS identity: `swarm remote init` regenerates machine.key
+	// (epoch id back to 1) without touching its siblings here, so an unbound file would
+	// hand the fresh identity the previous one's epoch-1 high-water -- stale-dropping the
+	// newly paired phone's first frames, take_control included -- and a cursor past the end
+	// of a mailbox that restarted at 1. Both are silent and permanent. The routing id is
+	// the right stamp: it is the coordinate the cursor indexes into, and it changes with
+	// any identity regeneration.
+	inbound, err := remotegw.OpenInboundState(
+		filepath.Join(remoteDir, "inbound-state.json"),
+		relay.RoutingID(id.RelayAuthPublic()),
+	)
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open inbound state: %w", err)
+	}
 
 	return gatewayParams{
 		DaemonSocket: daemonSocket,
@@ -116,6 +135,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
 		JournalSeq:         journalSeq,
 		ReplySeq:           replySeq,
+		Inbound:            inbound,
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
 		Grant:              sealedGrant,
 		StateDir:           stateDir,
