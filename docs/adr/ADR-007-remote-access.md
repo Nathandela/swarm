@@ -1566,3 +1566,67 @@ the ban does not fix this; it is an independent defect behind the same gate.
 implementer is required to test it against the bootstrap path and the revoked-signal path **before**
 building on it, and to report a contradiction rather than route around it — which is precisely how
 this entry came to exist.
+
+### B27 — the authority rule is about the TARGET, not the caller (B26 falsified too)
+
+B26 was prototyped and **does not make the RED tests pass**. Two directions have now been recorded
+here and both were wrong; this entry records the third, which is **measured rather than argued** —
+the property the first two lacked.
+
+**Where B26 was wrong, on its own terms.** It claimed the stranger's attack "becomes a no-op: it can
+only sever a relationship it invented". False. `revokeAndPurge` also **deletes the target's entire
+mailbox and its push token**, and both are keyed **per target**, not per pair. Scoping the ban does
+not scope the purge. Under B26 an anonymous party could still destroy every undelivered frame in the
+machine's mailbox and silence its push, repeatedly, on demand. Only the *permanence* was removed.
+The entry reasoned about the ban and never checked what else the same function does.
+
+**Why both directions failed — the structural fact neither entry saw.** At the relay, bootstrap and
+the attack are **the same shape**: *C authorizes D, then C appends to D*. Machine->phone and
+stranger->machine are **indistinguishable by any predicate over the pairs bucket**, because the thing
+that distinguishes them — the QR/SAS ceremony — **never reaches the relay**. Any fix must therefore
+either carry the target's consent to the relay out of band, or find an asymmetry that is not the
+caller's own say-so. Both B25 and B26 looked for the asymmetry in the caller, where it does not exist.
+
+**The asymmetry is in the target.** The stranger's target is an **established** identity that has
+already authorized somebody. Bootstrap's target has authorized **nobody**. One rule follows, and it
+replaces `isPaired(caller, target)` at every gate:
+
+> **You may act on a target's route if the target has authorized you — or if the target has
+> authorized nobody at all.**
+
+- `authorize_device` records a **directed intent** (`pairer -> device`) rather than an undirected
+  edge written both ways. A one-sided authorize forms no pairing.
+- `isPaired(a, b)` becomes mutual — true only with both intents — so a stranger's say-so no longer
+  makes it true in either direction.
+- `mayActOn(source, target)` = `granted(target, source) || (granted(source, target) && target has
+  granted nobody)`, gating `mailbox_append`, `push_trigger` and `device_revoke` uniformly.
+
+**Measured**: all three RED tests pass and the rest of the suite passes with **zero fixture edits** —
+a strong signal the rule matches the system's real semantics rather than being imposed on it. The
+bootstrap path, the revoked signal (`ErrRevoked` at registration, kept), PB-STATE-10's grace window
+and B22/B23/B24 are all untouched, and B24's ownership check remains correct as written.
+
+**The residual, accepted here with its reason.** The first-use clause is trust-on-first-use: a party
+that knows a **never-yet-paired** identity's relay-auth pubkey can act on it before it authorizes
+anyone. Two bounds make this acceptable. First, that pubkey is disclosed only at the relay handshake
+and over the SAS-authenticated pairing channel, so in practice the window is reachable by **the relay
+operator** — and **ADR-007 already concedes availability to the relay operator**, who can deny service
+to an unpaired machine simply by not routing. **The residual therefore grants no capability to a party
+that does not already have a strictly greater one**, which is the precise line B25 drew: not *any
+anonymous party*, which was the real defect. Second, the window closes **permanently** once an
+identity has either granted or banned anyone, so a revoke never re-opens a machine's window, and a
+previously-paired (or revoked) device is outside it by construction.
+
+**The stronger fix, recorded and NOT taken.** Carrying the phone's **consent signature** — its
+relay-auth key over the machine's routing id, obtained during the SAS ceremony — into
+`authorize_device` for the relay to verify would close the window completely and needs no crypto
+change. It touches the pairing message format (spec), `mobile`, `phonesim` and the device record: a
+substantially larger slice, and at this stage a larger risk than the residual it removes. **If the
+threat model ever stops conceding availability to the relay operator, this becomes required rather
+than optional.**
+
+**The lesson, and it is the same one twice.** B25 asserted a security property from a mechanism's
+name; B26 reasoned about one effect of a function and missed another in the same body. Both read as
+sound and both were checkable in minutes. **An architectural direction recorded without being run is
+a hypothesis wearing a decision's clothes** — and this one cost two rounds because I wrote it that
+way twice.
