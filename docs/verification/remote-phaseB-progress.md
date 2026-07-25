@@ -500,6 +500,28 @@ before the final audit reads a green suite as proof.
    covered, by S13's one-command-produces-an-AAR test, which was rebuilt and passed at HEAD. But an
    auditor reading S8's green gate alone would over-read it.
 
+## A TEST BUILT TO AVOID SELF-CERTIFICATION THAT SELF-CERTIFIED ONE LEVEL UP
+
+Found by the S16 RED author while fencing PB-TOK-1, and it explains why that requirement survived a
+slice boundary: **the palette is stated a THIRD time.** `SwarmTheme.EXPECTED_DARK_COLORS` holds the
+same literals, and its own doc says they exist so the theme test "compares the resolved theme against
+a recorded number rather than against itself".
+
+That instinct is exactly right and it was pointed at the wrong number. The constant was recorded
+**from `colors.xml`**, so it certifies that the app renders what `colors.xml` says — which is what it
+would do if `colors.xml` were wrong. Two files disagreeing with a third file that agrees with one of
+them reads, from any single test, as consistency.
+
+The fix is a checked-in join table both the Go gate and the Kotlin test read, enforced in **both**
+directions (a row naming a missing token fails; a colour with no row fails — which is how "single
+origin" decays into "origin plus a few extras"), plus a requirement that every colour literal in the
+theme source be a mapped token's value: derive it from the origin or delete it.
+
+**And the "must fail when they diverge" half is executed rather than asserted in prose**: a control
+mutates the comparator by one hex digit each run and requires the difference to be reported. A
+converter that over-normalised — dropping alpha, folding case, accepting short hex — passes every
+value assertion and fails only that one.
+
 ## PB-TOK-1 WAS MARKED SHIPPED AND IS NOT MET -- reassigned S5 -> S16
 
 Found by the evidence backfill, verified by me. The requirement is that one JSON token source is the

@@ -19,6 +19,18 @@
 > PB-KEY-9 is delivered in the sense that the cleartext sealer is gone and custody is mandatory; it
 > is NOT yet delivered in the sense of a phone that stores a real Keystore-backed KEK.
 >
+> **Four tests are green today that this blocker makes MISLEADING**, and an auditor must not read
+> them as covering it: the two PB-SEC-1 byte-level gates, the state-at-rest tier gate, and the
+> facade-seals-both-tiers test. All four drive the Go core with sealers or a KEK **the test
+> supplies**. They prove the Go side seals correctly, which is real. **None of them can see that the
+> handset has no code to supply a KEK that survives a restart** — the gap is upstream of every one
+> of them. This is the same shape as the epoch-key defect: a real-components test supplying the
+> missing input by hand.
+>
+> One more detail, and it is the part that hid it: `SealedStore.rawBytes`'s own doc says "The
+> persisted bytes, exactly as they sit on disk" — over an in-memory map. **The comment is the
+> plausible-but-wrong value**, and a comment is what a reader checks instead of the code.
+>
 > **This is an S16 BLOCKER, and it is standing defect class (ii) — a plausible-but-wrong value hiding
 > a brick.** An in-memory `SealedStore` means the KEK vanishes on process death, and on the next
 > start `device.key` and `phone-state.json` are sealed under a key that no longer exists —
