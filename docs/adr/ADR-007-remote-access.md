@@ -1514,3 +1514,55 @@ regression, because a second defect was **relying on the permissiveness to heal 
 one rule can convert another bug from self-correcting to permanent, and neither rule looks wrong
 alone. When a fix narrows a policy, the question is not only "what does this now forbid" but "what
 was silently depending on what it used to allow".
+
+### B26 — B25's fix direction was falsified by measurement; the ban is scoped to the pair instead
+
+The B25 RED author was asked to check the recorded fix direction against the real flow before
+anyone implemented it, and it does not survive. **The direction was mine and it was wrong in its
+justification**, which is the second time on this defect that a plausible argument was accepted
+without being run.
+
+**What was falsified.** B25 said mutual pairing was safe because "both legs plausibly already
+occur". Both legs do exist — but **not in the required order**. `deliverEpochGrant`
+(`cmd/swarm-remote/deliver.go:29`) authorizes the device and **immediately appends the sealed epoch
+grant**, and that append is what delivers the ContentKey, i.e. what makes a pairing usable at all.
+Its failure is **fatal** (`cmd/swarm-remote/main.go:64`). On a first pairing, `swarm remote pair`
+boots the gateway before the phone has necessarily ever connected, so under a drop-in mutual
+`isPaired` the grant delivery is refused and pairing cannot complete. Verified empirically with a
+reverted experiment: `TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap` fails at that line with
+`not authorized for route` — **production code, not a fixture**. The one device->machine authorize
+site is `mobile/relay.go:283` inside `onConnected`; `internal/phonesim` never issues the leg at all.
+
+**Re-examining what the global ban actually buys.** Forced back to the question, the answer is
+uncomfortable: **very little.** Relay registration is open, so a revoked handset can mint a fresh
+keypair and register again — the ban stops the *same identity*, which is the one thing an attacker
+trivially sidesteps and an honest owner never needs. What it does buy is real but narrow: it is how
+a revoked phone **learns** it was revoked (`ErrRevoked` at registration), which PB-APP-10 requires
+as an explicit re-pair prompt rather than a failure loop. So the ban is carrying a **signalling**
+job on a **global-authority** mechanism, and the mismatch is the vulnerability.
+
+**The direction, revised: scope the ban to the (banner, banned) PAIR rather than to the banned
+party's registration.** A revoke severs that relationship and purges its mailbox; it does not touch
+the target's ability to register or to talk to anyone else.
+
+- The stranger's attack becomes a **no-op**: it can only sever a relationship it invented, and the
+  machine's registration is untouched. The permanent DoS disappears without needing mutuality.
+- **Bootstrap is unaffected**, because grant delivery is an append and one-sided authorization still
+  permits it. This is the constraint that killed the previous direction.
+- **The revoked signal survives**, and improves: the phone learns it was revoked when it tries to
+  reach *its pinned machine*, which is both the moment it matters and strictly more informative than
+  a bare registration refusal.
+- **B22 and B24 dissolve into it.** A ban keyed by its banner *is* the ownership check B24 added by
+  hand, so the special case stops being a special case.
+
+**Separately, and not optional: the mailbox depth cap must be accounted per (source, target).** It
+is enforced per *target* today (`internal/remote/relay/server.go:808`,
+`mailboxDepth(req.Target) >= capN`), shared across every sender, so any authorized sender can starve
+the legitimate phone. The RED measured this: after a drain and ack the refusal lifted, proving it is
+the depth cap and not a rate window, so the flood is **sustainable** rather than one-shot. Scoping
+the ban does not fix this; it is an independent defect behind the same gate.
+
+**This entry is a direction, not a decree.** It has now been wrong once about this exact code. The
+implementer is required to test it against the bootstrap path and the revoked-signal path **before**
+building on it, and to report a contradiction rather than route around it — which is precisely how
+this entry came to exist.
