@@ -1458,3 +1458,45 @@ scope, but it is the same missing check and it should not be discovered a third 
 ("only an authenticated connection can issue it") must be checked against **what that mechanism
 actually gates**. Authentication proves identity, not authority. I wrote the argument, it read as
 sound, and it was wrong at the join between two true statements.
+
+### B25 — B24 escalated the mirror hole from transient to permanent, and that is on this ADR
+
+B24's fix is correct and it made a **second, recorded hole strictly worse**. The remediation agent
+found this in its own change and reported it rather than shipping quietly. It is the more serious
+finding of the two, and it exists because of a decision made here.
+
+**The attack, verified in the tree.** `handleAuthorizeDevice` (`internal/remote/relay/server.go`)
+calls `authorizePair(sc.rid, deviceRID)`: it creates a pairing between the **caller's** routing id
+and **any** routing id the caller names. `requireAuth` gates it, and relay registration is open, so
+that gate proves identity and **nothing about authority**. `handleDeviceRevoke` then gates on
+exactly that pairing. So any party mints a throwaway keypair, self-pairs with the machine's routing
+id, and revokes the machine — `revokeAndPurge` bans it and destroys its relay state.
+
+**What B24 changed.** Before it, every `authorize_device` cleared every ban, and the phone's
+`onConnected` authorizes the machine on each reconnect (`mobile/relay.go`) — so an attacker-placed
+ban on the machine **self-healed at the next reconnect**. After B24 only the banner may clear, and
+the banner is the attacker. The ban is now **permanent**: the machine's routing id cannot be
+un-banned by any party the owner controls.
+
+**Why this is not covered by "the relay is untrusted".** The threat model concedes availability *to
+the relay operator* — a hostile relay can always refuse to route. It does not concede that **any
+anonymous internet party** can permanently destroy a machine's identity at an honest relay. Those
+are different adversaries with different costs, and collapsing them would excuse the bug rather than
+answer it. Confidentiality and integrity are untouched: no content is readable and no command is
+forgeable. This is availability, permanent, and remotely reachable by anyone.
+
+**The fix direction: pairing must be mutual.** The root cause is that a pairing is created
+**unilaterally** by one side naming the other. Making `isPaired` require an authorization in **both
+directions** removes the whole class: an attacker's self-pair is a one-sided intent, and the machine
+never authorizes a throwaway rid, so the pair never forms and neither revoke nor append is reachable.
+This must be checked against the real flow before it is implemented — both legs plausibly already
+occur (the machine authorizes the device when pairing; the phone authorizes the machine on
+reconnect), but "plausibly" is exactly the word that produced B22. **It is not to be implemented off
+the back of this entry**; it needs its own RED proving the attack, then the change.
+
+**The generalisation, which is the reason this entry is long.** B24 was a *narrowing* — it made a
+permissive rule stricter, which is the safe direction by every instinct. It still caused a
+regression, because a second defect was **relying on the permissiveness to heal itself**. Tightening
+one rule can convert another bug from self-correcting to permanent, and neither rule looks wrong
+alone. When a fix narrows a policy, the question is not only "what does this now forbid" but "what
+was silently depending on what it used to allow".
