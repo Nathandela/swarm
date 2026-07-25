@@ -202,3 +202,70 @@ cherry-pick is mandatory, not advisory.
 - **PB-STATE-9's push replay coordinate is still unfilled** (`e649b4b`), which is S12's residual, not
   this slice's — but it lives in the same `State` blob whose schema S10 bumped. See
   `remote-phaseB-s12-evidence.md`.
+
+## Re-audit round 2 — a locked handset destroyed its own epoch key, and PB-KEY-3 got a real entry
+
+An independent review of this slice returned REVISE with two blockers. Both are fixed at `03f87f0`.
+
+### B1 — the ack rule's "transient" class was too small, and S14 widened the hole
+
+`acceptBootstrap` used `opened` as the ack discriminator, and `opened` is false for **any**
+`installGrant` failure — including `crypto.ErrKeyAuthRequired` raised because the content-tier KEK
+refused. That refusal is **transient** and is the *designed* locked-handset steady state: the loader
+deliberately tolerates a locked content tier so the wake tier keeps the relay dialled with nobody
+present.
+
+The relay DELETES acked items, and the bootstrap frame is appended once per gateway session. So:
+pair, phone wakes with the screen locked, grant acked, relay deletes it, and the user unlocks to
+every send failing forever. Reproduced: `acked=true relayAcks=[900]`.
+
+**This is a cross-slice interaction neither slice could see alone.** S10 wrote the ack rule when the
+open could not fail that way; S14 made it failable. Both cherry-picked cleanly, so nothing caught it
+— the same shape as the constructor-arity break, but semantic, so the build could not see it either.
+
+Fixed by refusing to ack on either custody sentinel. Worth keeping: **the non-ack costs nothing while
+locked**, because a keyless phone commits no sealed frame and the relay cursor does not advance past
+the bootstrap anyway — it is simply re-offered each poll until the tier opens.
+
+### B2 — PB-KEY-3's terminal state, closed with no clock, no threshold and no wire change
+
+`MarkGrantLost` had zero production callers, so the state was unreachable and its test supplied the
+entry by hand. Two obvious paths were **rejected with evidence**, and the reasoning is the valuable
+part:
+
+- **"Drained to head, paired, no content key" is insufficient.** The gateway appends once per
+  session, so a phone that drains before the daemon has ever reconnected sees exactly this. The
+  remedy there is "wait", not "regrant".
+- **A durable pairing timestamp does not make it decidable.** What must be exceeded is the RELAY's
+  retention cap — configuration asserted by the party this design treats as **hostile**, and unknown
+  to the phone. Elapsed time also says nothing about whether the gateway reconnected: delivery comes
+  from a *persistent* sidecar, so a machine that was off for eight days delivers a good grant on day
+  nine. A timestamp produces false terminal states on exactly the slow-machine case.
+
+The signal that works needs no content key and is already on the only inbound path: **a bootstrap
+refused as `ErrGrantReplay` while the phone holds no content key is proof, not inference.** The frame
+is tagged plaintext signed by the machine key pinned at pairing, so its arrival proves the gateway is
+connected and delivering; the coordinates are ones this phone already consumed; and the phone can
+open nothing with what it has. Re-delivery can never help — only a seq-advancing re-grant can.
+
+**It is reached in ordinary use.** The lock purge deliberately preserves the grant watermark (the
+watermark IS the replay defence) while destroying the content key, so after any screen lock the phone
+is keyless at exactly the coordinates the gateway is about to resend.
+
+Fenced both ways, including a false-positive guard — a relay replaying a retired grant to a phone
+with a **working** key must not be marked — which fails if the keyless condition is dropped.
+
+*Residual, stated plainly*: this closes the causes that are **terminal**. It does not flag "the relay
+purged the frame and the gateway has not reconnected", correctly, because the machine still holds the
+sidecar and a reconnect delivers it.
+
+### Two guards that could not fail, both mutation-proven
+
+- The re-grant's strict-coordinate advance was asserted only on a fixture where the **epoch had
+  already moved**, so it passed regardless of the sequence number — a neutered allocator left the
+  whole repository green. A same-epoch fixture now covers the primary case, which is also the one
+  PB-KEY-7 depends on: the purge preserves the coordinates, so ordinary re-delivery of the same
+  sidecar is refused as a replay and only a seq-advancing re-grant recovers.
+- The schema version could be reverted with everything green. It is now tied to the durable field set
+  by a pinned byte-literal per version. That fence fired on its very next integration, catching a
+  version bump with no pinned literal.
