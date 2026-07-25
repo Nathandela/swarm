@@ -607,6 +607,7 @@ keeps only what the handset demonstration actually needs; the rest returns to Ph
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
+| PB-OPS-5 | **The certificate pin must survive renewal.** S6 pins a leaf DER, so on Android — where the trust-root source is pinning-only — **every Let's Encrypt renewal (60-90 days) breaks the handset**. PB-OPS-1 offers "a pinned OR real certificate", but under pinning-only the "real certificate" half does not exist: a publicly-trusted cert must still be pinned. Pinning the **SPKI hash** rather than the full leaf DER survives renewal at the same security level. | Runbook states the renewal hazard; either the pin is SPKI-based or the operational consequence is documented and accepted. |
 | PB-OPS-1 | A **local/TLS relay runbook sufficient for the handset demonstration** — enough to stand up a reachable relay with a pinned or real certificate. Production deployment, VPS provisioning and image publishing return to Phase C. | Runbook executed once with an artifact as evidence. |
 | PB-OPS-2 | Operator runbook for the flows Phase B introduces: install, pair, revoke, kill switch, device loss, push configuration. | Each step executed once during verification. |
 | PB-OPS-3 | Honest metadata disclosure covering relay operator and push provider. | ADR section consistent with PB-PUSH-3 and ADR-007 D11. |
