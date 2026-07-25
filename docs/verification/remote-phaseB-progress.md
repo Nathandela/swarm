@@ -282,6 +282,34 @@ What to do about it, for every remaining slice: when a requirement names a struc
 check who actually calls it. A second instance in the same review: `RetryFor` has zero production
 callers, so PB-INPUT-4's "never blind resend" is enforced nowhere while its table is fully tested.
 
+## IN FLIGHT AND UNCOMMITTED (as of the last handoff) -- read before touching the tree
+
+Two slices have complete work sitting **uncommitted in the worktree**, and they share files, so
+they must be committed together or not at all:
+
+- **S11** (PB-INPUT-*, PB-TIME-*) -- implementation plus a full remediation round closing four
+  blocking review findings. Its own gates were green (`go test` and `-race` across phonecore,
+  remotegw, transport, mobile, conformance) **immediately before S14a's change landed**; those
+  numbers are the real state of S11.
+- **S14a** (PB-KEY-9) -- mid-migration. The failable `crypto.KeyStore` signatures (ADR-007 B18)
+  have landed and the `phonecore`/`mobile` call sites are partway through, so the tree is
+  transiently broken:
+  ```
+  internal/phonecore/command.go:42: assignment mismatch: 1 variable but ks.SignCommand returns 2
+  internal/phonecore/core.go:83:   too many arguments in call to OpenStore
+  ```
+  This is the expected shape of the change, not a defect.
+
+**They cannot be separated**: `internal/phonecore/core.go` now carries edits from both. Committing
+S11 alone would sweep S14a's partial migration. Finish the migration, verify the tree builds, then
+commit S11 first and S14a second.
+
+**Both still owe an independent review pass**: S11's remediation (four blockers, including a
+behaviour change -- the clock-skew refusal was removed from the phone in favour of "phone explains,
+machine enforces") and S14a in full. ADR-007 **B14 additionally requires S14a be re-reviewed
+CROSS-MODEL after GREEN**, as the 2026-07-23 SAS widening was, because it widens the frozen crypto
+package.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
