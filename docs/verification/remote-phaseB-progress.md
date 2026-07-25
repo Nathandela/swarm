@@ -148,11 +148,17 @@ That is the process working, not scope creep.
 | S4b remote-socket contract | PB-LIFE-7 | **SHIPPED** (`d971525`) -- stock install paired then went silent forever; the supervisor respawned a doomed gateway every 10s |
 | S6b low-latency input path | PB-NET-5 | **SHIPPED** (`c22eb36`) -- phone->PTY p50 **486 ms -> 31 ms**, 21% of budget. Review found a race + permanent wait-slot leak from a legal frame sequence |
 | S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | **SHIPPED** (`3fbaa50`) -- first Android code; AAR + APK + Gradle gate + CI lane all green |
-| S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | **SHIPPED** (`582676e`) -- 59 tests; found the facade signs every command at a flat 2-min TTL, so a typing session dies of its own signature. Re-review in flight |
-| **S14a Go custody seam** | **PB-KEY-9** (half) | **SHIPPED** (`582676e`) -- key material now sealed at rest; `crypto.KeyStore` made failable per B14. Cross-model review: **REVISE**, one owed test (below) |
-| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (79 tests, 74 red); **unblocked once S14a's owed test lands**. Owes PB-KEY-9's closing half + the dial-refusal behaviour (two sections below) |
-| S9, S12 | PB-NET-1, PB-PUSH-* | unblocked (the S11 hold is released). S12's PB-PUSH-0 introduces a **new wake-key crossing into the sidecar** -- treat as security-significant, not plumbing |
+| S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | **SHIPPED** (`582676e`), **re-audited** (`c85c210`) -- round 2 found the daemon-restart lease brick, the input seq inversion, and a fence defeated by a one-line move. Round-3 re-review in flight |
+| **S14a Go custody seam** | **PB-KEY-9** (half) | **SHIPPED** (`582676e`), re-audited (`3dfbab7`, `010876a`). Round-2 re-review found an **unauthenticated key-adoption path** that bypasses the binding, and a fail-open purge. **Round-3 fixes in flight** |
+| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (77 `@Test` + 563 lines of scaffolding, `67a9116`); **blocked until S14a closes**. Owes PB-KEY-9's closing half, the sentinel->Kotlin mapping, and the dial-refusal behaviour |
+| S12 push transport | PB-PUSH-0/1/2/3/5/6/7/8/10 | **RED in flight**. PB-PUSH-0 opens a **new wake-key crossing into the network-facing sidecar** (verified: the gateway holds only the content key today) -- security-significant, and it needs an ADR entry |
+| S9 | PB-NET-1 | unblocked, not started -- one integration requirement, and it gates S10 |
 | S10, S15..S21 | see §11 of the spec | not started |
+
+**Review rounds are still earning their keep, which is why they continue.** Every round so far has
+found at least one real defect, including in work already signed off twice: S14a's round-2 re-review
+found an unauthenticated ingress that two prior reviews and my own inspection all missed. When a
+round comes back clean with its failed attacks listed, that is when a slice closes.
 
 **S14a is shipped but NOT closed.** The cross-model review (mandated by ADR-007 B14 for any widening
 of the frozen crypto package) confirmed the widening is exactly what B14 and B18 authorise and
