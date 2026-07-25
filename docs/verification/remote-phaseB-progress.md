@@ -25,7 +25,7 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 | S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | **SHIPPED** (`20be9b2`) -- real symbol + relay URL; 39-char URL ceiling enforced; manual scan still owed |
 | S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | **next** -- all parallel roots, startable immediately |
 | S1b protocol additions | PB-SYNC-7 | **SHIPPED** (`689c8e8`) -- reconcile frame, lease confirmation, reply correlation |
-| S6 transport resilience | PB-NET-2,3,4,6,7 | implemented, security fix in flight (cleartext-via-redirect) |
+| S6 transport resilience | PB-NET-2,3,4,6,7 | **SHIPPED** (`078ac63`) -- cleartext-via-redirect hole found by review and closed |
 | S6b low-latency input path | PB-NET-5 | not started (split out of S6) |
 | S7..S21 | see §11 of the spec | not started |
 
