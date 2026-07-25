@@ -148,11 +148,19 @@ That is the process working, not scope creep.
 | S4b remote-socket contract | PB-LIFE-7 | **SHIPPED** (`d971525`) -- stock install paired then went silent forever; the supervisor respawned a doomed gateway every 10s |
 | S6b low-latency input path | PB-NET-5 | **SHIPPED** (`c22eb36`) -- phone->PTY p50 **486 ms -> 31 ms**, 21% of budget. Review found a race + permanent wait-slot leak from a legal frame sequence |
 | S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | **SHIPPED** (`3fbaa50`) -- first Android code; AAR + APK + Gradle gate + CI lane all green |
-| S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | in progress (GREEN) -- 59 tests; found the facade signs every command at a flat 2-min TTL, so a typing session dies of its own signature |
-| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (79 tests, 74 red), **BLOCKED on S14a** |
-| **S14a Go custody seam** | **PB-KEY-9** | not started -- **blocks S14, and S15's PB-STATE-6 needs the same mechanism** |
-| S9, S12 | PB-NET-1, PB-PUSH-* | unblocked; held behind S11, which is live in `mobile/` and `transport/` |
+| S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | **SHIPPED** (`582676e`) -- 59 tests; found the facade signs every command at a flat 2-min TTL, so a typing session dies of its own signature. Re-review in flight |
+| **S14a Go custody seam** | **PB-KEY-9** (half) | **SHIPPED** (`582676e`) -- key material now sealed at rest; `crypto.KeyStore` made failable per B14. Cross-model review: **REVISE**, one owed test (below) |
+| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (79 tests, 74 red); **unblocked once S14a's owed test lands**. Owes PB-KEY-9's closing half + the dial-refusal behaviour (two sections below) |
+| S9, S12 | PB-NET-1, PB-PUSH-* | unblocked (the S11 hold is released). S12's PB-PUSH-0 introduces a **new wake-key crossing into the sidecar** -- treat as security-significant, not plumbing |
 | S10, S15..S21 | see §11 of the spec | not started |
+
+**S14a is shipped but NOT closed.** The cross-model review (mandated by ADR-007 B14 for any widening
+of the frozen crypto package) confirmed the widening is exactly what B14 and B18 authorise and
+nothing more -- verified commit-to-commit and by recomputing all six KAT vectors against the parent
+commit -- but found the B18(a) branch at `internal/remote/relay/client.go:402-406` **unfalsifiable
+by any test**: both `ClientAuth.Sign` fixtures in the tree return nil errors, so the refusal path
+can be deleted and the whole suite still passes. Standing defect class (i), a guard that cannot
+fail. Remediation in flight.
 
 ## Working agreement that is producing the results
 
@@ -336,6 +344,48 @@ have that word: `mobile/app.go` and `mobile/conformance/harness_test.go`.
 regenerate the golden, and delete both `InsecureCleartextSealer` call sites. Until then, the
 `InsecureCleartextSealer` symbol itself should be treated as a live defect marker -- grep for it to
 find what remains.
+
+## S14 ALSO OWES THE PHONE'S CUSTODY-REFUSAL BEHAVIOUR -- the dial error is discarded today
+
+Found by main while verifying the S14a cross-model review finding. **This is a defect that would
+ship WITH S14**, not before it, which is exactly why it is written down here.
+
+`mobile/relay.go:140-142` discards the dial error outright:
+
+```go
+cl, err := a.dial(ctx)
+if err != nil {
+	continue
+}
+```
+
+`mobile/relay.go:165-167` wires `Sign: ks.SignRelayAuth`, and `cmd/swarm-remote/config.go:143`
+records that the machine identity never refuses -- so **the phone is the only production caller of
+`relay.ClientAuth.Sign` that can fail**. Once custody is hardware-backed, that bare `continue`
+means:
+
+- `crypto.ErrKeyAuthRequired` (RECOVERABLE, wants a biometric) -> an endless "reconnecting" loop
+  with no re-prompt. The user has no way to learn that authenticating would fix it.
+- `crypto.ErrKeyInvalidated` (PERMANENT, the device must re-pair) -> the same silent loop, with no
+  terminal state and no re-pair prompt. It retries forever against a key that is gone.
+
+This is ADR-007 B18(a)'s own stated failure mode -- "swallowing that refusal ... would re-create one
+layer up exactly the errorless interface B14 removed" -- reproduced **one layer further up than the
+ADR's comment anticipated**. The sentinels are handled carefully at `internal/phonecore/keycustody.go:179`
+and `internal/phonecore/state.go:444`, and then dropped on the floor at the transport edge.
+
+**Not reachable today**, which is the only reason it is not a stop-ship: the shipped app still uses
+the software keystore (see the section above), so `SignRelayAuth` cannot error. It goes live at the
+exact moment S14 lands the hardware-backed KEK.
+
+**S14's obligation**: a test drives `ErrKeyAuthRequired` through the phone dial path and asserts a
+user-visible **re-prompt** state (not "reconnecting"); a second drives `ErrKeyInvalidated` and
+asserts a **terminal, non-retrying** re-pair state. Both must fail against the current `continue`.
+Requirement anchor is PB-KEY-6 -- "every signing path" includes this one. S14 already owns mapping
+the two sentinels to typed Kotlin exceptions, which is the natural home for the behaviour.
+
+The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
+unfalsifiable by any test -- is being closed under S14a and is NOT this item.
 
 ## Open items carried forward
 
