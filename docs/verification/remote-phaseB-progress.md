@@ -401,6 +401,62 @@ the two sentinels to typed Kotlin exceptions, which is the natural home for the 
 The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
 unfalsifiable by any test -- is being closed under S14a and is NOT this item.
 
+## THE PHONE CAN NEVER OBTAIN AN EPOCH KEY -- and no requirement owned it until now
+
+**This is the most severe finding of Phase B, and it is a hole in MY requirements set**, not merely
+in the code. 142 requirements, validated by a full audit committee, and none of them owned the step
+without which nothing else can work. Now **PB-KEY-10**, owned by S10 (143 requirements).
+
+Found by a read-only fixture-seeding audit I commissioned after the machine-id defect, on the theory
+that its cause would generalise. It did, and worse than expected.
+
+**The chain, verified independently before amending anything:**
+
+- `State.Keys` is written ONLY by `InstallWakeKey`/`InstallContentKey` (`mobile/app.go:369,386`) --
+  inbound verbs called from Kotlin. **Nothing supplies those bytes.**
+- The machine delivers the epoch key as a sealed `crypto.EpochGrant` in a tagged bootstrap frame
+  appended to the phone's mailbox (`cmd/swarm-remote/deliver.go:29-40`).
+- `phonecore.AcceptGrant` has exactly **one** production caller: `internal/phonesim` -- the test
+  simulator. `mobile/` never calls it.
+- `MailboxRouter.TakeGrant` has **zero** production callers. Its own comment says "route+expose
+  only" and defers consumption to a work item ("C5") that was never done. `Core.Grants()` has zero
+  callers anywhere.
+- Kotlin cannot supply the bytes either: the custody surface is inbound-only by design (B8) and the
+  golden-pinned facade has **no verb that ingests a grant**.
+
+**On a real handset**: `resolveSend` returns `errNoContentKey` for every send, every inbound frame
+fails to open, the relay cursor never advances, and the drain polls the same page forever. The
+product does not function at all.
+
+**Why the entire suite is blind, and this is the part worth internalising:**
+
+- No test in `mobile/` calls `App.BeginPairing`.
+- The conformance harness says out loud that it seeds durable state "rather than running a pairing
+  handshake" (`harness_test.go:88-90`).
+- **Even the PB-NET-1 real-wire test does not catch it.** It generates the epoch keys in-test and
+  hands the content key to `InstallContentKey`. The "no fakes" test performs BY HAND the exact step
+  the facade is missing -- and it was written by the agent that had just found the machine-id
+  defect, in the slice created to close this very class.
+
+That is the lesson: a test can be built entirely from real components and still paper over a missing
+production path, because supplying the missing input is the most natural thing in the world when you
+are setting up a test. **Standing class (v) survives even a no-fakes integration test unless someone
+asks where each input comes from in production.**
+
+## A DEAD OFFLINE OP QUEUE THAT READS AS A FEATURE -- decision needed
+
+Same audit. `State.PendingOps` is persisted, restored, cloned and asserted to survive a restart --
+and **`OpQueue.Enqueue` has zero production callers.** Nothing ever appends to it. An offline
+mutating op is not queued: `sealSignedCommand` -> `sendContext` -> `awaitConn` waits 5 s and returns
+an error, and the op is dropped. `StateSummary.PendingOps` reports `len(a.inflight)`
+(`mobile/app.go:342,349`), never the durable queue, so the gap is invisible from the facade.
+
+PB-NET-4 says only that idempotent ops **may** queue, so no requirement is violated -- which is
+exactly why this needs a decision rather than a fix. Three options: require queuing (a new
+requirement), delete the dead machinery, or record it as deliberate. **Leaving durable machinery
+that production never fills is the worst of the three**, because `state_test.go` proves the blob
+round-trips a queue nobody writes, and that reads as coverage.
+
 ## A FRESH INSTALL NEVER LEARNS ITS MACHINE ID -- the most severe defect found in Phase B
 
 Found by S9's RED author on the FIRST run of the first test that pairs a fresh install and then uses
