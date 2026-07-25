@@ -34,9 +34,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/remote/pairing"
 )
 
 // relayConfigPath mirrors remoteRelayFile in internal/skeleton/pairing_config.go:
@@ -112,6 +115,131 @@ func TestRemoteInit_NoRelayURLWritesNoConfig(t *testing.T) {
 	path := relayConfigPath(dir)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("relay.json exists at %s despite no --relay-url flag; want it ABSENT (err=%v)", path, err)
+	}
+}
+
+// TestRemoteInit_RejectsARelayURLTheQRCannotCarry is slice S3 review finding B1: the
+// relay URL written here is the ONE free variable in the pairing QR's size budget
+// (internal/remote/qrterm/qrterm_test.go's TestRender_FitsAStandard80x24TerminalByRelayURLLength
+// derives the ceiling from the shipped codec and renderer), and today nothing bounds it.
+// The overflow is silent AND misattributed: past the ceiling `swarm remote pair` draws no
+// symbol at all and blames the terminal, sending the operator to resize an 80x24 window
+// that was never the problem. The config file is where the cause is, so the config writer
+// is where the refusal belongs — before the bad value is ever persisted.
+//
+// Fail fast and leave NOTHING behind: a rejected flag must write no relay.json AND no
+// machine identity, so a corrected re-run starts from a clean state dir.
+func TestRemoteInit_RejectsARelayURLTheQRCannotCarry(t *testing.T) {
+	tooLong := "wss://" + strings.Repeat("a", pairing.MaxRelayURLLen+1-len("wss://"))
+	cases := []struct {
+		name string
+		url  string
+	}{
+		// Real endpoints measured in the review: both draw no QR on a standard terminal.
+		{"regional relay host", "wss://swarm-relay.us-east-1.example.com:8443"},
+		{"per-tenant rendezvous path", "wss://relay.example.com:8443/tenants/acme/rendezvous"},
+		// Exactly one character past the ceiling: the cliff is one character wide.
+		{"one character over the ceiling", tooLong},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if len(tc.url) <= pairing.MaxRelayURLLen {
+				t.Fatalf("test bug: %q is %d characters, within the %d-character ceiling",
+					tc.url, len(tc.url), pairing.MaxRelayURLLen)
+			}
+			dir := t.TempDir()
+			t.Setenv(daemon.EnvStateDir, dir)
+
+			var stdout, stderr bytes.Buffer
+			exit := runRemoteInit([]string{"--relay-url", tc.url}, &stdout, &stderr)
+			if exit == 0 {
+				t.Fatalf("runRemoteInit accepted a %d-character relay URL (exit 0); `swarm remote "+
+					"pair` will then draw NO QR symbol and blame the terminal for it. The limit is "+
+					"%d characters (PB-PAIR-1(b) on a standard terminal).", len(tc.url), pairing.MaxRelayURLLen)
+			}
+			if msg := stderr.String(); !strings.Contains(msg, strconv.Itoa(pairing.MaxRelayURLLen)) {
+				t.Errorf("rejection message %q does not state the %d-character limit; an operator "+
+					"cannot fix a bound they are not told", msg, pairing.MaxRelayURLLen)
+			}
+			if _, err := os.Stat(relayConfigPath(dir)); !os.IsNotExist(err) {
+				t.Errorf("relay.json was written despite the refusal (err=%v); the bad endpoint "+
+					"would be read back by the daemon on the next start", err)
+			}
+			if _, err := os.Stat(remoteIdentityPath(dir)); !os.IsNotExist(err) {
+				t.Errorf("machine.key was provisioned despite the refusal (err=%v); a rejected "+
+					"flag must leave the state dir untouched", err)
+			}
+		})
+	}
+}
+
+// TestRemoteInit_RejectsAnUndialableRelayURL pins the rest of the write-time contract
+// (S3 review B1/N3): --relay-url is carried VERBATIM into the QR as the only address a
+// scanning phone will ever have, so a value no phone can dial must never reach the file.
+// Whitespace-only is called out explicitly by N3 — it is non-empty, so today it is
+// persisted and read back as a configured endpoint.
+func TestRemoteInit_RejectsAnUndialableRelayURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"no scheme", "relay.example.com:8443"},
+		{"wrong scheme", "https://relay.example.com"},
+		{"no host", "wss://"},
+		{"whitespace only", "   "},
+		{"surrounding whitespace", " ws://127.0.0.1:9999 "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(daemon.EnvStateDir, dir)
+
+			var stdout, stderr bytes.Buffer
+			if exit := runRemoteInit([]string{"--relay-url", tc.url}, &stdout, &stderr); exit == 0 {
+				t.Fatalf("runRemoteInit accepted --relay-url %q (exit 0); a phone that scans the "+
+					"pairing QR has this string and nothing else to dial", tc.url)
+			}
+			if _, err := os.Stat(relayConfigPath(dir)); !os.IsNotExist(err) {
+				t.Errorf("relay.json was written despite the refusal (err=%v)", err)
+			}
+		})
+	}
+}
+
+// TestRemoteInit_AcceptsARelayURLAtTheCeiling is the other side of the bound: the limit
+// must be the exact derived ceiling, so a URL of exactly that length is still written —
+// and written VERBATIM, since the machine's own dial target is the one endpoint known
+// reachable and a normalized URL is a different destination.
+func TestRemoteInit_AcceptsARelayURLAtTheCeiling(t *testing.T) {
+	base := "wss://relay.example.com:8443/"
+	if len(base) > pairing.MaxRelayURLLen {
+		t.Fatalf("test bug: the base URL is already %d characters, over the %d ceiling",
+			len(base), pairing.MaxRelayURLLen)
+	}
+	atCeiling := base + strings.Repeat("r", pairing.MaxRelayURLLen-len(base))
+	if len(atCeiling) != pairing.MaxRelayURLLen {
+		t.Fatalf("test bug: built a %d-character URL, want exactly %d", len(atCeiling), pairing.MaxRelayURLLen)
+	}
+
+	dir := t.TempDir()
+	t.Setenv(daemon.EnvStateDir, dir)
+
+	var stdout, stderr bytes.Buffer
+	if exit := runRemoteInit([]string{"--relay-url", atCeiling}, &stdout, &stderr); exit != 0 {
+		t.Fatalf("runRemoteInit refused a relay URL of exactly %d characters (exit %d, stderr=%q); "+
+			"the ceiling must be the derived one, not a round number below it",
+			len(atCeiling), exit, stderr.String())
+	}
+	b, err := os.ReadFile(relayConfigPath(dir))
+	if err != nil {
+		t.Fatalf("read relay.json: %v", err)
+	}
+	var rc relayConfigFile
+	if err := json.Unmarshal(b, &rc); err != nil {
+		t.Fatalf("relay.json is not valid JSON: %v (content: %s)", err, b)
+	}
+	if rc.RelayURL != atCeiling {
+		t.Errorf("relay.json relay_url = %q, want %q verbatim", rc.RelayURL, atCeiling)
 	}
 }
 

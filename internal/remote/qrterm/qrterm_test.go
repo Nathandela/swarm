@@ -89,6 +89,15 @@ import (
 // full-entropy-shaped, since base64url of random bytes is what the codec really emits.
 func realisticPayload(t *testing.T) string {
 	t.Helper()
+	return payloadForRelayURL(t, "wss://relay.example.com:8443")
+}
+
+// payloadForRelayURL is the payload production mints for relayURL: the real codec, the
+// real fixed-size id and secret, so the ONLY thing that varies between two calls is the
+// operator-supplied URL. That is what makes the URL the single free variable in
+// PB-PAIR-1(b)'s size budget.
+func payloadForRelayURL(t *testing.T, relayURL string) string {
+	t.Helper()
 	var id [16]byte
 	var secret [32]byte
 	for i := range id {
@@ -98,12 +107,12 @@ func realisticPayload(t *testing.T) string {
 		secret[i] = byte(i*11 + 5)
 	}
 	s, err := pairing.EncodeQR(pairing.QRPayload{
-		RelayURL:      "wss://relay.example.com:8443",
+		RelayURL:      relayURL,
 		RendezvousID:  id,
 		PairingSecret: secret,
 	})
 	if err != nil {
-		t.Fatalf("pairing.EncodeQR: %v", err)
+		t.Fatalf("pairing.EncodeQR(relay URL of %d chars): %v", len(relayURL), err)
 	}
 	return s
 }
@@ -234,6 +243,80 @@ func TestRender_FitsAStandard80x24Terminal(t *testing.T) {
 		if w := utf8.RuneCountInString(stripANSI(ln)); w != r.Cols {
 			t.Fatalf("Rendering.Text row %d is %d cells wide but Rendering.Cols = %d; the drawing "+
 				"must be a rectangle of exactly the reported size", i, w, r.Cols)
+		}
+	}
+}
+
+// TestRender_FitsAStandard80x24TerminalByRelayURLLength is the coupling PB-PAIR-7 asked
+// for and nothing pinned until now: the ENTIRE PB-PAIR-1(b) size budget above is derived
+// from a payload whose one free variable is an operator-supplied string — the relay URL
+// in <stateDir>/remote/relay.json. Every other field is fixed-width (a 13-character
+// scheme prefix, a 3-byte header, a 16-byte rendezvous id, a 32-byte secret), so the
+// symbol's QR version, and with it whether a symbol can be drawn at all, is a function of
+// len(relay URL) alone.
+//
+// The measured cliff is one character wide and completely silent. At the ceiling the
+// payload still encodes to a version-6 symbol (41 modules) that draws in a standard
+// terminal; one character past it the symbol is version 7 (45 modules), which needs 25
+// rows at the minimum quiet zone and so is REFUSED — the operator gets no symbol and no
+// hint that the config file, not the terminal, is the cause. Past 89 characters the codec
+// itself refuses (QRMaxBytes). pairing.MaxRelayURLLen is that first ceiling, and this test
+// is its proof: it is the only place in the tree that can see both the payload codec and
+// the terminal renderer, so it is where the number has to be checked.
+func TestRender_FitsAStandard80x24TerminalByRelayURLLength(t *testing.T) {
+	// The standard terminal PB-PAIR-1(b) sizes against, and the box the CLI hands the
+	// renderer (cmd/swarm/remote.go: defaultTermCols x defaultTermRows).
+	const cols, rows = 80, 24
+
+	// Everything the bound admits MUST draw. A ceiling set too high is the defect itself:
+	// `swarm remote init` would accept a URL that silently kills the QR.
+	for n := 0; n <= pairing.MaxRelayURLLen; n++ {
+		sym, err := Encode(payloadForRelayURL(t, strings.Repeat("u", n)))
+		if err != nil {
+			t.Fatalf("Encode(payload for a %d-character relay URL): %v", n, err)
+		}
+		r, err := sym.Render(cols, rows)
+		if err != nil {
+			t.Fatalf("a %d-character relay URL — at or below pairing.MaxRelayURLLen (%d) — does "+
+				"not render in %dx%d: %v; the bound admits a URL that draws no symbol, which is "+
+				"exactly the silent failure it exists to prevent", n, pairing.MaxRelayURLLen, cols, rows, err)
+		}
+		if r.QuietZone < minQuietZone {
+			t.Fatalf("a %d-character relay URL renders with quiet zone %d; the floor is %d",
+				n, r.QuietZone, minQuietZone)
+		}
+	}
+
+	// The bound is the REAL ceiling, not a round number under it: one more character must
+	// not fit. A ceiling set too low refuses relay URLs that work.
+	over := strings.Repeat("u", pairing.MaxRelayURLLen+1)
+	if sym, err := Encode(payloadForRelayURL(t, over)); err == nil {
+		if r, rErr := sym.Render(cols, rows); rErr == nil {
+			t.Fatalf("a %d-character relay URL still renders (%dx%d, quiet zone %d) in a %dx%d box, "+
+				"so pairing.MaxRelayURLLen (%d) is BELOW the real ceiling and refuses URLs that work",
+				len(over), r.Cols, r.Rows, r.QuietZone, cols, rows, pairing.MaxRelayURLLen)
+		}
+	}
+
+	// The concrete URLs the bound exists to catch: ordinary deployment endpoints, neither
+	// contrived nor pathological. Each must be over the ceiling (so the writer refuses it)
+	// AND genuinely undrawable (so the refusal is justified rather than arbitrary).
+	for _, u := range []string{
+		"wss://swarm-relay.us-east-1.example.com:8443",
+		"wss://relay.example.com:8443/tenants/acme/rendezvous",
+	} {
+		if len(u) <= pairing.MaxRelayURLLen {
+			t.Errorf("%q is %d characters, at or below pairing.MaxRelayURLLen (%d), so the writer "+
+				"accepts it — check the ceiling against the renderer below", u, len(u), pairing.MaxRelayURLLen)
+			continue
+		}
+		sym, err := Encode(payloadForRelayURL(t, u))
+		if err != nil {
+			continue // the codec already refuses it; the bound is not the last line of defence
+		}
+		if r, err := sym.Render(cols, rows); err == nil {
+			t.Errorf("%q (%d characters) renders %dx%d in a %dx%d box after all, so refusing it "+
+				"costs operators a working endpoint", u, len(u), r.Cols, r.Rows, cols, rows)
 		}
 	}
 }

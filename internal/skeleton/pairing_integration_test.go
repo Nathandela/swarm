@@ -114,6 +114,10 @@ func injectPairing(t *testing.T, sk *Daemon) chan *memRendezvous {
 		Hostname:     "test-machine.local",
 		RoutingID:    []byte("machine-routing-id-0001"),
 		RelayAuthPub: make([]byte, 32),
+		// The endpoint BeginPairing puts in the QR (PB-PAIR-7). The transport below is
+		// in-memory, so nothing dials this; it stands in for the relay.json URL production
+		// always has, which BeginPairing now requires (fail-closed, no endpoint no QR).
+		RelayURL: "ws://rendezvous.test:9999",
 		NewRendezvous: func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
 			mEnd, dEnd := rendezvousPair()
 			deviceEnds <- dEnd

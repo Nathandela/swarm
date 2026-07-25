@@ -26,6 +26,24 @@ const (
 	QRFlagMachineStaticPub = 0x01
 	// QRMaxBytes is the hard size budget for the whole encoded string (R-PAIR.2).
 	QRMaxBytes = 200
+	// MaxRelayURLLen is the longest relay URL whose pairing QR can still be DRAWN on a
+	// standard 80x24 terminal (PB-PAIR-1(b)). Every other field of the payload is
+	// fixed-width, so the URL is the one free variable in the whole size budget, and the
+	// binding limit is the symbol's version, not QRMaxBytes.
+	//
+	// Derivation. An L-character URL encodes to 13 (QRPrefix) + base64url(3 + L + 16 + 32)
+	// characters. At L=39 that is 133 characters, the most a version-6 symbol carries at
+	// ECC level L (134 bytes) -- 41 modules, which at half-block density is 45x23 cells
+	// with the minimum quiet zone of 2 and 47x24 with 3. At L=40 the payload is 135
+	// characters, one past version 6, so the symbol steps to version 7: 45 modules, 49x25
+	// cells even at the minimum quiet zone, which no 24-row terminal can show. The cliff
+	// is one character wide and the symbol is REFUSED on the far side of it, so the URL
+	// has to be bounded where it is written. QRMaxBytes only bites at L>=90, far past this.
+	//
+	// internal/remote/qrterm's TestRender_FitsAStandard80x24TerminalByRelayURLLength is
+	// the proof: it is the only place that sees both this codec and the terminal renderer,
+	// and it re-derives this number from both rather than trusting the arithmetic above.
+	MaxRelayURLLen = 39
 )
 
 // ErrQRMalformed is returned by DecodeQR for a bad prefix, version, length, or a

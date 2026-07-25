@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -41,6 +42,13 @@ type pairingConfig struct {
 	Hostname     string              // MachinePayload.Hostname
 	RoutingID    []byte              // MachinePayload.MachineRoutingID
 	RelayAuthPub []byte              // MachinePayload.MachineRelayAuthPub
+
+	// RelayURL is the configured relay endpoint, carried VERBATIM into the pairing QR
+	// (PB-PAIR-7) so a phone that has only scanned the camera channel knows where to
+	// dial. It is the same string NewRendezvous was built from -- the machine's own
+	// dial target is the one endpoint known reachable -- and it is never rewritten or
+	// normalized, because a rewritten URL is a different destination.
+	RelayURL string
 
 	// NewRendezvous returns the machine-side RendezvousTransport for a freshly minted
 	// rendezvous id. BeginPairing mints the id + single-use secret + QR, then asks this
@@ -88,6 +96,17 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		return protocol.PairView{}, errors.New("relay not configured; run `swarm remote init` with a relay URL before pairing")
 	}
 
+	// PB-PAIR-7 fail-closed: the QR must carry an endpoint. Today no path reaches here
+	// without one (loadPairingConfig sets RelayURL and NewRendezvous from the same read),
+	// but that invariant is COINCIDENTAL, not enforced: pairing.EncodeQR encodes an empty
+	// RelayURL perfectly happily -- the field is length-prefixed, so empty is well-formed --
+	// and the QR is minted BEFORE cfg.NewRendezvous is exercised, so the guard above runs
+	// too late to be the one carrying it. State the precondition where it belongs rather
+	// than mint a QR that leaves the scanning phone with an id, a secret and nowhere to dial.
+	if strings.TrimSpace(cfg.RelayURL) == "" {
+		return protocol.PairView{}, errors.New("relay endpoint not configured; run `swarm remote init` with a relay URL before pairing")
+	}
+
 	// The capability the new device is granted (fail-closed: an unknown or empty tier
 	// aborts the pairing before any transport work rather than defaulting to authority).
 	var capTier device.Capability
@@ -107,9 +126,18 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		return protocol.PairView{}, fmt.Errorf("mint pairing secret: %w", err)
 	}
 
-	// The QR a real phone scans to recover BOTH the rendezvous id and the single-use
-	// secret it drives the device leg with (R-PAIR.2).
-	qr, err := pairing.EncodeQR(pairing.QRPayload{RendezvousID: id, PairingSecret: secret})
+	// The QR a real phone scans to recover the relay endpoint, the rendezvous id, and the
+	// single-use secret it drives the device leg with (R-PAIR.2, PB-PAIR-7). Without the
+	// endpoint the phone holds an id and a secret and no address to dial, so it can never
+	// claim the rendezvous. MachineStaticPub is deliberately NOT pinned here in v1: it
+	// costs 43 more payload characters, pushing the symbol past what a standard 80x24
+	// terminal can draw (PB-PAIR-1(b)), and the machine static is already pinned from
+	// Noise msg2 with the SAS compare as the designed human anti-MITM check.
+	qr, err := pairing.EncodeQR(pairing.QRPayload{
+		RelayURL:      cfg.RelayURL,
+		RendezvousID:  id,
+		PairingSecret: secret,
+	})
 	if err != nil {
 		return protocol.PairView{}, fmt.Errorf("encode pairing qr: %w", err)
 	}

@@ -68,6 +68,11 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		return nil, err
 	}
 	if relayURL != "" {
+		// PB-PAIR-7: the URL survives onto the config as well as into the rendezvous
+		// closure, so BeginPairing can put it in the QR verbatim. It used to be read only
+		// to build the closure and then discarded, leaving the scanning phone with no
+		// endpoint to dial.
+		cfg.RelayURL = relayURL
 		cfg.NewRendezvous = relayRendezvousFactory(relayURL)
 	}
 

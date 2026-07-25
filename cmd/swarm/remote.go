@@ -3,18 +3,25 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/charmbracelet/x/term"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
+	"github.com/Nathandela/swarm/internal/remote/pairing"
+	"github.com/Nathandela/swarm/internal/remote/qrterm"
 )
 
 const remoteUsage = `usage: swarm remote <command>
@@ -82,15 +89,24 @@ const remoteStateFile = "remote-state.json"
 // rotates keys) or generates and saves a fresh one at 0600. It prints only the
 // identity's redacted, public fingerprint (identity.String()) to stdout — never
 // any private material. An optional --relay-url flag, when non-empty, is
-// persisted to <stateDir>/remote/relay.json ({"relay_url":"..."}, 0600) — the
-// exact shape internal/skeleton.loadRelayURL reads back. Without the flag,
-// relay.json is left untouched (absent), so remote pairing stays unconfigured.
+// VALIDATED (see validateRelayURL) and then persisted to
+// <stateDir>/remote/relay.json ({"relay_url":"..."}, 0600) — the exact shape
+// internal/skeleton.loadRelayURL reads back. Without the flag, relay.json is
+// left untouched (absent), so remote pairing stays unconfigured. An invalid URL
+// is refused BEFORE any filesystem work, so a rejected run provisions nothing
+// and a corrected re-run starts clean.
 func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("remote init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	relayURL := fs.String("relay-url", "", "relay server URL for remote pairing")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *relayURL != "" {
+		if err := validateRelayURL(*relayURL); err != nil {
+			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			return 1
+		}
 	}
 
 	stateDir := os.Getenv(daemon.EnvStateDir)
@@ -151,6 +167,47 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout, id.String())
 	return 0
+}
+
+// validateRelayURL checks --relay-url BEFORE it is persisted, because this is the last
+// moment an operator is present to fix it. The string is carried VERBATIM into the pairing
+// QR (PB-PAIR-7) as the only address a scanning phone will ever have, and it is the ONE
+// free variable in that QR's size budget (PB-PAIR-1(b)) — every other field is
+// fixed-width. So two properties have to hold, and neither is checkable later: a phone
+// must be able to dial it, and a standard terminal must still be able to DRAW the symbol
+// that carries it. Past pairing.MaxRelayURLLen the symbol steps to a version no 24-row
+// terminal can show, and `swarm remote pair` then draws nothing at all — with the config
+// file, not the terminal, as the cause.
+//
+// Nothing is normalized or trimmed here, only refused: a rewritten URL is a different
+// destination, and the machine's own dial target is the one endpoint known reachable.
+func validateRelayURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("--relay-url %q is blank", raw)
+	}
+	if raw != strings.TrimSpace(raw) {
+		return fmt.Errorf("--relay-url %q has leading or trailing whitespace; it is carried "+
+			"verbatim into the pairing QR and is never trimmed", raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("--relay-url %q is not a URL: %w", raw, err)
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("--relay-url %q has scheme %q; the relay is a websocket endpoint, "+
+			"so the scheme must be ws or wss", raw, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("--relay-url %q carries no host; a phone that scans the pairing QR "+
+			"would have nothing to dial", raw)
+	}
+	if len(raw) > pairing.MaxRelayURLLen {
+		return fmt.Errorf("--relay-url is %d characters; at most %d fit. Past that the pairing "+
+			"QR needs a symbol larger than a standard %dx%d terminal can draw (PB-PAIR-1(b)), "+
+			"so `swarm remote pair` would print no QR at all",
+			len(raw), pairing.MaxRelayURLLen, defaultTermCols, defaultTermRows)
+	}
+	return nil
 }
 
 // remoteRevokeUsage is `swarm remote revoke`'s usage message, printed to stderr
@@ -275,14 +332,19 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 	defer sess.Close()
 
-	// The rendezvous view bootstraps the phone: scanning the QR recovers the rendezvous
-	// id + single-use pairing secret it drives the device leg with.
-	fmt.Fprintln(stdout, "Scan this QR on your phone to pair:")
-	fmt.Fprintln(stdout, sess.QR)
+	// The rendezvous view bootstraps the phone: scanning the QR recovers the relay
+	// endpoint, the rendezvous id, and the single-use pairing secret it drives the device
+	// leg with.
+	//
+	// ORDER IS LOAD-BEARING: the session metadata is printed BEFORE the symbol and the
+	// symbol is the LAST thing on screen when this blocks on Pending() below. A terminal
+	// scrolls, so every row printed after the symbol pushes its top — the upper finder
+	// patterns a scanner needs to lock onto — off a 24-row screen. See printPairingQR.
 	fmt.Fprintf(stdout, "rendezvous: %s\n", sess.RendezvousID)
 	if sess.ExpiresAt != nil {
 		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
 	}
+	printPairingQR(stdout, sess.QR)
 
 	// Block until the phone reaches the SAS gate. A terminal result arriving FIRST (a
 	// rendezvous/TTL failure or a dropped session, before any gate) unblocks here fail
@@ -291,9 +353,15 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	select {
 	case pending = <-sess.Pending():
 	case <-sess.Result():
+		fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
 		fmt.Fprintln(stderr, "remote pair: pairing ended before the device connected")
 		return 1
 	}
+
+	// The scan is over: the phone has connected, so the symbol may now be displaced. This
+	// newline is the one printPairingQR left off its last row — spending it here rather
+	// than there is what lets the symbol have the whole viewport (see printPairingQR).
+	fmt.Fprintln(stdout)
 
 	// The independent second gate (ADR D3): the operator verifies the SAS emoji against
 	// the phone's screen and allows or denies at the desktop.
@@ -328,6 +396,153 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 	fmt.Fprintf(stdout, "paired %s\n", name)
 	return 0
+}
+
+// Terminal box used for the pairing QR when neither the environment nor the controlling
+// terminal says otherwise: the standard terminal PB-PAIR-1(b) sizes the symbol against.
+const (
+	defaultTermCols = 80
+	defaultTermRows = 24
+)
+
+// printPairingQR puts the pairing payload on the terminal as a SCANNABLE QR symbol
+// (PB-PAIR-1) and degrades to manual entry when the terminal cannot take one: TERM=dumb
+// cannot draw the glyphs, and a box too small makes the renderer REFUSE rather than emit
+// a cropped symbol that only looks scannable (PB-PAIR-1(c)). The fallback never invites
+// the operator to scan a bare string, which was the defect it replaces, and it names the
+// cause it actually hit (see qrFallbackReason).
+//
+// The symbol gets the WHOLE terminal, and it gets it because of how a terminal scrolls,
+// not despite it. The drawing is the last thing printed before the command blocks on the
+// phone: rows above it scroll off the top harmlessly — the heading is simply gone by the
+// time the operator lifts the camera — while any row printed after it pushes the symbol
+// up instead, taking the upper finder patterns a scanner needs off screen with it. So the
+// budget is not shared with the chrome; the only rule is that NOTHING is printed after the
+// symbol until the phone has connected. That is worth one more module of quiet zone: on a
+// standard 24-row terminal the payload's version-6 symbol draws at 47x24 with a quiet zone
+// of 3, where reserving a row for the heading forced it down to 45x23 at the standard's
+// floor of 2 — and on a 23-row terminal, forced it to draw nothing at all.
+//
+// The last symbol row is left UNTERMINATED for the same reason: the newline that would
+// end it scrolls the terminal one row and costs the drawing its top. runRemotePair opens
+// the post-scan block with that newline instead.
+func printPairingQR(stdout io.Writer, payload string) {
+	cols, rows := terminalBox()
+	if r, err := renderPairingQR(payload, cols, rows); err == nil {
+		// The payload stays available for manual entry (PB-PAIR-2), WRAPPED to the terminal
+		// width — a line long enough to reflow would displace the symbol — and printed
+		// ABOVE it, where it costs the symbol no rows.
+		fmt.Fprintln(stdout, "Or enter this pairing code manually:")
+		for _, line := range chunkLines(payload, cols) {
+			fmt.Fprintln(stdout, line)
+		}
+		fmt.Fprintln(stdout, "Scan this QR on your phone to pair:")
+		fmt.Fprint(stdout, r.Text)
+		return
+	}
+	fmt.Fprintln(stdout, qrFallbackReason(payload, cols, rows))
+	fmt.Fprintln(stdout, "Enter this pairing code on your phone:")
+	// UNWRAPPED here: there is no symbol above to protect, and manual entry wants one
+	// unbroken token to read or copy.
+	fmt.Fprintln(stdout, payload)
+}
+
+// qrFallbackReason names why no symbol was drawn. Three causes land here and they are
+// fixed in three different places — use another terminal, make this one bigger, or shorten
+// the relay URL in <stateDir>/remote/relay.json — so one message covering all three
+// misdirects two operators in three. The payload case is the one that bites: a relay URL
+// past pairing.MaxRelayURLLen draws no symbol on ANY standard terminal, and reporting that
+// as "terminal too small" on an 80x24 terminal that is neither small nor incapable sends
+// the operator to resize a window that was never the problem.
+func qrFallbackReason(payload string, cols, rows int) string {
+	switch {
+	case !terminalCanDrawQR():
+		return "No QR symbol drawn: this terminal cannot draw the block glyphs a symbol needs " +
+			"(TERM is unset or dumb)."
+	case !qrFitsBox(payload, defaultTermCols, defaultTermRows):
+		return fmt.Sprintf("No QR symbol drawn: this %d-character pairing code needs a symbol "+
+			"larger than a standard %dx%d terminal can show. Re-run `swarm remote init "+
+			"--relay-url` with a relay URL of at most %d characters.",
+			len(payload), defaultTermCols, defaultTermRows, pairing.MaxRelayURLLen)
+	default:
+		return fmt.Sprintf("No QR symbol drawn: this terminal is %dx%d, too small for the symbol "+
+			"(a standard %dx%d one shows it).", cols, rows, defaultTermCols, defaultTermRows)
+	}
+}
+
+// renderPairingQR encodes payload and draws it inside a cols x rows box, erroring when
+// the terminal cannot show a symbol at all.
+func renderPairingQR(payload string, cols, rows int) (qrterm.Rendering, error) {
+	if !terminalCanDrawQR() {
+		return qrterm.Rendering{}, errors.New("terminal cannot draw a QR symbol")
+	}
+	sym, err := qrterm.Encode(payload)
+	if err != nil {
+		return qrterm.Rendering{}, err
+	}
+	return sym.Render(cols, rows)
+}
+
+// terminalCanDrawQR reports whether the terminal can show a drawn symbol at all. TERM=dumb
+// — and an unset TERM, which promises as little — guarantees neither the block glyphs nor
+// the SGR colours the drawing needs.
+func terminalCanDrawQR() bool {
+	t := os.Getenv("TERM")
+	return t != "" && t != "dumb"
+}
+
+// qrFitsBox reports whether payload's symbol can be drawn inside a cols x rows box,
+// independently of the terminal actually in front of the operator. It is how the fallback
+// tells "this window is too small" from "no window would be big enough".
+func qrFitsBox(payload string, cols, rows int) bool {
+	sym, err := qrterm.Encode(payload)
+	if err != nil {
+		return false
+	}
+	_, err = sym.Render(cols, rows)
+	return err == nil
+}
+
+// terminalBox is the drawing box for the pairing QR: COLUMNS/LINES when the environment
+// sets them (the POSIX convention, and — since stdout is an injected writer — the only
+// channel a caller can drive), else the controlling terminal, else the 80x24 standard.
+func terminalBox() (cols, rows int) {
+	cols, rows = envDim("COLUMNS"), envDim("LINES")
+	if cols > 0 && rows > 0 {
+		return cols, rows
+	}
+	w, h, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || w <= 0 || h <= 0 {
+		w, h = defaultTermCols, defaultTermRows
+	}
+	if cols <= 0 {
+		cols = w
+	}
+	if rows <= 0 {
+		rows = h
+	}
+	return cols, rows
+}
+
+// envDim reads a positive terminal dimension from the environment; 0 when it is unset,
+// unparseable, or nonsensical.
+func envDim(name string) int {
+	n, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// chunkLines splits s into lines of at most width cells.
+func chunkLines(s string, width int) []string {
+	r := []rune(s)
+	var out []string
+	for len(r) > width {
+		out = append(out, string(r[:width]))
+		r = r[width:]
+	}
+	return append(out, string(r))
 }
 
 // readYesNo reads one line from r and reports whether it is an affirmative answer
