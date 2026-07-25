@@ -69,8 +69,8 @@ func TestKeyStore_NoPrivateExport(t *testing.T) {
 	}
 
 	// Methods that take input still must not echo a private scalar out.
-	assertNoPrivateBytes(t, "SignCommand", ks.SignCommand([]byte("op")), privates)
-	assertNoPrivateBytes(t, "SignRelayAuth", ks.SignRelayAuth([]byte("challenge")), privates)
+	assertNoPrivateBytes(t, "SignCommand", mustSignCommand(t, ks, []byte("op")), privates)
+	assertNoPrivateBytes(t, "SignRelayAuth", mustSignRelayAuth(t, ks, []byte("challenge")), privates)
 }
 
 func assertNoPrivate(t *testing.T, name string, out reflect.Value, privates [][]byte) {
@@ -129,10 +129,10 @@ func TestKeyStore_FileImplConformance(t *testing.T) {
 
 	// Ed25519 is deterministic: identical material -> identical signature.
 	msg := []byte("canonical-command-bytes")
-	if !bytes.Equal(a.SignCommand(msg), c.SignCommand(msg)) {
+	if !bytes.Equal(mustSignCommand(t, a, msg), mustSignCommand(t, c, msg)) {
 		t.Error("SignCommand not deterministic across identical-material stores")
 	}
-	if err := VerifyCommandSig(a.CommandSigningPublic(), msg, a.SignCommand(msg)); err != nil {
+	if err := VerifyCommandSig(a.CommandSigningPublic(), msg, mustSignCommand(t, a, msg)); err != nil {
 		t.Errorf("self-produced command signature failed verify: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestRelayAuth_IdentityNeverOnWire(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	wire := bytes.Join([][]byte{
 		ks.RelayAuthPublic(),
-		ks.SignRelayAuth([]byte("relay-challenge-nonce||ctx")),
+		mustSignRelayAuth(t, ks, []byte("relay-challenge-nonce||ctx")),
 	}, nil)
 	for _, id := range [][]byte{ks.NoiseStaticPublic(), ks.RecipientPublic()} {
 		if bytes.Contains(wire, id) {

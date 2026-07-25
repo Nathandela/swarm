@@ -422,6 +422,8 @@ func TestPBSTATE2_TypingSurvivesAProcessDeathThroughTheFacade(t *testing.T) {
 		t.Fatalf("TakeControl: %v", err)
 	}
 	h.AwaitCommand(protocol.ActionTakeControl)
+	// PB-INPUT-2 gates every keystroke on a CONFIRMED lease generation.
+	h.AwaitLease(testSession)
 	if err := h.App.SendInput(testSession, []byte("before\r")); err != nil {
 		t.Fatalf("SendInput before the kill: %v", err)
 	}
@@ -438,6 +440,9 @@ func TestPBSTATE2_TypingSurvivesAProcessDeathThroughTheFacade(t *testing.T) {
 	if _, err := h.App.TakeControl(testSession); err != nil {
 		t.Fatalf("post-restart TakeControl: %v", err)
 	}
+	// The restarted phone holds no lease either -- one cannot survive a process death
+	// (PB-INPUT-2) -- so the re-lease must be confirmed before it can type again.
+	h.AwaitLease(testSession)
 	if err := h.App.SendInput(testSession, []byte("after\r")); err != nil {
 		t.Fatalf("post-restart SendInput: %v", err)
 	}

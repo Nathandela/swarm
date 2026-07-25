@@ -57,6 +57,11 @@ type LeaseRouter interface {
 	// without it would silently revert to sealing nothing, and PB-INPUT-2 would again
 	// have no confirmed generation to gate keystrokes on.
 	Generation(session string) uint64
+	// OnSever installs the sink a lease death is reported to, fired ONCE per death. It is
+	// on the interface for the same reason Generation is: an optional hook is a hook a
+	// refactor drops, and the failure is silent -- the gateway simply stops telling the
+	// phone, PB-INPUT-2 regresses to typing into a void, and every test stays green.
+	OnSever(fn func(SeveredLease))
 }
 
 // *LeaseManager is the production LeaseRouter. Pinned at compile time.
@@ -109,6 +114,11 @@ type CommandBridge struct {
 	replySeq SeqSource               // OUTBOUND reply seq (durable across restart, C2b)
 	inbound  InboundState            // INBOUND checkpoint custody (durable across restart, PB-GW-1)
 
+	// replyMu serialises the whole seq-allocate -> seal -> append of the OUTBOUND reply
+	// bucket. It is separate from mu because sealReply's failure path calls setErr, which
+	// takes mu. See sealReply for why the three steps cannot be split.
+	replyMu sync.Mutex
+
 	mu      sync.Mutex
 	cursor  uint64
 	highest map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
@@ -151,6 +161,13 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 		b.highest[st] = seq
 	}
 	b.cursor = ck.Cursor
+	// PB-INPUT-2: a lease that dies under a live gateway must be sealed back to the phone
+	// (lease_sever.go). cfg.Leases is nilable -- "nil => input plane disabled" -- and a
+	// registration that dereferenced it would turn a supported configuration into a crash
+	// at construction.
+	if cfg.Leases != nil {
+		cfg.Leases.OnSever(b.sealSevered)
+	}
 	return b
 }
 
@@ -464,18 +481,9 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
-	seq, err := b.replySeq.Next()
-	if err != nil {
-		return fmt.Errorf("reply seq: %w", err)
-	}
-	env, err := SealControlReply(b.cfg.Key, b.cfg.EpochID, seq, reply)
-	if err != nil {
-		return fmt.Errorf("seal reply: %w", err)
-	}
-	if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, env); err != nil {
-		return fmt.Errorf("append reply: %w", err)
-	}
-	return nil
+	// Through the ONE serialised producer (lease_confirm.go): a second inline
+	// allocate -> append here would reintroduce the out-of-order hazard for this class.
+	return b.sealReply(ctx, reply)
 }
 
 // opForAction maps a command action to the daemon wire op. kill/delete carry no body

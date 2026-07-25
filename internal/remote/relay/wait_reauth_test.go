@@ -50,7 +50,10 @@ func reauthSameConn(t *testing.T, c *Client, auth ClientAuth) string {
 		t.Fatalf("re-auth nonce: %v", err)
 	}
 	rid := RoutingID(auth.RelayAuthPub)
-	sig := auth.Sign(AuthChallengeMessage(chal.Nonce, rid))
+	sig, err := auth.Sign(AuthChallengeMessage(chal.Nonce, rid))
+	if err != nil {
+		t.Fatalf("re-auth sign: %v", err)
+	}
 	if _, err := c.conn.control(testCtx(t), "auth_resp", map[string]any{"signature": sig}); err != nil {
 		t.Fatalf("re-auth auth_resp: %v", err)
 	}

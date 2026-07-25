@@ -62,12 +62,15 @@ import (
 // TestRollback_FailsClosedForMutatingOpsAndMarksChannelsStale, which does its rollback by
 // restoring the state DIRECTORY.
 type rollbackFixture struct {
-	dir         string
-	store       *memStore
-	key         crypto.ContentKey
-	machinePub  ed25519.PublicKey
-	machinePriv ed25519.PrivateKey
-	epochKeys   crypto.EpochKeys
+	dir string
+	// PB-KEY-9: Resume fails closed with no sealer, and the directory-level restart below
+	// must present the SAME KEKs -- a different KEK is a different device.
+	wake, content Sealer
+	store         *memStore
+	key           crypto.ContentKey
+	machinePub    ed25519.PublicKey
+	machinePriv   ed25519.PrivateKey
+	epochKeys     crypto.EpochKeys
 }
 
 func newRollbackFixture(t *testing.T) *rollbackFixture {
@@ -84,13 +87,14 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 
 	f := &rollbackFixture{
 		dir: t.TempDir(), store: &memStore{}, key: testContentKey(),
+		wake: s14aNewSealer(t), content: s14aNewSealer(t),
 		machinePub: pub, machinePriv: priv, epochKeys: keys,
 	}
 	f.store.st = State{
 		Machine: "m1", RoutingID: "rid-m1", EpochID: 7, Keys: keys, MachineSignPub: pub,
 	}
 	// The same pairing, on disk, for the directory-level rollback test.
-	c, err := Resume(Config{Dir: f.dir})
+	c, err := Resume(Config{Dir: f.dir, WakeSealer: f.wake, ContentSealer: f.content})
 	if err != nil {
 		t.Fatalf("Resume (pairing): %v", err)
 	}
@@ -163,7 +167,7 @@ func (f *rollbackFixture) rollbackDir(t *testing.T, snap map[string][]byte) *Cor
 			t.Fatalf("restore %s: %v", name, err)
 		}
 	}
-	c, err := Resume(Config{Dir: f.dir, Machine: "m1"})
+	c, err := Resume(Config{Dir: f.dir, Machine: "m1", WakeSealer: f.wake, ContentSealer: f.content})
 	if err != nil {
 		t.Fatalf("Resume after the directory rollback: %v", err)
 	}

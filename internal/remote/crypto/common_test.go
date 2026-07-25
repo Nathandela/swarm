@@ -30,6 +30,27 @@ func devKeyStore(t *testing.T, m KeyMaterial) KeyStore {
 	return ks
 }
 
+// mustSignCommand and mustSignRelayAuth take the failable custody signatures (ADR-007 B14)
+// in tests that are not about the refusal path: a software store never refuses, so an error
+// here is a defect, not a case to handle.
+func mustSignCommand(t *testing.T, ks KeyStore, msg []byte) []byte {
+	t.Helper()
+	sig, err := ks.SignCommand(msg)
+	if err != nil {
+		t.Fatalf("SignCommand: %v", err)
+	}
+	return sig
+}
+
+func mustSignRelayAuth(t *testing.T, ks KeyStore, challenge []byte) []byte {
+	t.Helper()
+	sig, err := ks.SignRelayAuth(challenge)
+	if err != nil {
+		t.Fatalf("SignRelayAuth: %v", err)
+	}
+	return sig
+}
+
 // stdMaterial is a distinct-per-key set of deterministic device key material.
 func stdMaterial() KeyMaterial {
 	return KeyMaterial{

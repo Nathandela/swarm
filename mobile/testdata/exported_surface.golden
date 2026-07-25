@@ -46,6 +46,10 @@ field StateSummary.Reconciled bool
 field StateSummary.RelayCursor int64
 field StateSummary.Restored bool
 field StateSummary.SendSeq int64
+field UndeliveredInput.AtMillis int64
+field UndeliveredInput.Bytes int
+field UndeliveredInput.Reason string
+field UndeliveredInput.SessionID string
 func DecodeQR(string) (*QRPayload, error)
 func NewApp(*Config) (*App, error)
 ifacemethod EventListener.OnEvent(*Event)
@@ -61,6 +65,7 @@ method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
 method App.Outcome(string) (*Outcome, error)
+method App.Paste(string, string) error
 method App.Peek(string) (*Snapshot, error)
 method App.PendingOpCount() (int, error)
 method App.Presence() (string, error)
@@ -85,6 +90,7 @@ method App.SubscribeJournal() error
 method App.TakeControl(string) (*Op, error)
 method App.TerminalUnwatch(string) error
 method App.TerminalWatch(string) error
+method App.UndeliveredInputs() (*UndeliveredList, error)
 method App.UnsubscribeJournal() error
 method JournalPage.At(int) (*JournalEntry, error)
 method JournalPage.Count() (int, error)
@@ -96,6 +102,8 @@ method Pairing.SAS() (string, error)
 method Pairing.State() (string, error)
 method SessionList.At(int) (*Session, error)
 method SessionList.Count() (int, error)
+method UndeliveredList.At(int) (*UndeliveredInput, error)
+method UndeliveredList.Count() (int, error)
 type App struct
 type Config struct
 type Event struct
@@ -112,3 +120,5 @@ type Session struct
 type SessionList struct
 type Snapshot struct
 type StateSummary struct
+type UndeliveredInput struct
+type UndeliveredList struct

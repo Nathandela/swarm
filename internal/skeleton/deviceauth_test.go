@@ -78,7 +78,7 @@ func signWith(t *testing.T, ks crypto.KeyStore, deviceID, action, machine, sessi
 	if err != nil {
 		t.Fatalf("Canonical: %v", err)
 	}
-	sig := ks.SignCommand(msg)
+	sig := mustSignCommand(t, ks, msg)
 	return protocol.DeviceCommandAuth{
 		DeviceID:    deviceID,
 		Action:      action,
@@ -189,7 +189,7 @@ func TestPolicy_LaunchContentMismatchRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Canonical: %v", err)
 	}
-	sig := base64.StdEncoding.EncodeToString(ks.SignCommand(msg))
+	sig := base64.StdEncoding.EncodeToString(mustSignCommand(t, ks, msg))
 
 	// Signed over hashA but presented with hashB -> the tuple differs -> reject.
 	mismatch := protocol.DeviceCommandAuth{

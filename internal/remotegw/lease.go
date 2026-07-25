@@ -38,8 +38,9 @@ var (
 // package skeleton, whose test drives this primitive; the internal machinery (readLoop)
 // stays unexported.
 type LeaseConn struct {
-	dc      *daemonConn
-	session string // namespaced session id the lease targets (for OpResize addressing)
+	dc          *daemonConn
+	session     string // namespaced session id the lease targets (for OpResize addressing)
+	operationID string // the phone's take_control operation id, so a severance is attributable
 
 	wmu sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
 
@@ -62,10 +63,11 @@ func DialLease(socketPath string, cmd protocol.RemoteCommand) (*LeaseConn, error
 		return nil, err
 	}
 	lc := &LeaseConn{
-		dc:      dc,
-		session: cmd.Session,
-		leased:  make(chan struct{}),
-		dead:    make(chan struct{}),
+		dc:          dc,
+		session:     cmd.Session,
+		operationID: cmd.OperationID,
+		leased:      make(chan struct{}),
+		dead:        make(chan struct{}),
 	}
 	// Reconstruct the take_control Control from the RemoteCommand, exactly as
 	// ForwardCommand reconstructs a mutating op (gateway.go): the gateway forwards the

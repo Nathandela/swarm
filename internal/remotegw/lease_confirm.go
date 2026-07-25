@@ -66,8 +66,22 @@ func (b *CommandBridge) confirmLease(ctx context.Context, rc protocol.RemoteComm
 // sealReply allocates the next OUTBOUND reply seq, seals reply under the epoch content
 // key and appends it to the phone's mailbox. Command replies ride the sender-zero bucket
 // with their own durable seq source (command_in.go's deliberate split from the shared
-// journal/terminal bucket).
+// journal/terminal bucket). It is the ONE producer on that bucket: confirmLease, forward and
+// sealSevered all go through here.
+//
+// THE WHOLE allocate -> append RUNS UNDER replyMu, for the reason RelaySink.sealAtSeqLocked
+// states one bucket over. Releasing the lock after allocating the seq would let a LATER seq
+// reach the relay first, and the phone has a single MailboxReceiver for this bucket: it
+// refuses the earlier frame with crypto.ErrStaleSeq and the app returns early, so
+// LeaseState.Apply never sees it. That stopped being theoretical when the lease-severance
+// notice arrived, because it seals from the per-conn WATCHER goroutine while confirmLease
+// and forward seal from the command-poll goroutine -- and a supersede drives both at once,
+// so the loser is either the new lease's OpLease (a dead keyboard) or the OpDetach that
+// exists to prevent typing into a void. Replies are the gateway's outbound path and not hot,
+// so serialising them is cheap.
 func (b *CommandBridge) sealReply(ctx context.Context, reply protocol.Control) error {
+	b.replyMu.Lock()
+	defer b.replyMu.Unlock()
 	seq, err := b.replySeq.Next()
 	if err != nil {
 		return fmt.Errorf("reply seq: %w", err)

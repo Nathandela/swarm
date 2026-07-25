@@ -155,6 +155,10 @@ func TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend(t *testing.T) {
 		t.Errorf("TakeControl returned no operation id; PB-SYNC-2 cannot attribute its outcome")
 	}
 	h.AwaitCommand(protocol.ActionTakeControl)
+	// PB-INPUT-2: no keystroke is sent without a CONFIRMED lease generation, so the machine
+	// has to grant one before the phone can type. The harness confirms every take_control
+	// the way the real gateway does; this waits for the confirmation to land.
+	h.AwaitLease(testSession)
 
 	if err := app.SendInput(testSession, []byte("ls\r")); err != nil {
 		t.Fatalf("SendInput: %v", err)

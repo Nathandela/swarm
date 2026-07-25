@@ -2,6 +2,10 @@ package gate
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +13,54 @@ import (
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
+
+// gateSealer stands in for the Android-Keystore-backed KEK the handset supplies: a real
+// AEAD under a key the Go core never sees. It is SETUP ONLY -- no assertion below moves --
+// and it is required because phonecore.Resume fails closed with no sealer rather than
+// writing key material in the clear (ADR-007 B18(c)). Handing it in is also what makes the
+// assertions meaningful: they read the bytes the core actually wrote, so a seam that sealed
+// nothing still leaves the material verbatim on disk.
+type gateSealer struct{ kek []byte }
+
+func newGateSealer(t *testing.T) *gateSealer {
+	t.Helper()
+	kek := make([]byte, 32)
+	if _, err := rand.Read(kek); err != nil {
+		t.Fatalf("generating a Keystore-stand-in KEK: %v", err)
+	}
+	return &gateSealer{kek: kek}
+}
+
+func (s *gateSealer) gcm() (cipher.AEAD, error) {
+	block, err := aes.NewCipher(s.kek)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (s *gateSealer) Seal(plaintext []byte) ([]byte, error) {
+	g, err := s.gcm()
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, g.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return g.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func (s *gateSealer) Open(sealed []byte) ([]byte, error) {
+	g, err := s.gcm()
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < g.NonceSize() {
+		return nil, errors.New("gate: sealed blob too short")
+	}
+	return g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], nil)
+}
 
 // PB-SEC-1 -- "Key material at rest is sealed under an Android-Keystore-backed KEK per the
 // PB-KEY-1 custody contract and the PB-KEY-2 tier split."
@@ -49,7 +101,10 @@ func TestPBSEC1_DeviceRoleKeysAreNotPersistedInTheClear(t *testing.T) {
 		t.Fatalf("seeding the device key store: %v", err)
 	}
 
-	core, err := phonecore.Resume(phonecore.Config{Dir: dir, Machine: "m"})
+	core, err := phonecore.Resume(phonecore.Config{
+		Dir: dir, Machine: "m",
+		WakeSealer: newGateSealer(t), ContentSealer: newGateSealer(t),
+	})
 	if err != nil {
 		t.Fatalf("phonecore.Resume: %v", err)
 	}
@@ -91,7 +146,10 @@ func TestPBSEC1_DeviceRoleKeysAreNotPersistedInTheClear(t *testing.T) {
 // ways.
 func TestPBSEC1_EpochKeysAreNotPersistedInTheClear(t *testing.T) {
 	dir := t.TempDir()
-	core, err := phonecore.Resume(phonecore.Config{Dir: dir, Machine: "m"})
+	core, err := phonecore.Resume(phonecore.Config{
+		Dir: dir, Machine: "m",
+		WakeSealer: newGateSealer(t), ContentSealer: newGateSealer(t),
+	})
 	if err != nil {
 		t.Fatalf("phonecore.Resume: %v", err)
 	}

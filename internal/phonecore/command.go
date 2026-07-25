@@ -39,7 +39,13 @@ func SignCommand(ks crypto.KeyStore, in CommandInput) (schema.DeviceCommandAuth,
 	if err != nil {
 		return schema.DeviceCommandAuth{}, err
 	}
-	sig := ks.SignCommand(msg)
+	// A custody refusal is returned, never swallowed: a DeviceCommandAuth carrying the
+	// base64 of nothing is structurally well-formed, refused by the daemon, and
+	// indistinguishable at the call site from a network problem (ADR-007 B14).
+	sig, err := ks.SignCommand(msg)
+	if err != nil {
+		return schema.DeviceCommandAuth{}, err
+	}
 	return schema.DeviceCommandAuth{
 		DeviceID:    device.DeviceIDFor(ks.CommandSigningPublic()),
 		Action:      in.Action,

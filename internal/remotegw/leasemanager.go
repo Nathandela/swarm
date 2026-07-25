@@ -24,6 +24,17 @@ type LeaseManager struct {
 
 	mu    sync.Mutex
 	conns map[string]*LeaseConn // namespaced session id -> its lease conn
+	sever func(SeveredLease)    // PB-INPUT-2 sink, fired once per lease death
+}
+
+// OnSever installs the sink every lease death is reported to (PB-INPUT-2). It is fired
+// EXACTLY ONCE per conn, from that conn's own watcher: End, Close and a supersede all close
+// the same conn, and a duplicate notice carrying a dead generation is precisely the frame
+// that could kill a live replacement lease on the phone.
+func (m *LeaseManager) OnSever(fn func(SeveredLease)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sever = fn
 }
 
 // NewLeaseManager returns a manager whose lease conns dial socketPath and whose Begin waits
@@ -124,16 +135,31 @@ func (m *LeaseManager) Close() error {
 	return nil
 }
 
-// watch removes lc from the map when its lease dies. It blocks on the ONE lc.Dead() signal:
-// End, a supersede, and Close all close the conn (which fires Dead), so the watcher is
-// guaranteed to wake and return — it never leaks. The identity check (conns[session]==lc)
-// makes it a no-op when a supersede has already swapped in a newer conn for the session, so a
-// dying old conn never evicts its live replacement.
+// watch removes lc from the map when its lease dies, and REPORTS the death. It blocks on
+// the ONE lc.Dead() signal: End, a supersede, and Close all close the conn (which fires
+// Dead), so the watcher is guaranteed to wake and return — it never leaks. The identity
+// check (conns[session]==lc) makes the eviction a no-op when a supersede has already swapped
+// in a newer conn for the session, so a dying old conn never evicts its live replacement.
+//
+// The NOTICE is unconditional, and that is the point of carrying the generation on it: this
+// watcher is the only one for this conn, so exactly one notice is emitted per death, and the
+// phone tells a supersede's stale notice from one that ends the live lease by comparing
+// generations rather than by the gateway guessing.
 func (m *LeaseManager) watch(session string, lc *LeaseConn) {
 	<-lc.Dead()
 	m.mu.Lock()
 	if m.conns[session] == lc {
 		delete(m.conns, session)
 	}
+	sever := m.sever
 	m.mu.Unlock()
+	if sever == nil {
+		return
+	}
+	sever(SeveredLease{
+		Session:     session,
+		OperationID: lc.operationID,
+		Generation:  lc.Generation(),
+		Reason:      "the lease connection to the machine closed",
+	})
 }

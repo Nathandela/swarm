@@ -221,7 +221,7 @@ func s6bNewLatencyRig(t *testing.T) s6bLatencyRig {
 		},
 	}
 	dp := pairing.DeviceParams{
-		Static:       ks.NoiseStatic(),
+		Static:       mustNoiseStatic(t, ks),
 		Secret:       fillKey(0x5A),
 		RendezvousID: fill16(0x11),
 		Payload: pairing.DevicePayload{

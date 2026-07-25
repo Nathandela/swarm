@@ -73,6 +73,11 @@ func (f *fakeLeaseRouter) End(session string) {
 // This fake grants no real lease, so it reports none.
 func (f *fakeLeaseRouter) Generation(string) uint64 { return 0 }
 
+// OnSever satisfies the LeaseRouter seam's lease-death method (PB-INPUT-2). This fake holds
+// no conn, so no lease can die on it and the sink is never fired; s11SeverRouter embeds this
+// type and overrides the method to drive the bridge's half.
+func (f *fakeLeaseRouter) OnSever(func(SeveredLease)) {}
+
 // sealRemoteCmd seals a full RemoteCommand (take_control/take_control_end carry an
 // Action but no LaunchReq) under the epoch content key, mirroring sealedCmd's bare
 // DeviceCommandAuth seal.

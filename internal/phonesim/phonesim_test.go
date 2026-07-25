@@ -75,7 +75,12 @@ func sealJournal(t *testing.T, key crypto.ContentKey, seq uint64, rec protocol.J
 	if err != nil {
 		t.Fatalf("marshal journal record: %v", err)
 	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: testEpoch, Seq: seq}, pt)
+	// IssuedAt mirrors the real producer (remotegw.RelaySink). PB-TIME-2 enabled the phone's
+	// bounded-age check, and an unstamped fixture authenticates a ZERO -- ~56 years old, and
+	// refused with crypto.ErrStaleAge. No assertion changed.
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1, EpochID: testEpoch, Seq: seq, IssuedAt: time.Now().UnixMilli(),
+	}, pt)
 	if err != nil {
 		t.Fatalf("seal journal frame: %v", err)
 	}
@@ -367,7 +372,9 @@ func TestPhone_Drain_GapSurvivesDecodeFailure(t *testing.T) {
 	first := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
 	// seq 3 skips seq 2 (dropped by the relay) AND is malformed: a type-mismatched
 	// kind-less plaintext that authenticates fine but fails the journal decode.
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: testEpoch, Seq: 3}, []byte(`{"cursor":"not-a-number"}`))
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version: crypto.VersionV1, EpochID: testEpoch, Seq: 3, IssuedAt: time.Now().UnixMilli(),
+	}, []byte(`{"cursor":"not-a-number"}`))
 	if err != nil {
 		t.Fatalf("seal malformed frame: %v", err)
 	}

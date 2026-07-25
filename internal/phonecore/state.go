@@ -42,7 +42,13 @@ import (
 // makes a downgrade fail closed -- a v1 build decoding a v2 blob would drop
 // MachineRelayAuthPub and leave the phone with a valid content key, a valid send-seq and
 // no destination, with nothing failing loudly.
-const StateSchemaVersion = 2
+//
+// v3 seals wake_key and content_key under their PB-KEY-2 tier KEKs (PB-KEY-9). The field
+// SET is unchanged, which is exactly why the bump is required: a v2 build would read v3's
+// sealed bytes AS the key and encrypt every frame under a wrong one, silently. A v2 blob is
+// refused here for the mirror reason -- its cleartext key read as a sealed blob is the same
+// confusion one direction over.
+const StateSchemaVersion = 3
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -173,6 +179,9 @@ type stateFile struct {
 	PushPreference  PushPreference `json:"push_preference,omitzero"`
 	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
 
+	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
+	// (PB-KEY-9): one file cannot be gated two ways, and a content key recoverable
+	// without the biometric collapses the tier split the design exists for.
 	WakeKey     []byte                    `json:"wake_key,omitempty"`
 	ContentKey  []byte                    `json:"content_key,omitempty"`
 	SendSeq     []sendSeqRecord           `json:"send_seq"`
@@ -216,6 +225,21 @@ type fileStore struct {
 	path    string
 	machine string
 	st      State
+
+	// wake and content are PB-KEY-2's tier KEKs. The two epoch keys are sealed under
+	// SEPARATE ones because a single file cannot be gated two ways.
+	wake, content         Sealer
+	wakeTier, contentTier sealedTier
+}
+
+// sealedTier is one tier's key field as it stands on disk, plus whether this process was
+// able to OPEN it. A tier it could not open is rewritten VERBATIM by the next Save:
+// re-sealing the zero value the process is holding would destroy a key it merely could not
+// read, and that is the wake path's normal condition -- it runs with the content tier locked
+// while any send reserves a seq and therefore Saves.
+type sealedTier struct {
+	blob   []byte
+	opened bool
 }
 
 // OpenStore opens the durable phone state at path, loading any previously persisted blob.
@@ -230,16 +254,22 @@ type fileStore struct {
 // A missing file is first run. Anything unparseable or unversioned is ErrCorruptState and a
 // newer schema is ErrFutureSchema: both fail closed, because starting from an empty
 // checkpoint would leave the replay guard blind and re-open every retained frame.
-func OpenStore(path, machineID string) (Store, error) {
-	s := &fileStore{path: path, machine: machineID}
+//
+// wake and content are PB-KEY-2's tier KEKs and are REQUIRED for any real path: writing the
+// epoch keys in the clear is the defect PB-SEC-1 names, so their absence is ErrNoSealer
+// rather than a silent cleartext blob (ADR-007 B18(c)). An empty path persists nothing, so
+// there is nothing at rest to seal and no sealer is needed.
+func OpenStore(path, machineID string, wake, content Sealer) (Store, error) {
+	s := &fileStore{path: path, machine: machineID, wake: wake, content: content}
 	if path == "" {
 		return s, nil
 	}
-	st, err := loadState(path, machineID)
-	if err != nil {
+	if wake == nil || content == nil {
+		return nil, fmt.Errorf("%w: %s must be sealed under both tier KEKs", ErrNoSealer, StateFileName)
+	}
+	if err := s.load(); err != nil {
 		return nil, err
 	}
-	s.st = st
 	return s, nil
 }
 
@@ -263,12 +293,45 @@ func (s *fileStore) Save(st State) error {
 
 	merged := mergeGuards(s.st, st.clone())
 	if s.path != "" {
-		if err := persistState(s.path, merged); err != nil {
+		wake, err := resealTier(s.wake, merged.Keys.WakeKey[:], s.wakeTier)
+		if err != nil {
+			return fmt.Errorf("seal wake key: %w", err)
+		}
+		content, err := resealTier(s.content, merged.Keys.ContentKey[:], s.contentTier)
+		if err != nil {
+			return fmt.Errorf("seal content key: %w", err)
+		}
+		if err := persistState(s.path, merged, wake.blob, content.blob); err != nil {
 			return err
 		}
+		s.wakeTier, s.contentTier = wake, content
 	}
 	s.st = merged
 	return nil
+}
+
+// resealTier returns the tier field to write. An all-zero key is written as NO field at all
+// -- a lock purge must take the durable copy with it (PB-KEY-7) -- while a tier this process
+// could not open is carried through untouched (see sealedTier).
+func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
+	if !prev.opened && len(prev.blob) > 0 {
+		return prev, nil
+	}
+	zero := true
+	for _, b := range key {
+		if b != 0 {
+			zero = false
+			break
+		}
+	}
+	if zero {
+		return sealedTier{opened: true}, nil
+	}
+	blob, err := sl.Seal(key)
+	if err != nil {
+		return sealedTier{}, err
+	}
+	return sealedTier{blob: blob, opened: true}, nil
 }
 
 // mergeGuards returns next with every replay-guard coordinate raised to at least the value
@@ -302,29 +365,39 @@ func mergeGuards(cur, next State) State {
 	return next
 }
 
-// loadState reads and validates the persisted blob (see OpenStore for the fail-closed
-// rules).
-func loadState(path, machineID string) (State, error) {
+// load reads, validates and unseals the persisted blob (see OpenStore for the fail-closed
+// rules) into the store's in-memory state and tier fields.
+func (s *fileStore) load() error {
+	path, machineID := s.path, s.machine
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return State{}, nil
+		return nil
 	}
 	if err != nil {
-		return State{}, fmt.Errorf("read phone state: %w", err)
+		return fmt.Errorf("read phone state: %w", err)
 	}
 	var f stateFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return State{}, fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
+		return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 	}
 	if f.SchemaVersion > StateSchemaVersion {
-		return State{}, fmt.Errorf("%w: %s: schema version %d (this build knows %d)",
+		return fmt.Errorf("%w: %s: schema version %d (this build knows %d)",
 			ErrFutureSchema, path, f.SchemaVersion, StateSchemaVersion)
 	}
 	if f.SchemaVersion < 1 {
-		return State{}, fmt.Errorf("%w: %s: unversioned blob", ErrCorruptState, path)
+		return fmt.Errorf("%w: %s: unversioned blob", ErrCorruptState, path)
 	}
 	if machineID != "" && f.Machine != machineID {
-		return State{}, nil
+		return nil
+	}
+	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
+	// sealed blobs would be exactly the silent reinterpretation the version guard exists
+	// to refuse, so a pre-seal blob that carries either one is refused outright. Checked
+	// AFTER the machine test: another machine's blob is discarded wholesale either way,
+	// and erroring on it would brick the re-pair that case exists to keep working.
+	if f.SchemaVersion < 3 && (len(f.WakeKey) > 0 || len(f.ContentKey) > 0) {
+		return fmt.Errorf("%w: %s: schema version %d holds unsealed epoch keys (PB-SEC-1); re-pair the device",
+			ErrCorruptState, path, f.SchemaVersion)
 	}
 
 	st := State{
@@ -346,8 +419,33 @@ func loadState(path, machineID string) (State, error) {
 		PendingOps:          f.PendingOps,
 		OpOutcomes:          f.OpOutcomes,
 	}
-	copy(st.Keys.WakeKey[:], f.WakeKey)
-	copy(st.Keys.ContentKey[:], f.ContentKey)
+	// The WAKE tier opens with no user present -- that is its whole purpose -- so one that
+	// will not open means this blob is not ours, and starting from an empty checkpoint
+	// would leave the replay guard blind. The CONTENT tier legitimately refuses (the phone
+	// comes up on a push before any biometric): the phone then holds no content key, and
+	// the durable blob is carried through every Save untouched until a tier that can read
+	// it arrives.
+	if len(f.WakeKey) > 0 {
+		s.wakeTier.blob = f.WakeKey
+		plain, oerr := s.wake.Open(f.WakeKey)
+		if oerr != nil {
+			return fmt.Errorf("%w: %s: unseal wake key: %v", ErrCorruptState, path, oerr)
+		}
+		copy(st.Keys.WakeKey[:], plain)
+		s.wakeTier.opened = true
+	}
+	if len(f.ContentKey) > 0 {
+		s.contentTier.blob = f.ContentKey
+		plain, oerr := s.content.Open(f.ContentKey)
+		switch {
+		case oerr == nil:
+			copy(st.Keys.ContentKey[:], plain)
+			s.contentTier.opened = true
+		case errors.Is(oerr, crypto.ErrKeyAuthRequired), errors.Is(oerr, crypto.ErrKeyInvalidated):
+		default:
+			return fmt.Errorf("%w: %s: unseal content key: %v", ErrCorruptState, path, oerr)
+		}
+	}
 	if len(f.SendSeq) > 0 {
 		st.SendSeq = make(map[uint32]uint64, len(f.SendSeq))
 		for _, rec := range f.SendSeq {
@@ -361,7 +459,7 @@ func loadState(path, machineID string) (State, error) {
 		for _, rec := range f.Receive {
 			b, err := decodeBucket(rec.Sender, rec.Epoch)
 			if err != nil {
-				return State{}, fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
+				return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 			}
 			if rec.Seq > st.Receive[b] {
 				st.Receive[b] = rec.Seq
@@ -373,12 +471,13 @@ func loadState(path, machineID string) (State, error) {
 		for _, rec := range f.Stale {
 			b, err := decodeBucket(rec.Sender, rec.Epoch)
 			if err != nil {
-				return State{}, fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
+				return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 			}
 			st.Stale[b] = true
 		}
 	}
-	return st, nil
+	s.st = st
+	return nil
 }
 
 func decodeBucket(sender string, epoch uint32) (Bucket, error) {
@@ -394,7 +493,7 @@ func decodeBucket(sender string, epoch uint32) (Bucket, error) {
 // persistState writes the blob atomically. The record slices are ordered so the file is
 // byte-stable across rewrites (Go map iteration is randomized), keeping a diff of the state
 // dir meaningful.
-func persistState(path string, st State) error {
+func persistState(path string, st State, wakeKey, contentKey []byte) error {
 	f := stateFile{
 		SchemaVersion:       StateSchemaVersion,
 		Machine:             st.Machine,
@@ -406,8 +505,8 @@ func persistState(path string, st State) error {
 		PushToken:           st.PushToken,
 		PushPreference:      st.PushPreference,
 		ReconciledEpoch:     st.ReconciledEpoch,
-		WakeKey:             st.Keys.WakeKey[:],
-		ContentKey:          st.Keys.ContentKey[:],
+		WakeKey:             wakeKey,
+		ContentKey:          contentKey,
 		GrantEpoch:          st.GrantEpoch,
 		GrantSeq:            st.GrantSeq,
 		WakeReplay:          st.WakeReplay,

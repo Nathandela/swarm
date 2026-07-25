@@ -21,6 +21,16 @@ var (
 	ErrBadRecipient = errors.New("crypto: recipient public key must be 32 bytes")
 	// ErrSealedOpen is returned when a sealed box fails to open.
 	ErrSealedOpen = errors.New("crypto: sealed box open failed")
+
+	// ErrKeyAuthRequired is a RECOVERABLE custody refusal: the key is gated on user
+	// authentication and the user has not authenticated. A prompt restores it.
+	ErrKeyAuthRequired = errors.New("crypto: key custody requires user authentication")
+	// ErrKeyInvalidated is a PERMANENT custody refusal: the key is gone for good
+	// (Android invalidates an auth-bound key on biometric re-enrollment). No prompt
+	// restores it and the device must re-pair. It is distinct from ErrKeyAuthRequired
+	// because the two demand opposite handling, and a UI that cannot tell them apart
+	// would prompt forever against a key no prompt can bring back (ADR-007 B14).
+	ErrKeyInvalidated = errors.New("crypto: key custody permanently invalidated")
 )
 
 // KeyMaterial is the raw private material for a device KeyStore. The two X25519
@@ -44,14 +54,20 @@ func (m KeyMaterial) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, m.St
 // Noise-static handle), sealed-box open, and detached signatures — but NEVER the
 // raw private scalar (R-CRY.2). A hardware-gated impl must drop in with
 // bit-identical wire output (R-CRY.15).
+//
+// Every operation that touches private material can FAIL (ADR-007 B14): a
+// hardware-gated custody refuses when the user has not authenticated
+// (ErrKeyAuthRequired) and permanently after a biometric re-enrollment
+// (ErrKeyInvalidated). A failed operation returns NOTHING a caller could send.
+// The public-key accessors stay errorless — public material is not gated.
 type KeyStore interface {
 	NoiseStaticPublic() []byte
 	RecipientPublic() []byte
-	NoiseStatic() *NoiseStatic
+	NoiseStatic() (*NoiseStatic, error)
 	OpenSealedBox(sealed []byte) ([]byte, error)
-	SignCommand(msg []byte) []byte
+	SignCommand(msg []byte) ([]byte, error)
 	CommandSigningPublic() []byte
-	SignRelayAuth(challenge []byte) []byte
+	SignRelayAuth(challenge []byte) ([]byte, error)
 	RelayAuthPublic() []byte
 }
 
@@ -87,6 +103,14 @@ func NewFileKeyStoreFromMaterial(dir string, m KeyMaterial) (KeyStore, error) {
 	}
 	return newFileKeyStore(m), nil
 }
+
+// NewKeyStoreFromMaterial returns a KeyStore over explicit material with NO file
+// custody at all (ADR-007 B18(b)). It is the construction path
+// NewFileKeyStoreFromMaterial already used, with the write lifted out, so a caller
+// that owns the device-key file itself — phonecore, which must SEAL it under a KEK
+// this package never sees — can supply the material it unsealed. No semantics
+// change and no new I/O: the derived keys and every wire byte are identical.
+func NewKeyStoreFromMaterial(m KeyMaterial) KeyStore { return newFileKeyStore(m) }
 
 // OpenFileKeyStore loads persisted material; a missing file is an error.
 func OpenFileKeyStore(dir string) (KeyStore, error) {
@@ -146,18 +170,21 @@ func (k *fileKeyStore) CommandSigningPublic() []byte {
 }
 func (k *fileKeyStore) RelayAuthPublic() []byte { return append([]byte(nil), k.relayPub...) }
 
-// NoiseStatic returns the opaque handshake handle for the Noise-static key.
-func (k *fileKeyStore) NoiseStatic() *NoiseStatic {
-	return newNoiseStatic(k.m.NoiseStaticPriv, k.noiseStaticPub)
+// NoiseStatic returns the opaque handshake handle for the Noise-static key. The
+// software store holds its material outright, so it never refuses.
+func (k *fileKeyStore) NoiseStatic() (*NoiseStatic, error) {
+	return newNoiseStatic(k.m.NoiseStaticPriv, k.noiseStaticPub), nil
 }
 
 // SignCommand returns a detached Ed25519 signature over the canonical command
 // bytes (D4). Ed25519 is deterministic: identical material -> identical sig.
-func (k *fileKeyStore) SignCommand(msg []byte) []byte { return ed25519.Sign(k.commandPriv, msg) }
+func (k *fileKeyStore) SignCommand(msg []byte) ([]byte, error) {
+	return ed25519.Sign(k.commandPriv, msg), nil
+}
 
 // SignRelayAuth signs a relay challenge with the relay-auth key (R-CRY.3).
-func (k *fileKeyStore) SignRelayAuth(challenge []byte) []byte {
-	return ed25519.Sign(k.relayPriv, challenge)
+func (k *fileKeyStore) SignRelayAuth(challenge []byte) ([]byte, error) {
+	return ed25519.Sign(k.relayPriv, challenge), nil
 }
 
 // OpenSealedBox opens a crypto_box_seal artifact addressed to this device's

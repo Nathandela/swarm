@@ -57,7 +57,28 @@ const opTakeControlEnd = "take_control_end"
 // pending count that only rises makes every real pending op invisible.
 func (a *App) ReleaseControl(session string) (op *Op, err error) {
 	defer barrier(&err)
-	return a.sealSignedCommand(opTakeControlEnd, session, nil, nil)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	// PB-INPUT-6: a release is a BOUNDARY, so what is still buffered is flushed while the
+	// lease is still live. Dropping it would lose keystrokes the user watched appear, and
+	// holding it would queue a keystroke for a lease that no longer exists (ADR-007 D7).
+	// Live-only, like every other send of these bytes: with no connection the flush resolves
+	// them as undelivered rather than waiting for one to come back.
+	if sc, serr := a.liveSendContext(); serr == nil {
+		_ = a.sendCoalesced(sc, core, a.coalesce.Flush())
+	} else {
+		for _, u := range a.coalesce.Abandon(serr.Error()) {
+			a.emitUndelivered(u)
+		}
+	}
+	op, err = a.sealSignedCommand(opTakeControlEnd, session, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	core.Leases().Sever(session, "control was released")
+	return op, nil
 }
 
 // Kill terminates a session. PB-APP-3's persistent Stop maps here.
@@ -153,21 +174,127 @@ func (a *App) TerminalUnwatch(session string) (err error) {
 // SendInput sends a keystroke burst on the live control lease (PB-APP-4 / PB-NET-4). It
 // is LIVE ONLY: never queued, never replayed. The target session is bound INSIDE the
 // sealed frame, so the machine routes by it and never by mutable focus state.
+//
+// It is GATED on a CONFIRMED lease generation (PB-INPUT-2) and PACED through the coalescer
+// (PB-INPUT-5). Ungated, the phone types happily at a machine that granted it nothing and
+// the gateway drops every frame silently, so the user sees a live keyboard and a dead
+// terminal. Unpaced, one relay append per keystroke is 30/s at autorepeat against the
+// relay's 600-per-minute window, so the lease dies with codeQuotaExceeded after roughly
+// twenty seconds of held-down key -- while every short-burst latency test still passes.
 func (a *App) SendInput(session string, data []byte) (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
 	if err != nil {
 		return err
 	}
-	sc, err := a.sendContext()
+	// Refused BEFORE the bytes are buffered: accepting them would leave keystrokes held for
+	// a lease that does not exist, which is the queue ADR-007 D7 forbids.
+	if err = core.Leases().Require(session, time.Now()); err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	sc, err := a.liveSendContext()
 	if err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	err = a.sendCoalesced(sc, core, a.coalesce.Type(session, data))
+	a.scheduleDrain()
+	return err
+}
+
+// Paste delivers a clipboard paste or an IME COMMIT as ONE unit (PB-INPUT-6). It is not a
+// keystroke stream and is deliberately not subject to the 125 ms coalescing window, which
+// exists to pace autorepeat: holding a paste for a window buys nothing (it is already one
+// event) and costs a window of visible latency, with the user watching the tail of their
+// paste disappear. Buffered keystrokes are flushed FIRST, so a paste can never overtake
+// characters typed before it, and an oversize unit is split at the 4 KiB frame cap and
+// nowhere else.
+//
+// The parameter is TEXT, not bytes: a clipboard and an IME both hand Android a String, and
+// PB-BIND-4 keeps []byte crossings to the enumerated few. An IME PREEDIT is never sent and
+// has no entry point here -- that is the decision, not an omission: a preedit is local until
+// the IME commits, at which point it arrives through this method. Sending preedit text would
+// type-then-correct against a live shell.
+func (a *App) Paste(session string, text string) (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	data := []byte(text)
+	if err = core.Leases().Require(session, time.Now()); err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	sc, err := a.liveSendContext()
+	if err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	return a.sendCoalesced(sc, core, a.coalesce.Insert(session, data))
+}
+
+// refuseInput resolves input the phone accepted from the user but will not send, as an
+// explicit undelivered record rather than a silent drop (PB-INPUT-1). The bytes never enter
+// the coalescer's buffer: buffering input for a lease or a link that is gone is the queue
+// ADR-007 D7 makes structurally impossible.
+func (a *App) refuseInput(session string, data []byte, cause error) error {
+	a.coalesce.Fail(phonecore.InputFrame{T: "data", Session: session, Data: data}, cause.Error())
+	a.events.emit(&Event{
+		Kind: "input", Stream: "input", SessionID: session,
+		State: "undelivered", Message: cause.Error(), Cursor: int64(len(data)),
+	})
+	return cause
+}
+
+// Resize sends a terminal resize on the live control lease. It is gated on the same
+// confirmed lease as typing, and it FLUSHES the buffered keystrokes first (PB-INPUT-6): a
+// resize that overtook them would re-wrap the line and land the bytes against a grid the
+// user was not looking at when they typed them.
+func (a *App) Resize(session string, cols, rows int) (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	if err = core.Leases().Require(session, time.Now()); err != nil {
+		return err
+	}
+	sc, err := a.liveSendContext()
+	if err != nil {
+		return err
+	}
+	return a.sendCoalesced(sc, core, a.coalesce.Resize(session, cols, rows))
+}
+
+// sendCoalesced seals and appends the frames the coalescer released, IN ORDER. A frame whose
+// send fails is recorded on the undelivered ledger and never handed back: re-buffering a
+// failed live frame turns the live-only path into a queue, one frame at a time.
+func (a *App) sendCoalesced(sc sendCtx, core *phonecore.Core, frames []phonecore.InputFrame) error {
+	var errs []error
+	for _, f := range frames {
+		if err := a.sendInputFrame(sc, core, f); err != nil {
+			a.coalesce.Fail(f, err.Error())
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// sendInputFrame seals ONE coalesced frame and appends it. The lease is re-checked here
+// rather than only at the caller, because a frame the window held for 125 ms can outlive the
+// lease that authorized it -- and PB-INPUT-2's rule is about the moment of the SEND.
+func (a *App) sendInputFrame(sc sendCtx, core *phonecore.Core, f phonecore.InputFrame) error {
+	if err := core.Leases().Require(f.Session, time.Now()); err != nil {
 		return err
 	}
 	seq, err := core.Seq().NextInput()
 	if err != nil {
 		return err
 	}
-	env, err := phonecore.SealInputData(sc.key, sc.epoch, seq, session, data)
+	var env []byte
+	if f.T == "resize" {
+		env, err = phonecore.SealInputResize(sc.key, sc.epoch, seq, f.Session, f.Cols, f.Rows)
+	} else {
+		env, err = phonecore.SealInputData(sc.key, sc.epoch, seq, f.Session, f.Data)
+	}
 	if err != nil {
 		return err
 	}
@@ -175,27 +302,45 @@ func (a *App) SendInput(session string, data []byte) (err error) {
 	return err
 }
 
-// Resize sends a terminal resize on the live control lease.
-func (a *App) Resize(session string, cols, rows int) (err error) {
-	defer barrier(&err)
+// scheduleDrain arms the one-shot release of whatever the coalescer is still holding.
+// Without it the TAIL of a burst -- the keystrokes buffered inside the last 125 ms window --
+// would sit there until the user typed again, so a fast "ls\r" would leave the shell waiting
+// on a carriage return that was never sent. A user who keeps typing closes the window
+// themselves, so this timer only ever fires for the tail.
+func (a *App) scheduleDrain() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed || a.sess == nil {
+		return
+	}
+	if a.drainTimer == nil {
+		a.drainTimer = time.AfterFunc(phonecore.InputFrameInterval, a.drainHeldInput)
+		return
+	}
+	a.drainTimer.Reset(phonecore.InputFrameInterval)
+}
+
+// drainHeldInput sends what the elapsed window released. Held bytes that can no longer be
+// sent -- the link went away, the lease died -- resolve as an explicit undelivered entry
+// through sendCoalesced, never as a silent drop (PB-INPUT-1).
+func (a *App) drainHeldInput() {
 	core, err := a.ready()
 	if err != nil {
-		return err
+		return
 	}
-	sc, err := a.sendContext()
+	frames := a.coalesce.Due()
+	if len(frames) == 0 {
+		return
+	}
+	sc, err := a.liveSendContext()
 	if err != nil {
-		return err
+		for _, f := range frames {
+			a.coalesce.Fail(f, err.Error())
+		}
+		return
 	}
-	seq, err := core.Seq().NextInput()
-	if err != nil {
-		return err
-	}
-	env, err := phonecore.SealInputResize(sc.key, sc.epoch, seq, session, cols, rows)
-	if err != nil {
-		return err
-	}
-	_, err = sc.cl.MailboxAppend(context.Background(), sc.target, env)
-	return err
+	_ = a.sendCoalesced(sc, core, frames)
+	a.scheduleDrain() // bytes may have arrived inside the window that just closed
 }
 
 // ---- internals -----------------------------------------------------------------
@@ -215,6 +360,25 @@ func (a *App) requireReconciled() error {
 // send-seq and no machine routing id would otherwise seal every frame and deliver none,
 // with nothing failing.
 func (a *App) sendContext() (sendCtx, error) {
+	return a.resolveSend(a.awaitConn)
+}
+
+// liveSendContext is sendContext for the LIVE-ONLY plane (input and resize). It differs in
+// exactly one thing and the difference is the requirement: it takes the connection as it
+// stands instead of waiting for one.
+//
+// awaitConn polls for up to five seconds so a command issued right after Start is not
+// refused by a race the caller cannot see. That is right for a command -- idempotent, queued
+// by design -- and exactly wrong for a keystroke: waiting means the byte is appended to the
+// RECONNECTED link and reaches the machine seconds later, against a terminal state the user
+// has since changed and long after they gave up on it. ADR-007 D7 makes that structurally
+// impossible, so input fails immediately and resolves as an undelivered record instead.
+func (a *App) liveSendContext() (sendCtx, error) {
+	return a.resolveSend(a.conn)
+}
+
+// resolveSend is the shared destination lookup; conn supplies the connection policy.
+func (a *App) resolveSend(conn func() (*relay.Client, error)) (sendCtx, error) {
 	core, err := a.ready()
 	if err != nil {
 		return sendCtx{}, err
@@ -227,7 +391,7 @@ func (a *App) sendContext() (sendCtx, error) {
 	if st.Keys.ContentKey == (crypto.ContentKey{}) {
 		return sendCtx{}, errNoContentKey
 	}
-	cl, err := a.awaitConn()
+	cl, err := conn()
 	if err != nil {
 		return sendCtx{}, err
 	}
@@ -293,6 +457,16 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 	if err := a.requireReconciled(); err != nil {
 		return nil, err
 	}
+	// THE SKEW VERDICT DOES NOT GATE THIS CALL, and that is a decision (PB-TIME-1 with
+	// PB-STATE-10). The only authenticated machine time rides a REPLY, and a reply only
+	// exists in answer to a command -- so a local refusal stops the very command that would
+	// have re-measured the clock, and the refusal outlives the broken clock it was
+	// reporting: the user fixes the clock exactly as the error told them to and every op
+	// stays refused until the process restarts. Letting one command through per measurement
+	// is the same defect rearranged, since the machine answers every command and re-arms the
+	// probe. So the phone EXPLAINS -- onReply reports the verdict on the event plane the
+	// moment a reply produces it -- and the daemon's own ExpiresAt check ENFORCES, which is
+	// the split s11_skew_test.go already states for a phone that has never measured.
 	sc, err := a.sendContext()
 	if err != nil {
 		return nil, err
@@ -301,12 +475,17 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 	if err != nil {
 		return nil, err
 	}
+	// §6.0 sets the signed horizon BY OP CLASS: 1 minute for ordinary commands, 15 for
+	// take_control. The daemon's lease deadline is the EARLIEST of this ExpiresAt,
+	// now+TTLSeconds and a 30-minute cap, so one flat short TTL makes the SIGNATURE the
+	// thing that ends a typing session.
+	expiresAt := time.Now().Add(phonecore.CommandTTLFor(action))
 	cmd, err := phonecore.SignCommand(core.KeyStore(), phonecore.CommandInput{
 		Action:      action,
 		Machine:     core.State().Machine,
 		Session:     session,
 		OperationID: id,
-		ExpiresAt:   time.Now().Add(commandTTL),
+		ExpiresAt:   expiresAt,
 		ContentHash: contentHash,
 	})
 	if err != nil {
@@ -325,8 +504,19 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 	if err != nil {
 		return nil, err
 	}
+	// PB-TIME-3: T1 of the skew bracket. It can only be recorded here, where the operation
+	// id is minted, and as close to the append as possible -- without it every machine stamp
+	// arrives uncorrelated, the monitor ignores it by design, and the phone can never
+	// measure skew at all.
+	core.SkewMonitor().Sent(id)
 	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
 		return nil, err
+	}
+	if action == schema.ActionTakeControl {
+		// PB-INPUT-2: authoring a take_control is NOT a lease, and Require still refuses
+		// until the machine confirms one. What is recorded here is the horizon the phone
+		// SIGNED, which is the fallback expiry for a grant that carries none of its own.
+		core.Leases().Requested(session, id, expiresAt)
 	}
 	return &Op{Action: action, SessionID: session, OperationID: id}, nil
 }

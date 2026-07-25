@@ -15,10 +15,23 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
+
+// InboundMaxAge bounds the authenticated age of a MACHINE -> phone sealed frame (PB-TIME-2,
+// value from §6.0). It is the mirror of the gateway's own inbound bound and MUST hold the
+// same number as remotegw.InboundMaxAge -- one §6.0 budget, not two -- which the S11 tests
+// pin across the two packages (phonecore cannot import remotegw: PB-BIND-0).
+//
+// Like the gateway's, it is a BACKSTOP behind the per-(sender, epoch) replay high-water,
+// not a replacement: a fresh receiver has seen == false for every stream and skips the
+// staleness check on the first frame, so a relay that retained frames would otherwise have
+// them re-accepted at the guard after a restart. Ten minutes sits well above §6.0's
+// +/-30 s skew budget and any plausible relay delay, and well below the 7 d retention cap.
+const InboundMaxAge = 10 * time.Minute
 
 // The kind discriminator names each frame family the phone demuxes off the ONE shared
 // relay mailbox. A plaintext with an empty/absent kind is a journal record (backward-
@@ -385,7 +398,14 @@ func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) 
 // gap (round-4 re-audit, codex#3 + sonnet#2). A replayed/reordered seq or an unauthenticated
 // frame (res not yet known) returns false and mutates nothing (fail-closed, R-PHC.5).
 func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
-	_, res, f, err := r.open(raw)
+	return r.AcceptAt(raw, time.Now())
+}
+
+// AcceptAt is Accept with the age clock injected, so PB-TIME-2's bound is testable at its
+// boundary without waiting ten minutes. Production reads through Accept and AcceptCommit,
+// which pass time.Now().
+func (r *MailboxRouter) AcceptAt(raw []byte, now time.Time) (gap bool, err error) {
+	_, res, f, err := r.open(raw, now)
 	if err != nil {
 		gap := false
 		if res != nil {
@@ -400,9 +420,14 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 // inboundFrame is one authenticated plaintext, decoded but NOT yet applied. Splitting the
 // decode from the application is what lets AcceptCommit order the durable commit around it.
 type inboundFrame struct {
-	kind     string
-	bucket   Bucket
-	seq      uint64
+	kind   string
+	bucket Bucket
+	seq    uint64
+	// issuedAt is the envelope's AAD-COVERED machine stamp, in unix millis. It is the only
+	// authenticated machine time the phone ever sees, so it is what the skew monitor
+	// brackets (PB-TIME-3) -- and it is carried on the frame rather than re-read from the
+	// header later, so it can only be used for a frame the AEAD has already vouched for.
+	issuedAt int64
 	snapshot Snapshot
 	reply    schema.Control
 	record   schema.JournalRecord
@@ -413,13 +438,43 @@ type inboundFrame struct {
 // open parses, authenticates and seq-guards one envelope EXACTLY ONCE, then decodes its
 // plaintext. res is non-nil once the frame authenticated, so a caller can report the TRUE
 // gap even when the decode then fails.
-func (r *MailboxRouter) open(raw []byte) (Bucket, *crypto.MailboxResult, inboundFrame, error) {
+func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.MailboxResult, inboundFrame, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
 		return Bucket{}, nil, inboundFrame{}, err
 	}
 	b := Bucket{Sender: env.Header.SenderKeyID, Epoch: env.Header.EpochID}
 	key, recv, _, _, _ := r.bound()
+	// PB-TIME-2's bounded-age backstop.
+	//
+	// WHY IT LIVES AT THIS SEAM rather than on the receiver: internal/remote/crypto is
+	// FROZEN, MailboxReceiver.maxAge has no setter and NewMailboxReceiver takes no
+	// arguments, so the property is enforced here -- exactly as S7b enforced it at the
+	// gateway seam one hop over.
+	//
+	// WHY IT IS BEFORE Accept: a refusal must advance NO high-water, or one retained frame
+	// carrying an absurd seq silences the machine for the rest of the epoch -- no lease
+	// confirmation, no op outcome, no journal. The receiver cannot be relied on for this.
+	// Its own age check is the `maxAge > 0` branch, and maxAge is zero here BY CONSTRUCTION
+	// (see above), so Accept does not reject a stale frame at all: it accepts it and
+	// advances the high-water. Moving this check below Accept is caught by
+	// TestS11ReplyAge_RejectionDoesNotPoisonTheStream, which then fails with the machine's
+	// next live reply refused as ErrStaleSeq.
+	//
+	// The bound is ONE-SIDED. IssuedAt is AAD-covered, so the untrusted relay can only make
+	// a frame OLDER, never newer, and bounding the future would refuse live traffic from a
+	// machine whose clock runs fast (the same reasoning S7b pinned one hop over).
+	//
+	// A stale CLAIM belongs to the relay until the AEAD vouches for it, so the refusal
+	// happens only after crypto.OpenMailbox authenticates the header -- a forgery is refused
+	// as a forgery, not as stale. OpenMailbox does not touch the receiver, so this costs no
+	// seq; a fresh-looking claim needs no separate open, since Accept below authenticates it.
+	if now.Sub(time.UnixMilli(env.Header.IssuedAt)) > InboundMaxAge {
+		if _, err := crypto.OpenMailbox(key, env); err != nil {
+			return b, nil, inboundFrame{}, err
+		}
+		return b, nil, inboundFrame{}, crypto.ErrStaleAge
+	}
 	res, err := recv.Accept(key, env)
 	if err != nil {
 		return b, nil, inboundFrame{}, err
@@ -431,7 +486,7 @@ func (r *MailboxRouter) open(raw []byte) (Bucket, *crypto.MailboxResult, inbound
 	if err := json.Unmarshal(res.Plaintext, &disc); err != nil {
 		return b, res, inboundFrame{}, err
 	}
-	f := inboundFrame{kind: disc.Kind, bucket: b, seq: env.Header.Seq}
+	f := inboundFrame{kind: disc.Kind, bucket: b, seq: env.Header.Seq, issuedAt: env.Header.IssuedAt}
 	switch disc.Kind {
 	case kindTerminalSnapshot:
 		var sf snapshotFrame
@@ -483,6 +538,19 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 		snapshots.Apply(f.snapshot)
 	case kindCommandReply:
 		replies.Append(f.reply)
+		if r.core != nil {
+			// A command reply is the ONLY machine -> phone frame the phone can correlate to
+			// a send it made, so it is where both of S11's time-and-lease consumers live:
+			// PB-INPUT-2's lease lifecycle (the OpLease confirmation and the OpDetach
+			// severance ride this kind) and PB-TIME-3's skew bracket. Both run here, AFTER
+			// the AEAD has vouched for the frame -- reading either from an unauthenticated
+			// header would make the untrusted relay the authority.
+			r.core.leases.Apply(f.reply)
+			// The verdict is deliberately dropped here: a skewed clock is not a reason to
+			// refuse an INBOUND frame (the machine's stamp is the thing being measured).
+			// Callers read it from SkewMonitor.Check at the command-authoring site.
+			_, _ = r.core.skew.Observe(f.reply.OperationID, time.UnixMilli(f.issuedAt))
+		}
 	case kindReconcile:
 		r.mu.Lock()
 		r.recon, r.reconOK, r.reconAt = f.recon, true, f.bucket
@@ -533,10 +601,13 @@ type Receipt struct {
 // would have resolved therefore stays UNRESOLVED across a restart -- by design, until the
 // op is re-driven or the machine's reconcile record re-establishes the authorities.
 func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error) {
-	b, res, f, err := r.open(raw)
+	b, res, f, err := r.open(raw, time.Now())
 	if err != nil {
-		if errors.Is(err, crypto.ErrStaleSeq) {
-			// Already applied. The ack is the idempotent half of the retry.
+		if errors.Is(err, crypto.ErrStaleSeq) || errors.Is(err, crypto.ErrStaleAge) {
+			// Already applied, or past PB-TIME-2's bound and therefore never usable. The
+			// ack is the idempotent half of the retry: without it the phone re-reads the
+			// same unusable item on every drain and the relay mailbox never compacts.
+			// Nothing is persisted either way -- a fail-closed refusal commits no content.
 			return Receipt{Acked: r.ack(cursor) == nil}, err
 		}
 		gap := false

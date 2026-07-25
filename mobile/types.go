@@ -98,6 +98,46 @@ func (l *SessionList) At(i int) (s *Session, err error) {
 	return &item, nil
 }
 
+// UndeliveredInput is one unit of input the phone took from the user, acknowledged on
+// screen, and could not deliver (PB-INPUT-1). Input is live-only, so the resolution is never
+// a retry: it is "delivery unknown / not sent", and the whole point of the record is that
+// the user is TOLD rather than left believing they typed it. Bytes is what was lost (0 for a
+// resize); AtMillis is the unix-millisecond instant it was resolved.
+type UndeliveredInput struct {
+	SessionID string
+	Bytes     int
+	Reason    string
+	AtMillis  int64
+}
+
+// UndeliveredList is an undelivered-input HANDLE, for the same reason as SessionList:
+// gomobile has no bound list type, so a collection crosses as an opaque object.
+type UndeliveredList struct {
+	items []UndeliveredInput
+}
+
+// Count is the number of undelivered entries.
+func (l *UndeliveredList) Count() (n int, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return 0, errNoReceiver
+	}
+	return len(l.items), nil
+}
+
+// At returns the undelivered entry at index i.
+func (l *UndeliveredList) At(i int) (u *UndeliveredInput, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return nil, errNoReceiver
+	}
+	if i < 0 || i >= len(l.items) {
+		return nil, fmt.Errorf("swarmmobile: undelivered index %d out of range [0,%d)", i, len(l.items))
+	}
+	item := l.items[i]
+	return &item, nil
+}
+
 // JournalEntry is one journal record as the app sees it. Group and Type are verbatim
 // from the wire.
 type JournalEntry struct {

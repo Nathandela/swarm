@@ -35,7 +35,7 @@ func TestDeviceSig_SignVerifyRoundTrip(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	c := sampleCommand()
 
-	sig := ks.SignCommand(mustCanonical(t, c))
+	sig := mustSignCommand(t, ks, mustCanonical(t, c))
 	if len(sig) != 64 {
 		t.Errorf("Ed25519 signature length = %d, want 64", len(sig))
 	}
@@ -53,7 +53,7 @@ func TestDeviceSig_ForgedRejected(t *testing.T) {
 		CommandSignSeed: fill(0x63), RelayAuthSeed: fill(0x64),
 	})
 	c := sampleCommand()
-	sig := ks.SignCommand(mustCanonical(t, c))
+	sig := mustSignCommand(t, ks, mustCanonical(t, c))
 
 	// Bit-flipped signature.
 	forged := append([]byte(nil), sig...)
@@ -77,7 +77,7 @@ func TestDeviceSig_ForgedRejected(t *testing.T) {
 func TestDeviceSig_ReplayBoundToOperationIdAndExpiry(t *testing.T) {
 	ks := devKeyStore(t, stdMaterial())
 	c := sampleCommand()
-	sig := ks.SignCommand(mustCanonical(t, c))
+	sig := mustSignCommand(t, ks, mustCanonical(t, c))
 	pub := ks.CommandSigningPublic()
 
 	replayNewOp := c

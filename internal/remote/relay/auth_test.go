@@ -53,7 +53,7 @@ func TestRelayAuth_BadSignatureRefused(t *testing.T) {
 	// signature against the claimed pubkey and refuses.
 	bad := ClientAuth{
 		RelayAuthPub: pub,
-		Sign:         func(ch []byte) []byte { return ed25519.Sign(wrongPriv, ch) },
+		Sign:         func(ch []byte) ([]byte, error) { return ed25519.Sign(wrongPriv, ch), nil },
 	}
 	if _, err := Dial(testCtx(t), srv.URL(), bad); err == nil {
 		t.Fatalf("Dial with a bad signature succeeded, want refusal")
@@ -62,7 +62,7 @@ func TestRelayAuth_BadSignatureRefused(t *testing.T) {
 	// A structurally invalid (zeroed) signature is likewise refused, never a panic.
 	zero := ClientAuth{
 		RelayAuthPub: pub,
-		Sign:         func(ch []byte) []byte { return make([]byte, ed25519.SignatureSize) },
+		Sign:         func(ch []byte) ([]byte, error) { return make([]byte, ed25519.SignatureSize), nil },
 	}
 	if _, err := Dial(testCtx(t), srv.URL(), zero); err == nil {
 		t.Fatalf("Dial with a zero signature succeeded, want refusal")

@@ -42,9 +42,14 @@ type PresenceInfo struct {
 // ClientAuth carries the only key a party ever discloses to the untrusted relay:
 // its Ed25519 relay-auth public key, plus a signer over the relay's challenge.
 // The signer is a closure so a hardware-gated key never leaves its boundary.
+//
+// Sign can FAIL (ADR-007 B18(a)): the only production phone-side implementation is
+// crypto.KeyStore.SignRelayAuth, which a hardware-gated custody refuses. Swallowing
+// that refusal here — or signing nil and letting the relay reject opaquely — would
+// re-create one layer up exactly the errorless interface B14 removed.
 type ClientAuth struct {
 	RelayAuthPub ed25519.PublicKey
-	Sign         func(challenge []byte) []byte
+	Sign         func(challenge []byte) ([]byte, error)
 }
 
 // Conn is a raw, unauthenticated framed connection to the relay over a single
@@ -394,7 +399,11 @@ func authenticate(ctx context.Context, conn *Conn, auth ClientAuth) (*Client, er
 		return nil, err
 	}
 
-	sig := auth.Sign(AuthChallengeMessage(chal.Nonce, rid))
+	sig, err := auth.Sign(AuthChallengeMessage(chal.Nonce, rid))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	resp2, err := conn.control(ctx, "auth_resp", map[string]any{"signature": sig})
 	if err != nil {
 		_ = conn.Close()

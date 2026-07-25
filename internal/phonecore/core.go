@@ -12,10 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -32,11 +32,20 @@ type Acker interface {
 // Machine is the endpoint id the durable coordinates must belong to (empty adopts whatever
 // the blob describes); State overrides the file-backed custody (test wiring); Ack releases
 // consumed relay items.
+//
+// WakeSealer and ContentSealer are PB-KEY-2's two tier KEKs, held outside the Go core
+// (PB-KEY-9). Both are REQUIRED whenever anything is written at rest -- Resume fails with
+// ErrNoSealer rather than writing key material in the clear (ADR-007 B18(c)). They are
+// separate because one KEK over both tiers is the collapse the plaintext files already had:
+// the wake KEK opens with no user present, so anything under it is reachable without the
+// biometric the content tier exists to require.
 type Config struct {
-	Dir     string
-	Machine string
-	State   Store
-	Ack     Acker
+	Dir           string
+	Machine       string
+	State         Store
+	Ack           Acker
+	WakeSealer    Sealer
+	ContentSealer Sealer
 }
 
 // Core is the assembled phone: durable custody plus the components resumed from it.
@@ -48,6 +57,12 @@ type Core struct {
 	seq    *Sequencer
 	router *MailboxRouter
 	ops    *OpQueue
+	// leases and skew are DELIBERATELY NOT resumed from the durable blob and are not
+	// rebound by Save: a lease IS a live daemon connection, so one restored from disk names
+	// a connection that cannot exist (PB-INPUT-2), and a skew measurement is only as good
+	// as the round trip that produced it.
+	leases *LeaseState
+	skew   *SkewMonitor
 
 	mu     sync.Mutex
 	st     State
@@ -65,53 +80,27 @@ func Resume(cfg Config) (*Core, error) {
 			path = filepath.Join(cfg.Dir, StateFileName)
 		}
 		var err error
-		if store, err = OpenStore(path, cfg.Machine); err != nil {
+		if store, err = OpenStore(path, cfg.Machine, cfg.WakeSealer, cfg.ContentSealer); err != nil {
 			return nil, err
 		}
 	}
-	ks, err := openKeyStore(cfg.Dir)
+	ks, err := openKeyStore(cfg.Dir, cfg.WakeSealer, cfg.ContentSealer)
 	if err != nil {
 		return nil, err
 	}
 	c := &Core{
-		store: store,
-		ks:    ks,
-		ack:   cfg.Ack,
-		seq:   &Sequencer{},
-		ops:   NewOpQueue(0),
-		st:    store.Load().clone(),
+		store:  store,
+		ks:     ks,
+		ack:    cfg.Ack,
+		seq:    &Sequencer{},
+		ops:    NewOpQueue(0),
+		leases: NewLeaseState(),
+		skew:   NewSkewMonitor(time.Now),
+		st:     store.Load().clone(),
 	}
 	c.router = newMailboxRouter(crypto.ContentKey{}, c)
 	c.rebind()
 	return c, nil
-}
-
-// openKeyStore recovers the device keys from dir, generating them on first launch. They
-// must be the SAME keys across a restart: the daemon registry pins the device id to the
-// command-signing public key (R-DEV.1), so regenerating them would invalidate every command
-// the phone signs and every grant addressed to it.
-//
-// An empty dir has nowhere to persist, so the keys are EPHEMERAL (generated per Resume,
-// written to a temp directory that is removed before this returns -- crypto.KeyStore has no
-// in-memory constructor and internal/remote/crypto is frozen). That wiring is for a caller
-// that injects its own Store; production always provisions a state directory.
-func openKeyStore(dir string) (crypto.KeyStore, error) {
-	if dir == "" {
-		tmp, err := os.MkdirTemp("", "phonecore-ephemeral-keys-")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(tmp)
-		return crypto.NewFileKeyStore(tmp)
-	}
-	ks, err := crypto.OpenFileKeyStore(dir)
-	if err == nil {
-		return ks, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("open device keys: %w", err)
-	}
-	return crypto.NewFileKeyStore(dir)
 }
 
 // KeyStore is the device's key custody (never regenerated across a restart).
@@ -133,6 +122,15 @@ func (c *Core) Grants() *crypto.GrantReceiver {
 
 // Ops is the offline mutating-op queue, restored from State.PendingOps.
 func (c *Core) Ops() *OpQueue { return c.ops }
+
+// Leases is the control-lease gate (PB-INPUT-2), fed automatically from the authenticated
+// inbound path. It starts EMPTY on every Resume: a lease cannot survive a process death,
+// so the only correct durable representation of one is none at all.
+func (c *Core) Leases() *LeaseState { return c.leases }
+
+// SkewMonitor is the clock-skew estimator (PB-TIME-1/-3), fed the AAD-covered IssuedAt of
+// every command reply the inbound path authenticates.
+func (c *Core) SkewMonitor() *SkewMonitor { return c.skew }
 
 // State returns a copy of the durable state as it currently stands.
 func (c *Core) State() State {

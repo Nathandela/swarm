@@ -117,7 +117,10 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 		}
 	}
 
-	c1, err := Resume(Config{Dir: dir})
+	// PB-KEY-9: Resume fails closed with no sealer, and a restart must present the SAME
+	// KEKs -- a different KEK is a different device.
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (first launch): %v", err)
 	}
@@ -126,7 +129,7 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	}
 
 	// RESTART: a fresh Core over the same directory, nothing carried in memory.
-	c2, err := Resume(Config{Dir: dir})
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (second launch): %v", err)
 	}
@@ -159,7 +162,7 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	if unresolved := c2.UnresolvedOps(); len(unresolved) != 0 {
 		t.Errorf("UnresolvedOps() after recording the outcome = %+v; want empty", unresolved)
 	}
-	c3, err := Resume(Config{Dir: dir})
+	c3, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (third launch): %v", err)
 	}
@@ -176,16 +179,20 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 func TestState_DeviceKeysSurviveARestart(t *testing.T) {
 	dir := t.TempDir()
 
-	c1, err := Resume(Config{Dir: dir})
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (first launch): %v", err)
 	}
 	msg := []byte("canonical-command-tuple")
-	sig := c1.KeyStore().SignCommand(msg)
+	sig, err := c1.KeyStore().SignCommand(msg)
+	if err != nil {
+		t.Fatalf("SignCommand: %v", err)
+	}
 	cmdPub := append([]byte(nil), c1.KeyStore().CommandSigningPublic()...)
 	recipPub := append([]byte(nil), c1.KeyStore().RecipientPublic()...)
 
-	c2, err := Resume(Config{Dir: dir})
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (second launch): %v", err)
 	}
@@ -209,7 +216,8 @@ func TestState_DeviceKeysSurviveARestart(t *testing.T) {
 func TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 
-	c1, err := Resume(Config{Dir: dir})
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (first launch): %v", err)
 	}
@@ -236,7 +244,7 @@ func TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart(t *testing.T) {
 	}
 
 	// RESTART. The relay retained the grant and re-serves it.
-	c2, err := Resume(Config{Dir: dir})
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
 	if err != nil {
 		t.Fatalf("Resume (second launch): %v", err)
 	}
@@ -277,7 +285,7 @@ func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {
 	if err := os.WriteFile(path, []byte(stateV1Fixture), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	st, err := OpenStore(path, "m1")
+	st, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t))
 	if err != nil {
 		t.Fatalf("OpenStore on the pinned v1 fixture: %v (a shipped schema version must keep loading)", err)
 	}
@@ -316,7 +324,7 @@ func TestStateStore_UnknownFutureSchemaFailsClosed(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write future blob: %v", err)
 	}
-	if _, err := OpenStore(path, "m1"); !errors.Is(err, ErrFutureSchema) {
+	if _, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t)); !errors.Is(err, ErrFutureSchema) {
 		t.Fatalf("OpenStore on schema version %d = %v; want ErrFutureSchema (never a silent reinterpretation)", StateSchemaVersion+1, err)
 	}
 }
@@ -345,7 +353,7 @@ func TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty(t *testing
 	if err := os.WriteFile(foreign, []byte(stateV1Fixture), 0o600); err != nil {
 		t.Fatalf("write foreign blob: %v", err)
 	}
-	st, err := OpenStore(foreign, "some-other-machine")
+	st, err := OpenStore(foreign, "some-other-machine", s14aNewSealer(t), s14aNewSealer(t))
 	if err != nil {
 		t.Fatalf("OpenStore for a different machine = %v; want an EMPTY state, not an error (a bricked re-pair is the S2 B1 regression)", err)
 	}
@@ -362,13 +370,13 @@ func TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty(t *testing
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
-		if _, err := OpenStore(p, "m1"); !errors.Is(err, ErrCorruptState) {
+		if _, err := OpenStore(p, "m1", s14aNewSealer(t), s14aNewSealer(t)); !errors.Is(err, ErrCorruptState) {
 			t.Errorf("OpenStore on a %s blob = %v; want ErrCorruptState (never a silent reset to zero)", name, err)
 		}
 	}
 
 	// (d) A missing file is first run, not corruption.
-	fresh, err := OpenStore(filepath.Join(dir, "absent.json"), "m1")
+	fresh, err := OpenStore(filepath.Join(dir, "absent.json"), "m1", s14aNewSealer(t), s14aNewSealer(t))
 	if err != nil {
 		t.Fatalf("OpenStore on a missing file = %v; want a fresh empty state (first launch)", err)
 	}

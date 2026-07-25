@@ -2,6 +2,7 @@ package remotegw
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -91,7 +92,7 @@ const kindCommandReply = "command_reply"
 // truth) plus a kind tag. It mirrors phonecore's replyFrame exactly -- the phone unmarshals
 // this shape, and the tolerant OpenControlReply ignores the extra kind key.
 type replyFrame struct {
-	Kind            string `json:"kind"`
+	Kind             string `json:"kind"`
 	protocol.Control        // op, session_id, operation_id, ... (promoted)
 }
 
@@ -109,15 +110,24 @@ type replyFrame struct {
 // outbound-journal.seq + outbound-reply.seq) without collision. Do NOT "unify" SenderKeyID
 // across outbound kinds without also merging those two seq counters, or the streams will
 // collide and half of one drops as ErrStaleSeq.
+//
+// IssuedAt IS STAMPED HERE, at the producer (PB-TIME-2), exactly as the journal/terminal
+// path stamps in relaysink.go and as the five phone-side seal functions stamp for the other
+// direction. The field is AAD-covered, so leaving it unset AUTHENTICATES A ZERO: the phone's
+// bounded-age check then computes an age of ~56 years for every command reply and refuses
+// it -- the lease confirmation PB-INPUT-2 gates typing on never lands, and no mutating op
+// ever resolves. The signature is unchanged: threading a clock through every caller is what
+// lets one of them forget.
 func SealControlReply(key crypto.ContentKey, epochID uint32, seq uint64, reply protocol.Control) ([]byte, error) {
 	plaintext, err := json.Marshal(replyFrame{Kind: kindCommandReply, Control: reply})
 	if err != nil {
 		return nil, err
 	}
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version: crypto.VersionV1,
-		EpochID: epochID,
-		Seq:     seq,
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: time.Now().UnixMilli(),
 	}, plaintext)
 	if err != nil {
 		return nil, err

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -23,12 +24,17 @@ import (
 
 // sealFrame seals one mailbox plaintext at seq under the content key, mirroring the
 // gateway RelaySink's header (one sender, one epoch => a single increasing seq stream).
+//
+// IssuedAt mirrors the real producers too (relaysink.go and, since S11, SealControlReply):
+// PB-TIME-2 enabled the phone's bounded-age check, and an unstamped fixture authenticates a
+// ZERO, which is ~56 years old and refused with crypto.ErrStaleAge. No assertion changed.
 func sealFrame(t *testing.T, key crypto.ContentKey, seq uint64, plain []byte) []byte {
 	t.Helper()
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version: crypto.VersionV1,
-		EpochID: 7,
-		Seq:     seq,
+		Version:  crypto.VersionV1,
+		EpochID:  7,
+		Seq:      seq,
+		IssuedAt: time.Now().UnixMilli(),
 	}, plain)
 	if err != nil {
 		t.Fatalf("seal seq %d: %v", seq, err)

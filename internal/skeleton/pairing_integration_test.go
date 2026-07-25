@@ -137,8 +137,16 @@ type devLegResult struct {
 // the secret + rendezvous id recovered from the pair_start QR (as a real phone would).
 // It mirrors enroll_e2e_test.go's DeviceParams so the enrolled record is well-formed.
 func runDeviceLeg(ctx context.Context, ks crypto.KeyStore, dEnd pairing.RendezvousTransport, qp pairing.QRPayload) chan devLegResult {
+	// The handshake handle is failable custody now (ADR-007 B14); this leg has no *testing.T
+	// so a refusal resolves through the same channel as any other device-leg failure.
+	static, serr := ks.NoiseStatic()
+	if serr != nil {
+		ch := make(chan devLegResult, 1)
+		ch <- devLegResult{err: serr}
+		return ch
+	}
 	dp := pairing.DeviceParams{
-		Static:       ks.NoiseStatic(),
+		Static:       static,
 		Secret:       qp.PairingSecret,
 		RendezvousID: qp.RendezvousID,
 		Payload: pairing.DevicePayload{

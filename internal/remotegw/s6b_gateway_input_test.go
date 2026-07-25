@@ -184,6 +184,10 @@ func (l *s6bTimingLease) End(string) {}
 
 func (l *s6bTimingLease) Generation(string) uint64 { return 0 }
 
+// OnSever satisfies the LeaseRouter seam's lease-death method (PB-INPUT-2). This fake holds
+// no conn, so no lease can die on it and the sink is never fired.
+func (l *s6bTimingLease) OnSever(func(SeveredLease)) {}
+
 func (l *s6bTimingLease) lastAt() (time.Time, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

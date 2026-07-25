@@ -146,6 +146,14 @@ func (a *App) run(ctx context.Context) {
 		a.onConnected(ctx, cl)
 		a.drain(ctx, cl)
 		a.setClient(nil)
+		// PB-INPUT-2's FIRST enumerated severance event. A gateway restart kills the lease
+		// while being unable to seal any notice about it -- the gateway is the thing that
+		// died -- so the phone's own transport dropping is the ONLY signal that can exist,
+		// and a disconnect must therefore SEVER rather than merely pause. Without this the
+		// phone keeps reporting the pre-outage generation live and types against a lease the
+		// new gateway does not hold. It also empties the coalescer, so bytes buffered when
+		// the link went away resolve as undelivered instead of riding the reconnect.
+		a.suspendInput("the connection to the machine was lost")
 		_ = cl.Close()
 	}
 	a.setClient(nil)
@@ -156,7 +164,7 @@ func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 	ks := a.core.KeyStore()
 	return relay.Dial(ctx, a.relayURL, relay.ClientAuth{
 		RelayAuthPub: ed25519.PublicKey(ks.RelayAuthPublic()),
-		Sign:         func(challenge []byte) []byte { return ks.SignRelayAuth(challenge) },
+		Sign:         ks.SignRelayAuth,
 	})
 }
 
@@ -292,6 +300,7 @@ func (a *App) onReply(ctrl schema.Control) {
 	a.mu.Lock()
 	a.killSwitch = ctrl.ErrorCode == schema.CodeKillSwitch
 	a.mu.Unlock()
+	a.reportSkew()
 	a.events.emit(&Event{
 		Kind:      "outcome",
 		Stream:    "reply",
@@ -299,4 +308,29 @@ func (a *App) onReply(ctrl schema.Control) {
 		State:     ctrl.Op,
 		Message:   ctrl.OperationID,
 	})
+}
+
+// reportSkew surfaces PB-TIME-1's verdict, which this reply may just have produced: the
+// AAD-covered IssuedAt on a machine reply is the only authenticated machine time the phone
+// ever sees, so a bracket can close nowhere else.
+//
+// It is a REPORT, not a gate. A phone two minutes out signs an ExpiresAt the daemon refuses,
+// and the daemon's refusal reads "not authorized" -- which sends the user to re-pair when
+// the fix is to correct their clock. Refusing the command locally instead would stop the
+// command that re-measures, so the verdict could never clear once it went bad; the daemon
+// stays the enforcement and this is the explanation. Only a CHANGE is emitted, or a
+// two-minute-slow phone would raise an event per reply for the life of the session.
+func (a *App) reportSkew() {
+	msg := ""
+	if err := a.core.SkewMonitor().Check(); err != nil {
+		msg = err.Error()
+	}
+	a.mu.Lock()
+	changed := a.skewMsg != msg
+	a.skewMsg = msg
+	a.mu.Unlock()
+	if !changed || msg == "" {
+		return
+	}
+	a.events.emit(&Event{Kind: "clock", Stream: "clock", State: "skewed", Message: msg})
 }

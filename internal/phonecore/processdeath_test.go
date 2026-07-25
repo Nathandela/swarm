@@ -42,6 +42,20 @@ import (
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
+// phoneTestSealer is an AES-GCM sealer under a FIXED KEK. The re-exec'd helper is a
+// DIFFERENT PROCESS, so a randomly generated in-memory KEK could not reach it and the
+// restarted phone would read its own directory as another device's (PB-KEY-9). What this
+// test asserts is durable-coordinate survival across a real SIGKILL, not the KEK's secrecy,
+// so a fixed one is the honest fixture -- and it keeps the material genuinely sealed at rest
+// rather than reaching for InsecureCleartextSealer.
+func phoneTestSealer(b byte) Sealer {
+	kek := make([]byte, 32)
+	for i := range kek {
+		kek[i] = b
+	}
+	return &s14aSealer{kek: kek}
+}
+
 const (
 	phoneHelperEnv  = "SWARM_PHONE_HELPER"
 	phoneDirEnv     = "SWARM_PHONE_DIR"
@@ -64,7 +78,10 @@ func TestHelperPhoneCoreSession(t *testing.T) {
 	}
 	dir, spool, run := os.Getenv(phoneDirEnv), os.Getenv(phoneSpoolEnv), os.Getenv(phoneRunEnv)
 
-	core, err := Resume(Config{Dir: dir, Machine: "m1", Ack: noopAcker{}})
+	core, err := Resume(Config{
+		Dir: dir, Machine: "m1", Ack: noopAcker{},
+		WakeSealer: phoneTestSealer(0x5a), ContentSealer: phoneTestSealer(0xa5),
+	})
 	if err != nil {
 		os.Exit(10)
 	}
@@ -271,7 +288,7 @@ func TestProcessDeath_TypingLaunchAndKillSurviveAKillWhileAReplayDoesNot(t *test
 	key := testContentKey()
 
 	// Pair the phone: the state the helper will Resume from on both launches.
-	seed, err := Resume(Config{Dir: dir})
+	seed, err := Resume(Config{Dir: dir, WakeSealer: phoneTestSealer(0x5a), ContentSealer: phoneTestSealer(0xa5)})
 	if err != nil {
 		t.Fatalf("Resume (pairing): %v", err)
 	}

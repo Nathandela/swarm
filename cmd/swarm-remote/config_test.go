@@ -178,7 +178,10 @@ func TestResolveGatewayParams_Populated(t *testing.T) {
 		t.Errorf("RelayAuth.RelayAuthPub = %x, want %x", got.RelayAuth.RelayAuthPub, id.RelayAuthPublic())
 	}
 	challenge := []byte("resolver-test-challenge")
-	sig := got.RelayAuth.Sign(challenge)
+	sig, err := got.RelayAuth.Sign(challenge)
+	if err != nil {
+		t.Fatalf("RelayAuth.Sign: %v", err)
+	}
 	if !ed25519.Verify(got.RelayAuth.RelayAuthPub, challenge, sig) {
 		t.Errorf("RelayAuth.Sign produced a signature that does not verify under RelayAuth.RelayAuthPub")
 	}

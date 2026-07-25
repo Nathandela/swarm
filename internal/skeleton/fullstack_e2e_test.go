@@ -142,6 +142,6 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 func relayAuth(pub ed25519.PublicKey, priv ed25519.PrivateKey) relay.ClientAuth {
 	return relay.ClientAuth{
 		RelayAuthPub: pub,
-		Sign:         func(challenge []byte) []byte { return ed25519.Sign(priv, challenge) },
+		Sign:         func(challenge []byte) ([]byte, error) { return ed25519.Sign(priv, challenge), nil },
 	}
 }

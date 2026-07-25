@@ -139,7 +139,9 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		RelayURL:     relayURL,
 		RelayAuth: relay.ClientAuth{
 			RelayAuthPub: id.RelayAuthPublic(),
-			Sign:         id.RelayAuthSign,
+			// The MACHINE identity is a software key with no custody gate, so it never
+			// refuses; relay.ClientAuth.Sign is failable for the PHONE (ADR-007 B18(a)).
+			Sign: func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
 		},
 		// C5 (finding, re-audit): the relay keys the phone's mailbox by
 		// relay.RoutingID(its relay-auth pub) -- the SAME deriver the relay (client.go:

@@ -60,6 +60,27 @@ func rendezvousPair() (machine, dev *memRendezvous) {
 	return &memRendezvous{out: a, in: b}, &memRendezvous{out: b, in: a}
 }
 
+// mustNoiseStatic and mustSignCommand take the failable device-custody operations (ADR-007
+// B14) in tests that are not about the refusal path: a software key store never refuses, so
+// an error here is a defect rather than a case to handle.
+func mustNoiseStatic(t *testing.T, ks crypto.KeyStore) *crypto.NoiseStatic {
+	t.Helper()
+	ns, err := ks.NoiseStatic()
+	if err != nil {
+		t.Fatalf("NoiseStatic: %v", err)
+	}
+	return ns
+}
+
+func mustSignCommand(t *testing.T, ks crypto.KeyStore, msg []byte) []byte {
+	t.Helper()
+	sig, err := ks.SignCommand(msg)
+	if err != nil {
+		t.Fatalf("SignCommand: %v", err)
+	}
+	return sig
+}
+
 func fillKey(b byte) [32]byte {
 	var k [32]byte
 	for i := range k {
@@ -110,7 +131,7 @@ func TestEnrollmentE2E_PairThenCommandNoManualSetup(t *testing.T) {
 		},
 	}
 	dp := pairing.DeviceParams{
-		Static:       ks.NoiseStatic(),
+		Static:       mustNoiseStatic(t, ks),
 		Secret:       fillKey(0x5A),
 		RendezvousID: fill16(0x11),
 		Payload: pairing.DevicePayload{

@@ -127,7 +127,7 @@ func newRelayAuthKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 func authFor(pub ed25519.PublicKey, priv ed25519.PrivateKey) ClientAuth {
 	return ClientAuth{
 		RelayAuthPub: pub,
-		Sign:         func(challenge []byte) []byte { return ed25519.Sign(priv, challenge) },
+		Sign:         func(challenge []byte) ([]byte, error) { return ed25519.Sign(priv, challenge), nil },
 	}
 }
 

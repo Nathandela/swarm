@@ -123,7 +123,7 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 		},
 	}
 	dp := pairing.DeviceParams{
-		Static:       ks.NoiseStatic(),
+		Static:       mustNoiseStatic(t, ks),
 		Secret:       fillKey(0x5A),
 		RendezvousID: fill16(0x11),
 		Payload: pairing.DevicePayload{

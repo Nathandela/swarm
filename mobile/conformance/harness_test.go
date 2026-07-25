@@ -32,6 +32,7 @@ import (
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
@@ -74,6 +75,8 @@ type harness struct {
 	recv     *crypto.MailboxReceiver // machine-side inbound seq guard
 	cursor   uint64
 	replySeq uint64
+	granted  map[string]bool // take_control operation ids already confirmed
+	leaseGen uint64          // the daemon-granted generation counter
 	Commands []schema.RemoteCommand
 	Inputs   []remotegw.InputFrame
 }
@@ -103,7 +106,8 @@ func newHarness(t *testing.T) *harness {
 		t: t, ctx: ctx,
 		relaySrv: srv, RelayURL: srv.URL(),
 		Dir: t.TempDir(), EpochID: testEpochID, Machine: testMachineID,
-		recv: crypto.NewMailboxReceiver(),
+		recv:    crypto.NewMailboxReceiver(),
+		granted: map[string]bool{},
 	}
 
 	if h.Keys, err = crypto.NewEpochKeys(); err != nil {
@@ -134,7 +138,7 @@ func newHarness(t *testing.T) *harness {
 	h.machineRelayAuthPub = mPub
 	if h.machineRelay, err = relay.Dial(ctx, h.RelayURL, relay.ClientAuth{
 		RelayAuthPub: mPub,
-		Sign:         func(c []byte) []byte { return ed25519.Sign(mPriv, c) },
+		Sign:         func(c []byte) ([]byte, error) { return ed25519.Sign(mPriv, c), nil },
 	}); err != nil {
 		t.Fatalf("machine dial: %v", err)
 	}
@@ -173,7 +177,12 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) seedState(ks crypto.KeyStore, machineRelayAuthPub ed25519.PublicKey) {
 	h.t.Helper()
 
-	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine)
+	// The SAME custody the facade opens this directory with (mobile/app.go): PB-KEY-9's
+	// seam is not reachable from the gomobile Config, so the shipped app is still on the
+	// named cleartext sealer until S14 adds the facade verb. A different sealer here would
+	// seed a blob NewApp could not open.
+	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+		phonecore.InsecureCleartextSealer(), phonecore.InsecureCleartextSealer())
 	if err != nil {
 		h.t.Fatalf("open phone state: %v", err)
 	}
@@ -281,6 +290,32 @@ func (h *harness) Reply(ctrl schema.Control) {
 // ErrStaleSeq"). One Accept, then dispatch on the decoded plaintext's `t` discriminator.
 func (h *harness) Drain() {
 	h.t.Helper()
+	for _, g := range h.drainOnce() {
+		// The REAL gateway confirms every take_control (remotegw.CommandBridge.confirmLease
+		// seals an OpLease carrying the daemon-granted generation), and PB-INPUT-2 gates the
+		// phone's keystrokes on that confirmation. A fake machine that granted silently
+		// would leave every input assertion in this suite exercising the refusal path.
+		h.Reply(schema.Control{
+			Op:          protocol.OpLease,
+			EndpointID:  h.Machine,
+			SessionID:   g.session,
+			OperationID: g.operationID,
+			Generation:  g.generation,
+		})
+	}
+}
+
+// leaseGrant is one take_control the machine has decided to confirm.
+type leaseGrant struct {
+	session     string
+	operationID string
+	generation  uint64
+}
+
+// drainOnce reads and opens one page, and reports the take_controls whose lease grant is
+// owed. The seal happens OUTSIDE the lock, in Drain, because Reply takes it too.
+func (h *harness) drainOnce() []leaseGrant {
+	h.t.Helper()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -288,6 +323,7 @@ func (h *harness) Drain() {
 	if err != nil {
 		h.t.Fatalf("machine mailbox read: %v", err)
 	}
+	var grants []leaseGrant
 	for _, it := range items {
 		if it.Cursor > h.cursor {
 			h.cursor = it.Cursor
@@ -301,10 +337,45 @@ func (h *harness) Drain() {
 			continue
 		}
 		h.Commands = append(h.Commands, fr.Command)
+		if fr.Command.Action == schema.ActionTakeControl && !h.granted[fr.Command.OperationID] {
+			h.granted[fr.Command.OperationID] = true
+			h.leaseGen++
+			grants = append(grants, leaseGrant{
+				session:     fr.Command.Session,
+				operationID: fr.Command.OperationID,
+				generation:  h.leaseGen,
+			})
+		}
 	}
 	if err := h.machineRelay.MailboxAck(h.ctx, h.cursor); err != nil {
 		h.t.Fatalf("machine mailbox ack: %v", err)
 	}
+	return grants
+}
+
+// AwaitLease drains until the machine has confirmed the session's take_control AND the
+// phone has adopted the confirmation. PB-INPUT-2 refuses every keystroke until then, so a
+// test that types first is exercising the refusal rather than the facade.
+//
+// The probe is an EMPTY SendInput: it is exactly the gate under test, and it adds no bytes
+// of its own.
+//
+// IT IS NOT GUARANTEED TO APPEND NOTHING (review R4). An empty Type still drains whatever
+// the coalescer is holding, so with buffered bytes and an elapsed window the probe emits a
+// frame carrying THEM. Every call site below is buffer-empty, so today it appends nothing --
+// but a future caller with input in flight would inject an append here, and the frame is the
+// user's real keystrokes rather than anything this helper invented.
+func (h *harness) AwaitLease(session string) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.Drain()
+		if err := h.App.SendInput(session, nil); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	h.t.Fatalf("the lease for %q was never confirmed to the phone within 5s", session)
 }
 
 // AwaitCommand drains until a command with the given action arrives, or fails.

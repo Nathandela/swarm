@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -63,6 +64,8 @@ var machineSender = [8]byte{9, 10, 11, 12, 13, 14, 15, 16}
 // sealFrameFrom seals one mailbox plaintext at seq for an explicit (sender, epoch)
 // bucket. sealFrame (snapshot_test.go) always seals sender-zero; the reconcile record
 // rides the machine-sender journal bucket, so the bucket must be selectable here.
+// IssuedAt mirrors the real producers, for the reason sealFrame's doc gives: PB-TIME-2's
+// bounded-age check is live on this path, and an unstamped fixture is ~56 years old.
 func sealFrameFrom(t *testing.T, key crypto.ContentKey, sender [8]byte, epoch uint32, seq uint64, plain []byte) []byte {
 	t.Helper()
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
@@ -70,6 +73,7 @@ func sealFrameFrom(t *testing.T, key crypto.ContentKey, sender [8]byte, epoch ui
 		EpochID:     epoch,
 		Seq:         seq,
 		SenderKeyID: sender,
+		IssuedAt:    time.Now().UnixMilli(),
 	}, plain)
 	if err != nil {
 		t.Fatalf("seal seq %d: %v", seq, err)

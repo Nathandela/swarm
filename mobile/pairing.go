@@ -85,8 +85,17 @@ func (a *App) BeginPairing(qr string) (p *Pairing, err error) {
 	}
 
 	ks := core.KeyStore()
+	// Hoisted out of the literal so the custody refusal is surfaced: the Noise-static key
+	// is content tier, so on a locked device this is where pairing must stop rather than
+	// handshaking with a nil handle (ADR-007 B14).
+	static, err := ks.NoiseStatic()
+	if err != nil {
+		cancel()
+		_ = conn.Close()
+		return nil, err
+	}
 	params := pairing.DeviceParams{
-		Static:           ks.NoiseStatic(),
+		Static:           static,
 		Secret:           payload.PairingSecret,
 		RendezvousID:     payload.RendezvousID,
 		MachineStaticPub: payload.MachineStaticPub,

@@ -27,11 +27,6 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// commandTTL is how long a signed command stays valid. The daemon re-clamps it; this is
-// only the phone's own horizon, wide enough to survive a relay retry and narrow enough
-// that a captured envelope is not replayable indefinitely.
-const commandTTL = 2 * time.Minute
-
 // pollInterval is the IDLE mailbox drain cadence while connected; a page that came back
 // non-empty is followed immediately by the next read, so a backlog drains at full speed.
 // It matches the gateway's own command-IN cadence for the same reason: the relay meters
@@ -61,8 +56,14 @@ type App struct {
 
 	events *dispatcher
 
+	// coalesce paces keystrokes to §6.0's 8 frames/s (PB-INPUT-5). It has its own lock and
+	// is not guarded by a.mu.
+	coalesce *phonecore.InputCoalescer
+
 	mu            sync.Mutex
 	closed        bool
+	drainTimer    *time.Timer
+	skewMsg       string // last reported clock-skew verdict, so only a CHANGE raises an event
 	sess          *session
 	client        *relay.Client
 	machineTarget string
@@ -96,6 +97,7 @@ func NewApp(cfg *Config) (app *App, err error) {
 	a := &App{
 		relayURL:   cfg.RelayURL,
 		events:     newDispatcher(),
+		coalesce:   phonecore.NewInputCoalescer(time.Now),
 		connState:  "offline",
 		subscribed: true,
 		needs:      map[string]string{},
@@ -106,6 +108,16 @@ func NewApp(cfg *Config) (app *App, err error) {
 		Dir:     cfg.StateDir,
 		Machine: cfg.MachineID,
 		Ack:     &relayAcker{app: a},
+		// RECORDED DEFECT, owned by S14 (ADR-007 B18). PB-KEY-9's seam is
+		// phonecore.Config, which the Android side cannot reach: gomobile cannot set a
+		// Go struct field and mobile.Config is golden-pinned with no verb for a sealer.
+		// So the shipped app still writes key material in the clear -- named here at the
+		// call site rather than reached by omitting a field, which Resume refuses
+		// outright (ErrNoSealer). S14 adds the facade verb, changes the golden and
+		// replaces these two with the Android-Keystore-backed KEKs; PB-KEY-9 is not
+		// delivered until it does.
+		WakeSealer:    phonecore.InsecureCleartextSealer(),
+		ContentSealer: phonecore.InsecureCleartextSealer(),
 	})
 	if err != nil {
 		a.events.close()
@@ -196,7 +208,62 @@ func (a *App) Stop() (err error) {
 	}
 	s.cancel()
 	<-s.done
+	a.suspendInput("the app stopped controlling this machine")
 	return nil
+}
+
+// suspendInput is the whole-device input boundary: app backgrounding, and every Stop or
+// Close. PB-INPUT-2 enumerates backgrounding as a severance event, so every lease goes --
+// a lease the phone can no longer reach is one it must not assume it still holds -- and
+// PB-INPUT-6 requires the buffer be emptied, so what is left is resolved as an explicit
+// "delivery unknown / not sent" rather than dropped silently or held for a later replay.
+func (a *App) suspendInput(reason string) {
+	a.mu.Lock()
+	t := a.drainTimer
+	a.drainTimer = nil
+	a.mu.Unlock()
+	if t != nil {
+		t.Stop()
+	}
+	for _, u := range a.coalesce.Abandon(reason) {
+		a.emitUndelivered(u)
+	}
+	a.core.Leases().SeverAll(reason)
+}
+
+// emitUndelivered reports one resolved-as-undelivered unit of input on the event plane.
+// PB-INPUT-1 requires the state be SURFACED, and most of these are produced asynchronously
+// -- by a drain timer or by a link dropping -- where there is no call for an error to return
+// from. UndeliveredInputs is the matching pull surface for a screen that opens afterwards.
+func (a *App) emitUndelivered(u phonecore.Undelivered) {
+	a.events.emit(&Event{
+		Kind: "input", Stream: "input", SessionID: u.Session,
+		State: "undelivered", Message: u.Reason, Cursor: int64(u.Bytes),
+	})
+}
+
+// UndeliveredInputs is the ledger of input the phone accepted from the user and could not
+// deliver (PB-INPUT-1). Input is live-only, so none of it will be retried: the entries exist
+// so the user is TOLD what did not reach the machine instead of believing they typed it.
+//
+// It is a READ, not a drain: the state must survive the call that produced it, and a screen
+// that opens after the failure must still see it.
+func (a *App) UndeliveredInputs() (list *UndeliveredList, err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return nil, err
+	}
+	entries := a.coalesce.Undelivered()
+	out := &UndeliveredList{items: make([]UndeliveredInput, 0, len(entries))}
+	for _, u := range entries {
+		out.items = append(out.items, UndeliveredInput{
+			SessionID: u.Session,
+			Bytes:     u.Bytes,
+			Reason:    u.Reason,
+			AtMillis:  u.At.UnixMilli(),
+		})
+	}
+	return out, nil
 }
 
 // IsRunning reports whether the relay drain is live.
@@ -231,6 +298,7 @@ func (a *App) Close() (err error) {
 		s.cancel()
 		<-s.done
 	}
+	a.suspendInput("the app closed")
 	a.events.close()
 	return nil
 }

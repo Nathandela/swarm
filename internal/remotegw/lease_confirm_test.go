@@ -77,6 +77,10 @@ func (f *confirmingLeaseRouter) Generation(string) uint64 {
 	return f.gen
 }
 
+// OnSever satisfies the LeaseRouter seam's lease-death method (PB-INPUT-2). This fake holds
+// no conn, so no lease can die on it and the sink is never fired.
+func (f *confirmingLeaseRouter) OnSever(func(SeveredLease)) {}
+
 // openReplyControl opens one sealed reply envelope back to its Control.
 func openReplyControl(t *testing.T, key crypto.ContentKey, raw []byte) (crypto.EnvelopeHeader, protocol.Control) {
 	t.Helper()

@@ -41,7 +41,7 @@ func dialRelayClient(t *testing.T, ctx context.Context, url string) (*relay.Clie
 	}
 	c, err := relay.Dial(ctx, url, relay.ClientAuth{
 		RelayAuthPub: pub,
-		Sign:         func(ch []byte) []byte { return ed25519.Sign(priv, ch) },
+		Sign:         func(ch []byte) ([]byte, error) { return ed25519.Sign(priv, ch), nil },
 	})
 	if err != nil {
 		t.Fatalf("relay.Dial: %v", err)

@@ -109,11 +109,14 @@ func TestMachineIdentity_RelayAuthSignBuildsClientAuth(t *testing.T) {
 
 	auth := relay.ClientAuth{
 		RelayAuthPub: id.RelayAuthPublic(),
-		Sign:         id.RelayAuthSign,
+		Sign:         func(ch []byte) ([]byte, error) { return id.RelayAuthSign(ch), nil },
 	}
 
 	challenge := []byte("client-auth-challenge")
-	sig := auth.Sign(challenge)
+	sig, err := auth.Sign(challenge)
+	if err != nil {
+		t.Fatalf("ClientAuth.Sign: %v", err)
+	}
 	if !ed25519.Verify(auth.RelayAuthPub, challenge, sig) {
 		t.Error("signature from a relay.ClientAuth built with RelayAuthSign does not verify under RelayAuthPub")
 	}
