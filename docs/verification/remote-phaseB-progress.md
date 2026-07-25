@@ -19,6 +19,13 @@ Ownership and slice reachability are machine-enforced (`remote-phaseB-manifest.t
 `remote-phaseB-slices.tsv`), each verified with negative controls, because homeless
 requirements recurred in three consecutive rounds and an orphan slice in a fourth.
 
+## Requirements coverage (measured, not estimated)
+
+18 of 140 shipped, 9 in review, 113 remaining. The completed slices were deliberately the
+blockers and the security-critical machine-side work -- dependency surgery, gateway durability
+in both directions, the transport, the reconciliation frame -- because they gate everything
+downstream. The remaining 113 are weighted toward the Android app and end-to-end verification.
+
 ## Slice status
 
 | Slice | Requirements | State |
