@@ -51,6 +51,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -384,9 +385,30 @@ const stateV4Fixture = `{
 // stateFixtures is the pinned literal for each version that HAS one, keyed by version. The
 // map is what makes the version bump mechanical: TestStateSchemaVersion_IsPinnedToTheDurable
 // FieldSet demands an entry for whatever StateSchemaVersion currently is.
+// stateV5Fixture is the PINNED v5 blob: byte-for-byte what this build writes for fullState()
+// under stateV4FixtureKEK. v5 is S15's tier split -- eight formerly-cleartext fields now live in
+// three sealed containers (wake_state, content_kept, content_purgeable), which is exactly why the
+// literal must move with the version: a reader that stops understanding one of those containers
+// loses the coordinates inside it silently.
+const stateV5Fixture = `{"schema_version":5,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
+// sealedTags are the durable field names that S15 moved INSIDE a sealed container, so they
+// cannot appear as top-level keys in the pinned literal -- that is the point of sealing them.
+// They are still tied to the version: the container that carries them is itself a pinned key
+// below, and TestStateStore_PinnedV5FixtureStillLoads opens each one through the fixture KEK and
+// compares every restored coordinate against fullState(). So a field dropped from a sealed
+// container fails there rather than here. Listing them explicitly, rather than skipping any
+// absent tag, keeps the CLEARTEXT half of the check exact.
+var sealedTags = map[string]bool{
+	"push_token": true, "wake_replay": true,
+	"send_seq": true, "receive": true, "pending_ops": true,
+	"sessions": true, "snapshots": true, "op_outcomes": true,
+}
+
 var stateFixtures = map[int]string{
 	1: stateV1Fixture,
 	4: stateV4Fixture,
+	5: stateV5Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -396,31 +418,44 @@ var stateFixtures = map[int]string{
 // It restores through the fixture's PINNED KEK -- a real AEAD, the same s14aSealer every
 // other test here uses, over a key that is a literal rather than fresh entropy. That is what
 // lets the two sealed fields live in the byte literal at all.
-func TestStateStore_PinnedV4FixtureStillLoads(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "phone-state.json")
-	if err := os.WriteFile(path, []byte(stateV4Fixture), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	kek := &s14aSealer{kek: stateV4FixtureKEK}
-	st, err := OpenStore(path, "m1", kek, kek)
-	if err != nil {
-		t.Fatalf("OpenStore on the pinned v4 fixture: %v (a shipped schema version must keep "+
-			"loading; if StateSchemaVersion was lowered, this blob is now from the future)", err)
-	}
+func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
+	// EVERY pinned version from v4 on, not just the newest. v4 is the last all-cleartext
+	// layout and v5 is S15's tier split, so this is also the forward-migration path: a v4 blob
+	// must still yield every coordinate after the fields it carries in the clear moved inside
+	// sealed containers. Iterating the map is what makes the sealed-tag exemption above honest --
+	// a field dropped from a container has no top-level tag to miss, and fails HERE instead.
+	for _, version := range sortedFixtureVersions() {
+		if version < 4 {
+			continue // v1 predates the KEK and has its own test below
+		}
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "phone-state.json")
+			if err := os.WriteFile(path, []byte(stateFixtures[version]), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			kek := &s14aSealer{kek: stateV4FixtureKEK}
+			st, err := OpenStore(path, "m1", kek, kek)
+			if err != nil {
+				t.Fatalf("OpenStore on the pinned v%d fixture: %v (a shipped schema version must keep "+
+					"loading; if StateSchemaVersion was lowered, this blob is now from the future)", version, err)
+			}
 
-	// The fixture IS fullState() on disk, so the comparison covers every coordinate at once
-	// and names the one that was lost.
-	want, got := fullState(), st.Load()
-	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
-	for i := 0; i < wv.NumField(); i++ {
-		if !wv.Type().Field(i).IsExported() {
-			continue
-		}
-		if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
-			t.Errorf("the pinned v4 fixture restored State.%s = %#v; want %#v. A coordinate the "+
-				"literal carries and this build no longer reads is a durable field dropped without "+
-				"a schema bump", wv.Type().Field(i).Name, gv.Field(i).Interface(), wv.Field(i).Interface())
-		}
+			// The fixture IS fullState() on disk, so the comparison covers every coordinate at once
+			// and names the one that was lost.
+			want, got := fullState(), st.Load()
+			wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+			for i := 0; i < wv.NumField(); i++ {
+				if !wv.Type().Field(i).IsExported() {
+					continue
+				}
+				if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
+						"literal carries and this build no longer reads is a durable field dropped without "+
+						"a schema bump", version, wv.Type().Field(i).Name, gv.Field(i).Interface(), wv.Field(i).Interface())
+				}
+			}
+		})
 	}
 }
 
@@ -455,7 +490,7 @@ func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
 				rt.Field(i).Name)
 		}
 		tags[tag] = true
-		if _, present := blob[tag]; !present {
+		if _, present := blob[tag]; !present && !sealedTags[tag] {
 			t.Errorf("the durable field %q is absent from the pinned v%d fixture. Either it is NEW "+
 				"-- in which case StateSchemaVersion must be raised and a literal for the new version "+
 				"pinned, or a build one version back drops it silently and a replay guard comes back "+
