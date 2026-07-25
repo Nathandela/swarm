@@ -482,6 +482,41 @@ Every one of those belongs to a slice that has already SHIPPED. They have unit c
 no end-to-end coverage anywhere. **That is what S19 must actually demonstrate**, and it is why an
 exit demonstration driven through phonesim would be worth very little.
 
+## TWO CRITERIA THAT ARE EASY TO OVER-READ FROM A GREEN GATE
+
+Both found by the evidence backfill, both disclosed in-file rather than hidden, both worth knowing
+before the final audit reads a green suite as proof.
+
+1. **PB-NET-5's headline latency number comes from a test that SKIPS by default.**
+   `TestS6B_InputLatencyPhoneTypeToPTYWrite` is gated on `SWARM_S6B_LATENCY=1`, so a green
+   `go test ./...` says nothing about the budget. The gating is deliberate and well-argued (an env
+   var rather than a build tag, so the four untagged gates still compile, vet and lint it). Combined
+   with the separately recorded fact that the harness measures phonecore-to-PTY rather than
+   phone-to-PTY, **this is the requirement easiest to over-read in the whole phase.** Re-run at HEAD:
+   PASS, p50 36.4 ms against a 150 ms budget, with the Rosetta status correctly recorded in-process.
+2. **PB-BIND-1's literal criterion skips in the default gate.**
+   `TestPBBIND1_GomobileBindProducesAnAAR` skips when `ANDROID_HOME` is unset, which is the normal
+   state for a plain `go test ./...` — only the Android lane sources the pin. The property IS
+   covered, by S13's one-command-produces-an-AAR test, which was rebuilt and passed at HEAD. But an
+   auditor reading S8's green gate alone would over-read it.
+
+## PB-TOK-1 WAS MARKED SHIPPED AND IS NOT MET -- reassigned S5 -> S16
+
+Found by the evidence backfill, verified by me. The requirement is that one JSON token source is the
+**single origin for the Android theme**. There is no join in either direction — nothing outside
+`internal/design/` references `tokens.json` at all — and **the values disagree**:
+`--p-bg` `#08090a` vs `swarm_background` `#FF101114`, `--p-ink` `#f7f8f8` vs `swarm_text_primary`
+`#FFE6E8EB`.
+
+S5 delivered the JSON and drift-guarded it against the design source. That is real, and it is half
+the requirement. The other half is only satisfiable where the Android theme lives, so PB-TOK-1 now
+belongs to **S16**, which owns the screens and has not started.
+
+It was **disclosed, not hidden** — `colors.xml`'s own comment calls its values "placeholders for the
+skeleton", and S13 said it shipped a skeleton. But nobody held the join, and the traceability index
+reported the requirement as shipped because its owning slice had shipped. **That is the failure mode
+worth remembering: slice-level status silently answers a requirement-level question.**
+
 ## PB-PUSH-3's REPLAY WINDOW IS A FIELD, NOT A MECHANISM -- a gap in SHIPPED work
 
 Found by the S15 RED author while measuring the at-rest inventory, verified independently:
