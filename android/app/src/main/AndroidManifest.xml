@@ -24,9 +24,17 @@
          OPTIMIZATIONS either: an exemption would opt out of the constraints that policy
          exists to describe. -->
 
+    <!-- PB-SEC-10 / PB-STATE-6. allowBackup="false" is the CLOUD half: `adb backup` and cloud
+         backup return nothing for this app. dataExtractionRules is the DEVICE-TO-DEVICE half,
+         which allowBackup does not reliably cover on every manufacturer's build; see the rules
+         file for the reasoning and for why it carries no include list. The legacy
+         android:fullBackupContent is deliberately NOT declared, because every supported device
+         is Android 13 or later (android/supported-versions.tsv), where it is dead configuration
+         that reads like the D2D exclusion without being it. -->
     <application
         android:name=".SwarmApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Swarm">

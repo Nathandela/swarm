@@ -53,7 +53,16 @@ import (
 // per-BUCKET flags (see State.StaleStreams). The bump is what makes the downgrade fail
 // closed: a v3 build decoding a v4 blob would drop the field and report a channel it KNOWS
 // has a hole in it as live, which is the one thing PB-APP-8 forbids.
-const StateSchemaVersion = 4
+//
+// v5 moves the STATE PB-STATE-9 assigns a tier to out of the cleartext fields and into three
+// sealed containers -- wake_state, content_kept and content_purgeable (see stateFile). v3
+// sealed the two epoch KEYS and nothing else, so a locked handset still held the decrypted
+// journal, the server-rendered terminal grids and the command outcomes as plain JSON at rest.
+// The bump is required in both directions: a v4 build decoding a v5 blob would find no
+// send_seq and no receive array and start from an empty replay guard -- the exact reset this
+// file exists to refuse -- so it must fail closed instead, and a v5 build reading a v4 blob
+// must know to take those fields from the cleartext and reseal them on the next Save.
+const StateSchemaVersion = 5
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -206,6 +215,17 @@ type Store interface {
 // per consumed frame or per reserved seq BLOCK (never per keystroke), so an inspectable
 // encoding costs nothing. Maps travel as arrays because a compound key is not a JSON
 // object key -- the same choice remotegw/inboundstate.go made for the mirror direction.
+//
+// WHAT STAYS IN THE CLEAR, and why it is not an oversight (PB-STATE-9). The wake path runs
+// with NO USER PRESENT, so anything the LOAD PATH itself must read before it can open a
+// container has to be readable without either KEK: the machine id (a blob belonging to
+// another machine is discarded wholesale before any unseal) and the epoch id (resealTier
+// carries a key verbatim only into the epoch it was sealed for). The wake path then needs
+// the phone's own routing id and the machine's relay-auth public key to reach the relay at
+// all. The remaining cleartext fields are the ones PB-STATE-9 assigns to neither tier: the
+// grant watermark, the relay read cursor, the staleness sets -- records that content is
+// untrustworthy rather than the content -- and the two notification toggles the settings
+// screen renders. Four public keys travel in the clear because they are public.
 // ---------------------------------------------------------------------------
 
 type stateFile struct {
@@ -217,28 +237,79 @@ type stateFile struct {
 	RoutingID           string `json:"routing_id"`
 	EpochID             uint32 `json:"epoch_id"`
 
-	PushToken       string         `json:"push_token,omitempty"`
 	PushPreference  PushPreference `json:"push_preference,omitzero"`
 	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
 
 	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
 	// (PB-KEY-9): one file cannot be gated two ways, and a content key recoverable
 	// without the biometric collapses the tier split the design exists for.
-	WakeKey     []byte                    `json:"wake_key,omitempty"`
-	ContentKey  []byte                    `json:"content_key,omitempty"`
-	SendSeq     []sendSeqRecord           `json:"send_seq"`
-	Receive     []receiveRecord           `json:"receive"`
-	GrantEpoch  uint32                    `json:"grant_epoch"`
-	GrantSeq    uint64                    `json:"grant_seq"`
-	WakeReplay  uint64                    `json:"wake_replay"`
-	RelayCursor uint64                    `json:"relay_cursor"`
-	Sessions    []CachedSession           `json:"sessions,omitempty"`
-	Snapshots   []Snapshot                `json:"snapshots,omitempty"`
-	PendingOps  []QueuedOp                `json:"pending_ops,omitempty"`
-	OpOutcomes  map[string]schema.Control `json:"op_outcomes,omitempty"`
-	Stale       []bucketRecord            `json:"stale,omitempty"`
+	WakeKey    []byte `json:"wake_key,omitempty"`
+	ContentKey []byte `json:"content_key,omitempty"`
+
+	// WakeState is the wake tier's STATE, sealed under the wake KEK from v5 on: the push
+	// token and the push dedup coordinate. It is a container rather than two sealed scalars
+	// because the tier is opened once, at load, and a per-field seal would multiply the
+	// Keystore round trips by the field count for no gain.
+	WakeState []byte `json:"wake_state,omitempty"`
+	// ContentKept and ContentPurgeable are the content tier, in TWO containers, because the
+	// two halves have opposite lifetimes and one blob cannot have both.
+	//
+	// A Save taken while the tier is LOCKED must carry what it cannot read VERBATIM, or the
+	// send-seq ceiling goes to zero and the phone renumbers from 1 under an epoch the gateway
+	// already holds a high-water for -- every frame it sends stale-dropped for the life of
+	// that epoch. A lock PURGE runs at exactly the same moment, with the tier locked by
+	// definition, and PB-KEY-7 requires it to destroy the decrypted caches, which
+	// carry-verbatim cannot do. So the replay-guard coordinates and the offline op queue go
+	// in ContentKept, which a purge carries through untouched, and the three decrypted caches
+	// go in ContentPurgeable, which a purge simply drops -- destroying a blob has never
+	// required being able to read it.
+	ContentKept      []byte `json:"content_kept,omitempty"`
+	ContentPurgeable []byte `json:"content_purgeable,omitempty"`
+
+	GrantEpoch  uint32         `json:"grant_epoch"`
+	GrantSeq    uint64         `json:"grant_seq"`
+	RelayCursor uint64         `json:"relay_cursor"`
+	Stale       []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
+
+	// Everything below is READ ONLY, and only from a blob written before v5. These fields
+	// carried the tiered state in the clear up to v4; a v5 Save writes none of them and puts
+	// the same coordinates in the containers above. They are kept so an upgraded app loads an
+	// installed blob rather than starting from an empty replay guard (PB-STATE-5's forward
+	// migration), and the reseal happens on the first Save after the upgrade.
+	LegacyPushToken  string                    `json:"push_token,omitempty"`
+	LegacyWakeReplay uint64                    `json:"wake_replay,omitempty"`
+	LegacySendSeq    []sendSeqRecord           `json:"send_seq,omitempty"`
+	LegacyReceive    []receiveRecord           `json:"receive,omitempty"`
+	LegacySessions   []CachedSession           `json:"sessions,omitempty"`
+	LegacySnapshots  []Snapshot                `json:"snapshots,omitempty"`
+	LegacyPendingOps []QueuedOp                `json:"pending_ops,omitempty"`
+	LegacyOpOutcomes map[string]schema.Control `json:"op_outcomes,omitempty"`
+}
+
+// wakeContainer is the plaintext of stateFile.WakeState.
+type wakeContainer struct {
+	PushToken  string `json:"push_token,omitempty"`
+	WakeReplay uint64 `json:"wake_replay,omitempty"`
+}
+
+// keptContainer is the plaintext of stateFile.ContentKept: content-tier state a lock purge
+// must PRESERVE. The replay-guard coordinates are not decrypted content -- they are the
+// record of how far the streams have got -- and PendingOps is user content that no
+// machine-sealed frame produced, so PB-KEY-7's purge leaves all three.
+type keptContainer struct {
+	SendSeq    []sendSeqRecord `json:"send_seq,omitempty"`
+	Receive    []receiveRecord `json:"receive,omitempty"`
+	PendingOps []QueuedOp      `json:"pending_ops,omitempty"`
+}
+
+// purgeableContainer is the plaintext of stateFile.ContentPurgeable: the three decrypted
+// caches PB-KEY-7 names, and nothing else.
+type purgeableContainer struct {
+	Sessions   []CachedSession           `json:"sessions,omitempty"`
+	Snapshots  []Snapshot                `json:"snapshots,omitempty"`
+	OpOutcomes map[string]schema.Control `json:"op_outcomes,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -275,10 +346,45 @@ type fileStore struct {
 	wake, content         Sealer
 	wakeTier, contentTier sealedTier
 
+	// The three sealed STATE containers, in the same shape and for the same reason as the
+	// two key tiers above (PB-STATE-9): wakeState under the wake KEK, kept and purgeable
+	// under the content KEK.
+	wakeState, kept, purgeable stateTier
+
 	// purgeGen counts the lock purges this store has taken. It stamps every State handed
 	// out, so a Save can tell a snapshot from before a purge from one after it.
 	purgeGen uint64
 }
+
+// stateTier is one sealed STATE container as it stands on disk, plus whether this process
+// could open it. A container it did NOT open is carried VERBATIM by every Save, exactly as
+// sealedTier's second case carries an unreadable key: the empty maps a locked process holds
+// are coordinates it could not READ, not coordinates that are not there.
+//
+// There is deliberately no epoch here, where sealedTier has one. A key is meaningful only
+// for its own epoch, so carrying one across a rotation writes a plausible key that decrypts
+// nothing; these containers carry their own epoch keying INSIDE them -- SendSeq is a map
+// keyed by epoch and Receive by a bucket that names one -- and are merged rather than
+// replaced, so a rotation neither invalidates them nor is misled by them.
+type stateTier struct {
+	blob   []byte
+	opened bool
+}
+
+// ErrContentTierLocked refuses a Save that would CHANGE content-tier state this process
+// cannot read. It is the fail-closed half of the carry-verbatim rule: carrying the previous
+// blob is right when the caller has nothing to add, and silently discards the caller's write
+// when it does, so the two cases must be told apart rather than merged.
+//
+// PB-STATE-3's send-seq reservation is the path that meets it. reserveSendSeq is the
+// Sequencer's only durable dependency and issues NO seq when it fails, which is exactly the
+// honest outcome here: a process that cannot read the ceiling cannot raise it, and numbering
+// from 1 instead would have the gateway stale-drop every keystroke, take_control, launch and
+// kill for the life of the epoch. No production send path reaches it -- mobile's resolveSend
+// refuses with errNoContentKey before any seq is drawn, because a frame cannot be sealed
+// without the epoch content key, which is itself content tier -- so this is the fence rather
+// than the normal case.
+var ErrContentTierLocked = errors.New("phonecore: the content tier is locked; state sealed under it cannot be updated")
 
 // sealedTier is one tier's key field as it stands on disk, plus whether this process knows
 // what is in it -- either because it opened the blob, or because it put the contents there
@@ -326,7 +432,16 @@ type sealedTier struct {
 // there is nothing at rest to seal and no sealer is needed.
 func OpenStore(path, machineID string, wake, content Sealer) (Store, error) {
 	s := &fileStore{path: path, machine: machineID, wake: wake, content: content,
-		st: State{Machine: machineID}}
+		st: State{Machine: machineID},
+		// OPENED, holding nothing, until load says otherwise. Every path that ends with no
+		// blob adopted -- first run, and the different-machine discard described above --
+		// leaves this store owning an empty state it is fully entitled to write, and the
+		// carry-verbatim branch must not fire on a container that was never read because
+		// there was never one there. load sets these from the file.
+		wakeState: stateTier{opened: true},
+		kept:      stateTier{opened: true},
+		purgeable: stateTier{opened: true},
+	}
 	if path == "" {
 		return s, nil
 	}
@@ -367,6 +482,9 @@ func (s *fileStore) Save(st State) error {
 	merged := mergeGuards(s.st, st.clone())
 	merged.purgeGen = s.purgeGen
 	if s.path != "" {
+		if err := s.refuseUnreadableContentWrite(merged); err != nil {
+			return err
+		}
 		wake, err := resealTier(s.wake, merged.Keys.WakeKey[:], s.wakeTier, merged.EpochID)
 		if err != nil {
 			return fmt.Errorf("seal wake key: %w", err)
@@ -375,13 +493,103 @@ func (s *fileStore) Save(st State) error {
 		if err != nil {
 			return fmt.Errorf("seal content key: %w", err)
 		}
-		if err := persistState(s.path, merged, wake.blob, content.blob); err != nil {
+		wakeState, err := sealContainer(s.wake, wakeContainerOf(merged), s.wakeState)
+		if err != nil {
+			return fmt.Errorf("seal wake state: %w", err)
+		}
+		kept, err := sealContainer(s.content, keptContainerOf(merged), s.kept)
+		if err != nil {
+			return fmt.Errorf("seal content state: %w", err)
+		}
+		purgeable, err := sealContainer(s.content, purgeableContainerOf(merged), s.purgeable)
+		if err != nil {
+			return fmt.Errorf("seal decrypted caches: %w", err)
+		}
+		seals := stateSeals{
+			wakeKey: wake.blob, contentKey: content.blob,
+			wakeState: wakeState.blob, kept: kept.blob, purgeable: purgeable.blob,
+		}
+		if err := persistState(s.path, merged, seals); err != nil {
 			return err
 		}
 		s.wakeTier, s.contentTier = wake, content
+		s.wakeState, s.kept, s.purgeable = wakeState, kept, purgeable
 	}
 	s.st = merged
 	return nil
+}
+
+// refuseUnreadableContentWrite fails a Save that carries content-tier state into a container
+// this process could not open. The alternative is silence: the carry-verbatim branch would
+// write the previous blob back and the caller's coordinate would simply vanish, which is the
+// class of defect PB-STATE-9 was written to close one level down. See ErrContentTierLocked.
+func (s *fileStore) refuseUnreadableContentWrite(st State) error {
+	if !s.kept.opened && (len(st.SendSeq) > 0 || len(st.Receive) > 0 || len(st.PendingOps) > 0) {
+		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s) and %d pending op(s) "+
+			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps))
+	}
+	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0) {
+		return fmt.Errorf("%w: %d session(s), %d snapshot(s) and %d outcome(s) cannot be recorded",
+			ErrContentTierLocked, len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes))
+	}
+	return nil
+}
+
+// sealContainer returns the sealed state container to write, from the same three cases
+// resealTier distinguishes for a key, minus the epoch (see stateTier):
+//
+//	could not open it -> carry the previous blob VERBATIM. The caller holds nothing for this
+//	                     container because the tier is locked, and resealing that nothing
+//	                     destroys the send-seq ceiling, the receive high-waters and the op
+//	                     queue. refuseUnreadableContentWrite has already established the
+//	                     caller is not trying to change it.
+//	nothing to write  -> no field at all, so a purge that emptied the container is not undone
+//	                     by the next Save.
+//	otherwise         -> seal it.
+func sealContainer(sl Sealer, payload any, prev stateTier) (stateTier, error) {
+	if !prev.opened {
+		return prev, nil
+	}
+	plain, err := json.Marshal(payload)
+	if err != nil {
+		return stateTier{}, err
+	}
+	// An empty container marshals to exactly this -- every field is omitempty -- and writing a
+	// sealed blob for it would put a decryptable envelope on disk saying nothing.
+	if string(plain) == "{}" {
+		return stateTier{opened: true}, nil
+	}
+	blob, err := sl.Seal(plain)
+	if err != nil {
+		return stateTier{}, err
+	}
+	return stateTier{blob: blob, opened: true}, nil
+}
+
+func wakeContainerOf(st State) wakeContainer {
+	return wakeContainer{PushToken: st.PushToken, WakeReplay: st.WakeReplay}
+}
+
+func keptContainerOf(st State) keptContainer {
+	c := keptContainer{PendingOps: st.PendingOps}
+	for epoch, ceiling := range st.SendSeq {
+		c.SendSeq = append(c.SendSeq, sendSeqRecord{Epoch: epoch, Ceiling: ceiling})
+	}
+	sort.Slice(c.SendSeq, func(i, j int) bool { return c.SendSeq[i].Epoch < c.SendSeq[j].Epoch })
+	for b, seq := range st.Receive {
+		c.Receive = append(c.Receive, receiveRecord{Sender: hex.EncodeToString(b.Sender[:]), Epoch: b.Epoch, Seq: seq})
+	}
+	sort.Slice(c.Receive, func(i, j int) bool {
+		if c.Receive[i].Sender != c.Receive[j].Sender {
+			return c.Receive[i].Sender < c.Receive[j].Sender
+		}
+		return c.Receive[i].Epoch < c.Receive[j].Epoch
+	})
+	return c
+}
+
+func purgeableContainerOf(st State) purgeableContainer {
+	return purgeableContainer{Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes}
 }
 
 // dropKeyMaterial returns st with everything the lock purge destroys removed: the epoch keys
@@ -415,6 +623,15 @@ func dropKeyMaterial(st State) State {
 // The tier records go too, so nothing is left for the next Save to carry verbatim -- which is
 // what makes the purge survive being taken with a tier locked, and what lets a Save after a
 // failed write finish the job rather than resurrect the blob.
+//
+// WHAT IT DOES NOT TOUCH, and why that is the requirement rather than a shortcut. The purge
+// destroys key material and DECRYPTED CACHES, which is exactly the ContentPurgeable
+// container. ContentKept and WakeState are written back BYTE FOR BYTE: the purge runs at the
+// screen lock, so it cannot read either of them, and it does not need to -- destroying the
+// send-seq ceiling would renumber the phone from 1 at every screen lock and have the gateway
+// stale-drop everything it sends for the life of the epoch, and destroying the push token
+// would stop the phone being wakeable at all, with re-registration only happening if the app
+// is foregrounded (PB-PUSH-9). That is the line between purging the KEYS and purging the TIER.
 func (s *fileStore) PurgeKeys() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -425,10 +642,11 @@ func (s *fileStore) PurgeKeys() error {
 	// Opened, holding nothing: this process now KNOWS the tier is empty, so a later Save
 	// writes no field rather than resurrecting the blob just destroyed.
 	s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
+	s.purgeable = stateTier{opened: true}
 	if s.path == "" {
 		return nil
 	}
-	return persistState(s.path, s.st, nil, nil)
+	return persistState(s.path, s.st, stateSeals{wakeState: s.wakeState.blob, kept: s.kept.blob})
 }
 
 // resealTier returns the tier field to write, from three cases that must stay distinct.
@@ -560,17 +778,26 @@ func (s *fileStore) load() error {
 		MachineRelayAuthPub: f.MachineRelayAuthPub,
 		RoutingID:           f.RoutingID,
 		EpochID:             f.EpochID,
-		PushToken:           f.PushToken,
 		PushPreference:      f.PushPreference,
 		ReconciledEpoch:     f.ReconciledEpoch,
 		GrantEpoch:          f.GrantEpoch,
 		GrantSeq:            f.GrantSeq,
-		WakeReplay:          f.WakeReplay,
 		RelayCursor:         f.RelayCursor,
-		Sessions:            f.Sessions,
-		Snapshots:           f.Snapshots,
-		PendingOps:          f.PendingOps,
-		OpOutcomes:          f.OpOutcomes,
+		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
+		// arrive from the sealed containers below), so this is the forward migration and not a
+		// second source: an installed v4 blob loads with its replay guard intact and the first
+		// Save after the upgrade seals it. The cleartext copy stays on disk until that Save,
+		// which is inherent to migrating a file rather than rewriting it at load.
+		PushToken:  f.LegacyPushToken,
+		WakeReplay: f.LegacyWakeReplay,
+		Sessions:   f.LegacySessions,
+		Snapshots:  f.LegacySnapshots,
+		PendingOps: f.LegacyPendingOps,
+		OpOutcomes: f.LegacyOpOutcomes,
+	}
+	applySendSeq(&st, f.LegacySendSeq)
+	if err := applyReceive(&st, f.LegacyReceive); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 	}
 	// The WAKE tier opens with no user present -- that is its whole purpose -- so one that
 	// will not open means this blob is not ours, and starting from an empty checkpoint
@@ -599,25 +826,14 @@ func (s *fileStore) load() error {
 			return fmt.Errorf("%w: %s: unseal content key: %v", ErrCorruptState, path, oerr)
 		}
 	}
-	if len(f.SendSeq) > 0 {
-		st.SendSeq = make(map[uint32]uint64, len(f.SendSeq))
-		for _, rec := range f.SendSeq {
-			if rec.Ceiling > st.SendSeq[rec.Epoch] {
-				st.SendSeq[rec.Epoch] = rec.Ceiling
-			}
-		}
+	// The three sealed STATE containers, opened under the same rules as the keys above: the
+	// wake one must open or the blob is not ours, the two content ones may legitimately
+	// refuse and are then carried through every Save untouched (see stateTier).
+	if err := s.loadWakeState(&st, f.WakeState, path); err != nil {
+		return err
 	}
-	if len(f.Receive) > 0 {
-		st.Receive = make(map[Bucket]uint64, len(f.Receive))
-		for _, rec := range f.Receive {
-			b, err := decodeBucket(rec.Sender, rec.Epoch)
-			if err != nil {
-				return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
-			}
-			if rec.Seq > st.Receive[b] {
-				st.Receive[b] = rec.Seq
-			}
-		}
+	if err := s.loadContentState(&st, f, path); err != nil {
+		return err
 	}
 	if len(f.Stale) > 0 {
 		st.Stale = make(map[Bucket]bool, len(f.Stale))
@@ -649,10 +865,141 @@ func decodeBucket(sender string, epoch uint32) (Bucket, error) {
 	return b, nil
 }
 
-// persistState writes the blob atomically. The record slices are ordered so the file is
-// byte-stable across rewrites (Go map iteration is randomized), keeping a diff of the state
-// dir meaningful.
-func persistState(path string, st State, wakeKey, contentKey []byte) error {
+// applySendSeq folds one set of send-seq records into st, highest ceiling per epoch wins.
+// It is shared by the sealed container and the pre-v5 cleartext array so a migrated blob and
+// a current one cannot decode by two different rules.
+func applySendSeq(st *State, recs []sendSeqRecord) {
+	if len(recs) == 0 {
+		return
+	}
+	if st.SendSeq == nil {
+		st.SendSeq = make(map[uint32]uint64, len(recs))
+	}
+	for _, rec := range recs {
+		if rec.Ceiling > st.SendSeq[rec.Epoch] {
+			st.SendSeq[rec.Epoch] = rec.Ceiling
+		}
+	}
+}
+
+// applyReceive is applySendSeq's mirror for the per-bucket receive high-waters.
+func applyReceive(st *State, recs []receiveRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	if st.Receive == nil {
+		st.Receive = make(map[Bucket]uint64, len(recs))
+	}
+	for _, rec := range recs {
+		b, err := decodeBucket(rec.Sender, rec.Epoch)
+		if err != nil {
+			return err
+		}
+		if rec.Seq > st.Receive[b] {
+			st.Receive[b] = rec.Seq
+		}
+	}
+	return nil
+}
+
+// loadWakeState unseals the wake-tier state container into st. An unopenable wake tier is
+// ErrCorruptState for the same reason the wake KEY is: the wake KEK opens with no user
+// present, so one that refuses says the blob is not ours, and coming up without the push
+// dedup coordinate would re-open every wake the provider still retains (PB-PUSH-3).
+func (s *fileStore) loadWakeState(st *State, blob []byte, path string) error {
+	if len(blob) == 0 {
+		// Nothing there, and this process knows it: a later Save writes the container from
+		// what it holds rather than carrying an absent blob.
+		s.wakeState = stateTier{opened: true}
+		return nil
+	}
+	s.wakeState = stateTier{blob: blob}
+	plain, err := s.wake.Open(blob)
+	if err != nil {
+		return fmt.Errorf("%w: %s: unseal wake state: %v", ErrCorruptState, path, err)
+	}
+	var w wakeContainer
+	if err := json.Unmarshal(plain, &w); err != nil {
+		return fmt.Errorf("%w: %s: wake state container: %v", ErrCorruptState, path, err)
+	}
+	st.PushToken, st.WakeReplay = w.PushToken, w.WakeReplay
+	s.wakeState.opened = true
+	return nil
+}
+
+// loadContentState unseals the two content-tier containers into st. Either may legitimately
+// refuse -- the phone comes up on a push before any biometric -- and a container this process
+// could not open stays unopened, so every Save carries it verbatim rather than resealing the
+// emptiness the refusal produced. Only a refusal that is NOT a custody verdict says the blob
+// is not ours.
+func (s *fileStore) loadContentState(st *State, f stateFile, path string) error {
+	tier, plain, err := s.openContentContainer(f.ContentKept, path, "content state")
+	if err != nil {
+		return err
+	}
+	s.kept = tier
+	if plain != nil {
+		var c keptContainer
+		if err := json.Unmarshal(plain, &c); err != nil {
+			return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, path, err)
+		}
+		applySendSeq(st, c.SendSeq)
+		if err := applyReceive(st, c.Receive); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
+		}
+		st.PendingOps = c.PendingOps
+	}
+
+	tier, plain, err = s.openContentContainer(f.ContentPurgeable, path, "decrypted caches")
+	if err != nil {
+		return err
+	}
+	s.purgeable = tier
+	if plain != nil {
+		var c purgeableContainer
+		if err := json.Unmarshal(plain, &c); err != nil {
+			return fmt.Errorf("%w: %s: decrypted cache container: %v", ErrCorruptState, path, err)
+		}
+		st.Sessions, st.Snapshots, st.OpOutcomes = c.Sessions, c.Snapshots, c.OpOutcomes
+	}
+	return nil
+}
+
+// openContentContainer attempts one content-tier unseal, returning the tier record to keep
+// and the plaintext -- nil when the container is absent or the tier is locked, which are the
+// two cases with nothing to decode and opposite consequences for the next Save.
+func (s *fileStore) openContentContainer(blob []byte, path, what string) (stateTier, []byte, error) {
+	if len(blob) == 0 {
+		return stateTier{opened: true}, nil, nil
+	}
+	plain, err := s.content.Open(blob)
+	switch {
+	case err == nil:
+		return stateTier{blob: blob, opened: true}, plain, nil
+	case errors.Is(err, crypto.ErrKeyAuthRequired), errors.Is(err, crypto.ErrKeyInvalidated):
+		return stateTier{blob: blob}, nil, nil
+	default:
+		return stateTier{}, nil, fmt.Errorf("%w: %s: unseal %s: %v", ErrCorruptState, path, what, err)
+	}
+}
+
+// stateSeals are the five sealed blobs one write puts in the file: the two epoch keys and
+// the three PB-STATE-9 state containers. They are passed together rather than assembled here
+// because sealing is the caller's decision -- a container this process could not open is
+// carried verbatim, and persistState cannot tell that from one it sealed itself.
+type stateSeals struct {
+	wakeKey    []byte
+	contentKey []byte
+	wakeState  []byte
+	kept       []byte
+	purgeable  []byte
+}
+
+// persistState writes the blob atomically. The record slices INSIDE the sealed containers are
+// ordered so their plaintext is stable across rewrites (Go map iteration is randomized); the
+// file itself is not byte-stable from v5 on and cannot be, because a fresh AEAD nonce per
+// seal is what makes the containers safe to rewrite at all.
+func persistState(path string, st State, seals stateSeals) error {
 	f := stateFile{
 		SchemaVersion:       StateSchemaVersion,
 		Machine:             st.Machine,
@@ -661,33 +1008,17 @@ func persistState(path string, st State, wakeKey, contentKey []byte) error {
 		MachineRelayAuthPub: st.MachineRelayAuthPub,
 		RoutingID:           st.RoutingID,
 		EpochID:             st.EpochID,
-		PushToken:           st.PushToken,
 		PushPreference:      st.PushPreference,
 		ReconciledEpoch:     st.ReconciledEpoch,
-		WakeKey:             wakeKey,
-		ContentKey:          contentKey,
+		WakeKey:             seals.wakeKey,
+		ContentKey:          seals.contentKey,
+		WakeState:           seals.wakeState,
+		ContentKept:         seals.kept,
+		ContentPurgeable:    seals.purgeable,
 		GrantEpoch:          st.GrantEpoch,
 		GrantSeq:            st.GrantSeq,
-		WakeReplay:          st.WakeReplay,
 		RelayCursor:         st.RelayCursor,
-		Sessions:            st.Sessions,
-		Snapshots:           st.Snapshots,
-		PendingOps:          st.PendingOps,
-		OpOutcomes:          st.OpOutcomes,
 	}
-	for epoch, ceiling := range st.SendSeq {
-		f.SendSeq = append(f.SendSeq, sendSeqRecord{Epoch: epoch, Ceiling: ceiling})
-	}
-	sort.Slice(f.SendSeq, func(i, j int) bool { return f.SendSeq[i].Epoch < f.SendSeq[j].Epoch })
-	for b, seq := range st.Receive {
-		f.Receive = append(f.Receive, receiveRecord{Sender: hex.EncodeToString(b.Sender[:]), Epoch: b.Epoch, Seq: seq})
-	}
-	sort.Slice(f.Receive, func(i, j int) bool {
-		if f.Receive[i].Sender != f.Receive[j].Sender {
-			return f.Receive[i].Sender < f.Receive[j].Sender
-		}
-		return f.Receive[i].Epoch < f.Receive[j].Epoch
-	})
 	for b, stale := range st.Stale {
 		if stale {
 			f.Stale = append(f.Stale, bucketRecord{Sender: hex.EncodeToString(b.Sender[:]), Epoch: b.Epoch})
