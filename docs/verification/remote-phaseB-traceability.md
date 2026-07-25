@@ -9,9 +9,19 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped | 117 |
-| Remaining | 26 |
-| **Shipped with NO evidence file** | **0** |
+| Shipped | 120 |
+| Remaining | 23 |
+| **Shipped with NO evidence file** | **3** |
+
+## Shipped slices with no evidence file
+
+These 2 slices are implemented and gated, but their only durable record is a commit
+message. That is not sufficient for a per-requirement audit. **Reconstruct each from its
+commit and its tests, never from memory** — an evidence file written from recollection is a
+plausible account of what was intended rather than of what shipped.
+
+- **S17** — 2 requirements: PB-PUSH-4, PB-PUSH-9
+- **S18b** — 1 requirement: PB-STATE-10
 
 ## Every requirement
 
@@ -100,12 +110,12 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-PUSH-1 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-2 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-3 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-4 | S17 | pending | — |
+| PB-PUSH-4 | S17 | shipped | **none — commit message only** |
 | PB-PUSH-5 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-6 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-7 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-8 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-9 | S17 | pending | — |
+| PB-PUSH-9 | S17 | shipped | **none — commit message only** |
 | PB-PUSH-10 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-RUN-1 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-RUN-2 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
@@ -137,7 +147,7 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-STATE-7 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-8 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-9 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
-| PB-STATE-10 | S18b | pending | — |
+| PB-STATE-10 | S18b | shipped | **none — commit message only** |
 | PB-SYNC-1 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-3 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
