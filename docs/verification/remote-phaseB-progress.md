@@ -19,10 +19,12 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 | Slice | Requirements | State |
 |---|---|---|
 | S1 dependency-edge surgery | PB-BIND-0 | **SHIPPED** (`0024595`) — closure 52 -> 18 non-stdlib, zero forbidden |
+| S2 gateway inbound durability | PB-GW-1, 3, 4 | **SHIPPED** (`f98b9a9`) -- inbound high-water + cursor now durable and identity-bound |
+| S0 ADR amendment | PB-DOC-1 | **SHIPPED** (`6cdc164`) -- 14 Phase B decisions recorded |
 | S5 design tokens | PB-TOK-1/2/3 | **SHIPPED** (`638b61b`) — Substrate pinned, drift-guarded |
 | S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | **SHIPPED** (`20be9b2`) -- real symbol + relay URL; 39-char URL ceiling enforced; manual scan still owed |
 | S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | **next** -- all parallel roots, startable immediately |
-| S1b protocol additions | PB-SYNC-7 | reconcile frame + lease confirmation + reply correlation implemented, in fix-then-close |
+| S1b protocol additions | PB-SYNC-7 | **SHIPPED** (`689c8e8`) -- reconcile frame, lease confirmation, reply correlation |
 | S6 transport resilience | PB-NET-2,3,4,6,7 | implemented, security fix in flight (cleartext-via-redirect) |
 | S6b low-latency input path | PB-NET-5 | not started (split out of S6) |
 | S7..S21 | see §11 of the spec | not started |
