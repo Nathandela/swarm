@@ -144,7 +144,6 @@ func TestPhonesim_GrantDeliveredOverMailboxBootstrapsE2E(t *testing.T) {
 		PhoneTarget:    phoneRelay.RoutingID(),
 		Key:            keys.ContentKey,
 		EpochID:        epochID,
-		PollInterval:   20 * time.Millisecond,
 		ReconnectDelay: 50 * time.Millisecond,
 	})
 	svcCtx, svcCancel := context.WithCancel(ctx)

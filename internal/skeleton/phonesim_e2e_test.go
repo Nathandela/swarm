@@ -201,7 +201,6 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 		// (sender-zero for both) would collide the two independent seq counters and the
 		// router's seq guard would stale-drop the reply.
 		SenderKeyID:    crypto.KeyID(machineID.RecipientPublic()),
-		PollInterval:   20 * time.Millisecond,
 		ReconnectDelay: 50 * time.Millisecond,
 	})
 	svcCtx, svcCancel := context.WithCancel(ctx)

@@ -75,7 +75,6 @@ func TestGatewayServiceE2E_JournalOutAndCommandIn(t *testing.T) {
 		PhoneTarget:    phoneRelay.RoutingID(),
 		Key:            key,
 		EpochID:        1,
-		PollInterval:   20 * time.Millisecond,
 		ReconnectDelay: 50 * time.Millisecond,
 	})
 	svcCtx, svcCancel := context.WithCancel(ctx)
