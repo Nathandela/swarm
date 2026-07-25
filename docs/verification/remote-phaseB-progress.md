@@ -583,6 +583,12 @@ record of what was intended rather than what shipped — standing class (ii), ap
   - `internal/tui TestFirstPaintGate_RealDaemon_FiftySessions_P95`
   - `internal/skeleton` and `internal/protocol TestFix_SupersedeReAttachRealShim` — the latter
     spawns real shim processes, so it is the most load-sensitive thing in the repo
+  - `relay TestPresence_TransitionsAndSilentPush` under `-race -count=2` — the SAME unsynchronised
+    shape as the sweep-loop test fixed in `3dfbab7`: it closes the client and immediately advances
+    the fake clock, with nothing waiting for the server's `removeConn` to set `connected = false`.
+    Attributed both directions (fails at the same rate with the push-delivery split reverted), so it
+    is pre-existing and exposed by load, not caused by it. **Fixable the same way** — wait for the
+    server to observe the disconnect — and it will keep biting `-count=N` runs until someone does.
   - `internal/shim TestSocket_AttachDeliversSnapshot` — attributed with a dependency proof rather
     than assumed: `go list -deps ./internal/shim` has **zero** references to `phonecore` or
     `swarm/mobile`, so the phone work cannot reach it
