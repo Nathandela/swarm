@@ -43,6 +43,12 @@ type LeaseRouter interface {
 	Begin(cmd protocol.RemoteCommand) error
 	Input(session string, f InputFrame) error
 	End(session string)
+	// Generation reports the daemon-granted lease generation for a session (0 when it
+	// holds none). It is on the INTERFACE, not merely on *LeaseManager, because a
+	// call-site type assert would make the lease confirmation OPTIONAL -- a router
+	// without it would silently revert to sealing nothing, and PB-INPUT-2 would again
+	// have no confirmed generation to gate keystrokes on.
+	Generation(session string) uint64
 }
 
 // *LeaseManager is the production LeaseRouter. Pinned at compile time.
@@ -348,10 +354,10 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		if b.cfg.Leases == nil {
 			return nil
 		}
-		if err := b.cfg.Leases.Begin(rc); err != nil {
-			return fmt.Errorf("take_control: %w", err)
-		}
-		return nil
+		// Both outcomes are CONFIRMED to the phone (lease_confirm.go): silence is
+		// indistinguishable from a slow grant, which is how a keystroke gets sent against
+		// a lease that does not exist.
+		return b.confirmLease(ctx, rc, b.cfg.Leases.Begin(rc))
 	case protocol.OpTakeControlEnd:
 		// take_control_end has no signed Action constant; the daemon op string is its
 		// wire action. Tearing down the lease conn (End) is the phone's take_control_end.

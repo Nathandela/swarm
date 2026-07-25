@@ -841,6 +841,18 @@ type clientConn struct {
 	caps       []string
 	helloed    bool
 
+	// opID is the operation_id of the control CURRENTLY being handled, echoed onto the
+	// reply by replyOK/replyError/replyErrorCode (PB-SYNC-7 reply correlation). Without
+	// it a phone with two ops in flight cannot tell which reply -- or which REFUSAL --
+	// answers which op, so PB-SYNC-2's repair, PB-STATE-1's outcome persistence and
+	// PB-INPUT-4's retry all lose their attribution at the source.
+	//
+	// Owned solely by the serve goroutine: serve reads controls sequentially and
+	// handleControl runs to completion before the next is read, so it needs no lock (the
+	// same discipline as helloed/caps). Background writers (eventWriter, journalWriter,
+	// the peek and pairing goroutines) use writeControl directly and never these helpers.
+	opID string
+
 	writeMu sync.Mutex
 
 	// subscription
@@ -917,6 +929,7 @@ func (cc *clientConn) serve() {
 		case wire.TControl:
 			ctrl, derr := DecodeControl(payload)
 			if derr != nil {
+				cc.opID = "" // an undecodable request names no op; never echo the PREVIOUS one
 				cc.replyError("malformed control payload")
 				continue
 			}
@@ -930,6 +943,9 @@ func (cc *clientConn) serve() {
 }
 
 func (cc *clientConn) handleControl(c Control) {
+	// Every reply to THIS control -- success or refusal, from any handler -- echoes the
+	// request's operation_id (see clientConn.opID).
+	cc.opID = c.OperationID
 	if c.Op == OpHello {
 		cc.handleHello(c)
 		return
@@ -2293,17 +2309,20 @@ func (cc *clientConn) writeFrameDeadline(typ wire.Type, payload []byte) error {
 	return cc.writeFrameBy(typ, payload, time.Now().Add(pumpWriteTimeout()))
 }
 
+// Every reply below echoes the request's operation_id (cc.opID). The REFUSAL paths matter
+// as much as the success one: a phone with two ops in flight that receives an untagged
+// refusal can neither retry the right op nor mark the right one failed.
 func (cc *clientConn) replyError(msg string) {
-	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, Error: msg})
+	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg})
 }
 
 // replyErrorCode is replyError carrying a machine-readable refusal code (R-PROT.7).
 func (cc *clientConn) replyErrorCode(msg string, code ErrorCode) {
-	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, Error: msg, ErrorCode: code})
+	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg, ErrorCode: code})
 }
 
 func (cc *clientConn) replyOK(sessionID string) {
-	_ = cc.writeControl(Control{Op: OpOK, EndpointID: cc.endpointID, SessionID: sessionID})
+	_ = cc.writeControl(Control{Op: OpOK, EndpointID: cc.endpointID, OperationID: cc.opID, SessionID: sessionID})
 }
 
 // hasCap reports whether cap was negotiated for this connection.

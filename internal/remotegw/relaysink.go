@@ -3,6 +3,8 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -23,10 +25,25 @@ type MailboxAppender interface {
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
 }
 
+// ReconcileSource supplies the rollback authorities (PB-STATE-4) the sink cannot know
+// itself. Every method returns an ERROR rather than a fabricated zero: a record carrying
+// a made-up 0 is WORSE than no record at all, because the phone adopts it as truth,
+// raises no high-water, and keeps accepting every retained pre-rollback frame -- a silent
+// rollback re-opening dressed as a successful reconcile.
+//
+// The journal/terminal half of (b) is deliberately absent: it is the sink's OWN seq,
+// which only the sink knows (see Reconcile).
+type ReconcileSource interface {
+	InboundHighWater() (uint64, error)                     // (a) the gateway's durable inbound accepted high-water (PB-GW-1)
+	ReplyCeiling() (uint64, error)                         // (b) highest seq ISSUED on the command-reply bucket
+	GrantWatermark() (epoch uint32, seq uint64, err error) // (c) the daemon's grant-issuance coordinate
+}
+
 // RelayConfig configures a RelaySink.
 type RelayConfig struct {
 	Appender       MailboxAppender
 	Target         string            // the phone's relay routing id (mailbox target)
+	Machine        string            // this machine's endpoint id, stamped on the reconcile record
 	EpochID        uint32            // the current epoch the content key belongs to
 	Key            crypto.ContentKey // K_epoch content key the phone also holds (R-CRY.11)
 	RecipientKeyID [8]byte           // routing key id of the phone (recipient)
@@ -34,6 +51,7 @@ type RelayConfig struct {
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 	AppendTimeout  time.Duration     // per-append upper bound (nil/0 => defaultAppendTimeout)
 	Seq            SeqSource         // durable outbound seq high-water (nil => in-memory, non-durable)
+	Authorities    ReconcileSource   // rollback authorities for the reconcile record (nil => bootstrap disabled)
 }
 
 // defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
@@ -76,7 +94,20 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 
 // Snapshot seals and forwards each roster record as-of the read cursor, returning on
 // the first record that fails so the gateway can gate its cursor on delivery (R-GW.5).
+//
+// It is also PB-SYNC-7's BOOTSTRAP point: Snapshot runs exactly once per (re)connection
+// (the JournalSink contract, gateway.go), so publishing the reconcile record here gets the
+// phone its authorities before any journal frame it might have to reconcile against, on
+// first connect AND after every reconnect or epoch rotation -- with no new lifecycle hook.
+// A failed reconcile forwards NOTHING: the phone is never fed a stream it has no authority
+// to reconcile against. A nil Authorities disables the bootstrap (unit-test wiring only;
+// production must always provision one).
 func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) error {
+	if s.cfg.Authorities != nil {
+		if err := s.Reconcile(); err != nil {
+			return err
+		}
+	}
 	for _, rec := range roster {
 		if err := s.forward(rec); err != nil {
 			return err
@@ -121,6 +152,79 @@ func (s *RelaySink) Terminal(session string, lines []string, cols, rows int) err
 	return s.seal(plaintext)
 }
 
+// kindReconcile tags a mailbox plaintext as the machine's reconcile record. The phone
+// decoder demuxes it off the SHARED mailbox on this discriminator; it MUST match
+// phonecore's kindReconcile.
+const kindReconcile = "reconcile"
+
+// reconcileFrame is the sealed reconcile plaintext: the protocol.ReconcileRecord fields
+// (promoted via anonymous embedding so its frozen json tags stay the single source of
+// truth) plus a kind tag. It mirrors phonecore's reconcileFrame exactly.
+type reconcileFrame struct {
+	Kind                     string `json:"kind"`
+	protocol.ReconcileRecord        // machine, epoch_id, the three authorities, issued_at (promoted)
+}
+
+// errNoAuthorities refuses a reconcile on a sink with no authority source. Synthesizing an
+// all-zero record instead would publish three fabricated authorities the phone would adopt
+// as truth (see ReconcileSource).
+var errNoAuthorities = errors.New("remotegw: reconcile requires an authority source")
+
+// Reconcile seals ONE reconcile record onto the SHARED journal/terminal stream, publishing
+// the three rollback authorities PB-STATE-4 names (PB-SYNC-7). Riding the shared bucket is
+// what makes JournalCeiling self-certifying: the record's authority for that bucket is the
+// record's OWN envelope seq, so merely accepting the frame reseeds the phone's high-water
+// there -- and, because it is the highest seq ISSUED rather than the durable RESERVATION
+// ceiling, the next live frame at ceiling+1 is still accepted.
+//
+// Fail-closed: an unreachable authority seals nothing, appends nothing, and surfaces the
+// error (also via Err()). The phone then stays unreconciled and refuses mutating ops --
+// recoverably, until a later record lands.
+func (s *RelaySink) Reconcile() error {
+	rec, err := s.authorities()
+	if err != nil {
+		s.setErr(err)
+		return err
+	}
+	return s.sealAtSeq(func(seq uint64, issuedAt int64) ([]byte, error) {
+		rec.JournalCeiling = seq
+		// One clock, no divergence: the record's issued_at IS the envelope's issued_at, so a
+		// consumer that sees only the plaintext (MailboxResult carries no header) reads the
+		// same time PB-TIME-1 would skew-check.
+		rec.IssuedAt = issuedAt
+		return json.Marshal(reconcileFrame{Kind: kindReconcile, ReconcileRecord: rec})
+	})
+}
+
+// authorities collects the record's non-self-knowable authorities, failing on the first
+// unreachable one. JournalCeiling and IssuedAt are left unset: only sealAtSeq knows the
+// record's own envelope coordinates.
+func (s *RelaySink) authorities() (protocol.ReconcileRecord, error) {
+	if s.cfg.Authorities == nil {
+		return protocol.ReconcileRecord{}, errNoAuthorities
+	}
+	inbound, err := s.cfg.Authorities.InboundHighWater()
+	if err != nil {
+		return protocol.ReconcileRecord{}, fmt.Errorf("inbound high-water: %w", err)
+	}
+	reply, err := s.cfg.Authorities.ReplyCeiling()
+	if err != nil {
+		return protocol.ReconcileRecord{}, fmt.Errorf("reply ceiling: %w", err)
+	}
+	grantEpoch, grantSeq, err := s.cfg.Authorities.GrantWatermark()
+	if err != nil {
+		return protocol.ReconcileRecord{}, fmt.Errorf("grant watermark: %w", err)
+	}
+	return protocol.ReconcileRecord{
+		Machine:          s.cfg.Machine,
+		EpochID:          s.cfg.EpochID,
+		InboundHighWater: inbound,
+		ReplyCeiling:     reply,
+		GrantEpoch:       grantEpoch,
+		GrantSeq:         grantSeq,
+	}, nil
+}
+
 // forward marshals rec as a bare journal record (no kind tag, backward-compatible with the
 // phone's journal path) and seals it into the phone's mailbox. The seal/append error is
 // returned (authoritative for the gateway's cursor gating) and also stashed for Err().
@@ -137,14 +241,25 @@ func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 // appends the opaque envelope to the phone's mailbox. Journal records and terminal
 // snapshots both flow through here so they share one strictly increasing seq stream
 // (R-GW.3; the phone orders and dedups on that single seq).
+func (s *RelaySink) seal(plaintext []byte) error {
+	return s.sealAtSeq(func(uint64, int64) ([]byte, error) { return plaintext, nil })
+}
+
+// sealAtSeq is seal for a plaintext that must know its OWN envelope coordinates: build
+// runs INSIDE the same critical section and is handed the allocated seq and the envelope's
+// issued-at. The reconcile record needs both -- its journal_ceiling authority is its own
+// seq (self-certifying, so accepting the frame reseeds the bucket) and its issued_at must
+// be the header's, not a second reading of the clock.
 //
 // The whole seq-allocate -> append is held under s.mu so RunJournal and RunTerminal (two
 // goroutines sharing one sink) can never append out of seq order: releasing the lock
 // after allocating seq would let a later seq reach the phone's single MailboxReceiver
 // first, which drops the earlier one as ErrStaleSeq and forces a spurious resync. Appends
 // are the gateway's outbound path (not hot), so serializing them is cheap. setErrLocked
-// is used inside the critical section because setErr re-acquires s.mu.
-func (s *RelaySink) seal(plaintext []byte) error {
+// is used inside the critical section because setErr re-acquires s.mu. For the same
+// reason, build MUST NOT touch the sink: it runs holding s.mu, so any call back into a
+// locking method (Err, setErr, seal, Reconcile) self-deadlocks.
+func (s *RelaySink) sealAtSeq(build func(seq uint64, issuedAt int64) ([]byte, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Allocate seq inside s.mu so allocation order == append order (concurrent producers
@@ -156,6 +271,12 @@ func (s *RelaySink) seal(plaintext []byte) error {
 		s.setErrLocked(err)
 		return err
 	}
+	issuedAt := s.now().UnixMilli()
+	plaintext, err := build(seq, issuedAt)
+	if err != nil {
+		s.setErrLocked(err)
+		return err
+	}
 
 	env, err := crypto.SealMailbox(s.cfg.Key, crypto.EnvelopeHeader{
 		Version:        crypto.VersionV1,
@@ -163,7 +284,7 @@ func (s *RelaySink) seal(plaintext []byte) error {
 		Seq:            seq,
 		RecipientKeyID: s.cfg.RecipientKeyID,
 		SenderKeyID:    s.cfg.SenderKeyID,
-		IssuedAt:       s.now().UnixMilli(),
+		IssuedAt:       issuedAt,
 	}, plaintext)
 	if err != nil {
 		s.setErrLocked(err)

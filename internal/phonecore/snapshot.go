@@ -11,6 +11,7 @@ package phonecore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -27,6 +28,7 @@ const (
 	kindTerminalSnapshot = "terminal_snapshot" // server-rendered terminal grid -> snapshot cache
 	kindCommandReply     = "command_reply"     // daemon reply to a phone command -> reply cache
 	kindEpochGrant       = "epoch_grant"       // sealed epoch-rotation grant -> pending-grant slot (C5 consumes)
+	kindReconcile        = "reconcile"         // machine-published rollback authorities -> reconcile slot (PB-SYNC-7)
 	kindPush             = "push"              // reserved: no live push in Phase A
 )
 
@@ -47,6 +49,23 @@ type replyFrame struct {
 	Kind           string `json:"kind"`
 	schema.Control        // op, session_id, operation_id, ... (promoted)
 }
+
+// reconcileFrame is the wire shape of a sealed reconcile mailbox plaintext: the
+// schema.ReconcileRecord fields (promoted via anonymous embedding so its frozen json tags
+// stay the single source of truth) plus a kind tag. The gateway's RelaySink.Reconcile
+// MUST marshal this exact shape.
+type reconcileFrame struct {
+	Kind                   string `json:"kind"`
+	schema.ReconcileRecord        // machine, epoch_id, the three authorities, issued_at (promoted)
+}
+
+// ErrUnreconciled is the fail-closed refusal PB-STATE-4 demands of every MUTATING op
+// until the machine's reconcile record has been obtained: with no authority the phone
+// cannot know whether its persisted send-seq, receive high-waters or grant watermark
+// were rolled back, so authoring a command is unsafe. It is RECOVERABLE, never latched --
+// the refusal clears the moment the record lands (PB-STATE-10 forbids a permanent brick),
+// and observation (journal, terminal) is never gated on it.
+var ErrUnreconciled = errors.New("phonecore: no reconcile record; mutating ops refused until the machine publishes its authorities")
 
 // ReplyCache is a FIFO of the command replies the router demuxed off the shared mailbox,
 // drained by the phone with Take. A reply must land here, never in the session cache
@@ -76,6 +95,31 @@ func (c *ReplyCache) Take() (schema.Control, bool) {
 	ctrl := c.replies[0]
 	c.replies = c.replies[1:]
 	return ctrl, true
+}
+
+// TakeFor claims the cached reply that answers operationID, in ANY arrival order, and
+// consumes it. It is the attribution PB-SYNC-2 / PB-STATE-1 / PB-INPUT-4 need: a phone
+// with two ops in flight cannot repair, persist an outcome or drive retry off a FIFO it
+// cannot attribute.
+//
+// An UNTAGGED reply (empty operation_id) matches NOTHING -- not the empty key, not some
+// pending op by proximity. Attributing it would persist the wrong outcome for a mutating
+// op, which is worse than leaving it unattributed; Take still drains it, so nothing is
+// silently lost.
+func (c *ReplyCache) TakeFor(operationID string) (schema.Control, bool) {
+	if operationID == "" {
+		return schema.Control{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, ctrl := range c.replies {
+		if ctrl.OperationID != operationID {
+			continue
+		}
+		c.replies = append(c.replies[:i:i], c.replies[i+1:]...)
+		return ctrl, true
+	}
+	return schema.Control{}, false
 }
 
 // Len is the number of undrained replies.
@@ -143,6 +187,10 @@ type MailboxRouter struct {
 
 	grantMu sync.Mutex
 	grants  [][]byte // pending epoch-grant plaintexts; C5 wires machine-side delivery + consumption
+
+	reconMu sync.Mutex
+	recon   schema.ReconcileRecord // latest reconcile record (PB-SYNC-7); reconOK gates mutating ops
+	reconOK bool
 }
 
 // NewMailboxRouter returns a router bound to the epoch content key with empty caches.
@@ -178,6 +226,27 @@ func (r *MailboxRouter) TakeGrant() ([]byte, bool) {
 	return g, true
 }
 
+// Reconciled returns the latest reconcile record the router demuxed off the shared
+// mailbox (found=false until one lands). Its three authorities are what PB-STATE-4's
+// resume steps consume: Sequencer.SeedFrom(InboundHighWater), SeedHighWater for the
+// reply bucket (the shared journal/terminal bucket is reseeded by the frame's own
+// arrival), and crypto.NewGrantReceiverAt(GrantEpoch, GrantSeq).
+func (r *MailboxRouter) Reconciled() (schema.ReconcileRecord, bool) {
+	r.reconMu.Lock()
+	defer r.reconMu.Unlock()
+	return r.recon, r.reconOK
+}
+
+// RequireReconciled is the fail-closed gate every MUTATING op passes through: nil once a
+// reconcile record has been obtained, ErrUnreconciled until then. Reads are deliberately
+// NOT gated -- a phone that shows nothing is indistinguishable from a dead one.
+func (r *MailboxRouter) RequireReconciled() error {
+	if _, ok := r.Reconciled(); !ok {
+		return ErrUnreconciled
+	}
+	return nil
+}
+
 // SeedHighWater seeds the resume high-water mark for a (sender, epoch) stream, matching
 // JournalReceiver.SeedHighWater -- an envelope at seq <= N is rejected on resume (F4).
 func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) {
@@ -188,7 +257,8 @@ func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) 
 // mailbox receiver EXACTLY ONCE, then demuxes on the "kind" discriminator with an EXPLICIT
 // switch over the frame families that share this one mailbox and seq space (C8 / codex#7):
 // a terminal_snapshot updates the snapshot cache; a command_reply is enqueued on the reply
-// cache (drained by the phone, never mistaken for a journal record); an epoch_grant is
+// cache (drained by the phone, never mistaken for a journal record); a reconcile record
+// fills the reconcile slot (PB-SYNC-7, clearing the mutating-op refusal); an epoch_grant is
 // stashed for pairing / epoch-rotation (C5) to open; a push frame is reserved (dropped);
 // and ONLY a kind-less plaintext takes the existing journal path into the session cache. An
 // unrecognised kind fails closed rather than being mis-applied. gap=true reports a SKIPPED
@@ -227,6 +297,17 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 			return res.Gap, err
 		}
 		r.replies.Append(f.Control)
+	case kindReconcile:
+		// PB-SYNC-7: adopt the machine's authorities WHOLE or not at all -- a decode
+		// failure leaves the router unreconciled (and still refusing mutating ops) rather
+		// than half-applying a partial authority.
+		var f reconcileFrame
+		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
+			return res.Gap, err
+		}
+		r.reconMu.Lock()
+		r.recon, r.reconOK = f.ReconcileRecord, true
+		r.reconMu.Unlock()
 	case kindEpochGrant:
 		// Route+expose only: stash the authenticated plaintext for C5 to open. NEVER journal it.
 		r.grantMu.Lock()

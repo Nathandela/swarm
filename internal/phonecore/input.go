@@ -35,6 +35,23 @@ type Sequencer struct{ n atomic.Uint64 }
 // Next returns the next seq (1 on first call). Safe for concurrent use.
 func (s *Sequencer) Next() uint64 { return s.n.Add(1) }
 
+// SeedFrom resumes the sequencer above n, so the next seq is n+1. It is PB-STATE-4(a):
+// a rolled-back phone restarts its send-seq low and every command it seals is stale-
+// dropped by the gateway's durable inbound high-water (PB-GW-1) -- a permanent refusal
+// with no local symptom -- until the reconcile record's InboundHighWater resumes it here.
+//
+// MONOTONIC: a stale or lower authority (or a reserved-but-unused seq block, PB-STATE-3)
+// can never rewind an already-advanced counter, which would re-issue a seq the gateway
+// has already consumed. Safe for concurrent use with Next.
+func (s *Sequencer) SeedFrom(n uint64) {
+	for {
+		cur := s.n.Load()
+		if n <= cur || s.n.CompareAndSwap(cur, n) {
+			return
+		}
+	}
+}
+
 // SealInputData seals a keystroke burst as a mailbox INPUT-FRAME envelope under
 // the epoch content key so it travels through the untrusted relay as ciphertext,
 // mirroring SealCommandEnvelope. session is the target namespaced session id, bound

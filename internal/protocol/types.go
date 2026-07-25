@@ -120,6 +120,7 @@ type (
 	PolicyView       = schema.PolicyView
 	PairingControl   = schema.PairingControl
 	LaunchReq        = schema.LaunchReq
+	ReconcileRecord  = schema.ReconcileRecord
 )
 
 // The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no

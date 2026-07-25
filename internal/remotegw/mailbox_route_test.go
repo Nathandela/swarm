@@ -68,6 +68,10 @@ func (f *fakeLeaseRouter) End(session string) {
 	f.ends = append(f.ends, session)
 }
 
+// Generation satisfies the LeaseRouter seam's lease-confirmation method (PB-SYNC-7).
+// This fake grants no real lease, so it reports none.
+func (f *fakeLeaseRouter) Generation(string) uint64 { return 0 }
+
 // sealRemoteCmd seals a full RemoteCommand (take_control/take_control_end carry an
 // Action but no LaunchReq) under the epoch content key, mirroring sealedCmd's bare
 // DeviceCommandAuth seal.

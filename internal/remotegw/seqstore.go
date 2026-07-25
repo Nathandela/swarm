@@ -20,6 +20,13 @@ type SeqSource interface {
 	// seq -- if it cannot durably reserve, so a disk fault fails closed rather than risk
 	// reusing a seq across a restart.
 	Next() (uint64, error)
+
+	// Issued is a SAFE WATERMARK to publish to the phone as a receive high-water
+	// (PB-STATE-4(b)): >= every seq already handed out, and < every seq that will ever
+	// be handed out, ACROSS A RESTART. It is NOT the durable reservation ceiling, which
+	// sits up to a full block above the last frame actually sent -- a phone seeded there
+	// would stale-drop every legitimate frame until the gateway caught up.
+	Issued() uint64
 }
 
 // seqReserveBlock is how many seq values a durableSeq reserves per fsync. seq allocation
@@ -88,6 +95,16 @@ func (s *durableSeq) Next() (uint64, error) {
 	}
 	s.issued++
 	return s.issued, nil
+}
+
+// Issued is the highest seq handed out. Across a restart OpenSeqSource resumes issued at
+// the persisted reservation ceiling, so the watermark JUMPS (the unused tail of the last
+// block is burned) but never falls below an already-issued seq -- which is exactly the
+// two-sided property the phone needs to seed a receive high-water on.
+func (s *durableSeq) Issued() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.issued
 }
 
 // errCorruptSeqFile flags a seq file whose length is not the expected 8 bytes. Custody of
