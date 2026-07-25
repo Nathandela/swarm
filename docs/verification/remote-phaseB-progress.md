@@ -285,6 +285,18 @@ uses for the push preference.
   linter is not enabled in the golangci config, so this fails no gate today — `golangci-lint run
   ./...` is clean apart from slice S6b's declared build-RED. Recorded so the final audit does not
   mistake it for Phase B breakage; cleaning it is unrelated hygiene and deliberately out of scope.
+- **PHASE A, found by the S6b reviewer: re-authenticating an ALREADY-AUTHENTICATED relay socket
+  under a different key is a legal frame sequence.** Neither `handleAuthInit`
+  (`internal/remote/relay/server.go:615`) nor `handleAuthResp` (`:658`) checks `sc.authed`, so a
+  client may authenticate as A and then re-authenticate as B on the same connection.
+  `registerSession` (`:689`) rewrites `sc.rid` in place. Phase B's exposure through this
+  (S6b's wait-slot leak, where `s.waits[rid]` was keyed on the *current* rid and could never be
+  reclaimed) is fixed in S6b by capturing the rid at registration. The remaining Phase A surface
+  is `s.sessions`, which the reviewer verified **does** self-heal because `registerSession`
+  overwrites the key -- so this is recorded, not urgent. Worth deciding deliberately whether
+  re-auth on an authed connection should be refused outright: it is state a client can rewrite
+  after passing the gate, and the next feature keyed on `sc.rid` inherits the same trap. NOT in
+  Phase B's scope; do not fix it inside a Phase B slice without an ADR.
 - **Known pre-existing flake**: `TestRemotePeek_LargeGridClippedUnderMaxFrame` (i/o timeout
   under full-suite load; passes isolated). Predates Phase B.
 - The final full-committee audit against all 139 requirements is still owed, per the goal.
