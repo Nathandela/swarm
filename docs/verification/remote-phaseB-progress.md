@@ -112,15 +112,22 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-**45 of 141 shipped, 96 remaining (12 of 28 slices).** The completed slices were deliberately the
+**60 of 142 shipped, 82 remaining (15 of 29 slices).** The completed slices were deliberately the
 blockers and the security-critical machine-side work -- dependency surgery, gateway durability
 in both directions, the transport, the reconciliation frame, the bound facade -- because they
 gate everything downstream. The remaining 96 are weighted toward the Android app and end-to-end
 verification.
 
-The counts rose by one requirement and one slice mid-implementation: **PB-LIFE-7 / S4b**, created
-when an S4 re-reviewer restated an "accepted residual" and it turned out to be exit-criterion-fatal
-on the default install. That is the process working, not scope creep.
+The counts have risen twice mid-implementation, both times because a reviewer or test author found
+a hole that would otherwise have shipped:
+- **PB-LIFE-7 / S4b** -- an S4 re-reviewer restated an "accepted residual" that turned out to be
+  exit-criterion-fatal on the default install (the phone pairs, then silence, forever).
+- **PB-KEY-9 / S14a** -- the S14 RED author found that ADR-007 B14 (make `crypto.KeyStore`
+  failable, in the Go core) was **decided and never implemented**, so PB-KEY-6's criterion was
+  unreachable from Android; and that key material at rest is not sealed at all, which collapses
+  PB-KEY-2's tier split independently of anything the Android side does.
+
+That is the process working, not scope creep.
 
 ## Slice status
 
@@ -138,11 +145,14 @@ on the default install. That is the process working, not scope creep.
 | S7 durable phone state | PB-STATE-*, PB-GW-6 | **SHIPPED** (`0ac4fb9`) -- the phone now survives a process kill; was the most severe committee finding |
 | S7b gateway bounded-age | PB-GW-2 | **SHIPPED** (`a0bd09d`) -- age backstop for the window the seq guard cannot see. Reviewed: SHIP, seven mutations all fired |
 | S8 gomobile facade | PB-BIND-*, PB-SAS-1/2 | **SHIPPED** (`8293915`) -- `ReleaseControl` sealed `delete` and would have DESTROYED the session; one undecodable frame spun the drain at 1455 reads/s |
-| S4b remote-socket contract | PB-LIFE-7 | in progress (RED) -- exit-criterion-fatal: default install pairs, then silence |
-| S6b low-latency input path | PB-NET-5 | in progress (GREEN) -- measured 486 ms p50 against a 150 ms budget; rewrites the relay's concurrency model |
-| S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | in progress (RED) -- first Android code in the repo |
-| S9, S11, S12 | PB-NET-1, PB-INPUT-*/PB-TIME-*, PB-PUSH-* | unblocked by S8, **held behind S6b** -- all three land in `relay`/`transport`, which S6b is rewriting |
-| S10, S14..S21 | see §11 of the spec | not started |
+| S4b remote-socket contract | PB-LIFE-7 | **SHIPPED** (`d971525`) -- stock install paired then went silent forever; the supervisor respawned a doomed gateway every 10s |
+| S6b low-latency input path | PB-NET-5 | **SHIPPED** (`c22eb36`) -- phone->PTY p50 **486 ms -> 31 ms**, 21% of budget. Review found a race + permanent wait-slot leak from a legal frame sequence |
+| S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | **SHIPPED** (`3fbaa50`) -- first Android code; AAR + APK + Gradle gate + CI lane all green |
+| S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | in progress (GREEN) -- 59 tests; found the facade signs every command at a flat 2-min TTL, so a typing session dies of its own signature |
+| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (79 tests, 74 red), **BLOCKED on S14a** |
+| **S14a Go custody seam** | **PB-KEY-9** | not started -- **blocks S14, and S15's PB-STATE-6 needs the same mechanism** |
+| S9, S12 | PB-NET-1, PB-PUSH-* | unblocked; held behind S11, which is live in `mobile/` and `transport/` |
+| S10, S15..S21 | see §11 of the spec | not started |
 
 ## Working agreement that is producing the results
 
