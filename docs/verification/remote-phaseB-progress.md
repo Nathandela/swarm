@@ -20,8 +20,8 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 |---|---|---|
 | S1 dependency-edge surgery | PB-BIND-0 | **SHIPPED** (`0024595`) — closure 52 -> 18 non-stdlib, zero forbidden |
 | S5 design tokens | PB-TOK-1/2/3 | **SHIPPED** (`638b61b`) — Substrate pinned, drift-guarded |
-| S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | implementation + row-budget fix done, in independent review |
-| S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | not started (all parallel roots) |
+| S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | **SHIPPED** (`20be9b2`) -- real symbol + relay URL; 39-char URL ceiling enforced; manual scan still owed |
+| S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | **next** -- all parallel roots, startable immediately |
 | S1b, S6..S21 | see §11 of the spec | not started |
 
 ## Working agreement that is producing the results
@@ -33,8 +33,13 @@ every slice so far, including ones the implementer and test author both missed.
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
-  camera reading the symbol off a real terminal. No test can supply it. The 80x24 case is
-  exactly at the floor (45x23 symbol, quiet zone 2), so this is the check that matters.
+  camera reading the symbol off a real terminal. No test can supply it. Lower risk after the
+  row-budget fix (quiet zone 3 at 24 rows, 4 at 25+), but still the check that matters. The
+  encoder always uses mask 0 and every pairing mints fresh random material, so the reviewer
+  recommends re-running the out-of-band decode over ~1000 random payloads, not one.
+- **The relay URL ceiling is enforced at WRITE time only.** A `relay.json` written by hand or
+  before this change is loaded as-is; `swarm remote pair` then degrades with the now-accurate
+  "shorten the relay URL" message. Refusing at load would brick an existing config on upgrade.
 - **S8 must NOT reimplement `LaunchContentHash`** in the facade. It stayed in
   `internal/protocol` (Go has no function aliases). Reimplementing its canonical encoding
   would produce silent signature failures with no compile error. Options are: move it then,
