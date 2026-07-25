@@ -1010,3 +1010,53 @@ environment while the daemon reads its own, so an operator who exports it in one
 the daemon from another still gets a mismatch. Closing it requires the daemon to be the authority
 (a durable record or a protocol query). Both routes land in packages frozen for other in-flight
 slices, so it is recorded rather than rushed.
+
+**B16. Backgrounding DISCONNECTS. No foreground service in v1, and high-priority FCM is the sole
+background wake path. `minSdk` is 33.** PB-RUN-3 required "a policy compatible with PB-NET-5's
+waiting mechanism" without saying whether the app holds a connection while backgrounded. The S13
+RED author showed the two answers have very different costs that neither §6.0 nor B7 priced, and
+correctly declined to pick between them. Deciding here.
+
+**The problem.** B7's mechanism parks a socket in a bounded server-side wait for up to 25 s, which
+is exactly what Doze, App Standby and battery saver exist to kill. So:
+- **Hold the connection** -> a foreground service is mandatory, and its `foregroundServiceType` is
+  forced to one of two bad options. `dataSync` is capped from API 34 at roughly 6 h/day per app,
+  after which the system **force-stops the service** — so "observe all day" fails by design, and
+  fails silently late in the day. `specialUse` requires a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`
+  declaration and an explicit Play-review justification, which is a review dependency on a
+  personal tool.
+- **Drop the connection** -> PB-RUN-4's high-priority FCM becomes the *only* wake path, and its
+  quota is per-app-per-device with no published number, so §6.0 — which budgets everything else to
+  three significant figures — has no budget for the thing the design then depends on.
+
+**Decision: drop the connection.** Foreground holds a connected socket and issues waits; every
+background state (backgrounded, Doze, App Standby, battery saver) closes it and relies on a
+high-priority FCM push to wake the app, after which the user foregrounds and the socket
+re-establishes. No foreground service ships in v1.
+
+**Why.** This is what the architecture already assumed — D6 is "push-wakes + coalesced snapshots",
+and push exists *because* the socket is not held. The alternative buys a persistent notification, a
+measurable battery cost, a Play-review dependency, and a 6 h/day cliff that force-stops the service
+mid-afternoon, in exchange for saving a reconnect the user does not perceive: they are looking at
+their phone in order to act, and the reconnect happens while they read the notification. The
+unpublished FCM quota is a real unknown, but the volume here is small and already coalesced —
+an agent needs its owner a handful of times an hour, debounced by PB-PUSH-0 — which is far below
+the rate any messaging app sustains on the same mechanism.
+
+**Consequences, stated so they are not discovered later:**
+- Push is now **load-bearing, not a convenience**. A dropped push is a missed hand-off with no
+  fallback, which raises the bar on PB-PUSH-6 (relay-restart loss) and PB-PUSH-9 (token lifecycle),
+  and makes PB-E2E-5's real-FCM leg non-optional rather than nice-to-have.
+- Nothing observes while the phone is in a pocket. That is the correct behaviour for this product
+  and should be stated in the docs rather than discovered: the phone is a remote control, not a
+  monitor.
+- **A revoke cannot reach a backgrounded phone until the next push.** The gateway severs
+  regardless, so the machine side is unaffected and the window is one of stale local display, not
+  of retained access.
+
+**`minSdk` = 33, decided here rather than left to S13.** PB-KEY-8 binds custody to PB-RUN-1's
+`minSdk`, and Curve25519 entered KeyMint only in Android 13 (API 33) — below that the
+`NoiseStatic`/`Recipient` roles cannot be Keystore-native at all, which would silently degrade the
+central security property on old devices. Choosing 33 makes PB-KEY-8 clean by construction instead
+of forcing a per-device fallback path nobody would exercise. The cost is excluding pre-2022
+handsets, which for a single-maintainer personal tool is not a cost worth a fallback matrix.
