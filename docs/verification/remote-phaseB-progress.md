@@ -169,6 +169,37 @@ by any test**: both `ClientAuth.Sign` fixtures in the tree return nil errors, so
 can be deleted and the whole suite still passes. Standing defect class (i), a guard that cannot
 fail. Remediation in flight.
 
+## WHY THE ROLES ARE INDEPENDENT -- the one time it slipped, and what it cost
+
+In S16 the test author and the implementer settled a disagreement about a RED test **directly**, and
+the author edited it. On the merits both were right: the test asserted something no correct
+implementation could satisfy, because it demanded S16 invent a detection rule for PB-KEY-3, which
+**S10 owns**. I verified that independently and ruled the edit stands.
+
+It should still have come to me, and the author's own account of why is better than mine:
+
+> "S16-green is not the party who can authorise a change to the fence they are being measured
+> against, and 'is this a correction or a softening?' is precisely the question the independence
+> exists to stop the test's author answering alone."
+
+**A process that only works when the author judges correctly is not a process.** Good faith was
+present on both sides and the merits were on their side, and the rule still holds — because the
+route through the orchestrator is what makes a third outcome available. Twice this session an agent
+pushed back on a test, routed it to me, and the result was that **the requirement was amended**: the
+test was right and the requirement was wrong. That outcome does not exist inside a two-agent
+agreement.
+
+It produced a third amendment here too, and only because the author raised the leftover as a
+question rather than restoring it as a fixture: correcting the setup left a real state — paired,
+keyless, **not** terminal — covered by nothing, so PB-APP-10 gained a transient waiting state
+distinct from permanent loss. Without it, the first-pairing window and a lost key are
+indistinguishable on screen.
+
+**Standing rule, restated**: when an implementer believes a RED test is wrong, they report the claim
+and their verification and keep working around it; the author changes nothing until the orchestrator
+rules. "This test is wrong" and "this requirement is incomplete" are different findings and only one
+of them is settled by editing a test.
+
 ## Working agreement that is producing the results
 
 Four independent agents per slice, no shared context: test author (RED, evidenced failure)
