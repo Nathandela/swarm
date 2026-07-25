@@ -80,7 +80,7 @@ func TestRelay_PerSourceConcurrentConnCapEnforced(t *testing.T) {
 	clk := newFakeClock()
 	src := &bucketedSource{}
 	src.set("source-A")
-	srv, err := New(cfg, WithClock(clk), WithAPNsSink(&mockAPNs{}), WithSourceKeyFunc(src.fn))
+	srv, err := New(cfg, WithClock(clk), WithPushSink(&mockAPNs{}), WithSourceKeyFunc(src.fn))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

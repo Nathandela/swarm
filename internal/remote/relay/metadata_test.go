@@ -21,7 +21,7 @@ func TestRelay_LogsNoBodies(t *testing.T) {
 	cfg.TLSMode = "off"
 	cfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
 	clk := newFakeClock()
-	srv, err := New(cfg, WithClock(clk), WithAPNsSink(&mockAPNs{}), WithLogWriter(&logs))
+	srv, err := New(cfg, WithClock(clk), WithPushSink(&mockAPNs{}), WithLogWriter(&logs))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

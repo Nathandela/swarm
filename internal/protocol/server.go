@@ -994,6 +994,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleTakeControl(c)
 	case OpTakeControlEnd:
 		cc.handleTakeControlEnd(c)
+	case OpPushPrefs:
+		cc.handlePushPrefs(c)
 	case OpPairStart:
 		cc.handlePairStart(c)
 	case OpPairConfirm:
@@ -1253,6 +1255,24 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 		return
 	}
 	cc.replyOK(c.TargetDeviceID)
+}
+
+// handlePushPrefs AUTHORIZES a device's push-preference change and does nothing else
+// (PB-PUSH-8). The daemon is the one authorizer -- it holds the device registry and the
+// pinned command-signing keys -- while the durable record and the delivery decision live
+// at the gateway, because PB-PUSH-10 puts durability where delivery is decided and the
+// daemon never talks to the relay (D5). So there is deliberately no preference state here
+// to read, write, or reply with: an OK means "this device is who it says it is and may set
+// this", and the gateway persists on that OK.
+//
+// It carries no side effect, so it needs no OperationClaimer replay dedup the way kill and
+// delete do: a re-delivered push_prefs re-authorizes and the gateway's monotonic Version
+// refuses the stale write.
+func (cc *clientConn) handlePushPrefs(c Control) {
+	if !cc.requireRemoteAuthz(c, ActionPushPrefs, c.SessionID, nil) {
+		return
+	}
+	cc.replyOK(c.SessionID)
 }
 
 // severControl force-releases every control lease whose establishing control session matches the

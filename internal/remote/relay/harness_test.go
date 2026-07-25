@@ -61,7 +61,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 // recordedPush is one delivery the relay handed to the (mock) APNs sink.
 type recordedPush struct {
 	token   string
-	payload APNsPayload
+	payload PushPayload
 }
 
 // mockAPNs is the deferred-real APNs target (R-REL.5). It records every push so
@@ -71,7 +71,7 @@ type mockAPNs struct {
 	pushes []recordedPush
 }
 
-func (m *mockAPNs) Push(_ context.Context, token string, p APNsPayload) error {
+func (m *mockAPNs) Push(_ context.Context, token string, p PushPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pushes = append(m.pushes, recordedPush{token: token, payload: p})
@@ -99,7 +99,7 @@ func startTestRelay(t *testing.T, mut func(*Config)) (*Server, Config, *mockAPNs
 	}
 	apns := &mockAPNs{}
 	clk := newFakeClock()
-	srv, err := New(cfg, WithClock(clk), WithAPNsSink(apns))
+	srv, err := New(cfg, WithClock(clk), WithPushSink(apns))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

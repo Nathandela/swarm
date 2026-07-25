@@ -33,7 +33,7 @@ func TestRelayStore_SurvivesRestart(t *testing.T) {
 	if err := srv.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	srv2, err := New(cfg, WithClock(clk), WithAPNsSink(apns))
+	srv2, err := New(cfg, WithClock(clk), WithPushSink(apns))
 	if err != nil {
 		t.Fatalf("New(restart): %v", err)
 	}

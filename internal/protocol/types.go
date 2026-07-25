@@ -88,6 +88,14 @@ const (
 	// journal_subscribe/journal_event pair).
 	OpTerminalSubscribe = "terminal_subscribe"
 	OpTerminalSnapshot  = "terminal_snapshot"
+
+	// OpPushPrefs is the signed remote op behind ActionPushPrefs (PB-PUSH-8): the phone
+	// asks the machine to change which transitions may wake it. The daemon AUTHORIZES it
+	// and nothing more -- the durable record and the delivery decision live at the gateway,
+	// because PB-PUSH-10 puts durability where delivery is decided. It exists as a daemon
+	// op precisely so the verb rides the one authorization plane (requireRemoteAuthz)
+	// instead of growing a second one inside a gateway that holds no device key.
+	OpPushPrefs = "push_prefs"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

@@ -188,3 +188,95 @@ func TestServiceConfigFromParams_WiresTheGrantWatermark(t *testing.T) {
 			cfg.GrantSeq, id.GrantSeq())
 	}
 }
+
+// TestServiceConfigFromParams_WiresThePushPath closes PB-PUSH-0/-3/-8/-10 at the PRODUCTION
+// seam, in the same shape as the outbox and grant-watermark tests above and for the same
+// reason: every one of these three mappings fails SILENTLY when dropped.
+//
+//   - WakeKey dropped => every wake is sealed under an ALL-ZERO key. SealWake succeeds, the
+//     relay forwards 78 opaque bytes, the provider delivers, and the phone cannot open a
+//     single one. Nothing errors anywhere on this side.
+//   - PushSeq dropped => NewPushNotifier falls back to an in-memory source that cannot fail
+//     to build, so the wake seq restarts at 1 on every gateway restart and the phone's
+//     persisted replay coordinate (PB-STATE-1) refuses every wake after the first restart.
+//   - PushPrefs dropped => the notifier fails closed and suppresses every wake, and the
+//     command bridge refuses the push_prefs verb. Push simply never works, loudly only in a
+//     PushNotifier.Err() nobody is required to read.
+//
+// Presence is not enough for the seq, so this asserts DURABILITY the in-memory fallback
+// cannot satisfy: a seq issued through the mapped source must not be reissued by a fresh
+// handle over the on-disk file.
+func TestServiceConfigFromParams_WiresThePushPath(t *testing.T) {
+	stateDir := t.TempDir()
+	id := writeMachineIdentity(t, stateDir)
+	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
+	addPairedDevice(t, stateDir)
+
+	p, err := resolveGatewayParams(stateDir, "/tmp/does-not-need-to-exist/remote.sock")
+	if err != nil {
+		t.Fatalf("resolveGatewayParams: %v", err)
+	}
+	cfg := serviceConfigFromParams(p, noopMailbox{})
+
+	// The wake key is the identity's own, not a zero value that would seal unopenable wakes.
+	wantWake := id.EpochKeys().WakeKey
+	if cfg.WakeKey != wantWake {
+		t.Fatalf("ServiceConfig.WakeKey is not the machine identity's wake key: every wake the "+
+			"production gateway seals would be opened by nobody (got %x..., want %x...)",
+			cfg.WakeKey[:4], wantWake[:4])
+	}
+	if cfg.WakeKey == (crypto.WakeKey{}) {
+		t.Fatal("ServiceConfig.WakeKey is all zero")
+	}
+	// ...and it is NOT the content key: sealing wakes under the content key would hand the
+	// NSE-readable key path a key that opens session content (A15/F10).
+	if crypto.ContentKey(cfg.WakeKey) == cfg.Key {
+		t.Fatal("ServiceConfig.WakeKey equals the content key: the push path must hold a content-free key")
+	}
+
+	if cfg.PushPrefs == nil {
+		t.Fatal("ServiceConfig.PushPrefs is nil: the production notifier fails closed and suppresses " +
+			"every wake, and the push_prefs verb is refused, with PB-PUSH-8/-10 closed only in tests")
+	}
+	if cfg.PushSeq == nil {
+		t.Fatal("ServiceConfig.PushSeq is nil: the wake replay coordinate restarts at 1 on every " +
+			"gateway restart and the phone refuses every wake after one (PB-PUSH-3)")
+	}
+
+	// Durable, not merely present.
+	issued, err := cfg.PushSeq.Next()
+	if err != nil {
+		t.Fatalf("Next through the mapped push seq: %v", err)
+	}
+	reopened, err := remotegw.OpenSeqSource(filepath.Join(stateDir, "remote", "outbound-push.seq"))
+	if err != nil {
+		t.Fatalf("reopen the on-disk push seq: %v", err)
+	}
+	next, err := reopened.Next()
+	if err != nil {
+		t.Fatalf("Next through the reopened push seq: %v", err)
+	}
+	if next <= issued {
+		t.Errorf("a reopened <stateDir>/remote/outbound-push.seq reissued %d after %d: the seq the "+
+			"Service was handed is not backed by the provisioned file, so every restart replays wake "+
+			"seqs the phone has already refused", next, issued)
+	}
+
+	// The preference custody is the provisioned FILE, not an in-memory stand-in: what the
+	// command bridge stores must be what a restarted notifier reads.
+	if err := cfg.PushPrefs.SavePrefs(remotegw.PushPrefs{Version: 3, NeedsInput: false, Finished: true}); err != nil {
+		t.Fatalf("SavePrefs through the mapped custody: %v", err)
+	}
+	reopenedPrefs, err := remotegw.OpenPushPrefs(filepath.Join(stateDir, "remote", "push-prefs.json"))
+	if err != nil {
+		t.Fatalf("reopen the on-disk push preference: %v", err)
+	}
+	got, err := reopenedPrefs.LoadPrefs()
+	if err != nil {
+		t.Fatalf("LoadPrefs through the reopened custody: %v", err)
+	}
+	if got != (remotegw.PushPrefs{Version: 3, NeedsInput: false, Finished: true}) {
+		t.Errorf("a reopened <stateDir>/remote/push-prefs.json holds %+v, want the record saved through "+
+			"the mapped custody: the preference the user sets does not survive a gateway restart", got)
+	}
+}

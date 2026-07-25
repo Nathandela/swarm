@@ -17,6 +17,13 @@ import (
 // seam so a relay-client signature change is caught at compile time.
 var _ Mailbox = (*relay.Client)(nil)
 
+// It is ALSO the push transport: one connection carries both the mailbox and the wake
+// trigger, which is why NewService discovers the pusher by type-asserting cfg.Relay rather
+// than taking a second seam. That assertion is the risk this pin covers -- a drift in the
+// client's PushTrigger signature would make it fail silently at runtime, degrading the
+// gateway to no push with nothing failing anywhere.
+var _ PushTriggerer = (*relay.Client)(nil)
+
 // The gateway is a CommandForwarder via ForwardCommand. Pinned at compile time.
 var _ CommandForwarder = (*Gateway)(nil)
 
@@ -91,6 +98,13 @@ type CommandBridgeConfig struct {
 	ReplyTarget string              // the phone's relay routing id (where replies are appended)
 	ReplySeq    SeqSource           // durable reply seq high-water (nil => in-memory, non-durable)
 	Inbound     InboundState        // durable INBOUND checkpoint: read cursor + per-stream replay high-water (nil => in-memory, non-durable)
+	// Prefs is the durable push-preference custody the push_prefs verb writes (PB-PUSH-8,
+	// PB-PUSH-10). It is the SAME object the PushNotifier reads, so a change the daemon
+	// authorizes takes effect on the next transition. Nil disables the verb -- and disables
+	// it LOUDLY: a bridge with no custody refuses push_prefs rather than answering OK to a
+	// preference it did not store, which would leave the phone showing a setting the
+	// machine has never heard of.
+	Prefs PushPrefsSource
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -465,6 +479,10 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		}
 		b.cfg.Watchers.Unwatch(rc.Session)
 		return nil
+	case protocol.ActionPushPrefs:
+		// Authorized by the DAEMON, persisted HERE (PB-PUSH-8 / PB-PUSH-10): see
+		// applyPushPrefs.
+		return b.applyPushPrefs(ctx, rc)
 	default:
 		return b.forward(ctx, rc)
 	}
@@ -486,11 +504,86 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	return b.sealReply(ctx, reply)
 }
 
+// errNoPrefsCustody refuses push_prefs on a bridge assembled without durable custody. The
+// phone is told; answering OK to a preference nothing stored would leave its settings
+// screen authoritative about a value the machine has never held.
+var errNoPrefsCustody = errors.New("remotegw: push_prefs refused: no durable preference custody configured")
+
+// errNoPrefsBody refuses a push_prefs whose preference body is absent -- the counterpart of
+// the launch path's "missing its launch spec in-envelope". A stripped body must be refused
+// loudly, never applied as some default: the default is ENABLED, so a body a relay dropped
+// would silently re-enable notifications the user had turned off.
+var errNoPrefsBody = errors.New("remotegw: push_prefs command missing its preference body in-envelope")
+
+// applyPushPrefs runs one push_prefs: the DAEMON decides, the GATEWAY stores.
+//
+// The split is not arbitrary. The gateway holds no device key, so if it decided this verb
+// locally anyone who could get a plaintext-shaped frame into the mailbox would be deciding
+// whether the owner's phone gets woken -- and silence is the kind of failure nobody
+// reports, because nothing appears to break. So it rides the one authorization plane every
+// other signed action rides (requireRemoteAuthz), and the gateway applies only on the
+// daemon's OK. Durability lands here because PB-PUSH-10 puts it where DELIVERY is decided,
+// and delivery is decided by the notifier reading this same record.
+//
+// Every exit seals a reply. An unanswered push_prefs leaves the phone's settings screen
+// waiting forever, which is a worse object than one that is wrongly confident: at least a
+// refusal can be retried.
+func (b *CommandBridge) applyPushPrefs(ctx context.Context, rc protocol.RemoteCommand) error {
+	if rc.PushPrefs == nil {
+		return b.refusePushPrefs(ctx, rc, errNoPrefsBody)
+	}
+	if b.cfg.Prefs == nil {
+		return b.refusePushPrefs(ctx, rc, errNoPrefsCustody)
+	}
+	op, err := opForAction(rc.Action, rc.Launch)
+	if err != nil {
+		return err
+	}
+	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc.Session, rc.DeviceCommandAuth, nil)
+	if err != nil {
+		return fmt.Errorf("forward: %w", err)
+	}
+	reply.OperationID = rc.OperationID
+	if reply.Op == protocol.OpError {
+		// The daemon refused -- an unknown device, a forged or expired signature, an
+		// insufficient capability, or the kill switch. The gateway cannot tell these apart
+		// and must not: all it may do is NOT apply the preference, and say so.
+		return b.sealReply(ctx, reply)
+	}
+	// The ack the phone receives is what makes its settings screen authoritative, so it
+	// must not be able to precede a failed persist: the screen would then say "off" while
+	// the next gateway start pushes again -- the exact defect PB-PUSH-10 names.
+	if err := b.cfg.Prefs.SavePrefs(*rc.PushPrefs); err != nil {
+		return b.refusePushPrefs(ctx, rc, err)
+	}
+	return b.sealReply(ctx, reply)
+}
+
+// refusePushPrefs tells the phone why its preference was not applied and returns the reason
+// so the item still fails locally (no inbound high-water advance, a poll error an operator
+// can see). The seal error is joined rather than swallowed: a refusal the phone never
+// received leaves it with neither the setting nor the reason.
+//
+// The reply carries no ErrorCode. None of the six in the taxonomy describes a machine-side
+// custody failure, and inventing a mapping would tell the phone's retry policy something
+// untrue -- the same shape confirmLease's refusals already take.
+func (b *CommandBridge) refusePushPrefs(ctx context.Context, rc protocol.RemoteCommand, reason error) error {
+	sealErr := b.sealReply(ctx, protocol.Control{
+		Op:          protocol.OpError,
+		SessionID:   rc.Session,
+		OperationID: rc.OperationID,
+		Error:       reason.Error(),
+	})
+	return errors.Join(fmt.Errorf("push_prefs: %w", reason), sealErr)
+}
+
 // opForAction maps a command action to the daemon wire op. kill/delete carry no body
 // and map to identically-named ops. launch additionally requires the LaunchReq to
 // ride in the sealed envelope (RemoteCommand.Launch); a launch action with no body is
 // refused loudly rather than forwarded with a nil spec (which would fail the daemon's
-// content-hash binding). approve is not a daemon remote op (D6/D7).
+// content-hash binding). push_prefs carries its body in RemoteCommand.PushPrefs, which
+// applyPushPrefs has already checked by the time it asks for the op. approve is not a
+// daemon remote op (D6/D7).
 func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
 	switch action {
 	case protocol.ActionKill:
@@ -502,6 +595,8 @@ func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
 			return "", errors.New("remotegw: launch command missing its launch spec in-envelope")
 		}
 		return protocol.OpLaunch, nil
+	case protocol.ActionPushPrefs:
+		return protocol.OpPushPrefs, nil
 	default:
 		return "", fmt.Errorf("remotegw: unsupported command action %q", action)
 	}

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/remote/push"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
@@ -45,7 +46,11 @@ func run(ctx context.Context, args []string) error {
 	if cfg.SweepInterval <= 0 {
 		cfg.SweepInterval = defaultSweepInterval
 	}
-	srv, err := relay.New(cfg)
+	opts, err := pushOptions(cfg)
+	if err != nil {
+		return err
+	}
+	srv, err := relay.New(cfg, opts...)
 	if err != nil {
 		return err
 	}
@@ -54,6 +59,39 @@ func run(ctx context.Context, args []string) error {
 	}
 	<-ctx.Done()
 	return srv.Close()
+}
+
+// pushOptions builds the push transport the relay serves with, or none.
+//
+// This is the seam that makes internal/remote/push more than a library nobody calls: a
+// perfectly-tested FCM sender that no binary ever installs is a push system that does not
+// exist in production, and every one of its tests stays green while it does not.
+//
+// It fails CLOSED on a configured-but-broken credential (PB-PUSH-5): booting a relay that
+// looks healthy while push is dead means the operator finds out from a user who missed a
+// hand-off, hours later, with nothing tying the two together. An UNSET credential is a
+// different thing and boots fine with no sink -- "the system works without push".
+//
+// SCOPE: this wiring has never run against Google. There is no account in this project,
+// PB-E2E-5 (real provider, real handset) remains DEFERRED, and nothing here may be read as
+// evidence that a wake would be delivered.
+func pushOptions(cfg relay.Config) ([]relay.Option, error) {
+	if cfg.PushCredentials == "" {
+		return nil, nil
+	}
+	doc, err := os.ReadFile(cfg.PushCredentials)
+	if err != nil {
+		return nil, fmt.Errorf("swarm-relay: read push credentials: %w", err)
+	}
+	acct, err := push.LoadServiceAccount(doc)
+	if err != nil {
+		return nil, fmt.Errorf("swarm-relay: %w", err)
+	}
+	sender, err := push.NewFCM(push.FCMConfig{Account: acct, RetryDelay: push.DefaultRetryDelay})
+	if err != nil {
+		return nil, fmt.Errorf("swarm-relay: %w", err)
+	}
+	return []relay.Option{relay.WithPushSink(sender)}, nil
 }
 
 func main() {

@@ -24,11 +24,16 @@ import (
 // gatewayParams is everything remotegw.Service needs to run, minus the
 // dialed relay Mailbox (assembled by G2).
 type gatewayParams struct {
-	DaemonSocket   string
-	RelayURL       string
-	RelayAuth      relay.ClientAuth
-	PhoneTarget    string
-	Key            crypto.ContentKey
+	DaemonSocket string
+	RelayURL     string
+	RelayAuth    relay.ClientAuth
+	PhoneTarget  string
+	Key          crypto.ContentKey
+	// WakeKey is the content-free key the push trigger seals its wakes under (PB-PUSH-0).
+	// machineid.Load already materialises it in this process -- marshal/unmarshal read one
+	// buffer holding both signing privates, the content key AND this -- so resolving it
+	// here is dropping a `_` rather than admitting a new secret (ADR-007 B19).
+	WakeKey        crypto.WakeKey
 	EpochID        uint32
 	RecipientKeyID [8]byte
 	SenderKeyID    [8]byte
@@ -48,6 +53,15 @@ type gatewayParams struct {
 	// resetting to 1 and being stale-dropped.
 	JournalSeq remotegw.SeqSource
 	ReplySeq   remotegw.SeqSource
+	// PushSeq is the third outbound stream's durable seq: the wake's replay coordinate
+	// (PB-PUSH-3). It is separate because a wake is sealed under a different key and
+	// checked by a different receiver on the phone; sharing the journal counter would have
+	// the two streams stale-drop each other.
+	PushSeq remotegw.SeqSource
+	// PushPrefs is the durable record of which transitions may wake the paired device
+	// (PB-PUSH-8, PB-PUSH-10). Without it the gateway refuses the push_prefs verb and
+	// suppresses every wake, so it is resolved here rather than left to a default.
+	PushPrefs remotegw.PushPrefsSource
 	// Durable OUTBOUND journal outbox (PB-GW-8): {journal cursor, sealed envelope, relay
 	// outcome}. Without it Gateway.cursor is in-memory, so every restart re-reads from 0 and
 	// re-appends the WHOLE journal at fresh seqs into the same 600-per-tumbling-minute
@@ -112,6 +126,19 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open outbound reply seq: %w", err)
 	}
+	pushSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-push.seq"))
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open outbound push seq: %w", err)
+	}
+	// The push preference is opened, not read, here: LoadPrefs re-reads on every wake so a
+	// setting the phone changes mid-run takes effect on the next transition. A record that
+	// exists but cannot be parsed surfaces at that read as an error AND a suppression --
+	// deliberately not as a boot failure, because a corrupt preference must not stop the
+	// gateway bridging the journal.
+	pushPrefs, err := remotegw.OpenPushPrefs(filepath.Join(remoteDir, "push-prefs.json"))
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open push preference: %w", err)
+	}
 	// The outbound journal outbox sits beside its seq file: the seq says which numbers may
 	// never be reissued, the outbox says which journal cursors were actually delivered and
 	// which envelope is still in flight.
@@ -150,12 +177,15 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		// supplied a non-canonical routing id then cannot make the gateway misroute the grant.
 		PhoneTarget:        relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
 		Key:                id.EpochKeys().ContentKey,
+		WakeKey:            id.EpochKeys().WakeKey,
 		EpochID:            id.EpochID(),
 		GrantSeq:           id.GrantSeq(),
 		RecipientKeyID:     crypto.KeyID(rec.RecipientPub),
 		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
 		JournalSeq:         journalSeq,
 		ReplySeq:           replySeq,
+		PushSeq:            pushSeq,
+		PushPrefs:          pushPrefs,
 		Outbox:             outbox,
 		Inbound:            inbound,
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),

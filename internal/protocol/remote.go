@@ -27,6 +27,7 @@ type (
 	JournalRecord     = schema.JournalRecord
 	DeviceCommandAuth = schema.DeviceCommandAuth
 	RemoteCommand     = schema.RemoteCommand
+	PushPrefs         = schema.PushPrefs
 )
 
 // Refusal-reason taxonomy (R-PROT.7); ErrorCode.Transient reports retryability.
@@ -50,6 +51,7 @@ const (
 	ActionTakeControl     = schema.ActionTakeControl
 	ActionTerminalWatch   = schema.ActionTerminalWatch
 	ActionTerminalUnwatch = schema.ActionTerminalUnwatch
+	ActionPushPrefs       = schema.ActionPushPrefs
 
 	LaunchSessionSentinel = schema.LaunchSessionSentinel
 )

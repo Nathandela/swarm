@@ -54,6 +54,14 @@ type Config struct {
 	TLSMode string `json:"tls_mode"`
 	// DBPath is the bbolt persistence file.
 	DBPath string `json:"db_path"`
+	// PushCredentials is the path to a Google service-account JSON document. Set, the
+	// shipped binary constructs the FCM sender (internal/remote/push) and injects it via
+	// WithPushSink; EMPTY, the relay runs with NO push transport at all, which is a
+	// supported configuration -- pushes are dropped and every other path is unaffected
+	// (PB-PUSH-5). A path that is set but unreadable or invalid fails the boot: silently
+	// running push-less because a credential moved is precisely the failure an operator
+	// only learns about from a user who missed a hand-off.
+	PushCredentials string `json:"push_credentials"`
 
 	// HandshakeTimeout bounds a read on a connection that has not yet
 	// authenticated or joined a rendezvous: an idle socket that completes the ws

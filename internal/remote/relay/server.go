@@ -36,8 +36,8 @@ type Option func(*Server)
 // WithClock injects the authoritative clock.
 func WithClock(c Clock) Option { return func(s *Server) { s.clk = c } }
 
-// WithAPNsSink injects the push transport (nil = pushes are dropped).
-func WithAPNsSink(a APNsSink) Option { return func(s *Server) { s.apns = a } }
+// WithPushSink injects the push transport (nil = pushes are dropped).
+func WithPushSink(p PushSink) Option { return func(s *Server) { s.push = p } }
 
 // WithLogWriter directs the relay's (body-free) log output.
 func WithLogWriter(w io.Writer) Option {
@@ -154,7 +154,7 @@ func (sl *rdvSlot) detach(sc *serverConn) {
 type Server struct {
 	cfg    Config
 	clk    Clock
-	apns   APNsSink
+	push   PushSink
 	logger *log.Logger
 	st     *store
 
@@ -167,11 +167,14 @@ type Server struct {
 	closeOnce  sync.Once
 	sweepWG    sync.WaitGroup
 
-	mu         sync.Mutex
-	sessions   map[string]*serverConn  // rid -> active authenticated conn
-	waits      map[string]*pendingWait // rid -> its single parked server-side wait (§6.0 caps it at 1)
-	presence   map[string]*presenceEntry
-	tokens     map[string]string // rid -> APNs token (ephemeral)
+	mu       sync.Mutex
+	sessions map[string]*serverConn  // rid -> active authenticated conn
+	waits    map[string]*pendingWait // rid -> its single parked server-side wait (§6.0 caps it at 1)
+	presence map[string]*presenceEntry
+	// tokens is the in-memory cache of rid -> push token, hydrated from the store's
+	// tokens bucket at New and written through on every mutation (PB-PUSH-6). It is a
+	// cache, not the record: the store is what survives a restart.
+	tokens     map[string]string
 	rendezvous map[string]*rdvSlot
 	burned     map[string]bool // completed (single-use) rendezvous ids
 	conns      map[*serverConn]struct{}
@@ -216,6 +219,17 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 		return nil, err
 	}
 	s.st = st
+	// PB-PUSH-6: resume with the push tokens the previous run held. Fail closed on an
+	// unreadable tokens bucket rather than booting with an empty map, which would look
+	// exactly like a fleet that had never registered — silently push-less, with the loss
+	// lasting until each user next opens the app (ADR-007 B16: backgrounding disconnects,
+	// so a forgotten token cannot re-register on its own).
+	tokens, err := st.loadTokens()
+	if err != nil {
+		_ = st.close()
+		return nil, err
+	}
+	s.tokens = tokens
 	return s, nil
 }
 
@@ -852,6 +866,11 @@ func (sc *serverConn) handleTokenRegister(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	// Durable BEFORE the cache (PB-PUSH-6): a persist failure must leave the relay
+	// reporting the failure rather than holding a token that vanishes on restart.
+	if err := sc.s.st.putToken(sc.rid, req.Token); err != nil {
+		return sc.replyErr(codeBadRequest)
+	}
 	sc.s.mu.Lock()
 	sc.s.tokens[sc.rid] = req.Token
 	sc.s.mu.Unlock()
@@ -865,9 +884,16 @@ func (sc *serverConn) handleTokenDelete(_ []byte) error {
 	if code, ok := sc.requireAuth(); !ok {
 		return sc.replyErr(code)
 	}
+	// The cache first, then the store: the reverse order would leave a window in which a
+	// restart-free relay still pushes to a token the device just revoked. If the persist
+	// then fails the device is told, and the next restart resurrecting the token is the
+	// failure it was told about — never a silent one.
 	sc.s.mu.Lock()
 	delete(sc.s.tokens, sc.rid)
 	sc.s.mu.Unlock()
+	if err := sc.s.st.deleteToken(sc.rid); err != nil {
+		return sc.replyErr(codeBadRequest)
+	}
 	return sc.replyOK(map[string]any{})
 }
 
@@ -927,7 +953,7 @@ func (sc *serverConn) handlePushTrigger(payload []byte) error {
 		return sc.replyErr(codeQuotaExceeded)
 	}
 	if tok != "" {
-		sc.s.deliverPush(sc.ctx, tok, APNsPayload{Alert: GenericPushAlert, Ciphertext: req.Envelope})
+		sc.s.deliverPush(sc.ctx, req.Target, tok, PushPayload{Alert: GenericPushAlert, Ciphertext: req.Envelope})
 	}
 	return sc.replyOK(map[string]any{})
 }
@@ -958,6 +984,8 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 		old.superseded.Store(true)
 		delete(sc.s.sessions, req.Target)
 	}
+	// The durable half rode inside revokeAndPurge's single transaction above; this drops
+	// the cache so no push reaches the revoked device before the next restart either.
 	delete(sc.s.tokens, req.Target)
 	delete(sc.s.presence, req.Target)
 	sc.s.mu.Unlock()
@@ -971,11 +999,73 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	return sc.replyOK(map[string]any{})
 }
 
-func (s *Server) deliverPush(ctx context.Context, token string, p APNsPayload) {
-	if s.apns == nil || token == "" {
+// deliverPush hands one push to the transport and ACTS ON ITS VERDICT.
+//
+// Reading that error is the whole point (PB-PUSH-2): a sender can classify an
+// UNREGISTERED response perfectly and change nothing, because the previous
+// `_ = s.push.Push(...)` discarded it — a pruning signal nobody reads is a pruning
+// signal that does not exist. Exactly one verdict prunes; every other failure leaves
+// the token alone, because pruning on a transient provider outage would disable push
+// for every live handset the relay holds and nothing would surface until users started
+// missing hand-offs.
+//
+// A push failure is never propagated to the caller: push_trigger answers OK either way,
+// so a provider outage cannot make the gateway read the relay itself as failing
+// (PB-PUSH-5).
+// pushDeliveryBudget bounds ONE deliverPush.
+//
+// It exists because deliverPush runs on the connection's REQUEST LOOP, and this package's
+// standing invariant is that nothing blocks that loop — handleMailboxWait goes to the
+// trouble of parking its wait on a separate goroutine for exactly this reason. Delivery
+// stays synchronous anyway: the UNREGISTERED verdict must have pruned the token before the
+// next trigger reads it, and a fire-and-forget goroutine would decide that after the fact.
+// So the loop IS held, and this is what caps how long.
+//
+// The bound was invisible until this slice, because until now every configured sink was a
+// test double that answered instantly. A REAL sender retries a 5xx up to
+// push.DefaultMaxAttempts times over its own request timeouts — tens of seconds — and
+// holding a machine's request loop that long would stall the journal appends and the
+// mailbox_wait admission (PB-NET-5's input path) queued behind a push to a phone.
+//
+// Two seconds covers a normal provider round trip several times over, and it is
+// deliberately TIGHTER than the gateway's own 5 s push timeout (remotegw's
+// defaultPushTimeout): the inner bound firing first means the gateway gets a real answer
+// rather than a deadline error it would record as a push-path degradation.
+//
+// Residual, stated rather than hidden: a push_trigger can still delay the next frame on
+// that connection by up to this budget. It is bounded and rare — §6.0 coalesces wakes to
+// at most one per session per 30 s — but it is not zero.
+const pushDeliveryBudget = 2 * time.Second
+
+func (s *Server) deliverPush(ctx context.Context, rid, token string, p PushPayload) {
+	if s.push == nil || token == "" {
 		return
 	}
-	_ = s.apns.Push(ctx, token, p)
+	ctx, cancel := context.WithTimeout(ctx, pushDeliveryBudget)
+	defer cancel()
+	err := s.push.Push(ctx, token, p)
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, ErrPushUnregistered) {
+		// Body-free, like every other relay log line: no token, no routing id.
+		s.logger.Printf("push delivery failed (transient; token kept)")
+		return
+	}
+	// Compare-and-delete: between the send and here the device may have re-registered a
+	// FRESH token, and pruning that one would silence a handset that just came back.
+	s.mu.Lock()
+	stale := s.tokens[rid] == token
+	if stale {
+		delete(s.tokens, rid)
+	}
+	s.mu.Unlock()
+	if !stale {
+		return
+	}
+	if err := s.st.deleteToken(rid); err != nil {
+		s.logger.Printf("pruning an unregistered push token failed to persist")
+	}
 }
 
 // --- rendezvous ------------------------------------------------------------
@@ -1135,7 +1225,11 @@ func (s *Server) purgeExpiredRendezvous(now time.Time) {
 // device that has a registered token (R-REL.3).
 func (s *Server) SweepPresence(ctx context.Context) {
 	now := s.clk.Now()
-	var tokens []string
+	// The routing id rides alongside its token so an UNREGISTERED verdict here prunes the
+	// same way a push_trigger's does: a dead handset must not keep a token alive merely
+	// because the only thing still pushing to it is the presence sweep.
+	type pushTarget struct{ rid, token string }
+	var targets []pushTarget
 	s.mu.Lock()
 	for rid, p := range s.presence {
 		if p.connected || p.notified {
@@ -1148,13 +1242,13 @@ func (s *Server) SweepPresence(ctx context.Context) {
 		p.notified = true
 		for _, peer := range s.st.pairedPeers(rid) {
 			if tok := s.tokens[peer]; tok != "" {
-				tokens = append(tokens, tok)
+				targets = append(targets, pushTarget{rid: peer, token: tok})
 			}
 		}
 	}
 	s.mu.Unlock()
-	for _, tok := range tokens {
-		s.deliverPush(ctx, tok, APNsPayload{Alert: GenericPushAlert})
+	for _, t := range targets {
+		s.deliverPush(ctx, t.rid, t.token, PushPayload{Alert: GenericPushAlert})
 	}
 }
 

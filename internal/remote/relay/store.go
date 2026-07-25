@@ -18,6 +18,13 @@ var (
 	bucketSeq     = []byte("seq")     // rid -> next storage cursor (8 bytes)
 	bucketPairs   = []byte("pairs")   // "a\x00b" -> {1}, stored both directions
 	bucketRevoked = []byte("revoked") // rid -> {1}
+	// bucketTokens holds rid -> push token (PB-PUSH-6). It is a NEW durable device
+	// identifier at rest in the untrusted relay's store, and it has its own named bucket
+	// for exactly that reason: the token is not opaque to the relay (the relay must hand
+	// it to the provider, which can also see it), so the honest mitigation is not
+	// encryption but AUDITABILITY — an operator inspecting this store finds every device
+	// identifier in one place instead of discovering one smuggled into the item log.
+	bucketTokens = []byte("tokens")
 )
 
 type store struct {
@@ -30,7 +37,7 @@ func openStore(path string) (*store, error) {
 		return nil, err
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketItems, bucketSeq, bucketPairs, bucketRevoked} {
+		for _, b := range [][]byte{bucketItems, bucketSeq, bucketPairs, bucketRevoked, bucketTokens} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -245,22 +252,67 @@ func (s *store) pairedPeers(rid string) []string {
 	return peers
 }
 
+// putToken records rid's push token durably (PB-PUSH-6). Registration is
+// last-write-wins, matching the in-memory map it mirrors: one token per routing
+// id, and a routing id is one paired device, so this is the single-device v1
+// limitation expressed as storage. It is also what makes PB-PUSH-9's
+// re-registration on every reconnect converge — a rotated token REPLACES the
+// stale one instead of sitting beside it and getting every wake delivered twice.
+func (s *store) putToken(rid, token string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketTokens).Put([]byte(rid), []byte(token))
+	})
+}
+
+// deleteToken durably forgets rid's push token. Deletion MUST be as durable as
+// registration: a relay that persisted only the register would resurrect, on the
+// next restart, a token the device revoked or the owner killed — resuming wakes
+// to a handset that was deliberately silenced, and handing the provider a token
+// that should be gone.
+func (s *store) deleteToken(rid string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketTokens).Delete([]byte(rid))
+	})
+}
+
+// loadTokens reads the whole rid -> token map, which the Server hydrates its
+// in-memory cache from at construction so a restart resumes with the tokens it
+// had. Backgrounding DISCONNECTS the phone (ADR-007 B16), so a token the relay
+// forgot cannot be re-registered until the user next opens the app — which is
+// exactly what the lost push was meant to prompt.
+func (s *store) loadTokens() (map[string]string, error) {
+	out := map[string]string{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketTokens).ForEach(func(k, v []byte) error {
+			out[string(k)] = string(v)
+			return nil
+		})
+	})
+	return out, err
+}
+
 func (s *store) revoke(rid string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketRevoked).Put([]byte(rid), []byte{1})
 	})
 }
 
-// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked, and drops
-// rid's mailbox — in ONE transaction (ME-1), so a crash/read mid-revoke can
-// never observe rid as still-paired, not-yet-revoked, or holding a
-// pre-revoke backlog.
+// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked, drops rid's
+// push token, and drops rid's mailbox — in ONE transaction (ME-1), so a
+// crash/read mid-revoke can never observe rid as still-paired, not-yet-revoked,
+// still-pushable, or holding a pre-revoke backlog.
 func (s *store) revokeAndPurge(pairer, rid string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
 		_ = pb.Delete(pairKey(pairer, rid))
 		_ = pb.Delete(pairKey(rid, pairer))
 		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte{1}); err != nil {
+			return err
+		}
+		// In the SAME transaction as the revocation: a token purged separately could
+		// survive a crash between the two writes and be resurrected by the next restart,
+		// resuming pushes to a handset whose access the owner withdrew.
+		if err := tx.Bucket(bucketTokens).Delete([]byte(rid)); err != nil {
 			return err
 		}
 		root := tx.Bucket(bucketItems)

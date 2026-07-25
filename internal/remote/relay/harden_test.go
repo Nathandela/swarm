@@ -165,7 +165,7 @@ func TestRelay_AuthInitNotPoisonableByPresentedPubkey(t *testing.T) {
 	// the victim's dial connection are distinct sources on one loopback host — the
 	// per-connection seam the amendment's source keying needs.
 	identitySource := func(remoteAddr string) string { return remoteAddr }
-	srv, err := New(cfg, WithClock(clk), WithAPNsSink(&mockAPNs{}), WithSourceKeyFunc(identitySource))
+	srv, err := New(cfg, WithClock(clk), WithPushSink(&mockAPNs{}), WithSourceKeyFunc(identitySource))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

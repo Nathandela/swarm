@@ -65,7 +65,7 @@ func testCtx(t *testing.T) context.Context {
 // relay must not be handed a nil sink.
 type noopAPNs struct{}
 
-func (noopAPNs) Push(context.Context, string, relay.APNsPayload) error { return nil }
+func (noopAPNs) Push(context.Context, string, relay.PushPayload) error { return nil }
 
 // startRelay boots the REAL relay on 127.0.0.1:0 over plain ws:// and returns it
 // with its URL. mut lets a test tighten quotas.
@@ -78,7 +78,7 @@ func startRelay(t *testing.T, mut func(*relay.Config)) (*relay.Server, string) {
 	if mut != nil {
 		mut(&cfg)
 	}
-	srv, err := relay.New(cfg, relay.WithAPNsSink(noopAPNs{}))
+	srv, err := relay.New(cfg, relay.WithPushSink(noopAPNs{}))
 	if err != nil {
 		t.Fatalf("relay.New: %v", err)
 	}

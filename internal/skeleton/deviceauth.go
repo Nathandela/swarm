@@ -20,6 +20,19 @@ func actionClass(action string) (device.Action, bool) {
 		return device.ActionControl, true
 	case protocol.ActionApprove:
 		return device.ActionApprove, true
+	case protocol.ActionPushPrefs:
+		// READ, and the choice is not obvious: a push preference does mutate machine-side
+		// state, which argues for the control class. But it cannot start, stop or type into
+		// anything, and its whole effect is "does the machine wake THIS device" -- a
+		// control-class mapping would leave a read-only paired phone receiving notifications
+		// it has no way to silence, which is worse than the privilege it withholds.
+		//
+		// Stated rather than dressed up (ADR-007 B20): Capability.Allows admits ActionRead at
+		// every tier, so this CANNOT refuse the verb. The gate that can and does refuse it is
+		// the signature check below. What the case buys is that push_prefs is a KNOWN action
+		// at all -- without it the fail-closed default refuses every push_prefs as unknown, no
+		// matter how valid its signature.
+		return device.ActionRead, true
 	default:
 		return 0, false
 	}

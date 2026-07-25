@@ -25,12 +25,19 @@ type ServiceConfig struct {
 	// leaving this empty publishes a record no paired phone will adopt -- and an unadopted
 	// authority is the same fail-closed refusal of mutating ops as no record at all. Callers
 	// that assemble a Service for real traffic MUST set it (and GrantSeq).
-	Machine        string
-	Key            crypto.ContentKey // the epoch content key shared with the phone
-	EpochID        uint32            // the epoch the content key belongs to
-	GrantSeq       uint64            // the machine identity's grant-issuance seq (authority (c), see gatewayAuthorities)
-	RecipientKeyID [8]byte           // phone routing key id stamped on sealed journal envelopes
-	SenderKeyID    [8]byte           // this machine's routing key id
+	Machine string
+	Key     crypto.ContentKey // the epoch content key shared with the phone
+	// WakeKey is the CONTENT-FREE key the push trigger seals its wakes under (PB-KEY-2,
+	// PB-PUSH-0). It reaches the sidecar either way -- machineid.unmarshal already reads
+	// it into this process at startup alongside the content key and both private signing
+	// keys, and resolveGatewayParams merely dropped it -- so naming it here widens the
+	// package's key inventory, not the process's exposure (ADR-007 B19). It is handed ONLY
+	// to the PushConfig; nothing else in the gateway may see it.
+	WakeKey        crypto.WakeKey
+	EpochID        uint32  // the epoch the content key belongs to
+	GrantSeq       uint64  // the machine identity's grant-issuance seq (authority (c), see gatewayAuthorities)
+	RecipientKeyID [8]byte // phone routing key id stamped on sealed journal envelopes
+	SenderKeyID    [8]byte // this machine's routing key id
 	// NOTE: there is deliberately NO command-IN poll cadence here. PB-NET-5 requires
 	// the old 500 ms poll to be DROPPED, not tuned: the command loop is driven by the
 	// relay's bounded server-side wait (CommandBridge.Run), and re-introducing an
@@ -41,6 +48,18 @@ type ServiceConfig struct {
 	Now            func() time.Time // envelope issued-at clock (nil => time.Now)
 	JournalSeq     SeqSource        // durable outbound seq for journal + terminal frames (nil => in-memory)
 	ReplySeq       SeqSource        // durable outbound seq for command replies (nil => in-memory)
+	// PushSeq is the durable replay coordinate stamped on every wake (PB-PUSH-3). It is a
+	// THIRD stream, separate from the journal and reply seqs, because a wake is sealed
+	// under a different key and opened by a different receiver on the phone. Nil =>
+	// in-memory, which restarts at 1 and would have the phone's persisted coordinate
+	// (PB-STATE-1) reject every wake after a gateway restart; production wires the file.
+	PushSeq SeqSource
+	// PushPrefs is the durable push preference (PB-PUSH-8, PB-PUSH-10). ONE object serves
+	// both directions: the command bridge writes it when the daemon authorizes a change,
+	// the notifier reads it before every wake. Nil leaves the verb refused and every wake
+	// suppressed -- fail closed, since a misassembled gateway must not be the one
+	// configuration in which every push goes out unfiltered.
+	PushPrefs PushPrefsSource
 	// Durable OUTBOUND journal outbox (PB-GW-8): {journal cursor, sealed envelope, relay
 	// outcome}, which is what makes the resume point survive a restart AND makes a
 	// delivery-unknown append recoverable by re-appending the identical envelope. Nil =>
@@ -77,6 +96,7 @@ type Service struct {
 	cfg      ServiceConfig
 	gw       *Gateway
 	sink     *RelaySink
+	notifier *PushNotifier
 	bridge   *CommandBridge
 	leases   *LeaseManager
 	watchers *TerminalWatcher
@@ -126,11 +146,34 @@ func NewService(cfg ServiceConfig) *Service {
 			grantSeq: cfg.GrantSeq,
 		},
 	})
+	// PB-PUSH-0: the push trigger sits BETWEEN the coalescer and the sealing sink, so the
+	// journal it watches is the one the gateway actually delivers. Outside the coalescer it
+	// would hide CoalescingSink.Flush from RunTerminal's idle wake and PB-GW-7's trailing
+	// terminal flush would die silently; the notifier forwards SetMachine and
+	// DeliveredCursor so the coalescer still reaches the sink through it.
+	//
+	// The relay client is BOTH the mailbox and the push transport, so the pusher is
+	// discovered from cfg.Relay rather than configured separately. A Mailbox that cannot
+	// push (every unit-test fake) leaves it nil, which is the supported no-push
+	// configuration -- not an error.
+	var pusher PushTriggerer
+	if pt, ok := cfg.Relay.(PushTriggerer); ok {
+		pusher = pt
+	}
+	notifier := NewPushNotifier(sink, PushConfig{
+		Pusher:  pusher,
+		Target:  cfg.PhoneTarget,
+		WakeKey: cfg.WakeKey,
+		EpochID: cfg.EpochID,
+		Now:     cfg.Now,
+		Seq:     cfg.PushSeq,
+		Prefs:   cfg.PushPrefs,
+	})
 	// PB-GW-7: the journal, the terminal peek and the reconcile record share ONE sink, ONE
 	// relay target and ONE per-target append quota, so the peek's ~62 snapshots/s must be
 	// coalesced to the §6.0 budget or it exhausts the target's tumbling minute and starves
 	// the journal alongside it. Admission policy is a WRAPPER, not a change inside the sink.
-	gw := New(cfg.DaemonSocket, NewCoalescingSink(CoalesceConfig{Inner: sink, Now: cfg.Now}))
+	gw := New(cfg.DaemonSocket, NewCoalescingSink(CoalesceConfig{Inner: notifier, Now: cfg.Now}))
 	forwarder := cfg.Forwarder
 	if forwarder == nil {
 		forwarder = gw
@@ -152,8 +195,9 @@ func NewService(cfg ServiceConfig) *Service {
 		ReplyTarget: cfg.PhoneTarget,
 		ReplySeq:    replySeq,
 		Inbound:     inbound,
+		Prefs:       cfg.PushPrefs,
 	})
-	return &Service{cfg: cfg, gw: gw, sink: sink, bridge: bridge, leases: leases, watchers: watchers}
+	return &Service{cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers}
 }
 
 // gatewayAuthorities is the PRODUCTION ReconcileSource: each authority is read from the
@@ -193,6 +237,12 @@ func (s *Service) Gateway() *Gateway { return s.gw }
 
 // CommandBridge exposes the underlying command loop (e.g. to seed its cursor).
 func (s *Service) CommandBridge() *CommandBridge { return s.bridge }
+
+// PushNotifier exposes the push trigger, whose Err() is the ONLY signal that the wake path
+// is degraded: a push failure never fails a journal record, so without reading this a
+// gateway that has stopped waking the phone entirely is indistinguishable from one that
+// simply has nothing to say.
+func (s *Service) PushNotifier() *PushNotifier { return s.notifier }
 
 // Run drives both loops until ctx is cancelled, then returns ctx.Err(). The two
 // loops are independent: a failing journal connection (retried with ReconnectDelay)

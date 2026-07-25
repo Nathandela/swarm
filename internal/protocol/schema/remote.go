@@ -57,7 +57,34 @@ const (
 	// so no device signature is required to merely ask the gateway to open the read.
 	ActionTerminalWatch   = "terminal_watch"
 	ActionTerminalUnwatch = "terminal_unwatch"
+
+	// ActionPushPrefs sets the machine-side push preference for the signing device
+	// (PB-PUSH-8): which categories of transition may wake it. Unlike the reads above it
+	// IS signed and IS forwarded to the daemon's device authenticator -- the gateway holds
+	// no device key, so a locally-decided preference would let anyone who can inject a
+	// plaintext-shaped mailbox frame silence the owner's notifications. Its capability
+	// class is READ (skeleton/deviceauth.go): it cannot start, stop or type into anything,
+	// and a control-class mapping would leave a read-only paired phone receiving
+	// notifications it has no way to silence. ADR-007 B20 records the consequence that the
+	// capability check therefore cannot refuse this verb; the SIGNATURE is its gate.
+	ActionPushPrefs = "push_prefs"
 )
+
+// PushPrefs is the machine-authoritative record of which push categories may wake the
+// paired device (PB-PUSH-8, PB-PUSH-10). The two toggles are exactly PB-APP-7's coarse
+// categories: NeedsInput covers a transition into needs_input, Finished covers one into
+// ready_for_review or completed.
+//
+// Version is a device-supplied monotonic counter, not a timestamp: the relay is the
+// declared adversary and may reorder or replay what it retains, so a preference frame
+// from before the user turned pushes off must not turn them back on. The machine refuses
+// any update whose Version does not strictly exceed the stored one. Version 0 is reserved
+// for the never-configured bootstrap record, so the phone's first real update always wins.
+type PushPrefs struct {
+	Version    uint64 `json:"version"`
+	NeedsInput bool   `json:"needs_input"`
+	Finished   bool   `json:"finished"`
+}
 
 // LaunchSessionSentinel is the canonical Session value signed over a launch command
 // (D4/R-POL.9): a launch has no target session yet, but the signed tuple requires a
@@ -94,6 +121,14 @@ type DeviceCommandAuth struct {
 // the forwarded spec, so a gateway that alters the spec breaks the signature.
 type RemoteCommand struct {
 	DeviceCommandAuth
+	// PushPrefs is the push_prefs body (PB-PUSH-8). It is deliberately NOT bound by
+	// ContentHash the way a launch spec is, and the difference is load-bearing: a launch
+	// spec is forwarded through the gateway IN CLEARTEXT (Control.Launch), so the hash is
+	// what stops the gateway altering it, whereas a preference body never leaves the
+	// gateway -- it arrives sealed under the epoch content key, which the relay cannot
+	// forge, and the gateway is itself the custodian that decides delivery. A hash it
+	// recomputed against its own file would protect nothing it could not simply overwrite.
+	PushPrefs  *PushPrefs `json:"push_prefs,omitempty"`
 	Launch     *LaunchReq `json:"launch,omitempty"`
 	GateToken  string     `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
 	TTLSeconds int        `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
