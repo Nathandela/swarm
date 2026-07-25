@@ -443,6 +443,31 @@ production path, because supplying the missing input is the most natural thing i
 are setting up a test. **Standing class (v) survives even a no-fakes integration test unless someone
 asks where each input comes from in production.**
 
+### What phonesim skips, precisely -- the list of properties with NO end-to-end coverage
+
+From the same audit, and it should shape every remaining brief and especially **S19's exit
+demonstration**. `internal/phonesim` is the phone stand-in that nearly every integration test drives,
+and **it never constructs a `phonecore.Core` at all** — so everything Core owns is skipped by
+construction, not by omission:
+
+- **Durable state entirely**: no `Store`, no `State`, no `Save`.
+- **Durable send-seq reservation (PB-STATE-3)**: `p.seq` is a bare `Sequencer` driven by `Next()`,
+  the NON-durable allocator — not `NextCommand`/`NextInput`, which the facade uses. The burned-block
+  and gap-absorption rules are never exercised end-to-end.
+- **Durable receive transaction**: core-less `Accept`, not `AcceptCommit` — no `commitReceive`, no
+  durable high-water, no relay cursor, no persisted stale flags.
+- **The lease gate (PB-INPUT-2)**: no `LeaseState` at all. `Type`/`Resize` seal and append with no
+  `Leases().Require`, so keystrokes go out with no confirmed lease.
+- **Input coalescing (PB-INPUT-5)**: no `InputCoalescer`; one append per call.
+- **The reconcile fail-closed gate (PB-SYNC-7)**: no `RequireReconciled` before mutating ops.
+- **Skew (PB-TIME-3), the op queue, and the undelivered ledger (PB-INPUT-1)**.
+- **The machine id**: taken from phonesim's own `Config.Machine`, never from `State` — which is
+  precisely why it could not have caught the fresh-install defect.
+
+Every one of those belongs to a slice that has already SHIPPED. They have unit coverage; they have
+no end-to-end coverage anywhere. **That is what S19 must actually demonstrate**, and it is why an
+exit demonstration driven through phonesim would be worth very little.
+
 ## A DEAD OFFLINE OP QUEUE THAT READS AS A FEATURE -- decision needed
 
 Same audit. `State.PendingOps` is persisted, restored, cloned and asserted to survive a restart --
