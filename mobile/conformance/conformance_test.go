@@ -196,10 +196,19 @@ func TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend(t *testing.T) {
 	}
 	h.AwaitCommand(protocol.ActionKill)
 
+	// PB-APP-3's Stop, RESOLVED in S16: an interrupt IS a keystroke (Ctrl-C, 0x03, through a
+	// PTY in ISIG mode), so it rides the live input plane and is GATED on a confirmed lease
+	// like every other keystroke (PB-INPUT-2). The walk released control above, so the lease is
+	// re-acquired here -- which is exactly what the session screen does, and what
+	// TestPBAPP3_StopWithoutALeaseDoesNotSilentlyDoNothing asserts the phone refuses without.
+	if _, err := app.TakeControl(testSession); err != nil {
+		t.Fatalf("TakeControl before the interrupt: %v", err)
+	}
+	h.AwaitLease(testSession)
 	if _, err := app.Interrupt(testSession); err != nil {
-		t.Fatalf("Interrupt: %v -- PB-BIND-3 lists interrupt as a required screen element, and "+
-			"screen_coverage.tsv records that NO wire verb exists for it today. Either the verb "+
-			"lands, or the element is explicitly reassigned like PB-PUSH-8 was", err)
+		t.Fatalf("Interrupt: %v -- PB-BIND-3 lists interrupt as a required screen element and "+
+			"S16 wired it to the input plane; a refusal here means Stop is on the screen and "+
+			"does nothing", err)
 	}
 
 	if _, err := app.RevokeThisDevice(); err != nil {
@@ -342,6 +351,7 @@ func TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT(t *testing.T) {
 	}
 
 	// The live half: a real pairing over the real relay rendezvous.
+	//
 	h := newHarness(t)
 	awaitSAS, qr := h.runMachinePairing(t)
 
@@ -357,6 +367,9 @@ func TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT(t *testing.T) {
 		t.Errorf("PB-PAIR-6: Pairing.Origin is empty, so nothing can be DISPLAYED before the " +
 			"phone joins a relay it learned from a scanned QR")
 	}
+	// PB-PAIR-6 (S16): displaying the origin is now HALF the step -- the phone joins nothing
+	// until the user confirms what was displayed.
+	s16PassOriginGate(t, p)
 
 	var phoneSAS string
 	eventually(t, "the phone never derived a SAS", func() bool {
@@ -386,7 +399,6 @@ func TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT(t *testing.T) {
 func TestPBPAIR5_CancelIsATerminalStateNotAHang(t *testing.T) {
 	h := newHarness(t)
 	_, qr := h.runMachinePairing(t)
-
 	p, err := h.App.BeginPairing(qr)
 	if err != nil {
 		t.Fatalf("BeginPairing: %v", err)

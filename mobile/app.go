@@ -50,11 +50,26 @@ const (
 )
 
 var (
-	errClosed        = errors.New("swarmmobile: App is closed")
-	errNotRunning    = errors.New("swarmmobile: App is not running; call Start first")
-	errNoDestination = errors.New("swarmmobile: no machine relay destination in durable state; the phone knows who the machine is but not how to reach it -- pair first")
-	errUnreconciled  = errors.New("swarmmobile: refusing a mutating op until the machine publishes its rollback authorities (PB-SYNC-7)")
-	errNoContentKey  = errors.New("swarmmobile: no content key installed; call InstallContentKey after unlocking")
+	errClosed        = classed(ErrClassClosed, errors.New("swarmmobile: App is closed"))
+	errNotRunning    = classed(ErrClassOffline, errors.New("swarmmobile: App is not running; call Start first"))
+	errNoDestination = classed(ErrClassNotPaired, errors.New("swarmmobile: no machine relay destination in durable state; the phone knows who the machine is but not how to reach it -- pair first"))
+	errUnreconciled  = classed(ErrClassUnreconciled, errors.New("swarmmobile: refusing a mutating op until the machine publishes its rollback authorities (PB-SYNC-7)"))
+
+	// errNoContentKey is the phone WAITING for its epoch key, and its message says so.
+	//
+	// It used to read "call InstallContentKey after unlocking", which was advice nothing in
+	// production could act on: InstallContentKey is called from Kotlin and Kotlin has no
+	// source for the bytes -- the key arrives as a machine-sealed grant on the mailbox
+	// (PB-KEY-10). The distinction from errGrantLost below is the whole of PB-KEY-3: this one
+	// resolves itself when the grant lands, and that one never will.
+	errNoContentKey = classed(ErrClassAwaitingKey, errors.New("swarmmobile: no epoch content key yet; the machine delivers it as a signed grant on the mailbox (PB-KEY-10) and none has arrived"))
+
+	// errGrantLost is PB-KEY-3's terminal state at the facade. It WRAPS the core's sentinel
+	// rather than restating it, so errors.Is keeps working for every Go caller while the
+	// message carries the class Kotlin routes on.
+	errGrantLost = classed(ErrClassGrantLost, fmt.Errorf(
+		"swarmmobile: the phone holds no epoch key and its mailbox has nothing left that can deliver one; "+
+			"only the machine can re-grant (PB-KEY-3): %w", phonecore.ErrGrantLost))
 )
 
 // App is the phone. Construct it with NewApp; the zero value is unusable and every
@@ -63,6 +78,10 @@ type App struct {
 	core *phonecore.Core
 
 	relayURL string
+	// stateDir is the phone's private state directory. The core owns phone-state.json and
+	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
+	// (see mobile/pairing.go persist for why that one is not a State field).
+	stateDir string
 
 	events *dispatcher
 
@@ -107,6 +126,17 @@ type App struct {
 	// enforced against. Per stream because a shared budget lets the two repairable channels
 	// starve each other, and one shared-bucket gap stales both at once.
 	resyncAt map[string][]time.Time
+	// resyncAsked are the streams a repair has been REQUESTED for and not yet landed
+	// (PB-APP-8's fourth state). It is a fact ORTHOGONAL to staleness, never a third value of
+	// StreamState: a stream is stale-and-repairing or stale-and-idle, and one enum cannot
+	// carry both. Collapsing them would also contradict the shipped S10 fence that requires
+	// StreamState to still read "stale" at exactly this moment -- the guard standing between
+	// this product and PB-SYNC-3's optimistic clear.
+	resyncAsked map[string]bool
+	// clockVerdict is PB-TIME-1's CURRENT verdict, "" when the clock is in budget. It exists
+	// because the event plane alone cannot serve a screen that opens AFTER the measurement,
+	// which on Android is most of them -- the process is killed and rebuilt constantly.
+	clockVerdict string
 }
 
 // session is one Start..Stop generation.
@@ -128,21 +158,24 @@ type session struct {
 func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 	defer barrier(&err)
 	if cfg == nil {
-		return nil, errors.New("swarmmobile: NewApp requires a Config")
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: NewApp requires a Config"))
 	}
 	if custody == nil {
-		return nil, errors.New("swarmmobile: NewApp requires a KeyCustody (PB-KEY-9): the phone's " +
-			"key material at rest is sealed under the Android Keystore, and there is no cleartext fallback")
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: NewApp requires a KeyCustody (PB-KEY-9): the phone's key material at "+
+				"rest is sealed under the Android Keystore, and there is no cleartext fallback"))
 	}
 	a := &App{
-		relayURL:   cfg.RelayURL,
-		events:     newDispatcher(),
-		coalesce:   phonecore.NewInputCoalescer(time.Now),
-		connState:  "offline",
-		subscribed: true,
-		needs:      map[string]string{},
-		inflight:   map[string]bool{},
-		resyncAt:   map[string][]time.Time{},
+		relayURL:    cfg.RelayURL,
+		stateDir:    cfg.StateDir,
+		events:      newDispatcher(),
+		coalesce:    phonecore.NewInputCoalescer(time.Now),
+		connState:   "offline",
+		subscribed:  true,
+		needs:       map[string]string{},
+		inflight:    map[string]bool{},
+		resyncAt:    map[string][]time.Time{},
+		resyncAsked: map[string]bool{},
 	}
 	core, err := phonecore.Resume(phonecore.Config{
 		Dir:     cfg.StateDir,
@@ -293,7 +326,10 @@ func (a *App) UndeliveredInputs() (list *UndeliveredList, err error) {
 		return nil, err
 	}
 	entries := a.coalesce.Undelivered()
-	out := &UndeliveredList{items: make([]UndeliveredInput, 0, len(entries))}
+	out := &UndeliveredList{
+		items:   make([]UndeliveredInput, 0, len(entries)),
+		dropped: a.coalesce.UndeliveredDropped(),
+	}
 	for _, u := range entries {
 		out.items = append(out.items, UndeliveredInput{
 			SessionID: u.Session,
@@ -303,6 +339,26 @@ func (a *App) UndeliveredInputs() (list *UndeliveredList, err error) {
 		})
 	}
 	return out, nil
+}
+
+// ClearUndeliveredInputs is the acknowledgement half of the ledger (PB-INPUT-1).
+//
+// Without it the notice the user has already read stays on screen for the life of the
+// process, and the next genuine loss arrives underneath a wall of ones they dealt with an
+// hour ago. It is a separate verb rather than a draining UndeliveredInputs because the two
+// callers want opposite things: a screen that OPENS must see the backlog, and a user who
+// DISMISSES it says so once, for every screen.
+//
+// It does not disable the ledger. A clear that stopped recording would satisfy the same
+// assertion and silently drop every future loss -- PB-INPUT-1's forbidden silent drop,
+// reached through its own remedy.
+func (a *App) ClearUndeliveredInputs() (err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return err
+	}
+	a.coalesce.ClearUndelivered()
+	return nil
 }
 
 // IsRunning reports whether the relay drain is LIVE: a session has been started and its
@@ -418,7 +474,8 @@ func (a *App) InstallWakeKey(key []byte) (err error) {
 		return err
 	}
 	if len(key) != len(crypto.WakeKey{}) {
-		return fmt.Errorf("swarmmobile: wake key must be %d bytes", len(crypto.WakeKey{}))
+		return classed(ErrClassInvalidRequest,
+			fmt.Errorf("swarmmobile: wake key must be %d bytes", len(crypto.WakeKey{})))
 	}
 	st := core.State()
 	copy(st.Keys.WakeKey[:], key)
@@ -435,7 +492,8 @@ func (a *App) InstallContentKey(key []byte) (err error) {
 		return err
 	}
 	if len(key) != len(crypto.ContentKey{}) {
-		return fmt.Errorf("swarmmobile: content key must be %d bytes", len(crypto.ContentKey{}))
+		return classed(ErrClassInvalidRequest,
+			fmt.Errorf("swarmmobile: content key must be %d bytes", len(crypto.ContentKey{})))
 	}
 	st := core.State()
 	copy(st.Keys.ContentKey[:], key)
@@ -480,7 +538,14 @@ func (a *App) Roster() (list *SessionList, err error) {
 		return nil, err
 	}
 	cached := core.Router().Sessions().List()
-	out := &SessionList{items: make([]Session, 0, len(cached))}
+	out := &SessionList{
+		items: make([]Session, 0, len(cached)),
+		// PB-APP-8. The roster is rendered from the JOURNAL stream, so a roster read while
+		// that stream has an unrepaired hole may be missing a session, an exit or a
+		// needs_input. The flag rides the handle because the triage inbox is the first screen
+		// the user opens and the one they act on.
+		stale: a.streamStale(phonecore.StreamJournal),
+	}
 	for _, cs := range cached {
 		out.items = append(out.items, a.session(cs))
 	}
@@ -497,7 +562,7 @@ func (a *App) Session(id string) (s *Session, err error) {
 	}
 	cs, ok := core.Router().Sessions().Get(id)
 	if !ok {
-		return nil, fmt.Errorf("swarmmobile: no session %q in the roster", id)
+		return nil, classed(ErrClassNotFound, fmt.Errorf("swarmmobile: no session %q in the roster", id))
 	}
 	out := a.session(cs)
 	return &out, nil
@@ -530,7 +595,7 @@ func (a *App) Peek(session string) (snap *Snapshot, err error) {
 	}
 	s, ok := core.Router().Snapshots().Get(session)
 	if !ok {
-		return nil, fmt.Errorf("swarmmobile: no terminal snapshot for %q", session)
+		return nil, classed(ErrClassNotFound, fmt.Errorf("swarmmobile: no terminal snapshot for %q", session))
 	}
 	return &Snapshot{
 		SessionID: s.Session,
@@ -550,9 +615,11 @@ func (a *App) ReadJournal(from int64, limit int) (page *JournalPage, err error) 
 	if limit <= 0 {
 		limit = journalLogSize
 	}
+	// Read BEFORE a.mu is taken: streamStale takes it too.
+	stale := a.streamStale(phonecore.StreamJournal)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	out := &JournalPage{next: from}
+	out := &JournalPage{next: from, stale: stale}
 	for _, e := range a.journal {
 		if e.Cursor <= from {
 			continue
@@ -671,17 +738,81 @@ func (a *App) Resync(stream string) (err error) {
 		// Fail closed on a name that is not a repair channel. Admitting it would spend a
 		// budget, report success, and repair a stream that does not exist -- and a caller
 		// that mistyped one of the four would see exactly what a working resync looks like.
-		return fmt.Errorf("swarmmobile: %q is not a repair channel (%s, %s, %s, %s)", stream,
-			phonecore.StreamJournal, phonecore.StreamTerminal, phonecore.StreamReply, phonecore.StreamGrant)
+		return classed(ErrClassInvalidRequest,
+			fmt.Errorf("swarmmobile: %q is not a repair channel (%s, %s, %s, %s)", stream,
+				phonecore.StreamJournal, phonecore.StreamTerminal, phonecore.StreamReply, phonecore.StreamGrant))
 	}
 	if err = a.resyncBudget(stream, time.Now()); err != nil {
 		return err
 	}
+	// ADMITTED, so the repair is in flight from this instant (PB-APP-8's fourth state). It is
+	// marked BEFORE the request is sealed rather than after: the seal can take a relay round
+	// trip, and a user who pressed a button and saw nothing change for a second is the exact
+	// experience this state exists to remove. A seal that then fails leaves the flag set until
+	// the stream repairs or a later resync succeeds, which is honest -- the request was made.
+	a.mu.Lock()
+	a.resyncAsked[stream] = true
+	a.mu.Unlock()
 	if stream != phonecore.StreamJournal {
 		return nil
 	}
 	_, err = a.unsignedResync(core.Router().Sessions().Cursor())
 	return err
+}
+
+// ResyncPending is PB-APP-8's fourth state: a repair has been asked for and has not landed.
+//
+// IT IS NOT A THIRD VALUE OF StreamState, and that is the load-bearing part. Stale and
+// repairing are ORTHOGONAL -- a stream is stale-and-repairing or stale-and-idle -- so one
+// enum cannot carry both, and expressing "repairing" by clearing the stale mark is exactly
+// PB-SYNC-3's optimistic clear: it shows the user a known hole as live. The shipped
+// TestS10_ResyncDoesNotClearStalenessBeforeTheRepairLands fences that, and no screen state
+// may be bought by weakening it.
+//
+// It is DERIVED rather than latched: the flag is only ever true while that channel's own
+// stale mark is still up, so the repair landing clears it in the same durable transaction
+// that clears the staleness. A spinner that never stops is the same object as no spinner.
+func (a *App) ResyncPending(stream string) (pending bool, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return false, err
+	}
+	a.mu.Lock()
+	asked := a.resyncAsked[stream]
+	a.mu.Unlock()
+	if !asked {
+		return false, nil
+	}
+	if !core.StreamStale(stream) {
+		a.mu.Lock()
+		delete(a.resyncAsked, stream)
+		a.mu.Unlock()
+		return false, nil
+	}
+	return true, nil
+}
+
+// ClockVerdict is the PULL surface for PB-TIME-1's verdict: "" when the clock is in budget,
+// and the user-legible reason when it is not.
+//
+// It exists because the event plane alone cannot serve a screen that opens AFTER the
+// measurement -- and on Android that is most of them, since the process is killed and rebuilt
+// constantly. UndeliveredInputs already has exactly this shape, for exactly this reason.
+//
+// The verdict is NOT LATCHED. Correcting the clock clears it, and reportSkew raises an event
+// on that transition too, so a screen that rendered the first event has something to clear it
+// with. Without both halves a user who did precisely what they were told would go on being
+// told to fix a clock that is now right -- and the daemon's refusal of a skewed command reads
+// "not authorized", which sends them to re-pair instead.
+func (a *App) ClockVerdict() (verdict string, err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.clockVerdict, nil
 }
 
 // resyncBudget admits one resync attempt for a stream under §6.0's stated bound -- <= 1 per
@@ -696,9 +827,10 @@ func (a *App) resyncBudget(stream string, now time.Time) error {
 	defer a.mu.Unlock()
 	at := a.resyncAt[stream]
 	if len(at) > 0 && now.Sub(at[len(at)-1]) < resyncMinInterval {
-		return fmt.Errorf("swarmmobile: %s was resynced less than %s ago (§6.0 bounds the resync rate at "+
-			"1 per stream per %s); the repair clears the stale mark when it lands, not when it is asked for",
-			stream, resyncMinInterval, resyncMinInterval)
+		return classed(ErrClassRateLimited,
+			fmt.Errorf("swarmmobile: %s was resynced less than %s ago (§6.0 bounds the resync rate at "+
+				"1 per stream per %s); the repair clears the stale mark when it lands, not when it is asked for",
+				stream, resyncMinInterval, resyncMinInterval))
 	}
 	kept := at[:0]
 	for _, t := range at {
@@ -707,9 +839,10 @@ func (a *App) resyncBudget(stream string, now time.Time) error {
 		}
 	}
 	if len(kept) >= resyncPerWindow {
-		return fmt.Errorf("swarmmobile: %s has been resynced %d times in the last %s (§6.0's cap); "+
-			"a channel that will not repair is not repaired by asking harder",
-			stream, len(kept), resyncWindow)
+		return classed(ErrClassRateLimited,
+			fmt.Errorf("swarmmobile: %s has been resynced %d times in the last %s (§6.0's cap); "+
+				"a channel that will not repair is not repaired by asking harder",
+				stream, len(kept), resyncWindow))
 	}
 	a.resyncAt[stream] = append(kept, now)
 	return nil
@@ -742,7 +875,7 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 		return nil, err
 	}
 	if operationID == "" {
-		return nil, errors.New("swarmmobile: Outcome requires an operation id")
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: Outcome requires an operation id"))
 	}
 	if ctrl, ok := core.Router().Replies().TakeFor(operationID); ok {
 		_ = core.RecordOutcome(ctrl)
@@ -801,7 +934,7 @@ func (a *App) RegisterPushToken(token string) (err error) {
 		return err
 	}
 	if token == "" {
-		return errors.New("swarmmobile: RegisterPushToken requires a token")
+		return classed(ErrClassInvalidRequest, errors.New("swarmmobile: RegisterPushToken requires a token"))
 	}
 	cl, err := a.conn()
 	if err != nil {
@@ -844,16 +977,37 @@ func (a *App) PushPreference() (pref *PushPreference, err error) {
 	return &PushPreference{Alerts: p.Alerts, Mentions: p.Mentions}, nil
 }
 
-// SetPushPreference persists the toggles and returns the operation that carries them to
-// the machine.
+// SetPushPreference persists the toggles and carries them to the machine as a signed
+// push_prefs command (PB-APP-7, PB-PUSH-8).
 //
-// CROSS-SLICE SPLIT, recorded in screen_coverage.tsv: S8 owns this SURFACE, S12 owns the
-// wired verb. Local filtering is NOT a substitute -- the push would still be sent and the
-// provider would still see the token, the timing and the size (PB-PUSH-8) -- so the
-// preference is persisted and the missing verb is recorded as a durable, legible refusal,
-// exactly as Interrupt does. It is not reported as if the machine had acknowledged it,
-// and it is not left in flight: an op no verb can resolve would raise PendingOpCount on
-// every toggle, for the life of the process.
+// THE CROSS-SLICE SPLIT IS CLOSED. This verb used to persist locally and record a durable
+// refusal -- "no wire verb yet ... owed by another slice" -- which was correct when it was
+// written and went stale the moment S12 shipped ActionPushPrefs, protocol.OpPushPrefs, the
+// daemon's requireRemoteAuthz arm, remotegw.applyPushPrefs and the notifier's categoryEnabled
+// gate. Until now the user's toggle was a local boolean the machine had never heard of, so
+// every push they turned off was still SENT -- and PB-PUSH-8 is explicit that filtering on the
+// handset does not satisfy the requirement, because the provider has already seen the token,
+// the timing and the size (PB-PUSH-3).
+//
+// THE MAPPING IS A BIJECTION AND THIS IS WHERE IT IS DECIDED. The facade's fields are named
+// Alerts and Mentions; the wire's are NeedsInput and Finished; PB-APP-7's categories are "a
+// transition into needs_input" and "a transition into ready_for_review or completed". There
+// are no mentions anywhere in this product, so the pairing had to be chosen: Alerts carries
+// NEEDS_INPUT -- the agent is blocked on the owner, which is what an alert is -- and Mentions
+// carries FINISHED. Two of the three plausible readings are silent defects: wiring both to
+// NeedsInput leaves the second switch dead, and swapping them silences the notifications the
+// user asked for while delivering the ones they refused.
+//
+// THE VERSION IS DRAWN FROM DURABLE STATE, and PB-PUSH-10 is why. The machine refuses any
+// update whose Version does not STRICTLY exceed the stored one, because the relay may replay a
+// frame from before the user turned pushes off. A counter held in memory restarts at 1 after
+// the process death Android hands out routinely, and every toggle from then on is refused
+// while the settings screen shows the new value -- a brick with no visible symptom.
+//
+// The local Save happens FIRST and deliberately. If the append then fails the phone has burned
+// one version, which costs nothing (the next update strictly exceeds it anyway) and leaves the
+// settings screen showing what the user chose. Saving after a successful append would instead
+// lose the user's choice on exactly the path where the machine already has it.
 func (a *App) SetPushPreference(pref *PushPreference) (op *Op, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -861,16 +1015,25 @@ func (a *App) SetPushPreference(pref *PushPreference) (op *Op, err error) {
 		return nil, err
 	}
 	if pref == nil {
-		return nil, errors.New("swarmmobile: SetPushPreference requires a preference")
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: SetPushPreference requires a preference"))
 	}
 	st := core.State()
-	st.PushPreference = phonecore.PushPreference{Alerts: pref.Alerts, Mentions: pref.Mentions}
+	next := st.PushPreference.Version + 1
+	st.PushPreference = phonecore.PushPreference{
+		Alerts: pref.Alerts, Mentions: pref.Mentions, Version: next,
+	}
 	if err = core.Save(st); err != nil {
 		return nil, err
 	}
-	return a.refuse("push_preference", "",
-		"push preference is persisted locally but has no wire verb yet; carrying it to the machine "+
-			"is owed by another slice (PB-PUSH-8)")
+	// The signed tuple names LaunchSessionSentinel: a preference has no target session, and
+	// the tuple requires a non-empty one. It is the same reserved value the daemon's own
+	// push_prefs authorization test signs with, so the two ends cannot disagree.
+	return a.signedCommand(schema.ActionPushPrefs, schema.LaunchSessionSentinel, nil,
+		commandBody{prefs: &schema.PushPrefs{
+			Version:    next,
+			NeedsInput: pref.Alerts,
+			Finished:   pref.Mentions,
+		}})
 }
 
 // ---- kill switch ---------------------------------------------------------------

@@ -222,6 +222,8 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("App.BeginPairing: %v", err)
 	}
+	// PB-PAIR-6 (S16): the destination is displayed and confirmed before anything is joined.
+	s16PassOriginGate(t, p)
 	// A handshake that has FAILED is reported as such rather than waited out: p.SAS() errors on
 	// a terminal state, so polling it alone turns any pairing failure into "no SAS", five
 	// seconds later, with the actual cause discarded.

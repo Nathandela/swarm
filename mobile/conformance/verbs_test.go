@@ -64,12 +64,19 @@ func TestS8_ReleaseControlEndsTheLeaseAndNeverDeletesTheSession(t *testing.T) {
 
 // TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps.
 //
-// Three elements have no device-reachable wire verb today (screen_coverage.tsv says so):
-// interrupt has no signed action at all, push_preference's verb is owed by S12, and
-// device_revoke IS signed but remotegw's opForAction refuses it one hop short of the
-// daemon. Interrupt already handles this correctly -- it seals NOTHING and records a
-// durable, legible refusal -- and the other two must behave the same way, because the
-// alternatives are worse than a refusal:
+// ONE element has no device-reachable wire verb (screen_coverage.tsv says so): device_revoke
+// IS in the signed action set and the daemon serves it, but remotegw's opForAction refuses it
+// one hop short of the daemon, and a refused action seals no reply.
+//
+// TWO CASES LEFT THIS TEST WITH SLICE S16 AND THE ASSERTIONS DID NOT MOVE. interrupt and
+// push_preference were both verb-less when this was written and are now wired: an interrupt is
+// a keystroke on the live input plane (PB-APP-3, gated on a confirmed lease and therefore no
+// longer a refusal at all), and SetPushPreference seals the signed push_prefs command S12
+// shipped. Their behaviour is asserted far more strongly by the S16 conformance suite
+// (TestPBAPP3_* and TestPBAPP7_*); keeping them here would assert they are still BROKEN.
+// device_revoke stays, because its gap is real and unchanged.
+//
+// The alternatives to a refusal are worse, which is why the shape is pinned:
 //
 //   - an op handed to issue() that no reply can ever resolve raises PendingOpCount for
 //     the life of the process, which makes every REAL pending op invisible;
@@ -93,10 +100,6 @@ func TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps(t *testing.T) {
 		name string
 		call func() (*swarmmobile.Op, error)
 	}{
-		{"Interrupt", func() (*swarmmobile.Op, error) { return h.App.Interrupt(testSession) }},
-		{"SetPushPreference", func() (*swarmmobile.Op, error) {
-			return h.App.SetPushPreference(&swarmmobile.PushPreference{Alerts: true})
-		}},
 		{"RevokeThisDevice", func() (*swarmmobile.Op, error) { return h.App.RevokeThisDevice() }},
 	}
 	for _, c := range cases {
@@ -166,6 +169,8 @@ func TestS8_RepairIntoANewEpochReArmsTheFailClosedGates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginPairing: %v", err)
 	}
+	// PB-PAIR-6 (S16): the destination is confirmed before anything is joined.
+	s16PassOriginGate(t, p)
 	eventually(t, "the phone never derived a SAS", func() bool {
 		s, err := p.SAS()
 		return err == nil && s != ""

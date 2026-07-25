@@ -34,7 +34,7 @@ import (
 // the app must re-lease before typing.
 func (a *App) TakeControl(session string) (op *Op, err error) {
 	defer barrier(&err)
-	return a.signedCommand(schema.ActionTakeControl, session, nil, nil)
+	return a.signedCommand(schema.ActionTakeControl, session, nil, commandBody{})
 }
 
 // opTakeControlEnd is the lease teardown's wire action. take_control_end has no signed
@@ -73,7 +73,7 @@ func (a *App) ReleaseControl(session string) (op *Op, err error) {
 			a.emitUndelivered(u)
 		}
 	}
-	op, err = a.sealSignedCommand(opTakeControlEnd, session, nil, nil)
+	op, err = a.sealSignedCommand(opTakeControlEnd, session, nil, commandBody{})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (a *App) ReleaseControl(session string) (op *Op, err error) {
 // Kill terminates a session. PB-APP-3's persistent Stop maps here.
 func (a *App) Kill(session string) (op *Op, err error) {
 	defer barrier(&err)
-	return a.signedCommand(schema.ActionKill, session, nil, nil)
+	return a.signedCommand(schema.ActionKill, session, nil, commandBody{})
 }
 
 // Launch starts a session on the machine (PB-APP-6).
@@ -98,7 +98,7 @@ func (a *App) Kill(session string) (op *Op, err error) {
 func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 	defer barrier(&err)
 	if spec == nil {
-		return nil, errors.New("swarmmobile: Launch requires a LaunchSpec")
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: Launch requires a LaunchSpec"))
 	}
 	req := &schema.LaunchReq{
 		Agent:         spec.Agent,
@@ -107,7 +107,7 @@ func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 		Options:       parseOptions(spec.Options),
 	}
 	return a.signedCommand(schema.ActionLaunch, schema.LaunchSessionSentinel,
-		schema.LaunchContentHash(req), req)
+		schema.LaunchContentHash(req), commandBody{launch: req})
 }
 
 // RevokeThisDevice revokes this phone's own pairing (PB-SEC-7). It is the phone's panic
@@ -133,24 +133,54 @@ func (a *App) RevokeThisDevice() (op *Op, err error) {
 			"one hop short of the daemon, and the verb is owed by the gateway slice")
 }
 
-// Interrupt asks the machine to interrupt a session's agent (PB-APP-3).
+// interruptByte is Ctrl-C. A PTY in its default ISIG mode turns 0x03 into SIGINT for the
+// foreground process group, which is exactly how a human stops a running agent.
+const interruptByte = 0x03
+
+// Interrupt is PB-APP-3's persistent Stop: hold the lease, send Ctrl-C.
 //
-// GAP, recorded in screen_coverage.tsv: there is NO interrupt action in the signed set,
-// and inventing a wire string here would produce a command every daemon refuses while
-// looking, to the app, exactly like one that was delivered. So nothing is sealed: the op
-// is created and IMMEDIATELY RESOLVED against a durable, legible local refusal, which is
-// what makes the missing verb visible on the screen instead of a Stop button that hangs
-// forever. S8 owns this surface; the verb is a cross-slice split.
+// THE RESOLUTION THIS IMPLEMENTS, recorded 2026-07-25. Stop had no wire verb -- the signed
+// action set is launch, kill, delete, approve, device_revoke, take_control, terminal_watch,
+// terminal_unwatch and push_prefs, with no interrupt anywhere -- and this verb used to record
+// a durable local refusal saying so. That was right while no resolution existed and became
+// wrong the moment one did: the button is on the screen and it does nothing.
+//
+// MINTING A NEW SIGNED ACTION WAS REJECTED. It would change what requireRemoteAuthz accepts
+// and would need its own authz tuple, its own biometric tier and its own replay story, all to
+// duplicate a capability the input plane already delivers. Worse, until every hop learned it,
+// a command bearing the new action would be refused by the daemon's CLOSED, fail-closed
+// capability switch one hop short of the daemon -- and a refused action seals no reply, so the
+// op would never resolve and Stop would hang forever while looking, to the app, exactly like a
+// command that was delivered.
+//
+// So an interrupt IS a keystroke and rides the live input plane, with kill as the escalation.
+// Three consequences follow and all three are the requirement rather than side effects:
+//
+//   - It is GATED ON A CONFIRMED LEASE (PB-INPUT-2), so it refuses legibly rather than
+//     returning success. The gateway drops an input frame from a device holding no lease
+//     SILENTLY, which is a user watching a Stop button work while the agent keeps running.
+//   - It is LIVE ONLY (ADR-007 D7): never queued, never replayed. A Stop that arrives ten
+//     minutes late interrupts whatever the agent is doing THEN, after the user gave up and
+//     started something else.
+//   - An undeliverable one is recorded on the undelivered ledger (PB-INPUT-1) rather than
+//     dropped, because silence on THIS control is the worst place for it.
+//
+// The returned Op names the action for the screen and is deliberately NOT tracked in flight:
+// input is never acknowledged by the machine, so an op awaiting a reply would raise
+// PendingOpCount for the life of the process and hide every genuinely pending op behind it.
 func (a *App) Interrupt(session string) (op *Op, err error) {
 	defer barrier(&err)
 	if _, err = a.ready(); err != nil {
 		return nil, err
 	}
-	if err = a.requireReconciled(); err != nil {
+	if err = a.SendInput(session, []byte{interruptByte}); err != nil {
 		return nil, err
 	}
-	return a.refuse("interrupt", session,
-		"interrupt has no signed wire action; the verb is owed by another slice")
+	id, err := newOperationID()
+	if err != nil {
+		return nil, err
+	}
+	return &Op{Action: "interrupt", SessionID: session, OperationID: id}, nil
 }
 
 // TerminalWatch opens the server-rendered terminal peek for a session (PB-APP-4). It is a
@@ -424,6 +454,16 @@ func (a *App) resolveSend(conn func() (*relay.Client, error)) (sendCtx, error) {
 	}
 	st := core.State()
 	if st.Keys.ContentKey == (crypto.ContentKey{}) {
+		// PB-KEY-3's two keyless states are NOT the same failure and must not share a screen.
+		// Waiting for a grant resolves itself when the machine's next one lands; grant LOSS
+		// never will, and telling that user to pair again is a brick -- BeginPairing fail-fasts
+		// while this device is registered (PB-STATE-10), so the only exit left is physical
+		// access to the machine. The verdict is read from the CORE's durable stream mark rather
+		// than cached here, so the re-grant that clears it clears this too, in the same
+		// transaction that installs the key.
+		if core.StreamStale(phonecore.StreamGrant) {
+			return sendCtx{}, errGrantLost
+		}
 		return sendCtx{}, errNoContentKey
 	}
 	cl, err := conn()
@@ -470,12 +510,22 @@ func (a *App) refuse(action, session, reason string) (*Op, error) {
 	return &Op{Action: action, SessionID: session, OperationID: id}, nil
 }
 
+// commandBody is the optional payload a signed command carries beside its tuple. It is one
+// struct rather than a growing tail of nil parameters: each field is a DIFFERENT sealing
+// shape (SealLaunchEnvelope / SealPushPrefsEnvelope / SealCommandEnvelope), so a call site
+// that passes the wrong one produces a frame the gateway refuses, and a positional nil is
+// exactly the kind of argument that gets passed in the wrong slot.
+type commandBody struct {
+	launch *schema.LaunchReq
+	prefs  *schema.PushPrefs
+}
+
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
 // answers it: a forwarded action carries the daemon's reply back, and take_control its
 // lease confirmation. A command the gateway answers with nothing must use
 // sealSignedCommand directly.
-func (a *App) signedCommand(action, session string, contentHash []byte, launch *schema.LaunchReq) (*Op, error) {
-	op, err := a.sealSignedCommand(action, session, contentHash, launch)
+func (a *App) signedCommand(action, session string, contentHash []byte, body commandBody) (*Op, error) {
+	op, err := a.sealSignedCommand(action, session, contentHash, body)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +534,7 @@ func (a *App) signedCommand(action, session string, contentHash []byte, launch *
 }
 
 // sealSignedCommand authors, signs, seals and appends one mutating command.
-func (a *App) sealSignedCommand(action, session string, contentHash []byte, launch *schema.LaunchReq) (*Op, error) {
+func (a *App) sealSignedCommand(action, session string, contentHash []byte, body commandBody) (*Op, error) {
 	core, err := a.ready()
 	if err != nil {
 		return nil, err
@@ -542,9 +592,12 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 		return nil, err
 	}
 	var env []byte
-	if launch != nil {
-		env, err = phonecore.SealLaunchEnvelope(sc.key, sc.epoch, seq, cmd, launch)
-	} else {
+	switch {
+	case body.launch != nil:
+		env, err = phonecore.SealLaunchEnvelope(sc.key, sc.epoch, seq, cmd, body.launch)
+	case body.prefs != nil:
+		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
+	default:
 		env, err = phonecore.SealCommandEnvelope(sc.key, sc.epoch, seq, cmd)
 	}
 	if err != nil {

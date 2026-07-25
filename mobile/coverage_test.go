@@ -63,6 +63,22 @@ var requiredScreenElements = []string{
 	"op.outcome",          // PB-SYNC-2 / PB-STATE-1, and the S7 ReplyCache.Take residual
 	"key_custody.install", // PB-KEY-1's single documented crossing
 	"callbacks",           // PB-BIND-6's delivery plane
+
+	// ADDED BY SLICE S16, additively. This list is PB-BIND-3's enumeration transcribed, and
+	// it is hard-coded here so deleting a row from the TSV cannot make a requirement vanish --
+	// which means it must GROW when the product does, or the reverse check ("the table
+	// invented a screen") fires on every legitimately new element and the diagnosis it offers
+	// ("or the requirement list is stale") is the correct one.
+	//
+	// S16 owns their behaviour and states the case for each in mobile/s16_screencoverage_test.go;
+	// they are named here so S8's two directions keep meeting in the middle.
+	"error_class",                 // PB-APP-9/PB-APP-10: without a classifier every failure looks like every other
+	"clock_verdict",               // PB-APP-8/PB-TIME-1: push-only, so a screen opened afterwards cannot render it
+	"resync.pending",              // PB-APP-8/PB-SYNC-3: the fourth state, orthogonal to staleness
+	"input.undelivered_clear",     // PB-INPUT-1: a ledger that only grows, with nothing to acknowledge it
+	"pairing.confirm_destination", // PB-PAIR-6: the destination was joined before it was displayed
+	"pairing.sas_mismatch",        // PB-PAIR-5/PB-SAS-3: the only button was Cancel
+	"pairing.resume",              // PB-PAIR-4: the state machine did not survive a process death
 }
 
 type coverageRow struct {

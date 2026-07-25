@@ -5,12 +5,16 @@
       Section 5 defers light mode to Phase C, so there is no light variant to resolve to and
       the app must not vary with the system uiMode.
 
-      These are placeholders for the skeleton. PB-TOK-1/PB-TOK-2 own the real token source and
-      S16 owns the screens that paint with them; the values are duplicated as literals in
-      SwarmTheme.EXPECTED_DARK_COLORS so ThemeNightModeTest compares the resolved theme
-      against a recorded number rather than against itself.
+      PB-TOK-1 (S16): these are NO LONGER PLACEHOLDERS. Every value below is the corresponding
+      token in internal/design/tokens.json, opaque-prefixed, and android/design-tokens.tsv is
+      the checked-in join that says which token each one is. android/gate/s16_tokens_test.go
+      enforces it in both directions: a divergent value fails, and a colour resource with no
+      row fails too, because that is how "single origin" decays into "origin plus a few extras".
+
+      Do not edit a value here. Edit internal/design/tokens.json, which is itself drift-guarded
+      against the design source (PB-TOK-2), and the gate will require this file to follow.
     -->
-    <color name="swarm_background">#FF101114</color>
-    <color name="swarm_text_primary">#FFE6E8EB</color>
-    <color name="swarm_text_secondary">#FF9BA1A8</color>
+    <color name="swarm_background">#FF08090A</color>
+    <color name="swarm_text_primary">#FFF7F8F8</color>
+    <color name="swarm_text_secondary">#FF8A8F98</color>
 </resources>

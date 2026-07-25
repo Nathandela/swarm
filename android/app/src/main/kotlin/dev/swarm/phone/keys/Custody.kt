@@ -497,13 +497,29 @@ enum class ConnectionState(val wire: String) {
 
     /** PERMANENT and TERMINAL. The relay-auth key is gone; nothing on-device recovers it. */
     REPAIR_REQUIRED("repair_required"),
+
+    /**
+     * PERMANENT and TERMINAL, and NOT a custody failure (PB-APP-10).
+     *
+     * `relay.ErrRevoked` is the only signal a revoked phone ever gets, and it comes back from
+     * the relay handshake rather than from Keystore -- so it matches neither crypto sentinel.
+     * Before this entry existed the transport loop fell through to a bare `continue` and the
+     * phone redialled every 250 ms for the life of the process behind a "reconnecting"
+     * spinner: the failure LOOP the requirement forbids, reached by the owner doing exactly
+     * what the product tells them to do when a handset is lost.
+     *
+     * It shares REPAIR_REQUIRED's remedy and not its cause. The owner has to clear the
+     * machine-side registration before a re-pair can succeed, so the two must read differently
+     * on screen even though both say "pair again".
+     */
+    REVOKED("revoked"),
     ;
 
     /** True only for the state that must not sit behind a spinner. */
     val needsBiometricPrompt: Boolean get() = this == REAUTH_REQUIRED
 
     /** True where the app must stop retrying and say so. */
-    val isTerminal: Boolean get() = this == REPAIR_REQUIRED
+    val isTerminal: Boolean get() = this == REPAIR_REQUIRED || this == REVOKED
 
     companion object {
         fun of(wire: String): ConnectionState =

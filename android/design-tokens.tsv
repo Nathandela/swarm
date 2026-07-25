@@ -1,0 +1,23 @@
+# PB-TOK-1: the JOIN between the ONE machine-readable token source and the Android theme.
+#
+# internal/design/tokens.json is the single origin. This table says which token each
+# <color name=...> in app/src/main/res/values/colors.xml IS, and android/gate/s16_tokens_test.go
+# checks the values actually agree -- in BOTH directions, so a colour resource with no row here
+# is a value that entered the theme without passing through the origin.
+#
+# WHY A TABLE AND NOT A NAMING CONVENTION. A convention is a mapping nobody can review, and the
+# two names differ on purpose: the token names are the design source's CSS custom properties
+# (--p-bg) and the resource names are Android's (swarm_background). This is the arrangement
+# android/connectivity-policy.tsv and android/fcm-priority.tsv already use, and for the same
+# reason S13 gave: one artifact both a Go gate and a Kotlin test read.
+#
+# ONLY COLOUR TOKENS MAY APPEAR. tokens.json also carries font stacks, radii, weights and a
+# gradient; none of those has an ARGB form, and the gate refuses a row naming one rather than
+# inventing a conversion.
+#
+# Columns: token <TAB> android_color <TAB> note
+#
+#token	android_color	note
+--p-bg	swarm_background	The window background. This is the value that was wrong: colors.xml declared #FF101114 against the origin's #08090a and called it a placeholder.
+--p-ink	swarm_text_primary	Primary text. Also previously divergent (#FFE6E8EB against #f7f8f8).
+--p-ink2	swarm_text_secondary	Secondary text: labels, timestamps, the need summary under a session row.

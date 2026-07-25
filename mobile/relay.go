@@ -80,7 +80,7 @@ func (a *App) conn() (*relay.Client, error) {
 		return nil, errNotRunning
 	}
 	if a.client == nil {
-		return nil, errors.New("swarmmobile: relay connection not established yet")
+		return nil, classed(ErrClassOffline, errors.New("swarmmobile: relay connection not established yet"))
 	}
 	return a.client, nil
 }
@@ -120,6 +120,24 @@ const (
 	connReconnecting   = "reconnecting"
 	connReauthRequired = "reauth_required"
 	connRepairRequired = "repair_required"
+
+	// connRevoked is PB-APP-10's seventh state and it is NOT a custody condition.
+	//
+	// relay.ErrRevoked comes back from the RELAY HANDSHAKE, so it matches neither crypto
+	// sentinel and used to fall through the dial switch's bare `continue`: the phone redialled
+	// every reconnectDelay for the life of the process behind a "reconnecting" spinner, which
+	// is the failure LOOP the requirement forbids in as many words -- reached by the owner
+	// doing exactly what the product tells them to do when a handset is lost.
+	//
+	// It is TERMINAL for the same reason connRepairRequired is: nothing on this device can
+	// un-revoke itself, so every retry is a websocket handshake spent re-proving that, on a
+	// battery, against the relay's per-source budget.
+	//
+	// It is kept apart from connRepairRequired although the two share a remedy, because they
+	// do not share a cause: repair_required means this handset's Keystore key is gone, revoked
+	// means the OWNER removed it -- and the machine-side registration is what the owner has to
+	// clear before a re-pair can succeed.
+	connRevoked = "revoked"
 )
 
 func (a *App) setConn(state string) {
@@ -191,6 +209,16 @@ func (a *App) run(ctx context.Context) {
 				// RECOVERABLE. Keep retrying -- the biometric may be satisfied at any
 				// moment, and the retry is what notices -- but say what is actually wrong.
 				a.setConn(connReauthRequired)
+			case errors.Is(err, relay.ErrRevoked):
+				// PB-APP-10. The THIRD identity this switch has to distinguish, and the one
+				// the fix for the first two left behind with an identical shape: a bare
+				// `continue` here is an unbounded reconnect the user is shown as a spinner.
+				// Returning rather than breaking, for the same reason as the arm above --
+				// break falls through to setConn("offline") and erases the one state that
+				// tells the user what happened.
+				a.setConn(connRevoked)
+				a.setClient(nil)
+				return
 			}
 			continue
 		}
@@ -392,6 +420,12 @@ func (a *App) onReply(ctrl schema.Control) {
 // that can never dedupe, producing exactly the per-reply spam this guard exists to stop. The
 // user's fact is binary (the clock is out of budget, or it is not) and so is the key. The
 // verdict is not latched: correcting the clock clears it and a later relapse reports again.
+// It also maintains the PULL surface App.ClockVerdict reads, and it EMITS ON BOTH
+// TRANSITIONS. The `msg == ""` early return that used to sit here meant nothing was raised
+// when the verdict went back to healthy, so a UI that latched the first event went on telling
+// a user with a correct clock to fix their clock -- the same latch S11's round-1 fix removed
+// from the command path, re-created one layer up. A screen that is already open never calls a
+// pull surface, so the clearing event is what reaches it.
 func (a *App) reportSkew() {
 	msg := ""
 	if err := a.core.SkewMonitor().Check(); err != nil {
@@ -400,8 +434,13 @@ func (a *App) reportSkew() {
 	a.mu.Lock()
 	changed := a.skewed != (msg != "")
 	a.skewed = msg != ""
+	a.clockVerdict = msg
 	a.mu.Unlock()
-	if !changed || msg == "" {
+	if !changed {
+		return
+	}
+	if msg == "" {
+		a.events.emit(&Event{Kind: "clock", Stream: "clock", State: "healthy"})
 		return
 	}
 	a.events.emit(&Event{Kind: "clock", Stream: "clock", State: "skewed", Message: msg})

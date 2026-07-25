@@ -99,6 +99,14 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // keeps passing after someone lowers SWARM_ANDROID_MIN_SDK, and the whole point of the
     // floor is that Curve25519 does not exist below it.
     from(rootProject.layout.projectDirectory.file("toolchain.env"))
+    // PB-TOK-1 (S16): the token ORIGIN and the checked-in join. The Go gate compares the two
+    // FILES, which is the join the requirement asks for; it cannot say what the app RESOLVES,
+    // because Android picks a colour from the merged resource table at runtime. So the Kotlin
+    // theme test resolves it and compares against these -- and it must read the very same
+    // artifacts, not a copy, or the two halves can agree with each other while disagreeing
+    // with the design source.
+    from(rootProject.layout.projectDirectory.file("design-tokens.tsv"))
+    from(rootProject.layout.projectDirectory.dir("..").file("internal/design/tokens.json"))
     into(policyTestResourceDir)
 }
 

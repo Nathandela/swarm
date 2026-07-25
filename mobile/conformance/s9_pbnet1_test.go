@@ -229,6 +229,8 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 	if err != nil {
 		t.Fatalf("App.BeginPairing: %v", err)
 	}
+	// PB-PAIR-6 (S16): the destination is confirmed before anything is joined.
+	s16PassOriginGate(t, p)
 	var phoneSAS string
 	eventually(t, "the phone never derived a SAS", func() bool {
 		s, err := p.SAS()

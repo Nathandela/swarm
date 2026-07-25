@@ -33,6 +33,20 @@ const (
 	// without a cap would eventually produce a frame the relay refuses on size, losing the
 	// whole burst at once rather than pacing it.
 	MaxInputPayload = 4096
+
+	// UndeliveredLedgerSize bounds the PB-INPUT-1 ledger.
+	//
+	// It is not a number this file invents: journalLogSize bounds the facade's other
+	// unbounded-by-nature read model at the same 1024, for the same reason -- the DURABLE
+	// model is elsewhere and this is what a screen renders, so it is bounded rather than
+	// grown for the life of the process.
+	//
+	// The way here is ordinary, not contrived: PB-INPUT-2 refuses every keystroke until the
+	// machine confirms a lease, each refusal is one entry, and autorepeat on a held key is
+	// about 30 events/s -- so a minute against a dead lease is roughly 1800 entries. Worse,
+	// the facade copies the whole slice on every read, so the screen that renders the problem
+	// gets slower the worse the problem is.
+	UndeliveredLedgerSize = 1024
 )
 
 // Undelivered is one accepted-but-not-delivered unit of input, kept so PB-INPUT-1's
@@ -54,6 +68,10 @@ type InputCoalescer struct {
 	mu       sync.Mutex
 	sessions []*inputBuffer // insertion-ordered, so multi-session output is deterministic
 	ledger   []Undelivered
+	// dropped counts the entries UndeliveredLedgerSize discarded. A bound that discarded
+	// silently would tell the user about the last N keystrokes they lost and forget that
+	// there were thousands, which understates the failure at exactly the moment it is worst.
+	dropped int
 }
 
 // inputBuffer is one session's held bytes and its window.
@@ -167,7 +185,7 @@ func (c *InputCoalescer) Abandon(reason string) []Undelivered {
 		out = append(out, Undelivered{Session: s.session, Bytes: len(s.buf), At: now, Reason: reason})
 		s.buf = nil
 	}
-	c.ledger = append(c.ledger, out...)
+	c.record(out...)
 	return out
 }
 
@@ -177,7 +195,7 @@ func (c *InputCoalescer) Abandon(reason string) []Undelivered {
 func (c *InputCoalescer) Fail(f InputFrame, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.ledger = append(c.ledger, Undelivered{
+	c.record(Undelivered{
 		Session: f.Session,
 		Bytes:   len(f.Data),
 		At:      c.now(),
@@ -185,12 +203,52 @@ func (c *InputCoalescer) Fail(f InputFrame, reason string) {
 	})
 }
 
+// record appends to the bounded ledger, discarding the OLDEST entries once it is full and
+// counting what it discarded. Caller holds c.mu.
+//
+// Oldest-first is the right end to lose. The entries the user has not seen are the recent
+// ones, and a ledger that dropped the newest would go quiet exactly while the problem was
+// getting worse.
+func (c *InputCoalescer) record(entries ...Undelivered) {
+	c.ledger = append(c.ledger, entries...)
+	if over := len(c.ledger) - UndeliveredLedgerSize; over > 0 {
+		c.dropped += over
+		c.ledger = append(c.ledger[:0], c.ledger[over:]...)
+	}
+}
+
 // Undelivered is the ledger of everything the phone accepted from the user and could not
-// deliver. It is READ, not drained: the UX state must survive the call that produced it.
+// deliver. It is READ, not drained: the UX state must survive the call that produced it, and
+// a screen that opens after the failure must still see it. ClearUndelivered is the separate
+// acknowledgement; UndeliveredDropped is what the bound discarded.
 func (c *InputCoalescer) Undelivered() []Undelivered {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]Undelivered(nil), c.ledger...)
+}
+
+// UndeliveredDropped is how many older entries UndeliveredLedgerSize discarded.
+//
+// It is a second reader rather than a second return value from Undelivered so the shipped
+// call sites keep compiling -- and because the two answer different questions: one is what to
+// render, the other is what the rendering is leaving out.
+func (c *InputCoalescer) UndeliveredDropped() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dropped
+}
+
+// ClearUndelivered acknowledges the ledger: the user has read the notice and dismissed it.
+//
+// It is a separate verb rather than a draining read because the two callers want opposite
+// things -- a screen that OPENS must see the backlog, and a user who DISMISSES it must be
+// able to say so once, for every screen. It does not disable the ledger: a keystroke lost
+// after a clear is recorded like any other, or the acknowledgement would have become
+// PB-INPUT-1's forbidden silent drop, arrived at through its own remedy.
+func (c *InputCoalescer) ClearUndelivered() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ledger, c.dropped = nil, 0
 }
 
 // buffer returns the session's buffer, creating it on first use. Caller holds c.mu.

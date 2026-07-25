@@ -138,6 +138,32 @@ func SealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd s
 	return env.Marshal(), nil
 }
 
+// SealPushPrefsEnvelope seals the SIGNED push_prefs command together with its preference
+// body (PB-PUSH-8, PB-APP-7). seq must be unique per epoch.
+//
+// The body is deliberately NOT bound by ContentHash the way a launch spec is, and
+// schema.RemoteCommand.PushPrefs records why: a launch spec is forwarded through the gateway
+// in cleartext, so the hash is what stops the gateway altering it, whereas a preference body
+// never leaves the gateway -- it arrives sealed under the epoch content key the relay cannot
+// forge, and the gateway is itself the custodian that decides delivery. The SIGNATURE is this
+// verb's gate; the daemon's capability switch cannot refuse it.
+func SealPushPrefsEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, prefs schema.PushPrefs) ([]byte, error) {
+	plaintext, err := json.Marshal(schema.RemoteCommand{DeviceCommandAuth: cmd, PushPrefs: &prefs})
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: issuedAt(),
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
+}
+
 // SealCommandEnvelope seals a signed command as a mailbox envelope under the epoch
 // content key (XChaCha20-Poly1305), so it can travel through the untrusted relay to the
 // machine as ciphertext. The command's device signature is verified by the daemon after

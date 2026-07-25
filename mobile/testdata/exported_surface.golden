@@ -1,4 +1,20 @@
 const CallbackQueueSize
+const ErrClassAwaitingKey
+const ErrClassClosed
+const ErrClassGrantLost
+const ErrClassInternal
+const ErrClassInvalidRequest
+const ErrClassNoLease
+const ErrClassNotFound
+const ErrClassNotPaired
+const ErrClassOffline
+const ErrClassPairingFailed
+const ErrClassRateLimited
+const ErrClassReauthRequired
+const ErrClassRepairRequired
+const ErrClassRevoked
+const ErrClassUnknown
+const ErrClassUnreconciled
 const KeyCustodyAuthRequired
 const KeyCustodyKeyInvalidated
 field Config.MachineID string
@@ -58,9 +74,12 @@ ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
 method App.BeginPairing(string) (*Pairing, error)
+method App.ClearUndeliveredInputs() error
+method App.ClockVerdict() (string, error)
 method App.Close() error
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
+method App.ErrorClass(string) (string, error)
 method App.InstallContentKey([]byte) error
 method App.InstallWakeKey([]byte) error
 method App.Interrupt(string) (*Op, error)
@@ -69,6 +88,7 @@ method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
 method App.Outcome(string) (*Outcome, error)
+method App.PairingState() (string, error)
 method App.Paste(string, string) error
 method App.Peek(string) (*Snapshot, error)
 method App.PendingOpCount() (int, error)
@@ -80,6 +100,7 @@ method App.RegisterPushToken(string) error
 method App.ReleaseControl(string) (*Op, error)
 method App.Resize(string, int, int) error
 method App.Resync(string) error
+method App.ResyncPending(string) (bool, error)
 method App.RevokeThisDevice() (*Op, error)
 method App.Roster() (*SessionList, error)
 method App.SendInput(string, []byte) error
@@ -99,15 +120,22 @@ method App.UnsubscribeJournal() error
 method JournalPage.At(int) (*JournalEntry, error)
 method JournalPage.Count() (int, error)
 method JournalPage.NextCursor() (int64, error)
+method JournalPage.Stale() (bool, error)
 method Pairing.Cancel() error
 method Pairing.Confirm() error
+method Pairing.ConfirmOrigin(string) error
+method Pairing.DeadlineMillis() (int64, error)
 method Pairing.Origin() (string, error)
+method Pairing.OriginIsPrivate() (bool, error)
+method Pairing.RejectSAS() error
 method Pairing.SAS() (string, error)
 method Pairing.State() (string, error)
 method SessionList.At(int) (*Session, error)
 method SessionList.Count() (int, error)
+method SessionList.Stale() (bool, error)
 method UndeliveredList.At(int) (*UndeliveredInput, error)
 method UndeliveredList.Count() (int, error)
+method UndeliveredList.Dropped() (int, error)
 type App struct
 type Config struct
 type Event struct

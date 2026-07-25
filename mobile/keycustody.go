@@ -28,7 +28,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -105,7 +104,10 @@ func (s custodySealer) aead() (cipher.AEAD, error) {
 		}
 	}()
 	if len(key) != 32 {
-		return nil, fmt.Errorf("swarmmobile: the %s KEK is %d bytes, want 32", s.tier, len(key))
+		// A KekProvider that answered the wrong width is a bug in the Android layer, not a
+		// custody verdict: there is nothing for the user to authenticate or re-pair.
+		return nil, classed(ErrClassInternal,
+			fmt.Errorf("swarmmobile: the %s KEK is %d bytes, want 32", s.tier, len(key)))
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -132,7 +134,10 @@ func (s custodySealer) Open(sealed []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(sealed) < g.NonceSize() {
-		return nil, fmt.Errorf("swarmmobile: the %s custody blob is truncated", s.tier)
+		// The blob at rest cannot be opened by any key, so this is not a locked tier and no
+		// prompt helps: the remedy is the permanent one.
+		return nil, classed(ErrClassRepairRequired,
+			fmt.Errorf("swarmmobile: the %s custody blob is truncated", s.tier))
 	}
 	return g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], nil)
 }
@@ -149,39 +154,25 @@ func classifyCustodyVerdict(tier string, err error) error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, KeyCustodyKeyInvalidated):
-		return fmt.Errorf("swarmmobile: the %s Keystore key is gone: %w: %v",
-			tier, crypto.ErrKeyInvalidated, err)
+		return classed(ErrClassRepairRequired, fmt.Errorf(
+			"swarmmobile: the %s Keystore key is gone: %w: %v", tier, crypto.ErrKeyInvalidated, err))
 	case strings.Contains(msg, KeyCustodyAuthRequired):
-		return fmt.Errorf("swarmmobile: the %s Keystore key needs a fresh authentication: %w: %v",
-			tier, crypto.ErrKeyAuthRequired, err)
+		return classed(ErrClassReauthRequired, fmt.Errorf(
+			"swarmmobile: the %s Keystore key needs a fresh authentication: %w: %v",
+			tier, crypto.ErrKeyAuthRequired, err))
 	}
-	return fmt.Errorf("swarmmobile: the %s Keystore key could not be obtained: %w", tier, err)
+	// Deliberately NOT one of the two verdicts. An opaque platform failure mapped onto
+	// "authenticate again" is a prompt the user can never satisfy, which is the failure
+	// PB-KEY-6 exists to remove -- so it classifies as the bug it is.
+	return classed(ErrClassInternal,
+		fmt.Errorf("swarmmobile: the %s Keystore key could not be obtained: %w", tier, err))
 }
 
-// stampCustodyVerdict is the OUTBOUND half: it prefixes an error that wraps one of the two
-// crypto sentinels with the matching token, so the Android side can branch on a type instead
-// of on prose.
+// THE OUTBOUND HALF MOVED TO errorclass.go WITH SLICE S16. stampCustodyVerdict stamped these
+// two verdicts and nothing else; PB-APP-9 generalised it to the whole surface, so
+// stampErrorClass now does the same job for every error class -- including these two, whose
+// tokens are unchanged and are still the ones the Android side has matched on since S14
+// (ErrClassReauthRequired and ErrClassRepairRequired carry the identical strings).
 //
-// It runs in barrier, which every exported entry point already installs as its first
-// statement (PB-BIND-5), so it is total by construction: a verb cannot forget to classify,
-// and a verb added later inherits it. Doing it per-verb was the alternative and was rejected
-// for exactly that reason -- an enumeration of verbs is a list somebody has to keep correct.
-func stampCustodyVerdict(err error) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	switch {
-	case errors.Is(err, crypto.ErrKeyInvalidated):
-		if strings.Contains(msg, KeyCustodyKeyInvalidated) {
-			return err
-		}
-		return fmt.Errorf("%s: %w", KeyCustodyKeyInvalidated, err)
-	case errors.Is(err, crypto.ErrKeyAuthRequired):
-		if strings.Contains(msg, KeyCustodyAuthRequired) {
-			return err
-		}
-		return fmt.Errorf("%s: %w", KeyCustodyAuthRequired, err)
-	}
-	return err
-}
+// One stamping function rather than two is the point: two would each be total over their own
+// arm and neither total over the surface, which is how a class ships unmapped.

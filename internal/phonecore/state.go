@@ -62,7 +62,17 @@ import (
 // send_seq and no receive array and start from an empty replay guard -- the exact reset this
 // file exists to refuse -- so it must fail closed instead, and a v5 build reading a v4 blob
 // must know to take those fields from the cleartext and reseal them on the next Save.
-const StateSchemaVersion = 5
+//
+// v6 adds PushPreference.Version, the DEVICE-supplied monotonic counter PB-PUSH-10 makes the
+// machine refuse a preference update without. The field sits inside an existing container's
+// object rather than at the top level, which is precisely why the bump is not optional: the
+// top-level tag set is unchanged, so nothing else would notice, and a build one version back
+// would drop the counter and restart it at 1 on the next Save. The machine refuses anything
+// that does not STRICTLY exceed what it holds (remotegw.filePushPrefs.SavePrefs, because the
+// relay may replay a frame from before the user turned pushes off) -- so a counter that
+// restarts means every toggle from that moment on is silently refused, forever, while the
+// settings screen shows the user's new value. A brick with no visible symptom.
+const StateSchemaVersion = 6
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -168,6 +178,16 @@ type State struct {
 type PushPreference struct {
 	Alerts   bool `json:"alerts"`
 	Mentions bool `json:"mentions"`
+	// Version is the DEVICE-supplied monotonic counter the machine gates the update on
+	// (schema.PushPrefs.Version, PB-PUSH-10). It is durable for one reason and it is not
+	// bookkeeping: the machine refuses any push_prefs whose Version does not STRICTLY exceed
+	// the stored one, because the relay is the declared adversary and may replay a frame from
+	// before the user turned pushes off. A counter held only in memory restarts at 1 after the
+	// process death Android hands out routinely, and every toggle from then on is refused
+	// while the settings screen goes on showing the value the user chose.
+	//
+	// Version 0 is the never-configured record, so the phone's first real update always wins.
+	Version uint64 `json:"version,omitempty"`
 }
 
 // clone deep-copies the maps and slices so custody and callers can never observe or

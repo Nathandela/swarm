@@ -127,7 +127,7 @@ func s15EpochKeys() crypto.EpochKeys {
 // inventory at once.
 func s15State() State {
 	st := State{
-		Keys: s15EpochKeys(),
+		Keys:                s15EpochKeys(),
 		Machine:             s15Machine,
 		MachineStatic:       s15MachineStatic(),
 		MachineSignPub:      s15MachineSignPub(),

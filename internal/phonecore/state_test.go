@@ -411,10 +411,25 @@ var sealedTags = map[string]bool{
 	"sessions": true, "snapshots": true, "op_outcomes": true,
 }
 
+// stateV6Fixture is the PINNED v6 blob. v6 adds PushPreference.Version -- the device-supplied
+// monotonic counter the machine gates a push_prefs update on (PB-PUSH-10) -- INSIDE the
+// existing push_preference object, so the top-level tag set is unchanged and the check below
+// would not have noticed it. That is exactly why the version had to move: a build one version
+// back drops the counter, it restarts at 1 on the next Save, and the machine then refuses every
+// preference update as a replay while the settings screen shows the user's new value.
+//
+// It is the v5 literal with the stamp raised, which is what this build writes for fullState():
+// the field is omitempty and fullState()'s counter is zero, so the two blobs' cleartext differs
+// in the stamp alone. The counter's own round trip is pinned separately, by
+// TestStateStore_PushPreferenceVersionSurvivesARestart, because no fixture can carry it while
+// the v5 literal must go on restoring the same fullState().
+const stateV6Fixture = `{"schema_version":6,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
 var stateFixtures = map[int]string{
 	1: stateV1Fixture,
 	4: stateV4Fixture,
 	5: stateV5Fixture,
+	6: stateV6Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -425,11 +440,21 @@ var stateFixtures = map[int]string{
 // other test here uses, over a key that is a literal rather than fresh entropy. That is what
 // lets the two sealed fields live in the byte literal at all.
 func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
-	// EVERY pinned version from v4 on, not just the newest. v4 is the last all-cleartext
-	// layout and v5 is S15's tier split, so this is also the forward-migration path: a v4 blob
-	// must still yield every coordinate after the fields it carries in the clear moved inside
+	// EVERY pinned version from v4 on, not just the newest -- this is the forward-migration path:
+	// a v4 blob must still yield every coordinate it carries after those fields moved inside
 	// sealed containers. Iterating the map is what makes the sealed-tag exemption above honest --
 	// a field dropped from a container has no top-level tag to miss, and fails HERE instead.
+	//
+	// The comparison is version-aware, and it MUST be. An earlier version of this test compared
+	// every fixture against the CURRENT fullState(), which is right only while every pinned version
+	// is current: the moment a durable field is added, an old blob cannot restore a coordinate that
+	// did not exist when it was written, and the only ways to go green are to splice the key into a
+	// literal that never carried it -- falsifying the very artifact that proves migration works --
+	// or to weaken this guard. An implementer hit exactly that wall and correctly refused both.
+	//
+	// So: the CURRENT version must equal fullState() exactly, and an OLDER version must load and
+	// restore every coordinate ITS OWN literal carries. A field added later is legitimately absent
+	// from an older blob; a field the old blob carries and this build drops is the defect.
 	for _, version := range sortedFixtureVersions() {
 		if version < 4 {
 			continue // v1 predates the KEK and has its own test below
@@ -447,18 +472,47 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 					"loading; if StateSchemaVersion was lowered, this blob is now from the future)", version, err)
 			}
 
-			// The fixture IS fullState() on disk, so the comparison covers every coordinate at once
-			// and names the one that was lost.
+			// Which coordinates should this literal restore? Exactly the ones it carries: a
+			// top-level json key, or a field sealed into a container the literal has.
+			var blob map[string]any
+			if err := json.Unmarshal([]byte(stateFixtures[version]), &blob); err != nil {
+				t.Fatalf("decode the pinned v%d fixture: %v", version, err)
+			}
+			carries := func(tag string) bool {
+				if _, ok := blob[tag]; ok {
+					return true
+				}
+				if !sealedTags[tag] {
+					return false
+				}
+				for _, container := range []string{"wake_state", "content_kept", "content_purgeable"} {
+					if _, ok := blob[container]; ok {
+						return true
+					}
+				}
+				return false
+			}
+
 			want, got := fullState(), st.Load()
 			wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+			rt := reflect.TypeOf(stateFile{})
+			tagOf := map[string]string{}
+			for i := 0; i < rt.NumField(); i++ {
+				tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+				tagOf[rt.Field(i).Name] = tag
+			}
 			for i := 0; i < wv.NumField(); i++ {
+				name := wv.Type().Field(i).Name
 				if !wv.Type().Field(i).IsExported() {
 					continue
+				}
+				if version != StateSchemaVersion && !carries(tagOf[name]) {
+					continue // added after this version was pinned; legitimately absent
 				}
 				if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
 					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
 						"literal carries and this build no longer reads is a durable field dropped without "+
-						"a schema bump", version, wv.Type().Field(i).Name, gv.Field(i).Interface(), wv.Field(i).Interface())
+						"a schema bump", version, name, gv.Field(i).Interface(), wv.Field(i).Interface())
 				}
 			}
 		})

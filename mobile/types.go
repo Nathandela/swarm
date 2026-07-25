@@ -15,25 +15,8 @@ import (
 // have obtained from this package: a nil proxy whose Go object is gone, or a zero value
 // that never went through NewApp. It is an ERROR rather than a panic because a panic
 // crossing JNI aborts the app process.
-var errNoReceiver = errors.New("swarmmobile: unusable receiver (nil or never constructed by this package)")
-
-// barrier is the panic barrier every exported entry point installs as its FIRST
-// statement (PB-BIND-5). A Go panic that reaches the JNI frame kills the app process --
-// there is no Java frame to catch it -- so it is converted into the entry point's error
-// result, which is why every entry point has one.
-// It also carries PB-KEY-6's outbound half. Every custody refusal the core produces leaves
-// through one of these entry points, and gomobile flattens a Go error into a Java exception
-// carrying only its message -- so the two crypto sentinels are stamped with a stable token
-// HERE rather than at each verb. Central is the point: the Android side must act differently
-// on a recoverable refusal and a permanent one (PB-KEY-6), and an enumeration of the verbs
-// that classify is a list somebody has to keep correct as verbs are added.
-func barrier(err *error) {
-	if r := recover(); r != nil {
-		*err = fmt.Errorf("swarmmobile: recovered panic at the JNI boundary: %v", r)
-		return
-	}
-	*err = stampCustodyVerdict(*err)
-}
+var errNoReceiver = classed(ErrClassInternal,
+	errors.New("swarmmobile: unusable receiver (nil or never constructed by this package)"))
 
 // Config assembles an App. StateDir is the phone's private state directory (device keys
 // plus the one durable state blob); RelayURL is the relay to dial; MachineID is the
@@ -82,6 +65,7 @@ type Session struct {
 // crosses as an opaque object with Count/At rather than as a slice.
 type SessionList struct {
 	items []Session
+	stale bool
 }
 
 // Count is the number of sessions in the list.
@@ -100,10 +84,28 @@ func (l *SessionList) At(i int) (s *Session, err error) {
 		return nil, errNoReceiver
 	}
 	if i < 0 || i >= len(l.items) {
-		return nil, fmt.Errorf("swarmmobile: session index %d out of range [0,%d)", i, len(l.items))
+		return nil, classed(ErrClassNotFound,
+			fmt.Errorf("swarmmobile: session index %d out of range [0,%d)", i, len(l.items)))
 	}
 	item := l.items[i]
 	return &item, nil
+}
+
+// Stale reports that the JOURNAL stream this roster was rendered from has an unrepaired
+// hole, so the view may be missing a session, an exit or a needs_input (PB-APP-8).
+//
+// It rides ON THE HANDLE rather than being left to the caller, and that is the requirement
+// rather than a convenience. A screen that has to remember to call StreamState("journal")
+// beside every Roster() is a screen that will forget once, and the failure is silent and
+// looks exactly like a working app. Snapshot.Stale set the precedent for the terminal model;
+// PB-APP-2's triage inbox is the FIRST screen the user opens and the one they act on, so it
+// is the last place a known hole may be presented as live.
+func (l *SessionList) Stale() (stale bool, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return false, errNoReceiver
+	}
+	return l.stale, nil
 }
 
 // UndeliveredInput is one unit of input the phone took from the user, acknowledged on
@@ -121,7 +123,8 @@ type UndeliveredInput struct {
 // UndeliveredList is an undelivered-input HANDLE, for the same reason as SessionList:
 // gomobile has no bound list type, so a collection crosses as an opaque object.
 type UndeliveredList struct {
-	items []UndeliveredInput
+	items   []UndeliveredInput
+	dropped int
 }
 
 // Count is the number of undelivered entries.
@@ -140,10 +143,26 @@ func (l *UndeliveredList) At(i int) (u *UndeliveredInput, err error) {
 		return nil, errNoReceiver
 	}
 	if i < 0 || i >= len(l.items) {
-		return nil, fmt.Errorf("swarmmobile: undelivered index %d out of range [0,%d)", i, len(l.items))
+		return nil, classed(ErrClassNotFound,
+			fmt.Errorf("swarmmobile: undelivered index %d out of range [0,%d)", i, len(l.items)))
 	}
 	item := l.items[i]
 	return &item, nil
+}
+
+// Dropped is how many OLDER entries the ledger's bound discarded (PB-INPUT-1).
+//
+// A bound that discarded silently would be a second defect wearing the first one's clothes:
+// the user is told about the last N keystrokes they lost and never told there were thousands,
+// which understates the failure at exactly the moment it is worst. Event.Dropped is the same
+// contract one plane over -- the callback queue counts what its overflow discarded rather
+// than dropping quietly.
+func (l *UndeliveredList) Dropped() (n int, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return 0, errNoReceiver
+	}
+	return l.dropped, nil
 }
 
 // JournalEntry is one journal record as the app sees it. Group and Type are verbatim
@@ -159,6 +178,20 @@ type JournalEntry struct {
 type JournalPage struct {
 	items []JournalEntry
 	next  int64
+	stale bool
+}
+
+// Stale reports that the journal stream this page was read from has an unrepaired hole
+// (PB-APP-8), so the page is not a complete history of what the agent did.
+//
+// ReadJournal serves PB-APP-3's session detail AND PB-APP-5's activity log, and both render
+// as a chronology -- a shape that reads as complete unless it says otherwise.
+func (p *JournalPage) Stale() (stale bool, err error) {
+	defer barrier(&err)
+	if p == nil {
+		return false, errNoReceiver
+	}
+	return p.stale, nil
 }
 
 // Count is the number of entries in the page.
@@ -177,7 +210,8 @@ func (p *JournalPage) At(i int) (e *JournalEntry, err error) {
 		return nil, errNoReceiver
 	}
 	if i < 0 || i >= len(p.items) {
-		return nil, fmt.Errorf("swarmmobile: journal index %d out of range [0,%d)", i, len(p.items))
+		return nil, classed(ErrClassNotFound,
+			fmt.Errorf("swarmmobile: journal index %d out of range [0,%d)", i, len(p.items)))
 	}
 	item := p.items[i]
 	return &item, nil

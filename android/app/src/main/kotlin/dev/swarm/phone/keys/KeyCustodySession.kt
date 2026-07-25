@@ -14,20 +14,43 @@ package dev.swarm.phone.keys
  * key re-checks authorisation on every use, and a store that unwrapped once and cached would
  * keep serving the content key after the screen locked (PB-KEY-7) while every restart-based
  * test still passed. The cost is a Keystore round trip per read, which is the point.
+ *
+ * WHAT IT KEEPS IN MEMORY IS CIPHERTEXT. The blobs are read from [PersistentCustodyBacking]
+ * once, at construction, and re-read only when the object is built again -- which on Android is
+ * every process. Caching sealed bytes costs nothing, because opening them still needs the KEK.
+ *
+ * THE BACKING IS A CONSTRUCTOR ARGUMENT AND HAS NO DEFAULT. It used to be a `LinkedHashMap`
+ * with no way to say otherwise, so the sealed material lived for exactly one process and the
+ * second launch could not open its own state. [openOver] is the production factory; the
+ * one-argument constructor is the volatile store the pure-JVM policy tests want, and it is
+ * named for what it is at the point of use.
  */
-class SealedStore(private val kek: KekProvider) {
+class SealedStore private constructor(
+    private val kek: KekProvider,
+    private val backing: PersistentCustodyBacking,
+) {
 
-    private class Entry(val tier: KeyTier, val blob: ByteArray)
+    /**
+     * A store over bytes that die with the process. It is what the policy tests construct --
+     * they assert about tiers and refusals, not about durability -- and it is never what the
+     * app constructs.
+     */
+    constructor(kek: KekProvider) : this(kek, PersistentCustodyBacking.inMemoryForTest())
 
-    private val entries = LinkedHashMap<String, Entry>()
+    private val entries = LinkedHashMap(backing.load())
 
     /**
      * Seals [plaintext] under [tier]'s KEK and keeps only the blob. The caller's array is
      * neither retained nor cleared -- it belongs to the caller, and clearing it here would
      * make `put` surprising for a caller that still needs the value.
+     *
+     * THE BACKING IS WRITTEN FIRST. An entry this object believes it holds and the backing
+     * does not is the whole defect in miniature: it works until the process dies.
      */
     fun put(name: String, tier: KeyTier, plaintext: ByteArray) {
-        entries[name] = Entry(tier, kek.wrap(tier, plaintext))
+        val record = SealedRecord(tier, kek.wrap(tier, plaintext))
+        backing.save(name, record)
+        entries[name] = record
     }
 
     /** @throws KeyCustodyException when the tier's KEK will not authorize the unwrap. */
@@ -38,17 +61,30 @@ class SealedStore(private val kek: KekProvider) {
 
     fun tierOf(name: String): KeyTier = entry(name).tier
 
-    /** The persisted bytes, exactly as they sit on disk. */
+    /** The persisted bytes, exactly as the backing holds them. */
     fun rawBytes(name: String): ByteArray = entry(name).blob.copyOf()
 
     fun names(): Set<String> = entries.keys.toSet()
 
     fun remove(name: String) {
         entries.remove(name)
+        backing.delete(name)
     }
 
-    private fun entry(name: String): Entry =
+    private fun entry(name: String): SealedRecord =
         entries[name] ?: throw KeyCustodyException.KeystoreKeyMissing(name)
+
+    companion object {
+        /**
+         * The production factory: a store over a backing that outlives the process.
+         *
+         * It is `openOver` rather than a second `open` because the instance method of that
+         * name opens an ENTRY. Two `open`s one line apart, meaning "open the store" and "open
+         * this blob", is a name that gets misread once by everyone.
+         */
+        fun openOver(kek: KekProvider, backing: PersistentCustodyBacking): SealedStore =
+            SealedStore(kek, backing)
+    }
 }
 
 /**
