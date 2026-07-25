@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -54,21 +55,95 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	mu     sync.Mutex // serialises one request/response exchange
+
+	// frames is non-nil on a PUMPED connection: a background reader owns every
+	// socket read, so the connection's death is observed while the caller is
+	// idle (see Done). A raw Conn reads inline, which is what the adversarial
+	// framing paths want.
+	frames chan pumpedFrame
+	// pending counts requests written whose reply has not been consumed. It is
+	// non-zero only after a request abandoned its reply (timeout/cancel): the
+	// next request discards that many replies first, so an abandoned exchange
+	// can never hand its answer to a later, unrelated one.
+	pending int
+
+	done      chan struct{}
+	doneOnce  sync.Once
+	closeOnce sync.Once
+	closeErr  error
 }
 
-func dialConn(ctx context.Context, url string) (*Conn, error) {
-	ws, _, err := websocket.Dial(ctx, url, nil)
+// pumpedFrame is one decoded frame, or the decode failure that replaced it.
+type pumpedFrame struct {
+	tag     MsgType
+	payload []byte
+	err     error
+}
+
+// errConnClosed reports a connection that died underneath a caller. The
+// underlying network error is not propagated: every caller's response is the
+// same (the connection is gone), and a resilient one reconnects.
+var errConnClosed = errors.New("relay: connection closed")
+
+// dialConn opens one websocket. hc is the dial client a security policy built
+// (nil for the policy-free paths, which take the websocket package's default).
+func dialConn(ctx context.Context, url string, hc *http.Client, pumped bool) (*Conn, error) {
+	var opts *websocket.DialOptions
+	if hc != nil {
+		opts = &websocket.DialOptions{HTTPClient: hc}
+	}
+	ws, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return nil, err
 	}
 	ws.SetReadLimit(MaxFrame + 64)
 	cctx, cancel := context.WithCancel(context.Background())
-	return &Conn{ws: ws, ctx: cctx, cancel: cancel}, nil
+	c := &Conn{ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
+	if pumped {
+		c.frames = make(chan pumpedFrame, 1)
+		go c.pump()
+	}
+	return c, nil
 }
+
+// pump owns every read on a pumped connection and exits (closing Done) as soon
+// as the socket dies, which is what makes an idle drop observable.
+func (c *Conn) pump() {
+	defer c.markDone()
+	for {
+		mt, data, err := c.ws.Read(c.ctx)
+		if err != nil {
+			return
+		}
+		var f pumpedFrame
+		if mt != websocket.MessageBinary {
+			f.err = fmt.Errorf("relay: unexpected websocket message type %v", mt)
+		} else {
+			f.tag, f.payload, f.err = ReadFrame(bytes.NewReader(data))
+		}
+		select {
+		case c.frames <- f:
+		case <-c.ctx.Done():
+			return
+		}
+		if f.err != nil {
+			return
+		}
+	}
+}
+
+func (c *Conn) markDone() { c.doneOnce.Do(func() { close(c.done) }) }
+
+// Done is closed when the connection is no longer usable. On a pumped
+// connection (Dial, DialSecure) that happens as soon as the peer or the network
+// drops it; on a raw one it happens at Close.
+func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // DialRaw opens an unauthenticated framed connection (rendezvous + adversarial
 // framing use it).
-func DialRaw(ctx context.Context, url string) (*Conn, error) { return dialConn(ctx, url) }
+func DialRaw(ctx context.Context, url string) (*Conn, error) {
+	return dialConn(ctx, url, nil, false)
+}
 
 func (c *Conn) writeFrame(ctx context.Context, tag MsgType, payload []byte) error {
 	var buf bytes.Buffer
@@ -79,14 +154,31 @@ func (c *Conn) writeFrame(ctx context.Context, tag MsgType, payload []byte) erro
 }
 
 func (c *Conn) readFrame(ctx context.Context) (MsgType, []byte, error) {
-	mt, data, err := c.ws.Read(ctx)
-	if err != nil {
-		return 0, nil, err
+	if c.frames == nil {
+		mt, data, err := c.ws.Read(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		if mt != websocket.MessageBinary {
+			return 0, nil, fmt.Errorf("relay: unexpected websocket message type %v", mt)
+		}
+		return ReadFrame(bytes.NewReader(data))
 	}
-	if mt != websocket.MessageBinary {
-		return 0, nil, fmt.Errorf("relay: unexpected websocket message type %v", mt)
+	// A frame already delivered by the pump wins over a concurrently-observed
+	// death, so the last reply before a drop is not discarded.
+	select {
+	case f := <-c.frames:
+		return f.tag, f.payload, f.err
+	default:
 	}
-	return ReadFrame(bytes.NewReader(data))
+	select {
+	case f := <-c.frames:
+		return f.tag, f.payload, f.err
+	case <-c.done:
+		return 0, nil, errConnClosed
+	case <-ctx.Done():
+		return 0, nil, ctx.Err()
+	}
 }
 
 // WriteMsg sends one raw framed message using the connection's own context.
@@ -97,14 +189,23 @@ func (c *Conn) WriteMsg(tag MsgType, payload []byte) error {
 // ReadMsg receives one raw framed message using the connection's own context.
 func (c *Conn) ReadMsg() (MsgType, []byte, error) { return c.readFrame(c.ctx) }
 
-// Close severs the connection.
+// Close severs the connection. It is idempotent.
 func (c *Conn) Close() error {
-	c.cancel()
-	return c.ws.Close(websocket.StatusNormalClosure, "")
+	c.closeOnce.Do(func() {
+		c.cancel()
+		c.closeErr = c.ws.Close(websocket.StatusNormalClosure, "")
+		c.markDone()
+	})
+	return c.closeErr
 }
 
 // roundtrip writes one request frame and reads exactly one reply, mapping an
 // r_error reply to its sentinel error.
+//
+// A caller that abandons its reply (context deadline or cancellation) leaves the
+// exchange outstanding rather than tearing the connection down; the next caller
+// discards the replies owed to those abandoned requests before claiming its own,
+// so a slow answer is never mistaken for the answer to a later question.
 func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMessage, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -115,14 +216,21 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 	if err := c.writeFrame(ctx, tag, body); err != nil {
 		return nil, err
 	}
-	rtag, payload, err := c.readFrame(ctx)
-	if err != nil {
-		return nil, err
+	c.pending++
+	for {
+		rtag, payload, err := c.readFrame(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.pending--
+		if c.pending > 0 {
+			continue // owed to an earlier request that gave up on its reply
+		}
+		if rtag == MsgError {
+			return nil, decodeError(payload)
+		}
+		return json.RawMessage(payload), nil
 	}
-	if rtag == MsgError {
-		return nil, decodeError(payload)
-	}
-	return json.RawMessage(payload), nil
 }
 
 // control issues a generic MsgRelay control op with a JSON body.
@@ -214,11 +322,38 @@ type Client struct {
 // Dial opens a connection and completes the Ed25519 signed-challenge handshake,
 // binding the connection to RoutingID(auth.RelayAuthPub). A revoked key, a rate
 // refusal, or a bad signature returns a non-nil error and no Client.
+//
+// It applies no transport-security policy: the URL is dialed as given. Callers
+// that reach a relay over an untrusted network use DialSecure.
 func Dial(ctx context.Context, url string, auth ClientAuth) (*Client, error) {
-	conn, err := dialConn(ctx, url)
+	conn, err := dialConn(ctx, url, nil, true)
 	if err != nil {
 		return nil, err
 	}
+	return authenticate(ctx, conn, auth)
+}
+
+// DialSecure is Dial under an explicit transport-security policy (PB-NET-2):
+// TLS verified against the platform's stated trust roots by default, a pinned
+// certificate as a per-connection opt-in for a self-hosted relay, and cleartext
+// refused. The policy is decided before any packet is sent, so a refusal returns
+// ErrCleartextRefused/ErrPinMismatch without a connection attempt and never
+// yields a Client. It is re-decided on every redirect hop, so a relay cannot
+// answer the upgrade with a 302 into cleartext.
+func DialSecure(ctx context.Context, url string, auth ClientAuth, sec Security) (*Client, error) {
+	cfg, err := sec.resolve(url)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := dialConn(ctx, url, sec.httpClient(cfg), true)
+	if err != nil {
+		return nil, err
+	}
+	return authenticate(ctx, conn, auth)
+}
+
+// authenticate runs the signed-challenge handshake over an open connection.
+func authenticate(ctx context.Context, conn *Conn, auth ClientAuth) (*Client, error) {
 	rid := RoutingID(auth.RelayAuthPub)
 
 	resp, err := conn.control(ctx, "auth_init", map[string]any{"relay_auth_pub": []byte(auth.RelayAuthPub)})
@@ -253,7 +388,11 @@ func Dial(ctx context.Context, url string, auth ClientAuth) (*Client, error) {
 // RoutingID returns the connection's bound routing id.
 func (c *Client) RoutingID() string { return c.rid }
 
-// Close severs the connection.
+// Done is closed when the underlying connection dies, so a caller can notice a
+// drop without issuing a request.
+func (c *Client) Done() <-chan struct{} { return c.conn.Done() }
+
+// Close severs the connection. It is idempotent.
 func (c *Client) Close() error { return c.conn.Close() }
 
 // AuthorizeDevice pairs this machine with a device's relay-auth key, authorizing
