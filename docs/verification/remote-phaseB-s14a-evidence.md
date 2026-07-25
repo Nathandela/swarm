@@ -150,19 +150,32 @@ tier locked) and `TestS14A_APurgeIsRecoverableNotABrick`.
   it was not inventoried; **fewer** means S14 landed the facade verb, PB-KEY-9 is delivered, and both
   this fence and the progress doc's disclosure section are stale. The failure message names that doc
   section explicitly, so the S14 author who trips it is pointed at the stale "not delivered" record
-  rather than just told a number moved. It matches any `*ast.CallExpr` anywhere, so it does not share
-  the other fence's `var`-form evasion gap — there is no legitimate call here to bound the match to,
-  so the broad match costs nothing.
+  rather than just told a number moved. It matches any `*ast.CallExpr` anywhere rather than only
+  assignment and expression statements, so it closes the other fence's **`var`-initializer** gap —
+  there is no legitimate call here to bound the match to, so the broad match costs nothing.
+
+  *Corrected by re-review*: this is NOT gap-free, and an earlier draft of this file overstated it.
+  The matcher keys on a call whose function is **named** `InsecureCleartextSealer`, so binding it as
+  a function **value** evades the fence entirely — `var mint = phonecore.InsecureCleartextSealer`
+  followed by `mint()` in a third package stays green, mutation-confirmed. The honest claim is "no
+  var-initializer gap", not "no evasion gap".
 
   *Granularity, stated precisely*: there are two **files** but **four** call expressions —
   `mobile/app.go:119` and `:120` (one sealer per tier) and two in the conformance harness. The fence
   is at file granularity deliberately: a third call inside an already-listed file is not new
   exposure, a third file is, and a count-of-expressions fence would fire spuriously on a reformat.
 - **With the content tier LOCKED the three content publics cannot be checked**, because the material
-  to check against is exactly what the lock withholds. Not exploitable on the pairing path today —
-  `mobile/pairing.go` calls `NoiseStatic()` and returns on error *before* building the payload that
-  reads the other publics — but that is an **ordering dependency, not a structural guarantee**, and
-  it is unfenced. S14 item.
+  to check against is exactly what the lock withholds. The pairing ordering holds — re-review
+  verified that `mobile/pairing.go:91-96` hoists `NoiseStatic()` and returns on error *before* the
+  literal at `:97-108` that reads the other publics, and `phonecore/command.go:45-50` is safe the
+  same way — but that is an **ordering dependency, not a structural guarantee**, and it is unfenced.
+
+  *Corrected by re-review*: pairing is **not the only reader**, so the earlier framing here was
+  incomplete. `mobile/app.go:799-801` `deviceID()` reads `CommandSigningPublic()` with **no**
+  preceding content unseal, and `mobile/commands.go:129-134` `RevokeThisDevice` consumes it with the
+  tier locked. Impact is low today — the value lands in a durable refusal record rather than on the
+  wire — but "every content operation refuses in that state anyway" is false as stated: the errorless
+  accessors are consumed by callers that are neither pairing nor content operations. S14 item.
 - **The call-site fence has an evasion gap**: it inspects only assignment and expression statements,
   so `var sig, _ = ks.SignRelayAuth(...)` inside a function passes. Recorded in the fence's own
   comment. "Sign" was deliberately NOT added to the op set — it would match
