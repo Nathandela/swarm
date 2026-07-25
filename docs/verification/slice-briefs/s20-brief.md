@@ -38,7 +38,13 @@ Check what exists before writing anything:
   exists and runs green today. Verify it actually enforces every clause, including the **negative
   controls** (a duplicate owner, a wildcard, a cycle, an orphan slice). If any clause is unenforced,
   that is the finding.
-- **PB-DOC-2** (a verification file mapping every PB-* id to evidence) —
+- **PB-DOC-2 has TWO halves and only one is done.** The first — **"Phase B exit criteria in
+  `implementation-goals.md`"** — is **NOT done**: that file has global goals, per-epic definitions of
+  done and the orchestration protocol, and **no Phase B section at all** (grep for "Phase B" or "PB-"
+  returns nothing). Write it BEFORE the final committee convenes, not in response to it: the
+  committee validates production readiness against stated criteria, and without them it must infer
+  the bar from 143 requirement rows — which is the inference the criteria exist to remove. The
+  second half —
   `docs/verification/remote-phaseB-traceability.md` exists and is **generated** by
   `scripts/phaseb-traceability.py`. Check it covers what the requirement asks. Note it has already
   caught one requirement reported as shipped whose owning slice had shipped while the requirement
