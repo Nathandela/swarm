@@ -260,6 +260,17 @@ The third was not reported by the implementer; it was found while fixing the oth
 fixing it I mutated the Kotlin to call a content verb from the wake callback, watched it report the
 violation, and reverted** -- because a guard just restored from "cannot fail" must be shown to fail.
 
+**A second lesson, in the implementer's own words, and it is the sharper one.** It *did* name the
+forbidden-verb map -- but filed it as a **consequence** of the casing bug rather than as the finding,
+so it arrived third in a list rather than first. Its correction:
+
+> "Rank a broken guard by what it was guarding, not by which root cause it shares."
+
+Two of those three assertions were wiring conventions; one carried the requirement's security
+property. Sharing a root cause made them look like one finding of equal parts, and a reader
+triaging by root cause would have fixed all three and never noticed that one of them mattered
+differently from the other two.
+
 **The generalisable lesson**: when a fence matches a NAME across a language boundary, the boundary
 may rewrite the name. A cross-language fence should assert on both spellings or on the resolved
 symbol, never on the source-language spelling alone -- and one instance of that mistake in a file
