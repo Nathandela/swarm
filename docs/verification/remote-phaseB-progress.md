@@ -57,6 +57,26 @@ record this section exists to prevent. Verified by running the probe from a tran
 (S6b RED author's finding, independently reproduced). Harnesses MUST use `sysctl.proc_translated`
 (plus `hw.optional.arm64` / `machdep.cpu.brand_string` for the host's real identity).
 
+**AND THE PROBE MUST RUN IN-PROCESS.** *Where* you run it matters as much as which sysctl you
+read, and this has now caught two reviewers in opposite directions. Measured on this host:
+
+```
+$ sysctl -n sysctl.proc_translated                 # from the SHELL
+0                                                  # the shell is NATIVE -> reports "not translated"
+
+$ /usr/local/bin/go run probe.go                   # from inside a process the Go toolchain spawned
+GOARCH=amd64 proc_translated="1"                   # the truth
+
+$ file /usr/local/bin/go
+/usr/local/bin/go: Mach-O 64-bit executable x86_64  # -> Cellar/go/1.26.1
+```
+
+One reviewer ran it from bash, got `0`, and reported the toolchain as native arm64. That is the
+same class of error as the `uname` trap, inverted: the shell is native, the Go process is not.
+A latency harness must read `proc_translated` **from within the test binary** (e.g.
+`unix.SysctlUint32("sysctl.proc_translated")` in-process), never by shelling out from a
+native parent. Anything else records the parent's personality, not the measurement's.
+
 The machine is Apple Silicon but `/usr/local/bin/go` is an **x86_64 binary running under
 Rosetta 2**. Consequences, in order of how easy they are to get wrong:
 
@@ -248,6 +268,14 @@ uses for the push preference.
   deliberately out of S7b's scope. Closing it is blocked on the PB-TIME-2 reply-seal gap above
   (`SealControlReply` stamps no `IssuedAt`), so the two must be done together or the phone
   bricks on its own command replies.
+- **Pre-existing `gofmt` drift, NOT gated and NOT introduced by Phase B**: 10 files are listed by
+  `gofmt -l`, including two production files (`internal/remotegw/command_in.go`,
+  `internal/remotegw/terminal_watcher.go`); the rest are older test files under
+  `internal/protocol`, `internal/remote/device`, `internal/remote/pairing`, `internal/skeleton`.
+  All are unmodified since HEAD. GG-4's gate is build/vet/test/`golangci-lint`, and the `gofmt`
+  linter is not enabled in the golangci config, so this fails no gate today — `golangci-lint run
+  ./...` is clean apart from slice S6b's declared build-RED. Recorded so the final audit does not
+  mistake it for Phase B breakage; cleaning it is unrelated hygiene and deliberately out of scope.
 - **Known pre-existing flake**: `TestRemotePeek_LargeGridClippedUnderMaxFrame` (i/o timeout
   under full-suite load; passes isolated). Predates Phase B.
 - The final full-committee audit against all 139 requirements is still owed, per the goal.
