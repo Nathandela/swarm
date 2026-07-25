@@ -486,6 +486,12 @@ func TestPBSTATE2_TypingSurvivesAProcessDeathThroughTheFacade(t *testing.T) {
 //
 // The durable failure must still be REPORTED: the sealed blobs at rest genuinely did survive
 // and the caller has to know that.
+//
+// THE JOURNAL ASSERTION IS THE ONE THAT MEASURES THE FACADE. Peek and Roster read the CORE's
+// caches, which Core.PurgeKeys clears unconditionally one layer down, so both of them pass
+// with App.PurgeKeys reverted to its early return -- this test used to say nothing at all
+// about the fix it is named for. a.journal and a.needs are the facade's OWN decrypted caches
+// and nothing below the facade can clear them; ReadJournal is their only reader.
 func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T) {
 	h := newHarness(t)
 	h.PushReconcile()
@@ -501,6 +507,16 @@ func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T)
 			return false
 		}
 		n, err := list.Count()
+		return err == nil && n > 0
+	})
+	// The facade's own journal log must actually hold something, or the assertion below
+	// passes on an empty cache no matter what the purge does.
+	eventually(t, "the journal read model never saw the record", func() bool {
+		page, err := h.App.ReadJournal(0, 0)
+		if err != nil {
+			return false
+		}
+		n, err := page.Count()
 		return err == nil && n > 0
 	})
 
@@ -531,5 +547,15 @@ func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T)
 			t.Errorf("PB-KEY-7: %d decrypted journal session(s) survived a lock purge whose durable "+
 				"write failed", n)
 		}
+	}
+	// The facade's OWN cache: a.journal, which only App.PurgeKeys can clear.
+	page, perr := h.App.ReadJournal(0, 0)
+	if perr != nil {
+		t.Fatalf("ReadJournal after the purge: %v", perr)
+	}
+	if n, cerr := page.Count(); cerr != nil || n > 0 {
+		t.Errorf("PB-KEY-7: %d decrypted journal entry(s) survived a lock purge whose durable write "+
+			"failed (%v). App.PurgeKeys returned on the durable error before clearing a.journal, so "+
+			"the app keeps rendering already-decrypted session content with the screen locked", n, err)
 	}
 }

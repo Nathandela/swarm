@@ -67,6 +67,24 @@ type Core struct {
 	mu     sync.Mutex
 	st     State
 	grants *crypto.GrantReceiver
+
+	// rebindMu serialises ONE rebind's read of the durable state with its application to the
+	// derived components. mu cannot do that job: it is released between the two, and every
+	// component rebind feeds takes its own lock, so holding mu across them would put mu above
+	// locks that callers already take below it.
+	//
+	// Without it the two halves of two rebinds interleave, and PB-KEY-7 is the direction that
+	// matters: a Save whose rebind read PRE-purge state applies after the purge's, leaving
+	// MailboxRouter bound to the content key the purge destroyed -- after PurgeKeys has
+	// returned and every writer has finished, with the screen locked. That is the memory half
+	// PB-KEY-7 lists FIRST, and it is the same race round 3 closed on the durable side; the
+	// argument is the one that fix already made, because PurgeKeys arrives from an Android
+	// lifecycle callback on another thread.
+	//
+	// LOCK ORDER is rebindMu -> mu, never the reverse. rebind is only ever entered with mu
+	// RELEASED (PurgeKeys unlocks before it, Save's persist has returned), and no path holding
+	// mu takes rebindMu -- which is what makes the ordering total and the deadlock impossible.
+	rebindMu sync.Mutex
 }
 
 // Resume opens the durable state and rebuilds every resume-critical component from it. It
@@ -193,9 +211,24 @@ func (c *Core) persistLocked(st State) error {
 	return nil
 }
 
-// rebind rebuilds the derived components from the current durable state.
+// testHookRebindRead, when non-nil, is invoked inside rebind once the durable state has been
+// read and before any derived component has been touched. That gap is the whole subject of
+// the ordering rule above, and nothing observable from outside the package can be parked in
+// it: the seam exists so the interleaving is DRIVEN rather than raced. Always nil in
+// production (mirroring internal/shim's testHookAfterSignalArm).
+var testHookRebindRead func()
+
+// rebind rebuilds the derived components from the current durable state. The state is read
+// and applied under rebindMu so no other rebind can land between the two -- see the field's
+// own comment for why that ordering is PB-KEY-7's, and why it cannot deadlock.
 func (c *Core) rebind() {
+	c.rebindMu.Lock()
+	defer c.rebindMu.Unlock()
+
 	st := c.State()
+	if testHookRebindRead != nil {
+		testHookRebindRead()
+	}
 
 	c.mu.Lock()
 	if st.GrantEpoch != 0 || st.GrantSeq != 0 {

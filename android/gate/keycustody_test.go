@@ -145,7 +145,20 @@ func TestPBSEC1_DeviceRoleKeysAreNotPersistedInTheClear(t *testing.T) {
 		{"CommandSign", contentTier[64:96], "content"},
 		{"RelayAuth", wakeTier, "wake"},
 	} {
-		if bytes.Contains(body, role.bytes) {
+		// BOTH forms, as the sibling epoch-key test already does: device.key is JSON, so an
+		// unwrapped copy dropped beside the container travels base64 and the raw needle never
+		// appears. Without this arm a sealDeviceKeys that also wrote the four privates into a
+		// second field passed this test with every one of them recoverable in the clear.
+		//
+		// WHAT THIS FENCE CANNOT SEE, recorded rather than chased: base64 encodes three input
+		// bytes at a time, so a 32-byte needle's own encoding only appears inside a LONGER
+		// field's encoding when the needle starts at a 3-byte-aligned offset and runs to the
+		// end. A leak that buried this material mid-field at an unaligned offset would slip
+		// past both arms. The positive half -- that the material went through an injected
+		// sealer -- is what covers that, and it lives in phonecore's in-package mirror
+		// (TestS14A_ResumeSealsBothTheDeviceKeysAndTheEpochKeys); this package holds no KEK
+		// but the ones it makes here, so it cannot assert it.
+		if bytes.Contains(body, role.bytes) || bytes.Contains(body, []byte(base64Std(role.bytes))) {
 			t.Errorf("PB-SEC-1: the %s private key (PB-KEY-5 %s tier) sits verbatim in "+
 				"%s. At rest it must be sealed under an Android-Keystore-backed KEK; "+
 				"0600 is a filesystem permission, not a seal",

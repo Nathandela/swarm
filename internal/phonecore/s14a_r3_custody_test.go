@@ -29,6 +29,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -147,6 +148,21 @@ func TestS14A_R3_APurgeClearsMemoryEvenWhenTheDurableWriteFails(t *testing.T) {
 	if core.State().Keys.ContentKey != keys.ContentKey {
 		t.Fatalf("fixture: the content key is not live before the purge, so the assertions below " +
 			"would pass vacuously")
+	}
+
+	// Decrypted content for the cache assertion to have something to be about. s14aR2Sealed
+	// populates neither, so without this the "no snapshots, no sessions" check below compares
+	// two empty slices and dropKeyMaterial can stop clearing them both with every
+	// TestS14A_R3_* test still green.
+	seed := core.State()
+	seed.Sessions = []CachedSession{{SessionID: "m/s", Group: status.Group("active"), Present: true}}
+	seed.Snapshots = []Snapshot{{Session: "m/s", Lines: []string{"decrypted terminal content"}, Cols: 80, Rows: 24}}
+	if err := core.Save(seed); err != nil {
+		t.Fatalf("seeding the decrypted caches: %v", err)
+	}
+	if len(core.State().Snapshots) == 0 || len(core.State().Sessions) == 0 {
+		t.Fatal("fixture: the decrypted caches are empty before the purge, so the assertion about " +
+			"them would pass vacuously")
 	}
 
 	s14aR3MakeUnwritable(t, dir)

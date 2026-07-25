@@ -31,9 +31,12 @@ package phonecore
 //	func (*Core) UnresolvedOps() []QueuedOp
 //
 // internal/remote/crypto is FROZEN. Persistence goes AROUND it through the seams it
-// already exposes: KeyStore custody is crypto.NewFileKeyStore / OpenFileKeyStore, the
-// receive high-water is replayed in through MailboxReceiver.SeedHighWater, and the grant
-// watermark through crypto.NewGrantReceiverAt.
+// already exposes: the receive high-water is replayed in through
+// MailboxReceiver.SeedHighWater and the grant watermark through crypto.NewGrantReceiverAt.
+// KeyStore custody was crypto.NewFileKeyStore / OpenFileKeyStore when this was written; S14a
+// replaced both with a sealed container this package owns (keycustody.go), and the raw
+// pre-seam layout those two produce is now REFUSED rather than adopted -- a layout with no
+// public half cannot be authenticated (see TestS14A_R3_ARawDeviceKeyBlobIsRefusedNotAdopted).
 //
 // NOTE ON Resume's CONTRACT, deliberately pinned by omission: there is no Close(). An
 // Android process is SIGKILLed, never shut down cleanly (PB-STATE-2), so durability may
@@ -160,6 +163,11 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	// disk. purgeGen counts the lock purges THIS process has taken, and a restored one would
 	// make a fresh process refuse the first Save of every caller holding a legitimate
 	// snapshot.
+	//
+	// THIS FIXTURE NEVER PURGES, so the stamp is zero on both sides here whatever custody
+	// does: the check below states the property, it does not measure it. The measurement is
+	// TestS14A_R4_ThePurgeStampDoesNotSurviveARestart, which purges first and then asserts
+	// both halves -- the counter, and the Save that must still land once it is gone.
 	if got.purgeGen != 0 {
 		t.Errorf("State.purgeGen after restart = %d; unexported custody bookkeeping must not be "+
 			"persisted -- if it ever is, it belongs in the durable schema and in fullState()", got.purgeGen)

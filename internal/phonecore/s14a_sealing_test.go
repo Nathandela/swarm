@@ -197,6 +197,15 @@ func s14aStateDirBytes(t *testing.T, dir string) map[string][]byte {
 
 // s14aFindMaterial reports the files in which needle appears verbatim, raw or base64 (JSON
 // encodes []byte as base64, so both forms are searched rather than assuming one).
+//
+// WHAT IT CANNOT SEE, recorded rather than chased: base64 encodes three input bytes at a
+// time, so a 32-byte needle's own encoding appears inside a LONGER field's encoding only when
+// the needle starts at a 3-byte-aligned offset and runs to the end of that field. Material
+// buried mid-field at an unaligned offset slips past both arms -- dropping the raw 96-byte
+// content tier as one JSON field is enough to do it. Absence of bytes is therefore never the
+// whole assertion here: the tests that matter pair it with the POSITIVE half, that the
+// material was handed to an injected sealer (s14aSealedMaterial), which no re-encoding
+// satisfies.
 func s14aFindMaterial(files map[string][]byte, needle []byte) []string {
 	var hits []string
 	b64 := []byte(base64.StdEncoding.EncodeToString(needle))
