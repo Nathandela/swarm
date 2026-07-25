@@ -553,6 +553,21 @@ precisely the shape that let the S11 B2 defect ship in the first place.
 end-to-end. Until then PB-NET-5's evidence should be read as "phonecore -> PTY", not "phone -> PTY",
 and no one should conclude from it that a facade-layer regression would have been caught.
 
+## AFTER ANY CHERRY-PICK, RUN THE BUILD -- a clean textual merge is not a clean semantic one
+
+S10 and S14 were implemented in parallel and cherry-picked with **zero textual conflicts**, because
+they touched different files. The build then failed: S14 changed `swarmmobile.NewApp` to take a
+second argument, and S10 had added a new test calling the old signature. Git cannot see that.
+
+The generalisable form, in the S14 implementer's own words: it reported the conflict it could **see**
+(the one file both slices edited) rather than the class of conflict it had **created**. **An arity or
+signature change makes every caller a merge hazard regardless of which file it lives in**, including
+callers added after the surveying grep was run.
+
+So: `go build ./...` after every cherry-pick is **mandatory, not advisory**, and an agent whose change
+alters a shared signature should say so as a class rather than enumerating today's call sites. This
+cost one commit to fix (`c7acd7b`) and would have cost far more had the parallel slices been larger.
+
 ## Carried from the S11 round-2 review (NOT in any remediation brief -- deliberately deferred)
 
 The three blockers (B-1 daemon-restart lease brick, B-2 input seq inversion, B-3 the spelling-fence)
