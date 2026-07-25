@@ -86,6 +86,29 @@ Two defect classes have now recurred often enough to be worth asking about on ev
    self-healing conditions (a regenerated machine identity, a reset relay mailbox) into silent
    permanent bricks. Ask what used to recover on restart and no longer does.
 
+### Six orchestration errors caught by agents pushing back
+
+Not defects in the code -- defects in the INSTRUCTIONS the orchestrator gave. Each was refused
+with proof rather than implemented:
+
+1. A reservation-style seq seam inbound -- would have silently censored the phone's next 64
+   legitimate frames, take_control and kill included (reservation is a sender-side technique;
+   inbound the phone owns the seq space).
+2. Enabling the bounded-age check before the phone stamps IssuedAt -- would have computed an
+   age of ~56 years and rejected every legitimate keystroke.
+3. "A failed append never consumes a seq" -- unsafe, because the relay commits before replying,
+   so the same seq would carry two different sealed envelopes and the phone would silently drop
+   one.
+4. A rollback anchor naming three authorities -- no inbound frame could carry any of them, so
+   "fail closed until reconciled" would have been permanent.
+5. Excluding PB-NET-5 from the slice the manifest assigned it to -- the requirement would have
+   gone unimplemented while its evidence file never mentioned it.
+6. Sourcing the machine id from the identity module -- it exposes only a hostname and routing
+   id, neither of which is the endpoint id the phone sees; a plausible-but-wrong value HIDES
+   the brick rather than exposing it.
+
+A compliant swarm implements all six. The independence between roles is what caught them.
+
 Also standing: an agent that says "the test is wrong" is right about half the time here, and
 has been right every time it PROVED it (the QR no-op substitution, the identical httptest
 certificates, the unsatisfiable timing assertion, the plist regex). Verify the proof, never the
