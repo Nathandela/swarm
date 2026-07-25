@@ -428,7 +428,7 @@ The three blockers (B-1 daemon-restart lease brick, B-2 input seq inversion, B-3
 are in remediation. These are the recorded residuals, each with an owner, so none of them is
 rediscovered later as if new:
 
-- **The clock verdict never clears and has no pull surface.** `mobile/relay.go:332`
+- **The clock verdict never clears and has no pull surface.** `mobile/relay.go:340`
   (`if !changed || msg == "" { return }`) emits nothing on the transition back to healthy, and the
   golden has no clock verb. A screen opened after the event, or after the user fixes the clock,
   cannot learn the current verdict. This is the same latch the round-1 B4 fix removed from the
@@ -545,6 +545,11 @@ record of what was intended rather than what shipped — standing class (ii), ap
   - `mobile/conformance TestPBBIND6_SlowCallbackDoesNotStallTheCore` (confirmed failing identically
     at the parent commit)
   - `internal/tui TestFirstPaintGate_RealDaemon_FiftySessions_P95`
+  - `internal/skeleton` and `internal/protocol TestFix_SupersedeReAttachRealShim` — the latter
+    spawns real shim processes, so it is the most load-sensitive thing in the repo
+  - `internal/shim TestSocket_AttachDeliversSnapshot` — attributed with a dependency proof rather
+    than assumed: `go list -deps ./internal/shim` has **zero** references to `phonecore` or
+    `swarm/mobile`, so the phone work cannot reach it
   - `mobile/conformance TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT` — a **cleanup** failure
     (`TempDir RemoveAll: directory not empty`) from harness goroutines writing during teardown; the
     test body passes. Attributed properly rather than assumed: reproduced identically in a
