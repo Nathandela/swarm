@@ -117,6 +117,30 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
 tasks.matching { it.name.startsWith("process") && it.name.endsWith("UnitTestJavaRes") }
     .configureEach { dependsOn(policyTestResources) }
 
+// ---------------------------------------------------------------------------
+// PB-SEC-14: dependency LOCKING. The other half, checksum VERIFICATION, lives in
+// android/gradle/verification-metadata.xml.
+//
+// The two are not interchangeable and neither implies the other. Locking pins WHICH modules
+// resolve, so a transitive version cannot drift between builds; verification pins WHAT BYTES
+// those coordinates carry. Locking alone pins a name to a name. Verification alone leaves the
+// set of names free to change. The requirement names both.
+//
+// It matters here more than on an ordinary app: the module links a native .so that holds the
+// user's session keys, and firebase-messaging drags in the Play Services client libraries, so
+// the resolved closure is an order of magnitude larger than the three declared dependencies.
+//
+// Regenerate after any dependency change with, from android/:
+//     ./gradlew :app:dependencies --write-locks
+//     ./gradlew --write-verification-metadata sha256 help
+// and REVIEW THE DIFF. The regeneration step is the point at which a changed artifact has to
+// be justified by a person.
+// ---------------------------------------------------------------------------
+
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 android {
     namespace = "dev.swarm.phone"
     compileSdk = pinnedApiLevel("SWARM_ANDROID_COMPILE_SDK")
@@ -141,9 +165,33 @@ android {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // PB-SEC-13: what a release process exposes to anyone holding the handset.
+    //
+    // Both attributes are STATED rather than inherited, for the reason this file already
+    // states isMinifyEnabled beside the signing config and the manifest states
+    // android:exported on a service: AGP's default is not a decision, and nothing fails when
+    // a later edit changes it.
+    //
+    // HEAP DUMPS. isProfileable is a SEPARATE attribute from isDebuggable and is not implied
+    // by it: `<profileable android:shell="true"/>` grants shell-side Perfetto and heap-dump
+    // access on Android 10+, so an app that is correctly non-debuggable and quietly
+    // profileable ships exactly the exposure this requirement names. What is in that heap is
+    // the unwrapped content key while the screen is unlocked, decrypted session text and the
+    // typed command line.
+    //
+    // CRASH REPORTS. This app ships NO crash reporter (PB-SEC-8 forbids one and
+    // android/dependency-inventory.tsv records the absence), so an uncaught exception
+    // produces a system tombstone on the device and uploads nothing anywhere. That is a
+    // deliberate posture and the opposite of most Android projects': a reporter would
+    // exfiltrate stack traces naming session ids from an app whose whole threat model is a
+    // device someone else may be holding.
+    // -----------------------------------------------------------------------
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            isDebuggable = false
+            isProfileable = false
             signingConfig = signingConfigs.getByName("release")
         }
     }

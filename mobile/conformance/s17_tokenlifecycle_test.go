@@ -24,6 +24,7 @@ package conformance_test
 // 13 and nothing here claims any part of it.
 
 import (
+	"strings"
 	"testing"
 
 	swarmmobile "github.com/Nathandela/swarm/mobile"
@@ -380,6 +381,20 @@ func TestS17_ReconnectingAfterADeletionDoesNotResurrectTheToken(t *testing.T) {
 // phone that relies on the relay to clean up has no deletion on revoke at all if the revoke is
 // issued while the relay is unreachable, and holds a token in durable state that it will
 // re-register on the next connection.
+//
+// THE CALL NOW REFUSES ON THIS RIG, AND THE REFUSAL IS ASSERTED RATHER THAN TOLERATED (S18).
+// RevokeThisDevice used to seal nothing at all -- remotegw's opForAction had no arm for
+// device_revoke, so the verb recorded a durable local refusal and returned nil. S18 added the
+// arm, so the verb now rides the ordinary mutating path, which runs PB-SYNC-7's fail-closed
+// gate: this rig's phone has never received a reconcile record, so the WIRE half is correctly
+// refused with swarm/unreconciled.
+//
+// That makes the test stronger rather than weaker, and it is why the shape is pinned here. The
+// LOCAL half must not be conditional on the machine being reachable or reconciled: an owner
+// pressing revoke on a handset they no longer trust is in exactly the state where the machine
+// cannot be told, and a token left registered there is a provider-visible identifier for a
+// device its owner disowned. So the order inside the verb is load-bearing -- drop the token
+// durably FIRST, attempt the wire half second -- and both halves are asserted below.
 func TestS17_RevokingThisDeviceDeletesItsPushToken(t *testing.T) {
 	r := s17NewRig(t)
 	app := r.StartApp()
@@ -387,15 +402,16 @@ func TestS17_RevokingThisDeviceDeletesItsPushToken(t *testing.T) {
 	if err := app.RegisterPushToken("fcm-token-revoked"); err != nil {
 		t.Fatalf("App.RegisterPushToken: %v", err)
 	}
-	if _, err := app.RevokeThisDevice(); err != nil {
-		t.Fatalf("App.RevokeThisDevice: %v", err)
+	_, err := app.RevokeThisDevice()
+	if err == nil {
+		t.Errorf("PB-SYNC-7: RevokeThisDevice returned no error on a phone that has never seen a " +
+			"reconcile record. device_revoke is a mutating op like any other and must fail closed " +
+			"until the machine publishes its rollback authorities")
+	} else if !strings.Contains(err.Error(), swarmmobile.ErrClassUnreconciled) {
+		t.Errorf("PB-SYNC-7: RevokeThisDevice failed with %q, want the %s class. Any other refusal "+
+			"here means the wire half did not reach the gate this test is pinning",
+			err, swarmmobile.ErrClassUnreconciled)
 	}
-
-	summary, err := app.StateSummary()
-	if err != nil {
-		t.Fatalf("App.StateSummary: %v", err)
-	}
-	_ = summary
 
 	r.FCM.Reset()
 	r.Wake("m/s1")

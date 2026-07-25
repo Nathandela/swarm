@@ -113,14 +113,19 @@ func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 // RevokeThisDevice revokes this phone's own pairing (PB-SEC-7). It is the phone's panic
 // action: the kill switch is owner-tier only and this surface can never set it.
 //
-// GAP, recorded in screen_coverage.tsv: device_revoke IS in the signed action set and the
-// daemon serves it, but the gateway's action->op mapping does not carry it, so the
-// correctly-signed command is refused "unsupported command action" one hop short of the
-// daemon -- and a refused action produces NO reply, so the op would never resolve.
-// Sealing it anyway would burn a durable send-seq and hand the panic action back as a
-// success that then hangs forever, which for THIS button is the worst possible shape. So
-// nothing is sealed and the refusal is recorded durably, exactly as Interrupt does. The
-// mapping is owed by the gateway slice.
+// THE GAP THIS VERB WORKED AROUND IS CLOSED (S18). device_revoke was in the signed action set
+// and the daemon served it, but remotegw's opForAction had no arm, so a correctly-signed
+// revoke was refused "unsupported command action" one hop short of the daemon -- and a refused
+// action seals no reply, so the op would never resolve either. Sealing it anyway would have
+// burnt a durable send-seq and handed the panic action back as a success that then hangs
+// forever, so this verb sealed NOTHING and recorded a durable local refusal instead, exactly
+// as Interrupt did before its own resolution. That was right while the mapping was missing and
+// became wrong the moment it landed: the button is on the screen and it would do nothing.
+//
+// So the revoke now rides the ordinary mutating path. opForAction maps it to
+// protocol.OpDeviceRevoke and Gateway.ForwardCommand copies the signed subject into
+// Control.TargetDeviceID, which is where handleDeviceRevoke reads both its authorization
+// subject and the device to remove.
 func (a *App) RevokeThisDevice() (op *Op, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -134,19 +139,20 @@ func (a *App) RevokeThisDevice() (op *Op, err error) {
 	// the next connection dutifully re-registers. Left in place it is a provider-visible
 	// identifier for a device its owner disowned, and a machine that can still wake it.
 	//
-	// It runs FIRST because it is the only half of this verb that works today: the signed
-	// command below has no gateway action->op mapping (see the GAP above), so a revoke that
-	// deleted the token last would do nothing at all on the path that matters. The durable
-	// clear cannot be lost either way -- dropPushToken persists before it speaks to the relay,
-	// so a transport failure leaves the deletion owed and onConnected carries it.
+	// It still runs FIRST, and the reason has changed rather than gone away. A revoke is the
+	// one command whose success DESTROYS the path its own reply would come back on: the daemon
+	// removes the device and rotates the epoch in one transaction, and the gateway severs and
+	// exits. So the local half must be durable before the remote half is attempted, or a
+	// revoke that reaches the machine leaves the token behind on a phone that can no longer be
+	// told anything. dropPushToken persists before it speaks to the relay, so a transport
+	// failure leaves the deletion owed and onConnected carries it.
 	if err = a.dropPushToken(core); err != nil {
 		return nil, err
 	}
-	// The target device id sits in the session position of the signed tuple, so a
-	// self-revoke names this phone; the recorded refusal keeps naming it.
-	return a.refuse(schema.ActionDeviceRevoke, a.deviceID(),
-		"device_revoke has no gateway action->op mapping; the correctly-signed command is refused "+
-			"one hop short of the daemon, and the verb is owed by the gateway slice")
+	// The target device id sits in the SESSION position of the signed tuple -- that tuple has
+	// no separate device field -- so a self-revoke names this phone, and the gateway moves it
+	// to Control.TargetDeviceID on the daemon hop.
+	return a.signedCommand(schema.ActionDeviceRevoke, a.deviceID(), nil, commandBody{})
 }
 
 // interruptByte is Ctrl-C. A PTY in its default ISIG mode turns 0x03 into SIGINT for the
@@ -497,34 +503,15 @@ type sendCtx struct {
 	epoch  uint32
 }
 
-// refuse records a durable, legible refusal for a surface whose wire verb no hop can
-// resolve today, and returns the already-resolved op.
-//
-// It is the shape every such surface must take. Sealing the command instead would burn a
-// durable send-seq on a frame that is dropped one hop later, and issuing the op would
-// raise PendingOpCount for the life of the process -- so the screen would show a button
-// that hangs forever, and every genuinely in-flight op would be hidden behind the ones
-// that can never land.
-func (a *App) refuse(action, session, reason string) (*Op, error) {
-	core, err := a.ready()
-	if err != nil {
-		return nil, err
-	}
-	id, err := newOperationID()
-	if err != nil {
-		return nil, err
-	}
-	if err := core.RecordOutcome(schema.Control{
-		Op:          "error",
-		EndpointID:  core.State().Machine,
-		SessionID:   session,
-		OperationID: id,
-		Error:       reason,
-	}); err != nil {
-		return nil, err
-	}
-	return &Op{Action: action, SessionID: session, OperationID: id}, nil
-}
+// (*App).refuse is GONE, and its absence is the record that this facade has no surface left
+// whose wire verb no hop can resolve. It recorded a durable, already-resolved refusal for such
+// a surface -- the right shape while one existed, because sealing the command instead would
+// burn a durable send-seq on a frame dropped one hop later, and issuing the op would raise
+// PendingOpCount for the life of the process. Its three callers were interrupt (resolved to a
+// keystroke on the live input plane), push_preference (resolved by S12's signed push_prefs)
+// and device_revoke (resolved by S18's opForAction arm). Should a future surface need the
+// shape again, it is in this comment and in git; keeping the helper alive with no caller would
+// only invite a new surface to reach for a local refusal instead of a wire verb.
 
 // commandBody is the optional payload a signed command carries beside its tuple. It is one
 // struct rather than a growing tail of nil parameters: each field is a DIFFERENT sealing

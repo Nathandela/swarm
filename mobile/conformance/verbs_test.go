@@ -13,9 +13,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	swarmmobile "github.com/Nathandela/swarm/mobile"
-
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
@@ -62,28 +61,35 @@ func TestS8_ReleaseControlEndsTheLeaseAndNeverDeletesTheSession(t *testing.T) {
 	}
 }
 
-// TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps.
+// TestS8_TheRevokePanicActionSealsItsSignedCommandAndResolves.
 //
-// ONE element has no device-reachable wire verb (screen_coverage.tsv says so): device_revoke
-// IS in the signed action set and the daemon serves it, but remotegw's opForAction refuses it
-// one hop short of the daemon, and a refused action seals no reply.
+// THIS TEST WAS CORRECTED IN S18 AND THE CORRECTION IS THE POINT, so it is recorded here
+// rather than left as a rewritten file. It used to be
+// TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps, and it pinned a WORKAROUND: at
+// the time, remotegw's opForAction had no arm for device_revoke, so a correctly-signed revoke
+// was refused "unsupported command action" one hop short of the daemon with no reply sealed,
+// and RevokeThisDevice therefore sealed NOTHING and recorded a durable local refusal instead.
+// The old test asserted exactly that: that no device_revoke reached the machine.
 //
-// TWO CASES LEFT THIS TEST WITH SLICE S16 AND THE ASSERTIONS DID NOT MOVE. interrupt and
-// push_preference were both verb-less when this was written and are now wired: an interrupt is
-// a keystroke on the live input plane (PB-APP-3, gated on a confirmed lease and therefore no
-// longer a refusal at all), and SetPushPreference seals the signed push_prefs command S12
-// shipped. Their behaviour is asserted far more strongly by the S16 conformance suite
-// (TestPBAPP3_* and TestPBAPP7_*); keeping them here would assert they are still BROKEN.
-// device_revoke stays, because its gap is real and unchanged.
+// S18 added the arm. The workaround's premise is now false, so the assertion had to move with
+// it: kept as it was, it would have failed the correct implementation and, worse, would have
+// gone on describing the phone's declared panic action (PB-SEC-7) as a surface with no wire
+// verb. This is the third time this shape has come up in Phase B -- interrupt and
+// push_preference were both verb-less when the original test was written and were both wired
+// later -- and the answer each time was to correct the test and say so.
 //
-// The alternatives to a refusal are worse, which is why the shape is pinned:
+// WHAT IS ASSERTED NOW is the property the old one was protecting, on the path that exists:
 //
-//   - an op handed to issue() that no reply can ever resolve raises PendingOpCount for
-//     the life of the process, which makes every REAL pending op invisible;
-//   - a device_revoke that is sealed and appended burns a durable send-seq and returns
-//     nil, so the phone's declared panic action (PB-SEC-7) is a silent no-op dressed up
-//     as success.
-func TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps(t *testing.T) {
+//   - the revoke SEALS its signed command rather than resolving locally, because a panic
+//     action that only writes to the phone's own outcome store does nothing to the machine
+//     holding the pairing;
+//   - it names THIS device: the target sits in the SESSION position of the signed tuple
+//     (that tuple has no separate device field), and the gateway moves it to
+//     Control.TargetDeviceID on the daemon hop, so a mismatch is a revoke of the wrong device;
+//   - it is IN FLIGHT until a reply resolves it, and PendingOpCount returns to its baseline
+//     afterwards. A counter that only rises makes every real in-flight op invisible, which is
+//     precisely what the old shape was avoiding by refusing locally.
+func TestS8_TheRevokePanicActionSealsItsSignedCommandAndResolves(t *testing.T) {
 	h := newHarness(t)
 	h.PushReconcile()
 	eventually(t, "reconcile never adopted", func() bool {
@@ -96,48 +102,57 @@ func TestS8_SurfacesWithNoWireVerbFailVisiblyAndLeakNoPendingOps(t *testing.T) {
 		t.Fatalf("PendingOpCount: %v", err)
 	}
 
-	cases := []struct {
-		name string
-		call func() (*swarmmobile.Op, error)
-	}{
-		{"RevokeThisDevice", func() (*swarmmobile.Op, error) { return h.App.RevokeThisDevice() }},
+	op, err := h.App.RevokeThisDevice()
+	if err != nil {
+		t.Fatalf("RevokeThisDevice: %v", err)
 	}
-	for _, c := range cases {
-		op, err := c.call()
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if op == nil || op.OperationID == "" {
-			t.Fatalf("%s returned no operation id, so its verdict is unclaimable", c.name)
-		}
-		out, err := h.App.Outcome(op.OperationID)
-		if err != nil {
-			t.Fatalf("%s: Outcome: %v", c.name, err)
-		}
-		if !out.Resolved {
-			t.Errorf("%s returned an op no wire verb can ever resolve, and it stays UNRESOLVED. "+
-				"The screen shows a button that hangs forever instead of a legible refusal; "+
-				"Interrupt is the model", c.name)
-		}
-		if out.Message == "" {
-			t.Errorf("%s resolved with no message; the refusal must say WHY, or the app can only "+
-				"report a bare failure", c.name)
-		}
+	if op == nil || op.OperationID == "" {
+		t.Fatalf("RevokeThisDevice returned no operation id, so its verdict is unclaimable")
 	}
 
-	if h.sawCommand(protocol.ActionDeviceRevoke) {
-		t.Errorf("RevokeThisDevice sealed and appended a %q the gateway refuses (opForAction has no "+
-			"mapping for it), burning a durable send-seq on a command that can never be delivered",
-			protocol.ActionDeviceRevoke)
+	cmd := h.AwaitCommand(protocol.ActionDeviceRevoke)
+	if cmd.Session != cmd.DeviceID {
+		t.Errorf("the sealed device_revoke targets %q while this device is %q. The target rides "+
+			"the session position of the signed tuple and the gateway copies it into "+
+			"Control.TargetDeviceID, so this revokes the wrong device -- or, more likely, none",
+			cmd.Session, cmd.DeviceID)
 	}
+	if cmd.OperationID != op.OperationID {
+		t.Errorf("the sealed command carries operation id %q and the caller was handed %q, so the "+
+			"reply cannot be claimed by the op that produced it (PB-SYNC-2)",
+			cmd.OperationID, op.OperationID)
+	}
+
+	inFlight, err := h.App.PendingOpCount()
+	if err != nil {
+		t.Fatalf("PendingOpCount: %v", err)
+	}
+	if inFlight != before+1 {
+		t.Errorf("PendingOpCount went %d -> %d over one sealed command; a revoke awaiting the "+
+			"machine's answer is in flight and must be counted as such", before, inFlight)
+	}
+
+	// The machine answers. A real revoke destroys the path its own reply comes back on -- the
+	// daemon rotates the epoch and the gateway severs and exits -- so the phone must not
+	// DEPEND on the reply; what it must do is resolve when one does arrive.
+	h.Reply(schema.Control{
+		Op:          "ok",
+		EndpointID:  h.Machine,
+		SessionID:   cmd.Session,
+		OperationID: op.OperationID,
+	})
+	eventually(t, "the revoke never resolved", func() bool {
+		out, oerr := h.App.Outcome(op.OperationID)
+		return oerr == nil && out.Resolved
+	})
 
 	after, err := h.App.PendingOpCount()
 	if err != nil {
 		t.Fatalf("PendingOpCount: %v", err)
 	}
 	if after != before {
-		t.Errorf("PendingOpCount went %d -> %d over three calls whose ops no reply can ever "+
-			"resolve. A counter that only rises makes every real in-flight op invisible", before, after)
+		t.Errorf("PendingOpCount went %d -> %d across a revoke that was answered. A counter that "+
+			"only rises makes every real in-flight op invisible", before, after)
 	}
 }
 

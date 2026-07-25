@@ -341,6 +341,17 @@ func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceComman
 		ExpiresAt:   &exp,
 		Launch:      launch,
 	}
+	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
+	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to
+	// remove. The phone signs the target device id in the SESSION position of the command
+	// tuple, because that tuple has no separate device field, so it arrives here as
+	// sessionID and is copied across. The gateway cannot escalate by doing so: the subject
+	// is bound under the phone's signature, and any other value simply fails the daemon's
+	// authorization. Without this the arm in opForAction would forward a revoke with an
+	// empty target, which the daemon refuses.
+	if op == protocol.OpDeviceRevoke {
+		ctrl.TargetDeviceID = sessionID
+	}
 	if err := dc.writeControl(ctrl); err != nil {
 		return protocol.Control{}, err
 	}

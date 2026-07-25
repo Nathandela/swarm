@@ -613,12 +613,22 @@ func (b *CommandBridge) refusePushPrefs(ctx context.Context, rc protocol.RemoteC
 // content-hash binding). push_prefs carries its body in RemoteCommand.PushPrefs, which
 // applyPushPrefs has already checked by the time it asks for the op. approve is not a
 // daemon remote op (D6/D7).
+//
+// device_revoke's arm was MISSING until S18, and the omission was the whole of the phone's
+// panic button. ActionDeviceRevoke is in the signed action set, skeleton/deviceauth.go classes
+// it, and handleDeviceRevoke serves it -- but a phone-sealed revoke fell through to the default
+// here and was refused "unsupported command action" one hop short of the daemon, WITH NO REPLY
+// SEALED, so the op could never resolve either. mobile.RevokeThisDevice worked around it by
+// sealing nothing and recording a durable local refusal; with the arm in place that workaround
+// is gone and the verb rides this path like every other mutation.
 func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
 	switch action {
 	case protocol.ActionKill:
 		return protocol.OpKill, nil
 	case protocol.ActionDelete:
 		return protocol.OpDelete, nil
+	case protocol.ActionDeviceRevoke:
+		return protocol.OpDeviceRevoke, nil
 	case protocol.ActionLaunch:
 		if launch == nil {
 			return "", errors.New("remotegw: launch command missing its launch spec in-envelope")

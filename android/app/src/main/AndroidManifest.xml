@@ -31,13 +31,46 @@
          android:fullBackupContent is deliberately NOT declared, because every supported device
          is Android 13 or later (android/supported-versions.tsv), where it is dead configuration
          that reads like the D2D exclusion without being it. -->
+    <!-- PB-SEC-5. usesCleartextTraffic="false" is DECLARED rather than inherited: on the
+         minSdk 33 floor the platform default is already false, so this is not a live hole
+         today, but a default is not a decision and the next targetSdk bump is not required to
+         keep it.
+
+         ITS SCOPE IS THE JAVA / WEBVIEW STACK ONLY, AND THAT LIMIT IS PART OF THE
+         REQUIREMENT. Android enforces this attribute (and networkSecurityConfig) in the
+         platform networking stack: java.net, OkHttp, WebView, Cronet. The relay connection is
+         made by Go's crypto/tls INSIDE the gomobile .so, which goes through none of them and
+         is unaffected by either attribute. PB-NET-2 is the sole control over that socket.
+         v1 of the spec drew the opposite inference from this attribute and shipped it, so the
+         statement sits beside the control rather than in an evidence file. -->
     <application
         android:name=".SwarmApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Swarm">
+        android:theme="@style/Theme.Swarm"
+        android:usesCleartextTraffic="false">
+
+        <!-- PB-SEC-4 / PB-SEC-12 / PB-E2E-2. The app's one Activity: the window FLAG_SECURE is
+             set on and the View hierarchy the overlay filter applies to. Before it existed
+             both requirements had no subject, because S16 shipped screen models and a data
+             class has no window.
+
+             exported="true" is FORCED by the LAUNCHER filter and is not a preference: the
+             launcher is another process, and it cannot start a component this app keeps to
+             itself. That makes this the most reachable surface the app has, so PhoneActivity
+             reads nothing off the incoming Intent and reaches no facade verb; see
+             android/exported-components.tsv for the row and the validation this records. -->
+        <activity
+            android:name=".PhoneActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".runtime.BootReceiver"

@@ -1,0 +1,39 @@
+# PB-SEC-4 -- which screens are sensitive, and what protects them.
+#
+# The requirement names two screens BY ROLE: "FLAG_SECURE on pairing and terminal-peek
+# screens; sensitive content excluded from recents." It names two and the app has more, so
+# which of the others are sensitive is a decision -- and a decision with no artifact is one the
+# next screen silently opts out of. This table is that record.
+#
+# THE PROTECTIONS ARE APPLIED AT ONE SINK, dev.swarm.phone.SecureWindow, called from
+# PhoneActivity.onCreate before the content view is set. Per-screen application is how the
+# screen added last gets missed with nothing failing, because a per-screen test can only
+# enumerate the screens that exist.
+#
+# WHAT IS RENDERED TODAY AND WHAT IS NOT, stated plainly so this table is not read as a claim
+# about a finished app. S18 delivers a MINIMAL Activity (the amended PB-SEC-4 ruling), and
+# PhoneSurface renders two of the rows below: the pairing surface and the terminal peek, which
+# are the two the requirement names. The rest exist as S16 screen models with no view attached
+# yet. They are listed because the decision is what this artifact records, and because they
+# inherit the protection by construction when they land: there is ONE window, and the sink is
+# on it. A later surface that needs different treatment has to argue for it in this file.
+#
+# flag_secure          the compositor refuses screenshots and screen recording for the window,
+#                      and blanks it in the recents thumbnail.
+# exclude_from_recents setRecentsScreenshotEnabled(false): the API-33 way to drop the recents
+#                      thumbnail specifically. Stated separately from flag_secure so a later
+#                      screen that needs screenshots cannot silently reacquire the thumbnail.
+#
+# WHAT IS NOT CLAIMED. Both are platform hints the system honours; neither is attested, neither
+# stops a camera pointed at the screen, and an accessibility service can still read the
+# rendered screen (android/input-path-limits.md records that limit). PB-E2E-5 is deferred and
+# nothing here is evidence about a physical handset.
+#
+# Columns: screen <TAB> flag_secure <TAB> exclude_from_recents <TAB> why
+pairing	true	true	Named by the requirement. Shows the SAS emoji the person compares against their machine's screen and the destination origin they confirm before anything is joined. A screenshot of the SAS hands an interceptor the one value the comparison exists to protect; the recents thumbnail writes the same frame to disk when the app backgrounds mid-pairing, which is exactly when a user switches away to look at their machine.
+terminal_peek	true	true	Named by the requirement. Shows the daemon-rendered terminal grid: whatever the agent has printed, including anything the user typed at it. This is the session content PB-SEC-3 keeps out of logs and S15 sealed at rest, so leaving it screenshottable would defeat both one layer up.
+session_detail	true	true	Not named by the requirement, and sensitive anyway: it carries the same snapshot card as the peek plus the journal, which names sessions and their state. Distinguishing it from the peek would mean the same grid is protected on one screen and not the other.
+triage_inbox	true	true	The roster: session titles, groups and the one-line need summary. Individually less than a grid, collectively a map of what the owner is working on, and a title is often the most sensitive line on screen.
+machine_pane	true	true	Presence, the paired device, the activity log, and the two gated controls (revoke, kill switch state). The activity log is journal content under another name.
+settings	true	true	Push preferences and the handset's biometric-gate preference. Nothing here is session content; it is protected because it is hosted by the same window, and an exception would have to be argued rather than inherited.
+connection_banner	true	true	Not a screen but a surface on every one of them, listed so its coverage is recorded rather than assumed. It renders the connection state, which includes the terminal "revoked" and "repair required" verdicts.
