@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bytes"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -191,3 +192,8 @@ func goListDeps(t *testing.T, root, pkg string) []string {
 	}
 	return deps
 }
+
+// base64Std is the encoding encoding/json uses for a []byte field. PB-SEC-1's assertions
+// search for both the raw bytes and this form, so a JSON blob cannot hide a key behind its
+// own encoding.
+func base64Std(b []byte) string { return base64.StdEncoding.EncodeToString(b) }

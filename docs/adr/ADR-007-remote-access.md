@@ -1143,3 +1143,40 @@ the rate any messaging app sustains on the same mechanism.
 central security property on old devices. Choosing 33 makes PB-KEY-8 clean by construction instead
 of forcing a per-device fallback path nobody would exercise. The cost is excluding pre-2022
 handsets, which for a single-maintainer personal tool is not a cost worth a fallback matrix.
+
+**B17. Amends B16's `minSdk` rationale, and records two consequences of B16 that nothing else
+catches.** The S14 RED author falsified the reason B16 gave, and the correction matters more than
+the number.
+
+**(a) B16's stated ground for `minSdk` 33 does not hold.** B16 pinned 33 because "Curve25519
+entered KeyMint only in API 33, so below it the `NoiseStatic`/`Recipient` roles cannot be
+Keystore-native". But KEYSTORE_NATIVE means the private key never leaves Keystore, which means the
+*operation* must RUN inside Keystore — and that needs a Java -> Go reverse seam for `NoiseStatic()`'s
+DH and for `OpenSealedBox`. **B8 pins the crossing to ONE INBOUND artifact and permits the matrix
+only to NARROW it**, and the gomobile facade has been golden-pinned since S8 with no such seam. So
+no role can be Keystore-native regardless of API level: every role is KEYSTORE_WRAPPED or
+SOFTWARE_ONLY, and PB-KEY-8's matrix is satisfiable at API 23.
+
+**The floor stays at 33, as a product choice rather than a cryptographic one**, and this ADR now
+says so instead of implying a technical necessity that does not exist. Android 13 is a reasonable
+2026 floor for a single-maintainer personal tool and avoids compatibility paths nobody would
+exercise. Widening B8 to admit a reverse operation seam was considered and **rejected**: the single
+inbound crossing is a strong, cheaply-verified property (the S8 reviewer confirmed in the shipped
+binary that no bound method returns `[]byte`), and trading it for hardware-native Curve25519 on a
+personal tool is the wrong side of that bargain. If a later phase wants native backing, widening B8
+is the decision to revisit — not the API floor.
+
+The consequence is fenced rather than left implicit: `KeyCustodyMatrixTest.native_rows_perform_
+their_operation_in_keystore` forces any row claiming KEYSTORE_NATIVE to declare an
+`ANDROID_KEYSTORE` boundary, so a false native claim surfaces at test time rather than at
+integration.
+
+**(b) `App.PurgeKeys` clears BOTH tiers, so the push path must re-arm after every lock.**
+`mobile/app.go:317` does `st.Keys = crypto.EpochKeys{}`, zeroing the **wake** key along with the
+content key. B16 makes high-priority FCM the sole background wake path, and B9 notes
+`FirebaseMessagingService` runs in the app process — so a push arriving after a lock purge finds no
+wake key in the core, and the Android side must re-install it, **without any authentication**,
+before it can open the envelope. An implementation that assumes the wake tier survived the purge
+produces a wake path that works until the first screen lock and then goes quiet — silently, and
+only on a real device. No requirement stated this and nothing else would have caught it. Pinned by
+`LockPurgeTest.the_wake_tier_is_reinstallable_after_a_purge_without_authentication`.

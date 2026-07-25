@@ -94,6 +94,11 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     description = "Stages the connectivity and FCM policy tables as unit-test resources."
     from(rootProject.layout.projectDirectory.file("connectivity-policy.tsv"))
     from(rootProject.layout.projectDirectory.file("fcm-priority.tsv"))
+    // PB-KEY-8 binds the custody matrix to PB-RUN-1's minSdk. The Kotlin test reads the pin
+    // itself for the same reason the tables are staged rather than copied: a hardcoded 33
+    // keeps passing after someone lowers SWARM_ANDROID_MIN_SDK, and the whole point of the
+    // floor is that Curve25519 does not exist below it.
+    from(rootProject.layout.projectDirectory.file("toolchain.env"))
     into(policyTestResourceDir)
 }
 
