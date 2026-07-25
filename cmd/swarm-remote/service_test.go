@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -91,5 +92,59 @@ func TestServiceConfigFromParams_MapsAllFields(t *testing.T) {
 	}
 	if cfg.SenderKeyID != p.SenderKeyID {
 		t.Errorf("SenderKeyID = %x, want %x", cfg.SenderKeyID, p.SenderKeyID)
+	}
+}
+
+// TestServiceConfigFromParams_WiresDurableOutbox closes PB-GW-8 at the PRODUCTION seam.
+// resolveGatewayParams provisions <stateDir>/remote/outbound-journal.outbox, and
+// remotegw.NewService only reaches it through ServiceConfig.Outbox -- a nil there falls back
+// to an in-memory outbox that OpenOutbox("") cannot fail to build, so a dropped mapping is
+// SILENT: the sidecar starts, the file is created and stays empty, every restart re-reads the
+// journal from cursor 0 and re-appends the whole thing at fresh seqs into the same
+// 600-per-tumbling-minute mailbox, and a delivery-unknown append is re-sealed instead of
+// re-appended verbatim.
+//
+// Non-nil is not enough to prove that, so this asserts DURABILITY: a commit made through the
+// mapped ServiceConfig.Outbox must be readable by a fresh OpenOutbox over the on-disk file,
+// which the in-memory fallback cannot satisfy.
+func TestServiceConfigFromParams_WiresDurableOutbox(t *testing.T) {
+	stateDir := t.TempDir()
+	writeMachineIdentity(t, stateDir)
+	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
+	addPairedDevice(t, stateDir)
+
+	p, err := resolveGatewayParams(stateDir, "/tmp/does-not-need-to-exist/remote.sock")
+	if err != nil {
+		t.Fatalf("resolveGatewayParams: %v", err)
+	}
+	if p.Outbox == nil {
+		t.Fatal("resolveGatewayParams returned a nil Outbox; the durable outbound-journal custody is not provisioned at all (PB-GW-8)")
+	}
+
+	cfg := serviceConfigFromParams(p, noopMailbox{})
+	if cfg.Outbox == nil {
+		t.Fatal("ServiceConfig.Outbox is nil: resolveGatewayParams provisions the durable outbox but " +
+			"serviceConfigFromParams drops it, so the production Service runs an IN-MEMORY outbox. " +
+			"PB-GW-8 is then closed only in tests -- every restart re-reads the journal from 0 and " +
+			"re-appends it at fresh seqs, and a delivery-unknown append is re-sealed rather than " +
+			"re-appended verbatim")
+	}
+
+	// Durable, not merely present: commit through the mapped outbox, then reopen the file.
+	const cursor = 9
+	if err := cfg.Outbox.Reserve(cursor, []byte("sealed-envelope-bytes")); err != nil {
+		t.Fatalf("reserve through the mapped outbox: %v", err)
+	}
+	if err := cfg.Outbox.Commit(cursor); err != nil {
+		t.Fatalf("commit through the mapped outbox: %v", err)
+	}
+	reopened, err := remotegw.OpenOutbox(filepath.Join(stateDir, "remote", "outbound-journal.outbox"))
+	if err != nil {
+		t.Fatalf("reopen the on-disk outbox: %v", err)
+	}
+	if got := reopened.Cursor(); got != cursor {
+		t.Errorf("a reopened <stateDir>/remote/outbound-journal.outbox reports cursor %d, want %d: "+
+			"the outbox the Service was handed is not backed by the provisioned file, so nothing it "+
+			"commits survives the restarts PB-LIFE-1/-5 make routine", got, cursor)
 	}
 }

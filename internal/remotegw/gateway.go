@@ -50,10 +50,24 @@ type Gateway struct {
 	cursor uint64
 }
 
+// CursorSource is a sink that knows its own DURABLE delivered cursor. New seeds the
+// gateway's resume point from it -- mirroring how RunTerminal discovers a TerminalSink, so
+// New's signature is unchanged and a sink with no durable custody simply starts at 0.
+type CursorSource interface {
+	DeliveredCursor() uint64
+}
+
 // New returns a gateway that dials socketPath (the daemon remote.sock) and delivers
-// the journal to sink.
+// the journal to sink, resuming from the cursor sink durably delivered (PB-GW-8). Without
+// that seeding every restart re-reads from 0 and re-appends the WHOLE journal at fresh seqs
+// into the same 600-per-tumbling-minute mailbox, which is also how a restart loop blows the
+// §6.0 append budget.
 func New(socketPath string, sink JournalSink) *Gateway {
-	return &Gateway{socketPath: socketPath, sink: sink}
+	g := &Gateway{socketPath: socketPath, sink: sink}
+	if cs, ok := sink.(CursorSource); ok {
+		g.cursor = cs.DeliveredCursor()
+	}
+	return g
 }
 
 // Cursor is the highest journal cursor the gateway has delivered (its durable resume
@@ -166,10 +180,17 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		ctrl, err := dc.readControl(time.Second)
+		ctrl, err := dc.readControl(terminalIdleWake)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue // idle; re-check ctx and keep waiting for snapshots
+				// Idle wake: nothing is in flight, so push out whatever the coalescer is
+				// still holding. Without it a burst's LAST frame never ships and the peek
+				// sits on a stale grid until the session emits again -- for an idle
+				// terminal, never (PB-GW-7).
+				if err := flushTerminal(sink); err != nil {
+					return err
+				}
+				continue // re-check ctx and keep waiting for snapshots
 			}
 			return err
 		}
@@ -193,11 +214,34 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 			// cache so it stops showing the pre-teardown screen (Blocker 1d), then return so
 			// the watcher backs off and reconnects (resuming when the switch flips back ON).
 			_ = sink.Terminal(namespaceSessionID(dc.endpointID, session), nil, 0, 0)
+			// Nothing follows the blank on this connection, so it must not sit in the
+			// coalescer: force it out before returning.
+			_ = flushTerminal(sink)
 			return fmt.Errorf("daemon ended the terminal peek: %s (%s)", ctrl.Error, ctrl.ErrorCode)
 		default:
 			// The terminal_subscribe ack (OpOK) and any other control are ignored.
 		}
 	}
+}
+
+// terminalIdleWake bounds one terminal read so RunTerminal wakes at least once per
+// coalescing window and can flush a stashed snapshot. It must stay <= DefaultAppendWindow:
+// a longer wake is a longer stale grid.
+const terminalIdleWake = DefaultAppendWindow
+
+// terminalFlusher is the coalescing wrapper's trailing-flush seam (CoalescingSink.Flush). A
+// sink that does not coalesce holds nothing back and needs no flush.
+type terminalFlusher interface {
+	Flush() error
+}
+
+// flushTerminal forces out any snapshot the sink is holding back, if it holds any.
+func flushTerminal(sink TerminalSink) error {
+	f, ok := sink.(terminalFlusher)
+	if !ok {
+		return nil
+	}
+	return f.Flush()
 }
 
 // ForwardCommand sends a phone-authored, device-signed mutating op to the daemon's

@@ -43,6 +43,12 @@ type gatewayParams struct {
 	// resetting to 1 and being stale-dropped.
 	JournalSeq remotegw.SeqSource
 	ReplySeq   remotegw.SeqSource
+	// Durable OUTBOUND journal outbox (PB-GW-8): {journal cursor, sealed envelope, relay
+	// outcome}. Without it Gateway.cursor is in-memory, so every restart re-reads from 0 and
+	// re-appends the WHOLE journal at fresh seqs into the same 600-per-tumbling-minute
+	// mailbox -- and a delivery-unknown append is re-sealed at a fresh seq instead of
+	// re-appended verbatim, getting the record accepted twice.
+	Outbox remotegw.Outbox
 	// Durable INBOUND checkpoint (PB-GW-1): the mailbox read cursor and the
 	// per-(sender,epoch) replay high-water. Without it a restarted gateway builds a fresh
 	// receiver, whose staleness check is SKIPPED on the first frame of every stream, so a
@@ -101,6 +107,13 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open outbound reply seq: %w", err)
 	}
+	// The outbound journal outbox sits beside its seq file: the seq says which numbers may
+	// never be reissued, the outbox says which journal cursors were actually delivered and
+	// which envelope is still in flight.
+	outbox, err := remotegw.OpenOutbox(filepath.Join(remoteDir, "outbound-journal.outbox"))
+	if err != nil {
+		return gatewayParams{}, fmt.Errorf("open outbound journal outbox: %w", err)
+	}
 	// Bind the checkpoint to THIS identity: `swarm remote init` regenerates machine.key
 	// (epoch id back to 1) without touching its siblings here, so an unbound file would
 	// hand the fresh identity the previous one's epoch-1 high-water -- stale-dropping the
@@ -135,6 +148,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
 		JournalSeq:         journalSeq,
 		ReplySeq:           replySeq,
+		Outbox:             outbox,
 		Inbound:            inbound,
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
 		Grant:              sealedGrant,

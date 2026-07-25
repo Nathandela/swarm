@@ -30,6 +30,11 @@ type ServiceConfig struct {
 	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
 	JournalSeq     SeqSource         // durable outbound seq for journal + terminal frames (nil => in-memory)
 	ReplySeq       SeqSource         // durable outbound seq for command replies (nil => in-memory)
+	// Durable OUTBOUND journal outbox (PB-GW-8): {journal cursor, sealed envelope, relay
+	// outcome}, which is what makes the resume point survive a restart AND makes a
+	// delivery-unknown append recoverable by re-appending the identical envelope. Nil =>
+	// in-memory, i.e. every restart re-reads from 0 and re-appends the whole journal.
+	Outbox Outbox
 	// Durable INBOUND checkpoint (PB-GW-1): the mailbox read cursor and the
 	// per-(sender,epoch) replay high-water, seeded into the command bridge at
 	// construction. Nil => in-memory (resets on restart), which leaves the replay guard
@@ -60,6 +65,7 @@ var ErrDeviceRevoked = errors.New("remotegw: paired device revoked; gateway exit
 type Service struct {
 	cfg      ServiceConfig
 	gw       *Gateway
+	sink     *RelaySink
 	bridge   *CommandBridge
 	leases   *LeaseManager
 	watchers *TerminalWatcher
@@ -87,8 +93,13 @@ func NewService(cfg ServiceConfig) *Service {
 		SenderKeyID:    cfg.SenderKeyID,
 		Now:            cfg.Now,
 		Seq:            cfg.JournalSeq,
+		Outbox:         cfg.Outbox,
 	})
-	gw := New(cfg.DaemonSocket, sink)
+	// PB-GW-7: the journal, the terminal peek and the reconcile record share ONE sink, ONE
+	// relay target and ONE per-target append quota, so the peek's ~62 snapshots/s must be
+	// coalesced to the §6.0 budget or it exhausts the target's tumbling minute and starves
+	// the journal alongside it. Admission policy is a WRAPPER, not a change inside the sink.
+	gw := New(cfg.DaemonSocket, NewCoalescingSink(CoalesceConfig{Inner: sink, Now: cfg.Now}))
 	forwarder := cfg.Forwarder
 	if forwarder == nil {
 		forwarder = gw
@@ -111,7 +122,7 @@ func NewService(cfg ServiceConfig) *Service {
 		ReplySeq:    cfg.ReplySeq,
 		Inbound:     cfg.Inbound,
 	})
-	return &Service{cfg: cfg, gw: gw, bridge: bridge, leases: leases, watchers: watchers}
+	return &Service{cfg: cfg, gw: gw, sink: sink, bridge: bridge, leases: leases, watchers: watchers}
 }
 
 // Gateway exposes the underlying journal bridge (e.g. to seed or read its cursor).
@@ -128,6 +139,12 @@ func (s *Service) Run(ctx context.Context) error {
 	// connection (control gate or read-only tap) is left behind after the sidecar exits.
 	defer func() { _ = s.leases.Close() }()
 	defer func() { _ = s.watchers.Close() }()
+	// PB-GW-8: re-append whatever the outbox reserved but never saw acked BEFORE any new
+	// frame goes out, so a delivery-unknown record is recovered by its IDENTICAL sealed
+	// envelope (which the phone stale-drops for free) rather than re-sealed at a fresh seq.
+	// A replay that fails is stashed on the sink (Err) and its entries stay pending for the
+	// next start; it must not stop the bridge from running.
+	_ = s.sink.Replay()
 	// Derive a cancelable context so the journal loop can tear the WHOLE Service down (both
 	// loops) the moment it detects the paired device was revoked (codex#1).
 	ctx, cancel := context.WithCancel(ctx)

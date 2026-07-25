@@ -52,6 +52,7 @@ type RelayConfig struct {
 	AppendTimeout  time.Duration     // per-append upper bound (nil/0 => defaultAppendTimeout)
 	Seq            SeqSource         // durable outbound seq high-water (nil => in-memory, non-durable)
 	Authorities    ReconcileSource   // rollback authorities for the reconcile record (nil => bootstrap disabled)
+	Outbox         Outbox            // durable outbound journal custody, PB-GW-8 (nil => in-memory)
 }
 
 // defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
@@ -69,17 +70,38 @@ const defaultAppendTimeout = 5 * time.Second
 // surfaced via Err(); the durable-cursor / relay-ack backpressure (R-GW.5) is a later
 // refinement.
 type RelaySink struct {
-	cfg RelayConfig
-	now func() time.Time
-	seq SeqSource
+	cfg    RelayConfig
+	now    func() time.Time
+	seq    SeqSource
+	outbox Outbox
 
 	mu      sync.Mutex
 	lastErr error
+	// reuse holds a seq whose frame was DEFINITIVELY refused before the relay stored
+	// anything, so the next frame carries it instead of leaving a gap (see sealAtSeqLocked).
+	// 0 means none held.
+	reuse uint64
+	// resumed is the journal cursor high-water this process RECOVERED: the outbox's durable
+	// committed cursor at construction, raised by each replayed entry. A record at or below
+	// it was delivered by a previous run, so re-offering it appends nothing (PB-GW-8). It is
+	// deliberately NOT raised by live deliveries -- ordering and dedup within one run belong
+	// to Gateway.deliver, and a live high-water would suppress an out-of-order record the
+	// gateway legitimately handed down.
+	resumed uint64
 }
+
+// The gateway's outbound seam: the sink is both halves of an OutboundSink and the durable
+// resume point New seeds a restarted gateway from. Pinned so a signature drift is a compile
+// error rather than a silently un-seeded cursor.
+var (
+	_ OutboundSink = (*RelaySink)(nil)
+	_ CursorSource = (*RelaySink)(nil)
+)
 
 // NewRelaySink returns a sink that seals records under cfg.Key and appends them to
 // cfg.Target's mailbox via cfg.Appender. A nil cfg.Seq defaults to a non-durable
-// in-memory source (the seq resets on restart) -- production wires a durable one.
+// in-memory source (the seq resets on restart) -- production wires a durable one, and
+// likewise for cfg.Outbox.
 func NewRelaySink(cfg RelayConfig) *RelaySink {
 	now := cfg.Now
 	if now == nil {
@@ -89,7 +111,11 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 	if seq == nil {
 		seq, _ = OpenSeqSource("") // in-memory, cannot error
 	}
-	return &RelaySink{cfg: cfg, now: now, seq: seq}
+	outbox := cfg.Outbox
+	if outbox == nil {
+		outbox, _ = OpenOutbox("") // in-memory, cannot error
+	}
+	return &RelaySink{cfg: cfg, now: now, seq: seq, outbox: outbox, resumed: outbox.Cursor()}
 }
 
 // Snapshot seals and forwards each roster record as-of the read cursor, returning on
@@ -102,6 +128,10 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 // A failed reconcile forwards NOTHING: the phone is never fed a stream it has no authority
 // to reconcile against. A nil Authorities disables the bootstrap (unit-test wiring only;
 // production must always provision one).
+//
+// Roster records are deliberately EXEMPT from the outbox dedup Event applies (PB-GW-8): they
+// are CURRENT STATE re-sent as of the read cursor, sharing cursors with journal records they
+// do not duplicate, so suppressing them would leave a restarted phone with no roster at all.
 func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) error {
 	if s.cfg.Authorities != nil {
 		if err := s.Reconcile(); err != nil {
@@ -118,8 +148,80 @@ func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) error {
 
 // Event seals and forwards one live journal record, returning any seal/append error so
 // the gateway declines to advance its cursor past an undelivered record (R-GW.5).
+//
+// It is OUTBOX-KEYED and therefore idempotent across a restart (PB-GW-8):
+//   - a cursor at or below the RESUMED high-water was delivered by a previous run and is not
+//     appended again (a restart that re-reads an overlapping range would otherwise re-flood a
+//     600-per-tumbling-minute mailbox at fresh seqs), and
+//   - a cursor still PENDING -- reserved, its delivery unknown -- is recovered by re-appending
+//     the IDENTICAL sealed envelope, which the phone's receiver stale-drops for free.
+//     Re-sealing it at a fresh seq instead would get the same record accepted twice, with
+//     nothing on the wire for the phone to dedup on.
+//
+// Snapshot (the reconnect roster) is deliberately NOT keyed this way: see Snapshot.
 func (s *RelaySink) Event(rec protocol.JournalRecord) error {
-	return s.forward(rec)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec.Cursor != 0 {
+		if rec.Cursor <= s.resumed {
+			return nil
+		}
+		pending, err := s.outbox.Pending()
+		if err != nil {
+			s.setErrLocked(err)
+			return err
+		}
+		for _, e := range pending {
+			if e.Cursor == rec.Cursor {
+				return s.replayLocked(e)
+			}
+		}
+	}
+	return s.forwardLocked(rec.Cursor, rec)
+}
+
+// Replay re-appends every entry the outbox reserved but never saw acked, oldest first and
+// byte-for-byte, then commits each. It is what a restarted gateway runs before any new frame
+// goes out. A duplicate costs the phone nothing (crypto.MailboxReceiver.Accept stale-drops
+// it), which is why an at-least-once outbox needs no relay protocol change; and a second
+// Replay appends nothing, so a restart loop cannot re-flood the mailbox.
+func (s *RelaySink) Replay() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, err := s.outbox.Pending()
+	if err != nil {
+		s.setErrLocked(err)
+		return err
+	}
+	for _, e := range pending {
+		if err := s.replayLocked(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeliveredCursor is the highest journal cursor whose delivery the outbox durably COMMITTED
+// -- the resume point New seeds a restarted gateway's journal_read from (PB-GW-8).
+func (s *RelaySink) DeliveredCursor() uint64 { return s.outbox.Cursor() }
+
+// replayLocked re-appends one pending entry VERBATIM and commits it. The caller must hold
+// s.mu (the append is serialized with every other producer, exactly like a fresh seal).
+func (s *RelaySink) replayLocked(e OutboxEntry) error {
+	if err := s.appendLocked(e.Envelope); err != nil {
+		s.setErrLocked(err)
+		return err
+	}
+	if err := s.outbox.Commit(e.Cursor); err != nil {
+		s.setErrLocked(err)
+		return err
+	}
+	// The in-flight tail of the previous run is now resolved, so a re-offer of it (the
+	// journal_read that re-serves the un-advanced cursor) must append nothing more.
+	if e.Cursor > s.resumed {
+		s.resumed = e.Cursor
+	}
+	return nil
 }
 
 // kindTerminalSnapshot tags a mailbox plaintext as a server-rendered terminal snapshot.
@@ -186,7 +288,9 @@ func (s *RelaySink) Reconcile() error {
 		s.setErr(err)
 		return err
 	}
-	return s.sealAtSeq(func(seq uint64, issuedAt int64) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealAtSeqLocked(0, func(seq uint64, issuedAt int64) ([]byte, error) {
 		rec.JournalCeiling = seq
 		// One clock, no divergence: the record's issued_at IS the envelope's issued_at, so a
 		// consumer that sees only the plaintext (MailboxResult carries no header) reads the
@@ -229,12 +333,21 @@ func (s *RelaySink) authorities() (protocol.ReconcileRecord, error) {
 // phone's journal path) and seals it into the phone's mailbox. The seal/append error is
 // returned (authoritative for the gateway's cursor gating) and also stashed for Err().
 func (s *RelaySink) forward(rec protocol.JournalRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Cursor 0: the roster path is not outbox-keyed (see Snapshot).
+	return s.forwardLocked(0, rec)
+}
+
+// forwardLocked is forward inside the critical section. A non-zero cursor makes the frame
+// outbox-backed (Event); 0 leaves it unrecorded (roster records, which are re-sent state).
+func (s *RelaySink) forwardLocked(cursor uint64, rec protocol.JournalRecord) error {
 	plaintext, err := json.Marshal(rec)
 	if err != nil {
-		s.setErr(err)
+		s.setErrLocked(err)
 		return err
 	}
-	return s.seal(plaintext)
+	return s.sealAtSeqLocked(cursor, func(uint64, int64) ([]byte, error) { return plaintext, nil })
 }
 
 // seal allocates the next shared seq, seals plaintext under the epoch content key, and
@@ -242,31 +355,29 @@ func (s *RelaySink) forward(rec protocol.JournalRecord) error {
 // snapshots both flow through here so they share one strictly increasing seq stream
 // (R-GW.3; the phone orders and dedups on that single seq).
 func (s *RelaySink) seal(plaintext []byte) error {
-	return s.sealAtSeq(func(uint64, int64) ([]byte, error) { return plaintext, nil })
-}
-
-// sealAtSeq is seal for a plaintext that must know its OWN envelope coordinates: build
-// runs INSIDE the same critical section and is handed the allocated seq and the envelope's
-// issued-at. The reconcile record needs both -- its journal_ceiling authority is its own
-// seq (self-certifying, so accepting the frame reseeds the bucket) and its issued_at must
-// be the header's, not a second reading of the clock.
-//
-// The whole seq-allocate -> append is held under s.mu so RunJournal and RunTerminal (two
-// goroutines sharing one sink) can never append out of seq order: releasing the lock
-// after allocating seq would let a later seq reach the phone's single MailboxReceiver
-// first, which drops the earlier one as ErrStaleSeq and forces a spurious resync. Appends
-// are the gateway's outbound path (not hot), so serializing them is cheap. setErrLocked
-// is used inside the critical section because setErr re-acquires s.mu. For the same
-// reason, build MUST NOT touch the sink: it runs holding s.mu, so any call back into a
-// locking method (Err, setErr, seal, Reconcile) self-deadlocks.
-func (s *RelaySink) sealAtSeq(build func(seq uint64, issuedAt int64) ([]byte, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Allocate seq inside s.mu so allocation order == append order (concurrent producers
-	// must append in seq order, else the phone's single MailboxReceiver stale-drops a
-	// lower seq that arrives after a higher one). A durable Seq may fsync here once per
-	// reservation block; on a persist fault it fails closed (no seq issued) via Err().
-	seq, err := s.seq.Next()
+	return s.sealAtSeqLocked(0, func(uint64, int64) ([]byte, error) { return plaintext, nil })
+}
+
+// sealAtSeqLocked is seal for a plaintext that must know its OWN envelope coordinates:
+// build is handed the allocated seq and the envelope's issued-at. The reconcile record needs
+// both -- its journal_ceiling authority is its own seq (self-certifying, so accepting the
+// frame reseeds the bucket) and its issued_at must be the header's, not a second reading of
+// the clock. A non-zero cursor makes the frame outbox-backed (PB-GW-8): the sealed bytes are
+// durable BEFORE the append and committed only once the relay acks.
+//
+// The caller must hold s.mu, and the whole seq-allocate -> append runs under it so
+// RunJournal and RunTerminal (two goroutines sharing one sink) can never append out of seq
+// order: releasing the lock after allocating seq would let a later seq reach the phone's
+// single MailboxReceiver first, which drops the earlier one as ErrStaleSeq and forces a
+// spurious resync. Appends are the gateway's outbound path (not hot), so serializing them is
+// cheap. For the same reason, build MUST NOT touch the sink: any call back into a locking
+// method (Err, setErr, seal, Event, Reconcile) self-deadlocks.
+func (s *RelaySink) sealAtSeqLocked(cursor uint64, build func(seq uint64, issuedAt int64) ([]byte, error)) error {
+	// Allocate seq inside s.mu so allocation order == append order. A durable Seq may fsync
+	// here once per reservation block; on a persist fault it fails closed (no seq issued).
+	seq, err := s.nextSeqLocked()
 	if err != nil {
 		s.setErrLocked(err)
 		return err
@@ -274,6 +385,7 @@ func (s *RelaySink) sealAtSeq(build func(seq uint64, issuedAt int64) ([]byte, er
 	issuedAt := s.now().UnixMilli()
 	plaintext, err := build(seq, issuedAt)
 	if err != nil {
+		s.reuse = seq // nothing left this process: the seq is unspent, so do not burn it
 		s.setErrLocked(err)
 		return err
 	}
@@ -287,23 +399,67 @@ func (s *RelaySink) sealAtSeq(build func(seq uint64, issuedAt int64) ([]byte, er
 		IssuedAt:       issuedAt,
 	}, plaintext)
 	if err != nil {
+		s.reuse = seq
 		s.setErrLocked(err)
 		return err
 	}
-	// Bounded append: a hung relay must not hold s.mu forever (Blocker 2). The deadline is
-	// generous (relay round-trips are fast); exceeding it surfaces an error via Err() rather
-	// than wedging RunJournal + every RunTerminal (all serialize on s.mu here).
+	raw := env.Marshal()
+	if cursor != 0 {
+		// Durable BEFORE the append (PB-GW-8): a crash, or a reply lost after the relay has
+		// already stored the item, leaves the EXACT bytes to re-append. Re-sealing instead
+		// would put a second, different envelope at this seq.
+		if err := s.outbox.Reserve(cursor, raw); err != nil {
+			s.reuse = seq
+			s.setErrLocked(err)
+			return err
+		}
+	}
+	if err := s.appendLocked(raw); err != nil {
+		// A DEFINITIVE pre-commit refusal (relay sentinel) stored nothing, so its seq is
+		// unspent and the next frame must carry it -- burning it manufactures a gap that
+		// PB-SYNC-1 charges to BOTH journal and terminal. An outbox-backed frame needs no
+		// such hold: its reservation already owns the seq and Event's retry re-appends the
+		// identical envelope. Delivery-UNKNOWN never reuses: the relay may hold that seq.
+		if cursor == 0 && ClassifyAppend(err) == AppendRefused {
+			s.reuse = seq
+		}
+		s.setErrLocked(err)
+		return err
+	}
+	if cursor != 0 {
+		if err := s.outbox.Commit(cursor); err != nil {
+			s.setErrLocked(err)
+			return err
+		}
+	}
+	return nil
+}
+
+// nextSeqLocked hands out the seq the next frame carries: a seq held back by a definitive
+// pre-commit refusal is reissued (the relay stored nothing at it), otherwise a fresh one is
+// reserved. The caller must hold s.mu.
+func (s *RelaySink) nextSeqLocked() (uint64, error) {
+	if s.reuse != 0 {
+		seq := s.reuse
+		s.reuse = 0
+		return seq, nil
+	}
+	return s.seq.Next()
+}
+
+// appendLocked appends one opaque envelope under a BOUNDED context: a hung relay must not
+// hold s.mu forever (Blocker 2). The deadline is generous (relay round-trips are fast);
+// exceeding it surfaces an error via Err() rather than wedging RunJournal + every
+// RunTerminal (all serialize on s.mu here). The caller must hold s.mu.
+func (s *RelaySink) appendLocked(env []byte) error {
 	timeout := s.cfg.AppendTimeout
 	if timeout <= 0 {
 		timeout = defaultAppendTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if _, err := s.cfg.Appender.MailboxAppend(ctx, s.cfg.Target, env.Marshal()); err != nil {
-		s.setErrLocked(err)
-		return err
-	}
-	return nil
+	_, err := s.cfg.Appender.MailboxAppend(ctx, s.cfg.Target, env)
+	return err
 }
 
 // Err returns the first append/seal error encountered, or nil.
