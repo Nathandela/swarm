@@ -120,21 +120,42 @@ func (h *hostSupervisor) Ensure() error {
 
 // Stop returns the unit to quiescent. A unit that was never loaded is already there, so
 // that is a success, not an error.
+//
+// The teardown alone cannot tell those apart: bootout fails identically whether the label
+// was never loaded or the boot-out was REFUSED, and neither launchd nor systemd documents
+// stable wording for either. So a second command decides, on its EXIT STATUS -- the same
+// shape as Ensure, where kickstart and not bootstrap decides. Reading the outcome off the
+// teardown's prose is the defect class Ensure was purged of, and both ways of getting it
+// wrong here are real: a spurious warning on every revoke, or -- worse -- swallowing a
+// gateway that survived its revoke and will serve the NEXT phone under the OLD epoch,
+// since Ensure is a documented no-op against a job that is already running.
 func (h *hostSupervisor) Stop() error {
 	if err := h.requireUnit(); err != nil {
 		return err
 	}
 	switch h.platform {
 	case PlatformLaunchd:
-		if out, err := h.run("launchctl", "bootout", h.launchdDomain()+"/"+LaunchdLabel); err != nil && !notLoaded(out) {
-			return fmt.Errorf("supervise: launchctl bootout: %w: %s", err, out)
+		target := h.launchdDomain() + "/" + LaunchdLabel
+		out, err := h.run("launchctl", "bootout", target)
+		if err == nil {
+			return nil
 		}
-		return nil
+		// print exits nonzero when the label is not in the domain: nothing left to stop.
+		if _, perr := h.run("launchctl", "print", target); perr != nil {
+			return nil
+		}
+		return fmt.Errorf("supervise: launchctl bootout: %w: %s", err, out)
 	default:
-		if out, err := h.run("systemctl", "--user", "disable", "--now", SystemdUnitName); err != nil && !notLoaded(out) {
-			return fmt.Errorf("supervise: systemctl disable: %w: %s", err, out)
+		out, err := h.run("systemctl", "--user", "disable", "--now", SystemdUnitName)
+		if err == nil {
+			return nil
 		}
-		return nil
+		// is-active exits nonzero for anything but a running unit; the gateway surviving
+		// its revoke is exactly what the caller needs to hear about.
+		if _, aerr := h.run("systemctl", "--user", "is-active", SystemdUnitName); aerr != nil {
+			return nil
+		}
+		return fmt.Errorf("supervise: systemctl disable: %w: %s", err, out)
 	}
 }
 
@@ -166,11 +187,4 @@ func runUnit(name string, args ...string) ([]byte, error) {
 	}
 	out, err := exec.Command(name, args...).CombinedOutput()
 	return bytes.TrimSpace(out), err
-}
-
-// notLoaded reports whether a stop failed only because nothing was loaded to stop.
-func notLoaded(out []byte) bool {
-	s := strings.ToLower(string(out))
-	return strings.Contains(s, "no such") || strings.Contains(s, "not find") ||
-		strings.Contains(s, "not loaded") || strings.Contains(s, "does not exist")
 }

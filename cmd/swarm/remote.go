@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 
@@ -250,6 +252,18 @@ func installGatewayUnit(stateDir string, stderr io.Writer) bool {
 		warn(err)
 		return false
 	}
+	// Review F4: supervise.Spec accepts an empty RemoteSocket and simply omits the variable
+	// from the rendered unit, but cmd/swarm-remote reads SWARM_DAEMON_REMOTE_SOCK with NO
+	// fallback -- so such a unit hands the gateway an empty dial target, which fails, which
+	// the supervisor restarts forever. That is PB-LIFE-7 again. runRemoteInit writes the
+	// machine identity before it reaches here, so this is unreachable today; the guard is
+	// what keeps that ordering from becoming an unwritten rule a second install site breaks.
+	sock := gatewaySocket(stateDir)
+	if sock == "" {
+		warn(errors.New("this machine has no remote identity, so the unit would name no remote " +
+			"socket and the gateway would have nothing to dial; run `swarm remote init` first"))
+		return false
+	}
 	sup, err := newGatewaySupervisor(stateDir)
 	if err != nil {
 		warn(err)
@@ -259,7 +273,7 @@ func installGatewayUnit(stateDir string, stderr io.Writer) bool {
 		Exec:         exe,
 		Owner:        gatewayOwner(),
 		StateDir:     stateDir,
-		RemoteSocket: gatewaySocket(stateDir),
+		RemoteSocket: sock,
 		LogPath:      filepath.Join(stateDir, "remote", gatewayLogFile),
 		// Backoff left zero: supervise.DefaultBackoff is PB-LIFE-5's floor.
 	}); err != nil {
@@ -315,13 +329,44 @@ func gatewayOwner() string {
 	return os.Getenv("USER")
 }
 
-// gatewaySocket is the daemon socket the supervised gateway dials: the configured
-// remote-tier socket, else the default under the state dir (ADR-007 D4).
+// gatewaySocket is the ONE definition of this machine's remote-tier UDS (ADR-007 B15):
+// the socket the supervised gateway dials AND the socket the daemon itself opens
+// (skeletonConfigFromEnv reads it from here too). Two independent defaults that had to
+// agree was the PB-LIFE-7 bug class -- the daemon required an env var while the unit
+// defaulted to D4's canonical path, so a stock install paired and then went silent.
+//
+// Explicit configuration wins; otherwise <stateDir>/remote.sock (D4), but ONLY once the
+// machine is PROVISIONED for remote. The machine identity is the marker: `swarm remote
+// init` writes it before anything here is consulted, it is what the daemon's pairing
+// config loads, and an install that never ran it opens no remote socket at all -- remote
+// control stays as absent as it was before, without a second definition to drift.
 func gatewaySocket(stateDir string) string {
 	if sock := os.Getenv(daemon.EnvRemoteSocket); sock != "" {
 		return sock
 	}
+	if _, err := os.Stat(filepath.Join(stateDir, "remote", remoteIdentityFile)); err != nil {
+		return "" // not provisioned: no remote tier
+	}
 	return filepath.Join(stateDir, remoteSocketFile)
+}
+
+// remoteSocketProbeTimeout bounds the liveness probe below. A UDS dial answers or refuses
+// immediately, so this only covers a listener whose backlog is full -- it is a ceiling on
+// how long an owner-invoked command can block, not an expected wait.
+const remoteSocketProbeTimeout = 2 * time.Second
+
+// remoteSocketServed reports whether something is accepting on this machine's remote-tier
+// socket RIGHT NOW. It performs the gateway's own first act (the sidecar dials
+// Spec.RemoteSocket) before the gateway is handed to a supervisor that would restart it
+// forever on failure. Reading the configuration cannot answer this: the daemon's listener
+// is a property of the process that is running, not of the state dir as it stands now.
+func remoteSocketServed(path string) bool {
+	c, err := net.DialTimeout("unix", path, remoteSocketProbeTimeout)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 // validateRelayURL checks --relay-url BEFORE it is persisted, because this is the last
@@ -583,6 +628,23 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 			warn(err)
 			return
 		}
+	}
+	// PB-LIFE-7 (review F1): ADR-007 B15 made the daemon's listen path and this unit's dial
+	// path one DEFINITION, which cannot remove a disagreement of TIME. The daemon decided
+	// its listener when IT started; a daemon that predates this machine's provisioning
+	// serves nothing at gatewaySocket(), so the gateway handed to the supervisor below would
+	// be restarted every throttle interval and never connect. The upgrade path is where this
+	// actually bites: a pre-B15 daemon still running on an already-paired machine, and this
+	// is the convergence command the owner was told to run.
+	//
+	// The gateway is still activated -- the unit is correct for the next daemon start and
+	// the enrollment is durable -- but the operator is handed the one step that fixes it
+	// now, rather than discovering it as a phone that pairs and then goes quiet.
+	if sock := gatewaySocket(stateDir); sock != "" && !remoteSocketServed(sock) {
+		fmt.Fprintf(stderr, "remote %s: nothing is serving the remote socket at %s, so the gateway "+
+			"cannot reach the daemon and will be restarted until it can. The running daemon chose "+
+			"its listener before this machine was provisioned for remote -- run `swarm daemon "+
+			"restart` to pick it up.\n", verb, sock)
 	}
 	sup, err := newGatewaySupervisor(stateDir)
 	if err != nil {

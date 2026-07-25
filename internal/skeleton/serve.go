@@ -60,7 +60,9 @@ type Config struct {
 	// gateway dials (R-GW.8 / amendment D.0-A1), distinct from the owner-trusted main
 	// SocketPath. Every connection on it is unconditionally remote-origin, so every
 	// mutating op is authorized against the pinned device registry (R-POL.9) before any
-	// action. Empty => no remote socket (remote control is opt-in).
+	// action. Empty => no remote socket. cmd/swarm fills it from gatewaySocket(), the same
+	// definition the gateway's supervision unit dials, and leaves it empty on a machine
+	// that was never provisioned for remote (ADR-007 B15).
 	RemoteSocketPath string
 }
 
@@ -215,12 +217,28 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.pairing = pc
 	d.srv = protocol.NewServer(d.api, epID)
 
-	// R-GW.8: opt-in dedicated remote-tier listener the gateway dials. It binds its own
+	// R-GW.8: the dedicated remote-tier listener the gateway dials. It binds its own
 	// socket and accept loop (independent of the demuxed main UDS), and every connection
 	// is remote-origin -- so mutating ops are authorized against the device registry via
 	// coreAPI's DeviceAuthenticator (R-POL.9). Assembled AFTER the registry is wired so
 	// the very first remote connection is already fail-closed.
 	if cfg.RemoteSocketPath != "" {
+		// Unlink a leftover socket from a crashed prior daemon before binding, as
+		// daemon.bindSocket does for the main UDS (S12). Without it a stale remote.sock would
+		// fail the bind and abort assembly below -- and since ADR-007 B15 every PROVISIONED
+		// machine opens this socket, so one crash would stop the daemon starting at all: "swarm
+		// is broken" rather than "remote is broken", a far worse failure than the one B15 fixes.
+		//
+		// Confined to paths that ARE sockets. The singleton flock taken by daemon.Open above
+		// makes the reclaim safe, but that lock is on <stateDir>/daemon.lock while
+		// RemoteSocketPath may be configured anywhere (SWARM_DAEMON_REMOTE_SOCK), so an
+		// unconditional remove would reach past it -- destroying a regular file an operator
+		// pointed at by mistake, and letting two daemons with different state dirs share one
+		// override path, the second silently stealing the first's LIVE socket instead of
+		// failing to bind. Crash debris is always a socket, so nothing is given up.
+		if fi, lerr := os.Lstat(cfg.RemoteSocketPath); lerr == nil && fi.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(cfg.RemoteSocketPath)
+		}
 		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID)
 		if rerr != nil {
 			return nil, rerr // defer'd cleanup tears down d.api + core

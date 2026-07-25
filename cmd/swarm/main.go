@@ -306,7 +306,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),
-		RemoteSocketPath:   os.Getenv(daemon.EnvRemoteSocket),
+		RemoteSocketPath:   gatewaySocket(stateDir), // ADR-007 B15: the SAME definition the unit dials
 		ShimBinary:         exe,
 		MaxSessions:        defaultMaxSessions,
 		PollInterval:       daemonPollInterval,

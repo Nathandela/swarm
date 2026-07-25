@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"net"
+	"os"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -147,6 +148,15 @@ func ServeRemote(d DaemonAPI, socketPath string) (*Server, error) {
 func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string) (*Server, error) {
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
+		return nil, err
+	}
+	// ADR-007 D4 specifies 0600 on the remote socket. net.Listen inherits the umask, so
+	// until now the mode was whatever the operator's shell happened to set and the 0700
+	// state dir was the only thing guarding it. That was tolerable while the socket existed
+	// only for operators who opted in; since B15 every provisioned machine has one.
+	// Fail-closed: a socket that cannot be made private is not served at all.
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = ln.Close()
 		return nil, err
 	}
 	// Fail-closed construction guard (A5 review R2): a remote-tier Server must not serve
