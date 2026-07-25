@@ -395,6 +395,27 @@ the two sentinels to typed Kotlin exceptions, which is the natural home for the 
 The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
 unfalsifiable by any test -- is being closed under S14a and is NOT this item.
 
+## PB-NET-5's LATENCY HARNESS DOES NOT MEASURE THE SHIPPED INPUT PATH
+
+Found by the S11 round-3 implementer while I was asking it to prove its lock had not blown the
+latency budget. **It could not have, and neither can the harness see a regression there at all.**
+
+`internal/phonesim` `Phone.Type` seals with `phonecore.SealInputData(p.content, ..., p.seq.Next(),
+...)` and calls `relay.MailboxAppend` **directly**. It never enters `mobile/commands.go`. So S6b's
+PB-NET-5 measurement covers phonecore's seal, the relay, the gateway, the daemon and the PTY — but
+**not the gomobile facade**, which is where the coalescer, the lease gate, `sendInputFrame` and now
+the input ordering lock all live. Those are on the real app's path and on nothing the harness times.
+
+The numbers are real for what they measure (p50 29.9 ms against a 150 ms budget, 20%), and the
+facade's added cost was measured separately and is negligible (~1.9 us per keystroke frame, ~13.4 us
+per 4 KiB paste). **The gap is coverage, not a known regression.** But it is standing defect class
+(v) applied to a performance budget: the fence guards a path production does not take, which is
+precisely the shape that let the S11 B2 defect ship in the first place.
+
+**Owner: S19**, whose exit demonstration is the natural place to time the real facade path
+end-to-end. Until then PB-NET-5's evidence should be read as "phonecore -> PTY", not "phone -> PTY",
+and no one should conclude from it that a facade-layer regression would have been caught.
+
 ## Carried from the S11 round-2 review (NOT in any remediation brief -- deliberately deferred)
 
 The three blockers (B-1 daemon-restart lease brick, B-2 input seq inversion, B-3 the spelling-fence)
