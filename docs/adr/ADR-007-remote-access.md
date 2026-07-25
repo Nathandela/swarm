@@ -792,6 +792,89 @@ whichever loses. A definitive pre-commit refusal may release the seq; a delivery
 must either burn it or retry the byte-identical sealed envelope, whose duplicate the receiver
 drops for free (`envelope.go:255-257`) — so no relay protocol change is needed for it.
 
+**B7 AS BUILT (S6b, 2026-07-25).** The decision above is unchanged; this records the mechanism
+that implements it, plus two facts the original entry did not carry.
+
+*Correlation is scoped to the wait, and the wait alone.* §6.0 caps pending waits per client at
+one, so the correlation state is a single slot, not a pending map: the request carries a
+monotonic `wait_id` and the reply comes back on its own frame tag, `MsgWaitReply` (0x04), which
+the client's existing read pump routes straight to the parked waiter instead of onto the
+serialised reply queue (`relay/client.go` `pump`/`deliverWait`, `relay/wait.go`). Every other
+exchange keeps today's strict write-then-read under `c.mu` untouched. The tag carries the
+"is this the out-of-order reply?" question and the id carries "which wait?" — the id is what
+discards the reply to a wait the client already withdrew, which is the only way a cancelled wait
+and its replacement can be told apart. Two consequences worth stating: the ordinary reply path is
+byte-for-byte unchanged, so no Phase A framing test moves; and writes now need their own mutex
+(`Conn.wmu`) because a parked wait writes outside `c.mu`.
+
+*Concurrent dispatch is one goroutine, not a worker pool.* Only the wait handler leaves the
+connection's request loop (`serveConn` still reads and dispatches everything else in order), which
+is the whole of the concurrency the decision needs, because at most one wait is outstanding per
+client. It is also what keeps the clause (d) fences intact for free: `sc.authed` stays a
+single-writer field read by `readFrame`'s cumulative handshake deadline, per-source admission
+control stays under `s.mu` in `serveConn` where CR-1 put it, and no ordinary op is reordered.
+A wait is refused **inline** — pre-auth (on the ordinary error frame, since no wait was created),
+superseded, quota-exceeded, or already-in-progress — so nothing a refusal touches ever parks.
+A takeover severs the superseded connection's wait under `s.mu` in `registerSession`; without
+that the superseded connection, which issues no further requests, would hold the single wait slot
+for the remaining ceiling and live typing would be dead for up to 25 s after every reconnect.
+
+*Cancellation crosses the wire, and is deliberately unmetered.* A client-side context
+cancellation sends `mailbox_wait_cancel{wait_id}` — fire-and-forget, no reply of its own, the
+wait's own reply being the answer. It has to cross: releasing only the client's slot would leave
+the server's held until the ceiling, so the next wait would be refused and the cancellation would
+be a lie. It is not metered because a cancel strictly *releases* server state; refusing one on
+quota would strand the slot, and it is already bounded by the one-wait-per-client cap.
+
+**Acks must not ride inline on the delivery path — a LATENCY requirement, not only a quota one.**
+The original entry justified batched acks on quota grounds alone. `MailboxAck` measures p50
+30.8 ms / **max 129.2 ms** on the reference host (one synchronous bolt fsync each), so a single
+ack taken between an item's arrival and the next wait can consume **86% of the entire 150 ms p50
+input budget**. Both hops therefore ack from a separate goroutine at <= 1/s
+(`transport.AckBatcher`), never between `fn(item)` and the next wait. Dropping an ack is safe:
+both hops advance a durable cursor before recording one, so an un-acked item is never
+re-delivered whatever the relay does with its copy.
+
+**The drain is adaptive, and its two regimes are decided by evidence.** §6.0's <= 3 reads/s is a
+sustained-regime average (2026-07-25 amendment); read flat it contradicts p50 <= 150 ms, because
+an un-batched wait returns one read per item. `transport.DrainPacer` therefore spaces reads at
+1/3 s by default and drops the spacing after **two consecutive** spaced reads come back without a
+batch — the spacing produced nothing but latency, so the producer, not the drain, is the limit.
+It re-enters spacing the moment any read returns more than one item. *(Literally true, but the S6b
+reviewer showed it is not what actually restores batching under §6.0's own 8 frames/s workload: an
+un-spaced read returns on the FIRST arrival, so it returns exactly one item every time, and
+`!p.spaced` short-circuits the idle counter so nothing accumulates. What restores batching there is
+the token bucket's forced delay ~36 s in, during which items gather and the next read returns >1.
+The rule is right and no workload latches the harmful regime -- a burst that alternates re-enters
+batching immediately on any multi-item page -- but the trigger is the bucket, not evidence of
+backlog.)* Two consecutive rather than
+one, because a single slow append widens one gather window and one hiccup must not strand the
+drain in the interactive regime. A token bucket sized to the relay's own one-minute window backs
+both regimes, so the sustained average is capped however the regime flaps. *(Asymptotically. The
+S6b reviewer quantified the transient: capacity is `3*60 = 180` and the bucket starts FULL, so one
+relay window can carry 180 burst + 180 refill = **360 reads/min (6/s)** plus 60 acks = 420 metered
+ops/min. That is 1.75x §6.0's stated 240/min and 2x its "<=3 reads/s sustained average over a
+1-minute window" -- but it is inside `OpsPerMin: 600`, so the failure the budget exists to prevent,
+the tail dying `codeQuotaExceeded` mid-session, genuinely cannot occur. Recorded rather than
+re-tuned: shrinking the bucket to make the stated number literal would cost latency at the start of
+every burst to buy nothing.)*
+
+**Recorded limit of the request/response model.** Because the ADR rejects server-push frames,
+one reply per request is a hard floor: delivering N items with a per-item latency bound of L
+costs at least one metered request per item whenever items arrive more than L apart. At §6.0's
+8 frames/s that floor is **6.67 requests/s** -- NOT 8 -- and a 3 reads/s ceiling forces ~167 ms of
+mean queueing. *(Corrected by the S6b reviewer before it could harden into a constraint on future
+requirements. The general rule holds -- one reply per request forces a reply before item k+1 exists
+WHENEVER arrivals are more than L apart -- but the instantiation dropped its own precondition: at 8
+frames/s the gap is 125 ms and L is 150 ms, so 125 < 150 and the precondition is FALSE there. One
+request returning at t=125 ms delivers both items. The correct floor is `min(R, 1/L)` = 6.67 req/s;
+the queueing figure is 333/2 = 167 ms, which §6.0 line 336 already states. The qualitative
+conclusion is untouched -- 6.67 > 3, so a hard <=3 reads/s at 8 items/s with sub-150 ms per-item
+latency still requires the streaming subscribe this ADR rejected -- but the gap is 2.2x, not 2.7x.)*
+The regimes above are how the two coexist; they do not make the floor go away, and a future
+requirement that needs both a hard <= 3 reads/s at 8 items/s *and* sub-150 ms per-item latency
+needs a streaming subscribe, which is the option this ADR rejected and would have to re-open.
+
 **B8. JNI key custody: exactly one secret crosses, inbound only.** The Go core holds its keys in
 native heap; the Android Keystore API is Java-only and never exports private keys. The single
 deliberate crossing is therefore a **transient per-tier data key, unwrapped by an
