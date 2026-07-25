@@ -3,9 +3,10 @@
 
 The final audit validates against every requirement, not every slice, so the
 question it needs answered per ROW is: which slice owns this, has that slice
-shipped, and where is the evidence. Nine shipped slices have no evidence file,
-and that gap is invisible in a per-slice view -- it shows up here as a run of
-requirements whose only record is a commit message.
+shipped, and where is the evidence. A gap here is invisible in a per-slice view --
+it shows up as a run of requirements whose only record is a commit message. It has
+already caught one requirement that was reported shipped because its owning SLICE
+had shipped, while the requirement itself was not met (PB-TOK-1).
 
 Regenerate with:  python3 scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md
 Checked by scripts/check-phaseb-manifest.py for ownership; this script does not
@@ -26,6 +27,7 @@ VERIF = os.path.join(ROOT, "docs/verification")
 SHIPPED = [
     "S0", "S1", "S1b", "S2", "S2b", "S3", "S4", "S4b", "S5", "S6", "S6b",
     "S7", "S7b", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S14a",
+    "S15",
 ]
 
 

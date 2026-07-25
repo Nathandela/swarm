@@ -9,8 +9,8 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped | 97 |
-| Remaining | 46 |
+| Shipped | 100 |
+| Remaining | 43 |
 | **Shipped with NO evidence file** | **0** |
 
 ## Every requirement
@@ -123,7 +123,7 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-SEC-6 | S18 | pending | — |
 | PB-SEC-7 | S18 | pending | — |
 | PB-SEC-8 | S18 | pending | — |
-| PB-SEC-10 | S15 | pending | — |
+| PB-SEC-10 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
 | PB-SEC-11 | S18 | pending | — |
 | PB-SEC-12 | S18 | pending | — |
 | PB-SEC-13 | S18 | pending | — |
@@ -133,10 +133,10 @@ view: owner, whether that owner has shipped, and where the evidence is.
 | PB-STATE-3 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-4 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-5 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-6 | S15 | pending | — |
+| PB-STATE-6 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
 | PB-STATE-7 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-8 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-9 | S15 | pending | — |
+| PB-STATE-9 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
 | PB-STATE-10 | S18b | pending | — |
 | PB-SYNC-1 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
