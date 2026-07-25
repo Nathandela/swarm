@@ -39,12 +39,31 @@
 //
 // # Key custody (PB-KEY-1, ADR-007 B8)
 //
-// Exactly one secret crosses this boundary, and it crosses INBOUND ONLY:
-// InstallWakeKey and InstallContentKey take a transient per-tier data key that the Java
-// side unwrapped with an authenticated-Keystore AES KEK. No exported method ever
-// RETURNS raw bytes -- Go hands back sealed blobs, public keys and signatures, never key
-// material -- and the caller must zeroize its copy of the byte array as soon as the call
-// returns. PurgeKeys is PB-KEY-7's lock purge: it zeroizes the installed tier keys, takes
+// Key material crosses this boundary in ONE DIRECTION ONLY -- Java to Go -- in two
+// shapes, both of them the same artifact: a transient per-tier data key that the Java
+// side unwrapped with an authenticated-Keystore AES KEK.
+//
+//   - InstallWakeKey and InstallContentKey take the EPOCH key of their tier, as method
+//     parameters. No exported method ever RETURNS raw bytes -- Go hands back sealed
+//     blobs, public keys and signatures, never key material -- and the caller must
+//     zeroize its copy of the byte array as soon as the call returns.
+//   - KeyCustody, which NewApp requires, supplies the KEK that seals the phone's own key
+//     material AT REST (PB-KEY-9, PB-SEC-1). It is REVERSE-BOUND, so its directions are
+//     the mirror image of the above: Go is the caller, a result travels Java to Go
+//     (inbound) and a parameter would travel Go to Java (outbound). Its two methods
+//     therefore RETURN []byte and accept none, and Go zeroizes what they hand it as soon
+//     as the cipher is built. The shape deliberately NOT used is a reverse-bound
+//     Seal/Open pair: sealing needs the plaintext device private scalars, so handing them
+//     out would be an outbound key crossing however tidy it looks.
+//
+// There is no constructor that omits KeyCustody. An App with no custody would write the
+// phone's key material at rest with nothing over it, and reaching cleartext by forgetting
+// an argument is exactly what ADR-007 B18(c) decided must not be possible.
+//
+// KeyCustody's methods are called PER OPERATION and their answers are never memoized:
+// that is what makes the content tier's gate real, because an auth-gated Keystore key
+// re-checks authorisation on every unwrap and a cached answer would keep decrypting
+// content after the screen locked (PB-KEY-7). PurgeKeys is PB-KEY-7's lock purge: it zeroizes the installed tier keys, takes
 // their SEALED copies at rest with them, and drops every decrypted cache -- and is
 // recoverable by re-installing the tier key (a screen lock must not brick the app).
 // An error from PurgeKeys means the copies AT REST survived (a full disk, a read-only data

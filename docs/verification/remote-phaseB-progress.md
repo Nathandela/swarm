@@ -150,8 +150,8 @@ That is the process working, not scope creep.
 | S6b low-latency input path | PB-NET-5 | **SHIPPED** (`c22eb36`) -- phone->PTY p50 **486 ms -> 31 ms**, 21% of budget. Review found a race + permanent wait-slot leak from a legal frame sequence |
 | S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | **SHIPPED** (`3fbaa50`) -- first Android code; AAR + APK + Gradle gate + CI lane all green |
 | S11 input/lease semantics | PB-INPUT-*, PB-TIME-* | **SHIPPED** (`582676e`), re-audited through **four rounds** (`c85c210`, `3d84d53`). Round 3 found the daemon-restart lease brick and an ordering lock that covered only part of a shared stream; round 4 measured **2 of 80 commands vanishing**. Wants one clean review to close |
-| **S14a Go custody seam** | **PB-KEY-9** (half) | **SHIPPED** (`582676e`), re-audited through **three rounds** (`3dfbab7`, `010876a`, `47809f0`). Round 2 found an **unauthenticated key-adoption path** that bypassed the binding round 1 added. Round-3 review in flight -- **S14 is blocked on it** |
-| S14 Android key custody | PB-KEY-*, PB-SEC-1/2 | RED complete (77 `@Test` + 563 lines of scaffolding, `67a9116`); **blocked until S14a closes**. Owes PB-KEY-9's closing half, the sentinel->Kotlin mapping, and the dial-refusal behaviour |
+| **S14a Go custody seam** | **PB-KEY-9** (half) | **SHIPPED** (`582676e`), re-audited through **four rounds** (`3dfbab7`, `010876a`, `47809f0`, `4d8a37d`). Round 2 found an **unauthenticated key-adoption path** that bypassed the binding round 1 added; round 3 found three fences that could not fail. **Closed**; S14 unblocked and now delivered |
+| **S14 Android key custody** | PB-KEY-1/2/5/6/7/8, PB-SEC-1/2, **PB-KEY-9** (closing half) | **GREEN, awaiting review** -- 77 `@Test` green; the facade `KeyCustody` verb landed, the golden was regenerated, **both `InsecureCleartextSealer` call sites are gone** and the fence + this document were retired with them. Also closes the sentinel->Kotlin mapping and the dial-refusal behaviour |
 | S12 push transport | PB-PUSH-0/1/2/3/5/6/7/8/10 | **SHIPPED** (`2cb9b13`) -- 65 tests. ADR-007 B19/B20 decided the wake-key crossing and the payload disclosure. Found `internal/remote/push` had **zero production callers**: a fully-tested sender no binary installed |
 | S9 | PB-NET-1 | **in flight** -- one integration requirement, and it gates S10. It is also the slice that closes the phonesim-vs-facade gap end-to-end |
 | S10, S15..S21 | see §11 of the spec | not started |
@@ -325,47 +325,57 @@ machine enforces") and S14a in full. ADR-007 **B14 additionally requires S14a be
 CROSS-MODEL after GREEN**, as the 2026-07-23 SAS widening was, because it widens the frozen crypto
 package.
 
-## THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR -- S14 owes the closing half
+## PB-KEY-9 IS DELIVERED -- the shipped app no longer writes key material in the clear
 
-**PB-KEY-9 is NOT delivered until S14 lands a facade verb.** S14a sealed key material at rest and
-the acceptance gate (`android/gate/keycustody_test.go`, which reads the raw bytes on disk) went
-RED -> GREEN. But that gate injects real sealers from Go. **The Android app cannot**: gomobile
-cannot set a Go struct field, and the facade is golden-pinned (`mobile/testdata/exported_surface.golden`,
-enforced by `mobile/contract_test.go`), so `mobile.NewApp` has no way to supply one. It therefore
-passes `phonecore.InsecureCleartextSealer()` -- identity Seal/Open -- and on a real handset today
-the epoch content key is still recoverable from `phone-state.json`.
+**RETIRED BY S14, and the retirement was forced rather than remembered.** This section used to
+read "THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR". It was held by a fence that
+named it:
+`TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites` required the set of files calling
+`phonecore.InsecureCleartextSealer` to equal exactly `{mobile/app.go,
+mobile/conformance/harness_test.go}`, and its failure message said that a SHORTER list meant S14
+had landed the facade verb and that "this very section is stale". S14 deleted both call sites,
+the fence went red on purpose, and this is the reckoning it demanded. The fence was retargeted to
+a floor of ZERO and renamed `TestS14A_TheCleartextSealerHasNoCallSitesLeft`; it was not deleted
+and its list was not widened.
 
-This is ADR-007 B18's own forecast made concrete, and it is the fifth standing defect class in its
-purest form: **the acceptance test is green and the product is not**. It is recorded here rather
-than left in a commit message because a later reader could otherwise take PB-SEC-1's green gate as
-proof the property holds on device.
+**What closed it.** `swarmmobile.NewApp` now takes a second argument, `KeyCustody` -- a
+REVERSE-BOUND interface the Android app implements over the Android Keystore, with one method per
+PB-KEY-2 tier returning that tier's transient data key. `NewApp` derives one `custodySealer` per
+tier from it (AES-256-GCM, key fetched per operation and zeroized immediately), and there is no
+second constructor that omits it: a nil `KeyCustody` is a refusal, so cleartext custody is not
+reachable by forgetting anything. The golden was regenerated as a reviewed change --
+`func NewApp(*Config, KeyCustody)`, `type KeyCustody interface`, two `ifacemethod` lines and two
+`const` verdict tokens.
 
-Fail-closed at `NewApp` was considered and rejected as the interim: it would take the Android app
-and the whole `mobile/conformance` suite down until S14 lands, with no security gain in the
-meantime (nothing ships to a handset before S14 either way). The safety property B18(c) actually
-demands is preserved -- **omission** yields `ErrNoSealer`, and cleartext requires typing
-`Insecure...` at a call site, so production cannot reach it by forgetting a field. Two FILES carry
-that word -- `mobile/app.go` and `mobile/conformance/harness_test.go` -- holding four call
-expressions between them (one sealer per tier, twice).
+**ADR-007 B8 still holds, and the direction is the subtle part.** On a reverse-bound interface Go
+is the CALLER, so a result travels Java -> Go (inbound -- B8's single permitted crossing) and a
+parameter travels Go -> Java (outbound). `KeyCustody` therefore returns `[]byte` and accepts none.
+The shape that looks natural and is wrong is a reverse-bound `Seal`/`Open` pair: sealing needs the
+PLAINTEXT device scalars, so `Seal(plaintext []byte)` would hand Java the three content-tier
+private keys. `TestS14_TheCustodySeamIsInboundOnly` fences that -- PB-BIND-4's own guard cannot,
+because its `entryPoints()` covers funcs and methods only and an `ifacemethod` is invisible to it.
 
-**This is now fenced, not merely conventional.**
-`TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites` requires the set of files calling
-`InsecureCleartextSealer` to equal exactly those two, and fails in BOTH directions: a third file
-means unsealed custody spread somewhere uninventoried; **fewer** means S14 landed the facade verb and
-**this very section is stale**. Its failure message says so and names this section, so whoever trips
-it is pointed at the stale record rather than left to wonder why a count moved. The fence walks
-`_test.go` files too, because one of the two sites is a test file.
+**What now carries the property, and what does not.** The `android/gate` PB-SEC-1 pair still
+drives `phonecore.Resume` directly with sealers injected from Go: a path the Android app cannot
+take. `TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK` is the addition that goes
+through `swarmmobile.NewApp` and `App.InstallWakeKey`/`InstallContentKey` -- the constructor the
+app uses and B8's single inbound crossing -- and then reads the bytes of `device.key` and
+`phone-state.json`. It fails against a facade put back on the cleartext sealer, and it names the
+defect directly (a blob no longer than its plaintext carries neither nonce nor tag).
 
-**S14's obligation, precisely**: add a facade verb that accepts an Android-Keystore-backed KEK,
-regenerate the golden, and delete both `InsecureCleartextSealer` call sites -- at which point the
-fence above goes red on purpose and this section must be retired with it.
+**DO NOT read a green byte search as "no cleartext key material".** S14a's round-3 correction
+stands and is repeated in the new test's own comment: base64 encodes three bytes at a time, so a
+32-byte needle's encoding appears inside a longer field's encoding only when it happens to be
+3-byte aligned and terminal. Under a leak of all four device privates as one base64 field the
+search catches exactly one of them. What carries the property is the POSITIVE half -- that the
+material went through the injected sealer and comes back only under it.
 
-## S14 ALSO OWES THE PHONE'S CUSTODY-REFUSAL BEHAVIOUR -- the dial error is discarded today
+## THE PHONE'S CUSTODY-REFUSAL BEHAVIOUR -- CLOSED by S14
 
-Found by main while verifying the S14a cross-model review finding. **This is a defect that would
-ship WITH S14**, not before it, which is exactly why it is written down here.
+Found by main while verifying the S14a cross-model review finding, and recorded as "a defect that
+would ship WITH S14". It did not: S14 closed it in the same change that made it reachable.
 
-`mobile/relay.go:140-142` discards the dial error outright:
+`mobile/relay.go` discarded the dial error outright:
 
 ```go
 cl, err := a.dial(ctx)
@@ -374,33 +384,36 @@ if err != nil {
 }
 ```
 
-`mobile/relay.go:165-167` wires `Sign: ks.SignRelayAuth`, and `cmd/swarm-remote/config.go:143`
-records that the machine identity never refuses -- so **the phone is the only production caller of
-`relay.ClientAuth.Sign` that can fail**. Once custody is hardware-backed, that bare `continue`
-means:
+`mobile/relay.go` wires `Sign: ks.SignRelayAuth`, and `cmd/swarm-remote/config.go` records that
+the machine identity never refuses -- so the phone is the ONLY production caller of
+`relay.ClientAuth.Sign` that can fail. That was unreachable while the app ran on the software
+keystore, and went live the moment PB-KEY-9's Keystore-backed KEK landed.
 
-- `crypto.ErrKeyAuthRequired` (RECOVERABLE, wants a biometric) -> an endless "reconnecting" loop
-  with no re-prompt. The user has no way to learn that authenticating would fix it.
-- `crypto.ErrKeyInvalidated` (PERMANENT, the device must re-pair) -> the same silent loop, with no
-  terminal state and no re-pair prompt. It retries forever against a key that is gone.
+**What it does now**, in `App.ConnectionState` terms:
 
-This is ADR-007 B18(a)'s own stated failure mode -- "swallowing that refusal ... would re-create one
-layer up exactly the errorless interface B14 removed" -- reproduced **one layer further up than the
-ADR's comment anticipated**. The sentinels are handled carefully at `internal/phonecore/keycustody.go:179`
-and `internal/phonecore/state.go:444`, and then dropped on the floor at the transport edge.
+- `crypto.ErrKeyAuthRequired` (RECOVERABLE) -> `reauth_required`, and the state PERSISTS across
+  retries rather than being overwritten by `reconnecting` at the top of the next iteration. The
+  loop keeps dialing, because the biometric may be satisfied at any moment and the retry is what
+  notices; the first successful dial clears it by setting `online`.
+- `crypto.ErrKeyInvalidated` (PERMANENT) -> `repair_required`, and the loop RETURNS. Returning
+  rather than breaking is deliberate: `break` falls through to `setConn("offline")` and erases
+  the one state that tells the user to pair again. Retrying a destroyed key is a websocket
+  handshake every 250 ms, forever, on a battery, against the relay's per-source ops budget.
 
-**Not reachable today**, which is the only reason it is not a stop-ship: the shipped app still uses
-the software keystore (see the section above), so `SignRelayAuth` cannot error. It goes live at the
-exact moment S14 lands the hardware-backed KEK.
+**Both tests fail against the old `continue`**, verbatim: `left the phone reporting
+"reconnecting"`. They inject the refusal at the KEK rather than at the signature, so the
+assertion covers the whole chain -- `KeyCustody` -> `custodySealer` -> `SignRelayAuth` ->
+`relay.ClientAuth.Sign` -> `relay.Dial` -> the transport loop -- over a real relay and a real
+handshake. The terminal one observes the loop STOPPING by counting wake-tier unwraps across two
+windows, which is the half the old code could never satisfy.
 
-**S14's obligation**: a test drives `ErrKeyAuthRequired` through the phone dial path and asserts a
-user-visible **re-prompt** state (not "reconnecting"); a second drives `ErrKeyInvalidated` and
-asserts a **terminal, non-retrying** re-pair state. Both must fail against the current `continue`.
-Requirement anchor is PB-KEY-6 -- "every signing path" includes this one. S14 already owns mapping
-the two sentinels to typed Kotlin exceptions, which is the natural home for the behaviour.
+**Known consequence, stated rather than discovered later**: after `repair_required` the run
+goroutine has returned but `a.sess` is still set, so `Start` is a no-op until `Stop` is called.
+That is the correct end state for a device whose key is gone -- recovery is a re-pair, which
+builds a new App -- but it is a behaviour, not an accident.
 
-The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
-unfalsifiable by any test -- is being closed under S14a and is NOT this item.
+The narrower sibling finding -- `relay/client.go` handling the refusal correctly but
+unfalsifiably -- was closed under S14a and is not this item.
 
 ## THE PHONE CAN NEVER OBTAIN AN EPOCH KEY -- and no requirement owned it until now
 

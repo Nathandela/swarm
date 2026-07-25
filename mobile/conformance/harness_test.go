@@ -51,6 +51,9 @@ type harness struct {
 
 	Dir string // the phone's state directory: device keys + phone-state.json
 	App *swarmmobile.App
+	// Custody is the Android Keystore stand-in every tier of this phone's key material at
+	// rest is sealed under (PB-KEY-9). A test drives its refusals to exercise PB-KEY-6.
+	Custody *testCustody
 	// AppRelayURL overrides the relay the PHONE dials (the machine side always uses
 	// RelayURL). A test that has to observe the phone's own wire traffic points it at a
 	// proxy; empty means dial the relay directly.
@@ -125,13 +128,14 @@ func newHarness(t *testing.T) *harness {
 
 	// The phone's device custody, created BEFORE the facade so the harness knows the phone's
 	// relay-auth pub (phonecore.Resume opens this same directory). It is provisioned through
-	// the core under the SAME cleartext sealers the shipped facade uses: an unsealed
-	// device.key is no longer adopted -- a layout with no public half cannot be authenticated
-	// -- so seeding one would only produce a directory NewApp refuses to open.
+	// the core under the SAME KEKs the facade will be given: an unsealed device.key is no
+	// longer adopted -- a layout with no public half cannot be authenticated -- and a
+	// container sealed under different keys is one NewApp cannot open.
+	h.Custody = newTestCustody(t)
 	provision, err := phonecore.Resume(phonecore.Config{
 		Dir: h.Dir, Machine: h.Machine,
-		WakeSealer:    phonecore.InsecureCleartextSealer(),
-		ContentSealer: phonecore.InsecureCleartextSealer(),
+		WakeSealer:    h.Custody.wakeSealer(),
+		ContentSealer: h.Custody.contentSealer(),
 	})
 	if err != nil {
 		t.Fatalf("phone keystore: %v", err)
@@ -185,12 +189,11 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) seedState(ks crypto.KeyStore, machineRelayAuthPub ed25519.PublicKey) {
 	h.t.Helper()
 
-	// The SAME custody the facade opens this directory with (mobile/app.go): PB-KEY-9's
-	// seam is not reachable from the gomobile Config, so the shipped app is still on the
-	// named cleartext sealer until S14 adds the facade verb. A different sealer here would
-	// seed a blob NewApp could not open.
+	// The SAME custody the facade opens this directory with (mobile/app.go, which now takes a
+	// KeyCustody and derives one sealer per tier from it). A different sealer here would seed
+	// a blob NewApp could not open.
 	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
-		phonecore.InsecureCleartextSealer(), phonecore.InsecureCleartextSealer())
+		h.Custody.wakeSealer(), h.Custody.contentSealer())
 	if err != nil {
 		h.t.Fatalf("open phone state: %v", err)
 	}
@@ -220,7 +223,7 @@ func (h *harness) openApp() *swarmmobile.App {
 		StateDir:  h.Dir,
 		RelayURL:  url,
 		MachineID: h.Machine,
-	})
+	}, h.Custody)
 	if err != nil {
 		h.t.Fatalf("swarmmobile.NewApp: %v", err)
 	}

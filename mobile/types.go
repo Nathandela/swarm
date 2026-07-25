@@ -21,10 +21,18 @@ var errNoReceiver = errors.New("swarmmobile: unusable receiver (nil or never con
 // statement (PB-BIND-5). A Go panic that reaches the JNI frame kills the app process --
 // there is no Java frame to catch it -- so it is converted into the entry point's error
 // result, which is why every entry point has one.
+// It also carries PB-KEY-6's outbound half. Every custody refusal the core produces leaves
+// through one of these entry points, and gomobile flattens a Go error into a Java exception
+// carrying only its message -- so the two crypto sentinels are stamped with a stable token
+// HERE rather than at each verb. Central is the point: the Android side must act differently
+// on a recoverable refusal and a permanent one (PB-KEY-6), and an enumeration of the verbs
+// that classify is a list somebody has to keep correct as verbs are added.
 func barrier(err *error) {
 	if r := recover(); r != nil {
 		*err = fmt.Errorf("swarmmobile: recovered panic at the JNI boundary: %v", r)
+		return
 	}
+	*err = stampCustodyVerdict(*err)
 }
 
 // Config assembles an App. StateDir is the phone's private state directory (device keys

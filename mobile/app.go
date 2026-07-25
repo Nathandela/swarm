@@ -118,10 +118,21 @@ type session struct {
 // NewApp resumes the phone from its state directory (PB-STATE-1/-2: every durable
 // coordinate, or a fail-closed error -- never a silent start from zero) and returns the
 // bound App. It does not connect; Start does.
-func NewApp(cfg *Config) (app *App, err error) {
+//
+// custody is PB-KEY-9's seam and it is REQUIRED, not optional. There is deliberately no
+// second constructor that omits it: an App with no custody would write the phone's key
+// material at rest with nothing over it, and an optional parameter is a parameter somebody
+// passes nil to. Refusing here costs one line at the one call site the Android app has, and
+// it is the only shape under which "key material at rest is sealed" is a property of the
+// product rather than of the test fixtures.
+func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 	defer barrier(&err)
 	if cfg == nil {
 		return nil, errors.New("swarmmobile: NewApp requires a Config")
+	}
+	if custody == nil {
+		return nil, errors.New("swarmmobile: NewApp requires a KeyCustody (PB-KEY-9): the phone's " +
+			"key material at rest is sealed under the Android Keystore, and there is no cleartext fallback")
 	}
 	a := &App{
 		relayURL:   cfg.RelayURL,
@@ -137,16 +148,15 @@ func NewApp(cfg *Config) (app *App, err error) {
 		Dir:     cfg.StateDir,
 		Machine: cfg.MachineID,
 		Ack:     &relayAcker{app: a},
-		// RECORDED DEFECT, owned by S14 (ADR-007 B18). PB-KEY-9's seam is
-		// phonecore.Config, which the Android side cannot reach: gomobile cannot set a
-		// Go struct field and mobile.Config is golden-pinned with no verb for a sealer.
-		// So the shipped app still writes key material in the clear -- named here at the
-		// call site rather than reached by omitting a field, which Resume refuses
-		// outright (ErrNoSealer). S14 adds the facade verb, changes the golden and
-		// replaces these two with the Android-Keystore-backed KEKs; PB-KEY-9 is not
-		// delivered until it does.
-		WakeSealer:    phonecore.InsecureCleartextSealer(),
-		ContentSealer: phonecore.InsecureCleartextSealer(),
+		// PB-KEY-9, delivered. Both tiers are sealed under a key the Android Keystore
+		// unwraps and this process never stores: the sealers hold the FETCHER, so every
+		// seal and every open goes back to Keystore and the content tier's gate is the
+		// unwrap refusing rather than a flag beside it. A separate sealer per tier is
+		// what keeps PB-KEY-2's split real at rest -- one file cannot be gated two ways,
+		// and one sealer over both would put the content key behind the wake tier's KEK,
+		// which opens with no user present.
+		WakeSealer:    custodySealer{tier: "wake", fetch: custody.WakeKEK},
+		ContentSealer: custodySealer{tier: "content", fetch: custody.ContentKEK},
 	})
 	if err != nil {
 		a.events.close()

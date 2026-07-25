@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
@@ -104,6 +105,23 @@ func (a *App) awaitConn() (*relay.Client, error) {
 	}
 }
 
+// The connection states App.ConnectionState reports, named once so the transport loop and
+// the Android side cannot disagree about a literal.
+//
+// The last two are PB-KEY-6's: a custody refusal is not a transport condition and must not be
+// reported as one. connReauthRequired means "prompt for the biometric and it will connect";
+// connRepairRequired means "the key is gone" and is TERMINAL -- the loop stops, because
+// retrying a destroyed key forever while showing a spinner is the failure this pair exists to
+// remove.
+const (
+	connOffline        = "offline"
+	connConnecting     = "connecting"
+	connOnline         = "online"
+	connReconnecting   = "reconnecting"
+	connReauthRequired = "reauth_required"
+	connRepairRequired = "repair_required"
+)
+
 func (a *App) setConn(state string) {
 	a.mu.Lock()
 	changed := a.connState != state
@@ -112,6 +130,14 @@ func (a *App) setConn(state string) {
 	if changed {
 		a.events.emit(&Event{Kind: "connection", State: state})
 	}
+}
+
+// currentConn reads the state without the ready()/barrier wrapping ConnectionState carries:
+// it is consulted from inside the transport loop, which is not an entry point.
+func (a *App) currentConn() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.connState
 }
 
 func (a *App) setClient(cl *relay.Client) {
@@ -125,10 +151,16 @@ func (a *App) run(ctx context.Context) {
 	first := true
 	for ctx.Err() == nil {
 		if first {
-			a.setConn("connecting")
+			a.setConn(connConnecting)
 			first = false
 		} else {
-			a.setConn("reconnecting")
+			// A custody refusal is NOT a transport problem, so it must not be overwritten
+			// by "reconnecting": the user has to be told that authenticating is what fixes
+			// this, and a spinner tells them the opposite. The state therefore persists
+			// across the retry, and the next successful dial clears it by setting "online".
+			if a.currentConn() != connReauthRequired {
+				a.setConn(connReconnecting)
+			}
 			select {
 			case <-ctx.Done():
 			case <-time.After(reconnectDelay):
@@ -139,10 +171,31 @@ func (a *App) run(ctx context.Context) {
 		}
 		cl, err := a.dial(ctx)
 		if err != nil {
+			// PB-KEY-6, at the one production call site of relay.ClientAuth.Sign that can
+			// refuse. This error used to be discarded with a bare `continue`, which was
+			// unreachable while the app ran on the software keystore and went LIVE the
+			// moment PB-KEY-9's Keystore-backed KEK landed: a recoverable refusal became an
+			// endless "reconnecting" with no prompt, and a permanent one the same loop
+			// against a key that no longer exists.
+			switch {
+			case errors.Is(err, crypto.ErrKeyInvalidated):
+				// PERMANENT and therefore TERMINAL. The relay-auth key is destroyed;
+				// nothing on-device recovers it and every retry is a round trip spent
+				// proving that again. Returning here rather than breaking is deliberate --
+				// break would fall through to setConn("offline") and erase the one state
+				// that tells the user to pair again.
+				a.setConn(connRepairRequired)
+				a.setClient(nil)
+				return
+			case errors.Is(err, crypto.ErrKeyAuthRequired):
+				// RECOVERABLE. Keep retrying -- the biometric may be satisfied at any
+				// moment, and the retry is what notices -- but say what is actually wrong.
+				a.setConn(connReauthRequired)
+			}
 			continue
 		}
 		a.setClient(cl)
-		a.setConn("online")
+		a.setConn(connOnline)
 		a.onConnected(ctx, cl)
 		a.drain(ctx, cl)
 		a.setClient(nil)
@@ -157,7 +210,7 @@ func (a *App) run(ctx context.Context) {
 		_ = cl.Close()
 	}
 	a.setClient(nil)
-	a.setConn("offline")
+	a.setConn(connOffline)
 }
 
 func (a *App) dial(ctx context.Context) (*relay.Client, error) {

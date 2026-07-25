@@ -43,6 +43,8 @@ enum class PromptOutcome { SUCCEEDED, CANCELLED, FAILED, LOCKED_OUT, LOCKED_OUT_
 
 /** What the app does about it. Distinct per outcome, or the outcome was not handled. */
 enum class GateResolution {
+    /** The prompt is now on screen. Not an outcome -- only [AuthorizationLedger.beginPrompt] returns it. */
+    PROMPT_STARTED,
     AUTHORIZED,
     ABANDONED,
     RETRYABLE,
@@ -55,22 +57,68 @@ enum class ConcurrentPromptPolicy { REFUSE_SECOND, COALESCE_ONTO_FIRST }
 
 object BiometricPolicy {
 
-    fun specFor(operation: GatedOperation): AuthorizationSpec =
-        TODO("PB-SEC-2 / 6.0: freshness tier for $operation")
+    /** 6.0's window for the typed tier, in seconds. Named once. */
+    const val TIMED_WINDOW_SECONDS: Int = 60
+
+    private val timed = AuthorizationSpec(
+        freshness = Freshness.Timed(TIMED_WINDOW_SECONDS),
+        requiresCryptoObject = false,
+        timeoutSeconds = TIMED_WINDOW_SECONDS,
+    )
+
+    private val perUse = AuthorizationSpec(
+        freshness = Freshness.PerUse,
+        requiresCryptoObject = true,
+        // Per-use IS timeout 0 in KeyGenParameterSpec terms. The integer alone cannot
+        // distinguish the tiers, which is exactly why requiresCryptoObject exists beside it.
+        timeoutSeconds = 0,
+    )
+
+    fun specFor(operation: GatedOperation): AuthorizationSpec = when (operation) {
+        GatedOperation.INPUT, GatedOperation.TAKE_CONTROL -> timed
+        GatedOperation.REVOKE, GatedOperation.KILL_SWITCH,
+        GatedOperation.LAUNCH, GatedOperation.KILL,
+        -> perUse
+    }
 
     /**
      * PB-SEC-2: "no reuse of one authentication for a different action unless explicitly
      * allowed". Explicitly allowed means declared here, not implied by two operations
      * happening to share a key.
+     *
+     * A per-use authorization is shared with NOTHING, including itself: it is carried by a
+     * CryptoObject bound to one operation, and it is spent by that operation. The timed
+     * operations DO share, because they share one Keystore entry and one window by
+     * construction (`KeystoreAliases.forOperation`) -- the declaration is what turns that
+     * accident of the platform into a decision.
      */
     fun sharesAuthorizationWith(a: GatedOperation, b: GatedOperation): Boolean =
-        TODO("PB-SEC-2: may an authorization for $a authorize $b?")
+        !specFor(a).requiresCryptoObject && !specFor(b).requiresCryptoObject
 
-    val concurrentPrompt: ConcurrentPromptPolicy
-        get() = TODO("PB-SEC-2: define concurrent-prompt behaviour")
+    /**
+     * REFUSE_SECOND. BiometricPrompt does not queue: a second prompt while one is in flight
+     * either replaces the first -- leaving the first caller waiting on a result that will
+     * never arrive -- or throws. Coalescing onto the first is worse still, because the two
+     * callers may want different operations and a coalesced success would authorize the
+     * wrong one.
+     */
+    val concurrentPrompt: ConcurrentPromptPolicy = ConcurrentPromptPolicy.REFUSE_SECOND
 
-    fun resolve(outcome: PromptOutcome): GateResolution =
-        TODO("PB-SEC-2: defined cancel/failure/lockout behaviour for $outcome")
+    /**
+     * Four non-success outcomes, four distinct resolutions. Collapsing any pair produces a
+     * prompt loop against a platform that is refusing on purpose.
+     */
+    fun resolve(outcome: PromptOutcome): GateResolution = when (outcome) {
+        PromptOutcome.SUCCEEDED -> GateResolution.AUTHORIZED
+        // The user said no. Prompting again is the thing they just declined.
+        PromptOutcome.CANCELLED -> GateResolution.ABANDONED
+        // A finger that did not match. The platform allows another attempt.
+        PromptOutcome.FAILED -> GateResolution.RETRYABLE
+        // ERROR_LOCKOUT: 30 s, and only time clears it.
+        PromptOutcome.LOCKED_OUT -> GateResolution.BLOCKED_UNTIL_TIMEOUT
+        // ERROR_LOCKOUT_PERMANENT: only a device credential clears it.
+        PromptOutcome.LOCKED_OUT_PERMANENT -> GateResolution.BLOCKED_UNTIL_DEVICE_CREDENTIAL
+    }
 }
 
 /**
@@ -97,8 +145,25 @@ enum class Recovery {
 }
 
 object GateInvalidation {
-    fun recoveryFor(event: InvalidationEvent): Recovery =
-        TODO("PB-SEC-2: how is custody recovered after $event?")
+    /**
+     * PB-SEC-2. Four of the five destroy no key, so a fresh prompt is the whole recovery.
+     *
+     * BIOMETRIC_ENROLLMENT_CHANGED is the exception and it is REPAIR_DEVICE, not
+     * REPROVISION_KEK. `setInvalidatedByBiometricEnrollment(true)` destroys the content KEK,
+     * and the material that KEK protected -- the three content-tier device scalars, including
+     * the COMMAND_SIGN seed the daemon registry pins this device's id to (R-DEV.1) -- exists
+     * nowhere else. Reprovisioning a KEK re-seals plaintext you still hold; here there is
+     * none to re-seal. Nothing on-device recovers it, so the honest answer is that the device
+     * must pair again.
+     */
+    fun recoveryFor(event: InvalidationEvent): Recovery = when (event) {
+        InvalidationEvent.BIOMETRIC_ENROLLMENT_CHANGED -> Recovery.REPAIR_DEVICE
+        InvalidationEvent.APP_BACKGROUNDED,
+        InvalidationEvent.DEVICE_LOCKED,
+        InvalidationEvent.PROCESS_DEATH,
+        InvalidationEvent.AUTH_TIMEOUT_EXPIRED,
+        -> Recovery.REAUTHENTICATE
+    }
 }
 
 /**
@@ -111,22 +176,62 @@ object GateInvalidation {
  */
 class AuthorizationLedger {
 
-    fun beginPrompt(operation: GatedOperation): GateResolution =
-        TODO("PB-SEC-2: concurrent-prompt behaviour when starting a prompt for $operation")
+    /** The one prompt BiometricPrompt may have on screen, or null. */
+    private var inFlight: GatedOperation? = null
 
-    fun endPrompt(operation: GatedOperation, outcome: PromptOutcome, atMillis: Long): GateResolution =
-        TODO("PB-SEC-2: record the result of the prompt for $operation")
+    /** Grant time per authorized operation. Absent means not authorized, at any time. */
+    private val grantedAtMillis = mutableMapOf<GatedOperation, Long>()
 
-    fun authorized(operation: GatedOperation, atMillis: Long): Boolean =
-        TODO("PB-SEC-2: is $operation authorized at $atMillis?")
-
-    /** Per-use authorizations are spent by the operation they authorized. */
-    fun consume(operation: GatedOperation)  {
-        TODO("PB-SEC-2: spend the authorization for $operation")
+    fun beginPrompt(operation: GatedOperation): GateResolution {
+        if (inFlight != null) return GateResolution.REFUSED_PROMPT_IN_FLIGHT
+        inFlight = operation
+        return GateResolution.PROMPT_STARTED
     }
 
+    /**
+     * Records the result and clears the in-flight marker WHATEVER the outcome. A resolution
+     * path that cleared it only on success wedges the gate on the first cancel: every later
+     * prompt is refused as concurrent and no prompt can ever start again.
+     */
+    fun endPrompt(operation: GatedOperation, outcome: PromptOutcome, atMillis: Long): GateResolution {
+        if (inFlight == operation) inFlight = null
+        val resolution = BiometricPolicy.resolve(outcome)
+        if (resolution == GateResolution.AUTHORIZED) {
+            grantedAtMillis[operation] = atMillis
+        } else {
+            grantedAtMillis.remove(operation)
+        }
+        return resolution
+    }
+
+    /**
+     * Never consulted as the gate. The gate is the Keystore refusing to unwrap; this only
+     * decides whether prompting is worth doing, and BiometricGateTest drives the two out of
+     * agreement to prove which one is trusted.
+     */
+    fun authorized(operation: GatedOperation, atMillis: Long): Boolean {
+        val granted = grantedAtMillis[operation] ?: return false
+        val spec = BiometricPolicy.specFor(operation)
+        // A per-use authorization has no window: it is carried by a CryptoObject bound to one
+        // operation and it ends when that operation consumes it. Giving it a timeout would be
+        // the Timed(0) confusion this file exists to prevent, from the other direction.
+        if (spec.requiresCryptoObject) return true
+        return atMillis - granted < spec.timeoutSeconds * 1_000L
+    }
+
+    /** Per-use authorizations are spent by the operation they authorized. */
+    fun consume(operation: GatedOperation) {
+        grantedAtMillis.remove(operation)
+    }
+
+    /**
+     * Every event drops EVERY authorization, not just the ones whose tier looks affected.
+     * PB-SEC-2 names invalidation as a clause of its own, and an event-specific purge is a
+     * table someone has to keep correct as operations are added.
+     */
     fun invalidate(event: InvalidationEvent) {
-        TODO("PB-SEC-2: drop authorizations on $event")
+        inFlight = null
+        grantedAtMillis.clear()
     }
 }
 
@@ -138,9 +243,20 @@ class AuthorizationLedger {
 enum class InputGateDecision { PROCEED, PAUSE_AND_REAUTHORIZE }
 
 object InputFreshness {
-    fun decide(lastAuthMillis: Long, nowMillis: Long): InputGateDecision =
-        TODO("PB-SEC-2 / PB-INPUT-3: freshness decision")
+    fun decide(lastAuthMillis: Long, nowMillis: Long): InputGateDecision {
+        val window = BiometricPolicy.specFor(GatedOperation.INPUT).timeoutSeconds * 1_000L
+        return if (nowMillis - lastAuthMillis < window) {
+            InputGateDecision.PROCEED
+        } else {
+            InputGateDecision.PAUSE_AND_REAUTHORIZE
+        }
+    }
 
-    val freshnessExpiryEndsLease: Boolean
-        get() = TODO("PB-SEC-2 / PB-INPUT-3: does freshness expiry end the lease?")
+    /**
+     * FALSE. take_control's ExpiresAt is now + 15 min precisely so the lease is not the
+     * binding constraint on a typing session (6.0); ending it on a 60 s freshness lapse would
+     * reintroduce that constraint through the back door, and the user would lose the session
+     * rather than be asked for a fingerprint.
+     */
+    const val freshnessExpiryEndsLease: Boolean = false
 }

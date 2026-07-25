@@ -1,4 +1,6 @@
 const CallbackQueueSize
+const KeyCustodyAuthRequired
+const KeyCustodyKeyInvalidated
 field Config.MachineID string
 field Config.RelayURL string
 field Config.StateDir string
@@ -51,8 +53,10 @@ field UndeliveredInput.Bytes int
 field UndeliveredInput.Reason string
 field UndeliveredInput.SessionID string
 func DecodeQR(string) (*QRPayload, error)
-func NewApp(*Config) (*App, error)
+func NewApp(*Config, KeyCustody) (*App, error)
 ifacemethod EventListener.OnEvent(*Event)
+ifacemethod KeyCustody.ContentKEK() ([]byte, error)
+ifacemethod KeyCustody.WakeKEK() ([]byte, error)
 method App.BeginPairing(string) (*Pairing, error)
 method App.Close() error
 method App.ConnectionState() (string, error)
@@ -110,6 +114,7 @@ type Event struct
 type EventListener interface
 type JournalEntry struct
 type JournalPage struct
+type KeyCustody interface
 type LaunchSpec struct
 type Op struct
 type Outcome struct

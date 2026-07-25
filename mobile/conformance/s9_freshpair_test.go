@@ -85,13 +85,18 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 	// The state directory is the install. It outlives every App opened over it, which is what
 	// makes the assertion after the restart a statement about what reached DISK.
 	dir := t.TempDir()
+	// ONE custody across both launches, deliberately. The Android Keystore survives a
+	// process death; a fresh KEK per launch would model a factory reset, and the assertion
+	// after the restart would then be about a directory the second App cannot open rather
+	// than about what reached disk.
+	custody := newTestCustody(t)
 	open := func() *swarmmobile.App {
 		t.Helper()
 		app, err := swarmmobile.NewApp(&swarmmobile.Config{
 			StateDir:  dir,
 			RelayURL:  srv.URL(),
 			MachineID: testMachineID,
-		})
+		}, custody)
 		if err != nil {
 			t.Fatalf("swarmmobile.NewApp: %v", err)
 		}
@@ -272,9 +277,10 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 	// ---- the next launch ---------------------------------------------------------
 	//
 	// Everything below reads the SECOND App, over the same directory. The durable blob is
-	// deliberately not opened directly: phonecore.InsecureCleartextSealer is inventoried to
-	// exactly two call sites (ADR-007 B18(c) / TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites)
-	// and a test is not entitled to be the third. The blob's own contents -- content key,
+	// deliberately not opened directly: it is sealed under the two tier KEKs now, so reading
+	// it here would mean re-deriving the facade's own AEAD construction in a test, and a
+	// second copy of that construction is a second thing to get wrong. The blob's contents --
+	// content key,
 	// send-seq ceilings, relay cursor -- are asserted where they belong, in
 	// internal/phonecore's TestS9_AFreshInstallsFirstSaveSurvivesTheNextProcessStart.
 	restarted := open()

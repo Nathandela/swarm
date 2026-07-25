@@ -281,41 +281,56 @@ func TestS14A_NoCallSiteDiscardsACustodyError(t *testing.T) {
 // The named cleartext fallback, bounded.
 // ---------------------------------------------------------------------------
 
-// s14aCleartextCallSites are the ONLY files permitted to reach for unsealed key custody.
-// mobile/app.go is the shipped defect ADR-007 B18(c) accepted as interim -- gomobile cannot
-// set a Go struct field and the facade is golden-pinned, so NewApp has no way to supply a
-// real sealer -- and mobile/conformance/harness_test.go must match it byte for byte or it
-// seeds a blob NewApp cannot open.
-var s14aCleartextCallSites = []string{
-	"mobile/app.go",
-	"mobile/conformance/harness_test.go",
-}
+// s14aCleartextCallSites is EMPTY, and that is S14's deliverable rather than an oversight.
+//
+// It used to hold mobile/app.go and mobile/conformance/harness_test.go: the interim ADR-007
+// B18(c) accepted, because the seam was a phonecore.Config field and gomobile cannot set a Go
+// struct field, so the shipped app had no way to supply a real sealer and wrote the epoch
+// content key to phone-state.json in the clear. swarmmobile.NewApp now REQUIRES a KeyCustody
+// and derives one custodySealer per tier from it, so both call sites are gone and PB-KEY-9 is
+// delivered.
+//
+// The list stays a list, and the fence stays, because the property it holds has not changed
+// direction -- only its value. Unsealed custody must still cost a deliberate, inventoried call
+// (that is what B18(c) decided), and the inventory is now empty.
+var s14aCleartextCallSites = []string{}
 
-// TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites converts a grep convention into
-// a fence. docs/verification/remote-phaseB-progress.md records that
-// InsecureCleartextSealer's own name is the live defect marker for PB-KEY-9's undelivered
-// half, and that exactly two files carry it -- but a comment cannot stop a third appearing,
-// and nothing announces when the two go away.
+// TestS14A_TheCleartextSealerHasNoCallSitesLeft converts a grep convention into a fence.
 //
-// It is deliberately failable in BOTH directions:
+// IT WAS RENAMED, AND THE RENAME IS THE RECORD. Until S14 it was
+// TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites and it required exactly
+// {mobile/app.go, mobile/conformance/harness_test.go}. Its own failure message said what a
+// SHORTER list would mean -- "S14 landed the facade verb, PB-KEY-9 is delivered, and both this
+// fence and the 'THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR' section of
+// docs/verification/remote-phaseB-progress.md are now false and must be retired" -- and that is
+// exactly what happened. It went red on purpose, the doc section was retired in the same change,
+// and the floor moved from two to zero. Deleting the test or widening the list would have thrown
+// the fence away at the moment it did its job.
 //
-//   - MORE than these two: something else now writes key material with no KEK over it, which
-//     is the property B18(c) exists to make impossible to reach by accident. The whole point
-//     of the named constructor is that unsealed custody costs a deliberate call, so the
-//     inventory of who paid that cost has to stay short and known.
-//   - FEWER: S14 has landed the facade verb and deleted the call sites, which means PB-KEY-9
-//     is finally delivered -- and the "NOT delivered" section of
-//     docs/verification/remote-phaseB-progress.md, plus this fence, are now stale. Failing
-//     here is what forces that reckoning instead of leaving a false record standing.
+// It is deliberately still failable, in the direction that is still reachable:
 //
-// FILES, not call expressions: mobile/app.go calls it twice (one sealer per tier) and the
-// harness twice on one line. A third call inside a file already on this list is not new
-// exposure; a third FILE is. Test files are walked too -- one of the two is one.
+//   - MORE than zero: something writes key material with no KEK over it again. B18(c)'s whole
+//     point is that unsealed custody costs a deliberate call, so the inventory of who paid that
+//     cost has to stay short and known -- and it is now empty.
+//   - FEWER: unreachable, which is the honest end state for a floor of zero. The direction this
+//     fence can no longer carry is carried by the POSITIVE half instead:
+//     TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK in android/gate opens the two
+//     files the facade wrote and refuses to find the key material in them. An absent call site
+//     proves only that nobody ASKED for cleartext.
 //
-// This cannot be done by restricting visibility instead: mobile/app.go is in another module
-// path and needs the exported symbol to build, so counting call sites is the mechanism
-// available today.
-func TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites(t *testing.T) {
+// FILES, not call expressions, unchanged: a third call inside a file already on the list is not
+// new exposure, a third FILE is, and a count-of-expressions fence would fire spuriously on a
+// reformat. With the list empty the distinction no longer bites; it is kept so the fence still
+// says something exact if the list ever grows again.
+//
+// KNOWN EVASION, recorded rather than overstated: the matcher keys on a call whose function is
+// NAMED InsecureCleartextSealer, so binding it as a function VALUE evades it entirely --
+// `var mint = phonecore.InsecureCleartextSealer` followed by `mint()` in a third package stays
+// green, mutation-confirmed. It has no var-initializer gap; it is not evasion-proof.
+//
+// This cannot be done by restricting visibility instead: mobile/app.go is in another module path
+// and needs the exported symbol to build, so counting call sites is the mechanism available today.
+func TestS14A_TheCleartextSealerHasNoCallSitesLeft(t *testing.T) {
 	root := s14aRepoRoot(t)
 
 	seen := map[string]bool{}
@@ -371,26 +386,25 @@ func TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := append([]string(nil), s14aCleartextCallSites...)
+	// []string{} rather than []string(nil): the floor is now ZERO, and reflect.DeepEqual
+	// distinguishes a nil slice from an empty one -- so a nil `want` would fail against the
+	// non-nil empty `got` above and the fence would report "[] want []".
+	want := append([]string{}, s14aCleartextCallSites...)
 	sort.Strings(want)
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ADR-007 B18(c): the InsecureCleartextSealer call sites are %v, want exactly %v.\n"+
-			"MORE means a third place now writes key material with no KEK over it -- unsealed custody is "+
-			"supposed to cost a deliberate, inventoried call.\n"+
-			"FEWER means S14 landed the facade verb, PB-KEY-9 is delivered, and both this fence and the "+
-			"'THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR' section of "+
-			"docs/verification/remote-phaseB-progress.md are now false and must be retired.",
+			"PB-KEY-9 is DELIVERED: swarmmobile.NewApp requires a KeyCustody and derives one sealer per "+
+			"tier from it, so nothing in this repository writes key material with no KEK over it. A call "+
+			"site appearing here means that has stopped being true somewhere -- unsealed custody is "+
+			"supposed to cost a deliberate, inventoried call, and the inventory is empty.\n"+
+			"If a new call site is genuinely wanted it needs the reckoning the old two got: a stated "+
+			"reason, a recorded residual and an ADR item -- not an entry appended to this list.",
 			got, want)
 	}
-	// Named separately because it is the one that matters: the shipped app is the defect this
-	// marker tracks, and losing it from the list while the count stays at two would mean the
-	// cleartext custody moved somewhere new rather than went away.
-	if !seen["mobile/app.go"] {
-		t.Errorf("ADR-007 B18(c): mobile/app.go no longer calls InsecureCleartextSealer. If S14 landed the "+
-			"facade verb, retire this fence and the PB-KEY-9 'not delivered' record with it; if the call "+
-			"merely moved, PB-KEY-9's status note now points at the wrong file. Call sites found: %v", got)
-	}
+	// The POSITIVE half is not here and cannot be: this package cannot observe what the facade
+	// writes. It is android/gate's TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK,
+	// which opens the two files NewApp wrote and searches their bytes.
 }
 
 // s14aCallsFailableOp reports whether e is a direct call to one of the three failable

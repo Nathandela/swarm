@@ -134,7 +134,7 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 		StateDir:  t.TempDir(),
 		RelayURL:  srv.URL(),
 		MachineID: testMachineID,
-	})
+	}, newTestCustody(t))
 	if err != nil {
 		t.Fatalf("swarmmobile.NewApp: %v", err)
 	}
