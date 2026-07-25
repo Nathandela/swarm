@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -254,11 +255,141 @@ func TestS14A_NoCallSiteDiscardsACustodyError(t *testing.T) {
 
 	// Every assignment call site in non-test code, counted. Below this floor the fence is not
 	// reading the tree it claims to guard.
-	const floor = 3
+	//
+	// The floor is the TRUE count, not a round number safely under it. Set below the truth it
+	// proves only that the walk parses Go -- it was 3 while the tree held 4, so it was already
+	// satisfied before the slice that introduced these call sites and measured none of them.
+	// The five are: internal/phonecore/command.go (ks.SignCommand), mobile/pairing.go
+	// (ks.NoiseStatic), mobile/commands.go and internal/phonesim/phonesim.go x2 (the
+	// package-local phonecore.SignCommand). Adding a call site is fine; losing one means the
+	// fence is looking at less of the tree than it did, and that is worth a failure.
+	//
+	// KNOWN EVASION, recorded not closed: only *ast.AssignStmt and *ast.ExprStmt are
+	// inspected, so `var sig, _ = ks.SignRelayAuth(...)` inside a function is legal Go that
+	// discards the error and passes. Widening the op set to the bare name "Sign" would
+	// over-match badly (relay.ClientAuth.Sign, machineid.RelayAuthSign, every ed25519 signer),
+	// so the cheap fix is worse than the gap.
+	const floor = 5
 	if visited < floor {
 		t.Fatalf("PB-KEY-9: the call-site fence found only %d assignment call sites of %v in non-test "+
 			"code (floor %d). It is not reading the tree, so it guards nothing",
 			visited, s14aSortedOps(), floor)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The named cleartext fallback, bounded.
+// ---------------------------------------------------------------------------
+
+// s14aCleartextCallSites are the ONLY files permitted to reach for unsealed key custody.
+// mobile/app.go is the shipped defect ADR-007 B18(c) accepted as interim -- gomobile cannot
+// set a Go struct field and the facade is golden-pinned, so NewApp has no way to supply a
+// real sealer -- and mobile/conformance/harness_test.go must match it byte for byte or it
+// seeds a blob NewApp cannot open.
+var s14aCleartextCallSites = []string{
+	"mobile/app.go",
+	"mobile/conformance/harness_test.go",
+}
+
+// TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites converts a grep convention into
+// a fence. docs/verification/remote-phaseB-progress.md records that
+// InsecureCleartextSealer's own name is the live defect marker for PB-KEY-9's undelivered
+// half, and that exactly two files carry it -- but a comment cannot stop a third appearing,
+// and nothing announces when the two go away.
+//
+// It is deliberately failable in BOTH directions:
+//
+//   - MORE than these two: something else now writes key material with no KEK over it, which
+//     is the property B18(c) exists to make impossible to reach by accident. The whole point
+//     of the named constructor is that unsealed custody costs a deliberate call, so the
+//     inventory of who paid that cost has to stay short and known.
+//   - FEWER: S14 has landed the facade verb and deleted the call sites, which means PB-KEY-9
+//     is finally delivered -- and the "NOT delivered" section of
+//     docs/verification/remote-phaseB-progress.md, plus this fence, are now stale. Failing
+//     here is what forces that reckoning instead of leaving a false record standing.
+//
+// FILES, not call expressions: mobile/app.go calls it twice (one sealer per tier) and the
+// harness twice on one line. A third call inside a file already on this list is not new
+// exposure; a third FILE is. Test files are walked too -- one of the two is one.
+//
+// This cannot be done by restricting visibility instead: mobile/app.go is in another module
+// path and needs the exported symbol to build, so counting call sites is the mechanism
+// available today.
+func TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites(t *testing.T) {
+	root := s14aRepoRoot(t)
+
+	seen := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "build", "node_modules":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		ast.Inspect(f, func(n ast.Node) bool {
+			// Any CallExpr anywhere, not just the two statement shapes the fence above
+			// inspects: there is no legitimate call to bound this to, so a composite
+			// literal or a var initializer must count exactly as much as an assignment.
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch fn := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				if fn.Sel.Name == "InsecureCleartextSealer" {
+					seen[filepath.ToSlash(rel)] = true
+				}
+			case *ast.Ident:
+				if fn.Name == "InsecureCleartextSealer" {
+					seen[filepath.ToSlash(rel)] = true
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository: %v", err)
+	}
+
+	got := make([]string, 0, len(seen))
+	for name := range seen {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+
+	want := append([]string(nil), s14aCleartextCallSites...)
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ADR-007 B18(c): the InsecureCleartextSealer call sites are %v, want exactly %v.\n"+
+			"MORE means a third place now writes key material with no KEK over it -- unsealed custody is "+
+			"supposed to cost a deliberate, inventoried call.\n"+
+			"FEWER means S14 landed the facade verb, PB-KEY-9 is delivered, and both this fence and the "+
+			"'THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR' section of "+
+			"docs/verification/remote-phaseB-progress.md are now false and must be retired.",
+			got, want)
+	}
+	// Named separately because it is the one that matters: the shipped app is the defect this
+	// marker tracks, and losing it from the list while the count stays at two would mean the
+	// cleartext custody moved somewhere new rather than went away.
+	if !seen["mobile/app.go"] {
+		t.Errorf("ADR-007 B18(c): mobile/app.go no longer calls InsecureCleartextSealer. If S14 landed the "+
+			"facade verb, retire this fence and the PB-KEY-9 'not delivered' record with it; if the call "+
+			"merely moved, PB-KEY-9's status note now points at the wrong file. Call sites found: %v", got)
 	}
 }
 

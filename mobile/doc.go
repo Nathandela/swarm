@@ -44,9 +44,9 @@
 // side unwrapped with an authenticated-Keystore AES KEK. No exported method ever
 // RETURNS raw bytes -- Go hands back sealed blobs, public keys and signatures, never key
 // material -- and the caller must zeroize its copy of the byte array as soon as the call
-// returns. PurgeKeys is PB-KEY-7's lock purge: it zeroizes the installed tier keys and
-// drops every decrypted cache, and is recoverable by re-installing the tier key (a
-// screen lock must not brick the app).
+// returns. PurgeKeys is PB-KEY-7's lock purge: it zeroizes the installed tier keys, takes
+// their SEALED copies at rest with them, and drops every decrypted cache -- and is
+// recoverable by re-installing the tier key (a screen lock must not brick the app).
 //
 // SendInput is the only other []byte parameter. Keystrokes are sensitive but are not KEY
 // material, and they are inbound-only too.

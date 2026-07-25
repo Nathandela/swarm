@@ -33,6 +33,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -49,6 +50,7 @@ func (c *countingStore) Save(s State) error {
 	c.saves++
 	return c.inner.Save(s)
 }
+func (c *countingStore) PurgeKeys() error { return c.inner.PurgeKeys() }
 
 // failAfterNStore commits the first n Saves and fails every one after that -- "the
 // process died before anything else hit disk", the injection idiom
@@ -69,6 +71,7 @@ func (f *failAfterNStore) Save(s State) error {
 	}
 	return f.inner.Save(s)
 }
+func (f *failAfterNStore) PurgeKeys() error { return f.inner.PurgeKeys() }
 
 // memStore is a non-durable Store standing in for the phone's state file across a
 // simulated crash: the process dies, the file does not. Reusing ONE memStore across two
@@ -78,6 +81,11 @@ type memStore struct{ st State }
 
 func (m *memStore) Load() State        { return m.st }
 func (m *memStore) Save(s State) error { m.st = s; return nil }
+func (m *memStore) PurgeKeys() error {
+	m.st.Keys = crypto.EpochKeys{}
+	m.st.Snapshots, m.st.Sessions = nil, nil
+	return nil
+}
 
 // resumeSeq builds a Core over st and returns its sequencer, for the epoch already
 // recorded in the state.

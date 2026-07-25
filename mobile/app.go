@@ -371,20 +371,22 @@ func (a *App) InstallContentKey(key []byte) (err error) {
 	return core.Save(st)
 }
 
-// PurgeKeys is PB-KEY-7's lock purge: zeroize the installed tier keys and drop every
-// DECRYPTED cache. Invalidating the biometric gate is not enough while the process still
-// holds already-decrypted session content. It is recoverable by InstallContentKey.
+// PurgeKeys is PB-KEY-7's lock purge: zeroize the installed tier keys, destroy the SEALED
+// copies at rest with them, and drop every DECRYPTED cache. Invalidating the biometric gate
+// is not enough while the process still holds already-decrypted session content, and
+// zeroizing only the live copy is not enough while the durable one survives the restart. It
+// is recoverable by InstallContentKey.
 func (a *App) PurgeKeys() (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
 	if err != nil {
 		return err
 	}
-	st := core.State()
-	st.Keys = crypto.EpochKeys{}
-	st.Snapshots = nil
-	st.Sessions = nil
-	if err = core.Save(st); err != nil {
+	// An EXPLICIT purge, not a Save whose keys happen to be zero: with the content tier
+	// locked -- which is exactly where a screen lock leaves the phone -- custody cannot tell
+	// a purge from the wake path holding a key it could not read, and would keep the sealed
+	// blob (phonecore.Store.PurgeKeys).
+	if err = core.PurgeKeys(); err != nil {
 		return err
 	}
 	a.mu.Lock()

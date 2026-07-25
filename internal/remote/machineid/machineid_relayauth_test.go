@@ -5,7 +5,7 @@
 //
 //	type ClientAuth struct {
 //	    RelayAuthPub ed25519.PublicKey
-//	    Sign         func(challenge []byte) []byte
+//	    Sign         func(challenge []byte) ([]byte, error)
 //	}
 //
 // machineid.Identity currently exposes ONLY RelayAuthPublic() — no way to
@@ -15,14 +15,16 @@
 //
 //	func (id *Identity) RelayAuthSign(challenge []byte) []byte
 //
-// matching relay.ClientAuth.Sign's exact signature (func([]byte) []byte, no
-// error), so a gateway builds a ClientAuth via
-// relay.ClientAuth{RelayAuthPub: id.RelayAuthPublic(), Sign: id.RelayAuthSign}
-// without any wrapping. The signature is Ed25519 over the challenge using the
-// relay-auth private key (mirrors GrantSignPrivate/GrantSignPublic's custody
-// pattern for the grant-signing key, except relay-auth exposes only a signer,
-// never the raw private, since the relay-auth key never needs to leave this
-// package the way enroll.Enroll needs the raw grant-signing key).
+// errorless: this is a plain in-process Ed25519 private with no custody that
+// could refuse. Sign carried that same shape when this test was written, and
+// ADR-007 B18(a) has since made it failable for the PHONE, whose relay-auth key
+// is Keystore-gated — so the gateway wraps the method value in a closure that
+// returns a nil error (see TestMachineIdentity_RelayAuthSignBuildsClientAuth).
+// The signature is Ed25519 over the challenge using the relay-auth private key
+// (mirrors GrantSignPrivate/GrantSignPublic's custody pattern for the
+// grant-signing key, except relay-auth exposes only a signer, never the raw
+// private, since the relay-auth key never needs to leave this package the way
+// enroll.Enroll needs the raw grant-signing key).
 package machineid
 
 import (
@@ -97,10 +99,12 @@ func TestMachineIdentity_RelayAuthSignSurvivesSaveLoad(t *testing.T) {
 }
 
 // TestMachineIdentity_RelayAuthSignBuildsClientAuth is a constructive check
-// that an Identity's accessors satisfy relay.ClientAuth's exact field types
-// with no wrapping (RelayAuthSign's method value must be directly assignable
-// to the Sign func([]byte) []byte field) — the shape the gateway binary needs
-// to call relay.Dial.
+// that an Identity's accessors build the relay.ClientAuth the gateway binary
+// hands to relay.Dial: RelayAuthPublic straight into the field, and
+// RelayAuthSign through the one-line closure ADR-007 B18(a) requires now that
+// Sign is func([]byte) ([]byte, error) for the phone's Keystore-gated key. The
+// machine's is a plain in-process private, so the closure's error is always nil
+// and the signature must still verify under RelayAuthPub.
 func TestMachineIdentity_RelayAuthSignBuildsClientAuth(t *testing.T) {
 	id, err := Generate("gateway-host")
 	if err != nil {

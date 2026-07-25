@@ -129,9 +129,15 @@ func (id *Identity) RelayAuthPublic() ed25519.PublicKey {
 }
 
 // RelayAuthSign signs a relay auth challenge with the machine's relay-auth
-// Ed25519 private key, matching relay.ClientAuth.Sign (a plain
-// func(challenge []byte) []byte). The gateway builds
-// relay.ClientAuth{RelayAuthPub: id.RelayAuthPublic(), Sign: id.RelayAuthSign}.
+// Ed25519 private key. It stays errorless: this key is a plain in-process
+// Ed25519 private and has no custody that could refuse. ADR-007 B18(a) made
+// relay.ClientAuth.Sign failable (func(challenge []byte) ([]byte, error)) for
+// the PHONE, whose relay-auth key is Keystore-gated, so the gateway now wraps:
+//
+//	relay.ClientAuth{
+//	    RelayAuthPub: id.RelayAuthPublic(),
+//	    Sign:         func(ch []byte) ([]byte, error) { return id.RelayAuthSign(ch), nil },
+//	}
 func (id *Identity) RelayAuthSign(challenge []byte) []byte {
 	return ed25519.Sign(id.relayPriv, challenge)
 }

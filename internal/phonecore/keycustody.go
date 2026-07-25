@@ -16,6 +16,7 @@ package phonecore
 // NoiseStatic, Recipient and CommandSign are content tier; RelayAuth is wake tier.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,12 @@ import (
 // unsealed custody must be a NAMED choice at the call site (InsecureCleartextSealer), never
 // something reached by omitting a field.
 var ErrNoSealer = errors.New("phonecore: no key-custody sealer supplied")
+
+// ErrPublicKeyMismatch refuses a device.key whose CLEARTEXT public half disagrees with the
+// material actually sealed inside it. It is a distinct diagnosis from a KEK that will not
+// open the container: the seals are intact and only the unauthenticated claim about them
+// changed, which means the app's private data directory was written to.
+var ErrPublicKeyMismatch = errors.New("phonecore: device.key public keys disagree with the sealed material")
 
 // Sealer wraps key material under a KEK held OUTSIDE the Go core. It is the single inbound
 // crossing ADR-007 B8 pins: the KEK comes in behind this interface and key material never
@@ -140,8 +147,10 @@ func sealDeviceKeys(path string, m crypto.KeyMaterial, wake, content Sealer) (cr
 		return nil, fmt.Errorf("seal wake key custody: %w", err)
 	}
 
-	// The publics are derived through the same construction the tier stores use, so the
-	// cleartext half of the container can never disagree with the sealed half.
+	// The publics are derived through the same construction the tier stores use, so what is
+	// WRITTEN here always agrees with the sealed half. That says nothing about what is read
+	// back: this file's cleartext half is unauthenticated and PB-SEC-1's adversary can write
+	// it, so checkPublic re-derives and compares at every unseal.
 	pub := crypto.NewKeyStoreFromMaterial(m)
 	f := sealedDeviceKeys{
 		Version:        deviceKeyVersion,
@@ -175,6 +184,8 @@ func openSealedDeviceKeys(f sealedDeviceKeys, wake, content Sealer) (crypto.KeyS
 	// The CONTENT tier legitimately refuses: the phone comes up on a push before any
 	// biometric. Only a refusal that is not a custody verdict says the blob is not ours;
 	// a locked or invalidated tier is surfaced per operation, where the caller can act.
+	// ErrPublicKeyMismatch is deliberately in the fatal set: the seals opened fine and the
+	// container still lied about what is in them, so the directory has been written to.
 	if _, err := ks.contentStore(); err != nil &&
 		!errors.Is(err, crypto.ErrKeyAuthRequired) && !errors.Is(err, crypto.ErrKeyInvalidated) {
 		return nil, fmt.Errorf("unseal content key custody: %w", err)
@@ -209,7 +220,8 @@ func newSealedKeyStore(f sealedDeviceKeys, wake, content Sealer) *sealedKeyStore
 // Nothing is memoized: an auth-gated key re-checks authorisation on every use, and a store
 // that unwrapped once would keep signing after the screen locks (PB-KEY-7) while every
 // restart-based test still passed. The relay-auth seed is deliberately left zero here --
-// this instance answers only content-tier operations.
+// this instance answers only content-tier operations, so its RelayAuthPublic is not the
+// device's and is deliberately NOT among the publics checked below.
 func (k *sealedKeyStore) contentStore() (crypto.KeyStore, error) {
 	plain, err := k.content.Open(k.contentBlob)
 	if err != nil {
@@ -222,7 +234,17 @@ func (k *sealedKeyStore) contentStore() (crypto.KeyStore, error) {
 	copy(m.NoiseStaticPriv[:], plain[0:32])
 	copy(m.RecipientPriv[:], plain[32:64])
 	copy(m.CommandSignSeed[:], plain[64:96])
-	return crypto.NewKeyStoreFromMaterial(m), nil
+	inner := crypto.NewKeyStoreFromMaterial(m)
+	if err := checkPublic("noise_static_pub", k.noiseStaticPub, inner.NoiseStaticPublic()); err != nil {
+		return nil, err
+	}
+	if err := checkPublic("recipient_pub", k.recipientPub, inner.RecipientPublic()); err != nil {
+		return nil, err
+	}
+	if err := checkPublic("command_pub", k.commandPub, inner.CommandSigningPublic()); err != nil {
+		return nil, err
+	}
+	return inner, nil
 }
 
 // wakeStore is contentStore's mirror for the wake tier: the relay-auth seed alone.
@@ -236,7 +258,33 @@ func (k *sealedKeyStore) wakeStore() (crypto.KeyStore, error) {
 	}
 	var m crypto.KeyMaterial
 	copy(m.RelayAuthSeed[:], plain)
-	return crypto.NewKeyStoreFromMaterial(m), nil
+	inner := crypto.NewKeyStoreFromMaterial(m)
+	if err := checkPublic("relay_auth_pub", k.relayAuthPub, inner.RelayAuthPublic()); err != nil {
+		return nil, err
+	}
+	return inner, nil
+}
+
+// checkPublic re-derives one public key from the material just unsealed and compares it to
+// the cleartext copy the container carries.
+//
+// It runs HERE, at the unseal, and not at the accessors, because the accessors are errorless
+// by design -- they must answer with a tier locked, since a phone that cannot state its own
+// relay routing id cannot receive the push that asks the user to unlock. The unseal is the
+// earliest moment the private material exists, and it is a moment that can say no.
+//
+// That places the wake public's check at load (openSealedDeviceKeys unseals the wake tier
+// unconditionally, so a forged relay_auth_pub never reaches a caller) and the three content
+// publics' check at the first content-tier operation -- which is also load whenever the tier
+// is unlocked. With the tier LOCKED the check cannot run at all, and nothing weaker would be
+// honest: the material to check against is exactly what the lock withholds. Every content
+// operation refuses in that state anyway, and mobile/pairing.go stops at NoiseStatic before
+// it reads a single public, so a forged content public cannot be enrolled while locked.
+func checkPublic(field string, claimed, derived []byte) error {
+	if bytes.Equal(claimed, derived) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s claims %x, the sealed material derives %x", ErrPublicKeyMismatch, field, claimed, derived)
 }
 
 func (k *sealedKeyStore) NoiseStaticPublic() []byte {

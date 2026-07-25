@@ -152,6 +152,27 @@ func (c *Core) Save(st State) error {
 	return nil
 }
 
+// PurgeKeys is PB-KEY-7's lock purge at the durable layer: the epoch keys go, the sealed
+// blobs with them, and so does every DECRYPTED cache they protected. It REBINDS afterwards
+// for the same reason Save does -- the live objects must come off the purged epoch, or the
+// router keeps opening frames under a key the phone no longer holds.
+//
+// It is a distinct verb from Save because a Save whose keys are zero is ambiguous: the wake
+// path holds zeros for a content key it could not read and Saves constantly, so custody
+// cannot tell "nothing to write" from "destroy this" by looking at the bytes (see
+// Store.PurgeKeys).
+func (c *Core) PurgeKeys() error {
+	c.mu.Lock()
+	if err := c.store.PurgeKeys(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.st = c.store.Load().clone()
+	c.mu.Unlock()
+	c.rebind()
+	return nil
+}
+
 // persist writes st through custody and adopts whatever custody made of it (the file store
 // merges the replay guards monotonically). A failed write leaves the in-memory copy
 // untouched, so nothing is claimed that is not durable.

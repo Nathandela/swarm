@@ -157,6 +157,15 @@ func (s State) clone() State {
 type Store interface {
 	Load() State
 	Save(State) error
+	// PurgeKeys destroys the durable epoch key material -- the SEALED blobs included -- and
+	// every decrypted cache derived from it (PB-KEY-7's lock purge).
+	//
+	// It is a method rather than a Save of a State whose keys are zero because those two
+	// are not the same act and custody cannot tell them apart from the bytes: a process that
+	// came up on a push holds zeros for a content key it merely could not read, and Saves
+	// constantly. One signal for both means either the purge does not reach disk or the wake
+	// path destroys the epoch, and S14a shipped the first.
+	PurgeKeys() error
 }
 
 // ---------------------------------------------------------------------------
@@ -232,11 +241,12 @@ type fileStore struct {
 	wakeTier, contentTier sealedTier
 }
 
-// sealedTier is one tier's key field as it stands on disk, plus whether this process was
-// able to OPEN it. A tier it could not open is rewritten VERBATIM by the next Save:
-// re-sealing the zero value the process is holding would destroy a key it merely could not
-// read, and that is the wake path's normal condition -- it runs with the content tier locked
-// while any send reserves a seq and therefore Saves.
+// sealedTier is one tier's key field as it stands on disk, plus whether this process knows
+// what is in it -- either because it opened the blob, or because it put the contents there
+// itself. A tier it does NOT know is rewritten VERBATIM by the next Save that has no key to
+// write: re-sealing the zero value the process is holding would destroy a key it merely
+// could not read, and that is the wake path's normal condition -- it runs with the content
+// tier locked while any send reserves a seq and therefore Saves.
 type sealedTier struct {
 	blob   []byte
 	opened bool
@@ -310,13 +320,49 @@ func (s *fileStore) Save(st State) error {
 	return nil
 }
 
-// resealTier returns the tier field to write. An all-zero key is written as NO field at all
-// -- a lock purge must take the durable copy with it (PB-KEY-7) -- while a tier this process
-// could not open is carried through untouched (see sealedTier).
-func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
-	if !prev.opened && len(prev.blob) > 0 {
-		return prev, nil
+// PurgeKeys destroys both sealed tiers and the decrypted caches, in ONE atomic write. The
+// tier records go with them: nothing is left for the next Save to carry verbatim, which is
+// what makes the purge survive being taken with a tier locked. Nothing is unsealed and no
+// KEK is consulted -- destroying a blob does not require being able to read it, and a purge
+// that needed the biometric could not run at the screen lock that triggers it.
+func (s *fileStore) PurgeKeys() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := s.st.clone()
+	st.Keys = crypto.EpochKeys{}
+	st.Snapshots, st.Sessions = nil, nil
+	if s.path != "" {
+		if err := persistState(s.path, st, nil, nil); err != nil {
+			return err
+		}
+		// Opened, holding nothing: this process now KNOWS the tier is empty, so a later
+		// Save writes no field rather than resurrecting the blob just destroyed.
+		s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
 	}
+	s.st = st
+	return nil
+}
+
+// resealTier returns the tier field to write, from three cases that must stay distinct.
+// Two of them used to share one signal -- an all-zero key meant both "I have nothing to
+// write" and "destroy this" -- and the collapse was live in both directions.
+//
+//	a real key in hand   -> SEAL IT, whatever this process could make of the previous blob.
+//	                        A content key installed once the user finally authenticates
+//	                        arrives while the tier record still says "could not open", and it
+//	                        must reach disk or the phone restarts on the old epoch's key and
+//	                        decrypts nothing (PB-KEY-3). A real key always wins.
+//	no key, unopened blob-> carry it VERBATIM. The zero is a key this process could not READ,
+//	                        not one that is not there, and re-sealing it would destroy the
+//	                        epoch. This is the wake path's NORMAL condition: it runs with the
+//	                        content tier locked while any send reserves a seq and so Saves.
+//	no key, nothing held -> write no field at all.
+//
+// DESTROYING a tier is deliberately not among them: it is Store.PurgeKeys, which drops the
+// record so the second case has nothing left to carry (PB-KEY-7). Inferring destruction from
+// an absent key is what let a purge taken with the tier locked leave the blob on disk.
+func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
 	zero := true
 	for _, b := range key {
 		if b != 0 {
@@ -325,6 +371,9 @@ func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
 		}
 	}
 	if zero {
+		if !prev.opened && len(prev.blob) > 0 {
+			return prev, nil
+		}
 		return sealedTier{opened: true}, nil
 	}
 	blob, err := sl.Seal(key)
@@ -395,9 +444,13 @@ func (s *fileStore) load() error {
 	// to refuse, so a pre-seal blob that carries either one is refused outright. Checked
 	// AFTER the machine test: another machine's blob is discarded wholesale either way,
 	// and erroring on it would brick the re-pair that case exists to keep working.
+	// The remedy named here is the one the user can actually reach. "Re-pair the device" is
+	// not: this error fails Resume, so the app never starts and never offers a re-pair. Only
+	// clearing the app's data removes the blob that is refusing to load, and re-pairing is
+	// what happens after that, not instead of it.
 	if f.SchemaVersion < 3 && (len(f.WakeKey) > 0 || len(f.ContentKey) > 0) {
-		return fmt.Errorf("%w: %s: schema version %d holds unsealed epoch keys (PB-SEC-1); re-pair the device",
-			ErrCorruptState, path, f.SchemaVersion)
+		return fmt.Errorf("%w: %s: schema version %d holds unsealed epoch keys (PB-SEC-1); clear the app's "+
+			"data to discard them, then pair again", ErrCorruptState, path, f.SchemaVersion)
 	}
 
 	st := State{
