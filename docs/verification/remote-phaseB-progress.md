@@ -33,6 +33,27 @@ criteria are NOT blocked by tooling. Only PB-E2E-5 (real camera, real biometrics
 Doze, reboot, hardware Keystore attestation) needs physical hardware, and it is already an
 explicitly deferred gate under §13.
 
+### `--` IS ILLEGAL INSIDE ANDROID RESOURCE XML COMMENTS, AND THIS PROJECT'S PROSE STYLE USES IT
+
+A double hyphen may not appear **anywhere** inside an XML comment, per the XML spec, and AAPT2
+rejects the entire file rather than warning. One occurrence in a `res/values/*.xml` comment fails
+`:app:mergeDebugResources`, which blocks **every** Gradle task for the module — including
+`:app:testDebugUnitTest`, so no Kotlin test in the module can run at all.
+
+This is a live hazard here rather than a curiosity: the house style uses `--` heavily in Go comments,
+commit messages and these documents, where it is perfectly fine, so the habit transfers straight into
+a total build break the first time someone writes a thorough comment in a resource file. It happened
+exactly that way during S16.
+
+Colons or parentheses read the same. If a Gradle task fails somewhere that looks unrelated to the
+change, parse the resource XML before believing anything else:
+
+```sh
+for f in $(find android -name '*.xml' -not -path '*/build/*'); do
+  python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse('$f')" || echo "BROKEN: $f"
+done
+```
+
 ### The host runs Go under Rosetta -- this taints every timing number
 
 ```
