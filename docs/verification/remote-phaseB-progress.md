@@ -68,6 +68,27 @@ Both halves, in the same slice:
   `SeqSource.Issued()`.
 - phone: the calls to `RequireReconciled` / `SeedFrom` / `SeedHighWater` / `NewGrantReceiverAt`.
 
+## Standing review guidance (earned, not theoretical)
+
+Two defect classes have now recurred often enough to be worth asking about on every slice:
+
+1. **"What if there is more than one?"** Single-instance tests pass while the multi-instance
+   case is broken. S2 needed the replay high-water keyed per `(sender, epoch)` -- a scalar
+   would brick the phone on every revoke, since a rotated epoch legitimately restarts at seq 1.
+   S2b needed the coalescing stash keyed per session -- a single slot lets one session's frame
+   discard another's stashed final grid, stranding a quiescent peek on a stale grid forever.
+   Both were found by a reviewer asking about N, not by the tests.
+
+2. **"Does the fix make a self-healing failure permanent?"** Three of the defects found so far
+   were regressions introduced BY hardening work. S2's durability turned two previously
+   self-healing conditions (a regenerated machine identity, a reset relay mailbox) into silent
+   permanent bricks. Ask what used to recover on restart and no longer does.
+
+Also standing: an agent that says "the test is wrong" is right about half the time here, and
+has been right every time it PROVED it (the QR no-op substitution, the identical httptest
+certificates, the unsatisfiable timing assertion, the plist regex). Verify the proof, never the
+claim.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
