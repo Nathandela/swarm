@@ -233,6 +233,38 @@ coordinate written earlier in the same flow is a precondition that can be satisf
 event. Prefer asserting the fact the test needs — here, that the phone can actually reach the
 machine — over approximating it.
 
+## THREE GUARDS THAT COULD NOT FAIL, IN ONE FENCE FILE -- and the third was the security one
+
+The clearest instance of this project's most-repeated defect, found in S17's gate file, and worth
+keeping because all three shared ONE root cause that reads as correct.
+
+**gobind lowercases the first letter when it emits the Java binding.** The generated
+`swarmmobile/App.java` declares `registerPushToken`, `handlePushWake`, `deletePushToken`;
+`Swarmmobile.java` declares `newApp`. So **no correct Kotlin call site can contain the Go-cased
+name** -- and a fence matching `RegisterPushToken(` is unsatisfiable by any correct implementation.
+
+1. **Five assertions were unsatisfiable.** The proof was that `TestS17_TheAppTheServiceUsesIsTheProductionOne`
+   failed against S16's **shipped and correct** wiring. S16's own gate had already met this and
+   accepts both spellings; the precedent existed and was not carried across.
+2. **A body scanner was off by one.** Its declaration regexp ends with `\(`, so the offset was
+   already inside the parameter list, while the depth counter started at zero -- the outer close
+   drove it to -1 and the break could never fire. It returned **no body** for six functions and a
+   **wrong** body (short by the parameter list) for the rest, so three more assertions reported
+   "nothing to walk" regardless of the implementation.
+3. **The security guard could not fire at all**, and this is the one that matters. The
+   forbidden-verb map in the no-content-verb check matched Go casing too. That check is not a wiring
+   convention -- it carries PB-PUSH-4's actual property, that **a wake callback never fetches
+   content while no user is present**. It would have passed forever.
+
+The third was not reported by the implementer; it was found while fixing the other two. **After
+fixing it I mutated the Kotlin to call a content verb from the wake callback, watched it report the
+violation, and reverted** -- because a guard just restored from "cannot fail" must be shown to fail.
+
+**The generalisable lesson**: when a fence matches a NAME across a language boundary, the boundary
+may rewrite the name. A cross-language fence should assert on both spellings or on the resolved
+symbol, never on the source-language spelling alone -- and one instance of that mistake in a file
+implies the file has more.
+
 ## KOTLIN COMPILES THE WHOLE TEST SOURCE SET, SO ONE SLICE'S RED BLOCKS EVERY OTHER SLICE'S TESTS
 
 Found during S16. `:app:testDebugUnitTest` cannot run while **any** test file in the module fails to
