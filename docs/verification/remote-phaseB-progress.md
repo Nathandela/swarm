@@ -169,6 +169,26 @@ by any test**: both `ClientAuth.Sign` fixtures in the tree return nil errors, so
 can be deleted and the whole suite still passes. Standing defect class (i), a guard that cannot
 fail. Remediation in flight.
 
+## THE DIFFERENT-MACHINE GUARD NEEDS AN ABSENCE CASE -- carry this into S16's evidence
+
+Contributed by the S16 RED author and NOT in the amended requirement row, which would have been
+wrong without it: **you can only detect "different" against something you pinned.** A phone with no
+pinned `MachineStatic` must therefore PROCEED, not refuse.
+
+That matters concretely because `harness.seedState` never sets that field, so every seeded-harness
+phone in the suite has nothing to compare against. A guard keyed on "is this phone paired at all"
+would refuse them, which is the same mistake as the retired fail-fast one layer down. It is also a
+second, independent reason the revoke-then-re-pair flow survives the guard.
+
+Two more properties from the same author, both load-bearing:
+
+- **Assert non-re-pinning by where the next command LANDS**, not by reading a state field. The send
+  target derives from `MachineRelayAuthPub`, so whose mailbox the next command reaches *is* the
+  question, and "abandons machine A" is the actual defect. A state assertion proves less.
+- **The check lands at Noise msg2, before a channel binding exists**, so a refusing phone never
+  displays a SAS. A driver built on "wait for the SAS" would report the refusal as "the phone never
+  derived a SAS" — the exact misreporting shape of the latent pairing race recorded above.
+
 ## S16 AND S17 MUST BE VERIFIED TOGETHER, NOT SEQUENTIALLY
 
 Raised by the S17 RED author and it changes how these two close. They are coupled in **both**
