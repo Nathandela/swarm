@@ -297,6 +297,18 @@ uses for the push preference.
   re-auth on an authed connection should be refused outright: it is state a client can rewrite
   after passing the gate, and the next feature keyed on `sc.rid` inherits the same trap. NOT in
   Phase B's scope; do not fix it inside a Phase B slice without an ADR.
+- **The daemon's `OpLease` grant carries no `ExpiresAt`** (found by the S11 RED author).
+  `internal/protocol/server.go:620-626` encodes Op/EndpointID/SessionID/Generation/SnapshotLen,
+  while the lease deadline the daemon actually enforces is the earliest of three bounds
+  (`:1500-1533`). So the phone **cannot observe the authoritative expiry**. S11 takes the
+  machine's value when a confirmation carries one and otherwise falls back to the horizon the
+  phone signed -- an upper bound on the truth, so the phone can only ever believe the lease ends
+  *later* than it does, never earlier, and the severance notice (not a countdown) stays the
+  authority. Changing a daemon reply was outside S11's fence, so the precedence is pinned by test
+  now (`Lease_TheMachinesExpiryWinsOverThePhonesSignedHorizon`) to stop a later slice wiring the
+  real value through and having it silently ignored. Wants a follow-up.
 - **Known pre-existing flake**: `TestRemotePeek_LargeGridClippedUnderMaxFrame` (i/o timeout
-  under full-suite load; passes isolated). Predates Phase B.
+  under full-suite load; passes isolated). Predates Phase B. A second, same shape:
+  `relay TestRelay_SweepLoopPresenceSilentPushNoManualCall` fails only under loaded full-suite
+  runs and passes 3/3 in isolation.
 - The final full-committee audit against all 139 requirements is still owed, per the goal.
