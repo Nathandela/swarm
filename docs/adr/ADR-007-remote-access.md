@@ -612,3 +612,351 @@ the stale (about-to-be-revoked) epoch. Corrected:
 Together these make revoke -> (rotate + gateway-exit + sever) -> re-pair (fresh epoch) -> restart gateway
 (new epoch) leak nothing to the revoked device. ME-1's relay-socket close remains a Phase-B defense-in
 -depth item; it is no longer load-bearing for this property now that the gateway exits on revoke.
+
+## Amendment 2026-07-25 — Phase B (Android handset v1): the decisions the phase rests on
+
+**Status**: accepted. Discharges PB-DOC-1 of
+`docs/specifications/remote-phaseB-requirements.md` (v3.5, requirements-complete after five
+committee rounds), which binds the Phase B implementation. Refines D2 (key tiers), D5 (gateway
+lifecycle), D6/D9 (durable state, transport, resync, push) and D12; supersedes the 2026-07-23
+client-strategy amendment on skin (it retained a *pair*, not a choice) and narrows its
+"light+dark token sets" wording for the client. One frozen-crypto **signature** change is
+authorised (B14); no crypto semantics change. Decisions are recorded here with the code that
+forced them; the requirements document holds the detail and the acceptance criteria, and each
+slice named below owns the implementation.
+
+**B1. v1 is SINGLE-MACHINE, and stays single-device. The machine switcher is cut.** The phone
+core is structurally single-machine — one `ContentKey` per `MailboxRouter`
+(`internal/phonecore/snapshot.go:137-157`), one machine/target/grant/epoch/sequencer per phone
+(`internal/phonesim/phonesim.go:52-59`) — so frames from two machines are sealed under different
+epoch keys and one router cannot open both. The roadmap's machine switcher assumed a capability
+nothing supported, and the binding exit criterion says "a real session", singular. Multi-machine
+therefore joins multi-device (deferred by the 2026-07-24 closure amendment, decision C6) in
+Phase C, where both need the same missing primitive: a nonzero per-device `SenderKeyID` bound
+into every inbound envelope. The design's machines screen ships as a single-machine pane
+(presence, the one paired device, revoke, kill switch, activity log), not a switcher.
+
+**B2. Light mode is DEFERRED to Phase C — and this is not a correction to the 2026-07-23
+amendment's claim.** The four `--p-*` product skins in
+`docs/research/remote-control-design-directions.html` are dark-only; the artifact itself does
+ship a light set (`@media (prefers-color-scheme: light)` at `:8-10`, `:root[data-theme="light"]`
+at `:12`), so the earlier "light+dark token sets" sentence was true of what it described. What is
+deferred is *authoring a light product theme for the Android client*, the single largest
+non-load-bearing item in v1, against an exit criterion that is a dark phosphor terminal. Recorded
+explicitly because a round-3 requirement (PB-DOC-6) proposed amending this ADR to say the light
+set never existed; it was **withdrawn** on verification. A future reader must not resurrect it:
+the deferral stands on its own merits and needs no such justification. Consequence: since the app
+ships one mode, its theme must not inherit a `DayNight`/system-mode parent, or a system-light
+handset renders it unstyled.
+
+**B3. One skin: Substrate (d1).** Supersedes the 2026-07-23 amendment, which retained the pair
+`01 Substrate + 02 Void` and never chose. Substrate is the artifact's default direction and its
+restrained near-black surface ladder suits an information-dense monitoring list better than
+Void's true-black treatment, which flattens the Group sections. The machine-readable token source
+(JSON, one origin for the Android theme) pins the single skin; the phosphor-green monospace
+terminal treatment and the retirement of purple are unchanged.
+
+**B4. The bound surface is one non-internal façade over a closure constrained by an executable
+allowlist.** `internal/phonecore` reached `internal/protocol` -> `internal/daemon`, dragging the
+shim, engine, VT emulator, transcript, persistence and PTY — 52 non-stdlib packages — into a
+package destined for a handset an adversary may hold, directly against the 2026-07-24 amendment's
+Decision 2, which keeps the VT emulator and raw PTY bytes off the network-facing edge. Two
+decisions: (a) the daemon-free wire types move to a leaf package `internal/protocol/schema` with
+`internal/protocol` **aliasing** every moved name, so type identity, wire encoding and every
+consumer are untouched (shipped in S1: closure 52 -> 18, zero forbidden packages, guard covering
+host + android/arm64 + ios/arm64 because those closures already differ); (b) only the **bound**
+package must live outside `internal/` — verified empirically with a probe AAR — so the façade is a
+single non-internal package that consumes the internal tree freely, and no relocation of
+`phonecore` is needed. The constraint is an **allowlist** of exact import paths, not a denylist
+(the prior denylist already omitted `internal/shimwire`) and not categories (unmachine-checkable,
+and they omitted required transitive deps). Recorded trap: `LaunchContentHash` deliberately stayed
+in `internal/protocol`; the façade may move it or re-export it, but **reimplementing its canonical
+length-prefixed encoding is forbidden** — a one-byte divergence yields silent signature
+verification failures with no compile error and no test linking the two implementations.
+
+**B5. The phone gets durable state; the send-seq strategy is reserve-a-ceiling-and-burn-the-gap.**
+`internal/phonecore` performs no persistence at all and its outbound sequencer is a bare
+`atomic.Uint64` returning 1 on first call (`input.go:33-36`), while the gateway rejects
+`seq <= highest` as stale (`internal/remote/crypto/envelope.go:33-34,240-243`). Android kills
+backgrounded processes as routine behaviour, so **one** process death permanently bricks typing,
+launch and kill under the same epoch — the exit criterion fails on the second app launch — and the
+mirror direction is worse: an in-memory `MailboxReceiver.highest` (`envelope.go:211-216`) resets
+the phone's replay high-water to zero, handing a retaining relay a redelivery window. Decisions:
+
+- **One persisted schema** enumerating everything resume-critical: device keys, pinned machine
+  static + sign pub + routing id, epoch id and keys, outbound send-seq, per-`(sender, epoch)`
+  receive high-waters, the grant receiver's `(epoch, grant_seq)` watermark (which
+  `internal/remote/crypto/epoch.go:155,167` already demands be persisted or "a relay could replay
+  an old correctly-signed grant after a phone/app restart"), the push replay coordinate, the relay
+  mailbox cursor, caches, pending idempotent ops and per-bucket stale flags. Versioned, with an
+  unknown future version failing closed.
+- **Send-seq: reserve a ceiling, burn the gap** (block 256), mirroring the gateway's own
+  `internal/remotegw/seqstore.go` (block 64) rather than an fsync per keystroke. Rejected:
+  per-frame durability (unusable on the input hot path) and a non-durable counter (the brick
+  above).
+- **The burned gap must be absorbed by the re-lease command frame, never by an input frame.** The
+  gateway silently drops input/resize whose `Gap` bit is set while ignoring `Gap` on commands
+  (`internal/remotegw/command_loop.go:208-216`), so without this rule the first post-restart
+  keystroke vanishes with no signal.
+- **The receive path commits as one transaction before the ack**: `{high-water, relay cursor,
+  decoded cache mutation, stale flags}`. Today the high-water advances inside `Accept`
+  (`envelope.go:254`), caches mutate afterwards (`phonecore/snapshot.go:201`) and the ack comes
+  later still, so a crash between them either loses a frame forever or permits a replay.
+- **Rollback has a named trust anchor: authenticated remote reconciliation, with a distinct
+  authority per coordinate.** AEAD and atomic writes detect corruption, not rollback — a valid
+  older blob sealed by the same Keystore key stays valid — and KeyMint rollback-resistance
+  protects key blobs, not app state. One authority is not enough either: the gateway's inbound
+  high-water describes only phone->machine sequences. So (a) phone send-seq answers to the
+  gateway's durable inbound accepted high-water, with reserved-but-unused blocks accounted for;
+  (b) each receive bucket answers to the gateway's durable outbound ceiling *for that bucket* —
+  journal/terminal from the outbound outbox, command-reply from the already-durable
+  `outbound-reply.seq` (`cmd/swarm-remote/config.go:95`); (c) the grant watermark answers to the
+  daemon's epoch/grant issuance coordinate. An unreachable authority fails closed for mutating
+  ops, marks the affected channels stale, and reseeds. The carrier is a machine->phone reconcile
+  record sealed onto the **existing** outbound stream (see B6 for why not a phone-initiated signed
+  reconcile).
+- **Fail-closed must not mean bricked.** `BeginPairing` refuses while a device is registered
+  (`AddSole`, the 2026-07-24 single-device decision), so a phone that fails closed on corrupt
+  state would have no exit but physical access to the machine. An unconditional owner-side
+  recovery flow — identify the stranded device, revoke/unregister, purge machine and relay state,
+  re-pair — is required; a re-grant path does not substitute, because it cannot recover a phone
+  whose local state is already fail-closed.
+
+**B6. Resync: staleness per SEQ BUCKET, repair per CHANNEL, and the repair is UNSIGNED.** The
+phone receives multiple independent sealed streams, and `MailboxResult` carries only
+`{Plaintext, Gap bool}` (`envelope.go:195-200`) with no frame kind, so a gap in the shared
+journal+terminal sequence space **cannot** be attributed to one of them. There are three buckets
+(shared journal+terminal; command-reply, kept separate by the deliberate `SenderKeyID` split at
+`internal/remotegw/command_in.go:104-109`; grant) and four repair channels: journal via an atomic
+roster+events snapshot, terminal via a fresh full snapshot (a journal reseed cannot repair a
+missed grid), command replies via the durable operation outcome, grant via the re-grant/terminal
+state. A shared-bucket gap conservatively stales **both** journal and terminal; attributing it to
+one is a failing implementation. `Stale()` clears only after that channel's successful reseed,
+committed with its transport watermark; a failed resync stays stale.
+
+**Authorization (the PB-SYNC-4/-5 decision): resync is NOT device-signed.** Journal repair rides
+`handleJournalRead`'s existing gate — the negotiated `journal` capability plus the kill switch
+(`internal/protocol/server.go:1657-1683`) — not `requireRemoteAuthz`, which guards the mutating
+ops. Terminal repair rides the already-unsigned `terminal_watch` read, which the gateway routes to
+its `TerminalWatcher` without consulting the device authenticator while the daemon gates the peek
+itself per snapshot (`internal/protocol/schema/remote.go:51-59`,
+`internal/remotegw/command_loop.go:238-256`). Consequence: **no new `Action*` constant**, so the
+closed, fail-closed `actionClass` switch (`internal/skeleton/deviceauth.go:17-26`) is untouched.
+Rejected — a signed resync: the only fitting existing class is `ActionControl`, and `rec.Capability`
+is pinned at enrollment and never read from the wire, so an observe-tier device could never repair
+a read it is entitled to. A read-repair must not require the control tier. The machine->phone
+reconcile frame of B5 follows the same rule and is carried on the existing outbound stream for the
+same reason.
+
+**Journal reseed REPLACES the phone's cursor.** The daemon emits roster records with `Cursor`
+deliberately unset — "a roster record is a set member keyed by SessionID, NOT a point in the
+cursor-ordered event stream" (`internal/daemon/journal.go:60-73`) — while `SessionCache.Apply`
+drops any record with `rec.Cursor < c.cursor` (`internal/phonecore/journal.go:110-115`). Once the
+first event advances the cursor, every subsequent roster snapshot is silently discarded, which
+makes the designated journal repair channel a no-op and hides reconcile-adopted Running sessions
+permanently. Either the reseed replaces the cursor wholesale or roster records carry the boundary
+cursor; no test may use a nonzero roster cursor, since production never emits one.
+
+**B7. Transport: request-id correlation with concurrent dispatch on BOTH hops, plus a bounded
+server-side wait. Server-push frames rejected.** §6.0 of the requirements assigns this choice to
+this document. Today `Conn.roundtrip` holds `c.mu` across write-then-blocking-read with no request
+ids (`internal/remote/relay/client.go:108-126`) and the relay's `serveConn` is strictly
+`readFrame -> dispatch -> readFrame` (`internal/remote/relay/server.go:382-390`), so a naive
+long-poll head-of-line-blocks the very keystrokes it exists to accelerate — and a second
+connection is not available, because one conn per routing id with newest-wins takeover
+(`server.go:675-691`) is what revoke and presence severance depend on. Both candidate mechanisms
+therefore need demux, which is why the earlier "needs no client demux change" tiebreaker
+evaporated. Correlation wins on three grounds: the numeric budget is already written against the
+wait form (25 s wait ceiling, one pending wait per client, <=50 ms for an append issued while a
+wait is outstanding, 10 s non-wait timeout); metering stays legible, since `mailbox_read`/
+`mailbox_ack` meter against `OpsPerMin` (`server.go:766,798`) while `mailbox_append` does not and
+is capped by `MailboxAppendPerMin` alone; and an unsolicited server-push frame would add a second
+inbound path with its own flow control and make the budget's criterion unmeasurable as written.
+**The change covers both hops**: the gateway's fixed 500 ms command-IN poll
+(`internal/remotegw/service.go:27`) goes too — a phone-side-only fix passes the letter while
+typing stays 500 ms-gated. Unweakened by this change: the per-source pre-auth limits and
+cumulative handshake deadline of the 2026-07-20 amendment, and the newest-wins single-connection
+property.
+
+Two rate consequences are part of the decision. Drain is budgeted, not just append: <=3 reads/s
+and batched acks <=1/s per routing id on each hop, because at 8 appends/s a wait returning on the
+first item would put 960 metered ops into a 600/window and kill the live tail mid-demonstration.
+And the machine->phone direction is **coalesced at the gateway** to <=8 appends/s across journal
+and terminal combined — they share one `RelaySink` and one target, against a render loop that can
+emit ~62 snapshots/s (`internal/daemon/terminalrender.go:33`) — with the seq allocated only after
+local admission. The obvious remedy "a failed append never consumes a seq" is **forbidden as
+unsafe**: the relay commits the item before replying (`server.go:758-762`) and `MailboxAppend`
+errors when the *response* read fails (`client.go:268`), so reusing the seq after a
+delivery-unknown failure lets two different plaintexts claim it and the phone stale-drops
+whichever loses. A definitive pre-commit refusal may release the seq; a delivery-unknown failure
+must either burn it or retry the byte-identical sealed envelope, whose duplicate the receiver
+drops for free (`envelope.go:255-257`) — so no relay protocol change is needed for it.
+
+**B8. JNI key custody: exactly one secret crosses, inbound only.** The Go core holds its keys in
+native heap; the Android Keystore API is Java-only and never exports private keys. The single
+deliberate crossing is therefore a **transient per-tier data key, unwrapped by an
+authenticated-Keystore AES KEK on the Java side and passed Java -> Go**, one per tier (wake,
+content), zeroized after use. No long-term private key crosses in either direction: Go returns
+only sealed blobs, public keys and signatures, and no exported façade method returns raw private
+material. This is the one documented exception to the "no secret crosses the boundary" rule, and
+it is directional and named so the guard test can pin it. The per-role platform matrix — whether
+`{NoiseStatic, Recipient, CommandSign, RelayAuth}` is generated and used natively in Keystore,
+held as an app-format key wrapped by this KEK, or software-only with a recorded residual — is
+decided in the Android slice against real `KeyInfo` attestation, and Curve25519 entering KeyMint
+only in Android 13 with device-dependent hardware backing means it cannot be settled from here.
+That matrix may only **narrow** this crossing (a role moving natively into Keystore removes its
+material from Go entirely), never widen it.
+
+**B9. Wake vs content tiers on Android: enforced by Keystore auth-gating, not by process
+isolation.** D2/A15's two-key split is honored, but its iOS argument does not transfer: A15 leans
+on the Notification Service Extension being a separate process, whereas `FirebaseMessagingService`
+runs **in the app process**. The enforcement mechanism on Android is therefore Keystore
+authentication-gating (the unwrap fails while locked) plus code discipline — and the emulator's
+software Keystore proves the code path, not the hardware guarantee. Tier assignment per role:
+**RelayAuth is wake-tier** (after-first-unlock; background reconnect must work on a locked
+handset); **Recipient, NoiseStatic and CommandSign are content-tier** (user-authentication-gated),
+with per-use authorization for revoke, kill switch, launch and kill. Recipient is the load-bearing
+one: `OpenSealedBox` recovers **both** the wake and the content key from a grant
+(`internal/remote/crypto/keystore.go:163`), so an after-first-unlock recipient key plus the
+persisted sealed grant would hand a stolen once-unlocked handset the content key and falsify this
+ADR's own claim at `:89` in the very phase meant to implement it. For the same reason the sealed
+grant blob is retained only under the content tier, or discarded once opened. Persisted state
+follows the same split: only the push token and the push dedup coordinate are wake-tier; send-seq,
+receive high-waters and decrypted caches are content-tier. And **lock purges live memory** —
+invalidating the gate is not enough while `MailboxRouter` holds `ContentKey` by value and caches
+decrypted sessions and snapshots (`internal/phonecore/snapshot.go:88,132`); on lock, background or
+auth expiry the core stops content operations, zeroizes key custody, purges decrypted caches, and
+requires a fresh unwrap.
+
+**B10. Push: a gateway-side trigger on Group transitions, sealed under the wake key, with a
+content-free pinned payload.** Nothing machine-side calls `PushTrigger`/`TokenRegister` today, so
+v1 would have shipped a push transport with no producer; the trigger is in scope. It fires on
+journal **Group transitions** (the roadmap's "wake on Group transitions"), coalesced 30 s per
+session, sealed under the **wake key** — the content key is never used on the push path. This
+introduces a new key crossing into the sidecar: `gatewayParams` carries only `ContentKey` and
+`WakeKey` appears nowhere in the gateway or relay outside tests. It is accepted because the
+gateway already holds the strictly more powerful content key, so the blast radius does not widen;
+the requirement is that it holds the wake key **only** for the push path. The payload is a
+data-only FCM message (no `notification` block, so a locked handset renders a generic alert and
+the app decides everything else) carrying one opaque wake envelope; the sealed plaintext is
+content-free per D2 ("activity on machine X"), carries a persisted replay coordinate and a
+10-minute expiry, and must not carry session names, hostnames, agent names or Group labels. The
+provider observes token, timing and size — D11 is unchanged and this is stated to it, not around
+it. The exact field list is pinned by a schema test in the push slice. Two consequences recorded:
+the seam is renamed transport-neutral (`PushSink`/`PushPayload`) rather than keeping the APNs name
+for an FCM backend, and the user-facing push toggles need a real **device->machine preference
+verb** whose suppression is durable and machine-authoritative where delivery is decided — local
+filtering is not sufficient, since the push would still have been sent and the provider would
+still see token, timing and size. That verb's action class and capability tier are a genuine open
+sub-decision, deliberately left to the push slice rather than pre-empted here; it is the one place
+in Phase B where a new `Action*` constant is expected, and it must be mapped in `actionClass`
+(`internal/skeleton/deviceauth.go:17-26`) or it fails closed.
+
+**B11. Gateway supervision has THREE states, and "no paired device" is not a failure.** D5's
+external supervisor (launchd LaunchAgent / systemd user unit, generated from one source, running
+as the owner, restart-on-exit with backoff, no embedded credentials) is finally shipped, and the
+daemon still never spawns it. But naive restart-on-exit is a permanent crash loop after every
+revoke, because `resolveGatewayParams` fails unless exactly one device exists
+(`cmd/swarm-remote/config.go:77-78`) and the 2026-07-24 amendment made the gateway **exit** when
+its device is no longer registered. The three states: (a) **no paired device** -> unit quiescent,
+and this is a normal state, not a fault; (b) **paired** -> gateway active and grant delivery
+completes; (c) **revoked** -> the process exits, the unit returns to quiescent, and only a later
+successful re-pair activates a gateway under the new epoch. A successful `swarm remote pair`
+ensures the gateway is running, so no manual restart is part of the flow. `swarm-remote` and
+`swarm-relay` become released artifacts; today `.goreleaser.yaml` builds `./cmd/swarm` only.
+
+**B12. §4.6 — the gateway's non-durable inbound replay guard: scoped, and the exploit claim
+RETRACTED. The Phase A closure must NOT be amended to assert an exploit.** An earlier revision of
+the Phase B requirements claimed that a relay retaining phone->machine frames could, after a
+gateway restart, re-inject observed keystrokes into a live lease on the **shipped** tree. That
+claim was **investigated and disproved**, and the disproof independently re-verified: a restart
+builds a fresh, empty `LeaseManager`; `LeaseManager.Input` drops input for a session with no lease
+conn (`internal/remotegw/leasemanager.go:67-72`); and a retained `take_control` cannot recreate the
+lease, because its `operation_id` is claimed through the **durable** two-phase idempotency store
+and a consumed one stays consumed (`internal/protocol/server.go:1452-1462`) — the daemon does not
+restart when the gateway does. The blunter reason it is unreachable today is that no production
+binary imports `internal/phonecore`, so a retaining relay has nothing to replay against.
+
+What remains true is narrower and is what Phase B fixes: the guard is **not durable** —
+`NewCommandBridge` builds a fresh `crypto.NewMailboxReceiver()` on every start
+(`internal/remotegw/command_loop.go:106`), `SetCursor` is never called from production startup,
+and the gateway persists **no** inbound state (`cmd/swarm-remote/config.go:91,95` open outbound
+files only) — and its bounded-age backstop is disabled, since `NewMailboxReceiver` leaves
+`maxAge == 0` (`internal/remote/crypto/envelope.go:219-221`). On a fresh receiver the staleness
+test is skipped entirely (`seen == false`), so the first replayed frame at any seq is accepted and
+so is every contiguous frame after it. The property therefore rests on *incidental* mechanisms — an
+empty lease map, a shared monotonic sequencer, single-use operation ids — rather than on the guard
+meant to provide it, which is exactly how a future routing or sequencing change turns a latent
+defect into a live one.
+
+It **is** reachable inside Phase B's own implementation window, against a phone holding durable
+keys but a regressed send-seq — the precise intermediate state this phase creates: a legitimate
+`take_control` at seq 1 is accepted and opens a lease (new operation_id, unexpired), retained
+input at seq 60 sets the gap bit and is dropped, and seqs 61..100 are contiguous, carry no gap, no
+signature and no expiry, and route to the live lease. Hence the sequencing rule: the gateway's
+durable inbound state and the phone's durable send-seq/rollback anchor **land together**, or Phase
+B briefly builds the hole it is closing.
+
+**Two documentation rulings follow, and they are the reason this section is long.** (1) The Phase
+A committee closure gains a **scoped note, not a retraction**: its "no relay-adversary-reachable
+confidentiality/integrity hole" statement stands; what it records is the reproduced finding (no
+durable inbound high-water, disabled age check, the original claim verified within a single
+gateway run) plus the distinction between the disproved shipped-Phase-A exploit and the valid
+conditional Phase-B trace. Writing a false correction into a committee-signed document is its own
+harm, and no future reader should resurrect the exploit claim from this amendment. (2) Enabling
+the age check requires the phone to stamp `IssuedAt` **first**: every phone->machine seal sets only
+`{Version, EpochID, Seq}` (`internal/phonecore/input.go:59`, `command.go:100,121,143`), so an age
+check turned on today computes an age of ~56 years and rejects every legitimate command and
+keystroke. The bound is 10 minutes — well above the 60 s command TTL, well below the 7 d retention
+cap.
+
+**B13. The QR carries the relay URL; `MachineStaticPub` is NOT pinned in v1; the relay URL ceiling
+is 39 characters.** The minted payload never set `RelayURL` although the codec reserved it and the
+URL was available two frames up, so a scanning phone got a rendezvous id and a secret and **no
+endpoint to dial** — and the "a malicious QR cannot silently point the phone at an attacker-chosen
+relay" threat model presupposed a destination the QR did not carry. `BeginPairing` now populates it
+verbatim (the machine's own dial target is the one endpoint known reachable, and the one displayed
+before joining). The ceiling is forced arithmetic, not preference: the payload is
+`13 + base64url(3 + L + 16 + 32)`, so L=39 gives 133 characters -> byte-mode ECC-L version 6 = 41
+modules, which a standard 80x24 terminal can draw at half-block density; **L=40 jumps to version 7
+(45 modules, 49x25) and no 24-row terminal can show it**. Adding `MachineStaticPub` pushes the
+payload to ~162 characters -> version 8 = 49 modules, which fits under no 80x24 budget at all —
+hence **not pinned in v1**. That is also defensible on its merits: the machine static is already
+pinned from Noise msg2 and the six-emoji SAS of the 2026-07-23 amendment is the designed human
+anti-MITM check, so a QR pin would be belt-and-braces rather than the primary defense. Revisit only
+with a denser glyph family (sextants, U+1FB00) or a shorter payload encoding. Operational
+consequence, recorded because it constrains deployment: `wss://swarm-relay.us-east-1.example.com:8443`
+is 44 characters and does not fit, so `swarm remote init --relay-url` refuses blank,
+whitespace-only, unparseable, non-`ws`/`wss`, host-less and over-length URLs **before any
+filesystem write**, and the fallback names the real cause instead of blaming the terminal. Achieved
+symbol budget (S3): 45x23 at `LINES=23` (quiet zone 2), 47x24 at 24 (quiet zone 3), 49x25 at 25+
+(quiet zone 4, the QR standard's full zone) — better than the requirements' earlier quiet-zone-2
+estimate, which assumed the renderer could not use the full box.
+
+**B14. `crypto.KeyStore` becomes failable — and the signature change lands in the Go core, not the
+Android slice.** `SignCommand(msg []byte) []byte` and `SignRelayAuth(challenge []byte) []byte` are
+errorless and `NoiseStatic() *NoiseStatic` materialises raw private material
+(`internal/remote/crypto/keystore.go:47-56`). Neither is implementable against Android Keystore,
+which never exports private keys and whose every operation can fail — user-authentication-required,
+and **permanent invalidation on biometric-enrollment change**, which the handset security
+requirements explicitly demand be handled. Until this changes, "Keystore-enforced sign
+authorization" is unimplementable and the biometric gate can only be a UI boolean, which is
+precisely the shortcut the criteria are written to fail. Decision: every operation returns an
+error, and the `NoiseStatic` accessor stays an **opaque handle** (never raw scalar export), backed
+on Android by an app-format key unwrapped under B8's content-tier data key where the platform
+cannot perform the DH natively. **Sequencing is part of the decision**: the interface change is
+hoisted into the Go durable-state slice (S7), because the transport, state and façade slices all
+consume this interface and leaving it in the Android slice would guarantee rework across every
+Go-side slice; only the Android *implementation* stays there. `crypto` is inside the bound-closure
+allowlist and is the FROZEN layer, so per project rule this edit is gated on this ADR and
+re-reviewed cross-model after GREEN, exactly as the 2026-07-23 SAS widening was.
+
+**Consequence / tracking.** The requirements document is the binding detail; slice ownership is
+machine-checked in `docs/specifications/remote-phaseB-manifest.tsv` +
+`remote-phaseB-slices.tsv`, not asserted in prose. Deferred to Phase C with reasons already
+stated: iOS (a rebind of the same façade), multi-machine and multi-device with the `SenderKeyID`
+binding and the admin tier, light mode, and production relay ops. Deferred within Phase B and
+named rather than hidden: the push-preference verb's action class (B10), the per-role Keystore
+matrix (B8), and the physical-handset gate — no handset exists on this machine, so Phase B's
+ceiling here is "provisionally implemented", and reclassifying that gate as an accepted limit is
+not permitted.
