@@ -1309,9 +1309,19 @@ whose contents are fully enumerable is auditable in a way that "and then it fetc
 **Rejected, and why, so this is not re-opened as an oversight:**
 
 - **`com.google.mlkit:barcode-scanning` (bundled)** decodes measurably better on damaged, small or
-  badly-lit codes. It costs roughly 2.4 MB of **closed native code** — a second vendor blob on the
-  security-sensitive surface. Traded off, not dismissed: the decode advantage is real and the cost is
-  paid in exactly the place this project is most careful about.
+  badly-lit codes. It costs a **closed native blob** on the security-sensitive surface — reported as
+  roughly 2.4 MB by the implementer, **a figure neither of us measured**, so treat the magnitude as
+  indicative and the kind as the decision: closed, vendor-supplied, on the surface this project is
+  most careful about. Traded off, not dismissed: the decode advantage is real.
+
+  **One open question deliberately NOT asserted here.** The bundled variant is usually presented as
+  the Play-Services-free option, and the implementer's understanding is that it still resolves
+  `play-services-basement` transitively through `com.google.mlkit:common` for the Tasks API — which,
+  if true, means the Play Services surface arrives by the very route chosen to avoid it and would
+  make this rejection unambiguous rather than a trade. **It could not be resolved offline and is
+  recorded as unverified rather than cited as fact.** Anyone revisiting this decision should check
+  the POM first; it would strengthen the conclusion, and a conclusion resting on an unchecked
+  transitive closure is exactly what this ADR should not contain.
 - **`com.google.android.gms:play-services-mlkit-barcode-scanning`** is rejected **outright** rather
   than traded off: it executes code the APK does not contain and the release signature does not
   cover. That is disqualifying independent of its merits.
