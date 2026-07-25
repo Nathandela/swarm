@@ -482,6 +482,26 @@ Every one of those belongs to a slice that has already SHIPPED. They have unit c
 no end-to-end coverage anywhere. **That is what S19 must actually demonstrate**, and it is why an
 exit demonstration driven through phonesim would be worth very little.
 
+## PB-PUSH-3's REPLAY WINDOW IS A FIELD, NOT A MECHANISM -- a gap in SHIPPED work
+
+Found by the S15 RED author while measuring the at-rest inventory, verified independently:
+**`State.WakeReplay` has no producer.** Outside `state.go`'s own persist/merge/load plumbing, nothing
+in `internal/` or `mobile/` ever writes it.
+
+Section 6.0 requires a "Push envelope TTL / replay window | 10 min, with the replay coordinate
+persisted per PB-STATE-1" against PB-PUSH-3, which slice **S12 shipped**. The coordinate is
+persisted; nothing advances it. So a wake envelope replayed by the relay -- the declared adversary,
+and the party that necessarily handles every wake -- is not detected.
+
+**Bounded, not severe**: the wake payload is content-free and a constant 78 bytes (ADR-007 B20), so a
+replay costs a spurious reconnect and battery, not disclosure. But PB-PUSH-3 names the replay window
+explicitly and the field exists to serve it, so this is an unmet requirement rather than a design
+choice.
+
+**Owner: S17**, which owns the phone's push client -- the receiver is where the check belongs. The
+field is already sealed under the wake tier by S15, correctly, since the wake path must read it with
+no user present.
+
 ## A DEAD OFFLINE OP QUEUE THAT READS AS A FEATURE -- decision needed
 
 Same audit. `State.PendingOps` is persisted, restored, cloned and asserted to survive a restart --
