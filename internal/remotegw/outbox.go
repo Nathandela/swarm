@@ -32,6 +32,10 @@ type Outbox interface {
 	Pending() ([]OutboxEntry, error)
 	// Cursor is the highest journal cursor durably COMMITTED.
 	Cursor() uint64
+	// Purge abandons every pending entry, keeping the committed cursor. It is the
+	// owner's revoke and nothing else: the pending bytes are sealed under the epoch
+	// the revoke rotates away, so they can never be opened again by anyone.
+	Purge() error
 }
 
 // outboxSchemaVersion stamps the on-disk file so the format can migrate forward. A file
@@ -109,6 +113,31 @@ func (o *fileOutbox) Commit(cursor uint64) error {
 		high = cursor
 	}
 	return o.adoptLocked(high, o.withoutLocked(cursor))
+}
+
+// Purge drops every pending entry and keeps the committed cursor (PB-STATE-10).
+//
+// IT IS THE ONE PLACE THE OUTBOX'S AT-LEAST-ONCE CONTRACT IS DELIBERATELY BROKEN, and the
+// revoke is the only thing entitled to break it. A pending entry is the EXACT sealed bytes
+// of an undelivered frame; a revoke rotates the machine epoch, so those bytes are sealed
+// under a key no future device will ever hold. Replaying them — which is precisely what the
+// next gateway does, verbatim and by contract — puts unopenable frames in the re-paired
+// phone's mailbox.
+//
+// THE CURSOR STAYS. It is the resume point the next gateway seeds journal_read from
+// (RelaySink.DeliveredCursor); resetting it to zero would re-read the whole journal and
+// re-flood the mailbox. The re-paired phone gets its state from the reconnect roster
+// snapshot, which is current state rather than replayed history.
+//
+// An empty outbox is a no-op that writes NOTHING, so a machine that never ran a gateway does
+// not acquire an outbox file as a side effect of revoking.
+func (o *fileOutbox) Purge() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.pending) == 0 {
+		return nil
+	}
+	return o.adoptLocked(o.cursor, nil)
 }
 
 func (o *fileOutbox) Pending() ([]OutboxEntry, error) {

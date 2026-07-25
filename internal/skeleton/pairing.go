@@ -85,8 +85,16 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 	// concurrent owner pairings is out of scope (pairing is owner-tier, one in flight per
 	// connection). The Registry itself stays uncapped; enforcement lives here at the
 	// pairing layer so the registry's own tests are unaffected.
+	//
+	// THE REFUSAL NAMES ITS OWN REMEDY BY THE COMMANDS THAT PERFORM IT (PB-STATE-10). This
+	// is the wall a stranded handset's owner hits: the phone told them to pair again, and
+	// this is what they get. "Revoke it first" is true and unusable -- it names no verb, and
+	// no way to learn the device id the verb needs -- so the recovery would be reachable only
+	// by an operator who already knew it.
 	if a.devices != nil && a.devices.Count() > 0 {
-		return protocol.PairView{}, errors.New("a device is already paired; revoke it first (single-device v1)")
+		return protocol.PairView{}, errors.New("a device is already paired (single-device v1); " +
+			"run `swarm remote devices` to see its id, then `swarm remote revoke <device-id>` " +
+			"to unregister it, and pair again")
 	}
 
 	// C7: a nil rendezvous seam means no relay is configured (relay.json absent, see

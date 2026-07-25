@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,7 +29,9 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
+	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 const remoteUsage = `usage: swarm remote <command>
@@ -443,6 +447,16 @@ func runRemoteDevices(_ []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", d.DeviceID, d.Name, d.Capability, d.PairedAt.Format(timeFormat))
 	}
 	tw.Flush()
+	// PB-STATE-10: this listing is the recovery's "identify the stranded device" step,
+	// and an operator who has just read a device id has to be told what to do with it --
+	// otherwise the next step is reachable only by already knowing the verb.
+	//
+	// ON STDERR, because stdout is the TABLE. A trailing prose line there is a row to
+	// anything parsing the listing, which is what a device id printed for the purpose of
+	// being copied invites.
+	if len(devices) > 0 {
+		fmt.Fprintln(stderr, "to unregister one: swarm remote revoke <device-id>")
+	}
 	return 0
 }
 
@@ -482,7 +496,24 @@ func runRemoteSetControl(enabled bool, stdout, stderr io.Writer) int {
 // runRemoteRevoke is the `swarm remote revoke <device-id>` verb: it requires
 // exactly one positional arg (the device id) and refuses with a usage error
 // (nonzero exit, no dial attempt) otherwise. With exactly one arg it dials the
-// daemon, revokes the device, and prints a confirmation on success.
+// daemon, revokes the device, purges the state the revocation orphans on BOTH
+// sides, and prints a confirmation naming the step that finishes the recovery.
+//
+// THE ORDER IS LOAD-BEARING (PB-STATE-10, ADR-007 B22):
+//
+//   - the routing id is read BEFORE the daemon revoke, because the revoke deletes
+//     the registry record that carries it and the relay purge cannot be addressed
+//     without it;
+//   - the gateway is stopped BEFORE the relay is dialled, because the gateway holds
+//     the machine's one relay connection under the same relay-auth identity and a
+//     second connection for a routing id SUPERSEDES the first;
+//   - the outbox is purged AFTER the gateway is stopped, so nothing is writing it.
+//
+// EVERY PURGE FAILURE IS A WARNING, never a nonzero exit. The revocation itself is
+// already durable by then -- the device is de-registered and the epoch rotated -- so
+// failing the command would tell the owner the revoke did not happen when it did,
+// and leave them no forward step. This is stopGatewayIfQuiescent's rule, for the
+// same reason.
 func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprint(stderr, remoteRevokeUsage)
@@ -497,13 +528,210 @@ func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 	}
 	defer client.Close()
 
+	stateDir := remoteStateDir()
+	routingID := deviceRoutingID(stateDir, deviceID)
+
 	if err := client.RevokeDevice(deviceID); err != nil {
 		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	stopGatewayIfQuiescent(stderr)
+	purgeRelayState(stateDir, routingID, stderr)
+	purgeOutboundCustody(stateDir, stderr)
+
+	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
+	// PB-STATE-10: the revoke is the MIDDLE of a four-step recovery, not the end of a
+	// job. An owner who stops here has a machine with no device and a handset that
+	// still cannot pair, because nothing told them there was another step.
+	fmt.Fprintln(stdout, "run `swarm remote pair` to pair a device again")
 	return 0
+}
+
+// remoteStateDir resolves the state dir every remote verb reads, the same way
+// dialClient does. An unresolvable one is "": the callers below all treat that as
+// "nothing provisioned here", which is the truth.
+func remoteStateDir() string {
+	if dir := os.Getenv(daemon.EnvStateDir); dir != "" {
+		return dir
+	}
+	dir, err := persist.DefaultDir()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// deviceRecord reads one device out of the durable registry, as a READ exactly like
+// pairedDeviceCount: it does not dial, so it works on a machine whose daemon is not
+// running. A missing record is reported rather than guessed at -- both callers do
+// nothing at all rather than address the relay with something invented.
+func deviceRecord(stateDir, deviceID string) (device.Record, bool) {
+	if stateDir == "" {
+		return device.Record{}, false
+	}
+	reg, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		return device.Record{}, false
+	}
+	return reg.Get(deviceID)
+}
+
+// deviceRoutingID is the relay mailbox address the machine appends to for a device. It
+// must be read BEFORE the revoke, which deletes the record that carries it.
+func deviceRoutingID(stateDir, deviceID string) string {
+	rec, ok := deviceRecord(stateDir, deviceID)
+	if !ok {
+		return ""
+	}
+	return string(rec.RoutingID)
+}
+
+// errRelayNotProvisioned means this machine has no relay identity or no relay URL, so
+// it holds no relay-side state at all. Every caller below treats it as "nothing to do"
+// rather than as a failure: `swarm remote init` without --relay-url is a supported
+// state, and a local-only machine must not be told its relay work failed.
+var errRelayNotProvisioned = errors.New("this machine is not provisioned for a relay")
+
+// withMachineRelay runs fn against an authenticated relay connection opened with THIS
+// MACHINE's own relay-auth identity -- the same identity cmd/swarm-remote's gateway
+// uses, so anything fn can do is something the owner's machine can do.
+//
+// THE CLI DIALS THE RELAY ITSELF, and that is a new responsibility rather than a wiring
+// change (ADR-007 B22). Neither the CLI nor the daemon holds a relay connection; only
+// the gateway sidecar does. But the two owner acts that must reach the relay -- purging
+// a revoked device's mailbox, and authorizing a freshly paired one -- happen at moments
+// when the gateway is by construction NOT running: revoke stops it, and pairing is only
+// permitted when the device count is zero, which is quiescent (PB-LIFE-3).
+//
+// The connection is short-lived on purpose. The relay supersedes an older connection for
+// the same routing id, so a long-lived CLI client would sever a gateway that came up
+// underneath it.
+func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) error) error {
+	if stateDir == "" {
+		return errRelayNotProvisioned
+	}
+	relayURL := readRelayURL(stateDir)
+	idPath := filepath.Join(stateDir, "remote", remoteIdentityFile)
+	if relayURL == "" || !statFileExists(idPath) {
+		return errRelayNotProvisioned
+	}
+	id, err := machineid.Load(idPath)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), remoteRelayOpTimeout)
+	defer cancel()
+	cl, err := relay.Dial(ctx, relayURL, relay.ClientAuth{
+		RelayAuthPub: id.RelayAuthPublic(),
+		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
+	})
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	return fn(ctx, cl)
+}
+
+// remoteRelayOpTimeout bounds the relay round trips these verbs make. The owner is
+// sitting at a terminal and the local half of the work is already durable, so a relay
+// that is down must cost them a reported delay and not a hang.
+const remoteRelayOpTimeout = 10 * time.Second
+
+// readRelayURL reads <stateDir>/remote/relay.json, the file `swarm remote init
+// --relay-url` writes and internal/skeleton's loadRelayURL reads back. An absent or
+// unreadable file means this machine is not provisioned for remote pairing at all.
+func readRelayURL(stateDir string) string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, "remote", remoteRelayFile))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		RelayURL string `json:"relay_url"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return ""
+	}
+	return cfg.RelayURL
+}
+
+// purgeRelayState is the RELAY half of PB-STATE-10's "purge machine and relay state":
+// it empties the revoked handset's mailbox and drops its push token, via the relay's own
+// device_revoke op -- which until this slice had no production caller anywhere in the
+// tree, so the requirement's third step was performed by nothing.
+//
+// Without it the stranded mailbox keeps whatever the gateway appended while the phone
+// was silent, up to the relay's 7-day retention. A handset that recovers WITHOUT a full
+// app-data wipe returns on the same routing id (device.key is minted once per install),
+// reads frames sealed under the epoch this revoke rotated away, cannot open them, and
+// cannot drain them -- and a mailbox that will not drain fills to its depth cap and
+// refuses the new session's appends.
+//
+// relay.ErrNotAuthorized is not a failure here: it says the relay holds no pairing
+// between this machine and that routing id, which is the same statement as "there is no
+// mailbox of ours to empty" from the other end.
+func purgeRelayState(stateDir, routingID string, stderr io.Writer) {
+	if routingID == "" {
+		return
+	}
+	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
+		return cl.DeviceRevoke(ctx, routingID)
+	})
+	switch {
+	case err == nil,
+		errors.Is(err, errRelayNotProvisioned),
+		errors.Is(err, relay.ErrNotAuthorized):
+	default:
+		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but its relay-side mailbox and "+
+			"push token were not purged: %v\n", err)
+	}
+}
+
+// authorizeAtRelay opens the machine -> device mailbox route for a device that has just
+// paired, and -- ADR-007 B22 -- LIFTS any ban a previous revoke left on its routing id.
+//
+// IT IS PART OF PAIRING AND NOT ONLY OF GATEWAY STARTUP, which is the change. The gateway
+// authorizes on every connect (cmd/swarm-remote/deliver.go), so before this the route
+// existed from whenever a supervised process happened to boot. That was survivable for a
+// FIRST pairing and is not for a RE-pairing: the recovered handset comes back on the same
+// routing id, and it is banned until this op runs. Pairing is the moment the owner grants
+// this device access, so it is where the grant is made -- and the gateway's own call
+// stays, idempotently, for every reconnect after.
+func authorizeAtRelay(stateDir, deviceID string, stderr io.Writer) {
+	rec, ok := deviceRecord(stateDir, deviceID)
+	if !ok || len(rec.RelayAuthPub) != ed25519.PublicKeySize {
+		return
+	}
+	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
+		return cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub))
+	})
+	if err != nil && !errors.Is(err, errRelayNotProvisioned) {
+		fmt.Fprintf(stderr, "remote pair: the device is paired, but the machine could not open its "+
+			"relay route: %v\n", err)
+	}
+}
+
+// purgeOutboundCustody is the MACHINE half of the same step, at the one piece of
+// durable machine state a revoke provably orphans and the next pairing then acts on.
+//
+// PB-GW-8's outbox holds reserved-but-uncommitted entries as the EXACT sealed bytes,
+// and a replay re-appends them VERBATIM by contract (re-sealing would mint a fresh
+// nonce). A stranded phone stops acking, so entries accumulate; the revoke rotates the
+// epoch, so every one of them is now sealed under a key no future device holds -- and
+// the gateway that comes up for the RE-PAIRED phone replays them into its mailbox,
+// where nothing can ever open them.
+func purgeOutboundCustody(stateDir string, stderr io.Writer) {
+	if stateDir == "" {
+		return
+	}
+	path := filepath.Join(stateDir, "remote", "outbound-journal.outbox")
+	ob, err := remotegw.OpenOutbox(path)
+	if err == nil {
+		err = ob.Purge()
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but the machine still holds "+
+			"undelivered outbound frames sealed under the rotated epoch (%s): %v\n", path, err)
+	}
 }
 
 // remoteRegrantUsage is `swarm remote regrant`'s usage message.
@@ -554,12 +782,9 @@ func runRemoteRegrant(args []string, stdout, stderr io.Writer) int {
 // error -- the owner runs the gateway some other way and restarts it themselves -- but it IS
 // reported, because a regrant nothing delivers is indistinguishable from no regrant at all.
 func restartGatewayForDelivery(stderr io.Writer) {
-	stateDir := os.Getenv(daemon.EnvStateDir)
+	stateDir := remoteStateDir()
 	if stateDir == "" {
-		var err error
-		if stateDir, err = persist.DefaultDir(); err != nil {
-			return
-		}
+		return
 	}
 	sup, err := newGatewaySupervisor(stateDir)
 	if err == nil {
@@ -667,6 +892,12 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 	fmt.Fprintf(stdout, "paired %s\n", name)
 
+	// PB-STATE-10 / ADR-007 B22: open this device's relay route NOW rather than at whatever
+	// moment a supervised gateway happens to boot. It is also what lifts the relay ban a
+	// previous `swarm remote revoke` left on a handset that recovers on the same routing id,
+	// so it runs BEFORE the gateway is ensured -- the phone is already dialling.
+	authorizeAtRelay(remoteStateDir(), res.DeviceID, stderr)
+
 	// PB-LIFE-2: the phone that just paired has a gateway to talk to, with no second
 	// command and no reboot. This is also what runs the epoch grant delivery
 	// (cmd/swarm-remote's deliverEpochGrant) that makes the pairing usable at all.
@@ -747,12 +978,9 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 // Like ensureGatewayRunning it can only warn; the revocation itself is already durable. A
 // machine with no unit installed has nothing to stop and is told nothing.
 func stopGatewayIfQuiescent(stderr io.Writer) {
-	stateDir := os.Getenv(daemon.EnvStateDir)
+	stateDir := remoteStateDir()
 	if stateDir == "" {
-		var err error
-		if stateDir, err = persist.DefaultDir(); err != nil {
-			return
-		}
+		return
 	}
 	if supervise.Desired(pairedDeviceCount(stateDir)) != supervise.StateQuiescent {
 		return

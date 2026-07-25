@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">swarm</string>
+
+    <!-- PB-PUSH-4. Both are constants with NO arguments, deliberately: the only things a wake
+         could interpolate are the payload (content-free by construction, ADR-007 B20) and a
+         content read, which is forbidden while the device is locked. The line the app renders
+         for the wake itself is not here at all; it comes from the Go core
+         (swarmmobile.WakeNotificationText), so there is one copy of it and no Kotlin string to
+         drift towards saying more. -->
+    <string name="wake_channel_name">Agent updates</string>
+    <!-- Added ONLY when the content tier is open, i.e. the user has authenticated since the last
+         lock. It names no session; it is an invitation to open the app. -->
+    <string name="wake_notification_open">Open swarm to see what changed.</string>
 </resources>

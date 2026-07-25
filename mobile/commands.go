@@ -123,7 +123,23 @@ func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 // mapping is owed by the gateway slice.
 func (a *App) RevokeThisDevice() (op *Op, err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	// PB-PUSH-9's "deletion on revoke/disable", done by the PHONE rather than left to the
+	// relay. The relay does drop the token inside revokeAndPurge's transaction (S12), but a
+	// phone that relies on that has no deletion on revoke at all when the revoke is issued
+	// while the relay is unreachable -- and it goes on holding a token in durable state that
+	// the next connection dutifully re-registers. Left in place it is a provider-visible
+	// identifier for a device its owner disowned, and a machine that can still wake it.
+	//
+	// It runs FIRST because it is the only half of this verb that works today: the signed
+	// command below has no gateway action->op mapping (see the GAP above), so a revoke that
+	// deleted the token last would do nothing at all on the path that matters. The durable
+	// clear cannot be lost either way -- dropPushToken persists before it speaks to the relay,
+	// so a transport failure leaves the deletion owed and onConnected carries it.
+	if err = a.dropPushToken(core); err != nil {
 		return nil, err
 	}
 	// The target device id sits in the session position of the signed tuple, so a

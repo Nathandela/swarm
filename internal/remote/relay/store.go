@@ -206,15 +206,35 @@ func pairKey(a, b string) []byte {
 	return k
 }
 
-// addPair records an undirected pairing (both directions) so an authorization
-// check is a single point lookup either way.
-func (s *store) addPair(a, b string) error {
+// authorizePair records an undirected pairing (both directions) so an
+// authorization check is a single point lookup either way, AND lifts any ban
+// standing against device — in ONE transaction, so a crash between the two can
+// never leave a routing id paired-but-banned (authorized on paper and refused at
+// the handshake).
+//
+// CLEARING THE BAN IS ADR-007 B22 AND IT IS NOT A WEAKENING. revokeAndPurge is
+// the only writer of bucketRevoked and nothing else ever cleared it, while the
+// phone's relay-auth key is minted once per install — so a recovered handset
+// returned on the same routing id and was locked out of the relay for good.
+// Revoke and re-pair were mutually exclusive, and PB-STATE-10 ("fail closed must
+// not mean bricked") was unsatisfiable.
+//
+// The safety argument: this is reached only from an AUTHENTICATED connection
+// (handleAuthorizeDevice's requireAuth), and a revoked routing id cannot
+// authenticate — the auth path refuses it before any op dispatches. So the only
+// party who can lift a ban is the machine, over its own connection, and the
+// machine authorizing a routing id IS the owner's decision to un-ban it. There
+// is no path by which a revoked device un-bans itself.
+func (s *store) authorizePair(pairer, device string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
-		if err := pb.Put(pairKey(a, b), []byte{1}); err != nil {
+		if err := pb.Put(pairKey(pairer, device), []byte{1}); err != nil {
 			return err
 		}
-		return pb.Put(pairKey(b, a), []byte{1})
+		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
+			return err
+		}
+		return tx.Bucket(bucketRevoked).Delete([]byte(device))
 	})
 }
 

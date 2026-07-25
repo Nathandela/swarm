@@ -39,6 +39,8 @@ object SwarmErrorTokens {
     const val APP_CLOSED: String = "swarm/closed"
     const val OFFLINE: String = "swarm/offline"
     const val NOT_PAIRED: String = "swarm/not-paired"
+    const val STATE_CORRUPT: String = "swarm/state-corrupt"
+    const val DEVICE_UNSUPPORTED: String = "swarm/device-unsupported"
     const val SYNCING: String = "swarm/unreconciled"
     const val AWAITING_KEY: String = "swarm/awaiting-key"
     const val GRANT_LOST: String = "swarm/grant-lost"
@@ -67,6 +69,8 @@ enum class ErrorState {
     APP_CLOSED,
     OFFLINE,
     NOT_PAIRED,
+    STATE_CORRUPT,
+    DEVICE_UNSUPPORTED,
     SYNCING,
     AWAITING_KEY,
     GRANT_LOST,
@@ -103,6 +107,19 @@ enum class Remedy {
     MACHINE_REGRANT,
     AUTHENTICATE,
     RE_PAIR,
+
+    /**
+     * PB-STATE-10's owner-side recovery, and it is its OWN remedy because it is TWO acts and
+     * neither alone works: the user clears the app's data, and the OWNER unregisters this
+     * device at the machine. [RE_PAIR] alone is the brick -- `swarm remote pair` is refused
+     * while the device is still registered (single-device v1), so the advice cannot be
+     * carried out and the only exit is physical access to the machine.
+     *
+     * It is deliberately NOT one of [RoutedError.offersPairing]'s two: there is no App to
+     * offer a pairing flow from -- the durable blob failed Resume, which is how the user got
+     * here -- and offering one before the machine side is done leads to the same refusal.
+     */
+    CLEAR_DATA_AND_RE_PAIR,
     TAKE_CONTROL,
     WAIT_AND_RETRY,
     RETRY_PAIRING,
@@ -168,6 +185,18 @@ object ErrorRouter {
         SwarmErrorTokens.NOT_PAIRED to RoutedError(
             ErrorState.NOT_PAIRED, Remedy.PAIR,
             "This phone is not paired with a machine yet. Nothing is broken -- pair it to begin.",
+        ),
+        SwarmErrorTokens.STATE_CORRUPT to RoutedError(
+            ErrorState.STATE_CORRUPT, Remedy.CLEAR_DATA_AND_RE_PAIR,
+            "This phone's saved state cannot be read, so it has stopped rather than guess. " +
+                "Clear this app's data, then on your machine run `swarm remote devices` to " +
+                "find this device and `swarm remote revoke <device-id>` to unregister it -- " +
+                "`swarm remote pair` is refused until you do -- and pair again.",
+        ),
+        SwarmErrorTokens.DEVICE_UNSUPPORTED to RoutedError(
+            ErrorState.DEVICE_UNSUPPORTED, Remedy.REPORT_BUG,
+            "This handset cannot protect keys the way this app requires. Nothing you do fixes " +
+                "it and pairing again would land here; please report it.",
         ),
         SwarmErrorTokens.SYNCING to RoutedError(
             ErrorState.SYNCING, Remedy.WAIT_FOR_MACHINE,

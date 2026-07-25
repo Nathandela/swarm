@@ -765,7 +765,10 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
-	if err := sc.s.st.addPair(sc.rid, deviceRID); err != nil {
+	// ADR-007 B22: this also LIFTS any ban standing against deviceRID. See
+	// store.authorizePair for why the owner's machine is the only party that can
+	// reach it, and therefore why un-banning here is the owner's own decision.
+	if err := sc.s.st.authorizePair(sc.rid, deviceRID); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
 	return sc.replyOK(map[string]any{})

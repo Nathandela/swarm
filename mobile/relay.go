@@ -131,7 +131,8 @@ const (
 	//
 	// It is TERMINAL for the same reason connRepairRequired is: nothing on this device can
 	// un-revoke itself, so every retry is a websocket handshake spent re-proving that, on a
-	// battery, against the relay's per-source budget.
+	// battery, against the relay's per-source budget. The ONE exception is a pairing that has
+	// just completed, which is the owner acting -- see rearmAfterPairing.
 	//
 	// It is kept apart from connRepairRequired although the two share a remedy, because they
 	// do not share a cause: repair_required means this handset's Keystore key is gone, revoked
@@ -176,7 +177,11 @@ func (a *App) run(ctx context.Context) {
 			// by "reconnecting": the user has to be told that authenticating is what fixes
 			// this, and a spinner tells them the opposite. The state therefore persists
 			// across the retry, and the next successful dial clears it by setting "online".
-			if a.currentConn() != connReauthRequired {
+			//
+			// connRevoked is held for the same reason, and it only ever survives a retry
+			// inside the post-pairing window rearmAfterPairing opens: hiding it behind a
+			// spinner there would put back exactly the loop PB-APP-10 forbids.
+			if s := a.currentConn(); s != connReauthRequired && s != connRevoked {
 				a.setConn(connReconnecting)
 			}
 			select {
@@ -217,6 +222,12 @@ func (a *App) run(ctx context.Context) {
 				// break falls through to setConn("offline") and erases the one state that
 				// tells the user what happened.
 				a.setConn(connRevoked)
+				// PB-STATE-10: unless a pairing has just made this answer STALE. See
+				// rearmAfterPairing -- the state stays "revoked" either way, so nothing is
+				// hidden; only the retry survives, and only inside a bounded window.
+				if a.withinPairingGrace() {
+					continue
+				}
 				a.setClient(nil)
 				return
 			}
@@ -252,12 +263,29 @@ func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 // onConnected re-establishes the per-connection state the relay does not persist: the
 // machine's authorization to append to this phone's mailbox, and the push token
 // (PB-PUSH-9 requires re-registration on every authenticated reconnect).
+//
+// THE TOKEN ARM RECONCILES IN BOTH DIRECTIONS, which is what makes an offline DELETION reach
+// the relay at all. It used to register when durable state held a token and do nothing when it
+// did not -- so a deletion issued while backgrounded (the normal state under ADR-007 B16)
+// cleared the phone and left the relay delivering forever, with nothing to retry it because the
+// phone had forgotten the token. Durable state is authoritative for what the relay should hold,
+// so no token means DELETE, and the deletion is owed by exactly the mechanism that owes a
+// registration.
+//
+// The empty case cannot destroy a good registration, which is the objection worth answering.
+// State.PushToken is durable and wake-tier, so it survives process death and a lock purge
+// (PB-STATE-9, and fileStore.PurgeKeys carries the wake container byte for byte). The only ways
+// to reach a connect with no token held are a phone that has never registered one -- for which
+// the relay holds nothing either -- and a phone whose user deleted it, which is the case this
+// arm exists for.
 func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
 	if _, pub := a.destination(); len(pub) == ed25519.PublicKeySize {
 		_ = cl.AuthorizeDevice(ctx, pub)
 	}
 	if token := a.core.State().PushToken; token != "" {
 		_ = cl.TokenRegister(ctx, token)
+	} else {
+		_ = cl.TokenDelete(ctx)
 	}
 }
 

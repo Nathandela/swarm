@@ -1,6 +1,7 @@
 package dev.swarm.phone
 
 import android.app.Application
+import dev.swarm.phone.push.PushTokens
 import dev.swarm.phone.theme.SwarmTheme
 
 /**
@@ -25,5 +26,13 @@ class SwarmApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         SwarmTheme.applyDefaultNightMode()
+        // PB-PUSH-9's "initial getToken", which is listed FIRST and separately from onNewToken
+        // for a reason: the callback fires only on ROTATION, so an app that implements it alone
+        // never registers on a fresh install -- and a fresh install is a phone that has just been
+        // paired and is about to be backgrounded, which is the state push exists for.
+        //
+        // It is safe HERE despite the rule above: the token arrives in a listener, so the phone
+        // is built off this thread and onCreate touches nothing that can refuse.
+        PushTokens.requestInitialToken(this)
     }
 }

@@ -137,6 +137,10 @@ type App struct {
 	// because the event plane alone cannot serve a screen that opens AFTER the measurement,
 	// which on Android is most of them -- the process is killed and rebuilt constantly.
 	clockVerdict string
+	// pairingGraceUntil is how long the transport keeps retrying a relay that still answers
+	// "revoked" after a pairing re-armed it (PB-STATE-10). Zero -- the normal case -- means
+	// no grace at all, so a revocation stays terminal exactly as PB-APP-10 requires.
+	pairingGraceUntil time.Time
 }
 
 // session is one Start..Stop generation.
@@ -262,6 +266,73 @@ func (a *App) Start() (err error) {
 		a.run(ctx)
 	}()
 	return nil
+}
+
+// pairingRevokeGrace is how long a transport that a PAIRING re-armed keeps retrying a relay
+// still answering "revoked".
+//
+// It exists because the two ends of a recovery cannot be ordered. The phone learns the
+// pairing succeeded the instant the machine's acceptance frame lands; the machine opens this
+// device's relay route just after, over a connection of its own (`swarm remote pair`'s
+// authorizeAtRelay, and again whenever the gateway boots). So the phone's first dial after a
+// re-pair can legitimately arrive before the ban is lifted, and latching on it would mean the
+// recovery only worked if the phone lost a race -- PB-STATE-10's brick, one layer down.
+//
+// It is bounded because a relay that is genuinely still refusing must eventually be believed,
+// and generous because the losing side of the race can be a supervised process starting.
+const pairingRevokeGrace = 30 * time.Second
+
+// rearmAfterPairing restarts a transport generation that a revocation ended, and opens the
+// window above. It is the phone half of PB-STATE-10 and it runs on exactly one event: a
+// pairing that pinned a destination.
+//
+// WHY A RE-ARM IS OWED AT ALL. connRevoked returns from the loop rather than breaking, so the
+// generation is OVER -- correctly, since nothing on-device can un-revoke itself. But a
+// completed pairing is the owner having acted, which is the one thing that can make that
+// verdict stale, and the App carries it across: the handset the user is holding shows REVOKED,
+// they pair from that very screen, and without this they would go on seeing REVOKED until the
+// Android process happened to be rebuilt. That is the same brick the requirement is named for,
+// reached through the remedy.
+//
+// A generation still RUNNING is left alone -- the ordinary first pairing, where nothing was
+// ever revoked -- so no grace is opened and a later revocation stays terminal.
+func (a *App) rearmAfterPairing() {
+	a.mu.Lock()
+	dead := a.sess
+	a.mu.Unlock()
+	if dead == nil {
+		return // never started, or stopped: Start owns that transition
+	}
+	select {
+	case <-dead.done:
+	default:
+		return // still connected or retrying; nothing to re-arm
+	}
+
+	a.mu.Lock()
+	if a.sess != dead || a.closed {
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &session{cancel: cancel, done: make(chan struct{})}
+	a.sess = s
+	a.pairingGraceUntil = time.Now().Add(pairingRevokeGrace)
+	a.mu.Unlock()
+
+	dead.cancel() // release the finished generation's context
+	go func() {
+		defer close(s.done)
+		a.run(ctx)
+	}()
+}
+
+// withinPairingGrace reports whether a "revoked" from the relay is still explicable by a
+// pairing this app has just completed.
+func (a *App) withinPairingGrace() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.pairingGraceUntil.IsZero() && time.Now().Before(a.pairingGraceUntil)
 }
 
 // Stop disconnects. It is IDEMPOTENT and safe to call concurrently with any other
@@ -927,6 +998,22 @@ func (a *App) resolve(operationID string) {
 // RegisterPushToken records the provider token with the relay AND persists it, so it
 // survives process death and app upgrade and is re-registered on every authenticated
 // reconnect (PB-PUSH-9 / PB-STATE-9).
+//
+// IT PERSISTS FIRST AND REGISTERS SECOND, and the order is the requirement rather than a
+// preference. This verb used to take a.conn() as its first act and return that error, so a
+// rotation arriving with no connection was DISCARDED -- and FCM does not ask: onNewToken fires
+// on reinstall, on app data restore, on a token TTL expiry, on any of them while the app is
+// backgrounded and therefore, under ADR-007 B16, disconnected. The consequence was never "the
+// rotation is retried later": durable state still held the OLD token, so onConnected
+// re-registered the DEAD one, the provider answered UNREGISTERED, the relay pruned it, and the
+// handset was unreachable by push with no token registered anywhere, nothing that would ever
+// register the new one, and nothing on either side reporting it. The phone looked healthy
+// throughout.
+//
+// A MISSING CONNECTION IS THEREFORE NOT AN ERROR HERE. The work is not lost, it is OWED: the
+// token is durable and onConnected carries whatever durable state holds on the next
+// authenticated reconnect, which is the mechanism PB-PUSH-9 already requires for its own
+// reasons. A relay that is reached and REFUSES is a different matter and is reported.
 func (a *App) RegisterPushToken(token string) (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -936,16 +1023,16 @@ func (a *App) RegisterPushToken(token string) (err error) {
 	if token == "" {
 		return classed(ErrClassInvalidRequest, errors.New("swarmmobile: RegisterPushToken requires a token"))
 	}
-	cl, err := a.conn()
-	if err != nil {
-		return err
-	}
-	if err = cl.TokenRegister(context.Background(), token); err != nil {
-		return err
-	}
 	st := core.State()
 	st.PushToken = token
-	return core.Save(st)
+	if err = core.Save(st); err != nil {
+		return err
+	}
+	cl, cerr := a.conn()
+	if cerr != nil {
+		return nil
+	}
+	return cl.TokenRegister(context.Background(), token)
 }
 
 // DeletePushToken removes the token from the relay and from durable state. Deletion on
@@ -956,14 +1043,35 @@ func (a *App) DeletePushToken() (err error) {
 	if err != nil {
 		return err
 	}
-	if cl, cerr := a.conn(); cerr == nil {
-		if err = cl.TokenDelete(context.Background()); err != nil {
-			return err
-		}
-	}
+	return a.dropPushToken(core)
+}
+
+// dropPushToken is deletion's whole implementation, shared with RevokeThisDevice.
+//
+// IT CLEARS DURABLE STATE WHETHER OR NOT THE RELAY IS REACHABLE, and that used to be the
+// defect rather than the fix: the old shape told the relay only `if cl, cerr := a.conn(); cerr
+// == nil` and cleared local state either way, so a user who turned notifications off while the
+// phone was backgrounded -- the normal state under ADR-007 B16 -- left the relay holding a live
+// token forever, with nothing retrying it because the phone had forgotten the token it would
+// have had to delete. The user saw notifications they had switched off and a settings screen
+// that agreed they were off.
+//
+// What closes it is not a queued deletion but the durable state being AUTHORITATIVE: the phone
+// holds no token, and onConnected reconciles the relay to that on every authenticated
+// reconnect. So the deletion is owed by the same mechanism that owes a registration, there is
+// no second flag to keep in step, and the converse holds too -- re-registration carries what
+// durable state HOLDS, and after a deletion that is nothing.
+func (a *App) dropPushToken(core *phonecore.Core) error {
 	st := core.State()
 	st.PushToken = ""
-	return core.Save(st)
+	if err := core.Save(st); err != nil {
+		return err
+	}
+	cl, cerr := a.conn()
+	if cerr != nil {
+		return nil
+	}
+	return cl.TokenDelete(context.Background())
 }
 
 // PushPreference is the persisted pair of coarse toggles (PB-APP-7).

@@ -79,6 +79,11 @@ var requiredScreenElements = []string{
 	"pairing.confirm_destination", // PB-PAIR-6: the destination was joined before it was displayed
 	"pairing.sas_mismatch",        // PB-PAIR-5/PB-SAS-3: the only button was Cancel
 	"pairing.resume",              // PB-PAIR-4: the state machine did not survive a process death
+
+	// ADDED BY SLICE S17, additively and for the same reason S16's block above states.
+	// mobile/s17_screencoverage_test.go states the case for it and hard-codes it there too, so
+	// this list and that one keep meeting in the middle.
+	"push.notification", // PB-PUSH-4/PB-PUSH-3: a push arrived and no verb decided what to render
 }
 
 type coverageRow struct {

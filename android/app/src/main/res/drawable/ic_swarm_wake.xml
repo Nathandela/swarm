@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PB-PUSH-4's status-bar glyph. A notification with no valid small icon is refused by
+     NotificationManager.notify at runtime, so this is not decoration.
+
+     It is a flat monochrome silhouette because that is all the status bar renders: the platform
+     masks the icon to its own tint, so any colour here is discarded. No -night variant and no
+     theme attribute, per PB-TOK-4. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2 L22,12 L12,22 L2,12 Z" />
+</vector>

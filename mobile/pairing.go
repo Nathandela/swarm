@@ -598,6 +598,10 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 		a.mu.Unlock()
 	}
 	a.setDestination(out.Machine.MachineRelayAuthPub)
+	// PB-STATE-10: a pairing is the owner acting, and it is the one event that can make a
+	// terminal "revoked" stale. Without this the recovered handset stays on that screen until
+	// the Android process is rebuilt -- the brick reached through the remedy.
+	a.rearmAfterPairing()
 }
 
 func (p *Pairing) setSAS(s string) {

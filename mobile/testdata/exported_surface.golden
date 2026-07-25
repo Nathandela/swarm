@@ -1,6 +1,7 @@
 const CallbackQueueSize
 const ErrClassAwaitingKey
 const ErrClassClosed
+const ErrClassDeviceUnsupported
 const ErrClassGrantLost
 const ErrClassInternal
 const ErrClassInvalidRequest
@@ -13,10 +14,12 @@ const ErrClassRateLimited
 const ErrClassReauthRequired
 const ErrClassRepairRequired
 const ErrClassRevoked
+const ErrClassStateCorrupt
 const ErrClassUnknown
 const ErrClassUnreconciled
 const KeyCustodyAuthRequired
 const KeyCustodyKeyInvalidated
+const WakeNotificationText
 field Config.MachineID string
 field Config.RelayURL string
 field Config.StateDir string
@@ -68,6 +71,8 @@ field UndeliveredInput.AtMillis int64
 field UndeliveredInput.Bytes int
 field UndeliveredInput.Reason string
 field UndeliveredInput.SessionID string
+field WakeAlert.ContentReady bool
+field WakeAlert.Text string
 func DecodeQR(string) (*QRPayload, error)
 func NewApp(*Config, KeyCustody) (*App, error)
 ifacemethod EventListener.OnEvent(*Event)
@@ -80,6 +85,7 @@ method App.Close() error
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
 method App.ErrorClass(string) (string, error)
+method App.HandlePushWake(string) (*WakeAlert, error)
 method App.InstallContentKey([]byte) error
 method App.InstallWakeKey([]byte) error
 method App.Interrupt(string) (*Op, error)
@@ -155,3 +161,4 @@ type Snapshot struct
 type StateSummary struct
 type UndeliveredInput struct
 type UndeliveredList struct
+type WakeAlert struct

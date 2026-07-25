@@ -17,6 +17,7 @@ import dev.swarm.phone.keys.Recovery
 import dev.swarm.phone.keys.SealedStore
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
+import dev.swarm.phone.ui.SwarmErrorTokens
 import swarmmobile.App
 import swarmmobile.Config
 import swarmmobile.Swarmmobile
@@ -84,7 +85,7 @@ class PhoneRuntime(private val context: Context) {
     private fun attach(): PhoneStartup = try {
         PhoneStartup.Ready(construct())
     } catch (failure: Throwable) {
-        PhoneStartup.Unavailable(routed(failure), failure.message ?: failure.javaClass.name)
+        PhoneStartup.Unavailable(routeStartupFailure(failure), failure.message ?: failure.javaClass.name)
     }
 
     private fun construct(): App {
@@ -161,23 +162,6 @@ class PhoneRuntime(private val context: Context) {
         }
     }
 
-    /**
-     * The failure as something a screen can render (PB-APP-9).
-     *
-     * A custody failure is routed by its RECOVERY rather than by its message, because only two
-     * of the six carry a verdict token; the rest would fall through to the unknown row, which
-     * for a permanent invalidation is a user told to try again forever. Everything else IS a
-     * message -- gomobile leaves nothing of a Go error but its text, with the class stamped on
-     * the front -- so [ErrorRouter] reads it exactly as every other facade failure is read.
-     */
-    private fun routed(failure: Throwable): RoutedError = when {
-        failure !is KeyCustodyException -> ErrorRouter.route(failure.message.orEmpty())
-        GoCustodyFailure.recoveryFor(failure) == Recovery.REAUTHENTICATE ->
-            ErrorRouter.route(GoCustodyFailure.AUTH_REQUIRED_TOKEN)
-
-        else -> ErrorRouter.route(GoCustodyFailure.KEY_INVALIDATED_TOKEN)
-    }
-
     private fun rememberedRelay(): String {
         val file = File(runtimeDir, RELAY_FILE)
         return if (file.isFile) file.readText().trim() else ""
@@ -204,6 +188,65 @@ class PhoneRuntime(private val context: Context) {
 
     private companion object {
         const val RELAY_FILE = "relay-url"
+    }
+}
+
+/**
+ * A construction failure as something a screen can render (PB-APP-9).
+ *
+ * A custody failure is routed by TYPE rather than by its message, because only two of the six
+ * carry a verdict token; the rest would fall through to the unknown row, which for a permanent
+ * invalidation is a user told to try again forever. Everything else IS a message -- gomobile
+ * leaves nothing of a Go error but its text, with the class stamped on the front -- so
+ * [ErrorRouter] reads it exactly as every other facade failure is read.
+ *
+ * IT IS A TOP-LEVEL `internal` FUNCTION AND NOT A PRIVATE METHOD. Constructing a [PhoneRuntime]
+ * needs a `Context`, and its failures come from Keystore, so the routing table was the one part
+ * of this file no test could reach -- and it shipped S16 as a two-arm `when` that folded FOUR
+ * verdicts onto re-pair. Separating it is what makes the table assertable on a plain JVM.
+ *
+ * THE TWO ARMS THAT WERE WRONG, and they were wrong in the way this whole taxonomy exists to
+ * prevent -- a remedy the user can perform that cannot help:
+ *
+ *  - [KeyCustodyException.KeystoreDowngrade] and [KeyCustodyException.PlatformCapabilityMissing]
+ *    are PB-KEY-8's refusals: the handset is not capable of what the design requires. Routed to
+ *    re-pair, the user gets re-pair -> re-provision the same key on the same platform -> the same
+ *    refusal -> the same screen, which is the failure LOOP PB-APP-10 forbids, reached through
+ *    the remedy. They render as DEVICE_UNSUPPORTED, whose remedy is not a user action at all.
+ *  - [KeyCustodyException.Unexpected] is "anything else the platform threw" -- a `renameTo`
+ *    failing on a full disk, say. Routed to re-pair it tells a user with a perfectly good key
+ *    that it was destroyed and no authentication brings it back. It is a bug, so it renders as
+ *    INTERNAL, the class that already means exactly that.
+ *
+ * What remains on re-pair is what re-pairing actually fixes: a key the platform invalidated, a
+ * Keystore entry that is gone, and the state directory orphaned from its custody store (which
+ * [refuseAnOrphanedStateDirectory] raises as the invalidation it is).
+ */
+internal fun routeStartupFailure(failure: Throwable): RoutedError = when (failure) {
+    is KeyCustodyException -> routeCustodyVerdict(failure)
+    else -> ErrorRouter.route(failure.message.orEmpty())
+}
+
+/**
+ * The custody half, split out only so the branch above needs no smart cast.
+ *
+ * TWO VERDICTS ARE ROUTED BY TYPE AND NOT BY RECOVERY, and that is the point rather than an
+ * exception to it: [Recovery.REPAIR_DEVICE] is the answer for THREE different causes and only
+ * one of them is the user's to fix. The rest go through [GoCustodyFailure.recoveryFor], which
+ * is the shared, separately-tested policy, and the inner `when` carries no `else` -- a
+ * [Recovery] value added later fails to compile here rather than falling into a bucket.
+ */
+private fun routeCustodyVerdict(failure: KeyCustodyException): RoutedError = when (failure) {
+    is KeyCustodyException.Unexpected -> ErrorRouter.route(SwarmErrorTokens.INTERNAL)
+    is KeyCustodyException.PlatformCapabilityMissing ->
+        ErrorRouter.route(SwarmErrorTokens.DEVICE_UNSUPPORTED)
+
+    else -> when (GoCustodyFailure.recoveryFor(failure)) {
+        Recovery.REAUTHENTICATE -> ErrorRouter.route(GoCustodyFailure.AUTH_REQUIRED_TOKEN)
+        // KeystoreDowngrade, and the only verdict that reaches it.
+        Recovery.REPROVISION_KEK -> ErrorRouter.route(SwarmErrorTokens.DEVICE_UNSUPPORTED)
+        // The key itself is gone, which IS something the user can act on.
+        Recovery.REPAIR_DEVICE -> ErrorRouter.route(GoCustodyFailure.KEY_INVALIDATED_TOKEN)
     }
 }
 

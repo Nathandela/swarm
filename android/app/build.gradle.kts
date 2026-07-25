@@ -180,9 +180,30 @@ kotlin {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PB-PUSH-9 / PB-E2E-5: THIS BUILD IS NOT WIRED FOR REAL FCM DELIVERY, and that is recorded
+// here rather than in an evidence file because here is where the build is read.
+//
+// firebase-messaging below is what lets dev.swarm.phone.push.SwarmMessagingService compile and
+// what the manifest's MESSAGING_EVENT filter resolves against. It is NOT enough to receive a
+// message: FirebaseMessagingService is only ever invoked if FirebaseApp initialises, and
+// FirebaseApp initialises from a google-services.json processed by the com.google.gms
+// .google-services plugin -- which is deliberately NOT applied.
+//
+// THERE IS NO GOOGLE ACCOUNT IN THIS PROJECT, so that file cannot exist and must not be faked:
+// a fabricated one produces an app that initialises against a project id nobody owns, which
+// fails at runtime on a real handset and nowhere else. So an APK built from this module
+// installs, runs, registers no token with FCM and receives no wake -- while every source-level
+// gate and every Go conformance test stays green.
+//
+// Closing that is PB-E2E-5 (real FCM delivery, real Doze, a real handset), which is DEFERRED
+// under section 13. Slice S17 does not close it and claims no part of it.
+// ---------------------------------------------------------------------------
+
 dependencies {
     implementation(files(swarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("com.google.firebase:firebase-messaging:24.1.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")

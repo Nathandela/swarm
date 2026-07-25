@@ -82,6 +82,30 @@ const (
 	// simply never been paired (or its pairing left no destination behind).
 	ErrClassNotPaired = "swarm/not-paired"
 
+	// ErrClassStateCorrupt is phonecore.ErrCorruptState: the durable blob will not load, so
+	// PB-STATE-4 fails closed and Resume refuses. It is the OWNER-RECOVERABLE fail-closed
+	// state (PB-STATE-10) and it had no class of its own until S18b, which put it in
+	// ErrClassInternal -- whose remedy is report_bug and whose own definition is "never the
+	// user's fault and never has a user action". A recoverable state routed to "report a bug"
+	// is the brick expressed as a screen: the one thing the user is told to do is the one
+	// thing that cannot help.
+	ErrClassStateCorrupt = "swarm/state-corrupt"
+
+	// ErrClassDeviceUnsupported is PB-KEY-8's two refusals: the handset does not provide a
+	// capability a key role needs, or it generated a key WEAKER than was requested. Nothing
+	// the user does fixes either, and re-pairing least of all -- a re-pair re-provisions the
+	// same key on the same platform and lands on the same screen, which is the failure LOOP
+	// PB-APP-10 forbids, reached through the remedy. It shares ErrClassInternal's remedy
+	// (report_bug: the maintainers must hear about a platform that downgrades silently) and
+	// not its state, because the app is not at fault and its message must not say so.
+	//
+	// It is produced on the ANDROID side, where those refusals are raised
+	// (dev.swarm.phone.keys.KeyCustodyException, routed by PhoneRuntime): the Go facade has
+	// no sentinel for a Keystore read-back. The constant lives here because the taxonomy is a
+	// closed set derived from this package's exported surface -- a token Kotlin routes on and
+	// Go does not declare is a token nothing checks.
+	ErrClassDeviceUnsupported = "swarm/device-unsupported"
+
 	// ErrClassUnreconciled is PB-SYNC-7's fail-closed refusal of mutating ops until the
 	// machine publishes its rollback authorities. The phone is fine, the machine has not
 	// spoken yet, and reads keep working throughout.
@@ -132,11 +156,13 @@ const (
 // tokens at the same index reports the more specific one. It is the only list of classes in
 // this package; the taxonomy TSV is checked against the GOLDEN, never against this slice.
 var errClasses = []string{
+	ErrClassDeviceUnsupported,
 	ErrClassReauthRequired,
 	ErrClassRepairRequired,
 	ErrClassInvalidRequest,
 	ErrClassUnreconciled,
 	ErrClassPairingFailed,
+	ErrClassStateCorrupt,
 	ErrClassAwaitingKey,
 	ErrClassRateLimited,
 	ErrClassNotPaired,
@@ -205,6 +231,23 @@ func classifyMessage(msg string) string {
 	return best
 }
 
+// stateCorruptRecovery is PB-STATE-10's owner-side recovery, spelled as the commands that
+// perform it.
+//
+// IT RIDES THE ERROR because for this one class there is nowhere else to put it. A corrupt
+// blob fails Resume, so NewApp returns and there is no App: no screen, no App.ErrorClass, no
+// remedy string -- the message is the entire product for a user in this state, and on Android
+// it is what PhoneStartup.Unavailable carries into the log and the bug report.
+//
+// IT NAMES THE MACHINE-SIDE STEPS because the user's own act is not sufficient. Clearing the
+// app's data removes the blob that will not load; `swarm remote pair` is then still REFUSED,
+// because BeginPairing fail-fasts while this device is registered (single-device v1). A
+// remedy that stopped at "pair again" is advice that cannot be carried out, which is the
+// brick this requirement is named for.
+const stateCorruptRecovery = "recovery: clear this app's data, then on the machine run " +
+	"`swarm remote devices` to find this device, `swarm remote revoke <device-id>` to " +
+	"unregister it, and `swarm remote pair` to pair again"
+
 // stampErrorClass is the OUTBOUND totality guarantee: no error leaves this facade without a
 // class, whether or not this package constructed it.
 //
@@ -235,6 +278,8 @@ func stampErrorClass(err error) error {
 		// content KEK would not open, so the user must authenticate. Routing it anywhere else
 		// tells a locked handset it is broken.
 		return classed(ErrClassReauthRequired, err)
+	case errors.Is(err, phonecore.ErrCorruptState):
+		return classed(ErrClassStateCorrupt, fmt.Errorf("%w. %s", err, stateCorruptRecovery))
 	case errors.Is(err, relay.ErrRevoked):
 		return classed(ErrClassRevoked, err)
 	case errors.Is(err, phonecore.ErrGrantLost):
