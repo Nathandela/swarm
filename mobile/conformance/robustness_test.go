@@ -5,6 +5,7 @@ package conformance_test
 // on this surface.
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -473,5 +474,62 @@ func TestPBSTATE2_TypingSurvivesAProcessDeathThroughTheFacade(t *testing.T) {
 	if sum.SendSeq == 0 {
 		t.Errorf("StateSummary.SendSeq is 0 after a restart that sent frames; the durable " +
 			"reservation ceiling is not being surfaced, so PB-STATE-3 is unobservable")
+	}
+}
+
+// TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails is the facade half of the
+// same finding phonecore's TestS14A_R3_APurgeClearsMemoryEvenWhenTheDurableWriteFails
+// fences. PB-KEY-7 requires lock to "purge decrypted session/snapshot/reply caches and
+// sensitive UI state"; App.PurgeKeys returns before clearing the journal and the pending
+// unlock-needs map whenever the durable write fails. A read-only data directory then leaves
+// the app rendering already-decrypted session content with the screen locked.
+//
+// The durable failure must still be REPORTED: the sealed blobs at rest genuinely did survive
+// and the caller has to know that.
+func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T) {
+	h := newHarness(t)
+	h.PushReconcile()
+	h.PushTerminal(testSession, []string{"SECRET"}, 80, 24)
+	eventually(t, "the snapshot never arrived", func() bool {
+		snap, err := h.App.Peek(testSession)
+		return err == nil && strings.Contains(snap.Text, "SECRET")
+	})
+	h.PushRoster(schema.JournalRecord{Cursor: 1, SessionID: testSession, Type: "roster", Group: "working"})
+	eventually(t, "the roster never arrived", func() bool {
+		list, err := h.App.Roster()
+		if err != nil {
+			return false
+		}
+		n, err := list.Count()
+		return err == nil && n > 0
+	})
+
+	// A full disk or a read-only app data directory, from in here.
+	if err := os.Chmod(h.Dir, 0o500); err != nil {
+		t.Fatalf("making the state dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(h.Dir, 0o700) })
+	if f, err := os.CreateTemp(h.Dir, ".probe-*"); err == nil {
+		name := f.Name()
+		_ = f.Close()
+		_ = os.Remove(name)
+		t.Skip("this process can still write to a 0500 directory (root?); the failure this test " +
+			"needs cannot be produced")
+	}
+
+	err := h.App.PurgeKeys()
+	if err == nil {
+		t.Fatal("fixture: the durable write was expected to fail against a read-only state dir")
+	}
+	if snap, perr := h.App.Peek(testSession); perr == nil && strings.Contains(snap.Text, "SECRET") {
+		t.Errorf("PB-KEY-7: decrypted session content survived a lock purge whose durable write "+
+			"failed (%v). Zeroizing memory cannot fail, so it must not be gated behind a write "+
+			"that can", err)
+	}
+	if list, lerr := h.App.Roster(); lerr == nil {
+		if n, cerr := list.Count(); cerr == nil && n > 0 {
+			t.Errorf("PB-KEY-7: %d decrypted journal session(s) survived a lock purge whose durable "+
+				"write failed", n)
+		}
 	}
 }

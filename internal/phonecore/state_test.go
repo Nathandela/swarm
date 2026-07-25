@@ -109,8 +109,16 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	// covering fields added after this test was written. Checked here rather than in its
 	// own test so there is no assertion in this slice that a state-less implementation
 	// could satisfy.
+	//
+	// UNEXPORTED fields are custody's own bookkeeping, not coordinates: nothing outside this
+	// package can set or read one, so no caller can lose one across a restart and a durable
+	// coordinate can never be one. They are skipped here and asserted NOT to survive at the
+	// bottom of this test, so the exemption is a stated property rather than a blind spot.
 	fv := reflect.ValueOf(want)
 	for i := 0; i < fv.NumField(); i++ {
+		if !fv.Type().Field(i).IsExported() {
+			continue
+		}
 		if fv.Field(i).IsZero() {
 			t.Fatalf("fullState() leaves %s at its zero value; PB-STATE-1 enumerates every resume-critical field, so the fixture must set it",
 				fv.Type().Field(i).Name)
@@ -138,11 +146,23 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	// Field by field, so a failure names the coordinate that was lost.
 	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
 	for i := 0; i < wv.NumField(); i++ {
+		if !wv.Type().Field(i).IsExported() {
+			continue
+		}
 		name := wv.Type().Field(i).Name
 		if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
 			t.Errorf("State.%s after restart = %#v; want %#v (resume-critical, PB-STATE-1)",
 				name, gv.Field(i).Interface(), wv.Field(i).Interface())
 		}
+	}
+
+	// The other half of the exemption above: custody's bookkeeping must NOT come back from
+	// disk. purgeGen counts the lock purges THIS process has taken, and a restored one would
+	// make a fresh process refuse the first Save of every caller holding a legitimate
+	// snapshot.
+	if got.purgeGen != 0 {
+		t.Errorf("State.purgeGen after restart = %d; unexported custody bookkeeping must not be "+
+			"persisted -- if it ever is, it belongs in the durable schema and in fullState()", got.purgeGen)
 	}
 
 	// The restored coordinates must be WIRED, not merely readable: a Store nothing

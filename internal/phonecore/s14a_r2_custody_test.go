@@ -49,7 +49,7 @@ func s14aR2Sealed(t *testing.T) (dir string, wake, content *s14aSealer, keys cry
 	t.Helper()
 	dir = t.TempDir()
 	wake, content = s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 	keys = s14aEpochKeys(t, s14aR2Resume(t, dir, wake, content))
 	return dir, wake, content, keys
 }
@@ -264,7 +264,7 @@ func TestS14A_ForgedCleartextPublicKeysAreRefused(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			dir := t.TempDir()
 			wake, content := s14aNewSealer(t), s14aNewSealer(t)
-			s14aSeedDeviceKeys(t, dir)
+			s14aSeedDeviceKeys(t, dir, wake, content)
 			honest := s14aR2Resume(t, dir, wake, content)
 			want := map[string][]byte{
 				"noise_static_pub": honest.KeyStore().NoiseStaticPublic(),

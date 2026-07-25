@@ -392,14 +392,17 @@ func (a *App) PurgeKeys() (err error) {
 	// locked -- which is exactly where a screen lock leaves the phone -- custody cannot tell
 	// a purge from the wake path holding a key it could not read, and would keep the sealed
 	// blob (phonecore.Store.PurgeKeys).
-	if err = core.PurgeKeys(); err != nil {
-		return err
-	}
+	//
+	// The facade's own decrypted caches go whether or not the durable half succeeded, for the
+	// same reason the core purges its memory unconditionally: clearing them cannot fail, and
+	// returning first left the app rendering decrypted session content with the screen
+	// locked. The error still reaches the caller -- the blobs at rest survived.
+	err = core.PurgeKeys()
 	a.mu.Lock()
 	a.journal = nil
 	a.needs = map[string]string{}
 	a.mu.Unlock()
-	return nil
+	return err
 }
 
 // ---- read models ---------------------------------------------------------------

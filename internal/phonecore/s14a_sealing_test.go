@@ -128,11 +128,14 @@ func (s *s14aSealer) Open(sealed []byte) ([]byte, error) {
 // Fixtures.
 // ---------------------------------------------------------------------------
 
-// s14aSeedDeviceKeys writes a device key file with deterministic material, exactly as
-// android/gate/keycustody_test.go does, and returns the material so assertions are exact
-// rather than guesses about entropy. Seeding it in the CLEAR is deliberate: an installed app
-// already has one, so Resume must re-seal what it finds, not only seal what it creates.
-func s14aSeedDeviceKeys(t *testing.T, dir string) crypto.KeyMaterial {
+// s14aSeedDeviceKeys provisions a device key file with deterministic material and returns the
+// material, so assertions are exact rather than guesses about entropy.
+//
+// It seeds through the production writer under the test's own KEKs -- i.e. a handset that has
+// already been provisioned. It used to seed the pre-seam 128-raw-byte layout and let Resume
+// adopt it, which is the unauthenticated ingress round 3 removed: a layout with no public half
+// cannot be authenticated, so it is now REFUSED rather than adopted (see openKeyStore).
+func s14aSeedDeviceKeys(t *testing.T, dir string, wake, content Sealer) crypto.KeyMaterial {
 	t.Helper()
 	var m crypto.KeyMaterial
 	for i := range m.NoiseStaticPriv {
@@ -141,7 +144,7 @@ func s14aSeedDeviceKeys(t *testing.T, dir string) crypto.KeyMaterial {
 		m.CommandSignSeed[i] = byte(0x70 + i)
 		m.RelayAuthSeed[i] = byte(0xA0 + i)
 	}
-	if _, err := crypto.NewFileKeyStoreFromMaterial(dir, m); err != nil {
+	if _, err := sealDeviceKeys(filepath.Join(dir, s14aDeviceKeyFile), m, wake, content); err != nil {
 		t.Fatalf("seeding the device key store: %v", err)
 	}
 	return m
@@ -218,7 +221,7 @@ func s14aFindMaterial(files map[string][]byte, needle []byte) []string {
 func TestS14A_ResumeSealsBothTheDeviceKeysAndTheEpochKeys(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	m := s14aSeedDeviceKeys(t, dir)
+	m := s14aSeedDeviceKeys(t, dir, wake, content)
 
 	core, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -278,7 +281,7 @@ func TestS14A_ResumeSealsBothTheDeviceKeysAndTheEpochKeys(t *testing.T) {
 func TestS14A_TheTwoTiersAreSealedUnderSeparateKEKs(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	m := s14aSeedDeviceKeys(t, dir)
+	m := s14aSeedDeviceKeys(t, dir, wake, content)
 
 	core, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -342,7 +345,7 @@ func TestS14A_TheTwoTiersAreSealedUnderSeparateKEKs(t *testing.T) {
 func TestS14A_LockedContentTierRefusesEverySigningPath(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 
 	if _, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content}); err != nil {
 		t.Fatalf("Resume to seal the directory: %v", err)
@@ -391,7 +394,7 @@ func TestS14A_LockedContentTierRefusesEverySigningPath(t *testing.T) {
 func TestS14A_TheContentTierIsUnsealedPerOperationNotCached(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 
 	core, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -424,7 +427,7 @@ func TestS14A_TheContentTierIsUnsealedPerOperationNotCached(t *testing.T) {
 func TestS14A_PermanentInvalidationIsSurfacedDistinctly(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 
 	if _, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content}); err != nil {
 		t.Fatalf("Resume to seal the directory: %v", err)
@@ -459,7 +462,7 @@ func TestS14A_PermanentInvalidationIsSurfacedDistinctly(t *testing.T) {
 func TestS14A_AnUnsealableStateDirFailsClosedAndIsNotOverwritten(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 
 	first, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -492,7 +495,7 @@ func TestS14A_AnUnsealableStateDirFailsClosedAndIsNotOverwritten(t *testing.T) {
 func TestS14A_DeviceIdentitySurvivesRestartUnderTheSameSealer(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	m := s14aSeedDeviceKeys(t, dir)
+	m := s14aSeedDeviceKeys(t, dir, wake, content)
 
 	first, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -550,7 +553,7 @@ func s14aRecipientPubFor(t *testing.T, m crypto.KeyMaterial) []byte {
 func TestS14A_NoUnsealedCopyIsCachedAfterTheFirstUnseal(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	m := s14aSeedDeviceKeys(t, dir)
+	m := s14aSeedDeviceKeys(t, dir, wake, content)
 
 	core, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {
@@ -603,7 +606,9 @@ func TestS14A_NoUnsealedCopyIsCachedAfterTheFirstUnseal(t *testing.T) {
 // resolved, here: whichever answer is taken needs recording.
 func TestS14A_NoSealerIsNotSilentlyCleartext(t *testing.T) {
 	dir := t.TempDir()
-	m := s14aSeedDeviceKeys(t, dir)
+	// Provisioned under KEKs the Resume below is NOT given: the question here is what a
+	// sealer-less Resume does, not what it finds.
+	m := s14aSeedDeviceKeys(t, dir, s14aNewSealer(t), s14aNewSealer(t))
 
 	core, err := Resume(Config{Dir: dir, Machine: "m"})
 	if err != nil {
@@ -639,7 +644,7 @@ func TestS14A_NoSealerIsNotSilentlyCleartext(t *testing.T) {
 func TestS14A_PurgedContentKeyIsNotRecoverable(t *testing.T) {
 	dir := t.TempDir()
 	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	s14aSeedDeviceKeys(t, dir)
+	s14aSeedDeviceKeys(t, dir, wake, content)
 
 	core, err := Resume(Config{Dir: dir, Machine: "m", WakeSealer: wake, ContentSealer: content})
 	if err != nil {

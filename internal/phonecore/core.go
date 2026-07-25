@@ -161,16 +161,19 @@ func (c *Core) Save(st State) error {
 // path holds zeros for a content key it could not read and Saves constantly, so custody
 // cannot tell "nothing to write" from "destroy this" by looking at the bytes (see
 // Store.PurgeKeys).
+//
+// The durable error is REPORTED but never short-circuits the rest: custody purges its own
+// memory unconditionally, so adopting and rebinding is what carries that through to the live
+// objects. Returning early on a failed write left the keys in c.st and bound in the router
+// with the screen locked -- the half of PB-KEY-7 that cannot fail, gated behind the half that
+// can.
 func (c *Core) PurgeKeys() error {
 	c.mu.Lock()
-	if err := c.store.PurgeKeys(); err != nil {
-		c.mu.Unlock()
-		return err
-	}
+	err := c.store.PurgeKeys()
 	c.st = c.store.Load().clone()
 	c.mu.Unlock()
 	c.rebind()
-	return nil
+	return err
 }
 
 // persist writes st through custody and adopts whatever custody made of it (the file store

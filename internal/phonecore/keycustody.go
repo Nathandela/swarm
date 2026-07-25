@@ -53,10 +53,9 @@ const (
 	// deviceKeyFileName is the device key blob inside the state directory. The name is
 	// unchanged across the seam; only its contents are now sealed.
 	deviceKeyFileName = "device.key"
-	// deviceKeyVersion stamps the sealed container so a pre-seam blob is recognisable.
+	// deviceKeyVersion stamps the sealed container so a pre-seam blob is recognisable --
+	// and, since the pre-seam blob is no longer adopted, refusable.
 	deviceKeyVersion = 1
-	// legacyDeviceKeyLen is the pre-seam layout: four raw 32-byte scalars.
-	legacyDeviceKeyLen = 128
 	// contentTierLen is the content tier's plaintext: noise-static || recipient ||
 	// command-sign seed.
 	contentTierLen = 96
@@ -111,23 +110,25 @@ func openKeyStore(dir string, wake, content Sealer) (crypto.KeyStore, error) {
 		return nil, fmt.Errorf("open device keys: %w", err)
 	}
 
+	// ONLY the sealed container is adopted. The pre-seam layout used to be adopted and
+	// re-sealed here on nothing but its LENGTH, and that cannot be made safe: 128 raw private
+	// scalars carry no public half, so there is no claim for checkPublic to contradict and no
+	// way to tell the phone's own material from an attacker's. PB-SEC-1's adversary has one
+	// write to the app's private data directory, so that path handed them the whole device
+	// identity -- private halves included -- and once S14's Keystore KEK makes this container
+	// unforgeable it would be the ONLY unauthenticated ingress left.
+	//
+	// Nothing produces the layout: crypto.NewFileKeyStore is reached from tests only, its
+	// package is frozen, and no Phase B phone app has ever shipped, so there is no installed
+	// base to migrate (the same reasoning that accepts the absence of a v2 -> v3 state
+	// migration). Refusing is also the fail-closed answer: generating fresh material over an
+	// unrecognised blob would silently change the device identity the daemon registry pins.
 	var f sealedDeviceKeys
-	if json.Unmarshal(buf, &f) == nil && f.Version == deviceKeyVersion {
-		return openSealedDeviceKeys(f, wake, content)
+	if err := json.Unmarshal(buf, &f); err != nil || f.Version != deviceKeyVersion {
+		return nil, fmt.Errorf("open device keys: %s is not a v%d sealed key container; clear the app's "+
+			"data to discard it, then pair again", path, deviceKeyVersion)
 	}
-	// A device.key written before the seam existed. An installed app already has one, so
-	// Resume must RE-SEAL what it finds rather than only sealing what it creates:
-	// generating fresh material here would silently change the device identity.
-	if len(buf) != legacyDeviceKeyLen {
-		return nil, fmt.Errorf("open device keys: %s is neither a sealed container nor the %d-byte pre-seam blob",
-			path, legacyDeviceKeyLen)
-	}
-	var m crypto.KeyMaterial
-	copy(m.NoiseStaticPriv[:], buf[0:32])
-	copy(m.RecipientPriv[:], buf[32:64])
-	copy(m.CommandSignSeed[:], buf[64:96])
-	copy(m.RelayAuthSeed[:], buf[96:128])
-	return sealDeviceKeys(path, m, wake, content)
+	return openSealedDeviceKeys(f, wake, content)
 }
 
 // sealDeviceKeys splits m by tier, seals each half under its own KEK and writes the

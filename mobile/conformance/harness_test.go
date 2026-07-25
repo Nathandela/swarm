@@ -123,12 +123,20 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.senderKeyID = crypto.KeyID(machineID.RecipientPublic())
 
-	// The phone's device custody, created BEFORE the facade so the harness knows the
-	// phone's relay-auth pub (phonecore.Resume opens this same directory).
-	ks, err := crypto.NewFileKeyStore(h.Dir)
+	// The phone's device custody, created BEFORE the facade so the harness knows the phone's
+	// relay-auth pub (phonecore.Resume opens this same directory). It is provisioned through
+	// the core under the SAME cleartext sealers the shipped facade uses: an unsealed
+	// device.key is no longer adopted -- a layout with no public half cannot be authenticated
+	// -- so seeding one would only produce a directory NewApp refuses to open.
+	provision, err := phonecore.Resume(phonecore.Config{
+		Dir: h.Dir, Machine: h.Machine,
+		WakeSealer:    phonecore.InsecureCleartextSealer(),
+		ContentSealer: phonecore.InsecureCleartextSealer(),
+	})
 	if err != nil {
 		t.Fatalf("phone keystore: %v", err)
 	}
+	ks := provision.KeyStore()
 	h.phoneTarget = relay.RoutingID(ks.RelayAuthPublic())
 
 	mPub, mPriv, err := ed25519.GenerateKey(rand.Reader)

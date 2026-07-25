@@ -126,6 +126,14 @@ type State struct {
 	// this records that the fold HAPPENED, which nothing else can witness when every
 	// authority is legitimately zero.
 	ReconciledEpoch uint32
+
+	// purgeGen is the lock-purge counter this snapshot was taken at. It is custody's own
+	// bookkeeping, never persisted and never set by a caller: Store stamps every State it
+	// hands out, and a Save carrying an OLDER stamp is a writer that has not noticed the
+	// purge in between, whose key material and decrypted caches are dropped rather than
+	// re-sealed over it (PB-KEY-7). A State a caller built from a literal carries zero,
+	// which is correct -- it cannot have been derived from a post-purge Load.
+	purgeGen uint64
 }
 
 // PushPreference is PB-APP-7's pair of coarse notification toggles, persisted so the
@@ -165,6 +173,12 @@ type Store interface {
 	// came up on a push holds zeros for a content key it merely could not read, and Saves
 	// constantly. One signal for both means either the purge does not reach disk or the wake
 	// path destroys the epoch, and S14a shipped the first.
+	//
+	// The IN-MEMORY half must happen whether or not the durable half succeeds: zeroizing
+	// cannot fail, PB-KEY-7 lists it first, and an implementation that gates it behind the
+	// write keeps the keys live on a read-only data directory. A returned error therefore
+	// means "the blobs at rest survived", never "nothing was purged" -- Load answers with
+	// the purged state either way.
 	PurgeKeys() error
 }
 
@@ -239,6 +253,10 @@ type fileStore struct {
 	// SEPARATE ones because a single file cannot be gated two ways.
 	wake, content         Sealer
 	wakeTier, contentTier sealedTier
+
+	// purgeGen counts the lock purges this store has taken. It stamps every State handed
+	// out, so a Save can tell a snapshot from before a purge from one after it.
+	purgeGen uint64
 }
 
 // sealedTier is one tier's key field as it stands on disk, plus whether this process knows
@@ -250,6 +268,10 @@ type fileStore struct {
 type sealedTier struct {
 	blob   []byte
 	opened bool
+	// epoch is the State.EpochID the blob was written under. A key is only meaningful for
+	// its own epoch, so a blob is carried verbatim only into the epoch it was sealed for --
+	// see resealTier.
+	epoch uint32
 }
 
 // OpenStore opens the durable phone state at path, loading any previously persisted blob.
@@ -301,13 +323,21 @@ func (s *fileStore) Save(st State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A snapshot taken BEFORE a purge belongs to a writer that has not noticed it, and round
+	// 2's "a real key always wins" makes its stale keys win over the purge. Re-apply what the
+	// purge destroyed instead: the rest of the snapshot still lands, because refusing the
+	// whole Save would hold the purge by losing every unrelated coordinate with it.
+	if st.purgeGen < s.purgeGen {
+		st = dropKeyMaterial(st)
+	}
 	merged := mergeGuards(s.st, st.clone())
+	merged.purgeGen = s.purgeGen
 	if s.path != "" {
-		wake, err := resealTier(s.wake, merged.Keys.WakeKey[:], s.wakeTier)
+		wake, err := resealTier(s.wake, merged.Keys.WakeKey[:], s.wakeTier, merged.EpochID)
 		if err != nil {
 			return fmt.Errorf("seal wake key: %w", err)
 		}
-		content, err := resealTier(s.content, merged.Keys.ContentKey[:], s.contentTier)
+		content, err := resealTier(s.content, merged.Keys.ContentKey[:], s.contentTier, merged.EpochID)
 		if err != nil {
 			return fmt.Errorf("seal content key: %w", err)
 		}
@@ -320,28 +350,48 @@ func (s *fileStore) Save(st State) error {
 	return nil
 }
 
-// PurgeKeys destroys both sealed tiers and the decrypted caches, in ONE atomic write. The
-// tier records go with them: nothing is left for the next Save to carry verbatim, which is
-// what makes the purge survive being taken with a tier locked. Nothing is unsealed and no
-// KEK is consulted -- destroying a blob does not require being able to read it, and a purge
-// that needed the biometric could not run at the screen lock that triggers it.
+// dropKeyMaterial returns st with everything the lock purge destroys removed: the epoch keys
+// and every cache of the content they decrypted. OpOutcomes is in there because it IS the
+// decrypted reply cache PB-KEY-7 names beside sessions and snapshots -- MailboxRouter.rebind
+// rebuilds r.replies from it, so leaving it behind means the purge's own rebind puts the
+// replies back. The ops it resolves are the stated cost: PB-SYNC-2 settles an operation by its
+// durable outcome "or the stream stays unresolved", and a queued op that re-sends carries the
+// same operation id.
+func dropKeyMaterial(st State) State {
+	st.Keys = crypto.EpochKeys{}
+	st.Sessions, st.Snapshots, st.OpOutcomes = nil, nil, nil
+	return st
+}
+
+// PurgeKeys destroys both sealed tiers and the decrypted caches (PB-KEY-7's lock purge).
+// Nothing is unsealed and no KEK is consulted -- destroying a blob does not require being able
+// to read it, and a purge that needed the biometric could not run at the screen lock that
+// triggers it.
+//
+// THE MEMORY HALF IS UNCONDITIONAL, and it happens first. It cannot fail, and PB-KEY-7 lists
+// it first; gating it behind the durable write -- which can fail, on a full disk or a data
+// directory that has gone read-only -- left the keys live and bound with the screen locked.
+// "In-memory advances only once the write succeeded" is right for a Save and backwards here: a
+// Save must not claim what is not durable, a purge must not KEEP what it was told to destroy.
+// The durable failure is still returned; the blobs at rest genuinely did survive it.
+//
+// The tier records go too, so nothing is left for the next Save to carry verbatim -- which is
+// what makes the purge survive being taken with a tier locked, and what lets a Save after a
+// failed write finish the job rather than resurrect the blob.
 func (s *fileStore) PurgeKeys() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	st := s.st.clone()
-	st.Keys = crypto.EpochKeys{}
-	st.Snapshots, st.Sessions = nil, nil
-	if s.path != "" {
-		if err := persistState(s.path, st, nil, nil); err != nil {
-			return err
-		}
-		// Opened, holding nothing: this process now KNOWS the tier is empty, so a later
-		// Save writes no field rather than resurrecting the blob just destroyed.
-		s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
+	s.purgeGen++
+	s.st = dropKeyMaterial(s.st.clone())
+	s.st.purgeGen = s.purgeGen
+	// Opened, holding nothing: this process now KNOWS the tier is empty, so a later Save
+	// writes no field rather than resurrecting the blob just destroyed.
+	s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
+	if s.path == "" {
+		return nil
 	}
-	s.st = st
-	return nil
+	return persistState(s.path, s.st, nil, nil)
 }
 
 // resealTier returns the tier field to write, from three cases that must stay distinct.
@@ -353,16 +403,24 @@ func (s *fileStore) PurgeKeys() error {
 //	                        arrives while the tier record still says "could not open", and it
 //	                        must reach disk or the phone restarts on the old epoch's key and
 //	                        decrypts nothing (PB-KEY-3). A real key always wins.
-//	no key, unopened blob-> carry it VERBATIM. The zero is a key this process could not READ,
-//	                        not one that is not there, and re-sealing it would destroy the
-//	                        epoch. This is the wake path's NORMAL condition: it runs with the
-//	                        content tier locked while any send reserves a seq and so Saves.
+//	no key, unopened blob-> carry it VERBATIM, but only for the epoch it belongs to. The zero
+//	                        is a key this process could not READ, not one that is not there,
+//	                        and re-sealing it would destroy the epoch. This is the wake path's
+//	                        NORMAL condition: it runs with the content tier locked while any
+//	                        send reserves a seq and so Saves.
 //	no key, nothing held -> write no field at all.
+//
+// THE EPOCH TEST IS THE FOURTH CASE, and it is a rotation. mobile.App.pin zeroes State.Keys
+// deliberately when a pairing lands in a different epoch -- the tier keys belong to the old
+// one -- while a process that came up on a push still has contentTier.opened == false. Without
+// the test that Save carries the OLD epoch's sealed content key back under the NEW epoch id: a
+// plausible-looking key that decrypts nothing, indistinguishable from an epoch the phone
+// legitimately holds no key for. A key is only ever carried into the epoch it was sealed for.
 //
 // DESTROYING a tier is deliberately not among them: it is Store.PurgeKeys, which drops the
 // record so the second case has nothing left to carry (PB-KEY-7). Inferring destruction from
 // an absent key is what let a purge taken with the tier locked leave the blob on disk.
-func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
+func resealTier(sl Sealer, key []byte, prev sealedTier, epoch uint32) (sealedTier, error) {
 	zero := true
 	for _, b := range key {
 		if b != 0 {
@@ -371,16 +429,16 @@ func resealTier(sl Sealer, key []byte, prev sealedTier) (sealedTier, error) {
 		}
 	}
 	if zero {
-		if !prev.opened && len(prev.blob) > 0 {
+		if !prev.opened && len(prev.blob) > 0 && prev.epoch == epoch {
 			return prev, nil
 		}
-		return sealedTier{opened: true}, nil
+		return sealedTier{opened: true, epoch: epoch}, nil
 	}
 	blob, err := sl.Seal(key)
 	if err != nil {
 		return sealedTier{}, err
 	}
-	return sealedTier{blob: blob, opened: true}, nil
+	return sealedTier{blob: blob, opened: true, epoch: epoch}, nil
 }
 
 // mergeGuards returns next with every replay-guard coordinate raised to at least the value
@@ -479,7 +537,7 @@ func (s *fileStore) load() error {
 	// the durable blob is carried through every Save untouched until a tier that can read
 	// it arrives.
 	if len(f.WakeKey) > 0 {
-		s.wakeTier.blob = f.WakeKey
+		s.wakeTier.blob, s.wakeTier.epoch = f.WakeKey, f.EpochID
 		plain, oerr := s.wake.Open(f.WakeKey)
 		if oerr != nil {
 			return fmt.Errorf("%w: %s: unseal wake key: %v", ErrCorruptState, path, oerr)
@@ -488,7 +546,7 @@ func (s *fileStore) load() error {
 		s.wakeTier.opened = true
 	}
 	if len(f.ContentKey) > 0 {
-		s.contentTier.blob = f.ContentKey
+		s.contentTier.blob, s.contentTier.epoch = f.ContentKey, f.EpochID
 		plain, oerr := s.content.Open(f.ContentKey)
 		switch {
 		case oerr == nil:
