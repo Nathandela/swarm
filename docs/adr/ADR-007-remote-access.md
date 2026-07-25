@@ -1630,3 +1630,29 @@ name; B26 reasoned about one effect of a function and missed another in the same
 sound and both were checkable in minutes. **An architectural direction recorded without being run is
 a hypothesis wearing a decision's clothes** — and this one cost two rounds because I wrote it that
 way twice.
+
+### B28 — the relay item record gains a version byte; in-place upgrades fail closed
+
+B27's per-sender depth accounting needs the sender's identity **in the stored record**, so the
+mailbox item layout changes from `[8 time][envelope]` to `[1 version][8 time][32 sender rid][envelope]`.
+This is a **persisted-format change on a deployed component**, which is a decision rather than an
+implementation detail, and it is recorded because the failure mode is silent and operator-facing.
+
+**What a naive upgrade would do.** A relay upgraded in place over an existing store holds
+pre-version records. Read as the new layout, one would yield **32 bytes of ciphertext served as a
+routing id** and a truncated envelope served as the frame. The frame is undecodable, and **the
+phone's drain never advances past a frame it cannot open** — so a single legacy record stalls that
+mailbox for its entire retention window. The phone would show no new sessions and no error worth
+acting on, and the relay would report itself healthy.
+
+**The decision.** The version byte makes the two layouts distinguishable — an old record begins with
+a millisecond timestamp's top byte, which is `0x00` for the rest of this millennium — and the store
+**fails closed on any record it did not itself write**: skipped, never served. A skipped record is a
+lost frame, which the receive path already tolerates (the phone reseeds), whereas a misread record is
+a wedged mailbox. Fenced by a test that serves a legacy record and fails if it is misread rather than
+skipped.
+
+**Recorded because the implementer flagged it rather than leaving it in a commit message.** A
+storage-format change whose failure mode is "the product silently stops working for one user until a
+retention window expires" is exactly the class of decision that must be findable by whoever
+eventually runs the upgrade.

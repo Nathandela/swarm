@@ -1125,3 +1125,14 @@ The likely single cause: **a goroutine still writing into the phone's state dire
 failure is the symptom. Fix it at `Close()`, not by loosening temp-dir cleanup, and expect all three
 to go with it. A `Close()` that returns before its writers have stopped is also the shape that
 corrupts durable state on a real handset, where the process death is not a test ending.
+
+### Fourth flake, found the same way
+
+`TestPresence_TransitionsAndSilentPush` fails at `-count=5` on the **pristine** tree with the relay
+work stashed out, so it is pre-existing and will surface under full-suite load. It was not on the
+known-flake list; it is now. `TestRunShim_LaunchesAgentPersistsAndLeadsSession` passes in isolation
+with and without the change — a load flake, not a regression.
+
+Both were confirmed by re-running on a clean tree rather than assumed from a green diff. That is now
+three separate agents that have found a flake, suspected their own change, and checked before
+reporting. The list is only honest because none of them took the easy attribution.
