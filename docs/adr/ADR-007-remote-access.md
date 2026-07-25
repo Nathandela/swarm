@@ -1219,3 +1219,70 @@ with no verb to supply a sealer. So the seam is reachable from Go tests and **no
 the gate tests could go green while the shipped app still writes cleartext. That is the fifth
 standing defect class — the fence guarding a path production does not take — one layer up. **S14
 must add a facade verb and change the golden**, and PB-KEY-9 is not delivered until it does.
+
+**B19. The wake key MAY reach `internal/remotegw`. It widens the INVENTORY of that package, not
+the exposure of the process.** PB-PUSH-0 requires the push trigger's payload to be sealed under
+the content-free wake key (PB-KEY-2, A15), and `gatewayParams` carries only `ContentKey` today —
+`WakeKey` appears nowhere in `internal/remotegw/`, `cmd/swarm-remote/` or `internal/remote/relay/`
+outside tests. I initially framed that as a **new key crossing into the network-facing sidecar**
+and asked for a blast-radius analysis before granting it. The analysis falsified the framing, and
+the correction is the decision.
+
+The premise is true at the **package** boundary and false at the **process** boundary.
+`cmd/swarm-remote/config.go:78` loads the machine identity via `machineid.Load`, and
+`machineid.marshal`/`unmarshal` (`internal/remote/machineid/machineid.go:225-283`) write and read
+ONE buffer containing the Noise static private, the recipient private, the grant-signing private,
+the relay-auth private, **the wake key** and the content key. So the sidecar process already
+materialises the wake key at startup, in the same address space; `resolveGatewayParams` simply
+drops it on the floor (`config.go:152` takes `id.EpochKeys().ContentKey` alone).
+
+An attacker who compromises that process therefore already holds the **content key** (decrypts all
+session content — strictly more sensitive), the **relay-auth private key** (impersonates the
+machine), the **grant-signing private key** (mints epoch grants), the recipient key and the Noise
+static. What the wake key adds is the ability to forge a content-free wake and to read one — and
+they already observe every wake, because the trigger passes through them. It yields nothing about
+session content: `crypto.OpenWake` refuses type 0x01 and `MailboxReceiver.Accept` refuses type
+0x02, both structurally (F10/A15).
+
+**Granted on that basis.** The honest cost is legibility and refactor discipline — one more secret
+named in one more struct — not a new attack surface. Recorded explicitly so a later reader does not
+re-open it as though a new key were reaching a new process.
+
+**Two consequences.** First, PB-PUSH-0's test criterion "the gateway holds the wake key only" is
+**unimplementable as written**: the gateway MUST hold the content key, because `RelaySink` seals
+every journal, terminal and reconcile frame with it and `CommandBridge` opens every phone command
+with it. The enforceable form is "**the push path** holds the wake key only", which Go's typed keys
+make nearly free — a reflective fence over `PushConfig` rejecting any `crypto.ContentKey` or
+`crypto.EpochKeys` field, with a positive control requiring a `crypto.WakeKey` field so an empty
+struct cannot pass. §6.0 and PB-PUSH-0 are amended to that wording. Second, ruling the other way
+was measured and rejected: it would make the gateway-side trigger unimplementable and push PB-PUSH-0
+into the daemon, which would mean the daemon calling the relay — a boundary D5 does not have.
+
+**B20. A push payload MUST NOT carry the mailbox envelope header verbatim. Key ids zeroed, size
+constant.** PB-PUSH-3 states the provider observes only **token, timing and size**. That statement
+is **false** for the obvious implementation, and the requirement is amended to make the honest
+version enforceable rather than aspirational.
+
+`crypto.Envelope.Marshal` emits a **62-byte cleartext header** (`envelope.go:24,153-158`) carrying
+version, type, epoch id, seq, **`RecipientKeyID` (8 bytes)**, **`SenderKeyID` (8 bytes)** and
+`IssuedAt`. `handlePushTrigger` (`relay/server.go:930`) puts the whole marshalled envelope into the
+push payload. Reused verbatim, the provider additionally observes two **stable** endpoint
+identifiers — linking every wake to one machine/device pair for the life of the epoch — plus a
+monotonic wake counter. That is strictly more than the ADR claims, and D11 (metadata honesty)
+forbids claiming less exposure than exists.
+
+**Decision**: the wake envelope's key ids are **zero** on the push path, and the payload is a fixed
+**78 bytes** (`headerLen` 62 + a 16-byte AEAD tag over an EMPTY plaintext). Both are pinned by test,
+the second because "size" is a benign disclosure only while it is **constant** — a size that varied
+with the session name, or with how many transitions were coalesced, would be a covert channel and
+the ADR's own honesty claim would quietly become untrue with nothing failing.
+
+**Recorded, not fixed**: PB-PUSH-8's capability gate cannot refuse. `Capability.Allows` admits
+`ActionRead` at every tier, so mapping `push_prefs` to `ActionRead` — which is the right tier, since
+the verb cannot start, stop or type into anything, and a control-class mapping would leave a
+read-only paired phone unable to silence notifications it has no way to stop — yields a check that
+can never fail. The **signature** is the load-bearing gate for this verb, and the tests exercise it
+failing (forged key, expired command) with a positive control so the refusals are attributable.
+Naming this rather than dressing the tier check up as a guard: a guard that cannot fail is this
+project's most-repeated defect, and one that is known and documented is not the same object as one
+that is believed to work.
