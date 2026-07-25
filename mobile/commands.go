@@ -282,30 +282,44 @@ func (a *App) sendCoalesced(sc sendCtx, core *phonecore.Core, frames []phonecore
 // rather than only at the caller, because a frame the window held for 125 ms can outlive the
 // lease that authorized it -- and PB-INPUT-2's rule is about the moment of the SEND.
 //
-// THE WHOLE allocate -> append RUNS UNDER a.inputMu, and it must, for the reason
-// remotegw.CommandBridge.sealReply states for the gateway's reply bucket. This bucket has
-// TWO producers in production -- the caller's goroutine (SendInput, Paste, Resize; PB-BIND-6
-// makes concurrent facade calls part of the contract) and drainHeldInput on time.AfterFunc's
-// goroutine -- so releasing the sequencer before entering the append lets a LATER seq reach
-// the relay first. The machine has ONE crypto.MailboxReceiver for this stream and loses BOTH
-// frames when that happens: the high one is marked Gap and routeInput drops it silently, the
-// low one is refused with crypto.ErrStaleSeq. MailboxAppend returned nil for each, so the
-// undelivered ledger records nothing and two keystrokes vanish mid-line with no signal
-// anywhere -- the silent drop PB-INPUT-1 forbids.
+// THE WHOLE allocate -> append RUNS UNDER a.bucketMu, and it must, for the reason
+// remotegw.CommandBridge.sealReply states for the gateway's reply bucket.
+//
+// THE LOCK IS THE BUCKET'S, NOT THIS FUNCTION'S, and getting that wrong is what let the
+// inversion survive a remediation round. Every producer that draws from the phone's one
+// Sequencer is on this stream: the caller's goroutine typing (SendInput, Paste, Resize;
+// PB-BIND-6 makes concurrent facade calls part of the contract), drainHeldInput on
+// time.AfterFunc's goroutine, AND every command author -- sealSignedCommand and
+// unsignedCommand take the same lock, because phonecore.Sequencer hands commands and input
+// frames seq numbers from ONE counter per epoch (they share a single MailboxReceiver key, so
+// a private per-kind counter would collide). Releasing the sequencer before entering the
+// append lets a LATER seq reach the relay first.
+//
+// The machine has ONE crypto.MailboxReceiver for this stream, and what an inversion costs
+// depends on which kinds collided:
+//
+//   - two INPUT frames: BOTH die. The high one is marked Gap and routeInput drops it
+//     silently; the low one is refused with crypto.ErrStaleSeq.
+//   - a COMMAND anywhere in the pair: routeCommand executes a Gap frame, so only the LOW
+//     frame dies -- and when that is the command, a take_control never confirms or a kill
+//     never runs, with the op pending forever.
+//
+// MailboxAppend returned nil for each, so the undelivered ledger records nothing and the loss
+// is invisible from both ends -- the silent drop PB-INPUT-1 forbids.
 //
 // relay.Conn.roundtrip ALREADY holds its own c.mu across write-then-read, so appends on one
 // connection were serialised before this lock existed; what was missing is that the seq was
-// allocated OUTSIDE that critical section. This lock therefore costs the input path one AEAD
-// seal inside an interval it was already spending, not a new queue -- which matters, because
-// unlike replies this is the hot path (PB-NET-5's 150 ms budget). Relying on roundtrip's
-// mutex for ORDER would be relying on an accident of Go's mutex starvation mode; it is cited
-// here only as the reason the cost is nil.
+// allocated OUTSIDE that critical section. This lock therefore costs one AEAD seal inside an
+// interval the path was already spending, not a new queue -- which matters, because unlike
+// replies this is the hot path (PB-NET-5's 150 ms budget). Relying on roundtrip's mutex for
+// ORDER would be relying on an accident of Go's mutex starvation mode; it is cited here only
+// as the reason the cost is nil.
 func (a *App) sendInputFrame(sc sendCtx, core *phonecore.Core, f phonecore.InputFrame) error {
 	if err := core.Leases().Require(f.Session, time.Now()); err != nil {
 		return err
 	}
-	a.inputMu.Lock()
-	defer a.inputMu.Unlock()
+	a.bucketMu.Lock()
+	defer a.bucketMu.Unlock()
 	seq, err := core.Seq().NextInput()
 	if err != nil {
 		return err
@@ -512,6 +526,17 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 	if err != nil {
 		return nil, err
 	}
+	// A COMMAND IS A PRODUCER ON THE SAME BUCKET AS THE KEYSTROKES, so allocate -> seal ->
+	// append is spanned
+	// here exactly as it is in sendInputFrame: one Sequencer per epoch numbers both kinds, and
+	// a command whose seq was drawn outside this section is overtaken by every keystroke
+	// numbered after it. What dies is then the COMMAND -- the machine executes the Gap frame
+	// that overtook it and refuses this one as stale -- so the op is never answered and the
+	// phone shows it in flight forever. Held from the draw rather than from the top of the
+	// function: everything above resolves the destination, and a.sendContext may wait five
+	// seconds for a connection.
+	a.bucketMu.Lock()
+	defer a.bucketMu.Unlock()
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return nil, err
@@ -560,6 +585,11 @@ func (a *App) unsignedCommand(action, session string) (*Op, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The same bucket and the same rule as sealSignedCommand: a read command is numbered from
+	// the one Sequencer the keystrokes draw from, so its allocate -> seal -> append is spanned
+	// too. A terminal_watch lost to an inversion leaves a peek that never opens.
+	a.bucketMu.Lock()
+	defer a.bucketMu.Unlock()
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return nil, err

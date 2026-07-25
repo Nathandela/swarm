@@ -44,6 +44,13 @@ type s11r3CallGraph map[s11r3Func]map[s11r3Func]bool
 
 // s11r3BuildCallGraph walks every declaration in the facade and records, for each, the
 // package-level funcs and receiver methods its body mentions.
+//
+// WHAT IT DOES NOT SEE, recorded rather than chased (round 4). It resolves `a.foo` against
+// the receiver's own identifier, so two shapes evade edge recording: aliasing the receiver
+// (`self := a; self.awaitConn()`) and method expressions ((*App).awaitConn(a)). Neither is
+// worth a type-checked walker here, because an ACCIDENTAL variant of either also loses the
+// connection reference and trips the "cannot reach conn" non-vacuity assertion below -- only
+// a deliberate decoy evades both, and a fence's job is to stop regressions, not authors.
 func s11r3BuildCallGraph(t *testing.T, src *facadeSource) s11r3CallGraph {
 	t.Helper()
 
@@ -138,12 +145,38 @@ func s11r3Path(path []s11r3Func) string {
 // is the point: Paste and ReleaseControl are live-input paths and were in none of the
 // round-1 wiring guards, so the mutation that moved Paste onto the waiting resolver was
 // invisible to all three.
+//
+// THE LIST IS CLOSED AND NOTHING ENROLS ITSELF. A live-input surface added tomorrow is
+// covered by this fence only when it is written here, exactly as Paste and ReleaseControl had
+// to be after round 1 found them missing. There is no property that distinguishes a
+// live-input entry point from any other facade method by shape, so the enumeration is the
+// only handle there is -- and saying so is cheaper than discovering it a third time.
 var s11r3LiveInputPaths = []s11r3Func{
 	{"App", "SendInput"},
 	{"App", "Paste"},
 	{"App", "Resize"},
 	{"App", "ReleaseControl"},
 	{"App", "drainHeldInput"},
+}
+
+// s11r3ResolverScopedOnly EXEMPTS a live-input path from the WHOLE-ROOT assertion below,
+// with the reason it is exempt. Everything in s11r3LiveInputPaths is whole-root by default,
+// so a surface added to that list is fully fenced without anyone remembering a second list --
+// which is the drift that produced round 4's hole in the first place.
+//
+// ROUND 4, on why the whole-root half exists at all: the round-3 fence queried reachability
+// only from each root's directResolvers, so it never asked `reaches(root, awaitConn)`. An
+// `awaitConn()` fallback written DIRECTLY inside SendInput -- "add reconnect resilience", the
+// most natural regression shape there is -- therefore passed the reachability fence (never
+// queried from the root), the round-1 string fence (which bans only the literal
+// "a.sendContext("), and both behavioural disconnect tests (which refuse on the LEASE gate:
+// suspendInput severs before the resolver is ever consulted). The walker already recorded the
+// SendInput -> awaitConn edge; the test simply never asked for it.
+var s11r3ResolverScopedOnly = map[s11r3Func]string{
+	{"App", "ReleaseControl"}: "it also seals a signed take_control_end, and that command path " +
+		"legitimately waits for a connection. What must be live-only is the coalescer flush it " +
+		"performs first, which is exactly the resolver it names in its own body -- so it stays " +
+		"resolver-scoped rather than being dropped from the fence",
 }
 
 // s11r3Resolvers is every destination resolver in the facade, identified by its RESULT TYPE
@@ -204,12 +237,17 @@ func (g s11r3CallGraph) directResolvers(fn s11r3Func, resolvers map[s11r3Func]bo
 // correct for a COMMAND, which is idempotent and queued by design, so the two policies must
 // stay on opposite sides of this line.
 //
-// It is asserted in two composed halves, and it takes both to catch both mutations:
+// It is asserted in three composed halves, and it takes all three to catch all three
+// mutations:
 //
 //  1. WHICH RESOLVER a live-input path chooses -- read off its own body by result type, so
 //     Paste switching to the waiting one is caught however it is spelled.
 //  2. WHAT THAT RESOLVER CAN REACH -- transitively, through function VALUES, so restoring
 //     the wait one level down inside it is caught too.
+//  3. WHAT THE ROOT ITSELF CAN REACH -- whole-closure, because 1 and 2 together still only
+//     ever ask about the RESOLVER, and a wait written directly in the entry point is not on
+//     any resolver's closure at all. That is round 4's hole, and it is the shape a regression
+//     takes when someone "adds reconnect resilience" to SendInput.
 //
 // ReleaseControl is deliberately in the list AND deliberately not asserted whole: it also
 // seals a signed take_control_end, and that command path legitimately reaches awaitConn.
@@ -257,6 +295,32 @@ func TestS11R3_NoLiveInputPathCanReachTheWaitingResolver(t *testing.T) {
 					"non-waiting policy). Either it resolves no connection at all, or it acquired a "+
 					"third policy nobody has argued for.", root, r.name)
 			}
+		}
+	}
+
+	// WHOLE-ROOT, the half round 3 never asked for. Every hop from the entry point, not just
+	// the ones under the resolver it names.
+	for _, root := range s11r3LiveInputPaths {
+		if _, ok := graph[root]; !ok {
+			continue // already reported above
+		}
+		if _, exempt := s11r3ResolverScopedOnly[root]; exempt {
+			continue
+		}
+		if reached, path := graph.reaches(root, waiting); reached {
+			t.Errorf("%s can reach awaitConn: %s.\n"+
+				"ADR-007 D7: input is LIVE-ONLY. It does not matter that the destination RESOLVER is "+
+				"the immediate one -- a wait reached from anywhere in this closure, including one "+
+				"written directly in the entry point as a reconnect fallback, blocks the keystroke "+
+				"for up to five seconds and then delivers it on the RECONNECTED link.",
+				root, s11r3Path(path))
+		}
+		// NON-VACUITY for this half: a root that reached NOTHING would satisfy the assertion
+		// above for free, so each one must still get to the immediate policy.
+		if reached, _ := graph.reaches(root, immediate); !reached {
+			t.Errorf("%s cannot reach conn (the immediate, non-waiting policy) from anywhere in its "+
+				"closure, so the assertion that it cannot reach awaitConn is satisfied by it "+
+				"resolving no connection at all", root)
 		}
 	}
 

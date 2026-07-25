@@ -60,16 +60,26 @@ type App struct {
 	// is not guarded by a.mu.
 	coalesce *phonecore.InputCoalescer
 
-	// inputMu orders the phone's INPUT bucket: it is held across allocate-seal-append in
-	// sendInputFrame, for the reason remotegw.CommandBridge.sealReply states one bucket
-	// over. It is deliberately NOT a.mu -- a.mu guards the app's lifecycle and is taken on
-	// paths that must not queue behind a relay append.
-	inputMu sync.Mutex
+	// bucketMu orders the phone -> machine MAILBOX BUCKET -- every envelope on it, command
+	// and input alike. It is held across allocate-seal-append at each of the three append
+	// sites (sendInputFrame, sealSignedCommand, unsignedCommand), for the reason
+	// remotegw.CommandBridge.sealReply states one bucket over.
+	//
+	// THE SCOPE IS THE BUCKET AND NOTHING SMALLER, because the bucket has ONE Sequencer:
+	// phonecore.Sequencer's own doc records that "Commands AND input frames draw from ONE
+	// Sequencer per epoch because they share a single MailboxReceiver key". A lock covering
+	// only the input frames leaves every command author allocating and appending unserialised
+	// on the same stream, so the inversion survives -- which is exactly what happened while
+	// this field was called inputMu and scoped to sendInputFrame alone.
+	//
+	// It is deliberately NOT a.mu -- a.mu guards the app's lifecycle and is taken on paths
+	// that must not queue behind a relay append.
+	bucketMu sync.Mutex
 
 	mu            sync.Mutex
 	closed        bool
 	drainTimer    *time.Timer
-	skewed        bool   // whether the clock is currently out of budget, so only a CHANGE raises an event
+	skewed        bool // whether the clock is currently out of budget, so only a CHANGE raises an event
 	sess          *session
 	client        *relay.Client
 	machineTarget string

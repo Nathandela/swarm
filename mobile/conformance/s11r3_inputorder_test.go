@@ -5,10 +5,17 @@ package conformance_test
 //
 // THE DEFECT. mobile/commands.go sendInputFrame does three things with nothing spanning
 // them: Sequencer.NextInput allocates a durable seq, SealInputData seals the frame under it,
-// and relay.Client.MailboxAppend puts it on the wire. Two producers exist in production --
-// the caller's goroutine (SendInput, Paste, Resize; PB-BIND-6 makes concurrent facade calls
-// part of the contract) and drainHeldInput on time.AfterFunc's goroutine -- so a goroutine
+// and relay.Client.MailboxAppend puts it on the wire. The producers driven here are the
+// caller's goroutine (SendInput, Paste, Resize; PB-BIND-6 makes concurrent facade calls part
+// of the contract) and drainHeldInput on time.AfterFunc's goroutine -- so a goroutine
 // descheduled between the allocation and the append lets a LATER seq reach the relay first.
+//
+// ROUND 4 CORRECTION. This header used to say those were "two producers in production",
+// full stop. They are not: they are the two INPUT producers. Commands draw from the same
+// Sequencer (phonecore/input.go), so every command author is a producer on this bucket too,
+// and a fix scoped to the input frames alone leaves the inversion standing. That claim is
+// what let the defect survive round 3; s11r4_commandorder_test.go drives the pair this test
+// never did.
 //
 // WHY IT COSTS TWO KEYSTROKES, NOT ONE. The machine's inbound guard is a single
 // crypto.MailboxReceiver over one (sender, epoch) stream:

@@ -195,12 +195,22 @@ func TestS11Lease_ALateDuplicateOfTheRecoveryGrantCannotResurrectTheLease(t *tes
 			"daemon released", err)
 	}
 
-	// ... and with no new take_control authored, nothing at all may reopen it.
+	// ... and clearing the request must not leave the FLOOR unmanned: a grant naming a
+	// take_control the phone never authored takes the fallback path, and at or below the dead
+	// generation it is refused there.
+	//
+	// SAID EXACTLY (round 4): this proves the FLOOR, not a general rule about unrequested
+	// grants. It passes because the generation offered is below the one recorded dead. Within
+	// a single daemon lifetime a gateway-sealed grant ABOVE the floor and naming no request IS
+	// admitted -- that is the pre-existing fallback confirmable documents ("an older gateway, a
+	// future refactor"), not something this round changed, and it is not relay-exploitable
+	// because the grant arrives on the authenticated inbound path.
 	l.Apply(s11r3Grant("op-take-s11r3-never-authored", s11r3RestartGen+5, &exp))
 	if err := l.Require(s11Session, now); !errors.Is(err, ErrNoLease) {
-		t.Fatalf("Require after a grant for a take_control the phone never authored = %v, want "+
-			"ErrNoLease -- the phone gates on ITS OWN request, and a confirmation answering nothing "+
-			"it sent is not evidence of a lease it holds", err)
+		t.Fatalf("Require after an unrequested grant at generation %d, with %d recorded dead = %v, "+
+			"want ErrNoLease -- clearing the recorded request drops a confirmation onto the "+
+			"generation floor, and a floor that admits what it is below is no floor",
+			s11r3RestartGen+5, s11Gen, err)
 	}
 
 	// MUTATION CONTROL / anti-brick (PB-STATE-10): pressing Take Control again must work,

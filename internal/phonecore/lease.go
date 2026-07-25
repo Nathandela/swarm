@@ -89,9 +89,10 @@ type LeaseState struct {
 // single daemon lifetime, and the fallback whenever an id is missing.
 type leaseEntry struct {
 	// op is the take_control the phone has authored and NOT had severed since. It is what
-	// makes a confirmation FRESH, and severance clears it -- so a late duplicate of the very
-	// grant that opened a dead lease names a request the phone is no longer waiting on, and
-	// falls back to the generation floor that refuses it.
+	// makes a confirmation FRESH, and a severance ATTRIBUTABLE to it clears it -- so a late
+	// duplicate of the very grant that opened a dead lease names a request the phone is no
+	// longer waiting on, and falls back to the generation floor that refuses it. A notice
+	// naming some OTHER lease severed nothing of this request's, and leaves it standing.
 	op     string
 	signed time.Time // the horizon the phone SIGNED for it (an upper bound on the truth)
 
@@ -148,7 +149,8 @@ func (l *LeaseState) Requested(session, operationID string, expiresAt time.Time)
 // generation is at or below one already severed: the relay may reorder, so a confirmation
 // sealed before the severance can arrive after it, and re-opening the gate on it would let a
 // keystroke ride a lease the daemon released. Severance drops the recorded request precisely
-// so a replayed grant falls into that case (see severLocked and confirmable).
+// so a replayed grant falls into that case -- but only when the notice is ATTRIBUTABLE to
+// that request (see severNoticedLocked and confirmable).
 func (l *LeaseState) Apply(ctrl schema.Control) {
 	if ctrl.SessionID == "" {
 		return
@@ -183,7 +185,7 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 		if e.live && e.namesAnotherLease(ctrl) {
 			return // a notice for a lease that is not the one held; the live lease outlives it
 		}
-		l.severLocked(e, reasonOr(ctrl.Error, "the control lease ended"))
+		l.severNoticedLocked(e, reasonOr(ctrl.Error, "the control lease ended"), ctrl.OperationID)
 	case opError:
 		if ctrl.OperationID == "" || ctrl.OperationID != e.op {
 			return // an outcome for some other op, not a refusal of this lease
@@ -298,17 +300,44 @@ func (e *leaseEntry) namesAnotherLease(ctrl schema.Control) bool {
 	return ctrl.Generation != 0 && ctrl.Generation < e.gen
 }
 
-// severLocked drops a live lease and remembers its generation as dead.
-//
-// The RECORDED REQUEST is dropped with it. Only a take_control authored AFTER this moment
-// may be confirmed, so a late duplicate of the grant that opened the lease just severed
-// cannot resurrect it -- which is what makes keying confirmation on the operation id safe.
+// severLocked drops a live lease and remembers its generation as dead. It is the phone's OWN
+// severance -- a transport loss, a release, backgrounding, a freshness lapse -- which is
+// attributable to everything the phone has authored, because the phone cannot know whether
+// any of it reached the machine.
 func (l *LeaseState) severLocked(e *leaseEntry, reason string) {
+	l.severNoticedLocked(e, reason, "")
+}
+
+// severNoticedLocked is severLocked for a severance the MACHINE announced. noticeOp is the
+// take_control the notice names, or "" when it names none.
+//
+// The RECORDED REQUEST is dropped with the lease, and it must be: only a take_control
+// authored AFTER this moment may be confirmed, so a late duplicate of the grant that opened
+// the lease just severed cannot resurrect it -- which is what makes keying confirmation on
+// the operation id safe.
+//
+// BUT ONLY WHEN THE NOTICE IS ATTRIBUTABLE TO IT. `op` is the take_control the phone has
+// authored and NOT HAD SEVERED SINCE, and a notice that provably names a different lease --
+// both ids present and unequal -- severed no request of this one. The guard above tests that
+// only for a LIVE entry, so without this the natural recovery sequence loses the user's
+// second tap: the transport drops (the phone severs itself), the user re-taps BECAUSE they
+// are typing into a void, and the old lease's still-in-flight death notice then wipes the
+// fresh request. The restarted daemon's grant answers a request the phone no longer
+// remembers, falls back to the generation floor -- the daemon's counter is rebuilt empty, so
+// it grants 1 against a floor of N -- and is refused. Take Control does nothing visible.
+//
+// An unattributed notice (no id: an older gateway) still clears, exactly as namesAnotherLease
+// already argues for the live case: it is a proof, not a guess, and absent one the notice
+// severs.
+func (l *LeaseState) severNoticedLocked(e *leaseEntry, reason, noticeOp string) {
 	if e.live && e.gen > e.dead {
 		e.dead = e.gen
 	}
 	e.live = false
-	e.op, e.liveOp = "", ""
+	e.liveOp = ""
+	if noticeOp == "" || noticeOp == e.op {
+		e.op = ""
+	}
 	e.reason = reasonOr(reason, "the control lease ended")
 }
 
