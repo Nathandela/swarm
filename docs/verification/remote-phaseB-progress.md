@@ -3,6 +3,11 @@
 **Branch**: `worktree-remote-control-research`. **Spec**: `docs/specifications/remote-phaseB-requirements.md` (v3.5.1, 139 requirements).
 **Gates**: `python3 scripts/check-phaseb-manifest.py` (ownership + DAG), `go build/vet/test -race ./...`.
 
+**Checkpoint after 7 slices (`ea38ed0`)**: full `go test -race ./...` **green -- 47 packages ok,
+zero failures, exit 0**, with `go build` and `go vet` clean across the whole tree. That covers
+surgery on committee-validated Phase A code (the protocol split, the gateway inbound guard,
+the reply-correlation change) with no regressions and no data races.
+
 ## Requirements phase: COMPLETE
 
 Five adversarial audit-committee rounds (codex/GPT-5.6 sol, opus, fable), all findings
