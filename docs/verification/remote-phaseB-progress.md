@@ -169,6 +169,31 @@ by any test**: both `ClientAuth.Sign` fixtures in the tree return nil errors, so
 can be deleted and the whole suite still passes. Standing defect class (i), a guard that cannot
 fail. Remediation in flight.
 
+## S16 AND S17 MUST BE VERIFIED TOGETHER, NOT SEQUENTIALLY
+
+Raised by the S17 RED author and it changes how these two close. They are coupled in **both**
+directions:
+
+- **S17 depends on S16's Android wiring.** Nothing in production Kotlin constructs the bound app, so
+  a push service has no phone to call into. `TestS17_TheAppTheServiceUsesIsTheProductionOne` cannot
+  go green until S16 lands it — and a slice that shipped a messaging service talking to an app nobody
+  builds would satisfy every other test in its file while push did not exist on a handset.
+- **S16 depends on S17 for one of its own states.** PB-APP-10's new waiting state is *rendered* by
+  S16 but is most reachable through S17's wake path: a phone paired minutes ago and backgrounded
+  before its first grant landed has no key, no user present and nothing on screen. From inside the
+  wake handler that is byte-for-byte indistinguishable from permanent grant loss, and the two have
+  **opposite remedies** — this one self-heals because the gateway re-appends its sidecar every
+  session, while the terminal one's remedy is re-pairing, which the user cannot perform at all
+  because pairing fail-fasts while the device is still registered.
+
+So neither may be declared green alone, and a sequential verification would report each as passing on
+the strength of a stub the other owes.
+
+**A product distinction worth keeping from the same author**: a content tier refusing DURING A WAKE
+is not an error at all — it is a flag on the returned alert. A locked phone is the **normal** case
+for a push wake, not a failure, and classing it as an error would put a failure state on screen for
+every single wake the product delivers.
+
 ## WHY THE ROLES ARE INDEPENDENT -- the one time it slipped, and what it cost
 
 In S16 the test author and the implementer settled a disagreement about a RED test **directly**, and
