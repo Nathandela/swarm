@@ -8,6 +8,61 @@ zero failures, exit 0**, with `go build` and `go vet` clean across the whole tre
 surgery on committee-validated Phase A code (the protocol split, the gateway inbound guard,
 the reply-correlation change) with no regressions and no data races.
 
+## Build environment (VERIFIED 2026-07-25 -- read this before any Android or timing work)
+
+The Android toolchain is **fully present but in a non-standard location**. Nothing is on `PATH`
+and no `ANDROID_*` variable is exported by default, so a naive probe (`which adb`,
+`ls ~/Library/Android/sdk`, `java -version`) reports *no Android toolchain at all* and
+`/usr/libexec/java_home` reports no JVM. That conclusion is WRONG. Every Android slice
+(S13-S17) and the `gomobile bind` gate must export:
+
+```sh
+export ANDROID_HOME=/usr/local/share/android-commandlinetools
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/<version>     # ls to pick
+export JAVA_HOME=/usr/local/opt/openjdk@17              # brew-installed, NOT symlinked
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+```
+
+Verified available: SDK platform `android-35`, build-tools `35.0.0`, NDK, `platform-tools/adb`,
+`emulator`, system images `android-35/google_apis/{arm64-v8a,x86_64}`, JDK 17.0.20,
+Gradle 9.6.1 (Kotlin 2.3.21), and `gomobile`/`gobind` in `$(go env GOPATH)/bin`.
+**An AVD named `swarmtest` already exists** (Android 15, `google_apis/arm64-v8a`), so
+instrumented/emulator tests are genuinely runnable here -- the PB-APP-* "UI test" acceptance
+criteria are NOT blocked by tooling. Only PB-E2E-5 (real camera, real biometrics, real FCM,
+Doze, reboot, hardware Keystore attestation) needs physical hardware, and it is already an
+explicitly deferred gate under §13.
+
+### The host runs Go under Rosetta -- this taints every timing number
+
+```
+uname -m                  -> arm64          (Apple M1)
+file $(which go)          -> Mach-O 64-bit executable x86_64
+go env GOARCH/GOHOSTARCH  -> amd64 / amd64
+```
+
+The machine is Apple Silicon but `/usr/local/bin/go` is an **x86_64 binary running under
+Rosetta 2**. Consequences, in order of how easy they are to get wrong:
+
+1. Every benchmark recorded in this project was taken through binary translation -- including
+   the "13-15 ms per-keystroke fsync on an M1/APFS host" figure that §6.0 cites to justify the
+   file-backed `InboundState` harness rule.
+2. Measurements are therefore **pessimistic** versus a native `arm64` build (Rosetta typically
+   costs 20-30% on compute-bound Go; much less on syscall/IO-bound paths). A §6.0 budget that
+   PASSES here passes natively with margin. **Never loosen a bound to "correct for" Rosetta.**
+3. The real hazard is a **spurious FAIL** pushing an implementer into over-engineering a
+   mechanism that was already fast enough. Any budget landing within ~25% of its limit must be
+   flagged, not silently encoded.
+4. §6.0 says the latency harness "records the environment". Recording "M1" alone would be
+   actively misleading. The harness must record `GOARCH`/`GOHOSTARCH`/`runtime.GOARCH` and the
+   translation status, or runs on native arm64 and on CI's x86 Linux are silently incomparable.
+5. This is the strongest argument for splitting **structural** tests (an append and an
+   outstanding wait cannot contend -- architecture-independent, cannot flake) from **budget**
+   tests (environment-bound). The always-run gate should lean on the structural ones.
+
+The AAR cross-compile (`android/arm64` from an amd64 host toolchain) is unaffected and works:
+S8 produced a 5.4 MB AAR, independently confirmed on disk at the reported size.
+
 ## Requirements phase: COMPLETE
 
 Five adversarial audit-committee rounds (codex/GPT-5.6 sol, opus, fable), all findings
