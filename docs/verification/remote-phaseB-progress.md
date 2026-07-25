@@ -112,7 +112,7 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-**80 of 143 shipped, 63 remaining (19 of 29 slices).** Counted from the manifest, not estimated.
+**98 of 143 shipped, 45 remaining (21 of 29 slices).** Counted from the manifest, not estimated.
 The completed slices were deliberately the blockers and the security-critical machine-side work --
 dependency surgery, gateway durability in both directions, the transport, the reconciliation frame,
 the bound facade, the custody seam, the push transport -- because they gate everything downstream.
@@ -687,6 +687,11 @@ record of what was intended rather than what shipped — standing class (ii), ap
   - `mobile/conformance TestPBBIND6_SlowCallbackDoesNotStallTheCore` (confirmed failing identically
     at the parent commit)
   - `internal/tui TestFirstPaintGate_RealDaemon_FiftySessions_P95`
+  - `internal/remote/transport TestS6B_KeystrokeCompletesWhileFollowing` and `internal/remotegw
+    TestS6B_GatewayInputLatencyIsNotPollGated` — **every latency-BUDGET test in this repo belongs
+    here.** They are the ones measuring a wall-clock median, so a loaded box moves them by 30-50%%
+    and a full-suite run is exactly that load. Both passed in isolation immediately after failing a
+    `go test ./...` sweep.
   - `internal/skeleton` and `internal/protocol TestFix_SupersedeReAttachRealShim` — the latter
     spawns real shim processes, so it is the most load-sensitive thing in the repo
   - `relay TestPresence_TransitionsAndSilentPush` under `-race -count=2` — the SAME unsynchronised
