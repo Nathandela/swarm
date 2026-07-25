@@ -6,9 +6,23 @@ before:
   hooks:
     - go mod tidy
 
-# swarm is the ONLY release artifact. swarm-char and swarm-fake-agent
-# (cmd/swarm-char, cmd/swarm-fake-agent) are dev/test tools and are never
-# built by this pipeline.
+# Three deployables ship from this pipeline:
+#
+#   swarm         the CLI/TUI the owner drives
+#   swarm-remote  the remote-control gateway sidecar, which runs under launchd or
+#                 systemd on the owner's machine (PB-LIFE-6). It ships in the SAME
+#                 archive as swarm on purpose: `swarm remote init` writes the gateway's
+#                 absolute path into the supervision unit's ExecStart, and it looks for
+#                 it BESIDE its own executable first (then PATH), so a machine that
+#                 installed only swarm could not generate a unit that points at
+#                 anything (PB-LIFE-1). Every packaging path that installs the archive
+#                 must therefore deliver BOTH binaries -- see the homebrew_casks
+#                 `binaries:` list below, which a cask does not derive on its own.
+#   swarm-relay   the server-side rendezvous/mailbox relay, deployed on a host of its
+#                 own and therefore archived on its own.
+#
+# swarm-char and swarm-fake-agent (cmd/swarm-char, cmd/swarm-fake-agent) are dev/test
+# tools; the build list below is the whole release matrix.
 builds:
   - id: swarm
     main: ./cmd/swarm
@@ -24,7 +38,43 @@ builds:
     # N-4: CGO_ENABLED=0 + pure Go already guarantees a statically linked
     # binary with zero third-party runtime dependencies; -s -w just strips
     # debug info. ldflags stamp internal/version so `swarm version` and the
-    # D-8 hello handshake (E13.2) report the real release version.
+    # D-8 hello handshake (E13.2) report the real release version; the same
+    # stamps are applied to every binary here, and take effect in each one
+    # that links internal/version.
+    ldflags:
+      - -s -w
+      - -X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}
+      - -X github.com/Nathandela/swarm/internal/version.Commit={{ .Commit }}
+      - -X github.com/Nathandela/swarm/internal/version.Date={{ .Date }}
+
+  - id: swarm-remote
+    main: ./cmd/swarm-remote
+    binary: swarm-remote
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}
+      - -X github.com/Nathandela/swarm/internal/version.Commit={{ .Commit }}
+      - -X github.com/Nathandela/swarm/internal/version.Date={{ .Date }}
+
+  - id: swarm-relay
+    main: ./cmd/swarm-relay
+    binary: swarm-relay
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
     ldflags:
       - -s -w
       - -X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}
@@ -35,9 +85,17 @@ archives:
   - id: swarm
     ids:
       - swarm
+      - swarm-remote
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+  - id: swarm-relay
+    ids:
+      - swarm-relay
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 checksum:
   name_template: "checksums.txt"
@@ -58,18 +116,30 @@ homebrew_casks:
   - name: swarm
     ids:
       - swarm
+    # A cask LINKS onto PATH only what it declares here; anything else in the archive
+    # is staged under the Caskroom and never linked. Left at the default this emitted
+    # `binary "swarm"` alone, so every Homebrew machine had a swarm that could not
+    # resolve its gateway -- `swarm remote init` installed no unit and `swarm remote
+    # pair` then advised re-running init, advice that could never succeed. This list
+    # must name every binary the `swarm` archive above collects (asserted by
+    # TestGoreleaser_CaskLinksEveryBinaryItsArchiveShips).
+    binaries:
+      - swarm
+      - swarm-remote
     repository:
       owner: Nathandela
       name: homebrew-swarm
     homepage: "https://github.com/Nathandela/swarm"
     description: "Every coding agent on your machine, in one keyboard-driven terminal view"
     # F1: swarm is unsigned/unnotarized. Homebrew preserves the
-    # com.apple.quarantine xattr from download onto the staged binary, so
+    # com.apple.quarantine xattr from download onto the staged binaries, so
     # macOS Gatekeeper blocks the first run ("cannot be opened because the
     # developer cannot be verified" / "is damaged"). This is the standard,
     # documented fix for unsigned cask binaries: strip quarantine in postflight
-    # before the user ever runs it.
+    # before the user ever runs it. The whole staged path is stripped, not one
+    # named binary: this archive also carries swarm-remote, which launchd
+    # execs with no user present to click through a Gatekeeper prompt.
     hooks:
       post:
         install: |
-          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/swarm"]
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path]

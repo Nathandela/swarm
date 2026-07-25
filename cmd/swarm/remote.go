@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,9 +21,11 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
+	"github.com/Nathandela/swarm/internal/remote/supervise"
 )
 
 const remoteUsage = `usage: swarm remote <command>
@@ -75,6 +79,31 @@ const remoteIdentityFile = "machine.key"
 // <stateDir>/remote/relay.json is the exact path loadRelayURL reads, and the path
 // `swarm remote init --relay-url` must agree on.
 const remoteRelayFile = "relay.json"
+
+// gatewayBinary is the gateway sidecar's binary name, resolved into the supervision unit's
+// ExecStart. It is the name .goreleaser.yaml's swarm-remote build ships in the SAME archive
+// as swarm, so an installed swarm always has one next to it to point at.
+const gatewayBinary = "swarm-remote"
+
+// remoteSocketFile is the default remote-tier UDS under the state dir. ADR-007 D4: the
+// gateway dials the dedicated remote socket, never the owner socket.
+const remoteSocketFile = "remote.sock"
+
+// gatewayLogFile is where the supervision unit sends the gateway's stdout and stderr.
+// Inside the state dir, which is already the 0700 tree that guards the machine identity.
+const gatewayLogFile = "gateway.log"
+
+// newGatewaySupervisor is the CLI's hook into gateway supervision. ADR-007 D5 forbids the
+// daemon spawning the gateway, so the owner-invoked CLI is the ONLY thing that installs
+// (`swarm remote init`) or activates (`swarm remote pair`) the unit. It is a var so tests
+// substitute a fake and never touch the real launchd/systemd.
+var newGatewaySupervisor = func(stateDir string) (supervise.Supervisor, error) {
+	return supervise.Host(stateDir)
+}
+
+// osExecutable is os.Executable, as a var so a test can place this binary in a synthetic
+// install layout. resolveGatewayBinary looks for the gateway BESIDE it.
+var osExecutable = os.Executable
 
 // remoteStateFile mirrors remoteStateFile in internal/skeleton/killswitch.go: the
 // durable kill-switch file at <stateDir>/remote-state.json (directly under the state
@@ -165,8 +194,134 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// PB-LIFE-2, install half: provisioning a machine also installs its gateway
+	// supervision unit, so a later `swarm remote pair` has something to activate.
+	//
+	// It then converges on the state the machine's DEVICE COUNT already implies. With zero
+	// paired devices that is quiescence (PB-LIFE-3(a)) and nothing is started -- starting a
+	// gateway there would be the crash loop that requirement exists to prevent. With the one
+	// device of single-device v1 it is active, and this is the ONLY command that can get
+	// there: `swarm remote pair` is refused while a device is paired (internal/skeleton's
+	// "a device is already paired; revoke it first"), so an owner whose gateway is down --
+	// a transient launchctl refusal at pair time, an upgrade from a build that installed no
+	// unit -- would otherwise have no supported way to start it. init is idempotent and
+	// always available, which is what makes it the right place.
+	if installGatewayUnit(stateDir, stderr) && supervise.Desired(pairedDeviceCount(stateDir)) == supervise.StateActive {
+		ensureGatewayRunning("init", stderr)
+	}
+
 	fmt.Fprintln(stdout, id.String())
 	return 0
+}
+
+// pairedDeviceCount reads the durable device roster straight from <stateDir>/devices, the
+// same registry the daemon and cmd/swarm-remote open. It is a READ, so it does not dial
+// (and therefore never auto-starts) a daemon: `swarm remote init` provisions a machine and
+// must keep working on one where nothing is running yet.
+//
+// An unreadable or malformed registry reports 0. Nothing is lost by that: 0 is quiescent,
+// so the only consequence is that init installs the unit without activating it, which is
+// exactly what it did before -- and a registry the CLI cannot read is one the daemon
+// refuses to start on anyway (device.Open is fail-closed), so it will be reported there.
+func pairedDeviceCount(stateDir string) int {
+	reg, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		return 0
+	}
+	return reg.Count()
+}
+
+// installGatewayUnit writes/refreshes this machine's gateway supervision unit under
+// <stateDir>/remote/units, reporting whether a unit is now installed.
+//
+// Every failure here is a WARNING, never a nonzero exit: `swarm remote init`'s durable
+// work -- the machine identity -- is already done and must not be undone by a missing
+// gateway binary, and a source checkout with no swarm-remote anywhere must still be able
+// to provision an identity and pair. Silence is not an option either: the operator would
+// otherwise learn about it only when a paired phone receives nothing.
+func installGatewayUnit(stateDir string, stderr io.Writer) bool {
+	warn := func(err error) {
+		fmt.Fprintf(stderr, "remote init: no gateway supervision unit installed (%v); "+
+			"the gateway will not start on its own\n", err)
+	}
+
+	exe, err := resolveGatewayBinary()
+	if err != nil {
+		warn(err)
+		return false
+	}
+	sup, err := newGatewaySupervisor(stateDir)
+	if err != nil {
+		warn(err)
+		return false
+	}
+	if err := sup.Install(supervise.Spec{
+		Exec:         exe,
+		Owner:        gatewayOwner(),
+		StateDir:     stateDir,
+		RemoteSocket: gatewaySocket(stateDir),
+		LogPath:      filepath.Join(stateDir, "remote", gatewayLogFile),
+		// Backoff left zero: supervise.DefaultBackoff is PB-LIFE-5's floor.
+	}); err != nil {
+		warn(err)
+		return false
+	}
+	return true
+}
+
+// resolveGatewayBinary finds the swarm-remote this install ships, as an ABSOLUTE path -- a
+// supervisor resolves a relative one against a working directory nobody controls.
+//
+// ADJACENCY FIRST. swarm and swarm-remote ride in one archive (.goreleaser.yaml), so the
+// gateway is a sibling of the running binary, and that is the relationship the install
+// actually guarantees. PATH is not: a Homebrew cask links only the binaries it declares, a
+// tarball is unpacked wherever the operator likes, and an older swarm-remote earlier on
+// PATH would silently win. Symlinks are resolved first because the sibling is next to the
+// REAL file -- `brew` puts a link in its bin directory pointing into the Caskroom, where
+// both binaries live together.
+//
+// PATH remains the fallback: a source checkout has `go install`ed both into GOBIN with no
+// archive layout at all.
+func resolveGatewayBinary() (string, error) {
+	if self, err := osExecutable(); err == nil {
+		if self, err = filepath.EvalSymlinks(self); err == nil {
+			sibling := filepath.Join(filepath.Dir(self), gatewayBinary)
+			if isExecutableFile(sibling) {
+				return sibling, nil
+			}
+		}
+	}
+	exe, err := exec.LookPath(gatewayBinary)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(exe)
+}
+
+// isExecutableFile reports whether path is a regular file this user could exec.
+func isExecutableFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+}
+
+// gatewayOwner is the user the gateway will run as: whoever runs this command. Both unit
+// types run as the user that loads them, so this is a statement of FACT recorded in the
+// unit, not an authority the file confers. The environment fallback is what a
+// CGO_ENABLED=0 macOS build needs, where os/user cannot read the directory service.
+func gatewayOwner() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+
+// gatewaySocket is the daemon socket the supervised gateway dials: the configured
+// remote-tier socket, else the default under the state dir (ADR-007 D4).
+func gatewaySocket(stateDir string) string {
+	if sock := os.Getenv(daemon.EnvRemoteSocket); sock != "" {
+		return sock
+	}
+	return filepath.Join(stateDir, remoteSocketFile)
 }
 
 // validateRelayURL checks --relay-url BEFORE it is persisted, because this is the last
@@ -299,6 +454,7 @@ func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
+	stopGatewayIfQuiescent(stderr)
 	return 0
 }
 
@@ -395,7 +551,88 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 		name = res.DeviceID
 	}
 	fmt.Fprintf(stdout, "paired %s\n", name)
+
+	// PB-LIFE-2: the phone that just paired has a gateway to talk to, with no second
+	// command and no reboot. This is also what runs the epoch grant delivery
+	// (cmd/swarm-remote's deliverEpochGrant) that makes the pairing usable at all.
+	ensureGatewayRunning("pair", stderr)
 	return 0
+}
+
+// ensureGatewayRunning activates this machine's gateway, for the verb that asked: the
+// `pair` that just enrolled a device, or the `init` that found one already enrolled.
+//
+// It can only WARN, and the caller exits 0 regardless. On the pair path the enrollment is
+// COMMITTED and durable by the time this runs: the device is in the registry, and it will
+// be served the moment a gateway comes up, at the next login if not before. A nonzero exit
+// would report that durable enrollment as a failure -- it is not one, and the one thing
+// left to fix is not something a different exit status helps with. (It is not that a retry
+// would enroll a second device: a second pairing is refused outright while one is paired,
+// in internal/skeleton/pairing.go and again in the device registry's AddSole. The retry
+// simply cannot happen.) Nothing is swallowed either: a phone that pairs and then goes
+// quiet is the symptom, and the operator gets the cause on stderr.
+func ensureGatewayRunning(verb string, stderr io.Writer) {
+	warn := func(err error) {
+		fmt.Fprintf(stderr, "remote %s: the gateway was not started: %v\n", verb, err)
+	}
+
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			warn(err)
+			return
+		}
+	}
+	sup, err := newGatewaySupervisor(stateDir)
+	if err != nil {
+		warn(err)
+		return
+	}
+	switch err := sup.Ensure(); {
+	case err == nil:
+	case errors.Is(err, supervise.ErrNotInstalled):
+		fmt.Fprintf(stderr, "remote %s: this machine has no gateway supervision unit, so "+
+			"the paired device will receive nothing. Run `swarm remote init` to install one.\n", verb)
+	default:
+		warn(err)
+	}
+}
+
+// stopGatewayIfQuiescent returns this machine's gateway to quiescent once the roster the
+// revoke just wrote no longer justifies one (PB-LIFE-3(c)); a machine that somehow still
+// has its one device keeps its gateway, since supervise.Desired is the single definition
+// of that.
+//
+// The revoked device's gateway is expected to notice and self-exit (internal/remotegw's
+// ErrDeviceRevoked), but that path depends on it being able to READ the registry --
+// deviceRevoked() reports false when it cannot -- and a gateway that survives its revoke
+// is worse than one that merely lingers: Ensure on the NEXT pairing is a documented no-op
+// against a running job, so the new phone would be served by a process still holding the
+// revoked device's epoch. Revoke is the moment the owner is present and the desired state
+// is unambiguous, so it is where the process is ended.
+//
+// Like ensureGatewayRunning it can only warn; the revocation itself is already durable. A
+// machine with no unit installed has nothing to stop and is told nothing.
+func stopGatewayIfQuiescent(stderr io.Writer) {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			return
+		}
+	}
+	if supervise.Desired(pairedDeviceCount(stateDir)) != supervise.StateQuiescent {
+		return
+	}
+	sup, err := newGatewaySupervisor(stateDir)
+	if err == nil {
+		err = sup.Stop()
+	}
+	if err != nil && !errors.Is(err, supervise.ErrNotInstalled) {
+		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but its gateway was not "+
+			"stopped: %v\n", err)
+	}
 }
 
 // Terminal box used for the pairing QR when neither the environment nor the controlling
