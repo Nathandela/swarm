@@ -337,13 +337,21 @@ Fail-closed at `NewApp` was considered and rejected as the interim: it would tak
 and the whole `mobile/conformance` suite down until S14 lands, with no security gain in the
 meantime (nothing ships to a handset before S14 either way). The safety property B18(c) actually
 demands is preserved -- **omission** yields `ErrNoSealer`, and cleartext requires typing
-`Insecure...` at a call site, so production cannot reach it by forgetting a field. Two call sites
-have that word: `mobile/app.go` and `mobile/conformance/harness_test.go`.
+`Insecure...` at a call site, so production cannot reach it by forgetting a field. Two FILES carry
+that word -- `mobile/app.go` and `mobile/conformance/harness_test.go` -- holding four call
+expressions between them (one sealer per tier, twice).
+
+**This is now fenced, not merely conventional.**
+`TestS14A_TheCleartextSealerIsBoundedToItsTwoKnownCallSites` requires the set of files calling
+`InsecureCleartextSealer` to equal exactly those two, and fails in BOTH directions: a third file
+means unsealed custody spread somewhere uninventoried; **fewer** means S14 landed the facade verb and
+**this very section is stale**. Its failure message says so and names this section, so whoever trips
+it is pointed at the stale record rather than left to wonder why a count moved. The fence walks
+`_test.go` files too, because one of the two sites is a test file.
 
 **S14's obligation, precisely**: add a facade verb that accepts an Android-Keystore-backed KEK,
-regenerate the golden, and delete both `InsecureCleartextSealer` call sites. Until then, the
-`InsecureCleartextSealer` symbol itself should be treated as a live defect marker -- grep for it to
-find what remains.
+regenerate the golden, and delete both `InsecureCleartextSealer` call sites -- at which point the
+fence above goes red on purpose and this section must be retired with it.
 
 ## S14 ALSO OWES THE PHONE'S CUSTODY-REFUSAL BEHAVIOUR -- the dial error is discarded today
 
