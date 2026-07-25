@@ -112,28 +112,37 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-28 of 140 shipped, 112 remaining (9 of 27 slices). The completed slices were deliberately the
+**45 of 141 shipped, 96 remaining (12 of 28 slices).** The completed slices were deliberately the
 blockers and the security-critical machine-side work -- dependency surgery, gateway durability
-in both directions, the transport, the reconciliation frame -- because they gate everything
-downstream. The remaining 113 are weighted toward the Android app and end-to-end verification.
+in both directions, the transport, the reconciliation frame, the bound facade -- because they
+gate everything downstream. The remaining 96 are weighted toward the Android app and end-to-end
+verification.
+
+The counts rose by one requirement and one slice mid-implementation: **PB-LIFE-7 / S4b**, created
+when an S4 re-reviewer restated an "accepted residual" and it turned out to be exit-criterion-fatal
+on the default install. That is the process working, not scope creep.
 
 ## Slice status
 
 | Slice | Requirements | State |
 |---|---|---|
-| S1 dependency-edge surgery | PB-BIND-0 | **SHIPPED** (`0024595`) — closure 52 -> 18 non-stdlib, zero forbidden |
-| S2 gateway inbound durability | PB-GW-1, 3, 4 | **SHIPPED** (`f98b9a9`) -- inbound high-water + cursor now durable and identity-bound |
 | S0 ADR amendment | PB-DOC-1 | **SHIPPED** (`6cdc164`) -- 14 Phase B decisions recorded |
-| S5 design tokens | PB-TOK-1/2/3 | **SHIPPED** (`638b61b`) — Substrate pinned, drift-guarded |
-| S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | **SHIPPED** (`20be9b2`) -- real symbol + relay URL; 39-char URL ceiling enforced; manual scan still owed |
-| S0, S2, S2b, S4 | ADR decisions, gateway durability, supervision | **next** -- all parallel roots, startable immediately |
+| S1 dependency-edge surgery | PB-BIND-0 | **SHIPPED** (`0024595`) -- closure 52 -> 18 non-stdlib, zero forbidden |
 | S1b protocol additions | PB-SYNC-7 | **SHIPPED** (`689c8e8`) -- reconcile frame, lease confirmation, reply correlation |
-| S6 transport resilience | PB-NET-2,3,4,6,7 | **SHIPPED** (`078ac63`) -- cleartext-via-redirect hole found by review and closed |
+| S2 gateway inbound durability | PB-GW-1, 3, 4 | **SHIPPED** (`f98b9a9`) -- inbound high-water + cursor now durable and identity-bound |
 | S2b gateway outbound durability | PB-GW-7, PB-GW-8 | **SHIPPED** (`5aaacef`) -- live tail was refusing 81% of appends; coalescing + outbox |
+| S3 QR renderer + payload | PB-PAIR-1, PB-PAIR-7 | **SHIPPED** (`20be9b2`) -- real symbol + relay URL; 39-char URL ceiling enforced; manual scan still owed |
+| S4 gateway supervision | PB-LIFE-1..6, PB-OPS-3 | **SHIPPED** (`75674c1`) -- cask never linked `swarm-remote`; `Ensure` classified launchd failures by parsing prose. Re-reviewed: SHIP |
+| S5 design tokens | PB-TOK-1/2/3 | **SHIPPED** (`638b61b`) -- Substrate pinned, drift-guarded |
+| S6 transport resilience | PB-NET-2,3,4,6,7 | **SHIPPED** (`078ac63`) -- cleartext-via-redirect hole found by review and closed |
 | S7 durable phone state | PB-STATE-*, PB-GW-6 | **SHIPPED** (`0ac4fb9`) -- the phone now survives a process kill; was the most severe committee finding |
-| S8 gomobile facade | PB-BIND-*, PB-SAS-1/2 | in progress (RED) -- the contract the Android app is built on |
-| S6b low-latency input path | PB-NET-5 | not started (split out of S6) |
-| S7..S21 | see §11 of the spec | not started |
+| S7b gateway bounded-age | PB-GW-2 | **SHIPPED** (`a0bd09d`) -- age backstop for the window the seq guard cannot see. Reviewed: SHIP, seven mutations all fired |
+| S8 gomobile facade | PB-BIND-*, PB-SAS-1/2 | **SHIPPED** (`8293915`) -- `ReleaseControl` sealed `delete` and would have DESTROYED the session; one undecodable frame spun the drain at 1455 reads/s |
+| S4b remote-socket contract | PB-LIFE-7 | in progress (RED) -- exit-criterion-fatal: default install pairs, then silence |
+| S6b low-latency input path | PB-NET-5 | in progress (GREEN) -- measured 486 ms p50 against a 150 ms budget; rewrites the relay's concurrency model |
+| S13 Android skeleton | PB-RUN-*, PB-TOOL-*, PB-TOK-4 | in progress (RED) -- first Android code in the repo |
+| S9, S11, S12 | PB-NET-1, PB-INPUT-*/PB-TIME-*, PB-PUSH-* | unblocked by S8, **held behind S6b** -- all three land in `relay`/`transport`, which S6b is rewriting |
+| S10, S14..S21 | see §11 of the spec | not started |
 
 ## Working agreement that is producing the results
 
