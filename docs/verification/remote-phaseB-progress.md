@@ -401,6 +401,42 @@ the two sentinels to typed Kotlin exceptions, which is the natural home for the 
 The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
 unfalsifiable by any test -- is being closed under S14a and is NOT this item.
 
+## A FRESH INSTALL NEVER LEARNS ITS MACHINE ID -- the most severe defect found in Phase B
+
+Found by S9's RED author on the FIRST run of the first test that pairs a fresh install and then uses
+it. Fix in flight; recorded here immediately because of what it costs if it ships.
+
+**The chain** (every link verified independently before dispatching a fix):
+
+- `mobile/app.go:115` passes `cfg.MachineID` into `phonecore.Config.Machine`.
+- `phonecore/core.go:83` forwards it to `OpenStore`, where it is **only a load-time filter** --
+  `state.go:497`: `if machineID != "" && f.Machine != machineID { return nil }`. Never an initialiser.
+- On a fresh dir the file does not exist, so `load()` returns early with the state zero.
+- `mobile/pairing.go:167-169` `pin()` sets `MachineStatic`, `MachineSignPub` and
+  `MachineRelayAuthPub` -- **never `st.Machine`**.
+
+So `State.Machine` stays `""` for the life of the install.
+
+**Consequence A**: `crypto.Command.Canonical()` (`devicesig.go:47`) refuses an empty `Machine`, so
+`TakeControl`, `Kill`, `Launch` and `ReleaseControl` -- every mutating verb -- fail on a first-launch
+pair-then-use.
+
+**Consequence B, and this is why it is the worst one**: `persistState` writes `Machine: ""`
+(`state.go:610`), so the NEXT process start compares it against the configured id and **discards the
+entire durable blob** -- pairing, epoch, content key, relay cursor, durable send-seq ceilings. On
+Android a process death is routine. A product that fails every command on first launch is noticed in
+five minutes; a product that then silently forgets a working pairing on the first restart presents as
+"it randomly loses my phone".
+
+**Why nothing caught it, and why this vindicates the slice**: every conformance fixture seeds
+`Machine: h.Machine` (`harness_test.go:163`), and `phonesim` never authors a signed command through
+the facade at all. It is reachable ONLY by pairing a fresh install and then using it -- the exact
+composition PB-NET-1 asks for. Standing class (v) in its purest form: **a whole fixture family
+seeded past the defect.** S9 exists to close that gap and closed it on its first run.
+
+**The edge the obvious fix misses**: `state.go:497`'s different-machine early return. Initialise only
+the not-exist branch and the "re-pair self-heals" path lands straight back in the broken state.
+
 ## PB-NET-5's LATENCY HARNESS DOES NOT MEASURE THE SHIPPED INPUT PATH
 
 Found by the S11 round-3 implementer while I was asking it to prove its lock had not blown the
