@@ -196,6 +196,7 @@ func NewService(cfg ServiceConfig) *Service {
 		ReplySeq:    replySeq,
 		Inbound:     inbound,
 		Prefs:       cfg.PushPrefs,
+		Resync:      gw,
 	})
 	return &Service{cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers}
 }

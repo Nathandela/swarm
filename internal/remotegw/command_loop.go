@@ -87,6 +87,17 @@ type TerminalWatchRouter interface {
 // *TerminalWatcher is the production TerminalWatchRouter. Pinned at compile time.
 var _ TerminalWatchRouter = (*TerminalWatcher)(nil)
 
+// JournalResyncer serves PB-SYNC-2's journal repair: read the daemon's atomic roster +
+// the events after the phone's cursor and publish them as one reseed frame. *Gateway is the
+// production implementation (Resync); the seam keeps the loop's dispatch unit-testable
+// without a live daemon.
+type JournalResyncer interface {
+	Resync(ctx context.Context, from uint64) error
+}
+
+// *Gateway is the production JournalResyncer. Pinned at compile time.
+var _ JournalResyncer = (*Gateway)(nil)
+
 // CommandBridgeConfig configures a CommandBridge.
 type CommandBridgeConfig struct {
 	Mailbox     Mailbox             // the machine's own relay mailbox (read) + the phone's (append)
@@ -105,6 +116,10 @@ type CommandBridgeConfig struct {
 	// preference it did not store, which would leave the phone showing a setting the
 	// machine has never heard of.
 	Prefs PushPrefsSource
+	// Resync serves journal_resync (PB-SYNC-2). Nil disables the verb -- and the phone's
+	// stale journal then never clears, because nothing else can clear it (PB-SYNC-3: only
+	// that channel's own repair does). Production always wires the gateway.
+	Resync JournalResyncer
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -479,6 +494,20 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		}
 		b.cfg.Watchers.Unwatch(rc.Session)
 		return nil
+	case protocol.ActionJournalResync:
+		// A READ, and PB-SYNC-5's decision: UNSIGNED, so it is NOT forwarded to the daemon's
+		// device authenticator, exactly like the two watches above. The gateway is what
+		// performs the journal_read and it holds no device signing key -- it opens the
+		// phone's sealed commands and forwards them, it cannot author a signature -- so
+		// putting this behind the mutating-op gate would refuse every repair from a device
+		// whose view is stale, permanently. The gates that do apply are the daemon's:
+		// handleJournalRead requires the negotiated `journal` capability and the kill switch
+		// (PB-SYNC-4), and the seal under the epoch content key is already proof the asker is
+		// the paired device.
+		if b.cfg.Resync == nil {
+			return nil
+		}
+		return b.cfg.Resync.Resync(ctx, rc.ResyncCursor)
 	case protocol.ActionPushPrefs:
 		// Authorized by the DAEMON, persisted HERE (PB-PUSH-8 / PB-PUSH-10): see
 		// applyPushPrefs.

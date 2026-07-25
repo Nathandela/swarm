@@ -19,6 +19,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/grantwire"
 )
 
 // InboundMaxAge bounds the authenticated age of a MACHINE -> phone sealed frame (PB-TIME-2,
@@ -43,8 +44,52 @@ const (
 	kindCommandReply     = "command_reply"     // daemon reply to a phone command -> reply cache
 	kindEpochGrant       = "epoch_grant"       // sealed epoch-rotation grant -> pending-grant slot (C5 consumes)
 	kindReconcile        = "reconcile"         // machine-published rollback authorities -> reconcile slot (PB-SYNC-7)
+	kindJournalReseed    = "journal_reseed"    // atomic roster+events snapshot -> the JOURNAL repair (PB-SYNC-2)
 	kindPush             = "push"              // reserved: no live push in Phase A
 )
+
+// The four REPAIR CHANNELS of PB-SYNC-1. Staleness is MARKED per SEQ BUCKET -- journal and
+// terminal share one (sender, epoch) space and crypto.MailboxResult carries a bare Gap bool
+// with no frame kind, so a skipped seq CANNOT be attributed to one of them -- but it is
+// CLEARED per channel, because the four are repaired by four different things.
+const (
+	// StreamJournal is repaired by an atomic roster+events reseed (schema.JournalReseed).
+	StreamJournal = "journal"
+	// StreamTerminal is repaired by a fresh full server-rendered snapshot. A journal
+	// reseed cannot repair a missed grid.
+	StreamTerminal = "terminal"
+	// StreamReply is repaired by the durable outcome of each op, or it stays unresolved.
+	StreamReply = "reply"
+	// StreamGrant is repaired by PB-KEY-3's re-grant.
+	StreamGrant = "grant"
+)
+
+// streamsOf are the repair channels one seq bucket carries, and therefore the channels a
+// hole in it stales. The machine stamps its routing key id on journal, terminal AND
+// reconcile frames; command replies deliberately leave SenderKeyID zero (command_in.go),
+// which is the split that makes the reply stream's contiguity independent of the other two.
+func streamsOf(b Bucket) []string {
+	if b.Sender == ([8]byte{}) {
+		return []string{StreamReply}
+	}
+	return []string{StreamJournal, StreamTerminal}
+}
+
+// repairedBy is the channel one frame kind REPAIRS, or "" for a kind that repairs nothing.
+// It is the only place the PB-SYNC-2 mapping is written down: a reseed carries a roster and
+// events and NO grid, and a grid says nothing about which sessions exist -- so neither can
+// stand in for the other, and a kind that is absent here (a reply, a reconcile record, a
+// rotation grant) clears nothing at all.
+func repairedBy(kind string) string {
+	switch kind {
+	case kindJournalReseed:
+		return StreamJournal
+	case kindTerminalSnapshot:
+		return StreamTerminal
+	default:
+		return ""
+	}
+}
 
 // snapshotFrame is the wire shape of a sealed terminal-snapshot mailbox plaintext: the
 // schema.TerminalSnapshot fields (promoted via anonymous embedding, so its frozen json
@@ -71,6 +116,20 @@ type replyFrame struct {
 type reconcileFrame struct {
 	Kind                   string `json:"kind"`
 	schema.ReconcileRecord        // machine, epoch_id, the three authorities, issued_at (promoted)
+}
+
+// reseedFrame is the wire shape of a sealed journal-reseed plaintext: the
+// schema.JournalReseed fields (promoted via anonymous embedding so its pinned json tags
+// stay the single source of truth) plus a kind tag. The gateway's RelaySink.Reseed MUST
+// marshal this exact shape.
+//
+// It is ONE frame and not N roster frames because PB-SYNC-3 requires the repair to be
+// committed atomically with the matching transport watermark, and N independent frames
+// cannot be: a death between frames leaves the phone with half a snapshot and a watermark
+// claiming the whole. The frame's own arrival seq IS that watermark.
+type reseedFrame struct {
+	Kind                 string `json:"kind"`
+	schema.JournalReseed        // roster, events, cursor (promoted)
 }
 
 // ErrUnreconciled is the fail-closed refusal PB-STATE-4 demands of every MUTATING op
@@ -209,13 +268,14 @@ type MailboxRouter struct {
 	// mu guards the BOUND state above (key, receiver, caches) together with the reconcile
 	// slot below: rebind replaces all of them at once when the Core adopts a new epoch, so a
 	// reader takes the lock just long enough to copy the pointer it needs.
-	mu      sync.Mutex
-	recon   schema.ReconcileRecord // latest reconcile record (PB-SYNC-7)
-	reconOK bool                   // a record has ARRIVED
-	adopted bool                   // ... and its authorities have been applied (gates mutating ops)
-	reconAt Bucket                 // the bucket it arrived on: its self-certifying JournalCeiling
-	epoch   uint32                 // the epoch whose buckets are unverified while unadopted
-	stale   map[Bucket]bool        // persisted stale flags, restored from State.Stale
+	mu       sync.Mutex
+	recon    schema.ReconcileRecord // latest reconcile record (PB-SYNC-7)
+	reconOK  bool                   // a record has ARRIVED
+	adopted  bool                   // ... and its authorities have been applied (gates mutating ops)
+	reconAt  Bucket                 // the bucket it arrived on: its self-certifying JournalCeiling
+	epoch    uint32                 // the epoch whose buckets are unverified while unadopted
+	stale    map[Bucket]bool        // persisted stale flags, restored from State.Stale
+	staleStr map[string]bool        // persisted per-CHANNEL flags, restored from State.StaleStreams
 }
 
 // bound copies the router's currently-bound key, receiver and caches.
@@ -241,6 +301,7 @@ func newMailboxRouter(key crypto.ContentKey, core *Core) *MailboxRouter {
 		replies:   NewReplyCache(),
 		core:      core,
 		stale:     map[Bucket]bool{},
+		staleStr:  map[string]bool{},
 	}
 }
 
@@ -281,6 +342,10 @@ func (r *MailboxRouter) rebind(st State) {
 	r.epoch, r.stale = st.EpochID, maps.Clone(st.Stale)
 	if r.stale == nil {
 		r.stale = map[Bucket]bool{}
+	}
+	r.staleStr = maps.Clone(st.StaleStreams)
+	if r.staleStr == nil {
+		r.staleStr = map[string]bool{}
 	}
 	r.mu.Unlock()
 }
@@ -433,6 +498,7 @@ type inboundFrame struct {
 	record   schema.JournalRecord
 	grant    []byte
 	recon    schema.ReconcileRecord
+	reseed   schema.JournalReseed
 }
 
 // open parses, authenticates and seq-guards one envelope EXACTLY ONCE, then decodes its
@@ -509,6 +575,15 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 			return b, res, inboundFrame{}, err
 		}
 		f.recon = cf.ReconcileRecord
+	case kindJournalReseed:
+		// PB-SYNC-2's journal repair. Decoded WHOLE or not at all, for the reason the
+		// reconcile arm gives one case up: a half-decoded snapshot applied over the live
+		// cache is worse than no repair, because it clears the flag that says so.
+		var rf reseedFrame
+		if err := json.Unmarshal(res.Plaintext, &rf); err != nil {
+			return b, res, inboundFrame{}, err
+		}
+		f.reseed = rf.JournalReseed
 	case kindEpochGrant:
 		// Route+expose only: stash the authenticated plaintext for C5 to open. NEVER journal it.
 		f.grant = res.Plaintext
@@ -563,6 +638,13 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 			r.adopted = true
 		}
 		r.mu.Unlock()
+	case kindJournalReseed:
+		// PB-SYNC-8: the reseed REPLACES the cached set and the cursor. Merging it would
+		// discard every roster record it carries -- they arrive with Cursor 0, deliberately
+		// (internal/daemon/journal.go), and SessionCache.Apply drops anything below the
+		// highest applied cursor -- so the designated repair channel would report success
+		// and change nothing.
+		sessions.reseed(f.reseed)
 	case kindEpochGrant:
 		r.grantMu.Lock()
 		r.grants = append(r.grants, f.grant)
@@ -604,6 +686,21 @@ type Receipt struct {
 // would have resolved therefore stays UNRESOLVED across a restart -- by design, until the
 // op is re-driven or the machine's reconcile record re-establishes the authorities.
 func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error) {
+	// PB-KEY-10, and it must come BEFORE ParseEnvelope. The machine's bootstrap grant is a
+	// TAGGED PLAINTEXT frame, not a ContentKey-sealed envelope -- deliberately, because it is
+	// what DELIVERS the ContentKey -- so the envelope parser refuses it, commits nothing and
+	// acks nothing, and the relay cursor never advances past it. Every later frame then sits
+	// behind it unreachable for the whole 7-day retention window while the drain re-reads one
+	// page forever.
+	//
+	// It rides THIS path rather than a facade verb because the custody surface is inbound-only
+	// by design (ADR-007 B8) and the golden-pinned facade has no verb that ingests a grant --
+	// so the phone's ONE inbound path is the only place the key can arrive. Everything the
+	// open needs is already here: the device KeyStore, the pinned machine grant-signing pub,
+	// and the replay watermark seeded from durable state.
+	if g, ok := grantwire.ParseBootstrap(raw); ok {
+		return r.acceptBootstrap(g, cursor)
+	}
 	b, res, f, err := r.open(raw, time.Now())
 	if err != nil {
 		if errors.Is(err, crypto.ErrStaleSeq) || errors.Is(err, crypto.ErrStaleAge) {
@@ -626,7 +723,7 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 	// One Save covers the guard AND the content; a frame that left a hole in the bucket is
 	// delivered but NOT trusted into the durable model -- the phone resyncs (or reconciles)
 	// that stream first. See commitReceive.
-	contiguous, err := r.core.commitReceive(b, f, cursor)
+	contiguous, streams, err := r.core.commitReceive(b, f, cursor)
 	if err != nil {
 		return Receipt{Gap: res.Gap}, err
 	}
@@ -634,6 +731,11 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 	if !contiguous {
 		r.markStale(b)
 	}
+	// The per-channel flags are adopted from what the transaction COMMITTED, never computed
+	// again here. PB-SYNC-3 is fail-closed both ways: a repair whose Save did not land
+	// returned above with the flag untouched, and one that did land cleared it in the same
+	// write that carried its content and its watermark.
+	r.adoptStaleStreams(streams)
 	r.apply(f)
 	if err := r.ack(cursor); err != nil {
 		return Receipt{Gap: gap}, err
@@ -641,11 +743,72 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 	return Receipt{Gap: gap, Acked: true}, nil
 }
 
+// acceptBootstrap consumes the machine's tagged plaintext epoch-grant frame: verify it
+// against the pinned machine grant-signing key and the durable replay watermark, install the
+// epoch keys, and commit both with the relay read cursor in ONE transaction.
+//
+// An UNOPENABLE grant is still acked, for the same reason a stale seq is: delivery is
+// at-least-once (deliver.go appends once per gateway session) and an untrusted relay can
+// re-serve a retained pre-rotation grant, so the phone WILL see grants it must refuse -- and
+// one that is never compacted pins the drain on its page forever, which is the denial lever
+// PB-SYNC-6 forbids. Nothing is persisted on that path: a refusal commits no key.
+//
+// A grant that OPENED but whose commit failed is deliberately NOT acked. That is the ack
+// ordering AcceptCommit states one function down -- acking a frame whose content is not yet
+// durable lets the relay compact the only copy a SIGKILL is about to erase -- and it bites
+// hardest here: this frame arrives ONCE per gateway session and it is the only thing that
+// carries the epoch key, so dropping it leaves a phone that can neither send nor open
+// anything, with nothing left to redeliver.
+func (r *MailboxRouter) acceptBootstrap(g *crypto.EpochGrant, cursor uint64) (Receipt, error) {
+	if r.core == nil {
+		// A bare router holds no key custody and no watermark, so it cannot authenticate a
+		// grant at all. Fail closed rather than route the sealed bytes somewhere hopeful.
+		return Receipt{}, errNoGrantCustody
+	}
+	opened, err := r.core.installGrant(g, cursor)
+	if err != nil && opened {
+		return Receipt{}, err
+	}
+	acked := r.ack(cursor) == nil
+	return Receipt{Acked: acked}, err
+}
+
 // markStale mirrors the persisted stale flag into the live router.
 func (r *MailboxRouter) markStale(b Bucket) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.stale[b] = true
+}
+
+// StreamStale reports whether one REPAIR CHANNEL's content may not be trusted (PB-SYNC-1).
+//
+// MARKING is per BUCKET: a gap in the shared (sender, epoch) space marks BOTH journal and
+// terminal, conservatively, because the Gap bit carries no kind. A gap in the sender-zero
+// command-reply space marks only reply.
+//
+// CLEARING is per CHANNEL and only ever by that channel's own repair, committed atomically
+// with the matching transport watermark (PB-SYNC-3). A failed repair stays stale.
+//
+// It is deliberately NOT MailboxRouter.Stale's unadopted-epoch clause. That one answers "is
+// this BUCKET's content verified against an authority", which is false for every bucket of
+// an epoch with no reconcile record; this one answers "does this CHANNEL have a known hole",
+// which a phone that has simply not reconciled yet does not.
+func (r *MailboxRouter) StreamStale(stream string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.staleStr[stream]
+}
+
+// adoptStaleStreams mirrors the committed per-channel flags into the live router. The
+// durable set is authoritative: it is what the marking and the clearing were both computed
+// into, inside the one Save that carried the frame.
+func (r *MailboxRouter) adoptStaleStreams(streams map[string]bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.staleStr = maps.Clone(streams)
+	if r.staleStr == nil {
+		r.staleStr = map[string]bool{}
+	}
 }
 
 // ack releases the relay item; a router with no Core (or a Core with no Acker) manages no

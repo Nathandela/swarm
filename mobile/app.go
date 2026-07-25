@@ -39,6 +39,16 @@ const pollInterval = 500 * time.Millisecond
 // for the life of the process.
 const journalLogSize = 1024
 
+// §6.0's STATED resync bound (PB-SYNC-6): <= 1 per stream per 5 s, <= 12 per 5 min. These
+// are numbers someone chose, not emergent ones, so they are transcribed rather than derived
+// -- and they are ENFORCED here rather than documented, because the party who decides when a
+// phone wants to resync is the relay the design treats as hostile.
+const (
+	resyncMinInterval = 5 * time.Second
+	resyncWindow      = 5 * time.Minute
+	resyncPerWindow   = 12
+)
+
 var (
 	errClosed        = errors.New("swarmmobile: App is closed")
 	errNotRunning    = errors.New("swarmmobile: App is not running; call Start first")
@@ -92,8 +102,11 @@ type App struct {
 	ackSent       uint64
 	journal       []JournalEntry
 	needs         map[string]string
-	staleStrm     map[string]bool
 	inflight      map[string]bool
+	// resyncAt are the resync attempt times PER STREAM, the state §6.0's rate bound is
+	// enforced against. Per stream because a shared budget lets the two repairable channels
+	// starve each other, and one shared-bucket gap stales both at once.
+	resyncAt map[string][]time.Time
 }
 
 // session is one Start..Stop generation.
@@ -117,8 +130,8 @@ func NewApp(cfg *Config) (app *App, err error) {
 		connState:  "offline",
 		subscribed: true,
 		needs:      map[string]string{},
-		staleStrm:  map[string]bool{},
 		inflight:   map[string]bool{},
+		resyncAt:   map[string][]time.Time{},
 	}
 	core, err := phonecore.Resume(phonecore.Config{
 		Dir:     cfg.StateDir,
@@ -593,31 +606,94 @@ func (a *App) StreamState(stream string) (state string, err error) {
 	return "live", nil
 }
 
-// Resync clears a stream's stale mark and forces an immediate mailbox drain, so the
-// durable model catches up on the next contiguous frame (PB-SYNC-1/-6).
+// Resync ASKS THE MACHINE to repair a stream. It does NOT clear the stale mark: PB-SYNC-3
+// clears a channel only when that channel's own repair lands, committed atomically with the
+// matching transport watermark, so clearing on the request would turn "resync" into "forget"
+// and show the user a hole as live -- the one thing PB-APP-8 forbids.
+//
+// Only the JOURNAL has a stream-scoped repair verb, and that is the shape of the four
+// channels rather than an omission (PB-SYNC-2): the journal is repaired by an atomic
+// roster+events reseed, which is what this requests; the TERMINAL by a fresh full
+// server-rendered snapshot, which an open peek already publishes on its own and which is
+// requested per SESSION (TerminalWatch) because a grid belongs to one; a REPLY by that op's
+// durable outcome, or it stays unresolved; and the GRANT by a machine-side re-grant the
+// phone cannot ask for at all. The budget below is spent for every stream regardless, so a
+// caller cannot use the three verbless channels to evade it.
+//
+// It is RATE BOUNDED at §6.0's stated numbers. The relay is the declared adversary and it
+// controls exactly the input that triggers a resync -- it can withhold one frame whenever it
+// likes -- so an unbounded resync is an amplifier with the lever in the adversary's hand,
+// and the relay's own quota is not the backstop: mailbox_read and mailbox_ack meter against
+// the same per-source budget the repair itself has to arrive on, so a resync storm spends
+// the budget the phone needs to RECEIVE the answer.
 func (a *App) Resync(stream string) (err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
 		return err
 	}
+	switch stream {
+	case phonecore.StreamJournal, phonecore.StreamTerminal, phonecore.StreamReply, phonecore.StreamGrant:
+	default:
+		// Fail closed on a name that is not a repair channel. Admitting it would spend a
+		// budget, report success, and repair a stream that does not exist -- and a caller
+		// that mistyped one of the four would see exactly what a working resync looks like.
+		return fmt.Errorf("swarmmobile: %q is not a repair channel (%s, %s, %s, %s)", stream,
+			phonecore.StreamJournal, phonecore.StreamTerminal, phonecore.StreamReply, phonecore.StreamGrant)
+	}
+	if err = a.resyncBudget(stream, time.Now()); err != nil {
+		return err
+	}
+	if stream != phonecore.StreamJournal {
+		return nil
+	}
+	_, err = a.unsignedResync(core.Router().Sessions().Cursor())
+	return err
+}
+
+// resyncBudget admits one resync attempt for a stream under §6.0's stated bound -- <= 1 per
+// stream per 5 s and <= 12 per 5 min -- or refuses it.
+//
+// THE BUDGET IS PER STREAM, not shared. A shared one lets the two repairable channels starve
+// each other, and a single gap in the shared seq bucket stales BOTH of them at once
+// (PB-SYNC-1), so the very first thing a user would do is spend the whole budget on one of
+// the two holes they have.
+func (a *App) resyncBudget(stream string, now time.Time) error {
 	a.mu.Lock()
-	delete(a.staleStrm, stream)
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	at := a.resyncAt[stream]
+	if len(at) > 0 && now.Sub(at[len(at)-1]) < resyncMinInterval {
+		return fmt.Errorf("swarmmobile: %s was resynced less than %s ago (§6.0 bounds the resync rate at "+
+			"1 per stream per %s); the repair clears the stale mark when it lands, not when it is asked for",
+			stream, resyncMinInterval, resyncMinInterval)
+	}
+	kept := at[:0]
+	for _, t := range at {
+		if now.Sub(t) < resyncWindow {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= resyncPerWindow {
+		return fmt.Errorf("swarmmobile: %s has been resynced %d times in the last %s (§6.0's cap); "+
+			"a channel that will not repair is not repaired by asking harder",
+			stream, len(kept), resyncWindow)
+	}
+	a.resyncAt[stream] = append(kept, now)
 	return nil
 }
 
+// streamStale is the app-facing staleness of one repair channel. The per-channel flags are
+// the CORE's, and durable: a facade-local mirror would come back clear on every Android
+// process death and present a hole the phone already knows about as live.
+//
+// The unreconciled clause is separate and additive: with no authority in hand the phone
+// cannot verify any bucket of this epoch, so every channel is reported stale until a
+// reconcile record lands (PB-STATE-4).
 func (a *App) streamStale(stream string) bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.staleStrm[stream] || !a.reconciled
-}
-
-func (a *App) markStream(stream string, stale bool) {
-	a.mu.Lock()
-	if stale {
-		a.staleStrm[stream] = true
-	}
+	reconciled := a.reconciled
 	a.mu.Unlock()
+	return !reconciled || a.core.StreamStale(stream)
 }
 
 // ---- outcomes ------------------------------------------------------------------

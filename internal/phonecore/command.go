@@ -115,6 +115,29 @@ func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, 
 	return env.Marshal(), nil
 }
 
+// SealResyncEnvelope seals the journal_resync read command together with the phone's own
+// cache cursor, mirroring SealTakeControlEnvelope. The command is UNSIGNED (PB-SYNC-5's
+// decision: the gateway serves it and holds no device key), and the cursor is not part of
+// any signed tuple -- it does not need to be, since the frame is sealed under the epoch
+// content key the relay cannot forge, and a wrong cursor only changes how many events the
+// reseed carries. seq must be unique per epoch.
+func SealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64) ([]byte, error) {
+	plaintext, err := json.Marshal(schema.RemoteCommand{DeviceCommandAuth: cmd, ResyncCursor: from})
+	if err != nil {
+		return nil, err
+	}
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: issuedAt(),
+	}, plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return env.Marshal(), nil
+}
+
 // SealCommandEnvelope seals a signed command as a mailbox envelope under the epoch
 // content key (XChaCha20-Poly1305), so it can travel through the untrusted relay to the
 // machine as ciphertext. The command's device signature is verified by the daemon after

@@ -48,7 +48,12 @@ import (
 // sealed bytes AS the key and encrypt every frame under a wrong one, silently. A v2 blob is
 // refused here for the mirror reason -- its cleartext key read as a sealed blob is the same
 // confusion one direction over.
-const StateSchemaVersion = 3
+//
+// v4 adds stale_streams, the per-REPAIR-CHANNEL staleness PB-SYNC-1 splits out of the
+// per-BUCKET flags (see State.StaleStreams). The bump is what makes the downgrade fail
+// closed: a v3 build decoding a v4 blob would drop the field and report a channel it KNOWS
+// has a hole in it as live, which is the one thing PB-APP-8 forbids.
+const StateSchemaVersion = 4
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -109,6 +114,19 @@ type State struct {
 	PendingOps          []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
 	OpOutcomes          map[string]schema.Control // durable operation outcomes, keyed by operation id
 	Stale               map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	// StaleStreams are the REPAIR CHANNELS whose content may not be trusted (PB-SYNC-1).
+	// It is a second set rather than a view over Stale because marking and clearing happen
+	// at different granularities and one bit cannot carry both: a gap in the SHARED bucket
+	// conservatively stales journal AND terminal (crypto.MailboxResult carries a bare Gap
+	// bool with no frame kind, so the skipped seq cannot be attributed to either), while a
+	// reseed repairs the journal alone and a fresh grid repairs the terminal alone
+	// (PB-SYNC-2). With one flag per bucket, repairing either would present the other's
+	// hole as live.
+	//
+	// It is DURABLE because Android SIGKILLs the app as routine behaviour: a flag held only
+	// in memory comes back clear, and the phone presents a gap it already knew about as live
+	// on the very next launch.
+	StaleStreams map[string]bool
 	// PushToken is the provider push token PB-STATE-9 assigns to the WAKE tier and
 	// PB-PUSH-9 requires to survive process death and app upgrade: a token held only in
 	// memory is re-registered only if the app happens to be foregrounded.
@@ -156,6 +174,7 @@ func (s State) clone() State {
 	s.PendingOps = slices.Clone(s.PendingOps)
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
 	s.Stale = maps.Clone(s.Stale)
+	s.StaleStreams = maps.Clone(s.StaleStreams)
 	return s
 }
 
@@ -218,6 +237,8 @@ type stateFile struct {
 	PendingOps  []QueuedOp                `json:"pending_ops,omitempty"`
 	OpOutcomes  map[string]schema.Control `json:"op_outcomes,omitempty"`
 	Stale       []bucketRecord            `json:"stale,omitempty"`
+	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
+	StaleStreams []string `json:"stale_streams,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -370,6 +391,9 @@ func (s *fileStore) Save(st State) error {
 // replies back. The ops it resolves are the stated cost: PB-SYNC-2 settles an operation by its
 // durable outcome "or the stream stays unresolved", and a queued op that re-sends carries the
 // same operation id.
+// StaleStreams deliberately SURVIVES the purge. It is not decrypted content -- it is the
+// record that a channel has a hole in it -- and dropping it would make the first screen lock
+// promote every known-holed stream back to live, which is the same lie PB-APP-8 forbids.
 func dropKeyMaterial(st State) State {
 	st.Keys = crypto.EpochKeys{}
 	st.Sessions, st.Snapshots, st.OpOutcomes = nil, nil, nil
@@ -605,6 +629,12 @@ func (s *fileStore) load() error {
 			st.Stale[b] = true
 		}
 	}
+	if len(f.StaleStreams) > 0 {
+		st.StaleStreams = make(map[string]bool, len(f.StaleStreams))
+		for _, name := range f.StaleStreams {
+			st.StaleStreams[name] = true
+		}
+	}
 	s.st = st
 	return nil
 }
@@ -669,6 +699,12 @@ func persistState(path string, st State, wakeKey, contentKey []byte) error {
 		}
 		return f.Stale[i].Epoch < f.Stale[j].Epoch
 	})
+	for name, stale := range st.StaleStreams {
+		if stale {
+			f.StaleStreams = append(f.StaleStreams, name)
+		}
+	}
+	sort.Strings(f.StaleStreams)
 
 	data, err := json.Marshal(f)
 	if err != nil {

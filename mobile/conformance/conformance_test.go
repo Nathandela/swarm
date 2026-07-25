@@ -70,7 +70,7 @@ func TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend(t *testing.T) {
 	})
 
 	// -- roster + sessions_with_group.
-	h.PushRoster(schema.JournalRecord{Cursor: 1, SessionID: testSession, Type: "roster", Group: "needs_you"})
+	h.PushRoster(schema.JournalRecord{SessionID: testSession, Type: "roster", Group: "needs_you"})
 	eventually(t, "the roster never reached the phone", func() bool {
 		list, err := app.Roster()
 		if err != nil {

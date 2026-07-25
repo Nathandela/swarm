@@ -32,6 +32,13 @@ github.com/Nathandela/swarm/internal/status
 # --- crypto: sealing, Noise, epoch keys, SAS, device id
 github.com/Nathandela/swarm/internal/remote/crypto
 github.com/Nathandela/swarm/internal/remote/device
+# The WIRE half of the epoch-grant bootstrap only: the tagged plaintext frame the machine
+# appends to this phone's mailbox, and its parser (PB-KEY-10 -- without it the phone can
+# never obtain an epoch key, so nothing below this line is reachable on a real handset).
+# internal/remote/grant is deliberately NOT listed and must not be: it carries the MACHINE's
+# registry-sidecar file I/O over <stateDir>/devices/grants, which has no business on the
+# handset. grant re-exports grantwire, so the machine side keeps one import.
+github.com/Nathandela/swarm/internal/remote/grantwire
 github.com/flynn/noise
 golang.org/x/crypto/blake2b
 golang.org/x/crypto/blake2s

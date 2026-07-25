@@ -124,17 +124,27 @@ func TestPhoneCore_ReplayedOlderEnvelopeRejectedAndDoesNotMutateCache(t *testing
 func TestSessionCache_OutOfOrderCursorNotApplied(t *testing.T) {
 	cache := NewSessionCache()
 
-	// Establish m/s2 present + idle at cursor 12.
-	if applied := cache.Apply(protocol.JournalRecord{Cursor: 12, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")}); !applied {
-		t.Fatal("record at cursor 12 not applied to a fresh cache")
+	// Equal cursor is NOT stale: every record of ONE roster snapshot shares ONE cursor, and
+	// on the real wire that cursor is ZERO -- the daemon leaves it deliberately unset,
+	// because "a roster record is a set member keyed by SessionID, NOT a point in the
+	// cursor-ordered event stream" (internal/daemon/journal.go). A sibling at the cache's own
+	// cursor must still apply, or the snapshot half of R-JRN.4 drops every session after the
+	// first. Asserted BEFORE the cursor advances, since that is the only order the roster can
+	// arrive in and still be applied at all (PB-SYNC-8: after an event has moved the cursor,
+	// only a full reseed can land one).
+	if applied := cache.Apply(protocol.JournalRecord{SessionID: "m/s2", Type: "roster", Group: status.Group("idle")}); !applied {
+		t.Fatal("the first roster record was refused by a fresh cache")
 	}
-
-	// Equal cursor is NOT stale: a second session sharing the read cursor still applies.
-	if applied := cache.Apply(protocol.JournalRecord{Cursor: 12, SessionID: "m/s3", Type: "roster", Group: status.Group("working")}); !applied {
-		t.Error("equal-cursor (12) roster sibling refused; roster snapshots share one cursor and must apply")
+	if applied := cache.Apply(protocol.JournalRecord{SessionID: "m/s3", Type: "roster", Group: status.Group("working")}); !applied {
+		t.Error("equal-cursor (0) roster sibling refused; roster snapshots share one cursor and must apply")
 	}
 	if _, ok := cache.Get("m/s3"); !ok {
 		t.Error("equal-cursor roster record not applied; want present")
+	}
+
+	// Establish m/s2 present + idle at cursor 12.
+	if applied := cache.Apply(protocol.JournalRecord{Cursor: 12, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")}); !applied {
+		t.Fatal("record at cursor 12 not applied")
 	}
 
 	// Stale-cursor group_transition (11 < 12) must NOT mutate Group.

@@ -362,6 +362,43 @@ func (s *RelaySink) authorities() (protocol.ReconcileRecord, error) {
 	}, nil
 }
 
+// kindJournalReseed tags a mailbox plaintext as the atomic roster+events snapshot that
+// repairs the phone's journal channel. It MUST match phonecore's kindJournalReseed.
+const kindJournalReseed = "journal_reseed"
+
+// reseedFrame is the sealed journal-reseed plaintext: the protocol.JournalReseed fields
+// (promoted via anonymous embedding so its pinned json tags stay the single source of truth)
+// plus a kind tag. It mirrors phonecore's reseedFrame exactly.
+type reseedFrame struct {
+	Kind                   string `json:"kind"`
+	protocol.JournalReseed        // roster, events, cursor (promoted)
+}
+
+// Reseed seals ONE atomic roster+events snapshot onto the SHARED journal/terminal stream:
+// PB-SYNC-2's designated JOURNAL repair channel, answering the phone's journal_resync.
+//
+// ONE FRAME, not N roster records, and that is PB-SYNC-3's requirement rather than a
+// convenience: the repair must be committed atomically with the matching transport
+// watermark, and N independent frames cannot be -- a death between frames leaves the phone
+// with half a snapshot and a watermark claiming the whole. One frame's own arrival seq IS
+// the watermark, exactly as the reconcile record's arrival certifies its JournalCeiling.
+//
+// It carries its own CURSOR because the phone REPLACES its cache cursor with it (PB-SYNC-8).
+// The roster's own records carry Cursor 0 -- the daemon leaves it deliberately unset -- so a
+// phone that merged this into a live cache would discard every one of them and the repair
+// would be a silent no-op.
+//
+// It is deliberately NOT outbox-keyed: like the reconnect roster it is CURRENT STATE re-sent
+// on demand, not a journal record whose delivery must happen exactly once.
+func (s *RelaySink) Reseed(rs protocol.JournalReseed) error {
+	plaintext, err := json.Marshal(reseedFrame{Kind: kindJournalReseed, JournalReseed: rs})
+	if err != nil {
+		s.setErr(err)
+		return err
+	}
+	return s.seal(plaintext)
+}
+
 // forward marshals rec as a bare journal record (no kind tag, backward-compatible with the
 // phone's journal path) and seals it into the phone's mailbox. The seal/append error is
 // returned (authoritative for the gateway's cursor gating) and also stashed for Err().

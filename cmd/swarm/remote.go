@@ -35,6 +35,7 @@ const remoteUsage = `usage: swarm remote <command>
   swarm remote init      provision this machine's pairing identity
   swarm remote devices   list paired devices
   swarm remote revoke    revoke a paired device
+  swarm remote regrant   re-issue a paired device's epoch grant
   swarm remote pair      pair a new device
   swarm remote off       disable remote control
   swarm remote on        enable remote control
@@ -57,6 +58,8 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 		return runRemoteDevices(args[1:], stdout, stderr)
 	case "revoke":
 		return runRemoteRevoke(args[1:], stdout, stderr)
+	case "regrant":
+		return runRemoteRegrant(args[1:], stdout, stderr)
 	case "pair":
 		return runRemotePair(args[1:], os.Stdin, stdout, stderr)
 	case "off":
@@ -501,6 +504,73 @@ func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	stopGatewayIfQuiescent(stderr)
 	return 0
+}
+
+// remoteRegrantUsage is `swarm remote regrant`'s usage message.
+const remoteRegrantUsage = `usage: swarm remote regrant <device-id>
+`
+
+// runRemoteRegrant is the `swarm remote regrant` verb: PB-KEY-3's documented machine-side
+// unblock, and the ONLY exit from a lost epoch grant.
+//
+// It exists because the two obvious remedies are both closed. The relay purges mailbox
+// items past its retention cap even when never acked, so a bootstrap grant the phone missed
+// is gone for good; and re-pairing is refused outright while a device is registered
+// (BeginPairing fail-fasts on a non-empty registry), so the owner cannot simply start over.
+// The same verb converges a device that slept through an epoch rotation (PB-KEY-4).
+//
+// IT BOUNCES THE GATEWAY, and that is not tidiness. The gateway loads the device's grant
+// sidecar ONCE, at assembly, and appends it once per session; a running gateway therefore
+// keeps delivering the grant that was already lost, and after a rotation it is still sealing
+// every frame under an epoch key the phone cannot open. Without the bounce the regrant
+// writes a correct sidecar that nothing ever delivers -- a repair that reports success and
+// changes nothing on the handset.
+func runRemoteRegrant(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprint(stderr, remoteRegrantUsage)
+		return 2
+	}
+	deviceID := args[0]
+
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote regrant: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	if err := client.RegrantDevice(deviceID); err != nil {
+		fmt.Fprintf(stderr, "remote regrant: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "re-granted device %s\n", deviceID)
+	restartGatewayForDelivery(stderr)
+	return 0
+}
+
+// restartGatewayForDelivery stops and re-ensures the gateway unit so it re-reads the grant
+// sidecar and delivers the fresh bootstrap frame. Supervisor.Ensure is documented as "never
+// a restart", so the stop is what makes this one. A machine with no unit installed is not an
+// error -- the owner runs the gateway some other way and restarts it themselves -- but it IS
+// reported, because a regrant nothing delivers is indistinguishable from no regrant at all.
+func restartGatewayForDelivery(stderr io.Writer) {
+	stateDir := os.Getenv(daemon.EnvStateDir)
+	if stateDir == "" {
+		var err error
+		if stateDir, err = persist.DefaultDir(); err != nil {
+			return
+		}
+	}
+	sup, err := newGatewaySupervisor(stateDir)
+	if err == nil {
+		if err = sup.Stop(); err == nil {
+			err = sup.Ensure()
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "remote regrant: the grant was re-issued, but its gateway was not "+
+			"restarted, so nothing will deliver it: %v\n", err)
+	}
 }
 
 // runRemotePair is the `swarm remote pair` verb: it runs the OWNER side of pairing — the

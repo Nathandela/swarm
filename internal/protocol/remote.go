@@ -52,9 +52,14 @@ const (
 	ActionTerminalWatch   = schema.ActionTerminalWatch
 	ActionTerminalUnwatch = schema.ActionTerminalUnwatch
 	ActionPushPrefs       = schema.ActionPushPrefs
+	ActionJournalResync   = schema.ActionJournalResync
 
 	LaunchSessionSentinel = schema.LaunchSessionSentinel
 )
+
+// JournalReseed is the machine->phone journal repair frame (PB-SYNC-2 / PB-SYNC-8), aliased
+// from the daemon-free wire package so the phone's bound closure never reaches this one.
+type JournalReseed = schema.JournalReseed
 
 // JournalResume is journal_read's snapshot+range result (atomic per R-JRN.4).
 type JournalResume struct {

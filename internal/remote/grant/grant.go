@@ -9,11 +9,11 @@
 // gateway -- the process already holding an authenticated relay client for the device --
 // appends it to the device mailbox as a tagged plaintext BOOTSTRAP frame.
 //
-// The bootstrap frame is DISTINCT from phonecore's ContentKey-sealed router "epoch_grant"
-// rotation frame: this frame is recipient-sealed (NOT ContentKey-sealed) because it is
-// what DELIVERS the ContentKey -- a chicken-and-egg the router cannot resolve. The phone
-// scans its mailbox for this tag, opens the grant with AcceptGrant BEFORE it builds the
-// ContentKey-keyed router, and dedups by grant seq (delivery is at-least-once).
+// THE WIRE HALF LIVES IN internal/remote/grantwire and is re-exported below. The split is
+// PB-BIND-0's: the phone must be able to READ a bootstrap frame, and phonecore's bound
+// dependency closure is an allowlist of code shipped to a handset an adversary may hold --
+// so the frame's parser is allowlisted and this file's registry-sidecar I/O is not. Machine
+// -side callers import this package alone and see no difference.
 package grant
 
 import (
@@ -23,40 +23,29 @@ import (
 	"path/filepath"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/grantwire"
 )
 
-// BootstrapKind tags the plaintext mailbox bootstrap frame so the phone finds it among
-// mailbox items WITHOUT a ContentKey. The phone matches on this exact value.
-const BootstrapKind = "epoch_grant_bootstrap"
+// The bootstrap wire frame, re-exported from internal/remote/grantwire so the machine side
+// keeps one import. The frame is DISTINCT from phonecore's ContentKey-sealed router
+// "epoch_grant" rotation frame: it is recipient-sealed, because it is what DELIVERS the
+// ContentKey -- a chicken-and-egg the router cannot resolve.
+const BootstrapKind = grantwire.BootstrapKind
+
+// Bootstrap is the tagged plaintext frame the gateway appends to the device mailbox.
+type Bootstrap = grantwire.Bootstrap
+
+// MarshalBootstrap wraps a sealed grant in the tagged bootstrap frame the gateway
+// appends raw (NOT ContentKey-sealed) to the device mailbox.
+func MarshalBootstrap(g *crypto.EpochGrant) ([]byte, error) { return grantwire.MarshalBootstrap(g) }
+
+// ParseBootstrap decodes a mailbox item as a bootstrap frame, returning ok=false when
+// the item is not a well-formed bootstrap frame.
+func ParseBootstrap(env []byte) (*crypto.EpochGrant, bool) { return grantwire.ParseBootstrap(env) }
 
 // grantsSubdir is the sidecar directory under the device registry dir; one file per
 // device id keeps the frozen device.Record untouched.
 const grantsSubdir = "grants"
-
-// Bootstrap is the tagged plaintext frame the gateway appends to the device mailbox. It
-// carries the recipient-sealed, machine-signed grant (opaque to the relay); the phone
-// opens Grant with its recipient private key to derive the epoch keys.
-type Bootstrap struct {
-	Kind  string             `json:"kind"`  // always BootstrapKind
-	Grant *crypto.EpochGrant `json:"grant"` // recipient-sealed, machine-signed
-}
-
-// MarshalBootstrap wraps a sealed grant in the tagged bootstrap frame the gateway
-// appends raw (NOT ContentKey-sealed) to the device mailbox.
-func MarshalBootstrap(g *crypto.EpochGrant) ([]byte, error) {
-	return json.Marshal(Bootstrap{Kind: BootstrapKind, Grant: g})
-}
-
-// ParseBootstrap decodes a mailbox item as a bootstrap frame, returning ok=false when
-// the item is not a well-formed bootstrap frame (so a phone skips ContentKey-sealed
-// items while scanning for its bootstrap).
-func ParseBootstrap(env []byte) (*crypto.EpochGrant, bool) {
-	var b Bootstrap
-	if err := json.Unmarshal(env, &b); err != nil || b.Kind != BootstrapKind || b.Grant == nil {
-		return nil, false
-	}
-	return b.Grant, true
-}
 
 // Path is the sidecar file for deviceID: <registryDir>/grants/<deviceID>.json, next to
 // the device registry (registryDir is <stateDir>/devices). deviceID is the canonical

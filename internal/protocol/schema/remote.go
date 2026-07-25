@@ -58,6 +58,23 @@ const (
 	ActionTerminalWatch   = "terminal_watch"
 	ActionTerminalUnwatch = "terminal_unwatch"
 
+	// ActionJournalResync asks the gateway to republish an atomic roster+events snapshot
+	// so the phone can repair a stale journal channel (PB-SYNC-2). Like the two reads
+	// above and UNLIKE ActionPushPrefs it is UNSIGNED and is NOT forwarded to the daemon's
+	// device authenticator, and that is PB-SYNC-5's decision rather than an omission.
+	//
+	// A device-SIGNED resync walks into a trap the spec names: actionClass
+	// (internal/skeleton/deviceauth.go) is a CLOSED switch that fails closed on an
+	// unmapped action, the only fitting existing class is ActionControl -- which would make
+	// a READ REPAIR require the control tier -- and device capability is pinned at
+	// enrollment and never read from the wire, so an observe-tier device could never
+	// resync its own view at all. Sealing under the epoch content key is already proof the
+	// asker is the paired device; the gate that matters is the DAEMON's, which serves
+	// journal_read on the negotiated `journal` capability plus the kill switch
+	// (PB-SYNC-4). This constant therefore has NO actionClass mapping, exactly as
+	// terminal_watch and terminal_unwatch have none.
+	ActionJournalResync = "journal_resync"
+
 	// ActionPushPrefs sets the machine-side push preference for the signing device
 	// (PB-PUSH-8): which categories of transition may wake it. Unlike the reads above it
 	// IS signed and IS forwarded to the daemon's device authenticator -- the gateway holds
@@ -132,4 +149,15 @@ type RemoteCommand struct {
 	Launch     *LaunchReq `json:"launch,omitempty"`
 	GateToken  string     `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
 	TTLSeconds int        `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
+	// ResyncCursor is journal_resync's from-cursor: the boundary the phone's session cache
+	// currently stands at. The gateway's journal_read(from) answers with the complete roster
+	// as-of a new boundary plus the events in between, which is exactly JournalReseed's
+	// {Roster, Events, Cursor} -- so without it the gateway must read from 0 and re-send
+	// every event the machine has ever journalled to repair one hole.
+	//
+	// Not signed, like TTLSeconds, and it does not need to be: the frame is sealed under the
+	// epoch content key, which the relay cannot forge, and the worst a wrong value can do is
+	// make the reseed carry more or fewer events than needed -- the roster it replaces the
+	// cache with is complete either way.
+	ResyncCursor uint64 `json:"resync_cursor,omitempty"`
 }

@@ -97,6 +97,7 @@ func fullState() State {
 		PendingOps:          []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
 		OpOutcomes:          map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
 		Stale:               map[Bucket]bool{replyBucket(7): true},
+		StaleStreams:        map[string]bool{StreamJournal: true},
 	}
 }
 

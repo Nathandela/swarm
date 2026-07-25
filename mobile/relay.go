@@ -215,10 +215,18 @@ func (a *App) drain(ctx context.Context, cl *relay.Client) {
 
 // accept runs the core's durable receive transaction for one envelope, then -- only for a
 // frame the core ACCEPTED -- builds the app-facing read models and events from it.
+//
+// IT NO LONGER ATTRIBUTES THE GAP, and that is PB-SYNC-1. This used to mark the stream of
+// the frame it happened to be holding -- a hole seen while decoding a terminal snapshot
+// staled "terminal" -- but journal and terminal share ONE (sender, epoch) seq space and
+// crypto.MailboxResult carries a bare Gap bool with no frame kind, so the skipped seq may
+// just as well have been the journal record saying a session exited. The conservative
+// per-bucket mark and the per-channel clear both live in the core now, inside the same
+// durable transaction that moves the watermark (PB-SYNC-3), and StreamState reads them from
+// there.
 func (a *App) accept(raw []byte, cursor uint64) {
 	key := a.core.State().Keys.ContentKey
-	receipt, err := a.core.Router().AcceptCommit(raw, cursor)
-	if err != nil {
+	if _, err := a.core.Router().AcceptCommit(raw, cursor); err != nil {
 		return
 	}
 	v, ok := viewFrame(key, raw)
@@ -227,15 +235,18 @@ func (a *App) accept(raw []byte, cursor uint64) {
 	}
 	switch v.Kind {
 	case "terminal_snapshot":
-		a.markStream("terminal", receipt.Gap)
 		a.events.emit(&Event{Kind: "terminal", Stream: "terminal", SessionID: v.Terminal.Session})
 	case "command_reply":
-		a.markStream("reply", receipt.Gap)
 		a.onReply(v.Reply)
 	case "reconcile":
 		a.adoptReconcile()
+	case "journal_reseed":
+		// The repair landed and the core has already replaced the session model with it. The
+		// facade's own journal PAGE is deliberately not rewritten: it is a log of events, and
+		// a reseed is a set, so folding one in would invent entries the machine never
+		// journalled. The event tells a screen to re-read the roster.
+		a.events.emit(&Event{Kind: "journal", Stream: "journal", State: "resynced"})
 	case "":
-		a.markStream("journal", receipt.Gap)
 		a.onJournal(v.Record)
 	}
 }

@@ -13,6 +13,7 @@ package remotegw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -44,6 +45,55 @@ type machineNamer interface {
 // requires the gateway's sink to accept snapshots.
 type TerminalSink interface {
 	Terminal(session string, lines []string, cols, rows int) error
+}
+
+// ReseedSink receives PB-SYNC-2's journal repair frame. RelaySink implements it alongside
+// JournalSink, and both wrappers in the chain (CoalescingSink, PushNotifier) forward it --
+// a wrapper that swallowed it would leave every resync answered and delivering nothing.
+type ReseedSink interface {
+	Reseed(rs protocol.JournalReseed) error
+}
+
+// errNoReseedSink refuses a resync whose sink cannot publish the repair, rather than
+// reporting a repair that never left the machine. The phone's stale flag clears only on the
+// frame's arrival, so a silent nil here would leave it stale with nothing to say why.
+var errNoReseedSink = errors.New("remotegw: this sink cannot publish a journal reseed")
+
+// Resync answers the phone's journal_resync (PB-SYNC-2): read the daemon's atomic roster +
+// the events after the phone's own cursor, and publish them as ONE reseed frame.
+//
+// It opens its OWN daemon connection rather than borrowing RunJournal's. RunJournal's conn
+// is inside a blocking read loop that owns its control stream, so interleaving a second
+// journal_read on it would race the subscription's events for the reply; and a resync must
+// work while the journal loop is between reconnects, which is exactly when the phone is
+// most likely to have a hole.
+//
+// from is the phone's cursor, so res.Roster/res.Events/res.Cursor map onto the reseed's
+// three fields directly. The roster is namespaced with the daemon's endpoint id like every
+// other record the phone sees, or the repaired session ids do not match the ids it signs
+// commands against.
+func (g *Gateway) Resync(ctx context.Context, from uint64) error {
+	sink, ok := g.sink.(ReseedSink)
+	if !ok {
+		return errNoReseedSink
+	}
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
+	if err != nil {
+		return err
+	}
+	defer dc.Close()
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalRead, EndpointID: dc.endpointID, Cursor: from}); err != nil {
+		return err
+	}
+	res, err := dc.awaitOp(protocol.OpJournalRead, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	return sink.Reseed(protocol.JournalReseed{
+		Roster: namespaceRoster(dc.endpointID, res.Roster),
+		Events: namespaceRoster(dc.endpointID, res.Journal),
+		Cursor: res.Cursor,
+	})
 }
 
 // Gateway bridges one daemon's remote socket toward the phone. It holds the last

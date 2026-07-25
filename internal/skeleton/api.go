@@ -17,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
@@ -304,9 +305,99 @@ func (a *coreAPI) rotateEpoch() error {
 	return nil
 }
 
+// errNoRegistry refuses a re-grant on a daemon assembled without a device registry: there
+// is no record to converge and no device to seal to.
+var errNoRegistry = errors.New("skeleton: no device registry; nothing to re-grant")
+
+// RegrantDevice is PB-KEY-3's machine-side unblock and PB-KEY-4's convergence, which are
+// the same act: mint a FRESH sealed EpochGrant for a still-registered device under the
+// CURRENT machine epoch, persist it as that device's sidecar, and update the device
+// record's GrantedEpoch to match.
+//
+// It is the exit from PB-KEY-3's terminal state, and today there is no other. A grant can
+// be lost with no recovery: the relay refuses appends past the mailbox depth cap and
+// SweepRetention purges items older than RetentionCap (7 days) even when never acked, and
+// re-pairing is refused outright because BeginPairing fail-fasts while a device is
+// registered. Without this verb a phone that never received its grant -- or slept through a
+// rotation -- is recoverable only by physical access to the machine.
+//
+// THE GrantedEpoch UPDATE IS NOT BOOKKEEPING. reconcilePairedDevices removes any device
+// whose GrantedEpoch != the current machine epoch on EVERY daemon start (serve.go), so a
+// re-grant that leaves the record on the old epoch does not merely fail to converge -- it
+// SILENTLY UNPAIRS the only device on the next restart, and the owner discovers it when
+// their phone stops working for no visible reason.
+//
+// ORDER, and it is fail-closed at each step. The seq allocation is made DURABLE (id.Save)
+// before the grant is sealed, so a crash can only ever SKIP a coordinate, never re-issue
+// one -- a re-issued (epoch, seq) is refused by the phone as a replay, which is the one
+// outcome that leaves the device exactly as broken as it was. The sidecar lands before the
+// record moves, because the gateway delivers by loading that file: a record on the new
+// epoch with no sidecar for it is the "not fully paired" state reconcilePairedDevices
+// clears by REMOVING the device.
+//
+// It runs under lifecycleMu, the outermost lock, so it is atomic against a concurrent
+// revoke (which rotates the epoch and removes the device) and against a BeginPairing commit.
+func (a *coreAPI) RegrantDevice(deviceID string) error {
+	if a.devices == nil {
+		return errNoRegistry
+	}
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+
+	// Fail closed on an unknown id. Minting a sidecar for a device the registry does not
+	// hold would write a deliverable key nothing ever cleans up: the startup reconcile walks
+	// the REGISTRY, not the sidecar directory.
+	rec, ok := a.devices.Get(deviceID)
+	if !ok {
+		return fmt.Errorf("skeleton: no such device %q; nothing to re-grant", deviceID)
+	}
+	path := filepath.Join(a.stateDir, "remote", remoteIdentityFile)
+	id, err := machineid.Load(path)
+	if err != nil {
+		return fmt.Errorf("load machine identity: %w", err)
+	}
+	// The floor is the coordinate this device has already been handed. It matters when the
+	// epoch has NOT moved: a re-grant of a lost bootstrap reuses the live epoch, so only the
+	// seq can carry the strict increase the phone's grant receiver demands.
+	floor := uint64(0)
+	if prev, lerr := grant.Load(a.registryDir(), deviceID); lerr == nil && prev != nil && prev.EpochID == id.EpochID() {
+		floor = prev.GrantSeq
+	}
+	seq := id.NextGrantSeq(floor)
+	if err := id.Save(path); err != nil {
+		return fmt.Errorf("persist grant seq: %w", err)
+	}
+	g, err := crypto.SealEpochGrant(id.GrantSignPrivate(), rec.RecipientPub, id.EpochID(), seq, id.EpochKeys())
+	if err != nil {
+		return fmt.Errorf("seal epoch grant: %w", err)
+	}
+	if err := grant.Save(a.registryDir(), deviceID, g); err != nil {
+		return fmt.Errorf("persist epoch grant: %w", err)
+	}
+	rec.GrantedEpoch = id.EpochID()
+	if err := a.devices.Add(rec); err != nil {
+		return fmt.Errorf("converge device record onto epoch %d: %w", id.EpochID(), err)
+	}
+	// The in-memory pairing snapshot carries the grant seq the NEXT BeginPairing would seal
+	// under, so it must not keep naming one this re-grant has just consumed (the same reload
+	// rotateEpoch does for the same reason).
+	pc, err := loadPairingConfig(a.stateDir)
+	if err != nil {
+		return err
+	}
+	a.pairingMu.Lock()
+	a.pairing = pc
+	a.pairingMu.Unlock()
+	return nil
+}
+
 // coreAPI ALSO satisfies protocol.DeviceRevoker so the assembled remote-tier Server
-// can serve device_revoke (slice A3.2).
-var _ protocol.DeviceRevoker = (*coreAPI)(nil)
+// can serve device_revoke (slice A3.2), and protocol.DeviceRegranter so the OWNER-tier
+// Server can serve device_regrant (PB-KEY-3's unblock).
+var (
+	_ protocol.DeviceRevoker   = (*coreAPI)(nil)
+	_ protocol.DeviceRegranter = (*coreAPI)(nil)
+)
 
 // DeviceRegistered makes coreAPI a protocol.DeviceRegistrar (C1): it reports whether deviceID
 // is still present in the pinned device registry, so the daemon's controlGateOpen severs a

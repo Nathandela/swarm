@@ -167,6 +167,19 @@ func (c *Client) RevokeDevice(targetID string) error {
 	return nil
 }
 
+// RegrantDevice mints a fresh sealed epoch grant for targetID and converges its registry
+// record onto the current machine epoch (PB-KEY-3 / PB-KEY-4). Owner-tier only.
+func (c *Client) RegrantDevice(targetID string) error {
+	resp, err := c.request(Control{Op: OpDeviceRegrant, EndpointID: c.endpointID, TargetDeviceID: targetID})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // SetRemoteControl durably flips the remote-control master override (A4, `swarm remote
 // off`/`on`): enabled=false disables remote control regardless of paired devices,
 // enabled=true returns to the device-derived value. Owner-tier only — the daemon refuses

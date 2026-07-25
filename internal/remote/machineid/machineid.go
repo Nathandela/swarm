@@ -168,6 +168,26 @@ func (id *Identity) EpochID() uint32 { return id.epochID }
 // GrantSeq returns the current grant sequence.
 func (id *Identity) GrantSeq() uint64 { return id.grantSeq }
 
+// NextGrantSeq allocates the NEXT grant sequence under the current epoch and returns it;
+// the caller Saves the identity to make the allocation durable. It exists for the RE-GRANT
+// (PB-KEY-3 / PB-KEY-4), which mints a second grant for a device already holding one.
+//
+// A re-grant that reused the previous coordinates would be refused by the phone as a
+// replay: crypto.GrantReceiver.Accept enforces strict (epoch_id, grant_seq) monotonicity
+// and the phone seeds it from durable state, so the documented machine-side unblock would
+// silently fail to unblock. floor is the seq the device's existing sidecar already carries
+// (0 when it has none or when the epoch has moved on since); the returned seq strictly
+// exceeds both it and the counter, so the identity can never hand out a coordinate a device
+// has already seen. The fields are unexported with no setters, so this MUST be an
+// in-package method (as RotateEpoch's doc records).
+func (id *Identity) NextGrantSeq(floor uint64) uint64 {
+	if floor > id.grantSeq {
+		id.grantSeq = floor
+	}
+	id.grantSeq++
+	return id.grantSeq
+}
+
 // Hostname returns the machine's hostname.
 func (id *Identity) Hostname() string { return id.hostname }
 

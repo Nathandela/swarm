@@ -185,6 +185,17 @@ func (n *PushNotifier) SetMachine(machine string) {
 	}
 }
 
+// Reseed forwards the journal repair frame down to the sealing sink. A no-op here would
+// leave every stale phone with a resync that reaches the machine, is answered, and delivers
+// nothing -- the flag then never clears and the roster stays a hole presented as live.
+// It raises no push: the phone asked for this frame and is awake waiting for it.
+func (n *PushNotifier) Reseed(rs protocol.JournalReseed) error {
+	if rr, ok := n.inner.(ReseedSink); ok {
+		return rr.Reseed(rs)
+	}
+	return errNoReseedSink
+}
+
 // DeliveredCursor forwards the inner sink's durable PB-GW-8 resume point.
 func (n *PushNotifier) DeliveredCursor() uint64 {
 	if cs, ok := n.inner.(CursorSource); ok {

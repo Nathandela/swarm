@@ -89,6 +89,18 @@ func (c *CoalescingSink) SetMachine(machine string) {
 	}
 }
 
+// Reseed forwards the journal repair frame straight through, UNCOALESCED. Coalescing is
+// latest-wins per session and exists for the peek's ~62 snapshots/s; a reseed is a
+// one-per-request whole-roster repair the phone is blocked on, and holding it would be
+// holding the only thing that clears a stale channel. Its own rate bound is the phone's
+// (§6.0: <= 1 per stream per 5 s), enforced before the frame is ever authored.
+func (c *CoalescingSink) Reseed(rs protocol.JournalReseed) error {
+	if rr, ok := c.inner.(ReseedSink); ok {
+		return rr.Reseed(rs)
+	}
+	return errNoReseedSink
+}
+
 // Snapshot forwards the reconnect roster immediately, consuming the shared slot.
 func (c *CoalescingSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	c.mu.Lock()

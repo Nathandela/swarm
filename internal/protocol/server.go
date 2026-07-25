@@ -988,6 +988,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handlePolicyQuery()
 	case OpDeviceRevoke:
 		cc.handleDeviceRevoke(c)
+	case OpDeviceRegrant:
+		cc.handleDeviceRegrant(c)
 	case OpRemoteSetControl:
 		cc.handleRemoteSetControl(c)
 	case OpTakeControl:
@@ -1252,6 +1254,40 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 	// (err==nil) revoke -- whether it removed a device or was an idempotent no-op -- replies OK.
 	if err != nil {
 		cc.replyError("device_revoke: " + err.Error())
+		return
+	}
+	cc.replyOK(c.TargetDeviceID)
+}
+
+// handleDeviceRegrant serves the OWNER-TIER device_regrant op (PB-KEY-3's documented
+// machine-side unblock). Gate order mirrors handleRemoteSetControl: owner tier, then the
+// negotiated `pairing` cap, then the backend seam.
+//
+// It is deliberately NOT behind requireRemoteAuthz like device_revoke. That gate demands a
+// device signature over the command tuple, and the party who needs a regrant is a phone
+// that cannot author a sealed command at all -- it holds no epoch content key, which is the
+// whole condition being repaired. Making the remedy require what is broken is the brick
+// PB-STATE-10 forbids, so the remedy is the OWNER's, at the machine.
+func (cc *clientConn) handleDeviceRegrant(c Control) {
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("device_regrant is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	rg, ok := cc.srv.d.(DeviceRegranter)
+	if !ok {
+		cc.replyError("device_regrant not supported by this daemon")
+		return
+	}
+	if c.TargetDeviceID == "" {
+		cc.replyErrorCode("device_regrant requires target_device_id", CodeInvalidField)
+		return
+	}
+	if err := rg.RegrantDevice(c.TargetDeviceID); err != nil {
+		cc.replyError("device_regrant: " + err.Error())
 		return
 	}
 	cc.replyOK(c.TargetDeviceID)

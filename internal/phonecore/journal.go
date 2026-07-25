@@ -110,6 +110,12 @@ func NewSessionCache() *SessionCache {
 func (c *SessionCache) Apply(rec schema.JournalRecord) (applied bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.applyLocked(rec)
+}
+
+// applyLocked is Apply inside the critical section, so a caller already holding the lock
+// (reseed) folds records through exactly the same rules.
+func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	if rec.Cursor < c.cursor {
 		return false
 	}
@@ -133,6 +139,35 @@ func (c *SessionCache) Apply(rec schema.JournalRecord) (applied bool) {
 	}
 	c.sessions[rec.SessionID] = cs
 	return true
+}
+
+// reseed REPLACES the whole cached set and the cursor from an atomic roster+events snapshot
+// (PB-SYNC-2 / PB-SYNC-8). It is not a merge, and it must not be:
+//
+//   - the ROSTER carries Cursor 0 on every record, deliberately (internal/daemon/journal.go:
+//     "a roster record is a set member keyed by SessionID, NOT a point in the cursor-ordered
+//     event stream"), so merging it into a cache whose cursor has advanced past zero drops
+//     every record and the designated repair channel reports success while changing nothing;
+//   - a session ABSENT from the roster ended while the phone was not listening, so carrying
+//     it across leaves a dead session on the screen with a live-looking group -- the same lie
+//     the stale flag exists to prevent.
+//
+// The events are applied ON TOP of the roster, which is what makes it the ATOMIC
+// roster+events snapshot rather than a roster that is already out of date when it lands. The
+// cursor is then set to the snapshot BOUNDARY: it REPLACES, never merges and never maxes,
+// because the boundary is what the roster is current as of.
+func (c *SessionCache) reseed(rs schema.JournalReseed) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessions = make(map[string]CachedSession, len(rs.Roster))
+	c.cursor = 0
+	for _, rec := range rs.Roster {
+		c.applyLocked(rec)
+	}
+	for _, rec := range rs.Events {
+		c.applyLocked(rec)
+	}
+	c.cursor = rs.Cursor
 }
 
 // restore seeds one cached session from durable state, bypassing the cursor guard (the

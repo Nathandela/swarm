@@ -574,9 +574,27 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, laun
 	return &Op{Action: action, SessionID: session, OperationID: id}, nil
 }
 
+// unsignedResync seals the journal repair request (PB-SYNC-2). It is a READ, unsigned like
+// the two watches -- PB-SYNC-5's decision, and the gateway that performs the journal_read
+// holds no device key with which to satisfy a signature gate anyway.
+//
+// It carries the phone's own cache cursor so the machine's journal_read answers with the
+// events after it rather than every event ever journalled: JournalResume's
+// {Roster, Events, Cursor} is exactly the reseed's three fields.
+func (a *App) unsignedResync(from uint64) (*Op, error) {
+	return a.unsignedCommandAt(schema.ActionJournalResync, "", from)
+}
+
 // unsignedCommand seals a READ command (terminal_watch / terminal_unwatch): the action and
 // its target only, with no device signature, because the gateway serves it itself.
 func (a *App) unsignedCommand(action, session string) (*Op, error) {
+	return a.unsignedCommandAt(action, session, 0)
+}
+
+// unsignedCommandAt is unsignedCommand with journal_resync's from-cursor. It is one function
+// because every unsigned read draws from the SAME Sequencer and must take the same bucket
+// lock; a second copy of this body is a second place for that rule to be forgotten.
+func (a *App) unsignedCommandAt(action, session string, resyncCursor uint64) (*Op, error) {
 	core, err := a.ready()
 	if err != nil {
 		return nil, err
@@ -594,11 +612,13 @@ func (a *App) unsignedCommand(action, session string) (*Op, error) {
 	if err != nil {
 		return nil, err
 	}
-	env, err := phonecore.SealCommandEnvelope(sc.key, sc.epoch, seq, schema.DeviceCommandAuth{
-		Action:  action,
-		Machine: core.State().Machine,
-		Session: session,
-	})
+	auth := schema.DeviceCommandAuth{Action: action, Machine: core.State().Machine, Session: session}
+	var env []byte
+	if action == schema.ActionJournalResync {
+		env, err = phonecore.SealResyncEnvelope(sc.key, sc.epoch, seq, auth, resyncCursor)
+	} else {
+		env, err = phonecore.SealCommandEnvelope(sc.key, sc.epoch, seq, auth)
+	}
 	if err != nil {
 		return nil, err
 	}

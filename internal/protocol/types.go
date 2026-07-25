@@ -56,6 +56,16 @@ const (
 	// paired device from the daemon's device registry.
 	OpDeviceRevoke = "device_revoke"
 
+	// OpDeviceRegrant is PB-KEY-3's OWNER-TIER machine-side unblock behind
+	// `swarm remote regrant`: mint a fresh sealed epoch grant for a still-registered
+	// device and converge its record onto the current machine epoch.
+	//
+	// Owner-only, and not because of tiering taste. A device whose grant was lost holds no
+	// epoch CONTENT key, so it cannot seal a command for the gateway at all -- a remote-tier
+	// regrant verb would be unusable by exactly the device that needs it, while handing any
+	// remote caller a way to make the machine re-issue key material.
+	OpDeviceRegrant = "device_regrant"
+
 	// OpRemoteSetControl is the OWNER-TIER op behind `swarm remote off`/`on` (A4): it
 	// durably flips the manual remote-control master override the daemon reads at its
 	// kill-switch choke points. Owner-only (refused not_authorized on the remote tier,

@@ -91,7 +91,7 @@ func TestPBBIND5_APanickingListenerDoesNotKillTheCore(t *testing.T) {
 		t.Fatalf("SetEventListener: %v", err)
 	}
 	h.PushReconcile()
-	h.PushRoster(schema.JournalRecord{Cursor: 1, SessionID: testSession, Type: "roster", Group: "working"})
+	h.PushRoster(schema.JournalRecord{SessionID: testSession, Type: "roster", Group: "working"})
 
 	eventually(t, "the core stopped making progress after a listener panicked", func() bool {
 		list, err := h.App.Roster()
@@ -500,7 +500,12 @@ func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T)
 		snap, err := h.App.Peek(testSession)
 		return err == nil && strings.Contains(snap.Text, "SECRET")
 	})
-	h.PushRoster(schema.JournalRecord{Cursor: 1, SessionID: testSession, Type: "roster", Group: "working"})
+	// An EVENT, not a roster record. The record has to be pageable by ReadJournal below, and
+	// a roster record is not: the daemon leaves its Cursor deliberately unset (0), while
+	// ReadJournal(0, ...) serves entries strictly AFTER cursor 0 -- so on the real wire a
+	// roster record populates the roster and never the paged journal log. Stamping one with
+	// an invented cursor is what used to make this read.
+	h.PushEvent(schema.JournalRecord{Cursor: 1, SessionID: testSession, Type: "launched", Group: "working"})
 	eventually(t, "the roster never arrived", func() bool {
 		list, err := h.App.Roster()
 		if err != nil {

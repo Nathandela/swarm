@@ -26,6 +26,19 @@ type DeviceRevoker interface {
 	RevokeDevice(deviceID string) (bool, error)
 }
 
+// DeviceRegranter is the optional interface a DaemonAPI implements to expose
+// device_regrant (PB-KEY-3 / PB-KEY-4, backed by skeleton.coreAPI.RegrantDevice in
+// production): mint a fresh sealed grant for a still-registered device under the CURRENT
+// machine epoch and converge its record onto it.
+//
+// It is the ONLY exit from a lost grant. The relay purges mailbox items past its retention
+// cap even when never acked, and re-pairing is refused outright while a device is
+// registered, so without this a phone that never received its grant -- or slept through a
+// rotation -- is recoverable only by physical access to the machine.
+type DeviceRegranter interface {
+	RegrantDevice(deviceID string) error
+}
+
 // DeviceRegistrar is the optional interface a DaemonAPI implements to report whether a
 // device is still registered (present in the pinned device registry, backed by
 // device.Registry.Get in production). controlGateOpen re-checks it on EVERY remote
