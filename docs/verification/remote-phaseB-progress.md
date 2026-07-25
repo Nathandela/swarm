@@ -210,6 +210,26 @@ Two more properties from the same author, both load-bearing:
   displays a SAS. A driver built on "wait for the SAS" would report the refusal as "the phone never
   derived a SAS" — the exact misreporting shape of the latent pairing race recorded above.
 
+## KOTLIN COMPILES THE WHOLE TEST SOURCE SET, SO ONE SLICE'S RED BLOCKS EVERY OTHER SLICE'S TESTS
+
+Found during S16. `:app:testDebugUnitTest` cannot run while **any** test file in the module fails to
+compile, because Kotlin compiles the entire test source set as a unit. So three unimplemented RED
+files in `keys/`, `push/` and `theme/` blocked all 52 finished tests in `ui/` — a different package,
+fully green, with zero errors of its own.
+
+This is not the Go behaviour and it changes how Android slices can be sequenced. It means:
+
+- **The Kotlin halves of S16 and S17 cannot be verified independently**, on top of the two-way
+  coupling already recorded below. A Kotlin RED authored by one slice blocks the other's GREEN from
+  being demonstrated at all.
+- **A green Gradle run is not available as a per-slice signal** while any sibling RED is outstanding,
+  so "the module's tests pass" is a statement about the last slice to land, not about each one.
+
+The workaround that produced a real result here was to compile and run the finished package on a
+standalone JVM (`kotlinc` + `android.jar` + the AAR's `classes.jar` + JUnit) — which is worth
+knowing, but is a verification path outside the build system and should be reported as such rather
+than quoted as a Gradle result.
+
 ## S16 AND S17 MUST BE VERIFIED TOGETHER, NOT SEQUENTIALLY
 
 Raised by the S17 RED author and it changes how these two close. They are coupled in **both**
