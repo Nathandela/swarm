@@ -48,7 +48,8 @@ From the roadmap, verbatim:
 | Gradle | 9.6.1 system; wrapper **generation** verified in a scratch build pinning 8.11.1. The wrapper is **not yet checked in** — that is PB-TOOL-4. | scratch build |
 | Emulator + AVD | `swarmtest`, Android 15, `google_apis/arm64-v8a`; boots headless in ~30 s, adb attaches | `$ANDROID_HOME/emulator` |
 | Host CPU | Apple M1 (arm64) | — |
-| Go | 1.26.1 toolchain (module declares `go 1.24.2`, `go.mod:3`) | system |
+| Go | 1.26.1 toolchain (module declares `go 1.25.0`, `go.mod:3`) | system |
+| | *Was `go 1.24.2` when this table was written. Raised as a consequence of the `golang.org/x/mobile` tool directive this same section mandates: `x/mobile`, `x/mod`, `x/sync`, `x/sys` and `x/tools` all declare 1.25.0, and a hand-reverted directive is not a fixpoint under any module command. Decision and CI/doc corrections recorded in **ADR-008**. Found stale by the S13 RED author, who noted it contradicts the ADR that exists so the next reader finds a decision rather than an accident.* | |
 
 Proven by producing a real AAR containing `jni/arm64-v8a/libgojni.so`. Two toolchain facts the
 build scripts must encode:

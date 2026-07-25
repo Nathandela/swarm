@@ -46,7 +46,12 @@ const (
 	EnvSocket   = "SWARM_DAEMON_SOCK"
 	EnvLock     = "SWARM_DAEMON_LOCK"
 	EnvLog      = "SWARM_DAEMON_LOG"
-	// EnvRemoteSocket is the OPT-IN dedicated remote-tier socket; empty => remote control off.
+	// EnvRemoteSocket OVERRIDES the dedicated remote-tier socket path. It is not the enabler:
+	// since ADR-007 B15 the daemon defaults to D4's canonical <stateDir>/remote.sock once the
+	// machine is provisioned for remote, so that the daemon and the gateway's supervision unit
+	// derive the path from one definition. Empty means "use the default", not "remote off" --
+	// remote stays off on an unprovisioned machine (no identity, so no socket) and is gated at
+	// every op by RemoteControlEnabled(), which is derived from device presence.
 	EnvRemoteSocket = "SWARM_DAEMON_REMOTE_SOCK"
 )
 
