@@ -960,3 +960,53 @@ named rather than hidden: the push-preference verb's action class (B10), the per
 matrix (B8), and the physical-handset gate — no handset exists on this machine, so Phase B's
 ceiling here is "provisionally implemented", and reclassifying that gate as an accepted limit is
 not permitted.
+
+**B15. The daemon opens the remote socket when the machine is PROVISIONED for remote, not when
+an environment variable happens to be set.** D4 names `<stateDir>/remote.sock` as *the*
+dedicated remote-tier UDS, with no opt-in qualifier. The implementation disagreed with that:
+the daemon set `RemoteSocketPath` from `os.Getenv(daemon.EnvRemoteSocket)` with no default
+(`cmd/swarm/main.go:309`, "empty => remote control off"), while the supervision unit pointed the
+gateway at D4's canonical path by default (`cmd/swarm/remote.go:318-321`). So on a stock install
+the daemon served nothing there, `swarm remote init` installed a unit aimed at nothing, the
+gateway exited failure, and the supervisor respawned it every `ThrottleInterval` forever. The
+user-visible symptom was exactly **"the phone pairs, then silence"** — the exit criterion
+delivering its first step and nothing after it. Recorded as PB-LIFE-7, slice S4b.
+
+**Decision: option (a), conditioned on provisioning.** `skeletonConfigFromEnv` defaults
+`RemoteSocketPath` to the *same* `gatewaySocket()` the unit Spec uses, gated on the machine being
+provisioned (the identity artifact `swarm remote init` creates). Both sides then derive the path
+from **one function**, so "two independent defaults that must agree" stops being a bug class
+rather than being tested for.
+
+**Why not (b) — refuse loudly at `swarm remote init`.** Measured, not assumed: (b) breaks four
+existing PB-LIFE-2 tests, and more seriously **its detector is unsound in scope**. `swarm remote
+init` cannot read the daemon's environment; dialing is the only probe available, and a dial
+failure cannot distinguish "remote is off" from "the daemon isn't running" — a state `init` must
+tolerate by its own design. Making it sound needs a second probe of the main socket and remains a
+TOCTOU check on another process's environment. (b) keeps two definitions and adds a racy referee
+between them. It is also the option that departs from D4's stated mechanism.
+
+**The security narrative survives, carried by something stronger.** "Remote off unless asked"
+previously meant "no listener, decided once at daemon start". It now means `RemoteControlEnabled()`
+— derived from device presence, recomputed at read time, and already gating every remote op
+(`internal/protocol/server.go:1359,1580,1774,2393`). That is strictly more reliable than a
+start-time listener decision, and conditional (a) still leaves the socket **absent entirely** on
+any machine that never ran `swarm remote init`. The existing guard
+`TestSkeletonConfigFromEnv_RemoteSocketEmptyByDefault` keeps passing unchanged, because its state
+dir is unprovisioned.
+
+**Two consequences this decision creates, which the implementation must handle:**
+- `skeleton.Serve` **aborts assembly if the remote listener fails to bind** (`serve.go:223-226`,
+  `return nil, rerr`). Under (a) a stale `remote.sock` left by a crash would take down the whole
+  daemon — a worse failure than the bug being fixed. The socket must be unlinked-if-stale before
+  bind, or the remote bind must be non-fatal. Silently killing the daemon is not acceptable.
+- `ServeRemoteWithID` **never chmods the socket** (`internal/protocol/remote.go:148`): it
+  `net.Listen`s and inherits umask, relying on the 0700 state dir. D4 specifies **0600**.
+  Pre-existing and previously reachable only for opted-in operators; under (a) it is on every
+  provisioned machine, so it is fixed here rather than left as a residual.
+
+**Residual, filed not fixed.** The CLI still reads `SWARM_DAEMON_REMOTE_SOCK` from *its own*
+environment while the daemon reads its own, so an operator who exports it in one shell and starts
+the daemon from another still gets a mismatch. Closing it requires the daemon to be the authority
+(a durable record or a protocol query). Both routes land in packages frozen for other in-flight
+slices, so it is recorded rather than rushed.
