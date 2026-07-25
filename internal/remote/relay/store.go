@@ -16,7 +16,10 @@ import (
 var (
 	bucketItems = []byte("items") // nested: rid -> (cursor8 -> record)
 	bucketSeq   = []byte("seq")   // rid -> next storage cursor (8 bytes)
-	bucketPairs = []byte("pairs") // "a\x00b" -> {1}, stored both directions
+	// bucketPairs is "authorizer\x00authorized" -> {1}, DIRECTED (ADR-007 B27): one
+	// key per authorize_device, naming who granted whom. The direction is the
+	// authority check itself (see authorizePair and mayActOn), not a storage detail.
+	bucketPairs = []byte("pairs")
 	// bucketRevoked is rid -> the routing id that BANNED it (ADR-007 B24). The value is
 	// load-bearing, not a marker: it is what authorizePair matches the pairer against, and
 	// it is the whole of "the owner's machine lifts the ban it placed".
@@ -55,17 +58,43 @@ func openStore(path string) (*store, error) {
 
 func (s *store) close() error { return s.db.Close() }
 
+// isRecord reports whether v is an item record this store wrote (see recordV1).
+func isRecord(v []byte) bool { return len(v) >= recordHead && v[0] == recordV1 }
+
 func u64(v uint64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], v)
 	return b[:]
 }
 
+// The stored item record is [1 version][8 append time][32 sender rid][envelope].
+//
+// ridLen is fixed (a RoutingID is 16 bytes hex-encoded), which is what lets the
+// record carry its sender without a length prefix. recordV1 is what makes the
+// SENDER FIELD SAFE TO ADD: the previous layout had no version byte and began
+// with a millisecond timestamp, whose leading byte is 0x00 for any date this
+// millennium, so a record written by an older relay can never be mistaken for one
+// of these and have 32 bytes of somebody's ciphertext read off as a routing id.
+// Such a record is skipped rather than served — mis-serving it would hand the
+// phone a truncated envelope that no key can open and that never drains.
+const (
+	ridLen     = 2 * 16
+	recordV1   = 0x01
+	recordHead = 1 + 8 + ridLen
+)
+
 // appendItem assigns the next monotonic storage cursor for rid (distinct from
 // and never confused with the authenticated per-epoch seq inside the envelope),
-// stores the opaque envelope verbatim alongside its append time, and returns the
-// assigned cursor. The seq counter never rewinds on compaction.
-func (s *store) appendItem(rid string, env []byte, atMillis int64) (uint64, error) {
+// stores the opaque envelope verbatim alongside its append time AND ITS SENDER,
+// and returns the assigned cursor. The seq counter never rewinds on compaction.
+//
+// THE SENDER IS STORED BECAUSE THE DEPTH CAP HAS TO BE CHARGED TO SOMEBODY.
+// Charged to the mailbox alone — as it was — the cap is a shared resource with no
+// owner, so whoever fills it first evicts everybody else from a mailbox that is
+// not theirs. It is not read back out to any caller and never reaches the wire:
+// the relay already knows it (it authenticated the sender), so this leaks nothing
+// it did not have, and it is a routing id rather than a key (R-REL.11).
+func (s *store) appendItem(rid, source string, env []byte, atMillis int64) (uint64, error) {
 	var cursor uint64
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		seqB := tx.Bucket(bucketSeq)
@@ -81,9 +110,11 @@ func (s *store) appendItem(rid string, env []byte, atMillis int64) (uint64, erro
 		if err != nil {
 			return err
 		}
-		rec := make([]byte, 8+len(env))
-		binary.BigEndian.PutUint64(rec[:8], uint64(atMillis))
-		copy(rec[8:], env)
+		rec := make([]byte, recordHead+len(env))
+		rec[0] = recordV1
+		binary.BigEndian.PutUint64(rec[1:9], uint64(atMillis))
+		copy(rec[9:recordHead], source)
+		copy(rec[recordHead:], env)
 		return mb.Put(u64(cursor), rec)
 	})
 	return cursor, err
@@ -118,7 +149,10 @@ func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudg
 		start := u64(afterCursor + 1)
 		used := 0
 		for k, v := c.Seek(start); k != nil; k, v = c.Next() {
-			raw := v[8:]
+			if !isRecord(v) {
+				continue // not a record this store wrote; never parsed as an envelope.
+			}
+			raw := v[recordHead:]
 			cost := base64.StdEncoding.EncodedLen(len(raw)) + mailboxItemJSONOverhead
 			// Once the page holds at least one item, stop before either the item
 			// count cap or the byte budget would be exceeded; the current item then
@@ -164,7 +198,10 @@ func (s *store) purgeOlderThan(cutoffMillis int64) error {
 			mb := root.Bucket(rid)
 			c := mb.Cursor()
 			for k, v := c.First(); k != nil; k, v = c.Next() {
-				at := int64(binary.BigEndian.Uint64(v[:8]))
+				if !isRecord(v) {
+					continue
+				}
+				at := int64(binary.BigEndian.Uint64(v[1:9]))
 				if at <= cutoffMillis {
 					if err := c.Delete(); err != nil {
 						return err
@@ -187,7 +224,8 @@ func (s *store) purgeMailbox(rid string) error {
 	})
 }
 
-// mailboxDepth reports how many items rid's mailbox currently holds.
+// mailboxDepth reports how many items rid's mailbox currently holds, from every
+// sender (ops and revocation visibility: a purge has to drop to zero).
 func (s *store) mailboxDepth(rid string) int {
 	n := 0
 	_ = s.db.View(func(tx *bolt.Tx) error {
@@ -201,6 +239,28 @@ func (s *store) mailboxDepth(rid string) int {
 	return n
 }
 
+// mailboxDepthFrom reports how many items SOURCE currently holds in rid's
+// mailbox — the quantity the depth cap is charged against, so that one sender's
+// backlog can never refuse another's append. The scan is bounded by the cap it
+// serves.
+func (s *store) mailboxDepthFrom(rid, source string) int {
+	n := 0
+	src := []byte(source)
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
+		if mb == nil {
+			return nil
+		}
+		return mb.ForEach(func(_, v []byte) error {
+			if isRecord(v) && bytes.Equal(v[9:recordHead], src) {
+				n++
+			}
+			return nil
+		})
+	})
+	return n
+}
+
 func pairKey(a, b string) []byte {
 	k := make([]byte, 0, len(a)+1+len(b))
 	k = append(k, a...)
@@ -209,11 +269,20 @@ func pairKey(a, b string) []byte {
 	return k
 }
 
-// authorizePair records an undirected pairing (both directions) so an
-// authorization check is a single point lookup either way, AND lifts any ban
-// standing against device — in ONE transaction, so a crash between the two can
-// never leave a routing id paired-but-banned (authorized on paper and refused at
-// the handshake).
+// authorizePair records ONE DIRECTED authorization — pairer authorized device —
+// AND lifts any ban standing against device, in ONE transaction, so a crash
+// between the two can never leave a routing id authorized-but-banned (granted on
+// paper and refused at the handshake).
+//
+// THE EDGE IS DIRECTED (ADR-007 B27), AND THAT IS ADR-007 B25's MISSING CHECK.
+// It used to be written BOTH ways, so `authorize_device` — behind requireAuth
+// alone, over open registration — manufactured a mutual pairing out of one side's
+// say-so, and every verb meaning "act on somebody else's route" gated on exactly
+// that. A keypair minted seconds ago could name the machine and thereby acquire
+// it: append to its mailbox, push to it, revoke it. Stored directed, the same
+// call records only what it actually is — the CALLER's intent. Consent to be
+// acted upon is the OTHER direction, and only the named party can write it. See
+// mayActOn for what that buys and for the one exception it cannot avoid.
 //
 // CLEARING THE BAN IS ADR-007 B22 AND IT IS NOT A WEAKENING. revokeAndPurge is
 // the only writer of bucketRevoked and nothing else ever cleared it, while the
@@ -238,33 +307,24 @@ func pairKey(a, b string) []byte {
 // TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt and
 // TestRelay_TheBanningMachineCanLiftItsOwnBan.
 //
-// WHAT THIS POLICY MAKES WORSE, recorded rather than left to be found a third
-// time: handleDeviceRevoke has the SAME missing check — any authenticated
-// identity may authorize_device itself into a pairing with any routing id and
-// then revoke it, including the MACHINE's. That hole pre-dates this work and is
-// out of scope here (ADR-007 B24 records it), but the fix above changes its
-// severity rather than leaving it alone. Before, a ban an attacker placed on the
-// machine was cleared by the phone's very next reconnect — mobile/relay.go
-// onConnected authorizes the machine on every authenticated connect, and any
-// authorize cleared any ban. Now only the banner clears, so an attacker-placed
-// ban on the machine STICKS: a transient denial of service became a durable
-// lockout of that routing id. The rule is still the right one — no weaker rule
-// stops a revoked device un-banning itself through a throwaway identity, since a
-// throwaway is by construction not the banned party — so what this note buys is
-// that the mirror hole is now the load-bearing one and should be prioritised as
-// such.
+// THE BANNER-SCOPED CLEAR SURVIVES THE DIRECTED EDGE, and it has to be checked
+// rather than assumed, because B24's own note said this policy made the mirror
+// hole permanent: the ban an attacker placed on the machine stuck, since only its
+// placer could lift it and the placer was the attacker. That escalation is gone
+// now — not by weakening this rule, but because mayActOn no longer lets a
+// stranger reach device_revoke at all, so no ban of that shape can be placed.
+// B24 and this line are unchanged and remain right: no weaker rule stops a
+// revoked device un-banning itself through a throwaway identity, since a
+// throwaway is by construction not the banned party.
 func (s *store) authorizePair(pairer, device string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
 		if err := pb.Put(pairKey(pairer, device), []byte{1}); err != nil {
 			return err
 		}
-		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
-			return err
-		}
 		rb := tx.Bucket(bucketRevoked)
 		if !bytes.Equal(rb.Get([]byte(device)), []byte(pairer)) {
-			return nil // not banned, or banned by somebody else: the pairing still stands.
+			return nil // not banned, or banned by somebody else: the grant still stands.
 		}
 		return rb.Delete([]byte(device))
 	})
@@ -280,17 +340,104 @@ func (s *store) removePair(a, b string) error {
 	})
 }
 
+// isPaired reports a MUTUAL pairing: each party has authorized the other. It is
+// the honest reading of "these two are paired" now that the edge is directed.
+//
+// IT IS DELIBERATELY NOT THE GATE FOR ACTING ON A ROUTE, and reinstating it as
+// one would put ADR-007 B25 back: a first pairing is genuine before the second
+// leg exists, so a mutual gate refuses the epoch grant that makes the pairing
+// usable. mayActOn is the authority decision; this is the fact, and its only
+// consumer is the fence that pins it (b25_authority_test.go).
 func (s *store) isPaired(a, b string) bool {
 	paired := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
-		paired = tx.Bucket(bucketPairs).Get(pairKey(a, b)) != nil
+		pb := tx.Bucket(bucketPairs)
+		paired = pb.Get(pairKey(a, b)) != nil && pb.Get(pairKey(b, a)) != nil
 		return nil
 	})
 	return paired
 }
 
-// pairedPeers enumerates every routing id paired with rid (used to fan a
-// machine-went-silent push out to its paired devices).
+// mayActOn is the relay's authority decision — may source append to, push to, or
+// revoke target's route? THE RULE, WHICH IS ADR-007 B27: the target must have
+// authorized the source, or have authorized nobody at all.
+//
+// The first clause is the property ADR-007 B25 found missing, and it is the only
+// clause that matters once a device is paired. Authentication proves identity;
+// authority is the TARGET's own authorize, which only the target can write since
+// authorizePair stores the edge directed. A stranger naming the machine writes
+// the other direction and gets nothing from it.
+//
+// THE SECOND CLAUSE IS A BOOTSTRAP EXCEPTION AND IT IS LOAD-BEARING: without it
+// there is no first pairing at all. deliverEpochGrant (cmd/swarm-remote)
+// authorizes the phone and IMMEDIATELY appends the sealed epoch grant — the
+// append that delivers the ContentKey, i.e. what makes a pairing usable — and its
+// failure is fatal. The phone need not have connected yet, so it cannot have
+// consented at the relay yet, and it cannot consent before it holds the grant
+// either. That circularity is what falsified the mutual-pairing direction ADR-007
+// B25 recorded, measured at TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap.
+//
+// The relay cannot witness the QR ceremony that DID convey the phone's consent,
+// so at the relay "machine authorizes phone, then appends to phone" and "stranger
+// authorizes machine, then appends to machine" are the same shape, and no
+// predicate over the caller distinguishes them. The asymmetry that does survive
+// is not about the caller: the stranger's target is an ESTABLISHED identity that
+// has already authorized somebody, and a bootstrapping target has authorized
+// nobody.
+//
+// THE RESIDUAL, accepted in ADR-007 B27 rather than smoothed over: this is trust
+// on first use, and the entry records the complete fix it does not take. A
+// party that knows a NEVER-PAIRED identity's relay-auth pubkey can act on it
+// until it authorizes someone. That pubkey is disclosed at the relay handshake
+// and over the SAS-authenticated pairing channel, so the window is reachable in
+// practice by the RELAY OPERATOR, to whom the threat model already concedes
+// availability — not by an anonymous party who can merely open a socket to the
+// relay, which is the line B25 drew and the one this fix has to hold.
+func (s *store) mayActOn(source, target string) bool {
+	ok := false
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		pb := tx.Bucket(bucketPairs)
+		if pb.Get(pairKey(target, source)) != nil {
+			ok = true
+			return nil
+		}
+		if pb.Get(pairKey(source, target)) == nil {
+			return nil // not even the caller's own intent: nothing to bootstrap.
+		}
+		ok = !hasActedAsAuthority(tx, target)
+		return nil
+	})
+	return ok
+}
+
+// hasActedAsAuthority reports whether rid has ever authorized or banned another
+// party — whether it is past its first use, and so whether mayActOn's bootstrap
+// exception is closed for it.
+//
+// A BAN COUNTS, and leaving it out would be a hole rather than an omission:
+// revokeAndPurge DELETES the authorization it severs, so counting live grants
+// alone would RE-OPEN the bootstrap window of a machine that revoked its only
+// device — handing a stranger the same permanent lockout ADR-007 B25 describes,
+// one revoke later.
+func hasActedAsAuthority(tx *bolt.Tx, rid string) bool {
+	prefix := append([]byte(rid), 0)
+	if k, _ := tx.Bucket(bucketPairs).Cursor().Seek(prefix); bytes.HasPrefix(k, prefix) {
+		return true
+	}
+	banned := false
+	_ = tx.Bucket(bucketRevoked).ForEach(func(_, banner []byte) error {
+		if bytes.Equal(banner, []byte(rid)) {
+			banned = true
+		}
+		return nil
+	})
+	return banned
+}
+
+// pairedPeers enumerates the routing ids rid has AUTHORIZED (used to fan a
+// machine-went-silent push out to a machine's devices). Now that the edge is
+// directed this is rid's own grants and nothing else — a stranger that authorized
+// rid writes the opposite direction and is never woken by rid's silence.
 func (s *store) pairedPeers(rid string) []string {
 	var peers []string
 	prefix := append([]byte(rid), 0)

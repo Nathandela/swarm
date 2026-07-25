@@ -765,11 +765,17 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
+	// THIS VERB IS ACCEPTED FROM ANYONE AND CONFERS NOTHING ON THE CALLER. It
+	// records one directed edge: sc.rid authorized deviceRID. requireAuth above
+	// proves an identity and nothing more — relay auth is open registration, so
+	// "authenticated" never meant "the owner's machine" — and a caller naming a
+	// routing id is a statement about the CALLER's intent, not about the named
+	// party. Authority to act on deviceRID's route would be the OTHER edge, which
+	// only deviceRID can write. Refusing the call instead would be worse and not
+	// safer: the machine's grant at a first pairing is exactly this shape.
+	//
 	// ADR-007 B22: this also LIFTS a ban standing against deviceRID — but ONLY one
-	// sc.rid itself placed (B24). requireAuth above proves an identity and nothing
-	// more: relay auth is open registration, so "authenticated" does not mean "the
-	// owner's machine", and the ownership test therefore lives in the ban itself.
-	// See store.authorizePair.
+	// sc.rid itself placed (B24). See store.authorizePair.
 	if err := sc.s.st.authorizePair(sc.rid, deviceRID); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
@@ -787,7 +793,11 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	if !sc.s.st.isPaired(sc.rid, req.Target) {
+	// The target must have authorized this caller, or have authorized nobody at
+	// all (ADR-007 B27, store.mayActOn). Pairing alone is NOT the gate: it used to
+	// be, and a pairing is created by one side naming the other, so the gate proved
+	// only that the caller had spoken (ADR-007 B25).
+	if !sc.s.st.mayActOn(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	sc.s.mu.Lock()
@@ -805,7 +815,20 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	// storing it — a clean ErrQuotaExceeded, never unbounded growth. The cap is on
 	// LIVE depth, so capacity recovers once the device drains and acks. A value <= 0
 	// means no depth cap.
-	if capN := sc.s.cfg.Quotas.MailboxMaxItems; capN > 0 && sc.s.st.mailboxDepth(req.Target) >= capN {
+	//
+	// THE CAP IS CHARGED PER (SENDER, TARGET), NOT PER TARGET. Per target it was a
+	// shared budget with no owner: any sender the target would accept could hold
+	// the mailbox at its cap and every OTHER sender's append was refused for as
+	// long as it kept doing so — the owner's own handset locked out of its own
+	// machine by somebody else's backlog. That is a live-depth condition, so it
+	// lifted on a drain and returned on the next append: sustainable, not one-shot.
+	// Charged per sender, a backlog can only ever refuse the party that built it.
+	//
+	// What bounds the TOTAL is then the number of senders a target accepts, which
+	// is what store.mayActOn bounds: the parties it authorized, plus — until it
+	// authorizes its first one — anyone holding its relay-auth pubkey, whose rate
+	// of arrival is itself bounded by the per-source connection budget above.
+	if capN := sc.s.cfg.Quotas.MailboxMaxItems; capN > 0 && sc.s.st.mailboxDepthFrom(req.Target, sc.rid) >= capN {
 		return sc.replyErr(codeQuotaExceeded)
 	}
 	// CR-4 / R2 review H-1: refuse an envelope so large that a mailbox_read reply
@@ -816,7 +839,7 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	if base64.StdEncoding.EncodedLen(len(req.Envelope))+maxMailboxItemWrapper > MaxFrame-1 {
 		return sc.replyErr(codeBadRequest)
 	}
-	cur, err := sc.s.st.appendItem(req.Target, req.Envelope, sc.s.clk.Now().UnixMilli())
+	cur, err := sc.s.st.appendItem(req.Target, sc.rid, req.Envelope, sc.s.clk.Now().UnixMilli())
 	if err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
@@ -961,7 +984,9 @@ func (sc *serverConn) handlePushTrigger(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	if !sc.s.st.isPaired(sc.rid, req.Target) {
+	// Same authority decision as an append, and for the same reason: a push is an
+	// unsolicited wake of somebody else's handset (store.mayActOn).
+	if !sc.s.st.mayActOn(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	sc.s.mu.Lock()
@@ -995,7 +1020,15 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	if !sc.s.st.isPaired(sc.rid, req.Target) {
+	// The gravest of the three verbs behind this decision — it bans the target's
+	// registration and destroys its mailbox — and it takes the SAME authority
+	// (store.mayActOn) rather than a stricter one, deliberately. A stricter rule
+	// (full mutual pairing) would refuse the owner's own `swarm remote revoke`
+	// against a handset that paired and then died before ever connecting, which
+	// is precisely the stranded device PB-STATE-10 exists to recover from; that
+	// is measured by TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState and
+	// mobile/conformance's grace-window test.
+	if !sc.s.st.mayActOn(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	if err := sc.s.st.revokeAndPurge(sc.rid, req.Target); err != nil {
