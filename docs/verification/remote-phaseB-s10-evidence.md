@@ -227,6 +227,12 @@ Fixed by refusing to ack on either custody sentinel. Worth keeping: **the non-ac
 locked**, because a keyless phone commits no sealed frame and the relay cursor does not advance past
 the bootstrap anyway — it is simply re-offered each poll until the tier opens.
 
+*A conditional worth re-checking if the design changes*: "costs nothing" holds **because** a phone
+locked at Resume binds a zero content key, so no sealed frame commits and the relay cursor cannot
+advance past the bootstrap. If anything ever makes the content tier re-openable in-process without a
+restart, that argument needs revisiting. The correctness of not acking does not change — only the
+claim that it is free.
+
 ### B2 — PB-KEY-3's terminal state, closed with no clock, no threshold and no wire change
 
 `MarkGrantLost` had zero production callers, so the state was unreachable and its test supplied the

@@ -394,11 +394,17 @@ const stateV5Fixture = `{"schema_version":5,"machine":"m1","machine_static":"oaG
 
 // sealedTags are the durable field names that S15 moved INSIDE a sealed container, so they
 // cannot appear as top-level keys in the pinned literal -- that is the point of sealing them.
-// They are still tied to the version: the container that carries them is itself a pinned key
-// below, and TestStateStore_PinnedV5FixtureStillLoads opens each one through the fixture KEK and
-// compares every restored coordinate against fullState(). So a field dropped from a sealed
-// container fails there rather than here. Listing them explicitly, rather than skipping any
-// absent tag, keeps the CLEARTEXT half of the check exact.
+// They are still tied to the version: the container carrying them is itself a pinned key below,
+// and TestStateStore_PinnedSealedFixturesStillLoad opens every pinned version through the fixture
+// KEK and compares each restored coordinate against fullState(). So a field dropped from a sealed
+// container fails THERE rather than here.
+//
+// Listing them explicitly, rather than skipping any absent tag, is what preserves the
+// BOTH-DIRECTIONS property. If the check simply ignored a missing tag, absence would become
+// SELF-JUSTIFYING: the next durable field added without a version bump would not appear in the
+// literal, and the test would read that as "must be sealed" and pass -- the very defect this fence
+// exists to catch, reintroduced one level up and harder to see. Every declared tag must be
+// accounted for in exactly one place: present in the literal, or named here.
 var sealedTags = map[string]bool{
 	"push_token": true, "wake_replay": true,
 	"send_seq": true, "receive": true, "pending_ops": true,
