@@ -1,5 +1,31 @@
 # S14 evidence — Android key custody, and PB-KEY-9's closing half
 
+> ## SCOPE CORRECTION (independent review, 2026-07-25) — read before citing this file
+>
+> This file's framing is broader than what is proven. **What S14 establishes is that the Go core
+> seals under whatever `KeyCustody` it is handed, and that no constructor can omit one.** That part
+> is real, fenced, and was verified by the reviewer against the built AAR rather than the Go source:
+> every `byte[]` in the emitted surface is inbound, no bound method returns bytes, and the Kotlin
+> gate is 123 tests with 0 failures.
+>
+> **The ANDROID half has no production wiring yet**, verified independently and by me:
+> - `SealedStore` (`KeyCustodySession.kt`) is an in-memory map. There is **no file I/O anywhere** in
+>   `android/app/src/main/` — no `openFileOutput`, no `filesDir`, no `SharedPreferences`, no `File`.
+> - No `KekProvider` implementation exists outside tests; `KeystoreProvisioner.generate` is
+>   unimplemented.
+> - **Nothing in `main/` constructs `swarmmobile.NewApp`** — the symbol appears only in comments.
+>
+> So statements in this file about "the shipped app" describe the Go seam, not a wired handset app.
+> PB-KEY-9 is delivered in the sense that the cleartext sealer is gone and custody is mandatory; it
+> is NOT yet delivered in the sense of a phone that stores a real Keystore-backed KEK.
+>
+> **This is an S16 BLOCKER, and it is standing defect class (ii) — a plausible-but-wrong value hiding
+> a brick.** An in-memory `SealedStore` means the KEK vanishes on process death, and on the next
+> start `device.key` and `phone-state.json` are sealed under a key that no longer exists —
+> **permanently unopenable**. On Android a process death is routine. S16 must wire real persistence
+> and a real Keystore-backed provider, and the recovery path for a KEK that is genuinely gone is
+> `ErrKeyInvalidated` (re-pair), not a silent failure to start.
+
 **Requirements**: PB-KEY-1, PB-KEY-2, PB-KEY-5, PB-KEY-6, PB-KEY-7, PB-KEY-8, PB-SEC-1, PB-SEC-2,
 and the closing half of **PB-KEY-9**.
 **Decisions**: ADR-007 B8 (single inbound crossing), B9 (tiers per role), B16/B17 (minSdk 33 as a
