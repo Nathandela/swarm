@@ -1,6 +1,6 @@
 # Phase B progress and handoff
 
-**Branch**: `worktree-remote-control-research`. **Spec**: `docs/specifications/remote-phaseB-requirements.md` (v3.5.1, 139 requirements).
+**Branch**: `worktree-remote-control-research`. **Spec**: `docs/specifications/remote-phaseB-requirements.md` (v3.5.1, **143 requirements** -- the count has risen four times mid-implementation, each time because someone found a hole that would otherwise have shipped; see below).
 **Gates**: `python3 scripts/check-phaseb-manifest.py` (ownership + DAG), `go build/vet/test -race ./...`.
 
 **Checkpoint after 7 slices (`ea38ed0`)**: full `go test -race ./...` **green -- 47 packages ok,
@@ -112,11 +112,12 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-**60 of 142 shipped, 82 remaining (15 of 29 slices).** The completed slices were deliberately the
-blockers and the security-critical machine-side work -- dependency surgery, gateway durability
-in both directions, the transport, the reconciliation frame, the bound facade -- because they
-gate everything downstream. The remaining 96 are weighted toward the Android app and end-to-end
-verification.
+**80 of 143 shipped, 63 remaining (19 of 29 slices).** Counted from the manifest, not estimated.
+The completed slices were deliberately the blockers and the security-critical machine-side work --
+dependency surgery, gateway durability in both directions, the transport, the reconciliation frame,
+the bound facade, the custody seam, the push transport -- because they gate everything downstream.
+The remaining work is weighted toward the Android app (S14-S17), the resync machinery (S10), and
+end-to-end verification (S18-S21).
 
 The counts have risen twice mid-implementation, both times because a reviewer or test author found
 a hole that would otherwise have shipped:
@@ -652,6 +653,17 @@ record of what was intended rather than what shipped — standing class (ii), ap
   authority. Changing a daemon reply was outside S11's fence, so the precedence is pinned by test
   now (`Lease_TheMachinesExpiryWinsOverThePhonesSignedHorizon`) to stop a later slice wiring the
   real value through and having it silently ignored. Wants a follow-up.
+- **A LATENT PAIRING RACE that reports itself as the wrong failure.** Found by the S9 implementer
+  while debugging its own scaffolding. It is NOT a load flake -- it is a real ordering bug that
+  discards its own cause. `relay.handleRendezvousClaim` (`server.go:1200`) refuses a rendezvous id it
+  has never seen, and `pairing.RunDevice` does **not retry** its claim. So a `BeginPairing` that
+  beats the machine goroutine's `Create` fails the handshake **terminally** -- and the waiting test
+  reports it five seconds later as "the phone never derived a SAS", with the actual cause thrown
+  away. Reproduced 2 runs in 5 under concurrent agent load.
+  **`mobile/conformance/s9_pbnet1_test.go` and `conformance_test.go`'s `runMachinePairing` both still
+  have it.** The S9 implementer gated its own new test on the machine's `Create` having returned and
+  made the SAS wait fail fast on a terminal pairing state; the other two were deliberately left
+  alone. Anyone who sees "never derived a SAS" should suspect this before anything else.
 - **The load-sensitive test family.** On a QUIET machine the full suite is green at HEAD — verified
   in a pristine clone. These fail only under concurrent agent load, which the orchestration itself
   creates, and pass in isolation. **Do not dismiss a real regression as one of these: re-run in
