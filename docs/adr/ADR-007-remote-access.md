@@ -1340,3 +1340,47 @@ mode is therefore a slower pairing, not a blocked one.
 fails both when the ADR names no library and when a scanner dependency appears in
 `android/app/build.gradle.kts` that the ADR does not name. So this entry lands **before** the
 dependency, not alongside it.
+
+**B22. `authorize_device` CLEARS the relay's revoked bit, and the CLI issues the relay purge itself.
+Without this, "fail closed" and "re-pair" are mutually exclusive and PB-STATE-10 is unsatisfiable.**
+
+Found by the S18b RED author while testing the recovery flow PB-STATE-10 requires, and verified: the
+only relay operation that purges a mailbox is `device_revoke`, and `store.revokeAndPurge` writes the
+routing id into a `revoked` bucket **in the same transaction**. Nothing anywhere clears that bucket —
+grep confirms two writers, one reader, **no delete** — and the relay's auth path refuses a revoked
+routing id outright. The phone's relay-auth key lives in `device.key` and is minted **once per
+install**, so a recovered handset returns on the same routing id and is **permanently locked out of
+the relay**.
+
+That makes the error taxonomy's own shipped `REVOKED -> re_pair` row false today, and it means the
+owner-side recovery PB-STATE-10 mandates — revoke, purge, re-pair — cannot complete. Revoking to
+unstick a phone bricks it harder, which is precisely the failure this requirement exists to forbid.
+
+**Decision: `handleAuthorizeDevice` clears the revoked bit for the routing id it authorizes.**
+
+The safety argument, which is why this is not a weakening: `authorize_device` is served only on an
+**authenticated** connection, and a revoked device cannot authenticate — the auth path refuses it
+before any op is dispatched. So the only party who can issue it is the machine, over its own
+authenticated connection. **The machine choosing to authorize a routing id IS the owner's decision to
+un-ban it**; there is no path by which a revoked device un-bans itself, and the relay gains no new
+authority it did not already have. A ban that only the owner can lift, through the same verb that
+grants access in the first place, is the correct shape.
+
+**Rejected alternative**: rotating the phone's relay-auth key on every pairing. It would also work,
+but it changes PB-KEY and PB-PAIR assumptions about a device identity that is deliberately stable
+across an install, and it **orphans the old routing id's relay state anyway** — so the purge is still
+owed and the cost is paid twice.
+
+**Consequence for the CLI, and it is a new responsibility rather than a wiring change.** Neither the
+CLI nor the daemon holds a relay connection — only the gateway sidecar does, and `swarm remote
+revoke` **stops the gateway** as part of its own flow. So the relay purge must be issued by the CLI
+dialling the relay directly with the machine identity (`machineid.RelayAuthPublic` /
+`RelayAuthSign` plus `relay.json`). The RED author demonstrated this composes.
+
+**Also required by the same finding, and separately unowned**: `relay.Client.DeviceRevoke` has **no
+production caller at all** — the capability ships as a function nobody invokes, which is this
+project's standing "requirement satisfiable while the defect ships" class. And the machine's own
+outbox (`<stateDir>/remote/outbound-journal.outbox`) holds reserved-but-uncommitted entries as
+**exact sealed bytes, replayed verbatim by contract**; the revoke rotates the epoch, so those
+envelopes are sealed under a key no future device holds and the next gateway replays them into the
+re-paired phone's mailbox where nothing can open them. Revoke must purge both.
