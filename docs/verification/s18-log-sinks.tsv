@@ -2,5 +2,8 @@
 # Every logging call site on the PHONE-SIDE path (the Kotlin app, the bound facade,
 # the phone core). The daemon, the relay server and the TUI are deliberately out of
 # scope: they log at length and they do not run on the handset.
-# Columns: area <TAB> file:line <TAB> the call
-kotlin-app	android/app/src/main/kotlin/dev/swarm/phone/push/PushTokens.kt:70	Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " + "the phone works without push and will not receive background wakes", e)
+# Columns: area <TAB> file:line <TAB> the call <TAB> the reviewer's note on the file
+# The note is not decoration: a sink in a file with no note fails the artifact test,
+# in -update mode too, so a new call site cannot be regenerated into a green.
+kotlin-app	android/app/src/main/kotlin/dev/swarm/phone/push/PushTokens.kt:81	Log.w(TAG, "push token fetch failed; this launch registered no token and the " + "phone will not receive background wakes until the next one", e)	PB-PUSH-5's graceful-and-loud degradation, both arms: static prose plus the caught Throwable. No token value is in scope on either path -- getInstance() threw because this build configures no Firebase project, or the asynchronous fetch failed and produced none.
+kotlin-app	android/app/src/main/kotlin/dev/swarm/phone/push/PushTokens.kt:85	Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " + "the phone works without push and will not receive background wakes", e)	PB-PUSH-5's graceful-and-loud degradation, both arms: static prose plus the caught Throwable. No token value is in scope on either path -- getInstance() threw because this build configures no Firebase project, or the asynchronous fetch failed and produced none.

@@ -24,7 +24,6 @@ package conformance_test
 // 13 and nothing here claims any part of it.
 
 import (
-	"strings"
 	"testing"
 
 	swarmmobile "github.com/Nathandela/swarm/mobile"
@@ -382,19 +381,25 @@ func TestS17_ReconnectingAfterADeletionDoesNotResurrectTheToken(t *testing.T) {
 // issued while the relay is unreachable, and holds a token in durable state that it will
 // re-register on the next connection.
 //
-// THE CALL NOW REFUSES ON THIS RIG, AND THE REFUSAL IS ASSERTED RATHER THAN TOLERATED (S18).
-// RevokeThisDevice used to seal nothing at all -- remotegw's opForAction had no arm for
-// device_revoke, so the verb recorded a durable local refusal and returned nil. S18 added the
-// arm, so the verb now rides the ordinary mutating path, which runs PB-SYNC-7's fail-closed
-// gate: this rig's phone has never received a reconcile record, so the WIRE half is correctly
-// refused with swarm/unreconciled.
+// CORRECTED 2026-07-26, AND THE CORRECTION IS RECORDED HERE RATHER THAN REWRITTEN AWAY.
 //
-// That makes the test stronger rather than weaker, and it is why the shape is pinned here. The
-// LOCAL half must not be conditional on the machine being reachable or reconciled: an owner
-// pressing revoke on a handset they no longer trust is in exactly the state where the machine
-// cannot be told, and a token left registered there is a provider-visible identifier for a
-// device its owner disowned. So the order inside the verb is load-bearing -- drop the token
-// durably FIRST, attempt the wire half second -- and both halves are asserted below.
+// S18 asserted that the WIRE half fails closed on this rig -- RevokeThisDevice had just moved
+// onto the ordinary mutating path, which ran PB-SYNC-7's gate, and this rig's phone has never
+// received a reconcile record. S18 was right to pin what it observed rather than tolerate it,
+// but it also flagged the behaviour as a spec question, and PB-STATE-4 has since been AMENDED
+// (2026-07-26) to answer it: RevokeThisDevice is EXEMPT from that gate. An unreconciled phone is
+// close to the definition of a lost or long-disconnected handset, which is the exact state the
+// panic button exists for, and a self-revoke selects no target from synchronized state and only
+// removes capability. So the refusal this test used to assert is no longer the required
+// behaviour, and asserting it would now fail the correct implementation.
+//
+// WHAT DID NOT CHANGE is the half this test was named for and the reason its ORDER is
+// load-bearing: the local deletion must not be conditional on the machine being reachable, so
+// the verb drops the token durably FIRST and attempts the wire half second. That assertion is
+// kept verbatim below. The exemption's own two directions are fenced in
+// pbstate4_revokeexempt_test.go, not here -- this test owns PB-PUSH-9's deletion, and it would
+// go on passing if the wire half were removed entirely, which is why it is not the exemption's
+// evidence.
 func TestS17_RevokingThisDeviceDeletesItsPushToken(t *testing.T) {
 	r := s17NewRig(t)
 	app := r.StartApp()
@@ -402,15 +407,11 @@ func TestS17_RevokingThisDeviceDeletesItsPushToken(t *testing.T) {
 	if err := app.RegisterPushToken("fcm-token-revoked"); err != nil {
 		t.Fatalf("App.RegisterPushToken: %v", err)
 	}
-	_, err := app.RevokeThisDevice()
-	if err == nil {
-		t.Errorf("PB-SYNC-7: RevokeThisDevice returned no error on a phone that has never seen a " +
-			"reconcile record. device_revoke is a mutating op like any other and must fail closed " +
-			"until the machine publishes its rollback authorities")
-	} else if !strings.Contains(err.Error(), swarmmobile.ErrClassUnreconciled) {
-		t.Errorf("PB-SYNC-7: RevokeThisDevice failed with %q, want the %s class. Any other refusal "+
-			"here means the wire half did not reach the gate this test is pinning",
-			err, swarmmobile.ErrClassUnreconciled)
+	if _, err := app.RevokeThisDevice(); err != nil {
+		t.Errorf("PB-STATE-4 (amended 2026-07-26): RevokeThisDevice failed with %q on a phone that "+
+			"has never seen a reconcile record. The panic button is EXEMPT from PB-SYNC-7's gate: "+
+			"an unreconciled phone is the lost-handset state the button exists for, and a "+
+			"self-revoke names its own signer and only removes capability", err)
 	}
 
 	r.FCM.Reset()

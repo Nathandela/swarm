@@ -16,7 +16,10 @@ package swarmmobile
 //
 //   - A MUTATING op is refused until the machine's rollback authorities have been adopted
 //     (PB-SYNC-7). Reads -- roster, journal, peek, terminal_watch -- are never gated: a
-//     phone that shows nothing is indistinguishable from a dead one.
+//     phone that shows nothing is indistinguishable from a dead one. device_revoke is the
+//     one mutating EXEMPTION (PB-STATE-4, amended 2026-07-26): it selects no target from
+//     synchronized state and only removes capability, and an unreconciled phone is the lost
+//     handset the panic button exists for. sealSignedCommand carries the reasoning.
 
 import (
 	"context"
@@ -542,8 +545,19 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	if err != nil {
 		return nil, err
 	}
-	if err := a.requireReconciled(); err != nil {
-		return nil, err
+	// PB-SYNC-7's fail-closed gate, with PB-STATE-4's amendment of 2026-07-26 applied: the
+	// action decides, and device_revoke is EXEMPT. The boundary is not "revoke is special" --
+	// this gate protects ops whose TARGET IS SELECTED FROM SYNCHRONIZED STATE (kill, launch,
+	// take_control), because a rollback makes them act on the wrong object. A self-revoke
+	// selects no target (it names its own signer, which needs no synchronized state to
+	// identify) and only REMOVES capability, never grants it, so a rollback attacker who
+	// forces one gains a denial of service they already had -- while gating it denies the
+	// owner their only remote kill on an unreconciled phone, which is close to the definition
+	// of the lost handset the panic button exists for.
+	if action != schema.ActionDeviceRevoke {
+		if err := a.requireReconciled(); err != nil {
+			return nil, err
+		}
 	}
 	// THE SKEW VERDICT DOES NOT GATE THIS CALL, and that is a decision (PB-TIME-1 with
 	// PB-STATE-10). The only authenticated machine time rides a REPLY, and a reply only
