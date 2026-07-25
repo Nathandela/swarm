@@ -235,6 +235,19 @@ uses for the push preference.
   `internal/protocol` (Go has no function aliases). Reimplementing its canonical encoding
   would produce silent signature failures with no compile error. Options are: move it then,
   or expose it through the facade. See `remote-phaseB-s1-evidence.md`.
+- **The offline op queue is safe only by accident of design, and nothing pins it** (found by the
+  S7b implementer, recorded before it can bite). Now that PB-GW-2 enforces a 10-minute inbound
+  age bound, a phone backgrounded past ten minutes would have **every queued mutating op refused
+  as stale** if the queue held *sealed* envelopes. It does not: `OpQueue` stores unsealed
+  `QueuedOp` (`internal/phonecore/opqueue.go:20-25`) and seals at replay time, so `IssuedAt` is
+  stamped **on send, not on enqueue**. That ordering is what makes offline replay work at all
+  under the bound -- and no test asserts it. A future refactor that sealed at enqueue would
+  silently brick offline replay, and the failure would look exactly like the PB-GW-6 brick this
+  slice was created to avoid. Wants a test pinning seal-at-send, against S7/PB-STATE.
+- **PB-GW-2 is inbound-only; the phone's receiver still runs `maxAge == 0`.** A real asymmetry,
+  deliberately out of S7b's scope. Closing it is blocked on the PB-TIME-2 reply-seal gap above
+  (`SealControlReply` stamps no `IssuedAt`), so the two must be done together or the phone
+  bricks on its own command replies.
 - **Known pre-existing flake**: `TestRemotePeek_LargeGridClippedUnderMaxFrame` (i/o timeout
   under full-suite load; passes isolated). Predates Phase B.
 - The final full-committee audit against all 139 requirements is still owed, per the goal.
