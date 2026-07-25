@@ -279,11 +279,16 @@ func s10FreshInstall(t *testing.T) (ctx context.Context, relayURL, dir string, o
 
 	dir = t.TempDir()
 	relayURL = srv.URL()
+	// ONE custody for every reopen of this state dir (S14, PB-KEY-9): the KEKs are the
+	// Android Keystore stand-in, so a fresh one per open would be a phone whose hardware
+	// keys changed between process starts -- the sealed state would not unseal and the
+	// restart assertions below would fail for a reason that has nothing to do with grants.
+	custody := newTestCustody(t)
 	open = func() *swarmmobile.App {
 		t.Helper()
 		app, aerr := swarmmobile.NewApp(&swarmmobile.Config{
 			StateDir: dir, RelayURL: relayURL, MachineID: testMachineID,
-		})
+		}, custody)
 		if aerr != nil {
 			t.Fatalf("swarmmobile.NewApp: %v", aerr)
 		}
