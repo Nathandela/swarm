@@ -1384,3 +1384,42 @@ outbox (`<stateDir>/remote/outbound-journal.outbox`) holds reserved-but-uncommit
 **exact sealed bytes, replayed verbatim by contract**; the revoke rotates the epoch, so those
 envelopes are sealed under a key no future device holds and the next gateway replays them into the
 re-paired phone's mailbox where nothing can open them. Revoke must purge both.
+
+**B23. Two consequences of B22 that B22 did not name, both found by the fence rather than by
+reasoning, and both real production bricks.**
+
+B22 decided that authorizing a device clears the relay's ban. Getting the recovery to actually
+complete needed two more changes, and neither is a test artifact — each is a way the recovered
+handset stayed dead.
+
+**(a) `swarm remote pair` authorizes the new device at the relay itself.** B22 assigned only the
+*purge* to the CLI, on the reasoning that `authorize_device` already has a production caller. It
+does — **the gateway** — and `swarm remote revoke` **stops the gateway** as part of its own flow. So
+after a revoke nothing clears the ban until the supervisor gets round to restarting the sidecar.
+Meanwhile `relay.ErrRevoked` is **terminal** on the phone: the dial loop returns rather than
+retrying. The recovered handset therefore latches its revoked state *before* the gateway boots, and
+stays there. Pairing is the moment the owner grants access, so it is where the grant is now made;
+the gateway's own call remains and is idempotent.
+
+**(b) The phone re-arms a transport that a revocation killed, when a pairing pins a destination.**
+The terminal revoked state is latched at `Start()` — *before* the pairing that recovers it — so
+without this the handset shows revoked until the Android process is rebuilt, which on a phone can be
+hours. A bounded 30-second grace covers the genuinely unorderable race between the phone's first
+post-pairing dial and the machine's authorize.
+
+**The property that keeps (b) honest**: the connection state stays **revoked** throughout the grace
+window. Nothing hides behind a spinner, so PB-APP-10's "explicit re-pair prompt, not a failure loop"
+is untouched — and a generation still *running* is left alone, so the ordinary case of an owner
+revoking an online phone stays terminal, as its test still asserts.
+
+**Also accepted here: a second error class, `swarm/device-unsupported`.** Giving the
+key-reprovisioning recovery its own route needs a destination, and every existing no-user-action row
+maps to INTERNAL — which would tell a user "the app hit an internal fault" about a handset whose
+platform silently downgraded a Keystore key. The app is healthy; one thing outside it is not. This
+follows the existing precedent of a row sharing INTERNAL's remedy while carrying a different state
+for a different cause.
+
+**Its wart, recorded rather than smoothed over**: the Go facade exports a class it never stamps —
+the condition is produced only on the Android side. That is structural rather than accidental, since
+the taxonomy is a closed set checked for equality across the golden, the table and the Kotlin enum,
+so a class that exists in one must exist in all three. Noted at the constant and in the table.
