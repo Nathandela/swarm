@@ -124,6 +124,23 @@ uses for the push preference.
    device_revoke/take_control/terminal_watch/terminal_unwatch -- no interrupt -- and the gateway's
    action map covers only kill/delete/launch. **PB-APP-3's persistent Stop is half-unimplementable**
    until a verb exists.
+
+   **RESOLUTION (recorded 2026-07-25): no new verb is needed.** An interrupt IS a keystroke --
+   Ctrl-C is byte `0x03`, and a PTY in its default `ISIG` mode turns it into SIGINT for the
+   foreground process group. That is precisely how a human stops a running agent, and the phone
+   already has the machinery: `take_control` -> `data_in`. So PB-APP-3's Stop resolves to
+   **acquire lease (if not held) -> send 0x03**, with `kill` remaining the escalation for a
+   session that ignores SIGINT. This is strictly better than minting an `interrupt` action:
+   a new signed action would change the signed action set (ADR + a change to what
+   `requireRemoteAuthz` accepts) to duplicate a capability the input plane already delivers,
+   and it would need its own authz tuple, its own biometric tier, and its own replay story.
+   Two consequences the S16 implementer must honor: (i) Stop requires the lease, so an observer
+   must be shown the take-control step rather than a Stop button that silently does nothing;
+   (ii) 0x03 rides the LIVE-only path (ADR-007 D7), so an offline Stop must resolve to
+   "delivery unknown / not sent" and must NOT be queued for replay -- a Stop that arrives ten
+   minutes later, after the user gave up and did something else, is a genuine hazard.
+   S8's facade correctly refuses to invent a verb; it records a durable local refusal instead,
+   which stays correct until S16 wires Stop to the input plane.
 2. **`revoke` is broken at the gateway.** `ActionDeviceRevoke` IS in the signed set and the daemon
    serves it through `requireRemoteAuthz`, but `remotegw.opForAction` does not map it, so a
    phone-sealed `device_revoke` is refused "unsupported command action". One line, but it is a
