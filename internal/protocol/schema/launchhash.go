@@ -1,4 +1,4 @@
-package protocol
+package schema
 
 import (
 	"crypto/sha256"
@@ -12,6 +12,13 @@ import (
 // gateway swap the agent, cwd, options, or prompt of a validly-signed launch. Both the
 // phone-core (signer) and the daemon (verifier) compute this hash over exactly the
 // fields the daemon acts on; a mismatch makes VerifyCommandSig fail.
+//
+// It lives HERE, in the daemon-free schema package, rather than in protocol, for the same
+// reason the wire types do (PB-BIND-0, requirements 4.2): the gomobile-bound facade is a
+// SIGNER and must reach the canonical encoding without dragging internal/daemon onto a
+// handset. package protocol re-exports it, so the wire and protocol's importers are
+// unchanged. Reimplementing this encoding on the phone side is forbidden -- a one-byte
+// divergence produces silent signature-verification failures with no compile error.
 //
 // Bound fields: Agent, Cwd, sorted Options, InitialPrompt, Worktree. Env is excluded
 // (a remote launch drops client env entirely, R-POL.5) and Cols/Rows are excluded

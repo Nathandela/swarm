@@ -36,7 +36,13 @@ import (
 // send-seq ceiling or a receive high-water to zero, which is exactly the replay hole this
 // file closes. Every shipped version keeps a byte-literal fixture in state_test.go that
 // must go on loading (PB-STATE-5).
-const StateSchemaVersion = 1
+//
+// v2 adds the coordinates the gomobile facade (S8) is the first consumer to need:
+// MachineRelayAuthPub, PushToken, PushPreference and ReconciledEpoch. The bump is what
+// makes a downgrade fail closed -- a v1 build decoding a v2 blob would drop
+// MachineRelayAuthPub and leave the phone with a valid content key, a valid send-seq and
+// no destination, with nothing failing loudly.
+const StateSchemaVersion = 2
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -73,23 +79,54 @@ type Bucket struct {
 // walk the counter away from the gateway's per-(sender,epoch) high-water. Receive is keyed
 // per Bucket for the mirror reason.
 type State struct {
-	Machine        string                    // machine endpoint id these coordinates belong to
-	MachineStatic  []byte                    // machine Noise-static public key pinned at pairing
-	MachineSignPub []byte                    // machine Ed25519 grant-signing public key pinned at pairing
-	RoutingID      string                    // this phone's relay routing id
-	EpochID        uint32                    // current epoch the content key belongs to
-	Keys           crypto.EpochKeys          // wake + content keys for EpochID
-	SendSeq        map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive        map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch     uint32                    // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq       uint64                    // highest accepted grant seq for GrantEpoch
-	WakeReplay     uint64                    // highest accepted push-wake counter
-	RelayCursor    uint64                    // relay mailbox read cursor the next poll resumes from
-	Sessions       []CachedSession           // journal-derived session model
-	Snapshots      []Snapshot                // server-rendered terminal grids, latest per session
-	PendingOps     []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
-	OpOutcomes     map[string]schema.Control // durable operation outcomes, keyed by operation id
-	Stale          map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	Machine        string // machine endpoint id these coordinates belong to
+	MachineStatic  []byte // machine Noise-static public key pinned at pairing
+	MachineSignPub []byte // machine Ed25519 grant-signing public key pinned at pairing
+	// MachineRelayAuthPub is the machine's relay-auth Ed25519 public key, pinned at
+	// pairing. Everything above records who the machine IS; this is the only coordinate
+	// that says how to REACH it: relay.RoutingID(MachineRelayAuthPub) is the mailbox every
+	// command and keystroke is appended to, and it is what the phone authorizes so the
+	// machine may append back. Without it a restored phone holds a valid content key, a
+	// valid send-seq and no destination -- and nothing fails loudly.
+	MachineRelayAuthPub []byte
+	RoutingID           string                    // this phone's relay routing id
+	EpochID             uint32                    // current epoch the content key belongs to
+	Keys                crypto.EpochKeys          // wake + content keys for EpochID
+	SendSeq             map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive             map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch          uint32                    // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq            uint64                    // highest accepted grant seq for GrantEpoch
+	WakeReplay          uint64                    // highest accepted push-wake counter
+	RelayCursor         uint64                    // relay mailbox read cursor the next poll resumes from
+	Sessions            []CachedSession           // journal-derived session model
+	Snapshots           []Snapshot                // server-rendered terminal grids, latest per session
+	PendingOps          []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	OpOutcomes          map[string]schema.Control // durable operation outcomes, keyed by operation id
+	Stale               map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	// PushToken is the provider push token PB-STATE-9 assigns to the WAKE tier and
+	// PB-PUSH-9 requires to survive process death and app upgrade: a token held only in
+	// memory is re-registered only if the app happens to be foregrounded.
+	PushToken string
+	// PushPreference are PB-APP-7's two coarse toggles. PB-PUSH-10 makes the MACHINE
+	// authoritative for suppression, but the phone still has to render the setting the
+	// user chose across a restart, or the UI contradicts what the machine is doing.
+	PushPreference PushPreference
+	// ReconciledEpoch is the epoch whose machine-published rollback authorities
+	// (PB-SYNC-7) have been ADOPTED. It closes the S7 recorded residual "reconcile
+	// adoption is not persisted, so every phone process death re-arms the fail-closed
+	// refusal of mutating ops, clearable only by a gateway reconnect the phone cannot
+	// trigger" -- on Android process death is routine, so that residual is PB-STATE-10's
+	// brick. The authorities themselves are already folded into the coordinates above;
+	// this records that the fold HAPPENED, which nothing else can witness when every
+	// authority is legitimately zero.
+	ReconciledEpoch uint32
+}
+
+// PushPreference is PB-APP-7's pair of coarse notification toggles, persisted so the
+// settings screen renders the user's choice after a restart rather than a default.
+type PushPreference struct {
+	Alerts   bool `json:"alerts"`
+	Mentions bool `json:"mentions"`
 }
 
 // clone deep-copies the maps and slices so custody and callers can never observe or
@@ -97,6 +134,7 @@ type State struct {
 func (s State) clone() State {
 	s.MachineStatic = slices.Clone(s.MachineStatic)
 	s.MachineSignPub = slices.Clone(s.MachineSignPub)
+	s.MachineRelayAuthPub = slices.Clone(s.MachineRelayAuthPub)
 	s.SendSeq = maps.Clone(s.SendSeq)
 	s.Receive = maps.Clone(s.Receive)
 	s.Sessions = slices.Clone(s.Sessions)
@@ -123,25 +161,31 @@ type Store interface {
 // ---------------------------------------------------------------------------
 
 type stateFile struct {
-	SchemaVersion  int                       `json:"schema_version"`
-	Machine        string                    `json:"machine"`
-	MachineStatic  []byte                    `json:"machine_static,omitempty"`
-	MachineSignPub []byte                    `json:"machine_sign_pub,omitempty"`
-	RoutingID      string                    `json:"routing_id"`
-	EpochID        uint32                    `json:"epoch_id"`
-	WakeKey        []byte                    `json:"wake_key,omitempty"`
-	ContentKey     []byte                    `json:"content_key,omitempty"`
-	SendSeq        []sendSeqRecord           `json:"send_seq"`
-	Receive        []receiveRecord           `json:"receive"`
-	GrantEpoch     uint32                    `json:"grant_epoch"`
-	GrantSeq       uint64                    `json:"grant_seq"`
-	WakeReplay     uint64                    `json:"wake_replay"`
-	RelayCursor    uint64                    `json:"relay_cursor"`
-	Sessions       []CachedSession           `json:"sessions,omitempty"`
-	Snapshots      []Snapshot                `json:"snapshots,omitempty"`
-	PendingOps     []QueuedOp                `json:"pending_ops,omitempty"`
-	OpOutcomes     map[string]schema.Control `json:"op_outcomes,omitempty"`
-	Stale          []bucketRecord            `json:"stale,omitempty"`
+	SchemaVersion       int    `json:"schema_version"`
+	Machine             string `json:"machine"`
+	MachineStatic       []byte `json:"machine_static,omitempty"`
+	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
+	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
+	RoutingID           string `json:"routing_id"`
+	EpochID             uint32 `json:"epoch_id"`
+
+	PushToken       string         `json:"push_token,omitempty"`
+	PushPreference  PushPreference `json:"push_preference,omitzero"`
+	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
+
+	WakeKey     []byte                    `json:"wake_key,omitempty"`
+	ContentKey  []byte                    `json:"content_key,omitempty"`
+	SendSeq     []sendSeqRecord           `json:"send_seq"`
+	Receive     []receiveRecord           `json:"receive"`
+	GrantEpoch  uint32                    `json:"grant_epoch"`
+	GrantSeq    uint64                    `json:"grant_seq"`
+	WakeReplay  uint64                    `json:"wake_replay"`
+	RelayCursor uint64                    `json:"relay_cursor"`
+	Sessions    []CachedSession           `json:"sessions,omitempty"`
+	Snapshots   []Snapshot                `json:"snapshots,omitempty"`
+	PendingOps  []QueuedOp                `json:"pending_ops,omitempty"`
+	OpOutcomes  map[string]schema.Control `json:"op_outcomes,omitempty"`
+	Stale       []bucketRecord            `json:"stale,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -284,19 +328,23 @@ func loadState(path, machineID string) (State, error) {
 	}
 
 	st := State{
-		Machine:        f.Machine,
-		MachineStatic:  f.MachineStatic,
-		MachineSignPub: f.MachineSignPub,
-		RoutingID:      f.RoutingID,
-		EpochID:        f.EpochID,
-		GrantEpoch:     f.GrantEpoch,
-		GrantSeq:       f.GrantSeq,
-		WakeReplay:     f.WakeReplay,
-		RelayCursor:    f.RelayCursor,
-		Sessions:       f.Sessions,
-		Snapshots:      f.Snapshots,
-		PendingOps:     f.PendingOps,
-		OpOutcomes:     f.OpOutcomes,
+		Machine:             f.Machine,
+		MachineStatic:       f.MachineStatic,
+		MachineSignPub:      f.MachineSignPub,
+		MachineRelayAuthPub: f.MachineRelayAuthPub,
+		RoutingID:           f.RoutingID,
+		EpochID:             f.EpochID,
+		PushToken:           f.PushToken,
+		PushPreference:      f.PushPreference,
+		ReconciledEpoch:     f.ReconciledEpoch,
+		GrantEpoch:          f.GrantEpoch,
+		GrantSeq:            f.GrantSeq,
+		WakeReplay:          f.WakeReplay,
+		RelayCursor:         f.RelayCursor,
+		Sessions:            f.Sessions,
+		Snapshots:           f.Snapshots,
+		PendingOps:          f.PendingOps,
+		OpOutcomes:          f.OpOutcomes,
 	}
 	copy(st.Keys.WakeKey[:], f.WakeKey)
 	copy(st.Keys.ContentKey[:], f.ContentKey)
@@ -348,22 +396,26 @@ func decodeBucket(sender string, epoch uint32) (Bucket, error) {
 // dir meaningful.
 func persistState(path string, st State) error {
 	f := stateFile{
-		SchemaVersion:  StateSchemaVersion,
-		Machine:        st.Machine,
-		MachineStatic:  st.MachineStatic,
-		MachineSignPub: st.MachineSignPub,
-		RoutingID:      st.RoutingID,
-		EpochID:        st.EpochID,
-		WakeKey:        st.Keys.WakeKey[:],
-		ContentKey:     st.Keys.ContentKey[:],
-		GrantEpoch:     st.GrantEpoch,
-		GrantSeq:       st.GrantSeq,
-		WakeReplay:     st.WakeReplay,
-		RelayCursor:    st.RelayCursor,
-		Sessions:       st.Sessions,
-		Snapshots:      st.Snapshots,
-		PendingOps:     st.PendingOps,
-		OpOutcomes:     st.OpOutcomes,
+		SchemaVersion:       StateSchemaVersion,
+		Machine:             st.Machine,
+		MachineStatic:       st.MachineStatic,
+		MachineSignPub:      st.MachineSignPub,
+		MachineRelayAuthPub: st.MachineRelayAuthPub,
+		RoutingID:           st.RoutingID,
+		EpochID:             st.EpochID,
+		PushToken:           st.PushToken,
+		PushPreference:      st.PushPreference,
+		ReconciledEpoch:     st.ReconciledEpoch,
+		WakeKey:             st.Keys.WakeKey[:],
+		ContentKey:          st.Keys.ContentKey[:],
+		GrantEpoch:          st.GrantEpoch,
+		GrantSeq:            st.GrantSeq,
+		WakeReplay:          st.WakeReplay,
+		RelayCursor:         st.RelayCursor,
+		Sessions:            st.Sessions,
+		Snapshots:           st.Snapshots,
+		PendingOps:          st.PendingOps,
+		OpOutcomes:          st.OpOutcomes,
 	}
 	for epoch, ceiling := range st.SendSeq {
 		f.SendSeq = append(f.SendSeq, sendSeqRecord{Epoch: epoch, Ceiling: ceiling})

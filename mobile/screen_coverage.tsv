@@ -1,0 +1,50 @@
+# PB-BIND-3 traceability: every element the v1 screens need -> the facade method(s)
+# that serve it. Enforced by coverage_test.go, BIDIRECTIONALLY:
+#
+#   - an element in the required list with no row, or a row with an empty method column,
+#     is a COVERAGE FAILURE (the requirement's own words);
+#   - an exported facade entry point that appears in NO row is an UNTRACED surface --
+#     API the Android app can call that no screen asked for, which is how a bound
+#     surface grows secrets and dead verbs.
+#
+# Columns: element <TAB> methods (comma-separated) <TAB> requirement <TAB> note
+# Method spec: "Type.Method" for methods, bare "Name" for package-level functions.
+#
+# THREE ELEMENTS HAVE NO DEVICE-REACHABLE WIRE VERB TODAY. They are listed, with the
+# gap named, rather than quietly dropped -- PB-BIND-3 exists to make exactly this
+# visible, and the requirement's own precedent (PB-PUSH-8, split across S8/S12 in 11)
+# is that S8 owns the SURFACE and another slice owns the wired verb.
+#
+#element	methods	requirement	note
+pairing.qr_decode	DecodeQR,App.BeginPairing,Pairing.Origin	PB-PAIR-2,PB-PAIR-6	DecodeQR is separate from BeginPairing so the scanner screen can DISPLAY the destination before anything is joined (PB-PAIR-6: no destination is joined silently). Origin is what the confirm sheet renders.
+pairing.sas	Pairing.SAS	PB-SAS-1,PB-SAS-2	Returns the six-emoji SAS as ONE display string computed by the shared Go core (internal/remote/crypto/sas.go). The emoji table is never re-implemented in Kotlin.
+pairing.confirm	Pairing.Confirm,Pairing.State	PB-PAIR-4,PB-PAIR-5	State exposes the persisted pairing state machine's terminal states (declined, sas_mismatch, rendezvous_timeout, expired, already_paired).
+pairing.cancel	Pairing.Cancel	PB-PAIR-5	Abandoned device keys and partial local records are cleaned up.
+roster	App.Roster,SessionList.Count,SessionList.At	PB-APP-2	gomobile has no list type: a collection crosses as an opaque handle with Count/At. This is why Snapshot carries Text, not the []string of 4.1.
+sessions_with_group	App.Session,Session.Group	PB-APP-2	Group is VERBATIM from the wire (phonecore.CachedSession) and never derived on-device. status.Group is unbindable, so it crosses as its string form.
+presence	App.Presence	PB-APP-5	Machine presence via the relay (relay.Client.Presence).
+journal.read	App.ReadJournal,JournalPage.Count,JournalPage.At,JournalPage.NextCursor	PB-APP-3,PB-APP-5	Also serves the machine pane's activity log.
+journal.subscribe	App.SubscribeJournal,App.UnsubscribeJournal	PB-APP-3	Delivery is via the EventListener; unsubscribe exists so a backgrounded screen stops the stream.
+snapshot.peek	App.Peek	PB-APP-4	Renders daemon-sanitized SnapText only. No VT emulator on device (ADR-007 D2).
+terminal_watch	App.TerminalWatch	PB-BIND-3,PB-APP-4	First-class verb (protocol/schema/remote.go ActionTerminalWatch, routed at remotegw/command_loop.go). The live tail depends on it.
+terminal_unwatch	App.TerminalUnwatch	PB-BIND-3,PB-APP-4	Without unwatch the peek plane leaks per-session server render work.
+take_control.acquire	App.TakeControl	PB-INPUT-3,PB-APP-4	Signed take_control; the burned seq gap (PB-STATE-8) is absorbed by THIS command frame, never by an input frame.
+take_control.release	App.ReleaseControl	PB-INPUT-3,PB-APP-4	take_control_end.
+input.send	App.SendInput	PB-APP-4,PB-NET-4	Live-only: never queued, never replayed (ADR-007 D7).
+input.resize	App.Resize	PB-APP-4
+launch	App.Launch	PB-APP-6	The LaunchSpec's ContentHash MUST come from the canonical protocol.LaunchContentHash. Reimplementing its length-prefixed encoding in the facade is FORBIDDEN (S1 review R2): a one-byte divergence yields silent signature failures with no compile error. See conformance/launch_hash KAT.
+interrupt	App.Interrupt	PB-APP-3	GAP: no wire verb exists. protocol/schema/remote.go defines launch/kill/delete/approve/device_revoke/take_control/terminal_watch/terminal_unwatch -- there is NO interrupt action, and remotegw opForAction maps only kill/delete/launch. S8 owns this surface; the verb is a cross-slice split in the shape of PB-PUSH-8.
+kill	App.Kill	PB-APP-3	Persistent Stop maps here (with confirmation).
+revoke	App.RevokeThisDevice	PB-SEC-7,PB-APP-5	GAP: ActionDeviceRevoke IS in the signed action set and the daemon serves it through requireRemoteAuthz, but remotegw opForAction does not map it, so a phone-sealed device_revoke is refused "unsupported command action" AND no reply is sealed, which would leave the phone's panic action looking like a success that hangs forever. So the surface seals nothing and records a durable refusal, exactly as interrupt does. Gateway-side mapping is owed.
+kill_switch	App.KillSwitchEngaged	PB-APP-5,PB-SEC-6	READ ONLY, DELIBERATELY. remote_set_control is OWNER-TIER ONLY (protocol/server.go handleRemoteSetControl refuses the remote tier before the backend is consulted: "a remote device must never re-enable a switch its owner turned off"). The phone surfaces the state so a CodeKillSwitch refusal is legible; it must never be able to set it. The phone-side panic action is revoke.
+push.token_register	App.RegisterPushToken,App.DeletePushToken	PB-PUSH-9	Deletion on revoke/disable is part of the token lifecycle.
+push.preferences	App.PushPreference,App.SetPushPreference	PB-PUSH-8,PB-APP-7	Two coarse toggles. Split recorded in 11: S8 owns the SURFACE, S12 owns the wired-to-real-verb test, because local filtering is insufficient (the push would still be sent and the provider would still see token/timing/size).
+connection_state	App.ConnectionState	PB-APP-8,PB-NET-4	offline / connecting / online / reconnecting.
+stale_state	App.StreamState	PB-APP-8,PB-SYNC-1	PER STREAM, not global: a stale view is never presented as live.
+resync	App.Resync	PB-SYNC-1,PB-SYNC-6	Per-stream, rate-bounded per 6.0.
+lifecycle.start	App.Start,App.IsRunning	PB-BIND-6,PB-RUN-2	Idempotent.
+lifecycle.stop	App.Stop,App.Close	PB-BIND-6,PB-RUN-2	Idempotent. Close releases the durable state handle for good.
+lifecycle.restore	NewApp,App.StateSummary	PB-STATE-1,PB-STATE-2	NewApp resumes every durable coordinate (phonecore.Resume). StateSummary is how a test -- and the debug screen -- observes that a restart actually restored, rather than silently starting from zero.
+op.outcome	App.Outcome,App.PendingOpCount	PB-SYNC-2,PB-STATE-1	KEYED BY OPERATION ID. The unkeyed phonecore ReplyCache.Take is a recorded S7 residual: rebuilt from an unpruned OpOutcomes map, it can hand the app a stale outcome. The facade must route through TakeFor.
+key_custody.install	App.InstallWakeKey,App.InstallContentKey,App.PurgeKeys	PB-KEY-1,PB-KEY-7	The ONE deliberate secret crossing (ADR-007 B8): a transient per-tier data key, unwrapped by an authenticated-Keystore AES KEK on the Java side and passed Java -> Go, zeroized after use. Inbound only. PurgeKeys is PB-KEY-7's lock purge.
+callbacks	App.SetEventListener	PB-BIND-6	Events arrive on a Go goroutine; the UI must marshal. Queue bound and overflow behaviour are stated in the package doc and pinned by contract_test.go.

@@ -1,6 +1,6 @@
 module github.com/Nathandela/swarm
 
-go 1.24.2
+go 1.25.0
 
 require (
 	charm.land/bubbletea/v2 v2.0.2
@@ -16,7 +16,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	go.etcd.io/bbolt v1.3.11
 	golang.org/x/crypto v0.48.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.47.0
 	rsc.io/qr v0.2.0
 )
 
@@ -33,5 +33,10 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/mobile v0.0.0-20260709172247-6129f5bee9d5 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/tools v0.48.0 // indirect
 )
+
+tool golang.org/x/mobile/cmd/gobind

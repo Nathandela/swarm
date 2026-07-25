@@ -131,6 +131,13 @@ type (
 // that has silently drifted (S1 review R3).
 var _ Control = schema.Control{}
 
+// LaunchContentHash re-exports the canonical launch content binding, which lives in the
+// daemon-free schema package so the gomobile-bound phone facade -- the SIGNER -- can reach
+// it without dragging internal/daemon into the closure shipped to a handset (PB-BIND-0).
+// Verifier and signer must compute the SAME bytes: a divergent reimplementation produces
+// silent signature-verification failures with no compile error, so there is exactly one.
+var LaunchContentHash = schema.LaunchContentHash
+
 // Event is the client-facing subscribe payload: one status-changed session view.
 type Event struct {
 	Session SessionView

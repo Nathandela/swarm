@@ -1,0 +1,114 @@
+const CallbackQueueSize
+field Config.MachineID string
+field Config.RelayURL string
+field Config.StateDir string
+field Event.Cursor int64
+field Event.Dropped int
+field Event.Kind string
+field Event.Message string
+field Event.SessionID string
+field Event.State string
+field Event.Stream string
+field JournalEntry.Cursor int64
+field JournalEntry.Group string
+field JournalEntry.SessionID string
+field JournalEntry.Type string
+field LaunchSpec.Agent string
+field LaunchSpec.Cwd string
+field LaunchSpec.Options string
+field LaunchSpec.Prompt string
+field Op.Action string
+field Op.OperationID string
+field Op.SessionID string
+field Outcome.Code string
+field Outcome.Message string
+field Outcome.OperationID string
+field Outcome.Resolved bool
+field PushPreference.Alerts bool
+field PushPreference.Mentions bool
+field QRPayload.HasStaticPub bool
+field QRPayload.RelayURL string
+field QRPayload.RendezvousID string
+field Session.Group string
+field Session.ID string
+field Session.Need string
+field Session.Present bool
+field Session.Title string
+field Snapshot.Cols int
+field Snapshot.Rows int
+field Snapshot.SessionID string
+field Snapshot.Stale bool
+field Snapshot.Text string
+field StateSummary.EpochID int64
+field StateSummary.Machine string
+field StateSummary.PendingOps int
+field StateSummary.Reconciled bool
+field StateSummary.RelayCursor int64
+field StateSummary.Restored bool
+field StateSummary.SendSeq int64
+func DecodeQR(string) (*QRPayload, error)
+func NewApp(*Config) (*App, error)
+ifacemethod EventListener.OnEvent(*Event)
+method App.BeginPairing(string) (*Pairing, error)
+method App.Close() error
+method App.ConnectionState() (string, error)
+method App.DeletePushToken() error
+method App.InstallContentKey([]byte) error
+method App.InstallWakeKey([]byte) error
+method App.Interrupt(string) (*Op, error)
+method App.IsRunning() (bool, error)
+method App.Kill(string) (*Op, error)
+method App.KillSwitchEngaged() (bool, error)
+method App.Launch(*LaunchSpec) (*Op, error)
+method App.Outcome(string) (*Outcome, error)
+method App.Peek(string) (*Snapshot, error)
+method App.PendingOpCount() (int, error)
+method App.Presence() (string, error)
+method App.PurgeKeys() error
+method App.PushPreference() (*PushPreference, error)
+method App.ReadJournal(int64, int) (*JournalPage, error)
+method App.RegisterPushToken(string) error
+method App.ReleaseControl(string) (*Op, error)
+method App.Resize(string, int, int) error
+method App.Resync(string) error
+method App.RevokeThisDevice() (*Op, error)
+method App.Roster() (*SessionList, error)
+method App.SendInput(string, []byte) error
+method App.Session(string) (*Session, error)
+method App.SetEventListener(EventListener) error
+method App.SetPushPreference(*PushPreference) (*Op, error)
+method App.Start() error
+method App.StateSummary() (*StateSummary, error)
+method App.Stop() error
+method App.StreamState(string) (string, error)
+method App.SubscribeJournal() error
+method App.TakeControl(string) (*Op, error)
+method App.TerminalUnwatch(string) error
+method App.TerminalWatch(string) error
+method App.UnsubscribeJournal() error
+method JournalPage.At(int) (*JournalEntry, error)
+method JournalPage.Count() (int, error)
+method JournalPage.NextCursor() (int64, error)
+method Pairing.Cancel() error
+method Pairing.Confirm() error
+method Pairing.Origin() (string, error)
+method Pairing.SAS() (string, error)
+method Pairing.State() (string, error)
+method SessionList.At(int) (*Session, error)
+method SessionList.Count() (int, error)
+type App struct
+type Config struct
+type Event struct
+type EventListener interface
+type JournalEntry struct
+type JournalPage struct
+type LaunchSpec struct
+type Op struct
+type Outcome struct
+type Pairing struct
+type PushPreference struct
+type QRPayload struct
+type Session struct
+type SessionList struct
+type Snapshot struct
+type StateSummary struct
