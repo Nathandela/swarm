@@ -1,0 +1,126 @@
+# Phase B slice S2 — durable gateway inbound state (PB-GW-1, PB-GW-3, PB-GW-4)
+
+## The defect (§4.6)
+
+The gateway's inbound replay guard did not survive a restart. `NewCommandBridge` built a fresh
+`crypto.NewMailboxReceiver()` every start with a cursor of 0; its own doc said a caller
+"resuming across a restart should seed it via SetCursor from durable state" and **`SetCursor`
+was never called from production startup**. `cmd/swarm-remote` persisted only
+`outbound-journal.seq` and `outbound-reply.seq` — **no inbound state at all**. In
+`crypto.MailboxReceiver.Accept` the staleness test is `if seen && Seq <= hi`, so on a fresh
+receiver `seen == false` and the check was **skipped entirely**.
+
+**Scope, carefully.** The full keystroke-injection exploit was investigated and **disproved**
+for the shipped tree (no production phone client imports `phonecore`; a restart gives an empty
+`LeaseManager` which drops input with no lease; a replayed `take_control` is refused by a
+single-use `operation_id` in the durable idempotency store). What is true is narrower: the
+guard rests on incidental mechanisms rather than on itself, and with a **seq-regressed phone**
+— the state Phase B creates before PB-STATE lands — a legitimate `take_control` at seq 1 opens
+a lease, a retained input at seq 60 is gap-dropped but advances the high-water to 60, and seq
+61 is then contiguous and routes to the PTY. The Phase A closure is NOT amended to assert an
+exploit.
+
+## RED (failing first, GG-5)
+
+A compile failure cannot demonstrate per-test RED, so the test author temporarily declared the
+seam **inert** (types present, never loaded, never saved — today's behaviour), ran the suite,
+and deleted the scaffold. All 11 failed on their assertions:
+
+```
+--- FAIL: TestCommandBridge_InboundHighWaterSeededAcrossRestart
+    post-restart processed=3 forwarded=3, want 0/0
+--- FAIL: TestCommandBridge_MailboxCursorSeededOnStart
+    post-restart Cursor() = 0 before any poll, want 3
+--- FAIL: TestCommandBridge_InboundHighWaterKeyedPerEpoch
+--- FAIL: TestReplay_SeqRegressedPhoneRetainedInputNeverReachesLease
+    1 retained keystroke(s) reached the lease plane after the restart, want 0
+--- FAIL: TestReplay_RetainedFrameClassesRefusedAfterRestart/{take_control,take_control_end,
+           idempotent_mutation_kill,terminal_watch,terminal_unwatch}
+--- FAIL: TestCrashMatrix_* (6 tests)
+```
+
+Tests that would pass against unfixed code: **none**. The reviewer independently rebuilt the
+unfixed code and confirmed all 13 tests/subtests fail for their stated reasons — including two
+that only fail at run 3, which are exactly the assertions a weakened test would have dropped.
+
+## The central engineering judgement: no reservation inbound
+
+The implementation brief suggested a reservation-style optimistic high-water (mirroring
+`seqstore.go`) to avoid an fsync per keystroke. **The implementer refused, and was right.**
+
+Reservation is a *sender-side* technique. Outbound the gateway allocates the seq space, so
+skipping a block's unused tail produces a `Gap` at the phone — a resync signal, never a drop.
+Inbound **the phone allocates**: seeding `lastSeen + 64` would make `Accept` return
+`ErrStaleSeq` for the phone's next 64 *legitimate* frames, and the phone gets no feedback
+because `Run` discards `PollOnce`'s error. Commands and input share one sequencer, so the
+burned window swallows `take_control` and `kill` too. Durability would become silent
+censorship of future traffic. Per-frame persist shipped instead.
+
+## Per-class ordering (PB-GW-3)
+
+A local transaction cannot atomically span the persisted high-water, the cursor, an external
+PTY/daemon side effect and the relay ack, so each class differs:
+- **input**: persist consumption **before** the PTY write; a persist failure drops the
+  keystroke (loss allowed, duplication forbidden — ADR-007 D7 makes input live-only).
+- **mutations**: forward **before** persisting; exactly one bounded re-forward, deduped by the
+  daemon's durable idempotency.
+- **watch/unwatch**: dispatch then persist; converge by re-dispatch, never synthesise the
+  opposite transition.
+
+## Format
+
+Versioned JSON, `{schema_version, machine identity, cursor, streams[{sender, epoch, seq}]}`,
+sorted for byte-stability, fail-closed on malformed/unversioned/bad-sender, monotonic merge,
+in-memory advanced only after the write lands, temp+fsync+rename+dir-fsync. JSON rather than
+the packed uint64 of `outbound-*.seq` because a checkpoint is a variable-length map under a
+compound key written at human rate, not a per-journal-record hot path.
+
+## Review findings applied
+
+**B1 (blocking, a regression S2 itself introduced)**: the checkpoint was bound to no identity.
+`swarm remote init` regenerates `machine.key` without touching its siblings, so a stale
+`inbound-state.json` carried an epoch-1 high-water of N and stale-dropped a freshly paired
+phone's first N frames including `take_control`; and a reset relay mailbox left the gateway
+deaf forever. **Both self-healed before S2** because the in-memory guard reset on restart. Now
+the file is stamped with the machine identity and a mismatch yields an empty checkpoint.
+
+**N3**: the fail-closed input drop was completely silent (`Run` discards `PollOnce`'s error), so
+a full or read-only state dir would drop every keystroke forever with no signal. Surfaced.
+
+**N6**: a production comment claimed a retaining relay "can replay every frame ... keystrokes
+included" — true at the guard, but the PTY half is the claim §4.6 withdrew. Qualified.
+
+## Accepted residuals
+
+1. **A scalar high-water per stream cannot serve both classes — accepted deviation from
+   PB-GW-3's "loss forbidden" for mutations.** A `kill` at seq 1 whose forward fails, followed
+   by a keystroke at seq 2 in the same batch, persists `Highest=2`; on restart the retained
+   kill is refused and never re-forwarded. Reachable **with no crash at all**. The reviewer
+   tested the obvious fix (hold the high-water at the contiguous consumed prefix) and it makes
+   the inputs above the hole replayable, violating the input class's forbidden-duplication
+   rule; stopping the batch at the hole reintroduces the poisoned-envelope wedge `PollOnce`
+   exists to prevent. A gap set would be needed. **Softening**: against an honest (purging)
+   relay the mutation is already lost regardless, because `PollOnce` acks `maxCursor`
+   unconditionally past per-item failures — so this is a requirements-level gap that predates
+   S2, not an S2 regression. Recorded as accepted, not fixed.
+2. **Per-keystroke fsync is on the input critical path**, measured at 13-15 ms on this
+   M1/APFS host (200 iterations, warm), so a batch of 8 costs ~120 ms — about 10% of §6.0's
+   p50 <= 150 ms budget on fast local storage, worse on a network-mounted state dir.
+   **Consequence for PB-NET-5: its latency harness must run with a real file-backed
+   `InboundState`, not the in-memory default, or the budget is measured against a fiction.**
+   An invariant-preserving optimisation exists (persist once per maximal run of consecutive
+   input frames in a batch, never past an undispatched command frame) — recorded, not taken.
+3. **Retired-epoch entries accumulate**, one small record per revoke. Harmless and prunable:
+   the gateway holds one epoch content key at a time, so a retired epoch's retained frames fail
+   the AEAD regardless of the high-water.
+4. **`golangci-lint` has 9 pre-existing findings in this package**, byte-identical between HEAD
+   and the S2 tree. S2 introduces none. Separate issue, but CLAUDE.md makes lint a closure gate.
+
+## Gates
+
+```
+go test -race ./internal/remotegw/ ./cmd/swarm-remote/ ./internal/skeleton/ -count=1   PASS
+go build ./... && go vet ./internal/remotegw/ ./cmd/swarm-remote/                      clean
+```
+Run on a throwaway copy with slice S1b's in-flight RED files removed there only — the package
+does not compile in-tree while two slices are live in it.
