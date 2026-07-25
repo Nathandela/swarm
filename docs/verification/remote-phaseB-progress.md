@@ -210,6 +210,24 @@ Two more properties from the same author, both load-bearing:
   displays a SAS. A driver built on "wait for the SAS" would report the refusal as "the phone never
   derived a SAS" — the exact misreporting shape of the latent pairing race recorded above.
 
+## "HAS AN EPOCH" IS NOT A PROXY FOR "HAS AN EPOCH KEY" -- it was wrong in two tests, one of them green
+
+`pin()` sets `State.EpochID` from the machine's **payload**, the instant the handshake completes
+(`mobile/pairing.go:591`). The epoch key arrives later, in a signed grant on the mailbox. So a test
+that waits on `EpochID != 0` as a proxy for "the phone is ready" is satisfied by the **pairing**, not
+by the grant, and its probe then runs against a phone with an epoch and no key.
+
+It was wrong in two S16 tests. One failed visibly; **the other was passing by luck**, because the
+flow that followed purged the keys anyway, so the wrong precondition never surfaced.
+
+**What actually proves a grant was committed is the relay cursor moving** — a coordinate the grant
+advances, rather than one the pin advances.
+
+This generalises past those two tests: any wait that approximates a durable outcome with a
+coordinate written earlier in the same flow is a precondition that can be satisfied by the wrong
+event. Prefer asserting the fact the test needs — here, that the phone can actually reach the
+machine — over approximating it.
+
 ## KOTLIN COMPILES THE WHOLE TEST SOURCE SET, SO ONE SLICE'S RED BLOCKS EVERY OTHER SLICE'S TESTS
 
 Found during S16. `:app:testDebugUnitTest` cannot run while **any** test file in the module fails to
@@ -909,6 +927,9 @@ record of what was intended rather than what shipped — standing class (ii), ap
     Attributed both directions (fails at the same rate with the push-delivery split reverted), so it
     is pre-existing and exposed by load, not caused by it. **Fixable the same way** — wait for the
     server to observe the disconnect — and it will keep biting `-count=N` runs until someone does.
+  - `mobile/conformance TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart` — one of the
+    two tests still carrying the latent pairing race recorded above, so a full-suite failure here
+    should be read as that race before anything else
   - `internal/shim TestSocket_AttachDeliversSnapshot` — attributed with a dependency proof rather
     than assumed: `go list -deps ./internal/shim` has **zero** references to `phonecore` or
     `swarm/mobile`, so the phone work cannot reach it
