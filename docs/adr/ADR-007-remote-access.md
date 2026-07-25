@@ -1286,3 +1286,47 @@ failing (forged key, expired command) with a positive control so the refusals ar
 Naming this rather than dressing the tier check up as a guard: a guard that cannot fail is this
 project's most-repeated defect, and one that is known and documented is not the same object as one
 that is believed to work.
+
+**B21. The QR scanner is `com.google.zxing:core` for decoding plus `androidx.camera` (CameraX) for
+frame capture. ML Kit is named and rejected.** PB-PAIR-3 requires the scanner choice to be recorded
+here rather than discovered in a build file, and PB-SEC-14 is the cost it trades against.
+
+**The property that decides it**: everything shipped is inside the APK the release key signs. No
+Play Services, no downloaded model, no dynamic code loading. That is the supply-chain property that
+actually matters for a device the threat model assumes an adversary may hold — a signed artifact
+whose contents are fully enumerable is auditable in a way that "and then it fetches a model" is not.
+
+- **`com.google.zxing:core`** is pure Java, Apache-2.0, with **zero transitive dependencies** and an
+  auditable decoder.
+- **`androidx.camera`** is a first-party AndroidX artifact from the same repository this module
+  already trusts for `appcompat`, so it widens the trust set by one auditable library rather than by
+  a vendor.
+- It also works on **de-Googled and AOSP handsets**, which is not incidental here: PB-OPS-1's LAN
+  demonstration describes exactly the self-hosted deployment those users choose. A scanner that
+  requires Play Services would make the flagship demonstration impossible on the devices most likely
+  to want it.
+
+**Rejected, and why, so this is not re-opened as an oversight:**
+
+- **`com.google.mlkit:barcode-scanning` (bundled)** decodes measurably better on damaged, small or
+  badly-lit codes. It costs roughly 2.4 MB of **closed native code** — a second vendor blob on the
+  security-sensitive surface. Traded off, not dismissed: the decode advantage is real and the cost is
+  paid in exactly the place this project is most careful about.
+- **`com.google.android.gms:play-services-mlkit-barcode-scanning`** is rejected **outright** rather
+  than traded off: it executes code the APK does not contain and the release signature does not
+  cover. That is disqualifying independent of its merits.
+- **`com.journeyapps:zxing-android-embedded`** is a third-party wrapper carrying its own Activity and
+  camera stack — more surface than the decoder we need, from a smaller maintainer, to save wiring we
+  are writing anyway.
+
+**The accepted cost, stated rather than waved through**: ZXing has a weaker decoder and no auto-zoom.
+Two things make that acceptable in this product specifically. The QR is rendered **on a screen about
+a metre away**, not printed on a crumpled surface, which is the case ML Kit's advantage is largest
+for. And PB-PAIR-2 already requires a **manual-entry fallback** — the same QR payload, typed — for
+the denied-camera path, which doubles as the fallback for a code that will not decode. The failure
+mode is therefore a slower pairing, not a blocked one.
+
+**Ordering note, because the fence is bidirectional**: `TestPBPAIR3_TheScannerChoiceIsRecordedInTheADR`
+fails both when the ADR names no library and when a scanner dependency appears in
+`android/app/build.gradle.kts` that the ADR does not name. So this entry lands **before** the
+dependency, not alongside it.
