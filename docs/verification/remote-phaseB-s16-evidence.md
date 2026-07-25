@@ -239,3 +239,52 @@ test goroutine (`s10Machine.deviceOutcome`), and one of them has since been fixe
 Two further adaptations were made and then **reverted** once the PB-PAIR-5 amendment removed the need
 (`TestPBSAS2` and `TestPBPAIR5_CancelIsATerminalStateNotAHang` briefly paired a fresh app). Neither is
 modified now.
+
+## Independent review (2026-07-25) — SHIP, with four corrections to THIS file
+
+Twelve mutations were applied and reverted; every fence fired with a message naming the real defect.
+Two results are **stronger** than this file claimed, and four claims here are **weaker** than written.
+
+### Stronger than claimed
+
+- **The Kotlin half verifies clean as committed.** The reviewer built the AAR and ran
+  `./gradlew :app:lint :app:test` to BUILD SUCCESSFUL with **no init script and no workaround**.
+  S17's test file is not in this commit, so the recorded "the Kotlin halves of S16 and S17 cannot be
+  verified independently" residual **does not apply at this commit**. It applies once S17's RED
+  lands, not before.
+- **The four keyless states are disjoint BY CONSTRUCTION, not incidentally.** Verified structurally
+  rather than by the passing test: `streamsOf()` never returns the grant stream, so the commit path
+  cannot mark it; the sole writer of that mark is the grant-loss detector, gated on keyless AND a
+  replay refusal; the sole clearer is the grant install's success path.
+
+### Corrections
+
+1. **The different-machine guard's narrow comparison is UNFENCED in the direction that matters.**
+   Extending it to also compare the relay-auth key leaves the whole pairing suite green. The
+   same-machine subtest re-pairs against a machine supplying **byte-identical** coordinates, so it
+   cannot distinguish "compares the static only" from "compares everything" — while the code comment
+   cites key rotation as the entire justification for the narrow comparison. **Fence owed.**
+2. **The error-taxonomy syntax direction is convention-bound, not absolute.** An aliased `fmt` import
+   evades the AST scan, as do a custom error struct literal and a join. **The keystone claim
+   survives** — the barrier's residual default still classifies, so nothing reaches a user
+   *unclassified* — but what can slip past is a **misroute** (a not-found rendering as internal with
+   a report-a-bug remedy), not an unmapped class. This file should say totality is carried
+   structurally by the barrier, and the syntax scan is a convention check on top.
+3. **"The Android side constructs the phone" should read CAN construct.** The app declares **no
+   Activity**, nothing calls the runtime's phone accessor, and the discard-invalidated-custody
+   remedy has no caller. The wiring gate passes on a **string match** inside a method with no caller,
+   and its own failure message stays literally true after the fix — a fence reporting a property it
+   does not establish. Defensible as phase scope, since screens are policy models and the handset
+   gate is deferred, but it is a residual rather than a delivery.
+4. **Both PB-TOK-1 assertions written this slice are membership-based, not positional.** Permuting
+   the recorded palette passes both. The property holds only because a **pre-existing** Robolectric
+   test compares lists order-sensitively. Fence owed, and the credit belongs to a neighbour.
+
+### The one defect, folded into S18b rather than filed here
+
+`PhoneRuntime.routed()` collapses four custody verdicts onto re-pair. A platform downgrade then
+gives re-pair -> re-provision -> downgrade -> the same screen (**the failure loop PB-APP-10 forbids,
+reached through the remedy**), and a transient full disk at construction tells the user their key was
+destroyed. Unfenced — there is no runtime test at all, and the custody test accepts the two
+recoveries as a pair so it cannot see them merged one layer up. It is the same brick class as
+PB-STATE-10, so it is being fixed there.
