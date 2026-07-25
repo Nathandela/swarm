@@ -158,9 +158,28 @@ Two fixtures outside the package changed, **including the PB-SEC-1 acceptance ga
 change most deserving of suspicion, so the record is explicit: no assertion was relaxed. The gate now
 lets the core generate material and recovers it through the production writer, instead of hand-seeding
 a format that no longer exists — the old fixture was itself a small instance of testing a path
-production does not take. Proven by mutation: a `sealDeviceKeys` that also drops an unwrapped copy
-beside the container still fires both byte-level fences with the full got/want diagnosis, and round
-1's public-binding fence still fires on all four subtests with `checkPublic` neutered.
+production does not take. Round 1's public-binding fence still fires on all four subtests with
+`checkPublic` neutered, and an independent review later confirmed the gate was measurably
+**strengthened**: with the content sealer bypassed so the seam seals nothing, the new gate FAILS
+where the parent's gate PASSES.
+
+> **CORRECTION (round 3 review, and it is worse than the first correction).** An earlier version of
+> this paragraph claimed a `sealDeviceKeys` that also drops an unwrapped copy beside the container
+> "still fires both byte-level fences". **That was false**, and I propagated it into the commit
+> message too. `android/gate/keycustody_test.go:148` searched the **raw** needle only, while its
+> sibling at `:200` and the in-package `s14aFindMaterial` search raw **and** base64 — so a JSON field
+> holding base64-encoded privates passed the acceptance gate untouched. The base64 arm is added
+> (`4d8a37d`).
+>
+> **Even with the arm, do not read a green `android/gate` as "no cleartext privates".** Under a leak
+> of all four device privates as one base64 field, the arm catches exactly **one** of them —
+> `RelayAuth` — because it sits at offset 96 of the concatenation, which is both 3-byte aligned and
+> terminal. `NoiseStatic`, `Recipient` and `CommandSign` are invisible to **both** arms in the very
+> same file that holds them in the clear. A 32-byte needle's padded base64 only appears inside a
+> longer field's base64 when it happens to be aligned. The fence fires on an accident of layout.
+>
+> **What actually covers this property is the positive half** — that the material went through an
+> injected sealer — not the byte search. Both byte-level fences now carry a comment saying so.
 
 **Why it mattered more than it looked**: while the app ships `InsecureCleartextSealer` the container
 is forgeable anyway, which masked this. Once S14 lands a real Keystore KEK and the container becomes
@@ -190,6 +209,44 @@ is **forced**, not chosen. The exemption was converted into a stated property by
 assertion — the bookkeeping must NOT survive a restart, since a restored purge count would make a
 fresh process refuse the first Save of every legitimate caller. Exported fields, the only ones any
 caller can set, are covered exactly as before.
+
+## Re-audit round 3 — no live defect, three fences that could not fail
+
+The third independent review found **no live defect in the shipped code** and listed thirteen
+attacks that failed: the frozen package untouched, B8 holding, B1's deletion complete with no other
+unauthenticated ingress, no brick constructible from B3 or B4, and no existing test weakened. What it
+found is that **three of round 2's five fixes were unfenced in the direction that matters** — the
+project's own #1 recurring class, reproduced inside the remediation for it.
+
+| # | Finding | Disposition |
+|---|---|---|
+| F1 | The facade purge test passed **with its own fix reverted** — both assertions read the CORE's caches, never `a.journal`, the field the fix protects | FIXED `4d8a37d` |
+| F2 | The carry-verbatim fence ran at epoch 0, so after round 2 added an epoch predicate it only ever compared `0 == 0`. A mutation restricting the carry to epoch 0 ships a permanent content-key brick with five packages green | FIXED `4d8a37d` |
+| F3 | The purge-stamp converse assertion **cannot fail** — its fixture never purges. The harmful variant it names is a silent permanent brick | FIXED `4d8a37d` |
+| F4 | The in-memory pre-purge race: a Save whose rebind read pre-purge state rebinds the router to the **purged** content key after the purge returned | FIXED `4d8a37d` |
+| F6 | A vacuous assertion inside round 2's own new test — the fixture never populated what it asserted was cleared | FIXED `4d8a37d` |
+
+### F4's discipline, recorded because a later reader will need it
+
+`Core.rebindMu` spans rebind's **read** of durable state and its **application** to the derived
+components, so no rebind can land between another's read and apply. Either interleaving with a purge
+ends purged, because the purge updates state under `mu` *before* rebinding and a losing Save's rebind
+re-reads. Lock order is `rebindMu -> mu`, total and never inverted: rebind is entered with `mu`
+released at all three call sites, and nothing holding `mu` takes `rebindMu`. Verified under a
+16-writer/4-purger `-race` stress run.
+
+**A trap for anyone re-deriving F4's test**: the first version used `sync.Once` for the hook and
+**passed against the defect**. `Once.Do` blocks later callers until the first body returns, and the
+purge's own rebind runs the hook — so the purge was parked behind the Save under any implementation.
+It must be a CAS. A reviewer who "simplifies" it back to `Once` silently stops measuring anything,
+which is precisely the failure mode this round exists to correct.
+
+### One property that cannot be fenced
+
+`Session.Need` is not observable after a purge: the core's session cache is empty, so the facade
+returns "no session in the roster" whatever `a.needs` holds, and a post-purge roster record
+repopulates both together. `a.journal` is the whole measurable surface of the facade purge fix.
+Recorded rather than fenced.
 
 ## Accepted residuals
 
