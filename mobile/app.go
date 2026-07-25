@@ -331,6 +331,15 @@ func (a *App) ConnectionState() (state string, err error) {
 }
 
 // StateSummary is what the restart actually restored (PB-STATE-1/-2).
+//
+// Restored is derived from MachineRelayAuthPub rather than from State.Machine. The machine
+// endpoint id is now stamped by phonecore.OpenStore from the CONFIGURED id (it has to be: it is
+// the filter the durable blob is loaded against, and an empty one made the phone discard its
+// own state on the next launch), so it is present on a phone that has never paired and says
+// nothing about what was restored. MachineRelayAuthPub is pinned only by a pairing -- it is the
+// one coordinate that says how to REACH the machine, and phonecore.State's own doc records that
+// a phone missing it holds a valid content key, a valid send-seq and no destination with
+// nothing failing loudly. That is exactly the condition this flag exists to surface.
 func (a *App) StateSummary() (sum *StateSummary, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -347,7 +356,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 		SendSeq:     int64(st.SendSeq[st.EpochID]),
 		RelayCursor: int64(st.RelayCursor),
 		PendingOps:  pending,
-		Restored:    st.Machine != "",
+		Restored:    len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
 		Reconciled:  reconciled,
 	}, nil
 }

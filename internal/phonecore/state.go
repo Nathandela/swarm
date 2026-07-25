@@ -287,12 +287,25 @@ type sealedTier struct {
 // newer schema is ErrFutureSchema: both fail closed, because starting from an empty
 // checkpoint would leave the replay guard blind and re-open every retained frame.
 //
+// machineID is also the INITIALISER, not only the filter, and that is load-bearing rather
+// than tidy. Every path that ends with no blob adopted -- first run, and the different-machine
+// discard just described -- used to leave State.Machine empty, and nothing downstream ever set
+// it: the pairing handshake carries no endpoint id (pairing.MachinePayload has no such field),
+// so mobile.App.pin has nothing to supply one from. The empty value was then PERSISTED, and
+// this same filter discarded the whole blob on the next process start -- pairing, epoch, sealed
+// content key, relay cursor and send-seq ceilings -- so a phone lost its pairing on the first
+// Android process death, silently, and the "loads EMPTY, re-pair self-heals" path self-healed
+// into the same state. Stamping it here rather than at any caller is what makes the filter and
+// the value it tests come from ONE place; a store can no longer write a blob it will itself
+// refuse.
+//
 // wake and content are PB-KEY-2's tier KEKs and are REQUIRED for any real path: writing the
 // epoch keys in the clear is the defect PB-SEC-1 names, so their absence is ErrNoSealer
 // rather than a silent cleartext blob (ADR-007 B18(c)). An empty path persists nothing, so
 // there is nothing at rest to seal and no sealer is needed.
 func OpenStore(path, machineID string, wake, content Sealer) (Store, error) {
-	s := &fileStore{path: path, machine: machineID, wake: wake, content: content}
+	s := &fileStore{path: path, machine: machineID, wake: wake, content: content,
+		st: State{Machine: machineID}}
 	if path == "" {
 		return s, nil
 	}
@@ -478,6 +491,8 @@ func (s *fileStore) load() error {
 	path, machineID := s.path, s.machine
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// First run. The state OpenStore constructed stands, machine id included -- see the
+		// initialiser paragraph there for why leaving it empty was a silent brick.
 		return nil
 	}
 	if err != nil {
@@ -495,6 +510,9 @@ func (s *fileStore) load() error {
 		return fmt.Errorf("%w: %s: unversioned blob", ErrCorruptState, path)
 	}
 	if machineID != "" && f.Machine != machineID {
+		// Another machine's blob: discarded wholesale, and the state OpenStore constructed
+		// stands -- same reasoning as the first-run return above. The re-pair that follows must
+		// not write a blob stamped with an empty machine, or it discards itself next launch.
 		return nil
 	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
