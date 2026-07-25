@@ -1096,3 +1096,32 @@ loosening the temp-dir cleanup.
 
 Bundle with the GG-4 lint work as one gate-hygiene pass; both are prerequisites for the final audit
 to mean anything.
+
+### PB-SEC-3's real reach, stated so the audit does not over-read it
+
+The log guard now discriminates literal prose from interpolated data, and that fix **strictly
+narrows** matching — it cannot add detections. The three leak shapes it proves (`"x: $token"`,
+`"${resp.token}"`, a bare `tokenVar` argument) are **regression fences**: they pin that removing the
+false positive did not blow a hole in the detection that remains.
+
+**It still does not catch `Log.w(TAG, "$t")` where `t` holds a token, and it will not.** The scan
+matches an identifier list, so an unlabelled variable is invisible to it; catching that needs
+dataflow, not lexing. **Naming discipline covers that case, not this control.** The implementer
+wrote the limit into the file header rather than let an evidence line imply otherwise, which is the
+right instinct — a guard described as stronger than it is becomes a reason not to look.
+
+I asked for the false-negative half to be closed and it cannot be, at this cost. Recorded as a
+bounded residual rather than reported as a fix.
+
+### A third flake, and they are probably one bug
+
+`TestPBPAIR5_EveryTerminalStateIsExplicitAndDistinct/sas_mismatch` joins `TestPBSAS2_...` with the
+same `TempDir RemoveAll cleanup: directory not empty` signature. It surfaced on a fix agent's run;
+rather than assume, that agent exported HEAD to a scratch tree and ran the package three times —
+**failing on run 1, passing on 2 and 3**, so pre-existing.
+
+The likely single cause: **a goroutine still writing into the phone's state directory after
+`App.Close()` returns.** That is a real shutdown-ordering defect, not test noise — the cleanup
+failure is the symptom. Fix it at `Close()`, not by loosening temp-dir cleanup, and expect all three
+to go with it. A `Close()` that returns before its writers have stopped is also the shape that
+corrupts durable state on a real handset, where the process death is not a test ending.
