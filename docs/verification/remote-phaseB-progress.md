@@ -21,7 +21,7 @@ requirements recurred in three consecutive rounds and an orphan slice in a fourt
 
 ## Requirements coverage (measured, not estimated)
 
-20 of 140 shipped, 120 remaining (8 of 27 slices). The completed slices were deliberately the
+28 of 140 shipped, 112 remaining (9 of 27 slices). The completed slices were deliberately the
 blockers and the security-critical machine-side work -- dependency surgery, gateway durability
 in both directions, the transport, the reconciliation frame -- because they gate everything
 downstream. The remaining 113 are weighted toward the Android app and end-to-end verification.
@@ -39,7 +39,8 @@ downstream. The remaining 113 are weighted toward the Android app and end-to-end
 | S1b protocol additions | PB-SYNC-7 | **SHIPPED** (`689c8e8`) -- reconcile frame, lease confirmation, reply correlation |
 | S6 transport resilience | PB-NET-2,3,4,6,7 | **SHIPPED** (`078ac63`) -- cleartext-via-redirect hole found by review and closed |
 | S2b gateway outbound durability | PB-GW-7, PB-GW-8 | **SHIPPED** (`5aaacef`) -- live tail was refusing 81% of appends; coalescing + outbox |
-| S7 durable phone state | PB-STATE-* | in progress (RED) -- the most severe committee finding |
+| S7 durable phone state | PB-STATE-*, PB-GW-6 | **SHIPPED** (`0ac4fb9`) -- the phone now survives a process kill; was the most severe committee finding |
+| S8 gomobile facade | PB-BIND-*, PB-SAS-1/2 | in progress (RED) -- the contract the Android app is built on |
 | S6b low-latency input path | PB-NET-5 | not started (split out of S6) |
 | S7..S21 | see §11 of the spec | not started |
 
