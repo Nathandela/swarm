@@ -60,10 +60,16 @@ type App struct {
 	// is not guarded by a.mu.
 	coalesce *phonecore.InputCoalescer
 
+	// inputMu orders the phone's INPUT bucket: it is held across allocate-seal-append in
+	// sendInputFrame, for the reason remotegw.CommandBridge.sealReply states one bucket
+	// over. It is deliberately NOT a.mu -- a.mu guards the app's lifecycle and is taken on
+	// paths that must not queue behind a relay append.
+	inputMu sync.Mutex
+
 	mu            sync.Mutex
 	closed        bool
 	drainTimer    *time.Timer
-	skewMsg       string // last reported clock-skew verdict, so only a CHANGE raises an event
+	skewed        bool   // whether the clock is currently out of budget, so only a CHANGE raises an event
 	sess          *session
 	client        *relay.Client
 	machineTarget string

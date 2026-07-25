@@ -141,15 +141,22 @@ func (m *SkewMonitor) Skew() Skew {
 	return m.last
 }
 
-// Check is the gate a command-authoring path consults. It mirrors the last Observe exactly,
-// so a command cannot be refused on one rule and admitted on another.
+// Check is the last measurement's VERDICT, for reporting. It mirrors the last Observe
+// exactly, so the user is never told one thing while the phone believes another.
 //
-// UNKNOWN IS NEVER A REFUSAL. The only authenticated machine time the phone can get rides a
-// reply, and a reply only exists in answer to a command -- so gating commands on a known
-// skew would refuse the command that would have measured it, permanently, and the symptom
-// would be indistinguishable from a dead relay. The daemon's own ExpiresAt check remains
-// the backstop for a phone that has never measured. The refusal is likewise never latched:
-// the next good measurement clears it.
+// IT IS NOT A GATE, and no command-authoring path may make it one. The only authenticated
+// machine time the phone can get rides a reply, and a reply only exists in answer to a
+// command -- so refusing commands on a bad verdict refuses the command that would have
+// re-measured it, and the refusal outlives the broken clock it was reporting: the user
+// corrects their clock exactly as the error said and every op stays refused until the
+// process restarts. The daemon's own ExpiresAt check is the enforcement; this is the
+// explanation. Its one production caller is the phone's reply handler, which reports the
+// verdict on the event plane (mobile/relay.go reportSkew), and
+// mobile/s11r_livesend_test.go fences the command path against calling it at all.
+//
+// UNKNOWN IS LIKEWISE NEVER A VERDICT: a phone that has never measured reports nothing
+// rather than a fault it cannot substantiate, and a bad verdict is never latched -- the
+// next good measurement clears it.
 func (m *SkewMonitor) Check() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

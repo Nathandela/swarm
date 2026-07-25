@@ -320,14 +320,22 @@ func (a *App) onReply(ctrl schema.Control) {
 // command that re-measures, so the verdict could never clear once it went bad; the daemon
 // stays the enforcement and this is the explanation. Only a CHANGE is emitted, or a
 // two-minute-slow phone would raise an event per reply for the life of the session.
+//
+// THE CHANGE IS THE VERDICT, NOT ITS WORDING. Every reply closes a fresh bracket out of two
+// wall-clock reads around a network round trip, so one CONSTANT skew measures a slightly
+// different offset each time and skew.go renders it at full time.Duration precision.
+// Comparing the rendered message therefore sees a change on every single reply -- a dedupe
+// that can never dedupe, producing exactly the per-reply spam this guard exists to stop. The
+// user's fact is binary (the clock is out of budget, or it is not) and so is the key. The
+// verdict is not latched: correcting the clock clears it and a later relapse reports again.
 func (a *App) reportSkew() {
 	msg := ""
 	if err := a.core.SkewMonitor().Check(); err != nil {
 		msg = err.Error()
 	}
 	a.mu.Lock()
-	changed := a.skewMsg != msg
-	a.skewMsg = msg
+	changed := a.skewed != (msg != "")
+	a.skewed = msg != ""
 	a.mu.Unlock()
 	if !changed || msg == "" {
 		return

@@ -37,10 +37,18 @@ func s11rRefuseCalls(t *testing.T, label, body string, forbidden map[string]stri
 // not be refused by a race it cannot see, and a command is idempotent and queued by design.
 // It is exactly wrong for input, which is live-only. So the two paths must resolve their
 // destination differently, and this pins that they do.
+//
+// ROUND 3: Paste and ReleaseControl were absent from this list and from both wiring guards,
+// so the review's mutation moving Paste onto sendContext passed every fence in the tree.
+// They are live-input surfaces and belong here. This assertion remains a STRING search and
+// is therefore still defeated by moving the wait one level down -- that is what
+// s11r3_livereach_test.go's reachability fence is for; this one stays because a literal
+// call-site ban gives the shortest, most legible message when someone does the obvious
+// thing.
 func TestS11R_InputNeverWaitsForAConnection(t *testing.T) {
 	src := loadFacade(t)
 
-	for _, name := range []string{"SendInput", "Resize", "drainHeldInput"} {
+	for _, name := range []string{"SendInput", "Paste", "Resize", "ReleaseControl", "drainHeldInput"} {
 		body := s11FuncSource(t, src, "App", name)
 		label := s11FuncLabel("App", name)
 		s11rRefuseCalls(t, label, body, map[string]string{

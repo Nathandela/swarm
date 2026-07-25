@@ -548,7 +548,10 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 			r.core.leases.Apply(f.reply)
 			// The verdict is deliberately dropped here: a skewed clock is not a reason to
 			// refuse an INBOUND frame (the machine's stamp is the thing being measured).
-			// Callers read it from SkewMonitor.Check at the command-authoring site.
+			// The app reads it from SkewMonitor.Check in its reply handler and reports it on
+			// the event plane -- NOT at a command-authoring site, where refusing on it would
+			// stop the very command that re-measures the clock (PB-TIME-1, and the fence in
+			// mobile/s11r_livesend_test.go).
 			_, _ = r.core.skew.Observe(f.reply.OperationID, time.UnixMilli(f.issuedAt))
 		}
 	case kindReconcile:

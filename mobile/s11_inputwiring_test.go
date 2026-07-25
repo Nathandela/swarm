@@ -97,7 +97,10 @@ func s11RequireCalls(t *testing.T, label, body string, required map[string]strin
 func TestS11Wiring_InputIsGatedOnTheConfirmedLease(t *testing.T) {
 	src := loadFacade(t)
 
-	for _, name := range []string{"SendInput", "Resize"} {
+	// ROUND 3: Paste was in none of the three wiring guards, though it is a live-input path
+	// that puts bytes on the same lease. A gate that covers two of the three surfaces is a
+	// gate the third walks around.
+	for _, name := range []string{"SendInput", "Paste", "Resize"} {
 		body := s11FuncSource(t, src, "App", name)
 		s11RequireCalls(t, s11FuncLabel("App", name), body, map[string]string{
 			"Leases()": "PB-INPUT-2: \"no keystroke is ever sent without a confirmed current lease generation\". " +

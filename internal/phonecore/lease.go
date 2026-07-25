@@ -80,12 +80,24 @@ type LeaseState struct {
 }
 
 // leaseEntry is one session's lease lifecycle.
+//
+// A LEASE IS IDENTIFIED BY THE take_control THAT OPENED IT, not by its generation. The
+// daemon's counter is in-memory and per-Server lifetime (protocol/server.go:220-224 says as
+// much itself), so a restart hands out generation 1 again while the phone still remembers a
+// far higher one as dead. Operation ids survive a restart, and the gateway already carries
+// one on both the grant and the severance notice; the generation stays the tiebreak WITHIN a
+// single daemon lifetime, and the fallback whenever an id is missing.
 type leaseEntry struct {
-	op     string    // the take_control operation id the phone last authored
+	// op is the take_control the phone has authored and NOT had severed since. It is what
+	// makes a confirmation FRESH, and severance clears it -- so a late duplicate of the very
+	// grant that opened a dead lease names a request the phone is no longer waiting on, and
+	// falls back to the generation floor that refuses it.
+	op     string
 	signed time.Time // the horizon the phone SIGNED for it (an upper bound on the truth)
 
 	live      bool
 	gen       uint64
+	liveOp    string    // the take_control that opened the LIVE lease, so a notice is attributable
 	expiresAt time.Time // zero => no horizon is known; the severance notice is the authority
 
 	dead   uint64 // highest generation known to be severed
@@ -124,9 +136,19 @@ func (l *LeaseState) Requested(session, operationID string, expiresAt time.Time)
 //     the reason is kept, because a refused lease that reported nothing is indistinguishable
 //     from a slow one.
 //
-// A generation at or below one already severed is NEVER reconfirmed: the relay may reorder,
-// so a confirmation sealed before the severance can arrive after it, and re-opening the gate
-// on it would let a keystroke ride a lease the daemon released.
+// WHICH LEASE A FRAME IS ABOUT is decided by the take_control operation id first and the
+// generation only second, because the generation does not survive a daemon restart: the
+// counter is in-memory and per-Server lifetime (protocol/server.go:220-224), so the first
+// grant after a restart is generation 1 again while the phone remembers a far higher one as
+// dead. Keyed on the number alone, the forward order silently discards the recovery grant
+// (a dead keyboard and a Take Control button that does nothing) and the reverse order lets
+// the pre-restart lease's late notice sever the lease the daemon has just granted.
+//
+// A confirmation that names no request the phone is waiting on is still refused when its
+// generation is at or below one already severed: the relay may reorder, so a confirmation
+// sealed before the severance can arrive after it, and re-opening the gate on it would let a
+// keystroke ride a lease the daemon released. Severance drops the recorded request precisely
+// so a replayed grant falls into that case (see severLocked and confirmable).
 func (l *LeaseState) Apply(ctrl schema.Control) {
 	if ctrl.SessionID == "" {
 		return
@@ -137,10 +159,10 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 
 	switch ctrl.Op {
 	case opLease:
-		if ctrl.Generation == 0 || ctrl.Generation <= e.dead {
+		if ctrl.Generation == 0 || !e.confirmable(ctrl) {
 			return
 		}
-		e.live, e.gen, e.reason = true, ctrl.Generation, ""
+		e.live, e.gen, e.liveOp, e.reason = true, ctrl.Generation, ctrl.OperationID, ""
 		switch {
 		case ctrl.ExpiresAt != nil:
 			// The machine's value is the authority: it may have clamped the lease shorter
@@ -152,11 +174,14 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 			e.expiresAt = time.Time{}
 		}
 	case opDetach:
-		if ctrl.Generation != 0 && e.live && ctrl.Generation < e.gen {
-			return // a superseded generation's late notice; the live lease outlives it
-		}
+		// The generation is recorded dead FIRST, whether or not the notice applies to the
+		// live lease: it is the floor that stops a stale confirmation for that same dead
+		// generation from being replayed back in later.
 		if ctrl.Generation > e.dead {
 			e.dead = ctrl.Generation
+		}
+		if e.live && e.namesAnotherLease(ctrl) {
+			return // a notice for a lease that is not the one held; the live lease outlives it
 		}
 		l.severLocked(e, reasonOr(ctrl.Error, "the control lease ended"))
 	case opError:
@@ -239,12 +264,51 @@ func (l *LeaseState) entry(session string) *leaseEntry {
 	return e
 }
 
+// confirmable reports whether an OpLease may open the gate. Caller holds l.mu.
+//
+// A confirmation is admissible when it answers the take_control the phone has authored and
+// not had severed since -- a request only THIS phone could have made, and only after the
+// last severance, so the lease it names is necessarily newer than anything already dead. The
+// daemon's generation is meaningless across a restart and cannot carry that argument.
+//
+// The generation floor stays as the fallback for a confirmation that names no request (an
+// older gateway, a future refactor), and as the thing that refuses a REPLAY: severance
+// clears e.op, so a re-delivered copy of the grant that opened the dead lease is no longer
+// fresh and lands on the floor.
+func (e *leaseEntry) confirmable(ctrl schema.Control) bool {
+	if ctrl.OperationID != "" && ctrl.OperationID == e.op {
+		return true
+	}
+	return ctrl.Generation > e.dead
+}
+
+// namesAnotherLease reports whether a severance notice provably belongs to some lease other
+// than the live one, in which case it must NOT shut the gate. Caller holds l.mu.
+//
+// It is a proof, not a guess: absent one, the notice severs. The operation id is the proof
+// that survives a daemon restart -- the gateway seals the notice from the lease conn's own
+// take_control id (remotegw/lease_sever.go), so a notice for the pre-restart lease names a
+// different request than the post-restart grant even though its generation is HIGHER. When
+// either side carries no id, the generation comparison is the fallback, which is what the
+// supersede case within one daemon lifetime has always used.
+func (e *leaseEntry) namesAnotherLease(ctrl schema.Control) bool {
+	if ctrl.OperationID != "" && e.liveOp != "" {
+		return ctrl.OperationID != e.liveOp
+	}
+	return ctrl.Generation != 0 && ctrl.Generation < e.gen
+}
+
 // severLocked drops a live lease and remembers its generation as dead.
+//
+// The RECORDED REQUEST is dropped with it. Only a take_control authored AFTER this moment
+// may be confirmed, so a late duplicate of the grant that opened the lease just severed
+// cannot resurrect it -- which is what makes keying confirmation on the operation id safe.
 func (l *LeaseState) severLocked(e *leaseEntry, reason string) {
 	if e.live && e.gen > e.dead {
 		e.dead = e.gen
 	}
 	e.live = false
+	e.op, e.liveOp = "", ""
 	e.reason = reasonOr(reason, "the control lease ended")
 }
 
