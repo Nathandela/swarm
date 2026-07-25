@@ -233,6 +233,25 @@ coordinate written earlier in the same flow is a precondition that can be satisf
 event. Prefer asserting the fact the test needs — here, that the phone can actually reach the
 machine — over approximating it.
 
+## I MISCOUNTED THE KOTLIN TESTS, AND THE WAY I DID IT WILL RECUR
+
+The S17+S18b commit message claims **"328 tests across 47 classes"**. The real figure is **205 tests
+across 31 classes**, zero failures — the reviewer could not reproduce mine, and I confirmed it:
+`grep -c "@Test"` over the test sources yields exactly 205.
+
+**How I got 328**: I summed every `testsuite` XML under the build's results directory **without
+cleaning it first**, so results from earlier runs of other slices were still on disk and were counted
+again. The number was inflated by stale artifacts, not invented — which is worse, because it looked
+like a measurement.
+
+**The general form, and it is not specific to Gradle**: a build's output directory is **cumulative
+unless something clears it**. Any count taken by aggregating result files is a count of *everything
+ever run there*, not of this run. Either clean first, force a rerun and read that run's output, or
+count the source of truth — here, the `@Test` methods themselves.
+
+Zero failures was and remains correct. Only the denominator was wrong, and a denominator nobody can
+reproduce discredits the numerator standing next to it.
+
 ## THREE GUARDS THAT COULD NOT FAIL, IN ONE FENCE FILE -- and the third was the security one
 
 The clearest instance of this project's most-repeated defect, found in S17's gate file, and worth
