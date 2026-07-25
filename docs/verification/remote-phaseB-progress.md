@@ -1077,3 +1077,22 @@ the vacuous-pass shape this phase has found repeatedly.
 A permanent, remotely-reachable denial of service against a machine's relay identity, reachable by
 any anonymous party. RED author dispatched; fix direction is mutual pairing. Blocks production
 readiness independently of requirement coverage.
+
+### Two ownerless flakes, which matter more than their size suggests
+
+`TestS6B_GatewayInputLatencyIsNotPollGated` (a wall-clock latency assertion that fails under
+parallel suite load and passes in isolation) and `TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT`
+(a `TempDir` cleanup race from a goroutine outliving the test). Both reproduce at HEAD, both
+pre-date S18, and neither has a recorded owner.
+
+They are recorded here because of what they do to everything else in this phase, which the S18
+evidence file put better than I would: they are **the kind of noise that trains readers to re-run a
+red gate rather than read it**. Every "green" claim in Phase B rests on someone believing a red
+result. Two tests that cry wolf are a standing invitation to dismiss the third.
+
+Note the second one is not merely noisy — a goroutine outliving its test is a real leak, and the
+cleanup failure is the symptom rather than the bug. It should be fixed at the goroutine, not by
+loosening the temp-dir cleanup.
+
+Bundle with the GG-4 lint work as one gate-hygiene pass; both are prerequisites for the final audit
+to mean anything.
