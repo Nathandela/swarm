@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -133,14 +134,16 @@ func (s *memInboundState) Save(ck InboundCheckpoint) error {
 // sealAt seals any phone -> machine plaintext (a RemoteCommand or an inputFrameWire)
 // under an explicit (epoch, seq), which the existing sealedCmd/sealRemoteCmd/sealInputEnv
 // helpers cannot do -- they hardcode EpochID 1, and PB-GW-1's per-stream keying needs two
-// epochs. Mirrors the phone's seals: no SenderKeyID and no IssuedAt (§4.6, PB-GW-6).
+// epochs. Mirrors the phone's seals: no SenderKeyID, and IssuedAt stamped from the wall
+// clock as every phone -> machine seal now does (PB-GW-6, phonecore/input.go, command.go),
+// so the frame is live under PB-GW-2's bounded-age check.
 func sealAt(t *testing.T, key crypto.ContentKey, epoch uint32, seq uint64, v any) []byte {
 	t.Helper()
 	plain, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal plaintext: %v", err)
 	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: epoch, Seq: seq}, plain)
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: epoch, Seq: seq, IssuedAt: time.Now().UnixMilli()}, plain)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

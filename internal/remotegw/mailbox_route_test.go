@@ -26,6 +26,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -81,7 +82,7 @@ func sealRemoteCmd(t *testing.T, key crypto.ContentKey, seq uint64, rc protocol.
 	if err != nil {
 		t.Fatalf("marshal remote command: %v", err)
 	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq}, plain)
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq, IssuedAt: time.Now().UnixMilli()}, plain)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -97,7 +98,7 @@ func sealInputEnv(t *testing.T, key crypto.ContentKey, seq uint64, w inputFrameW
 	if err != nil {
 		t.Fatalf("marshal input frame: %v", err)
 	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq}, plain)
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq, IssuedAt: time.Now().UnixMilli()}, plain)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

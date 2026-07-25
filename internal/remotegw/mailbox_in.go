@@ -2,10 +2,21 @@ package remotegw
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
+
+// InboundMaxAge bounds the authenticated age of a phone -> machine sealed frame
+// (PB-GW-2, value from §6.0). It is a BACKSTOP behind the per-(sender, epoch) replay
+// high-water, not a replacement for it: a restart that loses the high-water leaves a
+// fresh receiver with seen == false, which skips the staleness check entirely
+// (crypto/envelope.go), so a relay that retained frames would otherwise have them
+// re-accepted at the guard. Ten minutes sits well above the 60 s command TTL, §6.0's
+// ±30 s clock-skew budget and any plausible relay delivery delay, and well below the
+// 7 d retention cap.
+const InboundMaxAge = 10 * time.Minute
 
 // FrameKind discriminates the two plaintext shapes a phone seals into the ONE
 // (sender, epoch) phone -> machine mailbox stream: a RemoteCommand or an InputFrame.
@@ -48,12 +59,41 @@ type MailboxFrame struct {
 // same envelope -- that advanced the seq twice and spuriously reported ErrStaleSeq.
 //
 // Fail-closed: a malformed/wrong-key envelope, a replayed/reordered seq
-// (crypto.ErrStaleSeq), or an undecodable plaintext returns an error and no frame.
+// (crypto.ErrStaleSeq), an authenticated issued_at older than InboundMaxAge
+// (crypto.ErrStaleAge), or an undecodable plaintext returns an error and no frame.
 // A replayed seq is rejected here, ONCE, and never reaches the router.
 func OpenMailboxFrame(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw []byte) (MailboxFrame, error) {
+	return OpenMailboxFrameAt(recv, key, raw, time.Now())
+}
+
+// OpenMailboxFrameAt is OpenMailboxFrame with the age clock injected, so the bound's
+// boundary is testable without waiting ten minutes. Production reads through
+// OpenMailboxFrame, which passes time.Now().
+//
+// The age check lives HERE rather than on the receiver because crypto is frozen:
+// MailboxReceiver.maxAge has no setter and NewMailboxReceiver takes no arguments, so
+// PB-GW-2's property is enforced at this seam instead of that field.
+func OpenMailboxFrameAt(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw []byte, now time.Time) (MailboxFrame, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
 		return MailboxFrame{}, err
+	}
+	// PB-GW-2's bounded-age backstop, applied BEFORE Accept so a refusal advances no
+	// high-water: otherwise one retained frame carrying an absurd seq would silence the
+	// real phone for good. The bound is ONE-SIDED -- IssuedAt is AAD-covered, so a relay
+	// can only make frames older, never newer, and bounding the future would refuse a
+	// live phone whose clock runs fast.
+	//
+	// A stale CLAIM is the untrusted relay's until the AEAD vouches for it, so refusing
+	// for age happens only after crypto.OpenMailbox authenticates the header -- a forgery
+	// is refused as a forgery. OpenMailbox does not touch the receiver, so this costs no
+	// seq. A fresh-looking claim needs no separate open: Accept below authenticates it,
+	// and a header a relay shifted forward fails the tag there.
+	if now.Sub(time.UnixMilli(env.Header.IssuedAt)) > InboundMaxAge {
+		if _, err := crypto.OpenMailbox(key, env); err != nil {
+			return MailboxFrame{}, err
+		}
+		return MailboxFrame{}, crypto.ErrStaleAge
 	}
 	res, err := recv.Accept(key, env)
 	if err != nil {

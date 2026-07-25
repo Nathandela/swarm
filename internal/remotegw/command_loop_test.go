@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -85,7 +86,7 @@ func sealedCmd(t *testing.T, key crypto.ContentKey, seq uint64, cmd protocol.Dev
 	if err != nil {
 		t.Fatalf("marshal cmd: %v", err)
 	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq}, plain)
+	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{Version: crypto.VersionV1, EpochID: 1, Seq: seq, IssuedAt: time.Now().UnixMilli()}, plain)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
