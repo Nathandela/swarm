@@ -1180,3 +1180,42 @@ before it can open the envelope. An implementation that assumes the wake tier su
 produces a wake path that works until the first screen lock and then goes quiet — silently, and
 only on a real device. No requirement stated this and nothing else would have caught it. Pinned by
 `LockPurgeTest.the_wake_tier_is_reinstallable_after_a_purge_without_authentication`.
+
+**B18. Three authorisations for S14a's custody seam, decided on the S14a RED author's evidence.**
+B14 authorised making `crypto.KeyStore` failable, "signatures only". Implementing it turned up three
+things that decision did not anticipate. All three are granted; the reasoning is recorded because
+each one widens a frozen package.
+
+**(a) The fence extends to `relay.ClientAuth.Sign`.** `internal/remote/relay/client.go:47` declares
+`Sign func(challenge []byte) []byte`, and the ONLY production `SignRelayAuth` call site lives
+inside that closure. Inside S14a's original fence the choices were to swallow the error with `_` —
+**the exact defect B14 exists to remove** — or return nil and let the relay reject opaquely. Either
+way PB-KEY-6's "every signing path" is unmet. `Sign` becomes `func([]byte) ([]byte, error)`: one
+declaration, one use, three test fixtures. Granting the smaller widening beats recording a residual
+that guts the requirement.
+
+**(b) `crypto.NewKeyStoreFromMaterial(KeyMaterial) KeyStore` is authorised.** `NewFileKeyStore` /
+`OpenFileKeyStore` own `device.key` I/O *inside* the frozen package and there is no in-memory
+constructor (`internal/phonecore/core.go:104-105` says so). Sealing that file requires phonecore to
+own the I/O, which requires exactly this one function. **No semantics change, no new I/O, no new
+interface** — it is the existing construction path with the file read lifted out. Strictly beyond
+"signatures only", hence recorded here rather than assumed.
+
+**(c) With no sealer, `Resume` FAILS CLOSED.** The alternative — seal anyway with a KEK derived from
+something on the same disk — would satisfy the letter of PB-SEC-1's assertion while the property its
+own comment states ("worth nothing against ADB backup, a restored image") stays unmet. That is
+precisely this project's standing *"requirement satisfiable while the defect ships"* class, which
+has now been caught five times, and choosing it here would be choosing it knowingly. Fail-closed
+costs a mechanical migration of existing `Resume` callers; any test that genuinely wants unsealed
+state must say so **loudly at the call site**, with a sealer whose name contains its own warning —
+never by omission. Production must not be able to reach cleartext by forgetting a field.
+`android/gate/keycustody_test.go` may be edited to inject sealers: it is the acceptance gate for
+half of PB-KEY-9 and its assertions do not move, only its setup.
+
+**The consequence S14 must carry, stated now rather than discovered later.** The Android side
+**cannot reach `phonecore.Config`** — gomobile cannot set a Go struct field, and the facade is
+golden-pinned (`mobile/testdata/exported_surface.golden`, enforced by `mobile/contract_test.go`)
+with no verb to supply a sealer. So the seam is reachable from Go tests and **not from Kotlin**:
+the gate tests could go green while the shipped app still writes cleartext. That is the fifth
+standing defect class — the fence guarding a path production does not take — one layer up. **S14
+must add a facade verb and change the golden**, and PB-KEY-9 is not delivered until it does.
