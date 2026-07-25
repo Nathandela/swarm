@@ -462,6 +462,22 @@ rediscovered later as if new:
   autorepeat against a dead lease retains roughly 1800 entries, and `UndeliveredInputs()` copies the
   whole slice per call. **Owner: S16**, with the pull surface above.
 
+## EVIDENCE FILES ARE MISSING FOR SIX SLICES -- close this BEFORE the final audit
+
+Measured, not estimated: `docs/verification/remote-phaseB-s<slice>-evidence.md` exists for S1, S1b,
+S2, S2b, S3, S4, S4b, S6, S7 and S14a, and is **missing for S5, S6b, S7b, S8, S11 and S13**. (S0 is
+the ADR amendment itself, so ADR-007 is its evidence.)
+
+This is not a gate failure today — the project convention ties evidence to the EPIC's exit criteria,
+and Phase B's exit demonstration is S19 — but the final audit committee validates against all 142
+requirements, and six slices whose only record is a commit message will be the slowest part of that
+audit. The narrative for each is in the commit messages and in this file; what is missing is the
+per-requirement traceability an auditor needs.
+
+**Do not backfill these from memory.** Reconstruct each from its commit and its tests, the way
+`remote-phaseB-s14a-evidence.md` was written, or the evidence file becomes a plausible-sounding
+record of what was intended rather than what shipped — standing class (ii), applied to documentation.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
