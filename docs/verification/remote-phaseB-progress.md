@@ -115,6 +115,24 @@ has been right every time it PROVED it (the QR no-op substitution, the identical
 certificates, the unsatisfiable timing assertion, the plist regex). Verify the proof, never the
 claim.
 
+## Three wire-verb gaps found by the facade traceability table (S8)
+
+The facade owns the SURFACE; another slice owns the VERB. Same split pattern section 11 already
+uses for the push preference.
+
+1. **`interrupt` has no verb at all.** The signed action set defines launch/kill/delete/approve/
+   device_revoke/take_control/terminal_watch/terminal_unwatch -- no interrupt -- and the gateway's
+   action map covers only kill/delete/launch. **PB-APP-3's persistent Stop is half-unimplementable**
+   until a verb exists.
+2. **`revoke` is broken at the gateway.** `ActionDeviceRevoke` IS in the signed set and the daemon
+   serves it through `requireRemoteAuthz`, but `remotegw.opForAction` does not map it, so a
+   phone-sealed `device_revoke` is refused "unsupported command action". One line, but it is a
+   reviewed edit in `internal/remotegw`.
+3. **The kill switch is READ-ONLY by design and must stay that way.** The daemon refuses the
+   remote tier *before* consulting the backend: "a remote device must never re-enable a switch
+   its owner turned off". The facade exposes only a getter and a test bans any setter -- a stolen
+   phone re-enabling remote control would be a surface-level bypass of a daemon gate (PB-SEC-6).
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
