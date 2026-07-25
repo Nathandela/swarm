@@ -762,7 +762,8 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | **S3 QR renderer + payload** (machine-side; zero façade coupling — startable immediately) | PB-PAIR-1, **PB-PAIR-7** | opus | — |
 | S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-*, PB-OPS-4 | opus | — |
 | S5 Design tokens | PB-TOK-* | fable | — |
-| **S6 Transport primitives**: request-id correlation, both-hop latency, TLS/resilience | PB-NET-2..7 | opus | S1 |
+| **S6 Transport resilience + TLS** | PB-NET-2, 3, 4, 6, 7 | opus | S1 |
+| **S6b Low-latency input path**: request-id correlation + concurrent dispatch, both hops (ADR B7) | PB-NET-5 | opus | S6 |
 | **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2, S2b** (PB-STATE-4's rollback authorities *are* PB-GW-1's inbound high-water and PB-GW-8's outbound ceilings, so neither can ship after it) |
 | **S7b Gateway age check** (split out: it depends on the phone seal change) | PB-GW-2 | opus | S2, S7 |
 | **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2** (sole owner; S19 contributes emulator evidence but does not own it) | opus | S6, S7 |
