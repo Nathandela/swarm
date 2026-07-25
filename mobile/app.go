@@ -305,15 +305,38 @@ func (a *App) UndeliveredInputs() (list *UndeliveredList, err error) {
 	return out, nil
 }
 
-// IsRunning reports whether the relay drain is live.
+// IsRunning reports whether the relay drain is LIVE: a session has been started and its
+// goroutine has not returned.
+//
+// The two are not the same thing, and the gap is a TERMINAL state, not a race. run() returns
+// outright on crypto.ErrKeyInvalidated -- the relay-auth key is destroyed, every retry is a
+// round trip spent proving that again, and the state it leaves behind is "pair again". Stop
+// is what clears a.sess, and nothing calls Stop on that path: the drain simply ends. Reading
+// the field alone therefore reports a live drain forever afterwards, so a UI gating its
+// re-pair affordance on !IsRunning() would never show it -- on exactly the handset that
+// cannot do anything else.
+//
+// Start stays a no-op while a session object exists, terminal or not, and deliberately: the
+// state this reports false in is reached only when the relay-auth key is destroyed, so
+// restarting the drain would spend another handshake proving that again. Re-pairing is the
+// remedy, which is why it is the affordance this answer gates.
 func (a *App) IsRunning() (running bool, err error) {
 	defer barrier(&err)
 	if _, err = a.ready(); err != nil {
 		return false, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.sess != nil, nil
+	s := a.sess
+	a.mu.Unlock()
+	if s == nil {
+		return false, nil
+	}
+	select {
+	case <-s.done:
+		return false, nil
+	default:
+		return true, nil
+	}
 }
 
 // Close stops the app and releases the durable state handle for good. It is idempotent;

@@ -50,6 +50,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -307,6 +309,177 @@ const stateV1Fixture = `{
   "wake_replay": 91,
   "relay_cursor": 17
 }`
+
+// stateV4FixtureKEK is the fixture's PINNED tier KEK. Every other test in this package mints
+// a random KEK per run, which is right for them and impossible here: a byte literal cannot
+// carry a ciphertext whose key is generated at run time, and the two sealed key fields have
+// to be IN the literal or the field-set tie below has a hole exactly where PB-KEY-9 lives.
+// So the fixture pins the KEK and the ciphertext together. It seals nothing but this
+// fixture's two throwaway epoch keys.
+var stateV4FixtureKEK = func() []byte {
+	kek := make([]byte, 32)
+	for i := range kek {
+		kek[i] = byte(0x5A + i)
+	}
+	return kek
+}()
+
+// stateV4Fixture is the PINNED v4 on-disk blob: byte-for-byte what this build writes for
+// fullState(), with the two epoch keys sealed under stateV4FixtureKEK.
+//
+// It does a SECOND job the v1 literal cannot. StateSchemaVersion was reverted from 4 to 3 in
+// a mutation with the whole repository still green: nothing tied the constant to the field
+// set it stamps, so the next durable field added without a bump would ship silently and a
+// build one version back would drop it -- which for a send-seq ceiling or a receive
+// high-water means a replay guard reset to zero, the exact hole the version exists to close.
+// This literal is the tie: it must keep LOADING (which a downgrade of the constant refuses,
+// ErrFutureSchema) and it must keep carrying EVERY durable field (which a new field without
+// a bump breaks). Raising the version therefore forces a new literal beside this one.
+//
+// v2 and v3 have no literal, and neither can be produced honestly here. A v2 blob carrying
+// either epoch key is REFUSED outright by load() -- its cleartext keys read as sealed blobs
+// are the silent reinterpretation the v3 bump exists to prevent -- so the only v2 literal
+// that could load is one with the coordinates the bump was about removed, which pins
+// nothing. A v3 blob is this literal minus stale_streams alone.
+const stateV4Fixture = `{
+  "schema_version": 4,
+  "machine": "m1",
+  "machine_static": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=",
+  "machine_sign_pub": "srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=",
+  "machine_relay_auth_pub": "w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=",
+  "routing_id": "rid-m1",
+  "epoch_id": 7,
+  "push_token": "fcm-token-m1",
+  "push_preference": {"alerts": true, "mentions": true},
+  "reconciled_epoch": 7,
+  "wake_key": "AQIDBAUGBwgJCgsMUjnRQtz97KtVbLtHTf4/N++9li4rV9S30xkVq4qvx6jpwus/7bgP0NJzPAB5ADWz",
+  "content_key": "AQIDBAUGBwgJCgsMMVS+L7+Yi842EcQ6LptYUozQ+UNIMrPSsERK9ikKYA2Hx40/KrnqG7mZ4mEWFuJ9",
+  "send_seq": [{"epoch": 6, "ceiling": 1024}, {"epoch": 7, "ceiling": 512}],
+  "receive": [
+    {"sender": "0000000000000000", "epoch": 7, "seq": 5},
+    {"sender": "090a0b0c0d0e0f10", "epoch": 7, "seq": 42}
+  ],
+  "grant_epoch": 7,
+  "grant_seq": 2,
+  "wake_replay": 91,
+  "relay_cursor": 17,
+  "sessions": [{"SessionID": "m1/s1", "Group": "running", "Present": true}],
+  "snapshots": [{"Session": "m1/s1", "Lines": ["$ ls"], "Cols": 80, "Rows": 24}],
+  "pending_ops": [
+    {
+      "op": "kill",
+      "session_id": "m1/s1",
+      "cmd": {
+        "Action": "", "ContentHash": null, "DeviceID": "",
+        "ExpiresAt": "0001-01-01T00:00:00Z", "Machine": "",
+        "OperationID": "op-pending", "Session": "", "Sig": ""
+      }
+    }
+  ],
+  "op_outcomes": {"op-done": {"op": "ok", "operation_id": "op-done", "endpoint_id": ""}},
+  "stale": [{"sender": "0000000000000000", "epoch": 7}],
+  "stale_streams": ["journal"]
+}`
+
+// stateFixtures is the pinned literal for each version that HAS one, keyed by version. The
+// map is what makes the version bump mechanical: TestStateSchemaVersion_IsPinnedToTheDurable
+// FieldSet demands an entry for whatever StateSchemaVersion currently is.
+var stateFixtures = map[int]string{
+	1: stateV1Fixture,
+	4: stateV4Fixture,
+}
+
+// TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
+// half that catches a DOWNGRADE of the constant: a build stamping 3 refuses this blob with
+// ErrFutureSchema before a single coordinate is read.
+//
+// It restores through the fixture's PINNED KEK -- a real AEAD, the same s14aSealer every
+// other test here uses, over a key that is a literal rather than fresh entropy. That is what
+// lets the two sealed fields live in the byte literal at all.
+func TestStateStore_PinnedV4FixtureStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "phone-state.json")
+	if err := os.WriteFile(path, []byte(stateV4Fixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	kek := &s14aSealer{kek: stateV4FixtureKEK}
+	st, err := OpenStore(path, "m1", kek, kek)
+	if err != nil {
+		t.Fatalf("OpenStore on the pinned v4 fixture: %v (a shipped schema version must keep "+
+			"loading; if StateSchemaVersion was lowered, this blob is now from the future)", err)
+	}
+
+	// The fixture IS fullState() on disk, so the comparison covers every coordinate at once
+	// and names the one that was lost.
+	want, got := fullState(), st.Load()
+	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+	for i := 0; i < wv.NumField(); i++ {
+		if !wv.Type().Field(i).IsExported() {
+			continue
+		}
+		if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+			t.Errorf("the pinned v4 fixture restored State.%s = %#v; want %#v. A coordinate the "+
+				"literal carries and this build no longer reads is a durable field dropped without "+
+				"a schema bump", wv.Type().Field(i).Name, gv.Field(i).Interface(), wv.Field(i).Interface())
+		}
+	}
+}
+
+// TestStateSchemaVersion_IsPinnedToTheDurableFieldSet is F2 itself: the constant and the
+// field set it stamps must move together. Nothing connected them, so both mutations were
+// silent -- lowering the constant, and adding a durable field without raising it.
+//
+// The tie is mechanical in BOTH directions. A field added to stateFile is missing from the
+// pinned literal for the current version, so it fails here until the version is raised and a
+// literal for the new one is pinned; a field REMOVED leaves a key in the pinned literal this
+// build can no longer decode, which is a coordinate silently dropped on every load of an
+// existing blob.
+func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
+	fixture, ok := stateFixtures[StateSchemaVersion]
+	if !ok {
+		t.Fatalf("StateSchemaVersion is %d and stateFixtures pins no literal for it (it pins %v). "+
+			"PB-STATE-5's forward-migration path is only mechanical if every shipped version keeps "+
+			"a byte-literal that must go on loading, so raising the version means pinning the blob "+
+			"the new version writes", StateSchemaVersion, sortedFixtureVersions())
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(fixture), &blob); err != nil {
+		t.Fatalf("decode the pinned v%d fixture: %v", StateSchemaVersion, err)
+	}
+
+	tags := map[string]bool{}
+	rt := reflect.TypeOf(stateFile{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if tag == "" || tag == "-" {
+			t.Fatalf("stateFile.%s has no json tag; a durable field's on-disk name must be explicit",
+				rt.Field(i).Name)
+		}
+		tags[tag] = true
+		if _, present := blob[tag]; !present {
+			t.Errorf("the durable field %q is absent from the pinned v%d fixture. Either it is NEW "+
+				"-- in which case StateSchemaVersion must be raised and a literal for the new version "+
+				"pinned, or a build one version back drops it silently and a replay guard comes back "+
+				"as zero -- or the literal has drifted from what this build writes",
+				tag, StateSchemaVersion)
+		}
+	}
+	for name := range blob {
+		if !tags[name] {
+			t.Errorf("the pinned v%d fixture carries %q and stateFile no longer has a field for it. "+
+				"Removing a durable coordinate is a schema change too: every existing blob still "+
+				"carries it, and this build now drops it on load", StateSchemaVersion, name)
+		}
+	}
+}
+
+func sortedFixtureVersions() []int {
+	out := make([]int, 0, len(stateFixtures))
+	for v := range stateFixtures {
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
+}
 
 // TestStateStore_PinnedV1FixtureStillLoads is the forward-migration guard (PB-STATE-5).
 func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {

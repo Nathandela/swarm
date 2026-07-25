@@ -759,6 +759,17 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 // hardest here: this frame arrives ONCE per gateway session and it is the only thing that
 // carries the epoch key, so dropping it leaves a phone that can neither send nor open
 // anything, with nothing left to redeliver.
+//
+// A CUSTODY REFUSAL IS NOT AN UNOPENABLE GRANT, and conflating the two is the same loss one
+// step earlier. The sealed-box open runs through the device's CONTENT tier, so
+// crypto.ErrKeyAuthRequired -- the locked handset -- surfaces here as a grant that "did not
+// open", when in fact the frame is intact and will open the moment the tier does. That state
+// is not an error path: openSealedDeviceKeys tolerates a locked content tier ON PURPOSE so
+// the wake tier keeps the relay dialled and the drain running with nobody present, which is
+// exactly when the bootstrap frame arrives. Acking it there deletes the only copy of the
+// epoch key for a reason that clears itself. crypto.ErrKeyInvalidated is treated the same
+// way: it is a verdict on this device's tier, never on the grant, and nothing behind the
+// frame can be opened either -- so there is no compaction to buy.
 func (r *MailboxRouter) acceptBootstrap(g *crypto.EpochGrant, cursor uint64) (Receipt, error) {
 	if r.core == nil {
 		// A bare router holds no key custody and no watermark, so it cannot authenticate a
@@ -766,11 +777,18 @@ func (r *MailboxRouter) acceptBootstrap(g *crypto.EpochGrant, cursor uint64) (Re
 		return Receipt{}, errNoGrantCustody
 	}
 	opened, err := r.core.installGrant(g, cursor)
-	if err != nil && opened {
+	if err != nil && (opened || isCustodyRefusal(err)) {
 		return Receipt{}, err
 	}
 	acked := r.ack(cursor) == nil
 	return Receipt{Acked: acked}, err
+}
+
+// isCustodyRefusal reports whether err is one of the two PB-KEY-2 tier verdicts, which say
+// nothing about the frame that provoked them and are answered by the user (unlock) or by a
+// re-pair -- never by discarding the frame.
+func isCustodyRefusal(err error) bool {
+	return errors.Is(err, crypto.ErrKeyAuthRequired) || errors.Is(err, crypto.ErrKeyInvalidated)
 }
 
 // markStale mirrors the persisted stale flag into the live router.

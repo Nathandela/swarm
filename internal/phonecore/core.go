@@ -292,6 +292,9 @@ func (c *Core) StreamStale(stream string) bool { return c.router.StreamStale(str
 //
 // It is RECOVERABLE, never latched (PB-STATE-10): the machine's re-grant clears it on the
 // ordinary inbound path, in the same transaction that installs the key.
+//
+// THE PRODUCTION ENTRY is installGrant's replay arm; see grantLossDetected there for what
+// makes the condition decidable without a clock, a threshold or a wire change.
 func (c *Core) MarkGrantLost() error {
 	c.mu.Lock()
 	st := c.st.clone()
@@ -306,6 +309,47 @@ func (c *Core) MarkGrantLost() error {
 	}
 	c.rebind()
 	return nil
+}
+
+// grantLossDetected reports whether a refused bootstrap grant PROVES PB-KEY-3's terminal
+// state. It is the production entry MarkGrantLost had none of, and it needs no clock, no
+// threshold and no new wire field.
+//
+// PB-KEY-3 describes the state as "drained, no grant, retention cap passed", and the phone
+// can measure none of those three: it holds no pairing timestamp, and the retention cap is
+// RELAY configuration asserted by the party this design treats as hostile. But it does not
+// have to measure them, because the bootstrap frame is the one machine -> phone frame that
+// is NOT sealed under the key at issue -- it is tagged plaintext signed by the grant-signing
+// key pinned at pairing, because it is what DELIVERS the content key -- and the gateway
+// re-appends it from its persistent sidecar once per gateway session.
+//
+// So the two conditions below are PROOF rather than inference:
+//
+//	crypto.ErrGrantReplay -- the machine's own signed frame arrived, so the gateway is
+//	    connected and delivering, and the coordinates it is able to deliver are ones this
+//	    phone has already consumed. crypto.GrantReceiver enforces strict (epoch, seq)
+//	    monotonicity and the receiver is only seeded when a watermark exists, so this error
+//	    cannot be reached by a phone that never accepted a grant.
+//	no content key -- and the phone cannot open anything with what it has.
+//
+// Together: re-delivery can never help, however long anyone waits, and only a machine-side
+// re-grant advancing the seq can. That is the terminal state in its own terms.
+//
+// BOTH CONDITIONS ARE LOAD-BEARING. A replay refused while the phone holds a WORKING key is
+// the normal traffic the watermark exists for -- a retaining relay re-serving a retired
+// pre-rotation grant -- and marking there would send a user with a healthy handset to the
+// machine. And a phone that is merely keyless has proved nothing: the gateway may simply not
+// have reconnected yet, which is answered by waiting, not by a re-grant.
+//
+// WHAT IT DELIBERATELY DOES NOT CLAIM. A locked content tier cannot reach here at all: the
+// sealed-box open runs before the replay check, so a locked handset is refused with
+// crypto.ErrKeyAuthRequired and is neither marked nor acked (see acceptBootstrap). And a
+// relay serving a very old retained grant to a keyless phone marks it when the gateway may
+// yet deliver a good one -- a false positive that costs one message which the real grant
+// clears on arrival, in the transaction that installs the key. That direction is the safe
+// one: the flag is a message, never a state change, and PB-STATE-10 forbids latching it.
+func grantLossDetected(err error, keyless bool) bool {
+	return keyless && errors.Is(err, crypto.ErrGrantReplay)
 }
 
 // installGrant consumes one machine-sealed bootstrap EpochGrant (PB-KEY-10): it verifies the
@@ -335,7 +379,19 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 	c.mu.Lock()
 	epoch, seq, keys, err := c.grants.Accept(c.ks, ed25519.PublicKey(c.st.MachineSignPub), g)
 	if err != nil {
+		keyless := c.st.Keys.ContentKey == (crypto.ContentKey{})
 		c.mu.Unlock()
+		if grantLossDetected(err, keyless) {
+			// The mark is advisory state ABOUT the refusal, never a second verdict on it: the
+			// replay is still what happened and still what the caller must see, so a failed
+			// persist is joined rather than substituted. errors.Is keeps matching
+			// crypto.ErrGrantReplay through the join, which is what acceptBootstrap's ack rule
+			// reads. Nothing is lost if the write does fail either -- the gateway re-appends
+			// the same sidecar every session, so the next delivery re-derives it.
+			if merr := c.MarkGrantLost(); merr != nil {
+				return false, errors.Join(err, merr)
+			}
+		}
 		return false, err
 	}
 	st := c.st.clone()

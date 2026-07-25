@@ -164,6 +164,54 @@ func TestPBBIND4_TheOnlySecretCrossingIsNamedAndInbound(t *testing.T) {
 		}
 	}
 
+	// STRUCT FIELDS ARE THE SAME CHANNEL WITH NO SIGNATURE TO INSPECT. gomobile binds an
+	// exported struct field as a getter/setter pair, so a []byte field becomes a
+	// `byte[] getX()` on the Java side -- an OUTBOUND crossing, the direction B8 forbids,
+	// reached without declaring a single method. The walk above cannot see it: there is no
+	// *ast.FuncDecl to look at. Until this existed, a []byte field landing was caught only by
+	// the exported-surface golden needing regeneration, which is a review step someone can
+	// approve, not a rule that refuses.
+	//
+	// The rule is absolute for fields, with no allow-list beside allowedByteParams: the two
+	// permitted crossings are METHODS by construction (they take the transient per-tier data
+	// key and zeroize it after use, which a field cannot do -- a field keeps the bytes alive
+	// for as long as the object), and SendInput's keystrokes are a parameter for the same
+	// reason. A field that genuinely needs to carry bytes has string and the facade's own
+	// declared types available.
+	for _, f := range src.Files {
+		for _, d := range f.Decls {
+			decl, ok := d.(*ast.GenDecl)
+			if !ok || decl.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range decl.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || !ts.Name.IsExported() {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, fld := range st.Fields.List {
+					if !isByteSlice(fld.Type) {
+						continue
+					}
+					for _, fn := range fld.Names {
+						if !fn.IsExported() {
+							continue
+						}
+						t.Errorf("PB-BIND-4: the exported field %s.%s is []byte. gomobile binds it as a "+
+							"`byte[] get%s()`, which is raw bytes leaving the Go core -- the OUTBOUND "+
+							"direction ADR-007 B8 forbids and B17 declined to widen. The custody "+
+							"crossings are methods on purpose: they zeroize after use, and a field "+
+							"cannot", ts.Name.Name, fn.Name, fn.Name)
+					}
+				}
+			}
+		}
+	}
+
 	// The crossing must be JUSTIFIED in the package doc, not merely present.
 	for _, phrase := range []string{"PB-KEY-1", "Keystore", "zeroize"} {
 		if !strings.Contains(src.Doc, phrase) {

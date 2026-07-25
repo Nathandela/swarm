@@ -62,6 +62,52 @@ func s10RotatedMachine(t *testing.T) (*Daemon, device.Record) {
 	return sk, rec
 }
 
+// s10SameEpochMachine is s10RotatedMachine's counterpart with the epoch STANDING STILL: the
+// machine is at epoch 1, the device is registered at epoch 1, and its sidecar carries the
+// grant coordinates it was already handed, (1, 1).
+//
+// It is the PRIMARY re-grant case, not a variant. PB-KEY-3's terminal state is a bootstrap
+// frame that was lost -- purged past the relay's retention cap, or dropped -- with nothing
+// having rotated, so the re-grant reuses the live epoch and ONLY the grant seq can carry the
+// strict increase crypto.GrantReceiver.Accept demands. It is also where PB-KEY-7 lands:
+// dropKeyMaterial preserves GrantEpoch/GrantSeq across a lock purge deliberately, so after a
+// purge the gateway's ordinary re-delivery of the SAME sidecar is refused by the phone as a
+// replay, and only a seq-advancing re-grant recovers the handset.
+//
+// The rotated fixture cannot fence any of that: its epoch has already moved, so an
+// epoch-only comparison is satisfied whatever the seq does.
+func s10SameEpochMachine(t *testing.T) (*Daemon, device.Record) {
+	t.Helper()
+	rec := validDeviceRecord(t) // GrantedEpoch defaults to 1, matching the un-rotated identity
+	sk, err := assembleWithMachineIdentity(t, func(stateDir string) {
+		remoteDir := filepath.Join(stateDir, "remote")
+		if err := os.MkdirAll(remoteDir, 0o700); err != nil {
+			t.Fatalf("mkdir remote: %v", err)
+		}
+		id, gerr := machineid.Generate("s10-regrant-sameepoch-host")
+		if gerr != nil {
+			t.Fatalf("machineid.Generate: %v", gerr)
+		}
+		if serr := id.Save(filepath.Join(remoteDir, "machine.key")); serr != nil {
+			t.Fatalf("Save identity: %v", serr)
+		}
+	})
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if err := sk.api.devices.Add(rec); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	if err := grant.Save(sk.api.registryDir(), rec.DeviceID, &crypto.EpochGrant{EpochID: 1, GrantSeq: 1}); err != nil {
+		t.Fatalf("seed grant sidecar: %v", err)
+	}
+	if got := s10MachineEpoch(t, sk.api.stateDir); got != 1 {
+		t.Fatalf("precondition: the fixture machine is at epoch %d, not 1; the epoch must NOT have "+
+			"moved or the seq assertion below is satisfied by the epoch alone", got)
+	}
+	return sk, rec
+}
+
 // s10MachineEpoch reads the current machine epoch the reconcile compares against.
 func s10MachineEpoch(t *testing.T, stateDir string) uint32 {
 	t.Helper()
@@ -149,26 +195,74 @@ func TestS10_ARegrantConvergesTheDeviceOntoTheCurrentEpoch(t *testing.T) {
 // crypto.GrantReceiver seeded from its durable watermark, which enforces strict
 // (epoch_id, grant_seq) monotonicity. A re-grant that reuses the previous coordinates is
 // refused by the phone as a REPLAY -- so the unblock silently does not unblock.
+//
+// IT RUNS OVER BOTH FIXTURES, and the same-epoch one is what gives the assertion teeth.
+// Against the rotated fixture alone the epoch has already moved, so the comparison is
+// satisfied by the epoch whatever the seq does: making Identity.NextGrantSeq return the
+// counter unchanged left the whole repository green. Only a re-grant under a STANDING epoch
+// -- the lost-bootstrap case PB-KEY-3 actually describes, and the post-purge case PB-KEY-7
+// leaves behind -- forces the seq to carry the increase on its own.
 func TestS10_ARegrantAdvancesTheGrantSeq(t *testing.T) {
-	sk, rec := s10RotatedMachine(t)
-	before, err := grant.Load(sk.api.registryDir(), rec.DeviceID)
-	if err != nil || before == nil {
-		t.Fatalf("precondition: seeded sidecar unreadable (%v)", err)
-	}
+	for _, tc := range []struct {
+		name    string
+		machine func(*testing.T) (*Daemon, device.Record)
+	}{
+		{"same epoch (a lost bootstrap; only the seq can carry the increase)", s10SameEpochMachine},
+		{"rotated epoch (the phone slept through a rotation)", s10RotatedMachine},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sk, rec := tc.machine(t)
+			before, err := grant.Load(sk.api.registryDir(), rec.DeviceID)
+			if err != nil || before == nil {
+				t.Fatalf("precondition: seeded sidecar unreadable (%v)", err)
+			}
 
-	if err := sk.api.RegrantDevice(rec.DeviceID); err != nil {
-		t.Fatalf("RegrantDevice: %v", err)
+			if err := sk.api.RegrantDevice(rec.DeviceID); err != nil {
+				t.Fatalf("RegrantDevice: %v", err)
+			}
+			after, err := grant.Load(sk.api.registryDir(), rec.DeviceID)
+			if err != nil || after == nil {
+				t.Fatalf("load the re-granted sidecar: %v", err)
+			}
+			if after.EpochID < before.EpochID || (after.EpochID == before.EpochID && after.GrantSeq <= before.GrantSeq) {
+				t.Errorf("the re-grant's coordinates (epoch %d, seq %d) do not strictly exceed the "+
+					"previous grant's (epoch %d, seq %d). crypto.GrantReceiver.Accept rejects anything "+
+					"that does not, and the phone seeds it from durable state -- so the re-granted key "+
+					"is refused as ErrGrantReplay and the device stays exactly as broken as it was",
+					after.EpochID, after.GrantSeq, before.EpochID, before.GrantSeq)
+			}
+		})
 	}
-	after, err := grant.Load(sk.api.registryDir(), rec.DeviceID)
-	if err != nil || after == nil {
-		t.Fatalf("load the re-granted sidecar: %v", err)
-	}
-	if after.EpochID < before.EpochID || (after.EpochID == before.EpochID && after.GrantSeq <= before.GrantSeq) {
-		t.Errorf("the re-grant's coordinates (epoch %d, seq %d) do not strictly exceed the "+
-			"previous grant's (epoch %d, seq %d). crypto.GrantReceiver.Accept rejects anything "+
-			"that does not, and the phone seeds it from durable state -- so the re-granted key "+
-			"is refused as ErrGrantReplay and the device stays exactly as broken as it was",
-			after.EpochID, after.GrantSeq, before.EpochID, before.GrantSeq)
+}
+
+// TestS10_ARepeatedRegrantKeepsAdvancingTheGrantSeq is the same property under REPETITION,
+// which is the shape the support path really takes: the owner runs `swarm remote regrant`,
+// the phone is locked or offline when the gateway session that carried it ended, and they
+// run it again. A verb that advances once and then plateaus -- because the floor is only
+// consulted against the sidecar, or because the counter is re-derived rather than allocated
+// -- makes every attempt after the first a replay the phone silently refuses, with the CLI
+// reporting success each time.
+func TestS10_ARepeatedRegrantKeepsAdvancingTheGrantSeq(t *testing.T) {
+	sk, rec := s10SameEpochMachine(t)
+
+	prev := uint64(0)
+	for i := 0; i < 3; i++ {
+		if err := sk.api.RegrantDevice(rec.DeviceID); err != nil {
+			t.Fatalf("RegrantDevice #%d: %v", i+1, err)
+		}
+		g, err := grant.Load(sk.api.registryDir(), rec.DeviceID)
+		if err != nil || g == nil {
+			t.Fatalf("load the re-granted sidecar #%d: %v", i+1, err)
+		}
+		if g.EpochID != 1 {
+			t.Fatalf("re-grant #%d moved the epoch to %d; a re-grant must not rotate", i+1, g.EpochID)
+		}
+		if g.GrantSeq <= prev {
+			t.Fatalf("re-grant #%d minted seq %d, which does not exceed the previous %d. The second "+
+				"and every later re-grant is refused by the phone as ErrGrantReplay while the CLI "+
+				"reports success", i+1, g.GrantSeq, prev)
+		}
+		prev = g.GrantSeq
 	}
 }
 
