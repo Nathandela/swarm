@@ -1423,3 +1423,38 @@ for a different cause.
 the condition is produced only on the Android side. That is structural rather than accidental, since
 the taxonomy is a closed set checked for equality across the golden, the table and the Kotlin enum,
 so a class that exists in one must exist in all three. Noted at the constant and in the table.
+
+**B24. CORRECTION to B22: its safety argument was FALSE as written, and the fix is a policy the
+code did not have.** An independent reviewer falsified it and I verified the falsification.
+
+B22 asserted: *"there is no path by which a revoked device un-bans itself"*, resting on the claim
+that `authorize_device` is served only on an authenticated connection and a revoked device cannot
+authenticate. **The second half is true and the conclusion does not follow.** Relay auth is
+**open registration** — `handleAuthInit` accepts any self-minted keypair — and `handleAuthorizeDevice`
+checks only `requireAuth()`, with **no ownership or role check at all**. So "authenticated" does not
+mean "the owner's machine".
+
+The concrete path: a revoked device mints a throwaway identity, authenticates as it, and calls
+`authorize_device` naming its **own** revoked key. `authorizePair` deletes the ban in the same
+transaction. The device then re-authenticates as itself and can pair and append again.
+
+**Bounds, stated honestly rather than as mitigation**: end-to-end crypto is intact — the revoked
+device cannot open new-epoch frames, and its commands still fail the registry signature check. The
+reachable harm is relay-plane: appends against the machine's mailbox up to the per-target depth cap,
+i.e. a denial of service against the legitimate phone's appends. The **openness itself pre-dates**
+this work; any identity could always self-pair with any target. What B22 added was making that same
+open verb clear bans, and then asserting a property the code does not have.
+
+**The fix**: `bucketRevoked` stores the **banning** routing id as its value, and `authorizePair`
+clears a ban only when the pairer matches the banner. That is a one-line policy which keeps B22's
+semantics — the owner's machine lifts the ban it placed — and makes its argument true rather than
+aspirational.
+
+**A mirror hole, pre-existing and now recorded**: `handleDeviceRevoke` likewise lets any
+authenticated routing id ban **any** routing id, including the machine's. It is out of this slice's
+scope, but it is the same missing check and it should not be discovered a third time.
+
+**The lesson worth keeping**, because I made this error: a security argument that names a mechanism
+("only an authenticated connection can issue it") must be checked against **what that mechanism
+actually gates**. Authentication proves identity, not authority. I wrote the argument, it read as
+sound, and it was wrong at the join between two true statements.
