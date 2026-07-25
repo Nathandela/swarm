@@ -310,6 +310,33 @@ machine enforces") and S14a in full. ADR-007 **B14 additionally requires S14a be
 CROSS-MODEL after GREEN**, as the 2026-07-23 SAS widening was, because it widens the frozen crypto
 package.
 
+## THE SHIPPED APP STILL WRITES THE CONTENT KEY IN THE CLEAR -- S14 owes the closing half
+
+**PB-KEY-9 is NOT delivered until S14 lands a facade verb.** S14a sealed key material at rest and
+the acceptance gate (`android/gate/keycustody_test.go`, which reads the raw bytes on disk) went
+RED -> GREEN. But that gate injects real sealers from Go. **The Android app cannot**: gomobile
+cannot set a Go struct field, and the facade is golden-pinned (`mobile/testdata/exported_surface.golden`,
+enforced by `mobile/contract_test.go`), so `mobile.NewApp` has no way to supply one. It therefore
+passes `phonecore.InsecureCleartextSealer()` -- identity Seal/Open -- and on a real handset today
+the epoch content key is still recoverable from `phone-state.json`.
+
+This is ADR-007 B18's own forecast made concrete, and it is the fifth standing defect class in its
+purest form: **the acceptance test is green and the product is not**. It is recorded here rather
+than left in a commit message because a later reader could otherwise take PB-SEC-1's green gate as
+proof the property holds on device.
+
+Fail-closed at `NewApp` was considered and rejected as the interim: it would take the Android app
+and the whole `mobile/conformance` suite down until S14 lands, with no security gain in the
+meantime (nothing ships to a handset before S14 either way). The safety property B18(c) actually
+demands is preserved -- **omission** yields `ErrNoSealer`, and cleartext requires typing
+`Insecure...` at a call site, so production cannot reach it by forgetting a field. Two call sites
+have that word: `mobile/app.go` and `mobile/conformance/harness_test.go`.
+
+**S14's obligation, precisely**: add a facade verb that accepts an Android-Keystore-backed KEK,
+regenerate the golden, and delete both `InsecureCleartextSealer` call sites. Until then, the
+`InsecureCleartextSealer` symbol itself should be treated as a live defect marker -- grep for it to
+find what remains.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
