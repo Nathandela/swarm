@@ -166,8 +166,19 @@ type Server struct {
 	baseCancel context.CancelFunc
 	closeOnce  sync.Once
 	sweepWG    sync.WaitGroup
+	// pushWG tracks in-flight background push deliveries so Close joins them BEFORE the
+	// store shuts. Measured, not assumed: a write to a closed bbolt handle returns
+	// "database not open" rather than panicking, so the cost of NOT joining is a goroutine
+	// outliving Close and, if its verdict was UNREGISTERED, a LOST prune — the dead token
+	// stays in the store and comes back on the next restart. Cheap to prevent, so
+	// prevented. Adds are guarded by the closing flag below.
+	pushWG sync.WaitGroup
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// closing is set once Close begins, under mu, so no NEW background push delivery can
+	// start after Close snapshots the set it is about to wait for. It is what makes
+	// pushWG.Add and pushWG.Wait mutually exclusive rather than merely unlikely to race.
+	closing  bool
 	sessions map[string]*serverConn  // rid -> active authenticated conn
 	waits    map[string]*pendingWait // rid -> its single parked server-side wait (§6.0 caps it at 1)
 	presence map[string]*presenceEntry
@@ -292,6 +303,9 @@ func (s *Server) Close() error {
 			s.baseCancel()
 		}
 		s.mu.Lock()
+		// No further background push delivery may start from here on (see closing): every
+		// one already started is joined below, before the store closes.
+		s.closing = true
 		conns := make([]*serverConn, 0, len(s.conns))
 		for sc := range s.conns {
 			conns = append(conns, sc)
@@ -311,6 +325,11 @@ func (s *Server) Close() error {
 		// store, so an in-flight SweepRetention can never touch a closed bbolt handle
 		// (CR-3: no leak, no store-shutdown race).
 		s.sweepWG.Wait()
+		// Same ordering for background push deliveries: one that ends in an UNREGISTERED
+		// verdict prunes the token from the store, and a prune that lands after the store
+		// closes is simply lost — the dead token returns on the next start. baseCancel above
+		// already cancelled their contexts, so this returns as fast as the sender honours it.
+		s.pushWG.Wait()
 		if s.st != nil {
 			_ = s.st.close()
 		}
@@ -953,7 +972,7 @@ func (sc *serverConn) handlePushTrigger(payload []byte) error {
 		return sc.replyErr(codeQuotaExceeded)
 	}
 	if tok != "" {
-		sc.s.deliverPush(sc.ctx, req.Target, tok, PushPayload{Alert: GenericPushAlert, Ciphertext: req.Envelope})
+		sc.s.deliverPush(req.Target, tok, PushPayload{Alert: GenericPushAlert, Ciphertext: req.Envelope})
 	}
 	return sc.replyOK(map[string]any{})
 }
@@ -999,50 +1018,106 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	return sc.replyOK(map[string]any{})
 }
 
+// pushVerdictWait is how long deliverPush blocks its CALLER waiting for the provider's
+// verdict before letting the delivery finish in the background.
+//
+// It exists because deliverPush is reached from the connection's REQUEST LOOP, and this
+// package's standing invariant is that nothing blocks that loop — handleMailboxWait goes to
+// the trouble of parking its wait on a separate goroutine for exactly this reason. The
+// stalled loop is the MACHINE's, and the gateway re-registers its mailbox_wait on that same
+// connection, so time spent here is time the gateway is not noticing the phone's keystrokes,
+// against PB-NET-5's 150 ms p50 budget. The realistic shape is multi-session: agent A goes
+// idle and fires a wake while the user is typing into session B.
+//
+// It is not zero because the UNREGISTERED verdict must have pruned the token before the next
+// trigger reads it, and a pure fire-and-forget would decide that after the fact. One second
+// covers a normal provider round trip several times over — including the extra OAuth exchange
+// a cold sender pays — so in practice the prune still lands before the reply.
+//
+// The bound was invisible until this slice, because every configured sink was until now a
+// test double that answered instantly. A REAL sender retries a 5xx up to
+// push.DefaultMaxAttempts times over its own request timeouts, which is why the RETRIES must
+// not be on this clock.
+const pushVerdictWait = time.Second
+
+// pushDeliveryBudget is the TOTAL lifetime of one delivery, retries included. It runs on a
+// background goroutine past pushVerdictWait, so it is generous enough to let the sender's
+// retry schedule actually complete (three attempts plus its inter-attempt delays) while still
+// capping how long an in-flight push can outlive the request that started it.
+const pushDeliveryBudget = 10 * time.Second
+
 // deliverPush hands one push to the transport and ACTS ON ITS VERDICT.
 //
-// Reading that error is the whole point (PB-PUSH-2): a sender can classify an
-// UNREGISTERED response perfectly and change nothing, because the previous
-// `_ = s.push.Push(...)` discarded it — a pruning signal nobody reads is a pruning
-// signal that does not exist. Exactly one verdict prunes; every other failure leaves
-// the token alone, because pruning on a transient provider outage would disable push
-// for every live handset the relay holds and nothing would surface until users started
-// missing hand-offs.
+// Reading that error is the whole point (PB-PUSH-2): a sender can classify an UNREGISTERED
+// response perfectly and change nothing, because the previous `_ = s.push.Push(...)`
+// discarded it — a pruning signal nobody reads is a pruning signal that does not exist.
+// Exactly one verdict prunes; every other failure leaves the token alone, because pruning on
+// a transient provider outage would disable push for every live handset the relay holds and
+// nothing would surface until users started missing hand-offs.
 //
-// A push failure is never propagated to the caller: push_trigger answers OK either way,
-// so a provider outage cannot make the gateway read the relay itself as failing
-// (PB-PUSH-5).
-// pushDeliveryBudget bounds ONE deliverPush.
+// THE SPLIT. The delivery runs on its own goroutine and the caller waits only
+// pushVerdictWait for it. A sink that answers within that window — every fast verdict,
+// including every UNREGISTERED, which is classified non-retryable and returns on the attempt
+// that sees it — has therefore pruned before the caller resumes. A sink still grinding
+// through retries does not hold the request loop for them. That is the whole difference
+// between a 10 s worst-case stall on the machine's connection and a 1 s one.
 //
-// It exists because deliverPush runs on the connection's REQUEST LOOP, and this package's
-// standing invariant is that nothing blocks that loop — handleMailboxWait goes to the
-// trouble of parking its wait on a separate goroutine for exactly this reason. Delivery
-// stays synchronous anyway: the UNREGISTERED verdict must have pruned the token before the
-// next trigger reads it, and a fire-and-forget goroutine would decide that after the fact.
-// So the loop IS held, and this is what caps how long.
+// It also means a LATER-attempt UNREGISTERED still prunes — just in the background. That
+// case is real (a 503 then a dead token, or an OAuth blip on the first attempt), so pruning
+// only on a first-attempt verdict would have quietly stopped pruning for it.
 //
-// The bound was invisible until this slice, because until now every configured sink was a
-// test double that answered instantly. A REAL sender retries a 5xx up to
-// push.DefaultMaxAttempts times over its own request timeouts — tens of seconds — and
-// holding a machine's request loop that long would stall the journal appends and the
-// mailbox_wait admission (PB-NET-5's input path) queued behind a push to a phone.
-//
-// Two seconds covers a normal provider round trip several times over, and it is
-// deliberately TIGHTER than the gateway's own 5 s push timeout (remotegw's
-// defaultPushTimeout): the inner bound firing first means the gateway gets a real answer
-// rather than a deadline error it would record as a push-path degradation.
-//
-// Residual, stated rather than hidden: a push_trigger can still delay the next frame on
-// that connection by up to this budget. It is bounded and rare — §6.0 coalesces wakes to
-// at most one per session per 30 s — but it is not zero.
-const pushDeliveryBudget = 2 * time.Second
-
-func (s *Server) deliverPush(ctx context.Context, rid, token string, p PushPayload) {
+// A push failure is never propagated to the caller: push_trigger answers OK either way, so a
+// provider outage cannot make the gateway read the relay itself as failing (PB-PUSH-5).
+func (s *Server) deliverPush(rid, token string, p PushPayload) {
 	if s.push == nil || token == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, pushDeliveryBudget)
-	defer cancel()
+	// Registered under s.mu against the closing flag, so Close's Wait can never race an Add:
+	// after Close sets closing, no further delivery starts, and every started one is joined
+	// before the store closes. Without that, an in-flight prune could reach deleteToken on a
+	// shut bbolt handle — the same hazard CR-3 already joins the sweep goroutine for.
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
+	s.pushWG.Add(1)
+	s.mu.Unlock()
+
+	// Deliberately NOT the caller's context. The caller is the machine's request loop (or the
+	// sweep), and the push targets a DIFFERENT device: neither that request finishing nor that
+	// machine disconnecting is a reason to abandon the delivery, least of all the prune that
+	// follows an UNREGISTERED verdict.
+	ctx, cancel := context.WithTimeout(s.deliveryBase(), pushDeliveryBudget)
+	done := make(chan struct{})
+	go func() {
+		defer s.pushWG.Done()
+		defer cancel()
+		defer close(done)
+		s.pushAndReconcile(ctx, rid, token, p)
+	}()
+
+	t := time.NewTimer(pushVerdictWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	}
+}
+
+// deliveryBase is the parent context every background delivery hangs off: the server's, so
+// Close cancels them all promptly and pushWG.Wait returns quickly. Start installs it; a
+// Server that was constructed but never started falls back to Background so deliverPush is
+// still safe to call.
+func (s *Server) deliveryBase() context.Context {
+	if s.baseCtx != nil {
+		return s.baseCtx
+	}
+	return context.Background()
+}
+
+// pushAndReconcile performs the delivery and applies the provider's verdict.
+func (s *Server) pushAndReconcile(ctx context.Context, rid, token string, p PushPayload) {
 	err := s.push.Push(ctx, token, p)
 	if err == nil {
 		return
@@ -1248,7 +1323,7 @@ func (s *Server) SweepPresence(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	for _, t := range targets {
-		s.deliverPush(ctx, t.rid, t.token, PushPayload{Alert: GenericPushAlert})
+		s.deliverPush(t.rid, t.token, PushPayload{Alert: GenericPushAlert})
 	}
 }
 
