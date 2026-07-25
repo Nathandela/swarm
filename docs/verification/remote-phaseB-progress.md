@@ -1033,3 +1033,47 @@ record of what was intended rather than what shipped — standing class (ii), ap
   `-run` filtering, a trap for anyone bisecting. It now waits for the server to observe the
   disconnect. No assertion changed.
 - The final full-committee audit against all **142** requirements is still owed, per the goal.
+
+## Open debt carried into the final audit (recorded 2026-07-26)
+
+Tracked here rather than in `bd`: `.beads/` exists in this worktree but its `issue_prefix` is
+unset, and initialising the shared tracker with a guessed prefix would affect every worktree. That
+is the user's call, not mine.
+
+### GG-4 is NOT met: `golangci-lint` is not clean
+
+Measured at the S18 merge with **v1.64.8**: **25 findings** — 12 errcheck, 5 unused, 4 gosimple,
+3 ineffassign, 1 staticcheck. **All pre-existing**; S18 introduced exactly one (`refuse` unused) and
+cleared it. GG-4 requires build, vet, test AND lint green before an epic closes, so this blocks the
+phase regardless of requirement coverage.
+
+**The tool is installed at `~/go/bin/golangci-lint` and is NOT on PATH.** Two agents reached
+opposite conclusions about this gate for that reason alone — one reported the findings, one reported
+the gate as unrun. The second was honest about not having run it, which is why the disagreement was
+visible instead of becoming a false green. Any runbook step must use the full path.
+
+**Two findings need judgement, not a mechanical fix:**
+
+1. **`internal/remote/relay/lifecycle_test.go:27` (SA4000) — a check that cannot fail.**
+   `if RoutingID(pubA) != RoutingID(pubA)` compares a value to itself; `RoutingID` is a pure HKDF, so
+   the branch is unreachable. Its comment claims it tests determinism. The property that actually
+   matters is stability **across builds** — a changed derivation silently orphans every paired phone,
+   since a routing id is how a handset finds its machine — and that needs a **pinned known-answer
+   value**. Replace it with the KAT it was trying to be; do not simply delete it. Pre-existing since
+   `c33eb6e` (Phase 1), so it has been decorative through every round of review since.
+
+2. **`internal/remote/relay/store.go`: `purgeMailbox` and `removePair` unused.** `purgeMailbox` was
+   checked and is **not** a missing purge — `revokeAndPurge` deletes the mailbox bucket inline in the
+   same transaction, so it is dead duplicate code, the same shape as the dead `store.revoke` already
+   removed. **Verify `removePair` the same way before deleting it**: an unused function in the
+   revocation path is exactly where a missing call would hide, and "unused" is the symptom either way.
+
+The errcheck findings are unchecked returns in test files (`sink.Snapshot`, `sink.Event`). They
+should be **checked**, not blank-assigned: a test that discards an error from the call under test is
+the vacuous-pass shape this phase has found repeatedly.
+
+### Relay pairing authority (ADR-007 B25)
+
+A permanent, remotely-reachable denial of service against a machine's relay identity, reachable by
+any anonymous party. RED author dispatched; fix direction is mutual pairing. Blocks production
+readiness independently of requirement coverage.
