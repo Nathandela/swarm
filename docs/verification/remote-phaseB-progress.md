@@ -260,6 +260,28 @@ uses for the push preference.
    its owner turned off". The facade exposes only a getter and a test bans any setter -- a stolen
    phone re-enabling remote control would be a surface-level bypass of a daemon gate (PB-SEC-6).
 
+## A fifth standing defect class, found in S11: the fence guards a path production does not take
+
+The four already recorded are: a guard that cannot fail; a plausible-but-wrong value that hides a
+brick; a test that passes because its subject became unreachable; and a requirement satisfiable
+while the defect ships. S11's review added a fifth, and it is the hardest to see because
+**everything looks correct**: the invariant is real, the test is real, the test passes, and the
+production code path is not the one under test.
+
+The instance: ADR-007 D7 says input is live-only, never queued or replayed. `transport.SendLive`
+enforces it and `TestS6B_KeystrokeNeverSurvivesADisconnectWhileFollowing` fences it. But
+**`mobile.App.SendInput` never calls `SendLive`** — it calls `relay.Client.MailboxAppend` directly,
+through `sendContext` -> `awaitConn`, which polls up to **5 seconds** for a reconnection and then
+appends. Probed: a keystroke typed with no live connection blocked 864 ms, returned `nil`, and
+**arrived on the reconnected link**. The invariant was enforced in a package the phone does not use
+for this, and the fence had been green all along.
+
+What to do about it, for every remaining slice: when a requirement names a structural invariant,
+**trace the production call path from the outermost caller inward** and confirm the fence sits on
+*that* path, not on a sibling that implements the same idea. Grep for the enforcing function and
+check who actually calls it. A second instance in the same review: `RetryFor` has zero production
+callers, so PB-INPUT-4's "never blind resend" is enforced nowhere while its table is fully tested.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
