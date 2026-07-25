@@ -387,6 +387,46 @@ the two sentinels to typed Kotlin exceptions, which is the natural home for the 
 The narrower sibling finding -- that `relay/client.go:402-406` handles the refusal correctly but is
 unfalsifiable by any test -- is being closed under S14a and is NOT this item.
 
+## Carried from the S11 round-2 review (NOT in any remediation brief -- deliberately deferred)
+
+The three blockers (B-1 daemon-restart lease brick, B-2 input seq inversion, B-3 the spelling-fence)
+are in remediation. These are the recorded residuals, each with an owner, so none of them is
+rediscovered later as if new:
+
+- **The clock verdict never clears and has no pull surface.** `mobile/relay.go:332`
+  (`if !changed || msg == "" { return }`) emits nothing on the transition back to healthy, and the
+  golden has no clock verb. A screen opened after the event, or after the user fixes the clock,
+  cannot learn the current verdict. This is the same latch the round-1 B4 fix removed from the
+  command path, re-created one layer up in the UI -- and it is inconsistent with this round's own
+  `UndeliveredInputs()`, added expressly as "the matching pull surface for a screen that opens
+  afterwards". **Owner: S16** (it needs a facade verb, so it travels with the UI slice).
+- **A phone more than 10 minutes FAST goes silently deaf to the entire machine->phone plane.**
+  `snapshot.go:472` is one-sided against `InboundMaxAge` on the PHONE's clock, so every reply,
+  journal record and snapshot returns `ErrStaleAge`; `mobile/relay.go:220-223` swallows it with no
+  stale mark, no event, and `ConnectionState()` still reads "online". The skew feature cannot fire
+  because it needs an OPENED reply. Not a regression -- it follows from PB-TIME-2/S7b's deliberate
+  one-sidedness. Note this is the **third** clock wall (30 s surfaced, 60 s refused opaquely,
+  10 min deaf) and the only one that was undocumented. **Blocked on** the PB-TIME-2 reply-seal gap
+  already recorded below; the two must land together.
+- **`transport.RetryFor` AND `transport.SendLive` both have zero production callers** -- the facade
+  appends through `relay.Client.MailboxAppend` directly. Which means
+  `TestS6B_KeystrokeNeverSurvivesADisconnectWhileFollowing`
+  (`transport/s6b_input_test.go:374`) -- the fence whose blindness let the round-1 B2 defect ship --
+  is **still a fence on a path production does not take**, and this round neither retired nor
+  re-pointed it. Standing defect class (v), now named with an owner. Not blocking: "never blind
+  resend" is trivially satisfied because nothing resends, and D7 is structurally enforced by
+  `sendCoalesced` never re-buffering a failed frame. The hazard is the next slice adding a resend
+  without consulting the table. **Owner: whoever next touches the transport send path -- delete the
+  fence or re-point it at the live path.**
+- **`replyMu` is held across a relay append with a 10 s ceiling** (`lease_confirm.go:82-97`). A
+  wedged relay lets one severance notice head-of-line-block every lease confirmation and command
+  reply for up to 10 s. Correct given the ordering the reply-seq fix requires, and not on the
+  keystroke path, but new this round. Watch it if reply latency ever matters.
+- **The undelivered-input ledger is unbounded.** `coalesce.go:56/170/180` append forever,
+  `Undelivered()` is a read and not a drain, and the facade has no clear verb. A minute of
+  autorepeat against a dead lease retains roughly 1800 entries, and `UndeliveredInputs()` copies the
+  whole slice per call. **Owner: S16**, with the pull surface above.
+
 ## Open items carried forward
 
 - **PB-PAIR-1 needs an evidenced manual scan** under `docs/verification/` — a real phone
