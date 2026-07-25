@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -185,33 +186,141 @@ type MailboxRouter struct {
 	snapshots *SnapshotCache
 	replies   *ReplyCache
 
+	// core is the durable custody AcceptCommit commits through, nil for a bare router
+	// (Accept-only, no persistence).
+	core *Core
+
 	grantMu sync.Mutex
 	grants  [][]byte // pending epoch-grant plaintexts; C5 wires machine-side delivery + consumption
 
-	reconMu sync.Mutex
-	recon   schema.ReconcileRecord // latest reconcile record (PB-SYNC-7); reconOK gates mutating ops
-	reconOK bool
+	// mu guards the BOUND state above (key, receiver, caches) together with the reconcile
+	// slot below: rebind replaces all of them at once when the Core adopts a new epoch, so a
+	// reader takes the lock just long enough to copy the pointer it needs.
+	mu      sync.Mutex
+	recon   schema.ReconcileRecord // latest reconcile record (PB-SYNC-7)
+	reconOK bool                   // a record has ARRIVED
+	adopted bool                   // ... and its authorities have been applied (gates mutating ops)
+	reconAt Bucket                 // the bucket it arrived on: its self-certifying JournalCeiling
+	epoch   uint32                 // the epoch whose buckets are unverified while unadopted
+	stale   map[Bucket]bool        // persisted stale flags, restored from State.Stale
 }
 
-// NewMailboxRouter returns a router bound to the epoch content key with empty caches.
+// bound copies the router's currently-bound key, receiver and caches.
+func (r *MailboxRouter) bound() (crypto.ContentKey, *crypto.MailboxReceiver, *SessionCache, *SnapshotCache, *ReplyCache) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.key, r.recv, r.sessions, r.snapshots, r.replies
+}
+
+// NewMailboxRouter returns a router bound to the epoch content key with empty caches. It
+// has no durable custody, so a reconcile record is adopted by its mere arrival: there is no
+// state to validate it against and no coordinate for it to move.
 func NewMailboxRouter(key crypto.ContentKey) *MailboxRouter {
+	return newMailboxRouter(key, nil)
+}
+
+func newMailboxRouter(key crypto.ContentKey, core *Core) *MailboxRouter {
 	return &MailboxRouter{
 		key:       key,
 		recv:      crypto.NewMailboxReceiver(),
 		sessions:  NewSessionCache(),
 		snapshots: NewSnapshotCache(),
 		replies:   NewReplyCache(),
+		core:      core,
+		stale:     map[Bucket]bool{},
 	}
 }
 
+// rebind rebuilds the router from durable state: the epoch content key, the per-bucket
+// receive high-waters replayed into a fresh crypto.MailboxReceiver (a receiver that was
+// never seeded SKIPS the staleness check on the first frame of every stream, so a retaining
+// relay could redeliver everything), the decoded caches, and the persisted stale flags.
+func (r *MailboxRouter) rebind(st State) {
+	recv := crypto.NewMailboxReceiver()
+	for b, seq := range st.Receive {
+		recv.SeedHighWater(b.Sender, b.Epoch, seq)
+	}
+	sessions := NewSessionCache()
+	for _, cs := range st.Sessions {
+		sessions.restore(cs)
+	}
+	snapshots := NewSnapshotCache()
+	for _, s := range st.Snapshots {
+		snapshots.Apply(s)
+	}
+
+	r.mu.Lock()
+	r.key, r.recv = st.Keys.ContentKey, recv
+	r.sessions, r.snapshots = sessions, snapshots
+	// The delivery FIFO is rebuilt from the DURABLE outcomes: a reply is decoded content
+	// like any other, so losing it on a process death would leave the phone unable to
+	// settle an op whose frame the durable high-water now refuses on redelivery
+	// (PB-SYNC-2: an op is resolved by its durable outcome, or the stream stays
+	// unresolved). Only contiguously-received replies are in there -- see
+	// Core.commitReceive. RESIDUAL: OpOutcomes is never pruned, so every launch re-offers
+	// every outcome ever recorded; bounding it needs a retention coordinate this slice's
+	// pinned schema does not carry.
+	r.replies = NewReplyCache()
+	for _, ctrl := range st.OpOutcomes {
+		r.replies.Append(ctrl)
+	}
+	r.recon, r.reconOK, r.adopted, r.reconAt = schema.ReconcileRecord{}, false, false, Bucket{}
+	r.epoch, r.stale = st.EpochID, maps.Clone(st.Stale)
+	if r.stale == nil {
+		r.stale = map[Bucket]bool{}
+	}
+	r.mu.Unlock()
+}
+
+// adopt records that Core.Reconcile applied rec: the reply bucket is reseeded from its own
+// authority (the shared journal/terminal bucket was reseeded by the record's own arrival),
+// the stale flags this epoch cleared are dropped, and mutating ops are unblocked.
+func (r *MailboxRouter) adopt(st State, journal, reply Bucket, rec schema.ReconcileRecord) {
+	_, recv, _, _, _ := r.bound()
+	recv.SeedHighWater(reply.Sender, reply.Epoch, rec.ReplyCeiling)
+	recv.SeedHighWater(journal.Sender, journal.Epoch, rec.JournalCeiling)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.adopted = true
+	r.stale = maps.Clone(st.Stale)
+	if r.stale == nil {
+		r.stale = map[Bucket]bool{}
+	}
+}
+
+// reconcileRecord is the arrived record plus the bucket it arrived on (whose high-water its
+// JournalCeiling certifies).
+func (r *MailboxRouter) reconcileRecord() (schema.ReconcileRecord, Bucket, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.recon, r.reconAt, r.reconOK
+}
+
+// Stale reports whether a bucket's content may not be trusted. A flag persisted across the
+// restart is one cause; the other is that this epoch has no authority in hand at all --
+// while the phone is unreconciled, or while a burned seq gap (PB-STATE-8) leaves the fate of
+// its in-flight ops unknown, EVERY bucket of the current epoch is unverified.
+func (r *MailboxRouter) Stale(b Bucket) bool {
+	r.mu.Lock()
+	persisted, adopted, epoch := r.stale[b], r.adopted, r.epoch
+	r.mu.Unlock()
+	if persisted {
+		return true
+	}
+	if r.core == nil || b.Epoch != epoch {
+		return false
+	}
+	return !adopted || r.core.Seq().GapPending()
+}
+
 // Sessions is the journal-derived session cache.
-func (r *MailboxRouter) Sessions() *SessionCache { return r.sessions }
+func (r *MailboxRouter) Sessions() *SessionCache { _, _, s, _, _ := r.bound(); return s }
 
 // Snapshots is the server-rendered snapshot cache.
-func (r *MailboxRouter) Snapshots() *SnapshotCache { return r.snapshots }
+func (r *MailboxRouter) Snapshots() *SnapshotCache { _, _, _, s, _ := r.bound(); return s }
 
 // Replies is the command-reply cache the phone drains after driving a command.
-func (r *MailboxRouter) Replies() *ReplyCache { return r.replies }
+func (r *MailboxRouter) Replies() *ReplyCache { _, _, _, _, c := r.bound(); return c }
 
 // TakeGrant pops the oldest pending epoch-grant plaintext demuxed off the mailbox
 // (found=false when none). Route+expose only: pairing / epoch-rotation (C5) opens it.
@@ -232,16 +341,22 @@ func (r *MailboxRouter) TakeGrant() ([]byte, bool) {
 // reply bucket (the shared journal/terminal bucket is reseeded by the frame's own
 // arrival), and crypto.NewGrantReceiverAt(GrantEpoch, GrantSeq).
 func (r *MailboxRouter) Reconciled() (schema.ReconcileRecord, bool) {
-	r.reconMu.Lock()
-	defer r.reconMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.recon, r.reconOK
 }
 
 // RequireReconciled is the fail-closed gate every MUTATING op passes through: nil once a
-// reconcile record has been obtained, ErrUnreconciled until then. Reads are deliberately
-// NOT gated -- a phone that shows nothing is indistinguishable from a dead one.
+// reconcile record has been ADOPTED, ErrUnreconciled until then. Reads are deliberately NOT
+// gated -- a phone that shows nothing is indistinguishable from a dead one.
+//
+// Arrival is not adoption when the router has durable custody: a record naming another
+// machine or epoch is refused by Core.Reconcile, and a refused authority is not a
+// reconciliation. A bare router has nothing to validate against, so arrival is adoption.
 func (r *MailboxRouter) RequireReconciled() error {
-	if _, ok := r.Reconciled(); !ok {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.adopted {
 		return ErrUnreconciled
 	}
 	return nil
@@ -250,7 +365,8 @@ func (r *MailboxRouter) RequireReconciled() error {
 // SeedHighWater seeds the resume high-water mark for a (sender, epoch) stream, matching
 // JournalReceiver.SeedHighWater -- an envelope at seq <= N is rejected on resume (F4).
 func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) {
-	r.recv.SeedHighWater(sender, epoch, seq)
+	_, recv, _, _, _ := r.bound()
+	recv.SeedHighWater(sender, epoch, seq)
 }
 
 // Accept parses one sealed envelope, authenticates + seq-guards it through the shared
@@ -269,50 +385,78 @@ func (r *MailboxRouter) SeedHighWater(sender [8]byte, epoch uint32, seq uint64) 
 // gap (round-4 re-audit, codex#3 + sonnet#2). A replayed/reordered seq or an unauthenticated
 // frame (res not yet known) returns false and mutates nothing (fail-closed, R-PHC.5).
 func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
+	_, res, f, err := r.open(raw)
+	if err != nil {
+		gap := false
+		if res != nil {
+			gap = res.Gap
+		}
+		return gap, err
+	}
+	r.apply(f)
+	return res.Gap, nil
+}
+
+// inboundFrame is one authenticated plaintext, decoded but NOT yet applied. Splitting the
+// decode from the application is what lets AcceptCommit order the durable commit around it.
+type inboundFrame struct {
+	kind     string
+	bucket   Bucket
+	seq      uint64
+	snapshot Snapshot
+	reply    schema.Control
+	record   schema.JournalRecord
+	grant    []byte
+	recon    schema.ReconcileRecord
+}
+
+// open parses, authenticates and seq-guards one envelope EXACTLY ONCE, then decodes its
+// plaintext. res is non-nil once the frame authenticated, so a caller can report the TRUE
+// gap even when the decode then fails.
+func (r *MailboxRouter) open(raw []byte) (Bucket, *crypto.MailboxResult, inboundFrame, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
-		return false, err
+		return Bucket{}, nil, inboundFrame{}, err
 	}
-	res, err := r.recv.Accept(r.key, env)
+	b := Bucket{Sender: env.Header.SenderKeyID, Epoch: env.Header.EpochID}
+	key, recv, _, _, _ := r.bound()
+	res, err := recv.Accept(key, env)
 	if err != nil {
-		return false, err
+		return b, nil, inboundFrame{}, err
 	}
 	// Peek the discriminator on the AUTHENTICATED plaintext (never on cleartext header).
 	var disc struct {
 		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(res.Plaintext, &disc); err != nil {
-		return res.Gap, err
+		return b, res, inboundFrame{}, err
 	}
+	f := inboundFrame{kind: disc.Kind, bucket: b, seq: env.Header.Seq}
 	switch disc.Kind {
 	case kindTerminalSnapshot:
-		var f snapshotFrame
-		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
-			return res.Gap, err
+		var sf snapshotFrame
+		if err := json.Unmarshal(res.Plaintext, &sf); err != nil {
+			return b, res, inboundFrame{}, err
 		}
-		r.snapshots.Apply(Snapshot{Session: f.Session, Lines: f.Lines, Cols: f.Cols, Rows: f.Rows})
+		f.snapshot = Snapshot{Session: sf.Session, Lines: sf.Lines, Cols: sf.Cols, Rows: sf.Rows}
 	case kindCommandReply:
-		var f replyFrame
-		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
-			return res.Gap, err
+		var rf replyFrame
+		if err := json.Unmarshal(res.Plaintext, &rf); err != nil {
+			return b, res, inboundFrame{}, err
 		}
-		r.replies.Append(f.Control)
+		f.reply = rf.Control
 	case kindReconcile:
 		// PB-SYNC-7: adopt the machine's authorities WHOLE or not at all -- a decode
 		// failure leaves the router unreconciled (and still refusing mutating ops) rather
 		// than half-applying a partial authority.
-		var f reconcileFrame
-		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
-			return res.Gap, err
+		var cf reconcileFrame
+		if err := json.Unmarshal(res.Plaintext, &cf); err != nil {
+			return b, res, inboundFrame{}, err
 		}
-		r.reconMu.Lock()
-		r.recon, r.reconOK = f.ReconcileRecord, true
-		r.reconMu.Unlock()
+		f.recon = cf.ReconcileRecord
 	case kindEpochGrant:
 		// Route+expose only: stash the authenticated plaintext for C5 to open. NEVER journal it.
-		r.grantMu.Lock()
-		r.grants = append(r.grants, res.Plaintext)
-		r.grantMu.Unlock()
+		f.grant = res.Plaintext
 	case kindPush:
 		// Reserved: no live push in Phase A. Recognised and dropped so it is never
 		// mis-applied as a journal record (the core C8 regression).
@@ -320,15 +464,121 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 		// Kind-less plaintext is a journal record (backward-compatible: the bare
 		// schema.JournalRecord has no kind field), decoded byte-identically to
 		// JournalReceiver.Accept (journal.go).
-		var rec schema.JournalRecord
-		if err := json.Unmarshal(res.Plaintext, &rec); err != nil {
-			return res.Gap, err
+		if err := json.Unmarshal(res.Plaintext, &f.record); err != nil {
+			return b, res, inboundFrame{}, err
 		}
-		r.sessions.Apply(rec)
 	default:
 		// An unrecognised kind is NOT a journal record: swallowing it into the session
 		// cache is exactly the C8 regression. Fail closed rather than mis-apply it.
-		return res.Gap, fmt.Errorf("phonecore: unrecognised mailbox frame kind %q", disc.Kind)
+		return b, res, inboundFrame{}, fmt.Errorf("phonecore: unrecognised mailbox frame kind %q", disc.Kind)
 	}
-	return res.Gap, nil
+	return b, res, f, nil
+}
+
+// apply mutates the caches and slots the decoded frame belongs to.
+func (r *MailboxRouter) apply(f inboundFrame) {
+	_, _, sessions, snapshots, replies := r.bound()
+	switch f.kind {
+	case kindTerminalSnapshot:
+		snapshots.Apply(f.snapshot)
+	case kindCommandReply:
+		replies.Append(f.reply)
+	case kindReconcile:
+		r.mu.Lock()
+		r.recon, r.reconOK, r.reconAt = f.recon, true, f.bucket
+		// A bare router has no coordinates to move and nothing to validate the record
+		// against, so arrival IS adoption; with durable custody Core.Reconcile adopts.
+		if r.core == nil {
+			r.adopted = true
+		}
+		r.mu.Unlock()
+	case kindEpochGrant:
+		r.grantMu.Lock()
+		r.grants = append(r.grants, f.grant)
+		r.grantMu.Unlock()
+	case "":
+		sessions.Apply(f.record)
+	}
+}
+
+// Receipt reports what became of one committed frame: whether its seq revealed a GAP, and
+// whether the relay was acked for it.
+type Receipt struct {
+	Gap   bool
+	Acked bool
+}
+
+// AcceptCommit is Accept plus the durable transaction PB-STATE-7 requires, in the order the
+// two invariants force -- NO FRAME IS BOTH ACKED AND UNAPPLIED, NO FRAME IS APPLIED TWICE:
+//
+//  1. authenticate and seq-guard the envelope once;
+//  2. commit ONE transaction -- this bucket's high-water, the stale flags, the relay read
+//     cursor AND the decoded content -- BEFORE the ack. Acking a frame whose guard has not
+//     advanced would let a redelivery be applied a second time; acking one whose content is
+//     not yet durable lets the relay compact the only copy of a frame a SIGKILL is about to
+//     erase, and the same durable guard then refuses the redelivery;
+//  3. mirror the committed frame into the live caches, then ack the relay so the mailbox
+//     can compact.
+//
+// Every step is fail-closed and reports its own error: a failed commit applies nothing and
+// acks nothing (the relay keeps the only copy), and a frame the durable high-water has
+// already seen is REFUSED with crypto.ErrStaleSeq yet still acked -- otherwise the phone
+// re-reads it forever while the relay mailbox never compacts.
+//
+// "No frame is both acked and unapplied" is exact for a CONTIGUOUS frame. A frame that
+// leaves a HOLE in its bucket is deliberately acked with its GUARD ONLY committed: folding
+// the content of a stream with holes into the durable model is the "later state trusted
+// before reconciliation" PB-STATE-8 forbids, so that frame is delivered to the live caches,
+// its bucket is marked stale, and its content is never made durable. An op such a frame
+// would have resolved therefore stays UNRESOLVED across a restart -- by design, until the
+// op is re-driven or the machine's reconcile record re-establishes the authorities.
+func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error) {
+	b, res, f, err := r.open(raw)
+	if err != nil {
+		if errors.Is(err, crypto.ErrStaleSeq) {
+			// Already applied. The ack is the idempotent half of the retry.
+			return Receipt{Acked: r.ack(cursor) == nil}, err
+		}
+		gap := false
+		if res != nil {
+			gap = res.Gap
+		}
+		return Receipt{Gap: gap}, err
+	}
+	if r.core == nil {
+		r.apply(f)
+		return Receipt{Gap: res.Gap, Acked: true}, nil
+	}
+	// One Save covers the guard AND the content; a frame that left a hole in the bucket is
+	// delivered but NOT trusted into the durable model -- the phone resyncs (or reconciles)
+	// that stream first. See commitReceive.
+	contiguous, err := r.core.commitReceive(b, f, cursor)
+	if err != nil {
+		return Receipt{Gap: res.Gap}, err
+	}
+	gap := res.Gap || !contiguous
+	if !contiguous {
+		r.markStale(b)
+	}
+	r.apply(f)
+	if err := r.ack(cursor); err != nil {
+		return Receipt{Gap: gap}, err
+	}
+	return Receipt{Gap: gap, Acked: true}, nil
+}
+
+// markStale mirrors the persisted stale flag into the live router.
+func (r *MailboxRouter) markStale(b Bucket) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stale[b] = true
+}
+
+// ack releases the relay item; a router with no Core (or a Core with no Acker) manages no
+// mailbox and has nothing outstanding.
+func (r *MailboxRouter) ack(cursor uint64) error {
+	if r.core == nil {
+		return nil
+	}
+	return r.core.ackCursor(cursor)
 }

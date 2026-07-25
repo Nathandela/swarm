@@ -98,9 +98,10 @@ func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, 
 		return nil, err
 	}
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version: crypto.VersionV1,
-		EpochID: epochID,
-		Seq:     seq,
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: issuedAt(),
 	}, plaintext)
 	if err != nil {
 		return nil, err
@@ -119,9 +120,10 @@ func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd 
 		return nil, err
 	}
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version: crypto.VersionV1,
-		EpochID: epochID,
-		Seq:     seq,
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: issuedAt(),
 	}, plaintext)
 	if err != nil {
 		return nil, err
@@ -141,9 +143,10 @@ func SealLaunchEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd s
 		return nil, err
 	}
 	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version: crypto.VersionV1,
-		EpochID: epochID,
-		Seq:     seq,
+		Version:  crypto.VersionV1,
+		EpochID:  epochID,
+		Seq:      seq,
+		IssuedAt: issuedAt(),
 	}, plaintext)
 	if err != nil {
 		return nil, err

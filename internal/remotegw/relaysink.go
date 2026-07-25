@@ -88,6 +88,39 @@ type RelaySink struct {
 	// to Gateway.deliver, and a live high-water would suppress an out-of-order record the
 	// gateway legitimately handed down.
 	resumed uint64
+	// daemonMachine is the endpoint id the daemon reported at hello (SetMachine), which
+	// overrides cfg.Machine. It is a separate field rather than a write into cfg so nothing
+	// that reads cfg lock-free on the seal path can race with the stamp.
+	daemonMachine string
+}
+
+// SetMachine adopts the endpoint id the DAEMON assigned, which is the only correct value for
+// the reconcile record's machine: it is the id every session id the phone sees is namespaced
+// with (Gateway.namespaceRecord) and the id the phone signs into every command tuple, and the
+// phone REFUSES a record naming anything else -- the same permanent fail-closed refusal of
+// mutating ops as publishing no record at all. Only the daemon knows it (it is derived from
+// the daemon's state dir and arrives in the hello), so it cannot be supplied at assembly
+// time; Gateway.RunJournal stamps it the moment it has it, before the run's Snapshot.
+//
+// An empty id is ignored, so a caller that DOES know its machine id (tests, an embedder)
+// keeps whatever it configured.
+func (s *RelaySink) SetMachine(machine string) {
+	if machine == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.daemonMachine = machine
+}
+
+// machine is the endpoint id to stamp: the daemon's when known, else the configured one.
+func (s *RelaySink) machine() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.daemonMachine != "" {
+		return s.daemonMachine
+	}
+	return s.cfg.Machine
 }
 
 // The gateway's outbound seam: the sink is both halves of an OutboundSink and the durable
@@ -320,7 +353,7 @@ func (s *RelaySink) authorities() (protocol.ReconcileRecord, error) {
 		return protocol.ReconcileRecord{}, fmt.Errorf("grant watermark: %w", err)
 	}
 	return protocol.ReconcileRecord{
-		Machine:          s.cfg.Machine,
+		Machine:          s.machine(),
 		EpochID:          s.cfg.EpochID,
 		InboundHighWater: inbound,
 		ReplyCeiling:     reply,

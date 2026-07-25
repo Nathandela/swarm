@@ -16,12 +16,19 @@ import (
 // daemon remote socket path and the relay Mailbox seam, so it runs against a real
 // relay in production and a fake one in tests.
 type ServiceConfig struct {
-	DaemonSocket   string            // the daemon remote.sock the journal bridge dials
-	Relay          Mailbox           // the relay client (machine mailbox read + phone mailbox append)
-	Forwarder      CommandForwarder  // optional override; nil => the built-in Gateway forwards commands
-	PhoneTarget    string            // the phone's relay routing id (journal + reply target)
+	DaemonSocket string           // the daemon remote.sock the journal bridge dials
+	Relay        Mailbox          // the relay client (machine mailbox read + phone mailbox append)
+	Forwarder    CommandForwarder // optional override; nil => the built-in Gateway forwards commands
+	PhoneTarget  string           // the phone's relay routing id (journal + reply target)
+	// Machine is this machine's endpoint id, stamped on every reconcile record. A phone
+	// REFUSES an authority stamped with a machine that is not the one it paired with, so
+	// leaving this empty publishes a record no paired phone will adopt -- and an unadopted
+	// authority is the same fail-closed refusal of mutating ops as no record at all. Callers
+	// that assemble a Service for real traffic MUST set it (and GrantSeq).
+	Machine        string
 	Key            crypto.ContentKey // the epoch content key shared with the phone
 	EpochID        uint32            // the epoch the content key belongs to
+	GrantSeq       uint64            // the machine identity's grant-issuance seq (authority (c), see gatewayAuthorities)
 	RecipientKeyID [8]byte           // phone routing key id stamped on sealed journal envelopes
 	SenderKeyID    [8]byte           // this machine's routing key id
 	PollInterval   time.Duration     // command-IN poll cadence (default 500ms)
@@ -84,9 +91,22 @@ func NewService(cfg ServiceConfig) *Service {
 	if cfg.LeaseAwait <= 0 {
 		cfg.LeaseAwait = 5 * time.Second
 	}
+	// The inbound checkpoint and the reply seq are shared between the command bridge that
+	// ADVANCES them and the authorities that PUBLISH them, so the record the phone adopts
+	// describes this runtime's live coordinates. Defaulted here rather than inside
+	// NewCommandBridge, which would leave the authorities reading a different object.
+	inbound := cfg.Inbound
+	if inbound == nil {
+		inbound, _ = OpenInboundState("", "") // in-memory, cannot error
+	}
+	replySeq := cfg.ReplySeq
+	if replySeq == nil {
+		replySeq, _ = OpenSeqSource("") // in-memory, cannot error
+	}
 	sink := NewRelaySink(RelayConfig{
 		Appender:       cfg.Relay,
 		Target:         cfg.PhoneTarget,
+		Machine:        cfg.Machine,
 		EpochID:        cfg.EpochID,
 		Key:            cfg.Key,
 		RecipientKeyID: cfg.RecipientKeyID,
@@ -94,6 +114,16 @@ func NewService(cfg ServiceConfig) *Service {
 		Now:            cfg.Now,
 		Seq:            cfg.JournalSeq,
 		Outbox:         cfg.Outbox,
+		// PB-SYNC-7 wired for real: WITHOUT an authority source the sink publishes no
+		// reconcile record, and a phone that fails closed on RequireReconciled then refuses
+		// every mutating op FOREVER with nothing in the tree failing -- the permanent brick
+		// PB-SYNC-7 exists to prevent, re-created at the seam.
+		Authorities: gatewayAuthorities{
+			inbound:  inbound,
+			reply:    replySeq,
+			epoch:    cfg.EpochID,
+			grantSeq: cfg.GrantSeq,
+		},
 	})
 	// PB-GW-7: the journal, the terminal peek and the reconcile record share ONE sink, ONE
 	// relay target and ONE per-target append quota, so the peek's ~62 snapshots/s must be
@@ -119,10 +149,42 @@ func NewService(cfg ServiceConfig) *Service {
 		Key:         cfg.Key,
 		EpochID:     cfg.EpochID,
 		ReplyTarget: cfg.PhoneTarget,
-		ReplySeq:    cfg.ReplySeq,
-		Inbound:     cfg.Inbound,
+		ReplySeq:    replySeq,
+		Inbound:     inbound,
 	})
 	return &Service{cfg: cfg, gw: gw, sink: sink, bridge: bridge, leases: leases, watchers: watchers}
+}
+
+// gatewayAuthorities is the PRODUCTION ReconcileSource: each authority is read from the
+// gateway's own durable state at the moment the record is sealed, never cached at process
+// start, so a reconnect republishes what is true now.
+//
+// (a) is the durable INBOUND accepted high-water (PB-GW-1) for the sender-zero stream --
+// every phone -> machine seal leaves SenderKeyID unset (phonecore input.go / command.go), so
+// that is the only stream the phone sends on. (b)'s reply half is the reply SeqSource's
+// Issued watermark, which is the highest seq ISSUED and never the durable reservation
+// ceiling (a phone seeded at the ceiling would stale-drop a whole block of live replies);
+// (b)'s journal half is the sink's own seq and is not in this interface. (c) is the machine
+// identity's grant-issuance coordinate.
+//
+// No method fabricates a zero on failure -- the interface returns errors for exactly that
+// reason -- and none can fail here: InboundState.Load is infallible by construction
+// (custody was validated at OpenInboundState) and Issued is a memory read.
+type gatewayAuthorities struct {
+	inbound  InboundState
+	reply    SeqSource
+	epoch    uint32
+	grantSeq uint64
+}
+
+func (a gatewayAuthorities) InboundHighWater() (uint64, error) {
+	return a.inbound.Load().Highest[InboundStream{Sender: [8]byte{}, Epoch: a.epoch}], nil
+}
+
+func (a gatewayAuthorities) ReplyCeiling() (uint64, error) { return a.reply.Issued(), nil }
+
+func (a gatewayAuthorities) GrantWatermark() (uint32, uint64, error) {
+	return a.epoch, a.grantSeq, nil
 }
 
 // Gateway exposes the underlying journal bridge (e.g. to seed or read its cursor).

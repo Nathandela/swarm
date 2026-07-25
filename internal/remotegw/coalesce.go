@@ -80,6 +80,15 @@ func NewCoalescingSink(cfg CoalesceConfig) *CoalescingSink {
 	}
 }
 
+// SetMachine passes the daemon's endpoint id through to the wrapped sink. Admission policy
+// is a wrapper, so a sink behind it would otherwise never be reachable for the stamp and the
+// reconcile record would go out unattributable (see RelaySink.SetMachine).
+func (c *CoalescingSink) SetMachine(machine string) {
+	if m, ok := c.inner.(machineNamer); ok {
+		m.SetMachine(machine)
+	}
+}
+
 // Snapshot forwards the reconnect roster immediately, consuming the shared slot.
 func (c *CoalescingSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	c.mu.Lock()

@@ -32,6 +32,13 @@ type JournalSink interface {
 	Event(rec protocol.JournalRecord) error
 }
 
+// machineNamer is a sink that stamps this machine's endpoint id on the frames carrying it
+// (today only the reconcile record). It is OPTIONAL: a sink that publishes no attributable
+// frame does not implement it, and RunJournal skips the stamp.
+type machineNamer interface {
+	SetMachine(machine string)
+}
+
 // TerminalSink receives the server-rendered terminal snapshots the gateway bridges toward
 // the phone (A7 slice D). RelaySink implements it alongside JournalSink; RunTerminal
 // requires the gateway's sink to accept snapshots.
@@ -92,14 +99,23 @@ func (g *Gateway) setCursor(c uint64) {
 // cancelled or the connection fails. It returns the reason it stopped; the caller may
 // reconnect, and RunJournal resumes from the last delivered cursor (Cursor()). NOTE:
 // the strict no-loss guarantee across the read->subscribe boundary also depends on the
-// daemon's atomic read+subscribe (DME-2, agents-tracker-7ra); until that lands a
-// reconnect re-reads from the last cursor to recover any gap.
+// daemon's atomic read+subscribe (DME-2, agents-tracker-7ra); until that lands the window is
+// held to the single control write below (never a relay round-trip), and a reconnect
+// re-reads from the last cursor to recover any gap.
 func (g *Gateway) RunJournal(ctx context.Context) error {
 	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
 	if err != nil {
 		return err
 	}
 	defer dc.Close()
+
+	// The endpoint id the daemon just assigned is the machine id the phone pairs against --
+	// the same id every record below is namespaced with. Stamp the sink with it BEFORE the
+	// Snapshot that publishes the reconcile record, or the record names no machine and the
+	// phone refuses it, leaving mutating ops fail-closed forever (PB-SYNC-7).
+	if ms, ok := g.sink.(machineNamer); ok {
+		ms.SetMachine(dc.endpointID)
+	}
 
 	// Snapshot: the atomic roster + events after our cursor (R-JRN.4).
 	from := g.Cursor()
@@ -108,6 +124,17 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	}
 	res, err := dc.awaitOp(protocol.OpJournalRead, 10*time.Second)
 	if err != nil {
+		return err
+	}
+	// Subscribe BEFORE the snapshot is forwarded, not after: everything between the
+	// journal_read reply and this write is a window in which a live event reaches neither
+	// the read nor the stream, and forwarding the snapshot means relay round-trips (the
+	// roster records, and the reconcile record the sink leads each run with) that widen that
+	// window from microseconds to tens of milliseconds -- long enough to lose the event of a
+	// session launched moments after the gateway started. Events that arrive during the
+	// forwarding below are buffered on the daemon conn and read by the loop; deliver dedups
+	// them against the roster read by cursor, exactly as it already did for the overlap.
+	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
 		return err
 	}
 	if err := g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), res.Cursor); err != nil {
@@ -122,11 +149,6 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		g.setCursor(res.Cursor)
 	}
 
-	// Live stream: subscribe, then relay every journal_event whose cursor advances past
-	// what we have delivered (dedup guards the read->subscribe overlap).
-	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
-		return err
-	}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()

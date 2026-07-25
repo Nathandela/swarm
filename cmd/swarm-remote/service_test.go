@@ -148,3 +148,39 @@ func TestServiceConfigFromParams_WiresDurableOutbox(t *testing.T) {
 			"commits survives the restarts PB-LIFE-1/-5 make routine", got, cursor)
 	}
 }
+
+// TestServiceConfigFromParams_WiresTheGrantWatermark closes the third authority of the
+// reconcile record (PB-STATE-4(c)) at the PRODUCTION seam.
+//
+// The grant watermark is (EpochID, GrantSeq), and only the machine identity holds the grant
+// seq -- ServiceConfig.GrantSeq is the sole way into gatewayAuthorities.GrantWatermark. A
+// dropped mapping is SILENT: NewService happily publishes grant_seq 0, the phone adopts it
+// monotonically (so 0 changes nothing and no error appears anywhere), and the coordinate
+// PB-STATE-4 exists to re-anchor after a rollback is simply never carried. Non-zero is
+// therefore asserted against the IDENTITY'S OWN value, not merely against zero.
+func TestServiceConfigFromParams_WiresTheGrantWatermark(t *testing.T) {
+	stateDir := t.TempDir()
+	id := writeMachineIdentity(t, stateDir)
+	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
+	addPairedDevice(t, stateDir)
+
+	p, err := resolveGatewayParams(stateDir, "/tmp/does-not-need-to-exist/remote.sock")
+	if err != nil {
+		t.Fatalf("resolveGatewayParams: %v", err)
+	}
+	if p.GrantSeq != id.GrantSeq() {
+		t.Fatalf("resolveGatewayParams read grant seq %d from <stateDir>/remote/machine.key; want %d "+
+			"(the identity's own grant-issuance coordinate)", p.GrantSeq, id.GrantSeq())
+	}
+	if p.EpochID != id.EpochID() {
+		t.Fatalf("resolveGatewayParams read epoch %d; want %d", p.EpochID, id.EpochID())
+	}
+
+	cfg := serviceConfigFromParams(p, noopMailbox{})
+	if cfg.GrantSeq != id.GrantSeq() {
+		t.Fatalf("ServiceConfig.GrantSeq = %d, want %d: resolveGatewayParams reads the grant "+
+			"watermark but serviceConfigFromParams drops it, so every reconcile record the "+
+			"production gateway publishes carries grant_seq 0 and PB-STATE-4(c) is closed only in tests",
+			cfg.GrantSeq, id.GrantSeq())
+	}
+}

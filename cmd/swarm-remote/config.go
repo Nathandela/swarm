@@ -32,6 +32,11 @@ type gatewayParams struct {
 	EpochID        uint32
 	RecipientKeyID [8]byte
 	SenderKeyID    [8]byte
+	// GrantSeq is the machine identity's grant-issuance coordinate, the second half of the
+	// reconcile record's grant watermark (PB-STATE-4(c), with EpochID). Without it the record
+	// carries grant_seq 0, which a phone adopts monotonically -- so it changes nothing, fails
+	// nowhere, and silently leaves that coordinate un-anchored after a rollback.
+	GrantSeq uint64
 	// Post-revocation confidentiality (codex#1): the gateway re-reads <StateDir>/devices on
 	// each journal reconnect and exits if DeviceID is gone, so a revoke-then-reconnect can no
 	// longer reseal epoch frames to the revoked device under the stale (pre-rotation) key.
@@ -144,6 +149,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		PhoneTarget:        relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
 		Key:                id.EpochKeys().ContentKey,
 		EpochID:            id.EpochID(),
+		GrantSeq:           id.GrantSeq(),
 		RecipientKeyID:     crypto.KeyID(rec.RecipientPub),
 		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
 		JournalSeq:         journalSeq,

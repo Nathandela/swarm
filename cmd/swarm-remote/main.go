@@ -24,6 +24,11 @@ import (
 // serviceConfigFromParams copies a resolved gatewayParams (slice G1) plus a
 // dialed relay Mailbox into a remotegw.ServiceConfig. Forwarder, PollInterval,
 // ReconnectDelay, and Now are left zero: remotegw.NewService defaults them.
+//
+// ServiceConfig.Machine is deliberately NOT set here: the reconcile record must name the
+// DAEMON'S endpoint id (the id the phone pairs against and namespaces every session id
+// with), which nothing in the provisioned state can produce -- it arrives in the daemon
+// hello, and Gateway.RunJournal stamps the sink with it there.
 func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw.ServiceConfig {
 	return remotegw.ServiceConfig{
 		DaemonSocket:   p.DaemonSocket,
@@ -31,6 +36,7 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 		PhoneTarget:    p.PhoneTarget,
 		Key:            p.Key,
 		EpochID:        p.EpochID,
+		GrantSeq:       p.GrantSeq,
 		RecipientKeyID: p.RecipientKeyID,
 		SenderKeyID:    p.SenderKeyID,
 		JournalSeq:     p.JournalSeq,

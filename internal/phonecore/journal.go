@@ -135,6 +135,14 @@ func (c *SessionCache) Apply(rec schema.JournalRecord) (applied bool) {
 	return true
 }
 
+// restore seeds one cached session from durable state, bypassing the cursor guard (the
+// entry IS the resume point, not a record being applied on top of it).
+func (c *SessionCache) restore(cs CachedSession) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessions[cs.SessionID] = cs
+}
+
 // Get returns the cached session for id.
 func (c *SessionCache) Get(id string) (CachedSession, bool) {
 	c.mu.Lock()

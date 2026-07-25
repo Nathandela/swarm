@@ -3,6 +3,7 @@ package phonecore
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -72,6 +73,14 @@ func (q *OpQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.ops)
+}
+
+// reset replaces the queue contents with ops (Resume restoring State.PendingOps). It is
+// unexported: the durable queue is owned by the Core, which persists every mutation.
+func (q *OpQueue) reset(ops []QueuedOp) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.ops = slices.Clone(ops)
 }
 
 // Marshal serializes the queue for durable persistence (R-PHC.4). The persistence layer
