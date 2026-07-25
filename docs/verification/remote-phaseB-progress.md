@@ -36,10 +36,26 @@ explicitly deferred gate under §13.
 ### The host runs Go under Rosetta -- this taints every timing number
 
 ```
-uname -m                  -> arm64          (Apple M1)
+uname -m                  -> arm64          (Apple M1)   <-- ONLY from a NATIVE shell
 file $(which go)          -> Mach-O 64-bit executable x86_64
 go env GOARCH/GOHOSTARCH  -> amd64 / amd64
 ```
+
+**CORRECTION — do NOT detect this with `uname`.** An earlier version of this note implied a
+`uname -m == arm64 && GOARCH == amd64` probe. That is wrong, and wrong in the direction that
+defeats the purpose. A translated process inherits the translated personality, so from **inside**
+a Rosetta'd Go binary the kernel lies:
+
+```
+GOARCH=amd64 uname="x86_64" hw.machine="x86_64" proc_translated="1" brand="Apple M1"
+```
+
+`uname -m` and `hw.machine` both report `x86_64`; only **`sysctl.proc_translated`** reports the
+truth (`1`). The shell-level `uname -m` above returned `arm64` only because the *shell* is native.
+A uname-based probe therefore reports "native" on a Rosetta host — precisely the misleading
+record this section exists to prevent. Verified by running the probe from a translated process
+(S6b RED author's finding, independently reproduced). Harnesses MUST use `sysctl.proc_translated`
+(plus `hw.optional.arm64` / `machdep.cpu.brand_string` for the host's real identity).
 
 The machine is Apple Silicon but `/usr/local/bin/go` is an **x86_64 binary running under
 Rosetta 2**. Consequences, in order of how easy they are to get wrong:
