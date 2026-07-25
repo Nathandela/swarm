@@ -816,12 +816,39 @@ func TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset(t *testing.T) {
 	s18bAwaitOnline(t, recovered)
 }
 
-// s18bAwaitOnline polls the phone's PB-APP-8 connection state until it is online, failing
-// fast on the terminal "revoked" the relay reports to a de-authorized relay-auth key.
+// s18bRevokedIsTerminalAfter is how long "revoked" has to PERSIST before this helper is
+// entitled to call it terminal. It mirrors swarmmobile's unexported pairingRevokeGrace (30 s)
+// plus a margin for the 250 ms redial and a loaded machine.
+//
+// IT IS NOT A TUNING KNOB, it is the correction of a wrong assumption. This helper used to
+// fail-fast the instant it observed "revoked", which reads as fail-fast discipline and is
+// actually a race: ADR-007 B23(b) DELIBERATELY HOLDS that state between retries while the
+// re-armed generation waits for the machine's authorize, precisely so nothing hides behind a
+// spinner. So "revoked" is a legitimate transient during the recovery this test drives, and an
+// independent reviewer measured the old helper failing 2 runs in 10 against CORRECT code --
+// with a message that then misdiagnosed it ("the revoked bucket is never cleared": it had been
+// cleared, the poll caught the held state). A test that is wrong 20% of the time about the
+// thing it exists to prove is worse than no test, because its failures get explained away.
+//
+// WHAT WAITING THE WINDOW OUT DOES NOT FIX, said plainly. The reviewer also measured the
+// DELETION of the grace window escaping this test 2 runs in 5, and it still does -- re-measured
+// at 3 failures in 5 after this change. That is not a defect in the helper: when the machine's
+// authorize happens to land before the phone's first post-pairing dial, the phone never needs
+// the grace and the recovery genuinely succeeds without it. An end-to-end test that drives both
+// ends through their real verbs cannot order that race, so it can only ever SAMPLE it. The
+// deterministic half is mobile/conformance's
+// TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace, which HOLDS the
+// authorize until the phone has already been refused and so catches the deletion every run.
+// This helper's job is only to stop lying in the other direction.
+const s18bRevokedIsTerminalAfter = 45 * time.Second
+
+// s18bAwaitOnline polls the phone's PB-APP-8 connection state until it is online. "revoked" is
+// terminal only once it has PERSISTED past the post-pairing grace window (see above).
 func s18bAwaitOnline(t *testing.T, app *swarmmobile.App) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(s18bRevokedIsTerminalAfter + 15*time.Second)
 	var last string
+	var revokedSince time.Time
 	for time.Now().Before(deadline) {
 		state, err := app.ConnectionState()
 		if err != nil {
@@ -832,14 +859,26 @@ func s18bAwaitOnline(t *testing.T, app *swarmmobile.App) {
 		case "online":
 			return
 		case "revoked":
-			t.Fatalf("PB-STATE-10: the recovered handset's relay-auth routing id is REVOKED at the " +
-				"relay. The `revoked` bucket store.revokeAndPurge writes is never cleared -- not by " +
-				"authorize_device, not by a fresh pairing -- so this handset can never reach the " +
-				"relay again and the recovery has traded one brick for another")
+			if revokedSince.IsZero() {
+				revokedSince = time.Now()
+			}
+			if held := time.Since(revokedSince); held > s18bRevokedIsTerminalAfter {
+				t.Fatalf("PB-STATE-10: the recovered handset has reported REVOKED continuously for "+
+					"%s -- past the post-pairing grace window, so this is the relay's settled answer "+
+					"and not the race B23(b) covers.\nEither the `revoked` bucket store.revokeAndPurge "+
+					"writes was never cleared (nothing cleared it before ADR-007 B22, and after B24 "+
+					"only the routing id that PLACED the ban can clear it -- so a pair issued over a "+
+					"different relay identity than the revoke leaves it standing), or the pairing did "+
+					"not re-arm the transport at all. Either way this handset can never reach the "+
+					"relay again and the recovery has traded one brick for another", held.Round(time.Second))
+			}
+		default:
+			revokedSince = time.Time{}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("the recovered handset never reached the relay within 20s (last connection state %q)", last)
+	t.Fatalf("the recovered handset never reached the relay within %s (last connection state %q)",
+		s18bRevokedIsTerminalAfter+15*time.Second, last)
 }
 
 // ---- the acceptance criterion: the whole chain, closed under what was shown --------

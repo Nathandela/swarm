@@ -14,10 +14,13 @@ import (
 // never plaintext, identity keys, or the pairing secret. Routing ids are HKDF
 // handles; the relay-auth pubkeys they derive from are never persisted.
 var (
-	bucketItems   = []byte("items")   // nested: rid -> (cursor8 -> record)
-	bucketSeq     = []byte("seq")     // rid -> next storage cursor (8 bytes)
-	bucketPairs   = []byte("pairs")   // "a\x00b" -> {1}, stored both directions
-	bucketRevoked = []byte("revoked") // rid -> {1}
+	bucketItems = []byte("items") // nested: rid -> (cursor8 -> record)
+	bucketSeq   = []byte("seq")   // rid -> next storage cursor (8 bytes)
+	bucketPairs = []byte("pairs") // "a\x00b" -> {1}, stored both directions
+	// bucketRevoked is rid -> the routing id that BANNED it (ADR-007 B24). The value is
+	// load-bearing, not a marker: it is what authorizePair matches the pairer against, and
+	// it is the whole of "the owner's machine lifts the ban it placed".
+	bucketRevoked = []byte("revoked")
 	// bucketTokens holds rid -> push token (PB-PUSH-6). It is a NEW durable device
 	// identifier at rest in the untrusted relay's store, and it has its own named bucket
 	// for exactly that reason: the token is not opaque to the relay (the relay must hand
@@ -219,12 +222,37 @@ func pairKey(a, b string) []byte {
 // Revoke and re-pair were mutually exclusive, and PB-STATE-10 ("fail closed must
 // not mean bricked") was unsatisfiable.
 //
-// The safety argument: this is reached only from an AUTHENTICATED connection
-// (handleAuthorizeDevice's requireAuth), and a revoked routing id cannot
-// authenticate — the auth path refuses it before any op dispatches. So the only
-// party who can lift a ban is the machine, over its own connection, and the
-// machine authorizing a routing id IS the owner's decision to un-ban it. There
-// is no path by which a revoked device un-bans itself.
+// THE BAN IS LIFTED ONLY BY ITS PLACER, WHICH IS ADR-007 B24 CORRECTING B22.
+// B22 argued the clear was safe because the verb is reached only from an
+// AUTHENTICATED connection and a revoked routing id cannot authenticate. The
+// second half is true and the conclusion does not follow: relay auth is OPEN
+// REGISTRATION and handleAuthorizeDevice has no ownership or role check, so a
+// revoked device could mint a throwaway identity, authenticate as it, and
+// authorize its OWN revoked routing id back in. Authentication proves identity,
+// not authority.
+//
+// So the ban carries its banner and only that banner clears it. That keeps B22's
+// semantics exactly — the owner's machine lifts the ban it placed, over the same
+// relay identity `swarm remote revoke` used to place it — and makes its argument
+// true rather than aspirational. Fenced in BOTH directions by
+// TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt and
+// TestRelay_TheBanningMachineCanLiftItsOwnBan.
+//
+// WHAT THIS POLICY MAKES WORSE, recorded rather than left to be found a third
+// time: handleDeviceRevoke has the SAME missing check — any authenticated
+// identity may authorize_device itself into a pairing with any routing id and
+// then revoke it, including the MACHINE's. That hole pre-dates this work and is
+// out of scope here (ADR-007 B24 records it), but the fix above changes its
+// severity rather than leaving it alone. Before, a ban an attacker placed on the
+// machine was cleared by the phone's very next reconnect — mobile/relay.go
+// onConnected authorizes the machine on every authenticated connect, and any
+// authorize cleared any ban. Now only the banner clears, so an attacker-placed
+// ban on the machine STICKS: a transient denial of service became a durable
+// lockout of that routing id. The rule is still the right one — no weaker rule
+// stops a revoked device un-banning itself through a throwaway identity, since a
+// throwaway is by construction not the banned party — so what this note buys is
+// that the mirror hole is now the load-bearing one and should be prioritised as
+// such.
 func (s *store) authorizePair(pairer, device string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
@@ -234,7 +262,11 @@ func (s *store) authorizePair(pairer, device string) error {
 		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
 			return err
 		}
-		return tx.Bucket(bucketRevoked).Delete([]byte(device))
+		rb := tx.Bucket(bucketRevoked)
+		if !bytes.Equal(rb.Get([]byte(device)), []byte(pairer)) {
+			return nil // not banned, or banned by somebody else: the pairing still stands.
+		}
+		return rb.Delete([]byte(device))
 	})
 }
 
@@ -311,22 +343,21 @@ func (s *store) loadTokens() (map[string]string, error) {
 	return out, err
 }
 
-func (s *store) revoke(rid string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketRevoked).Put([]byte(rid), []byte{1})
-	})
-}
-
-// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked, drops rid's
-// push token, and drops rid's mailbox — in ONE transaction (ME-1), so a
-// crash/read mid-revoke can never observe rid as still-paired, not-yet-revoked,
-// still-pushable, or holding a pre-revoke backlog.
+// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked BY pairer,
+// drops rid's push token, and drops rid's mailbox — in ONE transaction (ME-1),
+// so a crash/read mid-revoke can never observe rid as still-paired,
+// not-yet-revoked, still-pushable, or holding a pre-revoke backlog.
+//
+// Recording the banner is ADR-007 B24: it is the only thing that lets
+// authorizePair tell the owner's machine lifting its own ban from a stranger
+// lifting it. It is also why there is no second, banner-less writer of this
+// bucket — one would place a ban nobody could ever lift.
 func (s *store) revokeAndPurge(pairer, rid string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
 		_ = pb.Delete(pairKey(pairer, rid))
 		_ = pb.Delete(pairKey(rid, pairer))
-		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte{1}); err != nil {
+		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte(pairer)); err != nil {
 			return err
 		}
 		// In the SAME transaction as the revocation: a token purged separately could

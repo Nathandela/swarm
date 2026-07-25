@@ -110,10 +110,20 @@ func (c *Core) AcceptWake(raw []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// KEYLESSNESS IS TESTED FIRST, before the epoch, and the order is the requirement. A phone
-	// that has never been granted anything holds epoch 0, so every wake would otherwise be
-	// refused as an epoch mismatch -- an invalid-request verdict for PB-APP-10's third state,
-	// which is neither the phone's fault nor anything the user can act on except by waiting.
+	// KEYLESSNESS IS TESTED FIRST, before the epoch. A phone that has never been granted
+	// anything holds epoch 0, so an epoch check placed above this one answers every wake with a
+	// mismatch -- an invalid-request verdict for PB-APP-10's third state, which is neither the
+	// phone's fault nor anything the user can act on except by waiting.
+	//
+	// STATED AT ITS ACTUAL REACH, because the two orders are indistinguishable for most of the
+	// phones that get here: a PAIRED phone has its epoch set by the pairing, so the epoch
+	// matches and the keyless arm answers either way. What the order changes is the verdict at a
+	// phone holding epoch ZERO, which is reachable -- PushTokens.requestInitialToken runs from
+	// Application.onCreate before any pairing and relay registration is open, so an install that
+	// has never paired can hold a registered push token and be woken. Pinned by
+	// TestS17_AKeylessPhoneReportsNoWakeKeyRatherThanAnEpochMismatch, which is the only test in
+	// the tree that separates the two orders: a reviewer swapped them and the whole S17 suite
+	// stayed green.
 	if c.st.Keys.WakeKey == (crypto.WakeKey{}) {
 		return ErrNoWakeKey
 	}

@@ -257,3 +257,99 @@ func TestRelay_DuplicateConnectionResolved(t *testing.T) {
 		t.Fatalf("superseded connection still usable: got %v, want ErrDuplicateConnection", err)
 	}
 }
+
+// TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt is ADR-007 B24, and its absence is
+// why B22 shipped a safety argument that was false.
+//
+// B22 made authorize_device CLEAR the revoked bit so that revoke and re-pair stop being
+// mutually exclusive (PB-STATE-10). Its reason for calling that safe was that the verb is
+// served only on an AUTHENTICATED connection and a revoked routing id cannot authenticate --
+// so "only the owner's machine can reach it". The second half is true and the conclusion does
+// not follow: relay auth is OPEN REGISTRATION (handleAuthInit accepts any self-minted
+// keypair) and handleAuthorizeDevice checks only requireAuth, with no ownership or role check
+// anywhere. Authentication proves identity, not authority.
+//
+// So the ban has to be keyed to WHO placed it. This drives the exact path the reviewer used:
+// a throwaway identity authenticates and authorizes the banned routing id by name.
+//
+// IT ASSERTS THE BAN, NOT THE OP. The openness itself pre-dates B22 -- any identity could
+// always self-pair with any target -- so authorize_device succeeding for a stranger is not
+// what changed and is not what this fences. What changed is that the same open verb started
+// clearing bans.
+func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
+	srv, _, _, _ := startTestRelay(t, nil)
+
+	mPub, mPriv := newRelayAuthKey(t)
+	dPub, dPriv := newRelayAuthKey(t)
+	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+		t.Fatalf("AuthorizeDevice: %v", err)
+	}
+	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
+		t.Fatalf("DeviceRevoke: %v", err)
+	}
+	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("precondition: the revoked device dials with %v, want ErrRevoked", err)
+	}
+
+	// The throwaway identity. Minting it and authenticating as it is the whole cost of the
+	// attack: the relay has no registration step to refuse.
+	aPub, aPriv := newRelayAuthKey(t)
+	attacker := dialAuthed(t, srv.URL(), authFor(aPub, aPriv))
+	if err := attacker.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+		t.Fatalf("a self-minted identity could not even issue authorize_device (%v); this test "+
+			"needs that path REACHED, because what it fences is the ban surviving it", err)
+	}
+
+	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("ADR-007 B24: a self-minted third-party identity lifted the ban the machine "+
+			"placed -- the revoked device now dials with %v, want ErrRevoked.\n"+
+			"That is B22's falsified claim in one path: a revoked device mints a throwaway "+
+			"keypair, authenticates as it, calls authorize_device naming its OWN revoked routing "+
+			"id, and un-bans itself. End-to-end crypto is untouched (it cannot open new-epoch "+
+			"frames and its commands still fail the registry signature check), so the reachable "+
+			"harm is relay-plane: appends against the machine's mailbox up to the depth cap, a "+
+			"denial of service against the legitimate phone. The revoked bucket must record the "+
+			"BANNING routing id and authorize_device must clear a ban only when the pairer "+
+			"matches the banner", err)
+	}
+}
+
+// TestRelay_TheBanningMachineCanLiftItsOwnBan is the other direction of the same fence, and
+// it is what stops B24's policy from being a quiet re-brick.
+//
+// B22's semantics are the requirement: the owner's machine authorizing a routing id IS the
+// owner's decision to un-ban it, and without it revoke and re-pair are mutually exclusive and
+// PB-STATE-10 is unsatisfiable. A policy that keys a ban to its placer must therefore still
+// let THAT placer lift it -- which is what `swarm remote revoke` and `swarm remote pair` do,
+// both over the machine's own relay identity (cmd/swarm/remote.go withMachineRelay).
+func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
+	srv, _, _, _ := startTestRelay(t, nil)
+
+	mPub, mPriv := newRelayAuthKey(t)
+	dPub, dPriv := newRelayAuthKey(t)
+	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+		t.Fatalf("AuthorizeDevice: %v", err)
+	}
+	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
+		t.Fatalf("DeviceRevoke: %v", err)
+	}
+	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("precondition: the revoked device dials with %v, want ErrRevoked", err)
+	}
+
+	// The re-pair: the SAME machine authorizes the same handset again.
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+		t.Fatalf("re-authorize after revoke: %v", err)
+	}
+	conn, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv))
+	if err != nil {
+		t.Fatalf("ADR-007 B22/B24: the machine that placed the ban re-authorized the handset and "+
+			"it still cannot reach the relay: %v.\nThe phone's relay-auth key is minted once per "+
+			"install, so a handset that recovers without a full app-data wipe returns on the SAME "+
+			"routing id. A ban its own placer cannot lift means revoke and re-pair stay mutually "+
+			"exclusive and the recovery trades one brick for another", err)
+	}
+	_ = conn.Close()
+}
