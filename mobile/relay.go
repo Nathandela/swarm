@@ -254,7 +254,7 @@ func (a *App) run(ctx context.Context) {
 				}
 				a.setClient(nil)
 				return
-			case false && errors.Is(err, relay.ErrPinMismatch),
+			case errors.Is(err, relay.ErrPinMismatch),
 				errors.Is(err, relay.ErrPinRequired),
 				errors.Is(err, relay.ErrPinMalformed):
 				// The relay is not the one this phone pinned at pairing, or nothing was
@@ -266,7 +266,7 @@ func (a *App) run(ctx context.Context) {
 				}
 				a.setClient(nil)
 				return
-			case false && errors.Is(err, relay.ErrCleartextRefused):
+			case errors.Is(err, relay.ErrCleartextRefused):
 				// The MACHINE named a cleartext relay. Nothing on the handset can fix it and
 				// re-pairing carries the same URL, so this says what is actually wrong.
 				a.setConn(connRelayInsecure)

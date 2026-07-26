@@ -2478,3 +2478,62 @@ after repeated failures, and always without an enrolled Class-3 biometric) or af
 refusal there is **no in-app way to authenticate**. Before B44 this never bit, because the key stayed
 in Go memory for the process lifetime — which was B36's finding. Unverifiable in-repo by construction
 (B31), which makes it a blocker rather than a measured bug.
+
+### B52 — the consent leaves the handshake payload; it is bound to the CEREMONY, not to a generation
+
+Both fixes I briefed for B46/B47 were falsified by measurement before a line was written. Recording
+what replaces them, and why the briefs were wrong.
+
+**(a) "Sign the consent after `DeviceSAS` returns — one site in `RunDevice`" is IMPOSSIBLE.** Measured:
+`crypto.NoiseSession.binding` is captured only in `establish()`, which XXpsk0 reaches at **msg3**. So
+the phone cannot derive the SAS until msg3's payload is **already fixed** — and the consent is *in*
+that payload. The committee's own RED requires the `Consent` callback to be uninvoked when `DeviceSAS`
+runs. Those three facts cannot hold together, and `internal/remote/crypto` is frozen, so no
+intermediate binding can be exposed.
+
+**Decision: the consent leaves msg3.** msg3 carries a **`ConsentDeferred` marker and no signature**;
+the machine's pre-confirm `ErrNoConsent` check moves onto the marker — same fence, same position, and
+the distinction it now draws is the honest one: *"a build that will grant a route once its operator
+confirms"* versus *"a build that grants none"*, which is exactly the adversary that fence was written
+against. The device derives the SAS, runs `DeviceSAS`, and **only on nil** signs and sends the consent
+in a dedicated encrypted transport frame; a rejection sends an explicit **decline** frame so the
+machine fails closed promptly instead of hanging. The machine's `Confirm` stays where it is — it must
+display the desktop SAS *before* the phone resolves, or the human has nothing to compare against.
+
+**No requirement pins the handshake message count** (checked: PB-PAIR-* constrain the QR payload, the
+terminal states and the SAS comparison, not the frame sequence), so this is an ADR-level protocol
+decision and it is taken here. Blast radius is the pairing package, the phone facade and the machine
+leg — **no relay change**.
+
+**(b) The generation counter I briefed has the SAME bootstrap contradiction** it was meant to avoid. A
+relay-held per-(pairer, device) generation must be known to the **phone at signing time**, i.e. in
+msg2 — but the generation is keyed by the *device's* routing id, which the machine does not learn
+until **msg3**, and a first pairing has no record to read it from. That is `deliverEpochGrant`'s shape
+exactly: an artifact required one step before the step that produces it. **Third time this ADR has
+briefed a fix that needs a value earlier than it exists.**
+
+**Decision: bind the CEREMONY ID — the 16-byte rendezvous id — into `ConsentMessage`, and retire
+consents at the relay.** Both parties hold it from the QR **before msg1**, so there is no round trip
+and no bootstrap. The relay keeps, per (pairer, device), the one live consent id plus a spent set:
+`authorizePair` refuses a spent id, retires any different live id into `spent`, records the new one and
+lifts the ban exactly as today; `revokeAndPurge` retires the live id in the same transaction.
+
+Why this satisfies the three constraints that killed the alternatives:
+
+- **B22 / PB-STATE-10 intact** — a re-pair of a recovered handset is a *fresh ceremony*, hence a fresh
+  id, never spent. **No refusal is keyed on "this pairing was revoked."**
+- **B47 closed** — a stored consent names a retired id and is refused, and *recording a new live id*
+  retires the old one, so this does not depend on a revoke having happened.
+- **`deliverEpochGrant` and `authorizeAtRelay` keep working** — both re-present the *same* stored bytes
+  on every connect, and re-presenting the **live** id is idempotent-accept, not a retire.
+- **It does not pay the generation counter's cost**: relay-store loss drops the spent set together with
+  the bans and pairs, so the failure the counter protected against cannot arise.
+
+Cost, named: `ConsentMessage`'s wire statement changes (breaking for any already-signed consent),
+`authorize_device` gains a ceremony-id field, and the device registry persists it beside the signature.
+
+**(c) Burning rendezvous ids on TTL expiry must not create the leak it prevents.** `Server.burned` is
+an unswept `map[string]bool` and `rendezvous_create` has **no `requireAuth`**, so burning on expiry
+would let an unauthenticated stranger grow it without bound. **Approved: timestamp burned entries and
+sweep them, with retention longer than the announced QR window.** A fix that converts a hijack into a
+memory exhaustion is not a fix.
