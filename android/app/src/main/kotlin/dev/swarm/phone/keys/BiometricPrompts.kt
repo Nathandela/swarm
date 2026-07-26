@@ -37,6 +37,50 @@ import javax.crypto.SecretKey
  */
 
 /**
+ * The allowed authenticator set, in step with `KeystoreSpecs`. See the file header for why that
+ * being in step is load-bearing rather than tidy, and ADR-007 B57 for why it is BIOMETRIC_STRONG
+ * alone. `android/gate/s20_pbsec2_peruse_test.go` fails if this and the Keystore specs disagree.
+ */
+private const val AUTHENTICATORS: Int = BiometricManager.Authenticators.BIOMETRIC_STRONG
+
+/**
+ * What the platform says about prompting, from a plain `Context`.
+ *
+ * IT TAKES A CONTEXT AND NOT AN ACTIVITY, and that is what lets `PhoneRuntime` ask the question
+ * BEFORE any screen exists. It has to: `KeystoreSpecs.kek(CONTENT)` requests
+ * `AUTH_BIOMETRIC_STRONG`, and the platform refuses to GENERATE such a key when nothing is
+ * enrolled -- so a PIN-only handset failed during provisioning, before a prompt could ever be
+ * offered, and the exception surfaced as `SwarmErrorTokens.UNKNOWN` with no remedy at all
+ * (`ContentUnlockPolicy.provisioningFor`).
+ *
+ * It is a top-level function in THIS file because this file is the only one permitted to import
+ * androidx.biometric; `PhoneRuntime` calls it and stays free of the dependency.
+ */
+fun deviceBiometricAvailability(context: android.content.Context): PromptAvailability =
+    availabilityOf(BiometricManager.from(context).canAuthenticate(AUTHENTICATORS))
+
+/**
+ * `BiometricManager.canAuthenticate` onto [PromptAvailability], one constant per constant.
+ *
+ * A status the platform adds later falls to TEMPORARILY_UNAVAILABLE and not to NO_HARDWARE: the
+ * first says "try again", the second tells the user their handset can never do this. Guessing the
+ * permanent answer over an unknown code is the wrong error to make.
+ */
+private fun availabilityOf(status: Int): PromptAvailability = when (status) {
+    BiometricManager.BIOMETRIC_SUCCESS -> PromptAvailability.READY
+    BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> PromptAvailability.NONE_ENROLLED
+    BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> PromptAvailability.NO_HARDWARE
+    // "This device cannot satisfy the combination that was asked for" -- a Class-3 sensor the
+    // platform will not vouch for is, for this app, no sensor.
+    BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> PromptAvailability.NO_HARDWARE
+    BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> PromptAvailability.TEMPORARILY_UNAVAILABLE
+    BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
+        PromptAvailability.SECURITY_UPDATE_REQUIRED
+
+    else -> PromptAvailability.TEMPORARILY_UNAVAILABLE
+}
+
+/**
  * The platform's biometric surface, for the per-use gate and for the content tier's way back in.
  *
  * @param activity a `FragmentActivity` because that is what `BiometricPrompt` requires -- it
@@ -47,8 +91,7 @@ import javax.crypto.SecretKey
  */
 class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt {
 
-    override fun availability(): PromptAvailability =
-        availabilityOf(BiometricManager.from(activity).canAuthenticate(AUTHENTICATORS))
+    override fun availability(): PromptAvailability = deviceBiometricAvailability(activity)
 
     /**
      * The per-use prompt: `BiometricPrompt` over a `CryptoObject`.
@@ -144,9 +187,6 @@ class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt {
 
     private companion object {
 
-        /** In step with `KeystoreSpecs`. See the file header for why that is load-bearing. */
-        const val AUTHENTICATORS: Int = BiometricManager.Authenticators.BIOMETRIC_STRONG
-
         fun titleFor(operation: GatedOperation): String = when (operation) {
             GatedOperation.REVOKE -> "Revoke this device"
             GatedOperation.KILL -> "Kill this session"
@@ -166,29 +206,6 @@ class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt {
             GatedOperation.LAUNCH -> "A new agent starts on your machine."
             GatedOperation.KILL_SWITCH -> "This changes what every device may do."
             GatedOperation.INPUT, GatedOperation.TAKE_CONTROL -> ""
-        }
-
-        /**
-         * `BiometricManager.canAuthenticate` onto [PromptAvailability], one constant per
-         * constant.
-         *
-         * A status the platform adds later falls to TEMPORARILY_UNAVAILABLE and not to
-         * NO_HARDWARE: the first says "try again", the second tells the user their handset can
-         * never do this. Guessing the permanent answer over an unknown code is the wrong error to
-         * make.
-         */
-        fun availabilityOf(status: Int): PromptAvailability = when (status) {
-            BiometricManager.BIOMETRIC_SUCCESS -> PromptAvailability.READY
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> PromptAvailability.NONE_ENROLLED
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> PromptAvailability.NO_HARDWARE
-            // "This device cannot satisfy the combination that was asked for" -- a Class-3
-            // sensor the platform will not vouch for is, for this app, no sensor.
-            BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> PromptAvailability.NO_HARDWARE
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> PromptAvailability.TEMPORARILY_UNAVAILABLE
-            BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
-                PromptAvailability.SECURITY_UPDATE_REQUIRED
-
-            else -> PromptAvailability.TEMPORARILY_UNAVAILABLE
         }
 
         /**

@@ -107,6 +107,56 @@ class ContentUnlockTest {
     }
 
     /**
+     * THE HOLE THAT REFUSING `AUTH_DEVICE_CREDENTIAL` OPENS, and the assertion that it is named.
+     *
+     * `KeystoreSpecs.kek(CONTENT)` requests `AUTH_BIOMETRIC_STRONG`, and the platform will not
+     * GENERATE such a key with nothing enrolled -- so a PIN-only handset failed inside
+     * provisioning, long before any prompt could be offered. `DeviceCapabilities.probe` cannot see
+     * it: USER_AUTH_PER_USE is answered from the API LEVEL, a fact about the platform rather than
+     * about this handset. What the user got was `SwarmErrorTokens.UNKNOWN` -- "something failed in
+     * a way the app does not recognise" -- whose remedy is [Remedy.NONE]. An app that will not
+     * start, over something the user could fix in thirty seconds, saying nothing.
+     */
+    @Test
+    fun a_handset_with_nothing_enrolled_is_refused_by_name_rather_than_failing_in_provisioning() {
+        assertEquals(
+            ContentProvisioning.NEEDS_ENROLMENT,
+            ContentUnlockPolicy.provisioningFor(PromptAvailability.NONE_ENROLLED),
+        )
+        assertEquals(
+            "no Class-3 sensor is a fact about the hardware, not something to enrol",
+            ContentProvisioning.UNSUPPORTED,
+            ContentUnlockPolicy.provisioningFor(PromptAvailability.NO_HARDWARE),
+        )
+    }
+
+    /**
+     * The other direction, and the one residuals section 2.8 is about: an app that refuses to
+     * start. Key GENERATION checks enrolment, not whether the sensor is free this second, so a
+     * transient answer must not block a launch -- the handset can provision and the prompt can
+     * wait.
+     */
+    @Test
+    fun a_transient_platform_answer_does_not_stop_the_app_starting() {
+        for (transient in listOf(
+            PromptAvailability.READY,
+            PromptAvailability.TEMPORARILY_UNAVAILABLE,
+            PromptAvailability.SECURITY_UPDATE_REQUIRED,
+        )) {
+            assertEquals(
+                "$transient is not a reason the content KEK cannot be generated",
+                ContentProvisioning.PROCEED,
+                ContentUnlockPolicy.provisioningFor(transient),
+            )
+        }
+        // The set is closed, so a sixth availability cannot default into PROCEED unnoticed.
+        assertEquals(
+            PromptAvailability.entries.size,
+            PromptAvailability.entries.map { ContentUnlockPolicy.provisioningFor(it) }.size,
+        )
+    }
+
+    /**
      * THE STANDING TRAP as an assertion, on the content tier this time. If the platform cannot
      * prompt, offering an unlock control is offering a button that does nothing -- so the
      * availability answer decides what the user is told, and the one state with no way forward

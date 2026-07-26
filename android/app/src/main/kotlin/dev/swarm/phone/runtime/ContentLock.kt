@@ -131,6 +131,16 @@ fun interface ContentLockSink {
  * `ErrorRouter`'s single table. Matching on states here would be a second copy of that decision,
  * and the two would drift on the first row anybody added.
  */
+/**
+ * Whether this handset can hold a content KEK, and if not, whether that is the user's to fix.
+ *
+ * The two refusals are kept APART for the reason the whole error taxonomy keeps things apart:
+ * their remedies are opposites. [NEEDS_ENROLMENT] is an action the user performs in system
+ * settings; [UNSUPPORTED] is a fact about the hardware that nothing they do changes. Collapsing
+ * them either tells a fixable user to give up, or tells a stuck one to keep trying.
+ */
+enum class ContentProvisioning { PROCEED, NEEDS_ENROLMENT, UNSUPPORTED }
+
 object ContentUnlockPolicy {
 
     /** @param error what `PhoneRuntime.unlockContent` answered; null means it did not refuse. */
@@ -151,6 +161,41 @@ object ContentUnlockPolicy {
      * one, because it is: a handset with nothing enrolled cannot use the content tier and cannot
      * revoke, for one reason.
      */
+    /**
+     * Whether the content KEK can be PROVISIONED at all on this handset, which is a different
+     * question from whether it can be unwrapped now -- and the one nothing was asking.
+     *
+     * THE HOLE THIS CLOSES. `KeystoreSpecs.kek(CONTENT)` requests
+     * `setUserAuthenticationRequired(true)` with `AUTH_BIOMETRIC_STRONG`, and the platform refuses
+     * to GENERATE such a key when no Class-3 biometric is enrolled -- `KeyGenerator.init` throws
+     * `InvalidAlgorithmParameterException`. `DeviceCapabilities.probe` cannot see that: it answers
+     * USER_AUTH_PER_USE from the API LEVEL alone, which is a fact about the platform and not about
+     * this handset's enrolment. So a PIN-only user -- a large population, not an edge case -- got
+     * an app that could not start, reported as `SwarmErrorTokens.UNKNOWN`: "something failed in a
+     * way the app does not recognise", whose remedy is [Remedy.NONE].
+     *
+     * That is a gate whose exit is unbuilt, and it is the direct consequence of ADR-007 B57's
+     * refusal of `AUTH_DEVICE_CREDENTIAL` -- so it is B57's to answer, not a separate concern.
+     *
+     * [NEEDS_ENROLMENT] routes to `KeyCustodyException.UserAuthenticationRequired`, whose remedy is
+     * [Remedy.AUTHENTICATE] -- which is also what [offersUnlock] keys on, so the same control
+     * appears, finds it cannot prompt, and shows [adviceFor]'s "add one in system settings". One
+     * mechanism, reached by two roads.
+     *
+     * A TRANSIENT ANSWER PROCEEDS, deliberately. Generation checks ENROLMENT, not whether the
+     * sensor is free this second, and an app that refuses to start because the sensor is busy is
+     * residuals section 2.8 -- an app that will not start -- reached by a new door.
+     */
+    fun provisioningFor(availability: PromptAvailability): ContentProvisioning = when (availability) {
+        PromptAvailability.READY,
+        PromptAvailability.TEMPORARILY_UNAVAILABLE,
+        PromptAvailability.SECURITY_UPDATE_REQUIRED,
+        -> ContentProvisioning.PROCEED
+
+        PromptAvailability.NONE_ENROLLED -> ContentProvisioning.NEEDS_ENROLMENT
+        PromptAvailability.NO_HARDWARE -> ContentProvisioning.UNSUPPORTED
+    }
+
     fun adviceFor(availability: PromptAvailability): String = when (availability) {
         PromptAvailability.READY ->
             "Unlock to restore your sessions on this phone."

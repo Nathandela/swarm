@@ -173,16 +173,41 @@ var perUseSubjects = map[string]string{
 	// The alias table that gives each per-use operation its own Keystore entry, so no one
 	// authorization can be pointed at whichever operation the caller picks.
 	"KeystoreAliases.forOperation": "Custody.kt",
+
+	// ADR-007 B44's EXIT, in the same map because it is the same property and the same failure.
+	// B44 made a screen lock return the content tier to locked and left the resume path
+	// asserting the Keystore "will answer"; when it does not, these two are the whole of the way
+	// back in. A policy object deciding when to offer a prompt, with nothing calling it, would
+	// be the identical defect one requirement over -- and it is the reason `ContentLock`
+	// declined a foreground timer in the first place.
+	"ContentUnlockPolicy": "ContentLock.kt",
+	"confirmForContent":   "BiometricPrompts.kt",
+
+	// ADR-007 B57's BILL, and the row most likely to be the next instance if it is dropped.
+	// Refusing AUTH_DEVICE_CREDENTIAL makes an enrolled Class-3 biometric mandatory, and the
+	// platform refuses to GENERATE the content KEK without one -- which `DeviceCapabilities.probe`
+	// cannot see, because it answers USER_AUTH_PER_USE from the API level. Unreached, these two
+	// leave a PIN-only handset with an app that will not start and a remedy of NONE.
+	"provisioningFor":             "ContentLock.kt",
+	"deviceBiometricAvailability": "BiometricPrompts.kt",
 }
 
-// perUseSpecCallers are functions whose BODY must name B51's literal subject.
+// bodyMustName pins a call INSIDE a named function, which is the half a cross-file search
+// cannot do. Both rows exist because a cross-file search was measurably not enough:
 //
-// `KeystoreSpecs.forOperation` cannot be checked the way the chain above is: its only caller,
-// `CustodyProvisioning.provisionGate`, lives in the same file that declares it, so excluding the
-// declaring file would report it unreached however well wired it is. The chain establishes that
-// `provisionGate` is reached; this establishes that `provisionGate` is what reaches the spec.
-var perUseSpecCallers = map[string]string{
+//   - `KeystoreSpecs.forOperation`'s only caller, `CustodyProvisioning.provisionGate`, lives in
+//     the same file that declares it, so excluding the declaring file would report it unreached
+//     however well wired it is. The chain proves `provisionGate` is reached; this proves
+//     `provisionGate` is what reaches the spec.
+//   - `refuseAHandsetThatCannotHoldTheContentKek` was WRAPPED AND ORPHANED as a probe while this
+//     file was being written: commenting out its one call left `provisioningFor` and
+//     `deviceBiometricAvailability` still textually present in PhoneRuntime.kt, and the chain
+//     check passed over a handset gate that no longer ran. That is the documented limit of a
+//     name search -- "a call inside a function nothing invokes satisfies it" -- observed rather
+//     than assumed, so the row below closes it at the one place it mattered.
+var bodyMustName = map[string]string{
 	"provisionGate": "KeystoreSpecs.forOperation",
+	"construct":     "refuseAHandsetThatCannotHoldTheContentKek",
 }
 
 // TestPBSEC2_ThePerUseSubjectsAreReachedFromProductionKotlin.
@@ -227,9 +252,8 @@ func TestPBSEC2_ThePerUseSubjectsAreReachedFromProductionKotlin(t *testing.T) {
 		}
 	}
 
-	// And the last link, which no cross-file search can make: B51's literal subject, inside the
-	// body of the function the chain above proved is reached.
-	for fn, spec := range perUseSpecCallers {
+	// And the links no cross-file search can make: a call inside the body of a named function.
+	for fn, spec := range bodyMustName {
 		found := false
 		for _, f := range files {
 			body, ok := kotlinFunBody(code[f], fn)
