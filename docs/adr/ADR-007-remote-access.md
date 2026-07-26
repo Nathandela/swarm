@@ -1744,3 +1744,56 @@ had not run it either, and it survived because it was *coherent* — a rolled-ba
 stale-seq rejection is exactly what one would expect. It was falsified in minutes by someone who
 printed the values. **A mechanism nobody has executed is a story, however many people have repeated
 it**, and this is the fourth time in this ADR that a plausible chain proved wrong under measurement.
+
+### B31 — PB-E2E-5 (physical-handset gate): the exclusion, approved here and scoped by enumeration
+
+GG-3 permits a requirement to go untested only via **an exclusion approved by ADR or audit waiver,
+never a bare "documented justification"**, and E15.5 restates it. PB-E2E-5's deferral has until now
+lived only in its own requirement row, which is the bare justification GG-3 rejects. This entry is
+the approval, and it is deliberately written as an **enumeration of what is unverified** rather than
+a statement that the deferral is acceptable — a reader must be able to see the size of the hole
+without reconstructing it.
+
+**Why it cannot run.** There is no physical handset attached to this machine. Everything Phase B
+demonstrates on an emulator or in Go is, for the properties below, evidence about a model.
+
+**Unverified, in full. None of the following has been observed on real hardware:**
+
+- **Hardware-backed Keystore.** Every custody claim is asserted against a software or emulator
+  provider. `KeyInfo`/attestation has never confirmed hardware backing for any of
+  `{NoiseStatic, Recipient, CommandSign, RelayAuth}`, and PB-KEY-8's per-role backing matrix is
+  therefore a design, not a measurement. **Curve25519 entered KeyMint only in Android 13 and hardware
+  backing is device-dependent**, so the fallback paths are the ones most likely to be taken and least
+  likely to have been exercised.
+- **Real biometrics.** No BiometricPrompt has ever run: not the success path, not user cancel, not a
+  re-enrolled fingerprint invalidating a key. The two-tier key design (ADR-007 D2/A15) rests on the
+  content tier being biometric-gated, and that gating is modelled everywhere it is tested.
+- **Real camera pairing.** QR capture is exercised against synthetic input. ZXing + CameraX (B21) has
+  never decoded a physical screen under real optics or lighting.
+- **Real FCM.** No registration, no delivery, no token rotation observed against Google's service.
+  This build **configures no Firebase project by design**, so the push transport has never moved a
+  byte end to end. High-priority wake from **Doze**, notification behaviour after reboot, and
+  locked-device push handling are all unobserved.
+- **Reboot, lock/unlock, and radio handoff** on real hardware, including Wi-Fi <-> cellular.
+
+**What is NOT excluded, so the hole is not read as larger than it is.** `am force-stop` mid-session
+was deliberately moved *out* of this gate into PB-E2E-2 because an emulator can issue it, and it is
+strictly stronger than a plain process kill (it also puts the package in the STOPPED state, so no
+implicit broadcast reaches the app until a manual launch). The protocol, crypto, durable-state,
+relay, gateway and daemon paths are demonstrated end to end by PB-E2E-1 with no simulator seam.
+
+**The standing prohibition this entry enforces.** Nothing in this repository may claim or imply that
+any of the enumerated items is covered. **An emulator is not a handset**, and an artifact produced in
+one may not be cited as evidence about one. This has been a live instruction to every agent this
+phase, and no substitute has been accepted — the S19 RED author declined to write an instrumented
+test that would have *read* as PB-E2E-2 coverage while the product remained unpairable from a phone,
+which is the behaviour this entry ratifies.
+
+**Consequence, stated as the requirement states it: until this gate runs, Phase B is "provisionally
+implemented", not done.** The audit may find every other requirement met and must still record Phase
+B as provisional. An exclusion that let the phase be called complete would be a waiver of the
+conclusion rather than of the test.
+
+**Owner and runbook.** The gate needs a named human owner with a device — it is not assignable to an
+agent — and a runbook written in advance, with **every step marked unrun**. The runbook is owed by
+S20; writing it now is what makes the deferral checkable later rather than a promise.
