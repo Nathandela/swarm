@@ -1385,8 +1385,19 @@ func (s *Server) burnRendezvous(id string, now time.Time) {
 
 // burnWindow is how long a spent rendezvous id stays refused. One RendezvousTTL past the
 // burn: the QR that named the id was already dead when the slot expired, so a whole
-// further slot-lifetime of refusal is a generous margin, and it is bounded so the burn
-// set cannot grow without limit.
+// further slot-lifetime of refusal is a generous margin, and it is bounded so the burn set
+// cannot grow without limit.
+//
+// WHAT THE BOUND PRESERVES, stated rather than left to be inferred from the number. The
+// property is "no rendezvous id is reusable while a QR naming it could still be scanned",
+// and the QR's own window is capped at this same TTL (internal/skeleton's pairWindow), so
+// a full further TTL of refusal covers it with a whole slot-lifetime to spare. It is NOT
+// "a rendezvous id is single-use forever", and it never was: s.burned is in-memory, so a
+// relay restart already forgets every burn, including the ones rendezvous_complete wrote.
+// That is survivable for the same reason the window is: the live rendezvous table is lost
+// in the same instant, so after a restart there is no in-flight pairing left to hijack —
+// unlike a route consent, which outlives every connection and is therefore retired in the
+// durable store (see store.authorizePair).
 func (s *Server) burnWindow() time.Duration { return s.cfg.RendezvousTTL }
 
 // isBurned reports whether id is inside its burn window. Caller holds s.mu.

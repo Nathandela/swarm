@@ -21,6 +21,7 @@ package relay
 // accepted exactly as before -- ban lift included. Nothing is keyed on revocation at all.
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"testing"
@@ -164,6 +165,89 @@ func TestB47_TheGatewayMayRePresentItsLiveConsentForever(t *testing.T) {
 				"  deliverEpochGrant runs this on every connect and its failure is fatal to the "+
 				"gateway; a consent that is single-USE rather than single-CEREMONY bricks the machine.", i, err)
 		}
+	}
+}
+
+// TestB47_ARetirementSurvivesARelayRestart. A consent is presented arbitrarily long after
+// the ceremony -- deliverEpochGrant re-presents the stored bytes on every gateway connect,
+// months later, to a relay that never witnessed the pairing -- so "retired" has to mean
+// retired, not "retired until the relay next boots".
+//
+// It is the property Server.burned deliberately does NOT have: rendezvous burns are an
+// in-memory window over a live pairing, and a restart drops the whole rendezvous table
+// with them. A retirement is a durable statement about a credential that outlives every
+// connection, so it lives in the bbolt store beside the ban it accompanies.
+func TestB47_ARetirementSurvivesARelayRestart(t *testing.T) {
+	srv, cfg, apns, clk := startTestRelay(t, nil)
+	ctx := testCtx(t)
+
+	machinePub, machinePriv := newRelayAuthKey(t)
+	phonePub, phonePriv := newRelayAuthKey(t)
+	phoneRID := RoutingID(phonePub)
+	machineRID := RoutingID(machinePub)
+
+	machine := dialAuthed(t, srv.URL(), authFor(machinePub, machinePriv))
+	consent := consentToCeremony(phonePriv, "ceremony-before-the-restart", machineRID)
+	if err := machine.AuthorizeDevice(ctx, phonePub, consent); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	if err := machine.DeviceRevoke(ctx, phoneRID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	_ = machine.Close()
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close relay: %v", err)
+	}
+
+	// The same store, a new process.
+	srv2, err := New(cfg, WithClock(clk), WithPushSink(apns))
+	if err != nil {
+		t.Fatalf("restart relay: %v", err)
+	}
+	ctx2, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := srv2.Start(ctx2); err != nil {
+		t.Fatalf("start restarted relay: %v", err)
+	}
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	machine2 := dialAuthed(t, srv2.URL(), authFor(machinePub, machinePriv))
+	if err := machine2.AuthorizeDevice(ctx, phonePub, consent); !errors.Is(err, ErrConsentRetired) {
+		t.Fatalf("replay after a relay restart = %v, want ErrConsentRetired: a retirement that "+
+			"only holds until the next boot is not a revocation, it is a delay", err)
+	}
+}
+
+// TestB47_AnUnknownCeremonyIsAccepted states the OTHER half of the durability decision,
+// deliberately rather than by omission, because the alternative is the failure that killed
+// three earlier directions in this ADR.
+//
+// A consent naming a ceremony the relay has no record of is ACCEPTED. The relay is not the
+// witness to a pairing and never was -- that is B38's whole premise -- so "I have never
+// heard of this ceremony" is the state of every FIRST authorize, and of every authorize
+// against a relay whose store was rebuilt. Refusing it would break deliverEpochGrant for
+// every existing pairing on the first store loss, and its failure is fatal to the gateway.
+//
+// What that costs, named: a relay that loses its store loses its retirements. It loses its
+// BANS in the same instant -- bucketRevoked is that store -- so there is no surviving
+// revocation left for a replay to undo; the revocation died with the store, not with this
+// rule. Retirement is exactly as durable as the ban it exists to protect, which is the most
+// it can be.
+func TestB47_AnUnknownCeremonyIsAccepted(t *testing.T) {
+	srv, _, _, _ := startTestRelay(t, nil)
+	ctx := testCtx(t)
+
+	machinePub, machinePriv := newRelayAuthKey(t)
+	phonePub, phonePriv := newRelayAuthKey(t)
+	machine := dialAuthed(t, srv.URL(), authFor(machinePub, machinePriv))
+
+	// A relay that has never seen this pair, this device or this ceremony: the first
+	// authorize of every pairing, and every authorize after a store rebuild.
+	if err := machine.AuthorizeDevice(ctx, phonePub,
+		consentToCeremony(phonePriv, "a-ceremony-this-relay-never-saw", machine.RoutingID())); err != nil {
+		t.Fatalf("first authorize against a relay with no record of the ceremony: %v.\n"+
+			"  Refusing an unknown ceremony breaks deliverEpochGrant for every pairing the moment "+
+			"the relay's store is rebuilt, and its failure is FATAL to the gateway.", err)
 	}
 }
 
