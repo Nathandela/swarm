@@ -74,6 +74,17 @@ func NewApp(cfg *Config, custody KeyCustody) (*App, error)
 every seal and every open goes back to Keystore, so an auth-gated content KEK re-checks
 authorisation on every use and a lock actually stops content operations (PB-KEY-7).
 
+> **CORRECTION 2026-07-26 — the last clause of the sentence above is FALSE.** See ADR-007 B35/B36.
+> It is true of the **at-rest seal** and the `Resume` path, and false of the **live send path**:
+> `mobile/commands.go` `resolveSend` reads `core.State().Keys.ContentKey` straight from Go memory
+> with no Keystore round-trip, so after a single `Resume` neither a screen lock nor PB-SEC-2's
+> freshness window stops anything. PB-KEY-7 and PB-SEC-2 are recorded **NOT MET**.
+>
+> Struck in place rather than deleted, because this is precisely the defect PB-E2E-3 was built to
+> catch and did not: the fence checks that an evidence file **names** its requirement, and this file
+> names it. **Naming is checkable; truth is not.** The correction is left visible so the limit of
+> that fence is legible next to an instance of it.
+
 **There is no constructor that omits it.** A nil `KeyCustody` is a refusal that also leaves the
 state directory empty. An optional parameter is a parameter somebody passes nil to, and B18(c)
 decided cleartext must not be reachable by forgetting something.

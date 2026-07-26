@@ -46,6 +46,9 @@ SHIPPED = [
 NOT_MET = {
     "PB-KEY-7": "no purge trigger exists, and wiring one as specified would brick the "
                 "phone at the first screen lock (ADR-007 B35)",
+    "PB-SEC-2": "the freshness gate does nothing on the send path: the content key is "
+                "unwrapped once at Resume and read from Go memory thereafter, so no "
+                "re-authorization occurs per use (ADR-007 B36)",
 }
 
 

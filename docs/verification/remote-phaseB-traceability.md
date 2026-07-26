@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 141 |
-| Evidenced (measured on disk) | 141 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **1** |
+| Shipped (asserted by hand) | 140 |
+| Evidenced (measured on disk) | 140 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **2** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -125,7 +125,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-SAS-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-SEC-2 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
+| PB-SEC-2 | S14 | **NOT MET** | ADR-007 B35 — the freshness gate does nothing on the send path: the content key is unwrapped once at Resume and read from Go memory thereafter, so no re-authorization occurs per use (ADR-007 B36) |
 | PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-4 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-5 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
