@@ -37,6 +37,18 @@ SHIPPED = [
 ]
 
 
+# Requirements whose OWNING SLICE shipped but which are NOT met, with the reason.
+# This exists because slice-level shipping cannot express "the slice landed and this
+# particular requirement was later invalidated". PB-KEY-7 is exactly that: S14 shipped,
+# and PB-KEY-10's fix (a DIFFERENT requirement, correctly fixed) removed the mechanism
+# PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
+# shipped for the rest of the phase. See ADR-007 B35.
+NOT_MET = {
+    "PB-KEY-7": "no purge trigger exists, and wiring one as specified would brick the "
+                "phone at the first screen lock (ADR-007 B35)",
+}
+
+
 def evidence_path(slice_id):
     """The per-slice evidence file, if one exists. S0 is the ADR itself."""
     if slice_id == "S0":
@@ -62,7 +74,8 @@ def main():
     for req, sl in rows:
         by_slice.setdefault(sl, []).append(req)
 
-    n_shipped = sum(1 for _, sl in rows if sl in shipped)
+    n_shipped = sum(1 for r, sl in rows if sl in shipped and r not in NOT_MET)
+    n_not_met = sum(1 for r, _ in rows if r in NOT_MET)
     no_evidence = sorted(
         {sl for _, sl in rows if sl in shipped and evidence_path(sl) is None},
         key=lambda s: (len(s), s),
@@ -87,7 +100,8 @@ def main():
     out("| Requirements | %d |\n" % len(rows))
     out("| Shipped (asserted by hand) | %d |\n" % n_shipped)
     out("| Evidenced (measured on disk) | %d |\n" % (n_shipped - n_no_evidence))
-    out("| Remaining | %d |\n" % (len(rows) - n_shipped))
+    out("| **NOT MET (slice shipped, requirement invalidated later)** | **%d** |\n" % n_not_met)
+    out("| Remaining | %d |\n" % (len(rows) - n_shipped - n_not_met))
     out("| **Shipped with NO evidence file** | **%d** |\n\n" % n_no_evidence)
 
     if no_evidence:
@@ -112,7 +126,9 @@ def main():
         return (m.group(1), int(m.group(2))) if m else (req, 0)
 
     for req, sl in sorted(rows, key=sort_key):
-        if sl not in shipped:
+        if req in NOT_MET:
+            status, ev = "**NOT MET**", "ADR-007 B35 — " + NOT_MET[req]
+        elif sl not in shipped:
             status, ev = "pending", "—"
         else:
             status = "shipped"

@@ -16,8 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 142 |
-| Evidenced (measured on disk) | 142 |
+| Shipped (asserted by hand) | 141 |
+| Evidenced (measured on disk) | 141 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **1** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -74,7 +75,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-KEY-4 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-KEY-5 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-KEY-6 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-KEY-7 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
+| PB-KEY-7 | S14 | **NOT MET** | ADR-007 B35 — no purge trigger exists, and wiring one as specified would brick the phone at the first screen lock (ADR-007 B35) |
 | PB-KEY-8 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-KEY-9 | S14a | shipped | `docs/verification/remote-phaseB-s14a-evidence.md` |
 | PB-KEY-10 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
