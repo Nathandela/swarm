@@ -240,8 +240,17 @@ func (s State) clone() State {
 type Store interface {
 	Load() State
 	Save(State) error
-	// PurgeKeys destroys the durable epoch key material -- the SEALED blobs included -- and
-	// every decrypted cache derived from it (PB-KEY-7's lock purge).
+	// PurgeKeys is PB-KEY-7's lock purge: it returns the CONTENT tier to LOCKED and destroys
+	// every decrypted cache derived from it, in memory and at rest.
+	//
+	// IT DOES NOT DESTROY THE SEALED CONTENT KEY. This contract used to say "the SEALED blobs
+	// included", and ADR-007 B44 struck that claim: destroying the blob is unimplementable as
+	// specified, because nothing on the handset can re-obtain those bytes and the replay guard
+	// survives any purge, so the first screen lock would land the phone in PB-KEY-3's terminal
+	// state. The clause is corrected HERE and not only at the implementation because this
+	// interface is what a SECOND implementation gets written against -- one built to the struck
+	// wording would be correct by its own contract and would brick every handset it ran on.
+	// See fileStore.PurgeKeys for the whole argument, and UnsealContent for the way back.
 	//
 	// It is a method rather than a Save of a State whose keys are zero because those two
 	// are not the same act and custody cannot tell them apart from the bytes: a process that

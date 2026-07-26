@@ -69,13 +69,14 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		return nil, err
 	}
 	// The relay SPKI pin travels to the phone in msg2 and NOWHERE ELSE (ADR-007 B33/B34):
-	// the pairing QR has no room for it. OPTIONAL here -- a machine with no pin configured
-	// still pairs, and what an absent pin MEANS is decided at the phone's dial site.
-	// Decoded by relaycfg and NOT here. This block used to run its own
-	// base64.StdEncoding.DecodeString with no 32-byte check, which is a second opinion about
-	// what a malformed pin is: it would have forwarded to a handset a pin that no dial on this
-	// machine would have accepted. It also ran BEFORE the RelayURL guard below, so the length
-	// check in Security() only covered it by accident of ordering.
+	// the pairing QR has no room for it. OPTIONAL -- a machine with no pin configured still
+	// pairs, and what an absent pin MEANS is decided at the phone's dial site.
+	//
+	// DECODED BY relaycfg AND NOT HERE. This used to run its own base64 decode with no
+	// 32-byte check -- a second opinion about what a malformed pin is, which would have
+	// forwarded to a handset a pin no dial on this machine would have accepted. It also ran
+	// BEFORE the RelayURL guard below, so Security()'s length check covered it only by
+	// accident of ordering.
 	pin, err := relayCfg.Pin()
 	if err != nil {
 		return nil, err

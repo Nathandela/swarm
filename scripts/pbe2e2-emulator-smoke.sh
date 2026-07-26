@@ -235,6 +235,11 @@ log "build and install the APK"
 cd "$REPO/android"
 ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+# A FRESH INSTALL, which `adb install -r` alone is not: it preserves app data, so run N+1 starts
+# on whatever durable state run N left -- a completed pairing, a terminal error state, a pin from
+# a relay that no longer exists. PB-E2E-2's first clause is "APK installs", and the pairing flow
+# it drives is the one a phone that has never paired sees.
+adb shell pm clear "$PKG"
 shot 01-installed
 
 log "a session for the phone to observe"
@@ -262,15 +267,17 @@ eval "$SESSION_CMD" | tee "$OUT/session-id.txt"
 # ---------------------------------------------------------------------------
 # [UNRUN] EVERYTHING BELOW THIS LINE HAS NEVER BEEN EXECUTED.
 #
-# The phone cannot reach the relay yet, and it is this repository's own doing. PB-NET-2 is now
-# applied on the handset's dial path too, and relay.TrustRootSourceFor makes Android
-# TrustRootsPinned: a wss:// dial with no pin fails closed with relay.ErrPinRequired, and there
-# is no channel to give the handset a pin -- the pairing QR has no field for one and no room for
-# one (pairing.MaxRelayURLLen). That is ADR-007 residual 1.9.
+# THE CONDITION NAMED HERE WAS WRONG AND IS CORRECTED. This block used to say the gate lifts
+# "once pairing.MachinePayload carries the relay pin" -- a condition that was ALREADY TRUE when
+# it was written, and which does not unblock anything. Carrying the pin was never the blocker.
 #
-# So the requirement that would have caught residual 1.9 end to end is the requirement residual
-# 1.9 prevents from running. The remedy is the pin arriving over the pairing channel in
-# pairing.MachinePayload, alongside the machine keys the phone already pins there.
+# The pin arrives AT PAIRING, so the pairing dial is the dial that fetches it and cannot itself
+# be pinned; and on a pinning-only platform -- every Android handset -- an unpinned wss:// dial
+# is REFUSED (relay.ErrPinRequired) rather than merely unverified. The dial that would have
+# delivered the pin was the one being refused. That is ADR-007 B45, and residual 1.9's real
+# resolution is B45's ruling: the handset's pairing dial, and only that dial, runs unverified
+# TLS, because its peer is authenticated by the Noise handshake and the SAS the operator
+# compares rather than by the relay's certificate.
 #
 # THE STOP IS DELIBERATE AND MUST NOT BE REMOVED TO GET A GREEN RUN. Everything above it has
 # been executed and works: the relay, the terminator, the pin, the machine provisioning, the
@@ -287,9 +294,14 @@ if [ "${SWARM_E2E2_PHONE_READY:-0}" != "1" ]; then
 
   Everything before this point ran. Nothing after it has ever run.
 
-  Re-run with SWARM_E2E2_PHONE_READY=1 once pairing.MachinePayload carries the relay pin and
-  the phone persists it. Until then this exit is the correct outcome and the artifacts in the
-  output directory cover the MACHINE half only.
+  ADR-007 B45 has landed, so the handset CAN now dial: relay.PairingSecurity lets the pairing
+  rendezvous complete, and the pin it delivers is consulted on every session dial after it.
+  This gate stays down until a run past it has actually been attempted and its result recorded
+  -- lifting it on the strength of the argument alone is what left this script reading as
+  though it had run for a whole phase.
+
+  Re-run with SWARM_E2E2_PHONE_READY=1 to attempt it. Until a result is recorded here, the
+  artifacts in the output directory cover the MACHINE half only.
 
 BLOCKED
   exit 2
@@ -314,10 +326,15 @@ PAIR_PID=$!
 # It is WRAPPED across terminal-width lines by printPairingQR, so it is reassembled rather than
 # grepped as one token -- and its scheme is `swarm-pair:1:`, not the `swarm://` the previous
 # form looked for, which is a pattern that could never have matched anything this CLI prints.
+#
+# EVERY EXTRACTION IS `|| true`, and that is load-bearing under `set -euo pipefail` rather than
+# defensive style. While the machine is still printing, awk has no file and grep has no match --
+# both exit non-zero, a failed command substitution fails the assignment, and the script dies on
+# its first poll instead of waiting. That is what happened on the first real run of this step.
 QR=""
 for _ in $(seq 1 30); do
-  QR="$(awk '/^Or enter this pairing code manually:$/{f=1;next} /^Scan this QR/{f=0} f{printf "%s",$0}' "$OUT/pair.txt" 2>/dev/null)"
-  [ -n "$QR" ] || QR="$(grep -Eo '^swarm-pair:[^[:space:]]+' "$OUT/pair.txt" 2>/dev/null | head -1)"
+  QR="$(awk '/^Or enter this pairing code manually:$/{f=1;next} /^Scan this QR/{f=0} f{printf "%s",$0}' "$OUT/pair.txt" 2>/dev/null || true)"
+  [ -n "$QR" ] || QR="$(grep -Eo '^swarm-pair:[^[:space:]]+' "$OUT/pair.txt" 2>/dev/null | head -1 || true)"
   [ -n "$QR" ] && break
   sleep 1
 done
@@ -344,8 +361,8 @@ adb logcat -d -s SwarmE2E2 | tee "$OUT/phone-sas.txt"
 # further change to this step and has not been made. The clause the operator still owns on a
 # real handset is the refusal; this asserts the agreement.
 # ---------------------------------------------------------------------------
-MACHINE_SAS="$(sed -n 's/^Verify these emoji match your phone: //p' "$OUT/pair.txt" | head -1)"
-PHONE_SAS="$(sed -n 's/.*phone SAS: //p' "$OUT/phone-sas.txt" | head -1)"
+MACHINE_SAS="$(sed -n 's/^Verify these emoji match your phone: //p' "$OUT/pair.txt" | head -1 || true)"
+PHONE_SAS="$(sed -n 's/.*phone SAS: //p' "$OUT/phone-sas.txt" | head -1 || true)"
 [ -n "$MACHINE_SAS" ] || { echo "the machine printed no SAS; PB-E2E-2's 'SAS matches' clause cannot be checked"; exit 1; }
 [ -n "$PHONE_SAS" ] || { echo "the phone logged no SAS under the SwarmE2E2 tag; PB-E2E-2's 'SAS matches' clause cannot be checked"; exit 1; }
 if [ "$MACHINE_SAS" != "$PHONE_SAS" ]; then

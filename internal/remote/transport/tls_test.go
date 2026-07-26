@@ -228,29 +228,9 @@ func TestCleartext_CarveOutCannotBeEnabledInAReleaseBuild(t *testing.T) {
 		t.Fatalf("the carve-out is inert inside a test binary, so the in-process relay tests cannot work: %v", err)
 	}
 
-	root := repoRoot(t)
-	pkgDir := filepath.Join(root, "internal", "remote", "transport", "releasecheck")
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatalf("mkdir releasecheck: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(pkgDir) })
-	if err := os.WriteFile(filepath.Join(pkgDir, "main.go"), []byte(releaseCheckProgram), 0o644); err != nil {
-		t.Fatalf("write releasecheck main: %v", err)
-	}
+	bin := buildReleaseProbe(t, releaseCheckProgram)
 
-	bin := filepath.Join(t.TempDir(), "releasecheck")
-	build := exec.Command("go", "build", "-o", bin, "./internal/remote/transport/releasecheck")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the release binary failed: %v\n%s", err, out)
-	}
-
-	run := exec.Command(bin)
-	out, err := run.CombinedOutput()
-	if err != nil {
-		t.Fatalf("running the release binary failed: %v\n%s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); got != "REFUSED" {
+	if got := runReleaseProbe(t, bin); got != "REFUSED" {
 		t.Fatalf("a release build admitted the loopback cleartext carve-out: %s", got)
 	}
 }

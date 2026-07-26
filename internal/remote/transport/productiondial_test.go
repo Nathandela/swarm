@@ -21,14 +21,11 @@
 package transport_test
 
 import (
-	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -383,34 +380,7 @@ func main() {
 // property untouched -- the field this policy sets is unexported, so no code outside the
 // relay package can turn the exception on for a URL of its choosing.
 func TestPBNET2_MachinePolicyIsLoopbackOnlyInAReleaseBuild(t *testing.T) {
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skipf("go toolchain unavailable: %v", err)
-	}
-
-	root := repoRoot(t)
-	pkgDir := filepath.Join(root, "internal", "remote", "transport", "machinereleasecheck")
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatalf("mkdir machinereleasecheck: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(pkgDir) })
-	if err := os.WriteFile(filepath.Join(pkgDir, "main.go"), []byte(machineReleaseProgram), 0o644); err != nil {
-		t.Fatalf("write machinereleasecheck main: %v", err)
-	}
-
-	bin := filepath.Join(t.TempDir(), "machinereleasecheck")
-	build := exec.Command("go", "build", "-o", bin, "./internal/remote/transport/machinereleasecheck")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the release binary failed: %v\n%s", err, out)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	if err != nil {
-		t.Fatalf("running the release binary failed: %v\n%s", err, out)
-	}
-	got := strings.TrimSpace(string(out))
+	got := runReleaseProbe(t, buildReleaseProbe(t, machineReleaseProgram))
 	switch {
 	case got == "OK":
 	case strings.HasPrefix(got, "ROUTABLE-ADMITTED"):

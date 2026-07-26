@@ -629,6 +629,16 @@ base64 characters. Two channels that are not the QR:
   later would be worse than one now. Its limit, to be stated at the field: it protects every dial
   *after* pairing, not the pairing dial itself.
 
+**RESOLVED 2026-07-26, and the limit above is exactly where it bit.** Both channels landed, and the
+handset still could not pair: carrying the pin was never sufficient, because the pairing dial that
+delivers it is unpinned by construction and a pinning-only platform **refuses** an unpinned `wss://`
+dial rather than merely leaving it unverified. **ADR-007 B45** rules that the handset's pairing dial —
+and only that dial — runs unverified TLS, on the argument that its peer is authenticated by the Noise
+handshake and the SAS the operator compares, so the relay certificate never protected it. Landed as
+`relay.PairingSecurity`, scoped by an AST fence that fails in *both* directions, with the bootstrap
+demonstrated on a simulated pinning-only platform rather than reasoned about
+(`relay.WithTrustRootSource`, inert in release builds).
+
 ## 4.4 A third fence that cannot fail — in the file the missing-policy defect was recorded against
 
 `wireTap` in `internal/remote/transport/harness_test.go` is a **raw TCP** tap, so
@@ -695,8 +705,25 @@ platform with no pin, i.e. `ErrPinRequired`. (That last step is a deduction from
 an observation; Go cannot be run on the emulator to watch it.)
 
 **The requirement that would have caught residual 1.9 end to end is the requirement residual 1.9 now
-prevents from running.** When the consent-signature agent lands the `MachinePayload` pin, the phone
-hop becomes possible; `MaxRelayURLLen` is not a constraint (`wss://10.0.2.2:8443` is 19 characters).
+prevents from running.**
+
+**CORRECTED 2026-07-26.** This paragraph used to read "when the consent-signature agent lands the
+`MachinePayload` pin, the phone hop becomes possible". That was false when written, and §1.9 of this
+same document states the reason four hundred lines above it: carrying the pin was never the blocker.
+The pin arrives *at pairing*, so the pairing dial is the dial that fetches it and cannot itself be
+pinned — and on a pinning-only platform an unpinned `wss://` dial is **refused**, not merely
+unverified. The `MachinePayload` pin landed and the handset still could not pair, because the dial
+that would have delivered it was the one being refused.
+
+**The real unblocking condition is ADR-007 B45**, which rules that the handset's pairing dial — and
+only that dial — runs unverified TLS: the peer is authenticated by the Noise handshake and the SAS
+the operator compares, so the relay's certificate never protected that exchange. That is landed
+(`relay.PairingSecurity`, scoped by `mobile/b45_pairingscope_test.go`, with the pinning-only bootstrap
+demonstrated in `TestB45_ThePairingPolicyCanBootstrapOnAPinningOnlyPlatform`).
+
+`MaxRelayURLLen` is not a constraint either way (`wss://10.0.2.2:8443` is 19 characters), though the
+address itself had to change — see the smoke's own header for why one `relay_url` serving both ends
+rules out the emulator's host-loopback alias.
 
 **Two more proofs the smoke had never run**, found by trying: it invokes `swarm-relay --listen ... --tls off --db ...` and that binary accepts only `--config`; and it passes `swarm remote pair --yes`,
 a flag that does not exist.
@@ -780,3 +807,29 @@ undetectable by reading the diff, because a mutation is designed to look like th
 is by **explicit pathspec against that agent's reported file list**, or not at all. I have written
 some version of this note five times; the previous four described it as a discipline I had skipped
 once. It is not a discipline problem. `git add -A` must not be typed in this orchestration.
+
+## 1.14 B47 and B49 MUST SHIP TOGETHER — neither may merge alone
+
+Found by the agent implementing B47, about its own fix, before writing it:
+
+**Today the only thing that restores a revoked device is B47's replay — the attack.** B49 established
+that every revoke is currently unrecoverable by either party (the ban is global, only the banner lifts
+it, and the counterparty-side lift was deleted). So closing the replay **without** B49's recovery path
+leaves a revoke that is **genuinely permanent for both parties**, with no legitimate undo at all.
+
+**Enforcement**: neither branch merges to `worktree-remote-control-research` alone. They land in one
+step, and the merged tree must demonstrate **both** properties — a replayed consent is refused, **and**
+a legitimately revoked device can be recovered by the flow PB-STATE-10 documents.
+
+**This is the round-2 lesson applied prospectively rather than retrospectively.** Every composition
+found so far was found *after* both halves shipped: two residuals safe alone and critical together
+(B37), a fix that deleted another defect's only remedy (B49), a fix that recreated its own bug on the
+other side (B46). This one was found **before either half landed**, by the agent whose own fix was the
+dangerous half, reasoning about what the other agent's finding meant for it. That is the check nothing
+in this phase's apparatus performs, done by hand.
+
+**The ordering** (arbitrated, both agents agree): B47's ceremony-id work lands first — it is a
+parameter addition plus two buckets with **no change to ban semantics** — and B49 rebases onto it, its
+edit then falling entirely inside the ban logic B47 deliberately does not touch. They conflict
+textually in `authorizePair` and `revokeAndPurge` while being orthogonal in meaning: one decides
+*which consent bytes* may authorize a pairing, the other *which ban* a re-pair lifts.

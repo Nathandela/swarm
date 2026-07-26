@@ -214,10 +214,15 @@ func (c *Core) Mutate(fn func(*State)) error {
 	return nil
 }
 
-// PurgeKeys is PB-KEY-7's lock purge at the durable layer: the epoch keys go, the sealed
-// blobs with them, and so does every DECRYPTED cache they protected. It REBINDS afterwards
-// for the same reason Save does -- the live objects must come off the purged epoch, or the
-// router keeps opening frames under a key the phone no longer holds.
+// PurgeKeys is PB-KEY-7's lock purge at the durable layer: the content tier returns to LOCKED
+// and every DECRYPTED cache it protected is destroyed, in memory and at rest. It REBINDS
+// afterwards for the same reason Save does -- the live objects must come off the purged epoch,
+// or the router keeps opening frames under a key the phone no longer holds.
+//
+// THE SEALED BLOBS STAY. This comment used to say they went with the keys; ADR-007 B44 struck
+// that. The tier is unopened, not erased, which is the state a push-woken process is already
+// in, and UnsealContent -- a fresh Keystore unwrap -- is the way back. Store.PurgeKeys carries
+// why destroying the blob is unimplementable rather than merely undesirable.
 //
 // It is a distinct verb from Save because a Save whose keys are zero is ambiguous: the wake
 // path holds zeros for a content key it could not read and Saves constantly, so custody

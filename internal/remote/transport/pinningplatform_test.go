@@ -11,10 +11,7 @@ package transport_test
 
 import (
 	"errors"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
@@ -147,27 +144,7 @@ func TestPBNET2_TheTrustRootOverrideIsInertInAReleaseBuild(t *testing.T) {
 			"are not exercising the branch they claim: %v", err)
 	}
 
-	root := repoRoot(t)
-	pkgDir := filepath.Join(root, "internal", "remote", "transport", "trustrootcheck")
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatalf("mkdir trustrootcheck: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(pkgDir) })
-	if err := os.WriteFile(filepath.Join(pkgDir, "main.go"), []byte(trustRootReleaseProgram), 0o644); err != nil {
-		t.Fatalf("write trustrootcheck main: %v", err)
-	}
-
-	bin := filepath.Join(t.TempDir(), "trustrootcheck")
-	build := exec.Command("go", "build", "-o", bin, "./internal/remote/transport/trustrootcheck")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the release binary failed: %v\n%s", err, out)
-	}
-	out, err := exec.Command(bin).CombinedOutput()
-	if err != nil {
-		t.Fatalf("running the release binary failed: %v\n%s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); got != "INERT" {
+	if got := runReleaseProbe(t, buildReleaseProbe(t, trustRootReleaseProgram)); got != "INERT" {
 		t.Fatalf("a release build honoured the trust-root override (%s); it could then claim a "+
 			"platform it is not on, which is the opposite of what this seam is for", got)
 	}
