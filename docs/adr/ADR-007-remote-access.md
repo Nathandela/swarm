@@ -1997,3 +1997,113 @@ phase's apparatus ever asked *what two accepted residuals do in combination* —
 was strictly worse than either part, converting "conceded to the relay operator" into "available to
 any passive observer". **A list of individually-acceptable residuals is not an acceptable residual
 set.** Every future acceptance must state which other open residuals it was checked against.
+
+### B38 — B37's remedy is INSUFFICIENT; the consent signature is required unconditionally
+
+**B37 was written two hours before this entry and its escape hatch is false.** It closed with:
+"B27's consent-signature design... is now REQUIRED **unless transport security is made mandatory
+first and proven on the dial path**." An audit reviewer measured a **second, transport-independent
+path** to the same capability, with a passing negative control.
+
+`Machine.Pair` sends msg2 — carrying `MachinePayload.MachineRelayAuthPub` and `MachineRoutingID`
+(`internal/remote/pairing/pairing.go`) — **one full round-trip before the mandatory desktop confirm,
+and before the SAS is derived at all**. At that moment the channel is **PSK-authenticated, not
+SAS-authenticated**: anyone holding the 32-byte QR secret opens it. B27's premise says the pubkey is
+disclosed "over the SAS-authenticated pairing channel"; the code discloses it **before the SAS
+exists**.
+
+**Measured**: an impostor that photographed the QR, sent msg1 and never sent msg3, read
+`MachineRelayAuthPub` with **zero desktop-confirm invocations**. D3 names the photographed QR as
+precisely the threat the confirm defeats — it defeats **pinning**, not **disclosure**.
+
+**And the window stays open**: `authorizeAtRelay` runs only on a *successful* pair
+(`cmd/swarm/remote.go`), so a declined or abandoned pairing leaves the machine having authorized
+nobody. **Measured**: a machine that has **never dialled the relay** is permanently locked out by the
+QR photographer; its first dial returns `ErrRevoked`, and the owner's phone cannot lift a ban it did
+not place. The negative control — the same body against a machine that has authorized one device —
+is refused, so the fence can fail.
+
+**This path needs no on-path position, no `ws://`, and survives `wss://` with a valid public-CA
+certificate. B27's consent signature is therefore REQUIRED UNCONDITIONALLY.** Transport hardening
+remains necessary and is no longer sufficient. Nobody may schedule work off B37's `unless`.
+
+**PB-E2E-2 is also marked NOT MET here**: its own evidence file disclaims it, no log or screenshot
+exists, and it was counted `shipped` **only because `scripts/phaseb-traceability.py` measures
+evidence per SLICE, not per requirement**. That is the E15.1 defect I strengthened — still alive in
+the artifact the audit reads.
+
+### B39 — the 2026-07-20 pre-auth amendment states two facts the code does not have, and B29 rests on them
+
+The fourth "names a mechanism without checking what it gates" entry, and it makes **both** errors.
+
+The amendment claims per-routing-id rate maps are "**reaped on disconnect and bounded by a TTL
+sweep**". Neither is true. `removeConn` reaps `authRate` and `opsRate` only; **`appendRate` and
+`pushRate` are reaped nowhere** — verified: created and written, never deleted. There is **no TTL
+sweep**; `runSweeps` runs presence and retention and nothing else.
+
+It also claims per-key limits are safe because they apply "where the identity is **proven**". Proven
+is not scarce: registration is open and re-authenticating on a live socket under a fresh key is
+legal — recorded as residual 1.4 and filed as "the hazard is the *next* feature keyed on `sc.rid`".
+**That feature already shipped, in this same amendment**: `opSource()` returns `"rid:"+sc.rid`, so
+`OpsPerMin` — the only meter on `authorize_device`, `device_revoke` and `mailbox_read` — **resets on
+demand**. Measured: with `OpsPerMin=4`, **18 `authorize_device` calls landed on one socket in one
+window** by re-authenticating between rounds.
+
+**B29 rests its acceptance on that false premise** — it declined the per-`(source,target)` fix
+because it "mints map entries under attacker-chosen keys, which is precisely the unbounded per-key
+state the auth path already refuses by design". The auth path refuses no such thing, and the
+per-target keying B29 kept is **already attacker-chosen**, because `authorize_device` accepts any 32
+bytes and B27's first-use clause authorizes append and push to the invented identity. **B29 traded
+nothing.**
+
+**A fourth badly-composing pair: B29 + B27's first-use clause.** Measured, after the attacker's
+connection **closed**: 200 `appendRate` + 200 `pushRate` entries, 200 durable pairs rows and 200
+durable mailbox sub-buckets from self-minted victims. A 30-day retention sweep deleted the items and
+**left every sub-bucket and pairs row standing**. No `Quotas` field caps total storage.
+
+### B40 — B27's rule is SYMMETRIC: a stolen once-unlocked handset permanently bans the owner's machine
+
+A third badly-composing pair, unrecorded until now. `mayActOn` grants authority to whoever the target
+authorized **in either direction**, so `granted(machine, phone)` authorizes the **phone** to
+`device_revoke` the **machine**. B27 analysed the machine-as-caller direction only.
+
+It composes with a custody decision made correctly elsewhere: RELAY_AUTH lives in the **wake tier**,
+whose KEK is "deliberately NOT user-authentication-gated", because background reconnect must work on
+a locked handset (B9/B16).
+
+**Measured**: a legitimately paired phone banned its own machine; the machine's re-dial returns
+`ErrRevoked` and **only the phone can lift it**.
+
+**This falsifies half of the stolen-phone claim.** ADR-007 states "a once-unlocked stolen phone
+yields only the wake key — no session history". Confidentiality survives via epoch rotation. The wake
+key **also** yields permanent destruction of the machine's relay identity, and it **pre-empts the
+designed remedy**: `swarm remote revoke` needs the machine to reach the relay, and it no longer can.
+
+### B41 — "the gateway is owner-uid trusted" is circular with respect to the declared adversary
+
+D5 names the gateway "the only component parsing attacker-influenced relay bytes". R1 then places
+that same process **outside the cryptographic boundary**. So the one component the declared adversary
+can reach is the one declared trusted, and R1's argument — a compromised owner-uid process "can act
+as the owner directly" — is a claim about **authority** applied silently to **confidentiality and
+identity**.
+
+Concretely: `cmd/swarm-remote` loads `machine.key` and is handed `EpochKeys().ContentKey` and
+`WakeKey`. A relay achieving code execution in the sidecar obtains the **machine identity key**
+(impersonate the machine to the phone indefinitely) and the **epoch content key** (read all session
+content) — the two things E2EE exists to deny the relay. The "compromised shell" analogy assumes the
+attacker already has the machine, which is the whole question. **R1 argues the endpoint, not the
+path.**
+
+Worse to describe accurately: D4's per-command signatures **do** hold against the gateway, and the
+compromised gateway does not need to forge one — it dials the owner-tier main socket, where no
+signature, kill switch, allowed-root or `Options` allowlist applies. Every D8 launch restriction is
+bypassed through the front door.
+
+**The recorded hardening is entirely unimplemented**: `internal/remote/supervise` writes units with
+no `User=`, `NoNewPrivileges`, `ProtectSystem` or sandbox profile, so "sidecar isolation limits blast
+radius (defense-in-depth)" buys address-space separation and nothing else.
+
+**The model is defensible in practice only because Go removes the memory-safety class from a
+relay-bytes parser, leaving logic bugs** — and that qualification, which is the actual load-bearing
+argument, appears nowhere in R1. R1 must state it, and must stop claiming defence-in-depth it did not
+ship.

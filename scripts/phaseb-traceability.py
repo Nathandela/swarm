@@ -51,6 +51,9 @@ NOT_MET = {
                 "re-authorization occurs per use (ADR-007 B36)",
     "PB-NET-2": "the transport-security policy has no production caller, so no pin and "
                 "no cleartext refusal is applied on the dial path (ADR-007 B34/B37)",
+    "PB-E2E-2": "the emulator smoke has never run -- its own evidence file disclaims it "
+                "and no log or screenshot exists; counted shipped only because evidence "
+                "is measured per SLICE, not per requirement (ADR-007 B38)",
 }
 
 

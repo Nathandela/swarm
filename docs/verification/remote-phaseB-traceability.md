@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 139 |
-| Evidenced (measured on disk) | 139 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **3** |
+| Shipped (asserted by hand) | 138 |
+| Evidenced (measured on disk) | 138 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -51,7 +51,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-DOC-5 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
-| PB-E2E-2 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-2 | S19 | **NOT MET** | ADR-007 B35 — the emulator smoke has never run -- its own evidence file disclaims it and no log or screenshot exists; counted shipped only because evidence is measured per SLICE, not per requirement (ADR-007 B38) |
 | PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
