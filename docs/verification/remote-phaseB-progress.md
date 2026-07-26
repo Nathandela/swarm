@@ -1165,3 +1165,47 @@ with and without the change — a load flake, not a regression.
 Both were confirmed by re-running on a clean tree rather than assumed from a green diff. That is now
 three separate agents that have found a flake, suspected their own change, and checked before
 reporting. The list is only honest because none of them took the easy attribution.
+
+### The fourth flake: narrowed, NOT closed, and it still needs an owner
+
+`TestPBPAIR5_EveryTerminalStateIsExplicitAndDistinct/different_machine`, ~15-25% (2/8 at HEAD with
+the gate-hygiene work stashed out, 2/15 after). Pre-existing and not fixed.
+
+**The explanation its own failure message asserts is ruled out.** The phone did *not* re-point at
+machine B: `handleMailboxAppend` refuses an append to a target the sender is not paired with, and
+that subtest never enrolls B, so a re-pinned phone could not have received `nil` from the append —
+it would have failed earlier with a different message. Also ruled out: the ops quota, a dead
+machine-A connection, and out-of-order appends. What remains is **"appended to A but unopenable"**,
+and **why it will not open is unproven**. ~280 iterations across three worktrees, including `-race`,
+`GOMAXPROCS=1` and under concurrent full suites, did not reproduce it.
+
+The one change made: `drainPhoneCommands` advanced its cursor **before** attempting the open and
+discarded the error, so a single unopenable frame was lost for good and every later poll returned
+nothing — the harness then reported "the phone stopped sending". Same vacuous-swallow shape as the
+errcheck findings, and it is what made this failure unattributable. It now logs the cursor and the
+error rather than failing, because a re-pair into a new epoch legitimately leaves frames the current
+key cannot open. **The next occurrence will name itself.**
+
+### A lost-update defect in `phonecore.Core.Save` — filed on its own merits
+
+`Core.Save` is a blind whole-blob adopt, and seven facade sites read the state, work with the core
+lock released, then save it back — so any core-internal write in that window is silently reverted
+(`SendSeq`, `Keys`, `GrantEpoch`/`GrantSeq`, `RelayCursor`, `Receive`, `StaleStreams`, `OpOutcomes`).
+`pin()` runs on the pairing goroutine concurrently with the relay drain and the epoch grant lands
+immediately after a pairing, so the window is the **normal pairing sequence**, not an exotic race.
+
+A rolled-back `SendSeq` re-issues a consumed seq, after which every phone->machine frame is rejected
+with `ErrStaleSeq` **permanently**, while `MailboxAppend` keeps returning nil: a handset that looks
+connected, sends nothing forever, and surfaces no error. Assigned.
+
+**It is the leading hypothesis for the flake above and was explicitly NOT demonstrated to be its
+cause.** Recording it as the cause would close both items on one unproven link — and the reason this
+defect was found at all is that the investigating agent refused to make exactly that inference.
+
+### Separate ledger entry: a data-race failure mode of the same subtest
+
+One older run (2026-07-25 21:19) shows `different_machine` failing in 1.03s with **seven
+`WARNING: DATA RACE` reports** — a different failure mode from the 5s one, pre-dating the
+gate-hygiene work. Subsequent `-race` runs of `./mobile/...`, `./internal/remotegw/` and
+`./internal/phonecore/` were clean. Kept as its own entry rather than folded in: two failure modes
+under one name is how a real defect hides behind a known flake.

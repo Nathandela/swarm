@@ -120,7 +120,7 @@ func TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke(t *testing.T) {
 	// does not overwrite the coordinate it just restored. pairing.MachinePayload carries no
 	// endpoint id, so pin() has nothing to write; Core.Reconcile receives the machine's own
 	// name on an authenticated record and does not adopt it either.
-	if got := rig.Summary().Machine; false && got != rig.MachineEndpointID() {
+	if got := rig.Summary().Machine; got != rig.MachineEndpointID() {
 		t.Fatalf("after a real pairing the phone's machine endpoint id is %q, want %q; "+
 			"the phone has no production source for this value -- Config.MachineID is \"\" on a "+
 			"handset, the pairing payload carries no endpoint id, and nothing adopts the one the "+
@@ -314,7 +314,7 @@ func (r *s19Rig) openApp(relayURL string) *swarmmobile.App {
 	app, err := swarmmobile.NewApp(&swarmmobile.Config{
 		StateDir:  r.phoneDir,
 		RelayURL:  relayURL,
-		MachineID: r.sk.api.endpointID, // TEMPORARY PROBE
+		MachineID: "",
 	}, r.custody)
 	if err != nil {
 		r.t.Fatalf("swarmmobile.NewApp: %v", err)
