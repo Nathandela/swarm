@@ -283,6 +283,25 @@ scaffolding for the feature.
 
 TDD with evidenced failing-first (RED) runs under `docs/verification/`; never weaken a test
 to make it pass. Cross-model review (codex + independent opus) on A5 (input) and the A7
-gomobile surface. Implementers are sonnet/opus subagents (never fable/haiku for this work).
+gomobile surface.
 `-race` on every package that spawns goroutines. Beads is NOT used in this worktree (its
 bd config is broken here — do not `bd init`); this doc is the tracked breakdown.
+
+**AMENDED 2026-07-26 (PB-DOC-4) — the implementer rule changed for Phase B, and this line was
+the old one.** It read: *"Implementers are sonnet/opus subagents (never fable/haiku for this
+work)."* Phase B's §11 (`docs/specifications/remote-phaseB-requirements.md`) sets a different
+rule — **"opus and fable subagents only; independent agents per role (test author,
+implementer, reviewer do not share context)"** — and its Model column assigns **fable** as
+implementer for S5, S13, S16, S17 and S20, which the sentence above forbade in as many words.
+Two things changed, not one: fable was **admitted** as an implementer, and sonnet was
+**dropped**. The amendment is recorded here rather than left as a silent contradiction because
+§11 is binding for Phase B and this line is the document a Phase C planner would read first.
+
+**Two limits on this amendment, stated rather than smoothed over.** First, nothing in this
+repository records which model actually implemented which slice — there is no per-slice model
+attribution in the evidence files, the commit trailers or the manifest — so §11's Model column
+is a *plan*, and whether it was followed cannot be checked from the tree. Second, it
+demonstrably was not followed for at least one slice: S20 is assigned "fable, opus review" and
+was implemented by opus. The rule this line should carry forward into Phase C is the one that
+is actually load-bearing and is independently verifiable: **independent agents per role**, and
+cross-model review. The model names are guidance.

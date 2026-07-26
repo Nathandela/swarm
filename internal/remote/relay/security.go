@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -25,7 +26,15 @@ var (
 	ErrPinMismatch = errors.New("relay: server certificate does not match the pin")
 	// ErrPinRequired rejects a verified dial on a platform whose trust-root source
 	// is TrustRootsPinned: there is no usable root store, so the caller must pin.
-	ErrPinRequired = errors.New("relay: platform has no usable trust roots; Security.PinnedCert is required")
+	// It names PinnedSPKISHA256 FIRST because this error is the only instruction
+	// most operators will ever read about how to configure a pin, and the other
+	// form stops working at the relay's next certificate renewal (PB-OPS-5).
+	ErrPinRequired = errors.New("relay: platform has no usable trust roots; Security.PinnedSPKISHA256 (renewal-safe) or Security.PinnedCert is required")
+	// ErrPinMalformed rejects a pin that is not a SHA-256 digest. It is decided
+	// before the dial rather than inside VerifyPeerCertificate: a truncated pin
+	// that only ever surfaced as a handshake failure would read as "the relay is
+	// down", and one silently zero-padded to length would weaken the check.
+	ErrPinMalformed = errors.New("relay: Security.PinnedSPKISHA256 must be a 32-byte SHA-256 digest")
 )
 
 // TrustRootSource names where a platform's relay TLS verification gets its
@@ -42,7 +51,8 @@ const (
 	// TrustRootsEmbedded verifies against a CA bundle compiled into the binary.
 	TrustRootsEmbedded TrustRootSource = "embedded"
 	// TrustRootsPinned does not verify against any root store: the caller must
-	// supply Security.PinnedCert or the dial is refused.
+	// supply Security.PinnedSPKISHA256 or Security.PinnedCert, or the dial is
+	// refused.
 	TrustRootsPinned TrustRootSource = "pinned"
 )
 
@@ -81,7 +91,35 @@ type Security struct {
 	// an explicit, per-connection opt-in for a self-hosted relay with a
 	// self-signed certificate: pinning is a whitelist of exactly one certificate,
 	// never a global relaxation of verification.
+	//
+	// IT DOES NOT SURVIVE A CERTIFICATE RENEWAL, and on Android that is fatal
+	// rather than inconvenient: TrustRootSourceFor makes the handset pinning-only,
+	// so there is no root-store path to fall back to. A reissue changes the leaf
+	// DER even when the key is unchanged, so a relay renewing on the Let's Encrypt
+	// cadence takes the handset offline every 60-90 days. Prefer
+	// PinnedSPKISHA256 unless the certificate is long-lived and self-signed.
 	PinnedCert []byte
+	// PinnedSPKISHA256 is SHA-256 over the presented certificate's
+	// SubjectPublicKeyInfo -- the renewal-safe pin (PB-OPS-5), and the value
+	//
+	//	openssl x509 -in relay.crt -pubkey -noout |
+	//	  openssl pkey -pubin -outform der | openssl dgst -sha256 -binary
+	//
+	// produces. A reissue that REUSES THE KEY presents the same SPKI, so the pin
+	// keeps matching across renewals at the same security level: the digest still
+	// admits exactly one public key, and an impostor holding a different key is
+	// refused exactly as it is under PinnedCert.
+	//
+	// KEY REUSE IS PART OF THE PIN, not an implementation detail of the operator's
+	// ACME client. certbot rotates the keypair on every renewal unless it is told
+	// not to (--reuse-key, or reuse_key = True in the renewal config), and a
+	// rotated key is a new SPKI, which breaks this pin on exactly the cadence it
+	// was adopted to survive. docs/operations/relay-runbook.md carries the step;
+	// TestPBOPS5_SPKIPinIsBrokenByARenewalThatROTATESTheKey carries the proof.
+	//
+	// Either pin alone satisfies a TrustRootsPinned platform; both may be set, in
+	// which case either matching admits the peer.
+	PinnedSPKISHA256 []byte
 	// AllowLoopbackCleartext admits a ws:// relay whose host is a loopback IP
 	// literal. It exists because the relay server is ws://-only today, so an
 	// unconditional cleartext ban makes the in-process integration tests
@@ -116,17 +154,37 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 
 // tlsConfig builds the verification policy for an encrypted dial.
 func (s Security) tlsConfig() (*tls.Config, error) {
-	if len(s.PinnedCert) > 0 {
-		pinned := append([]byte(nil), s.PinnedCert...)
+	if len(s.PinnedSPKISHA256) > 0 && len(s.PinnedSPKISHA256) != sha256.Size {
+		return nil, ErrPinMalformed
+	}
+	if len(s.PinnedCert) > 0 || len(s.PinnedSPKISHA256) > 0 {
+		pinnedDER := append([]byte(nil), s.PinnedCert...)
+		pinnedSPKI := append([]byte(nil), s.PinnedSPKISHA256...)
 		// Verification is replaced, not disabled: the presented chain must contain
-		// exactly the pinned certificate, so an equally self-signed impostor is
-		// refused where a bare InsecureSkipVerify would accept it.
+		// exactly the pinned certificate or exactly the pinned public key, so an
+		// equally self-signed impostor is refused where a bare InsecureSkipVerify
+		// would accept it.
 		return &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: true, //nolint:gosec // replaced by the pin check below
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 				for _, raw := range rawCerts {
-					if bytes.Equal(raw, pinned) {
+					if len(pinnedDER) > 0 && bytes.Equal(raw, pinnedDER) {
+						return nil
+					}
+					if len(pinnedSPKI) == 0 {
+						continue
+					}
+					// Parsed per certificate rather than once: the SPKI is a FIELD of
+					// the certificate, so it cannot be recovered from the raw DER
+					// without decoding it. An undecodable certificate is skipped, not
+					// accepted -- a peer that cannot be parsed has not matched a pin.
+					cert, err := x509.ParseCertificate(raw)
+					if err != nil {
+						continue
+					}
+					sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+					if bytes.Equal(sum[:], pinnedSPKI) {
 						return nil
 					}
 				}

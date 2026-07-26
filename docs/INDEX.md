@@ -5,6 +5,11 @@
 - [README](../README.md) — project overview
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
+## Operations
+- [Relay runbook](operations/relay-runbook.md) — standing up a TLS-terminated relay for the handset demonstration, and the certificate-renewal hazard (PB-OPS-1, PB-OPS-5)
+- [Operator runbook](operations/operator-runbook.md) — install, pair, revoke, kill switch, device loss, push configuration (PB-OPS-2)
+- [Metadata disclosure](operations/metadata-disclosure.md) — what the relay operator and the push provider actually observe (PB-OPS-3)
+
 ## The plan
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)

@@ -26,6 +26,13 @@ jobs:
               exit 1
             fi
           done
+      # PB-DOC-7: every concrete PB-* id owned exactly once, no wildcard ownership, every
+      # dependency edge enumerated, the slice DAG acyclic and orphan-free, and section 11's
+      # readable table not contradicting either authoritative file. The requirement asks for
+      # this "validated in CI" specifically: ownership-in-prose failed three audit rounds
+      # running, and the checker existed for two more without anything running it on push.
+      - name: Phase B slice-ownership manifest (PB-DOC-7)
+        run: python3 scripts/check-phaseb-manifest.py
 
   lint:
     name: lint (golangci-lint)
