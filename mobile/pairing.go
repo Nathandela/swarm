@@ -346,7 +346,13 @@ func (p *Pairing) join(base context.Context) {
 	// reaches. A cleartext one is refused here rather than after the connection, which
 	// matters for the same reason BeginPairing no longer dials at all -- a connection is
 	// already a disclosure (ADR-007 B37).
-	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, handsetSecurity())
+	//
+	// THE PIN IS NOT APPLIED HERE AND CANNOT BE: this is the dial that fetches it, so
+	// State.RelaySPKIPin is empty on the pairing that first learns it (App.handsetSecurity
+	// carries the full argument). What guards this exchange is the Noise handshake and the
+	// SAS the operator compares, not the relay's certificate; what the transport policy
+	// contributes is the cleartext refusal, which is decided from the URL.
+	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, app.handsetSecurity())
 	if err != nil {
 		p.finish(nil, err, ctx)
 		return

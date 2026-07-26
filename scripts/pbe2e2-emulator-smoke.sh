@@ -30,13 +30,21 @@
 # the [UNRUN] block further down, and ADR-007 residual 1.9. No artifact this script has so far
 # produced is evidence for any clause of PB-E2E-2.
 #
-# THREE INVOCATIONS IN THIS FILE WERE DEAD, which is how it is known it never ran: swarm-relay
-# was called with --listen/--tls/--db when it takes only --config; `swarm remote pair` was
-# called with a --yes that does not exist; and the QR was grepped for `swarm://` when the CLI
-# prints `swarm-pair:1:`, wrapped across lines. A fourth was an ordering that could not
-# complete -- the pair command blocks until the phone connects, so it could not be run to
-# completion and then read for the QR the phone needs in order to connect. All four are fixed
-# below; none of the fixes has been exercised past the [UNRUN] stop.
+# SIX THINGS IN THIS FILE COULD NOT HAVE WORKED, which is how it is known it never ran:
+#
+#   1. swarm-relay was called with --listen/--tls/--db; it takes only --config.
+#   2. `swarm remote pair` was called with a --yes that does not exist (--capability is the
+#      only flag). None is needed: the SAS gate reads from stdin.
+#   3. The QR was grepped for `swarm://`; the CLI prints `swarm-pair:1:`, WRAPPED across
+#      terminal-width lines, so the pattern could never have matched anything.
+#   4. The ordering could not complete: the pair command blocks until the phone connects, so
+#      it could not be run to completion and then read for the QR the phone needs to connect.
+#   5. `swarm daemon` reads SWARM_DAEMON_SOCK/LOCK/LOG with no defaults and was given none, so
+#      it would have died with "serve: open : no such file or directory".
+#   6. The daemon socket was placed under $OUT, which on a normal checkout overflows sun_path.
+#
+# All six are fixed below, and the relay URL had to change scheme AND address besides. None of
+# the fixes has been exercised past the [UNRUN] stop.
 #
 # Two earlier blockers this file recorded ARE closed:
 #   (a) The APK now has all five of the requirement's in-app subjects. PairingSurface adds the
@@ -294,10 +302,9 @@ log "pair, SAS, observe, take control, type"
 # output instead.
 #
 # `--yes` never existed (the only flag is --capability). It was never needed either: the machine's
-# SAS gate reads from STDIN, so the operator's answer is piped. The comparison this clause is
-# named for is still between the six symbols the phone displays (logged by the instrumented test
-# under the SwarmE2E2 tag) and the six printed into pair.txt below; both ends derive them
-# independently from the Noise channel binding, so they agree only if nothing is between them.
+# SAS gate reads from STDIN, so the operator's answer is piped. The six symbols it prints are
+# ASSERTED against the six the phone logs -- see the "SAS matches" block after the instrumented
+# run, which fails this script if they differ.
 ( printf 'y\n' | "$OUT/bin/swarm" remote pair > "$OUT/pair.txt" 2>&1 ) &
 PAIR_PID=$!
 
@@ -321,6 +328,35 @@ done
   -Pandroid.testInstrumentationRunnerArguments.swarmQr="$QR" \
   -Pandroid.testInstrumentationRunnerArguments.swarmRelay="$RELAY_URL"
 adb logcat -d -s SwarmE2E2 | tee "$OUT/phone-sas.txt"
+
+# ---------------------------------------------------------------------------
+# "SAS matches" -- ASSERTED, not merely captured.
+#
+# Capturing both values into two files is not a comparison, and this clause is the one that
+# says a man-in-the-middle is absent. Both ends derive their six symbols independently from the
+# Noise channel binding, so they agree only if nothing sits between the phone and the machine.
+#
+# WHAT THIS DOES NOT PROVE, said here rather than left to be assumed. The machine's answer at
+# its own SAS gate was piped by this script before the comparison ran, so what is asserted is
+# that the two ends AGREED -- not that a human refused a mismatch. A mismatch fails the run
+# after the fact rather than declining the pairing at the gate. Making the answer conditional
+# means feeding the machine's stdin only after the phone has logged its symbols, which is a
+# further change to this step and has not been made. The clause the operator still owns on a
+# real handset is the refusal; this asserts the agreement.
+# ---------------------------------------------------------------------------
+MACHINE_SAS="$(sed -n 's/^Verify these emoji match your phone: //p' "$OUT/pair.txt" | head -1)"
+PHONE_SAS="$(sed -n 's/.*phone SAS: //p' "$OUT/phone-sas.txt" | head -1)"
+[ -n "$MACHINE_SAS" ] || { echo "the machine printed no SAS; PB-E2E-2's 'SAS matches' clause cannot be checked"; exit 1; }
+[ -n "$PHONE_SAS" ] || { echo "the phone logged no SAS under the SwarmE2E2 tag; PB-E2E-2's 'SAS matches' clause cannot be checked"; exit 1; }
+if [ "$MACHINE_SAS" != "$PHONE_SAS" ]; then
+  echo "SAS MISMATCH -- the two ends did not derive the same short authentication string."
+  echo "  machine: $MACHINE_SAS"
+  echo "  phone:   $PHONE_SAS"
+  echo "This is the signal the SAS exists to give. Something sat between the phone and the machine."
+  exit 1
+fi
+echo "SAS matches on both ends: $MACHINE_SAS"
+
 shot 02-controlling
 
 # ---------------------------------------------------------------------------

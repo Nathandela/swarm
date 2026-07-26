@@ -128,6 +128,34 @@ func TestB38_TheDeviceConsentsToTheMachineItAuthenticated(t *testing.T) {
 	}
 }
 
+func TestAuditRound2_ConsentMustNotBeReleasedBeforeTheSASGate(t *testing.T) {
+	mID, _ := crypto.GenerateIdentity()
+	dID, _ := crypto.GenerateIdentity()
+	secret, rid := fill32(0x5A), fill16(0x11)
+	mp := newMachineParams(mID, secret, rid, acceptConfirm)
+	dp := newDeviceParams(dID, secret, rid)
+
+	consentReleased := false
+	dp.Consent = func(MachinePayload) ([]byte, error) {
+		consentReleased = true
+		return bytes.Repeat([]byte{0x5C}, ed25519.SignatureSize), nil
+	}
+	sasSawConsent := false
+	dp.DeviceSAS = func(context.Context, [6]string) error {
+		sasSawConsent = consentReleased
+		return nil
+	}
+
+	mEnd, dEnd := newRendezvousPipe()
+	_, mErr, _, dErr := drivePair(t, NewMachine(mp), dp, mEnd, dEnd)
+	if mErr != nil || dErr != nil {
+		t.Fatalf("pairing failed: machine=%v device=%v", mErr, dErr)
+	}
+	if sasSawConsent {
+		t.Fatal("the phone released its standing relay consent before the user even saw the SAS")
+	}
+}
+
 // TestB38_ADeviceWithNoConsentCallbackFailsClosed is half of property 3: a device that
 // cannot produce a consent must not complete a pairing. Completing would leave the phone
 // paired to a machine that can never deliver it the epoch grant -- a pairing that looks

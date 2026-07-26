@@ -708,3 +708,37 @@ stops being about the product. **But a test-only operator helper speaking the ex
 the same API the TUI uses and the same one S19's exit demonstration already drives, a session created
 that way is indistinguishable to the daemon, and the smoke's own contract already states the command
 is the operator's. It must live outside the shipped binaries and say so.
+
+## 1.12 ROUND 2 — the phone releases its relay consent BEFORE the user sees the SAS
+
+Found by the external reviewer in round 2, as an **executable test**
+(`TestAuditRound2_ConsentMustNotBeReleasedBeforeTheSASGate`) rather than an argument: the consent
+callback fires, and `DeviceSAS` observes that it has already fired.
+
+The consent-signature author stated this residual at the field and argued it is bounded — a party
+reaching msg3 *as the responder* holds the phone's consent, and a QR photographer cannot reach msg3
+because the machine created the rendezvous first. **That bound may hold; the ordering is still wrong,
+and for a reason the bound does not address.** The SAS comparison is **the human authentication step
+of this protocol**. Releasing a standing, durable credential before it means the human check
+*structurally cannot* prevent that release — the user's "these do not match, stop" arrives after the
+thing worth protecting has already been handed over.
+
+`DeviceParams.Consent` is documented as producing the signature "**before msg3 is written**", and
+`DeviceSAS` is documented as surfacing the SAS "before the decision". Both are true; they are ordered
+the wrong way round with respect to each other.
+
+The author's stated cost of closing it — a fourth handshake message, introducing a partial-failure
+window where the device is pinned and the machine failed — is real and was judged worse than the
+sliver. **That judgement was made against the "who can reach msg3" bound, not against "the human gate
+cannot gate what precedes it".** It should be re-taken against the second framing.
+
+**Recorded as OPEN pending the round-2 synthesis**, not fixed reflexively: this is a protocol ordering
+decision, and this ADR has already recorded two fix directions and one remedy that were falsified
+after being adopted in haste.
+
+### Note on the round-2 external review itself
+
+That reviewer's run **terminated early on its host's content filter** after producing this finding.
+Its report is therefore **partial**, and is recorded as partial rather than as a clean pass — an
+audit that stopped is not an audit that found nothing. The other three round-2 reviewers are
+unaffected.

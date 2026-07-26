@@ -269,13 +269,46 @@ func (a *App) run(ctx context.Context) {
 // handset, so a ws://127.0.0.1 relay is never a legitimate destination, and a QR that
 // named one would be pointing the phone at something already running on it.
 //
-// NOT YET CARRYING A PIN. relay.TrustRootSourceFor makes Android TrustRootsPinned, so on
-// a handset a wss:// dial fails closed with relay.ErrPinRequired until a pin reaches this
-// value. That is ADR-007 B34's open half: the pairing QR has no pin field and
-// MaxRelayURLLen exists to keep the symbol scannable, so carrying one needs a decision
-// about the pairing payload rather than a call-site change.
-func handsetSecurity() relay.Security {
-	return relay.Security{AllowLoopbackCleartext: true}
+// THE PIN COMES FROM PAIRING AND IS PERSISTED (ADR-007 B33/B34). State.RelaySPKIPin is
+// written by pin() from pairing.MachinePayload -- the one authenticated channel that can
+// carry it, since the QR has no room for 43 base64 characters and every later frame
+// already rides the connection the pin exists to protect. Reading it here is what makes it
+// load-bearing: a pin that is carried, persisted and never consulted is exactly the fence
+// guarding an untaken path that B34 records.
+//
+// WHAT A USER SEES, in the three states a handset can be in:
+//
+//   - PAIRED, PIN HELD. The pin replaces name and chain verification, so the operator's
+//     self-signed relay is reachable and an impostor holding any other key is refused with
+//     relay.ErrPinMismatch however well-issued its certificate is.
+//   - PAIRED BEFORE THE MACHINE PUBLISHED A PIN, or paired with a machine that publishes
+//     none. No pin is applied. On a pinning-only platform -- which is every Android
+//     handset (relay.TrustRootSourceFor) -- the wss:// dial is refused with
+//     relay.ErrPinRequired rather than falling back to an unverified connection. That
+//     refusal IS residual 1.9's resolution: fail closed, do not dial unpinned.
+//   - NEVER PAIRED. There is no relay URL to dial until a QR supplies one, and the pairing
+//     dial itself cannot be pinned -- see below.
+//
+// THE PAIRING DIAL IS NOT COVERED BY THIS PIN AND CANNOT BE. It is the dial that FETCHES
+// the pin, so nothing on the handset can know it beforehand; mobile/pairing.go's join()
+// runs under the same policy with State.RelaySPKIPin still empty. What protects that
+// exchange is not TLS: the payload is a Noise handshake the operator confirms by comparing
+// a SAS, so a hostile terminator sees routing metadata and no pinned material.
+//
+// AND THAT LEAVES A BOOTSTRAP THIS WIRING DOES NOT CLOSE, stated here rather than
+// discovered later. On a pinning-only platform an unpinned wss:// dial is not merely
+// unverified, it is REFUSED (Security.tlsConfig returns ErrPinRequired before any packet).
+// The pairing dial is unpinned by construction, so on an Android handset it is refused, so
+// the pin never arrives -- the phone cannot pair over wss:// at all, and the pin it would
+// have learned is unreachable. Residual 1.9 is therefore NOT resolved by consulting the
+// pin here; closing it needs a decision about what policy the PAIRING dial runs under,
+// which is a security decision and not a call-site change. Recorded, not papered over.
+func (a *App) handsetSecurity() relay.Security {
+	sec := relay.Security{AllowLoopbackCleartext: true}
+	if pin := a.core.State().RelaySPKIPin; len(pin) > 0 {
+		sec.PinnedSPKISHA256 = pin
+	}
+	return sec
 }
 
 func (a *App) dial(ctx context.Context) (*relay.Client, error) {
@@ -283,7 +316,7 @@ func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 	return relay.DialSecure(ctx, a.relayURL, relay.ClientAuth{
 		RelayAuthPub: ed25519.PublicKey(ks.RelayAuthPublic()),
 		Sign:         ks.SignRelayAuth,
-	}, handsetSecurity())
+	}, a.handsetSecurity())
 }
 
 // onConnected re-establishes the per-connection state the relay does not persist: the
