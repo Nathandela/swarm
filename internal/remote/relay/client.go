@@ -67,6 +67,9 @@ type Conn struct {
 	// idle (see Done). A raw Conn reads inline, which is what the adversarial
 	// framing paths want.
 	frames chan pumpedFrame
+	// peerSPKI records what the peer's certificate was on a DialRawSecure dial (ADR-007
+	// B48). Nil on every other constructor, which reads as "nothing observed".
+	peerSPKI *spkiObserver
 	// pending counts requests written whose reply has not been consumed. It is
 	// non-zero only after a request abandoned its reply (timeout/cancel): the
 	// next request discards that many replies first, so an abandoned exchange
@@ -179,12 +182,39 @@ func DialRaw(ctx context.Context, url string) (*Conn, error) {
 // first packet either end sends to a URL a scanned QR chose, so the same refusal applies
 // and it is decided before a socket is opened.
 func DialRawSecure(ctx context.Context, url string, sec Security) (*Conn, error) {
+	// One observer per dial (ADR-007 B48): what this connection's peer presented, not what
+	// some other dial under a shared policy value presented.
+	obs := &spkiObserver{}
+	sec.observer = obs
 	cfg, err := sec.resolve(url)
 	if err != nil {
 		return nil, err
 	}
-	return dialConn(ctx, url, sec.httpClient(cfg), false)
+	c, err := dialConn(ctx, url, sec.httpClient(cfg), false)
+	if err != nil {
+		return nil, err
+	}
+	c.peerSPKI = obs
+	return c, nil
 }
+
+// PeerSPKI is the SHA-256 SubjectPublicKeyInfo digest of the certificate this
+// connection's peer presented, or nil if none was seen (a cleartext loopback dial, or a
+// dial that did not go through DialRawSecure).
+//
+// IT EXISTS FOR EXACTLY ONE COMPARISON (ADR-007 B48). The pairing rendezvous dials
+// UNVERIFIED, because it is the dial that fetches the pin that would verify it, and B45
+// accepted that on the grounds that the certificate never protected the Noise payload.
+// True of the payload, and B48 amends it: that ruling also lowered the cost of B46's
+// consent harvest from "hold a certificate valid for the operator's relay" to "be on the
+// path". So the certificate is recorded here and compared, when msg2 arrives, against the
+// RelaySPKIPin the real machine authored. A network attacker terminating this TLS cannot
+// make the two agree.
+//
+// WHAT IT DOES NOT COVER, stated so it is not assumed: a QR-holder is a legitimate party
+// to the ceremony and presents the relay's real certificate. That case is the SAS gate's
+// and the deferred consent's (B52), not this.
+func (c *Conn) PeerSPKI() []byte { return c.peerSPKI.get() }
 
 func (c *Conn) writeFrame(ctx context.Context, tag MsgType, payload []byte) error {
 	var buf bytes.Buffer

@@ -399,6 +399,13 @@ func (p *Pairing) join(base context.Context) {
 		Consent: func(m pairing.MachinePayload) ([]byte, error) {
 			return ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(m.MachineRelayAuthPub)))
 		},
+		// ADR-007 B48: the certificate this dial accepted UNVERIFIED, checked against the
+		// pin the real machine authored and put inside the authenticated msg2. It runs
+		// before the SAS gate below, so an operator is never asked to compare a code for a
+		// connection already known to be terminated.
+		VerifyMachine: func(m pairing.MachinePayload) error {
+			return checkRelayPin(m.RelaySPKIPin, conn.PeerSPKI())
+		},
 		// The SAS gate: surfaced to the screen, then held until the operator has compared
 		// it against the machine's own display. Returning an error here fails the pairing
 		// CLOSED -- nothing is pinned.

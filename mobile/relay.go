@@ -10,6 +10,7 @@ package swarmmobile
 // into events for the app.
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -309,6 +310,41 @@ func (a *App) handsetSecurity() relay.Security {
 		sec.PinnedSPKISHA256 = pin
 	}
 	return sec
+}
+
+// ErrRelayPinUnmatched is the phone's refusal when the certificate its UNVERIFIED pairing
+// dial accepted is not the one the machine pinned in msg2 (ADR-007 B48).
+var ErrRelayPinUnmatched = errors.New("swarm: the relay presented a certificate the machine did not pin; the pairing connection is being intercepted")
+
+// checkRelayPin is B48's amendment to B45, and it is the whole of it: the pairing dial
+// cannot VERIFY the relay -- it is the dial that fetches the pin -- so what it presented
+// is compared, once msg2 lands, against the pin the REAL MACHINE authored. A network
+// attacker terminating that TLS cannot make the two agree: it cannot reach inside the
+// Noise+PSK frame to change the pin, and it cannot present the machine's relay key.
+//
+// TWO CASES ARE DELIBERATELY NOT REFUSALS, and neither is a hole this can close.
+//
+// A machine with NO pin configured (machinePin empty) says nothing about its relay, so
+// there is nothing to compare and the check passes. That is B34's own contract -- the pin
+// is optional -- and a phone cannot invent a claim its machine never made.
+//
+// A dial that observed NO certificate (presented empty) is a cleartext dial, which reaches
+// this only through the loopback carve-out: a release build refuses every other cleartext
+// URL from the URL itself, before a socket. There is no path by which an attacker turns a
+// wss:// pairing dial into an unobserved one.
+//
+// AND IT DOES NOT COVER THE QR-HOLDER. Someone who photographed the code is a legitimate
+// party to the ceremony and reaches the real relay under its real certificate; this
+// comparison passes for them. That case belongs to the SAS gate and to the consent the
+// phone now withholds until that gate passes (ADR-007 B52).
+func checkRelayPin(machinePin, presented []byte) error {
+	if len(machinePin) == 0 || len(presented) == 0 {
+		return nil
+	}
+	if !bytes.Equal(machinePin, presented) {
+		return ErrRelayPinUnmatched
+	}
+	return nil
 }
 
 func (a *App) dial(ctx context.Context) (*relay.Client, error) {

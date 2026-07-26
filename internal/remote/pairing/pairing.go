@@ -138,6 +138,29 @@ type DeviceSASFunc func(ctx context.Context, sas [6]string) error
 // that can never deliver it the epoch grant, which is a silently broken pairing.
 type DeviceConsentFunc func(machine MachinePayload) ([]byte, error)
 
+// DeviceVerifyFunc is the device's check on the machine payload it has just
+// authenticated, run the instant msg2 is decoded — BEFORE msg3 is written, before the SAS
+// is shown, and before any consent exists. A non-nil error fails the pairing CLOSED with
+// nothing sent and nothing pinned; a nil func is a no-op.
+//
+// IT EXISTS FOR ADR-007 B48. The pairing rendezvous dials under unverified TLS, because it
+// is the dial that fetches the pin that would verify it (B45). B48 amends that ruling:
+// leaving the certificate unchecked also lowered the cost of B46's consent harvest from
+// "hold a certificate valid for the operator's relay" to "be on the path". The remedy is
+// not to verify the dial — it cannot be — but to compare what it presented against
+// MachinePayload.RelaySPKIPin, which the REAL machine authored and which reaches the phone
+// only inside this authenticated frame. A network attacker terminating that TLS cannot
+// make the two agree.
+//
+// It runs at msg2 rather than later because that is the first moment the comparison is
+// possible and the last moment before the operator is asked to do anything: an operator
+// should never be shown a SAS for a connection already known to be terminated.
+//
+// It does NOT cover a QR-holder, who is a legitimate party to the ceremony and presents
+// the relay's real certificate. That case belongs to the SAS gate and the deferred
+// consent (B52).
+type DeviceVerifyFunc func(machine MachinePayload) error
+
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
 // attempt before any transport work; a nil RateLimiter is unlimited.
@@ -243,7 +266,8 @@ type DeviceParams struct {
 	Payload          DevicePayload       // carried to the machine in msg3
 	Limiter          RateLimiter         // optional device-side rate limit (nil => unlimited)
 	DeviceSAS        DeviceSASFunc       // optional; surfaces the SAS before the decision (nil => no-op)
-	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg3
+	VerifyMachine    DeviceVerifyFunc    // optional; checks the authenticated msg2 payload (ADR-007 B48)
+	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg4
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -580,6 +604,14 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	machPayload, err := decodeMachinePayload(machPayloadBytes)
 	if err != nil {
 		return nil, fmt.Errorf("pairing: decode machine payload: %w", err)
+	}
+	// The device's own check on the authenticated machine payload (ADR-007 B48): the relay
+	// certificate this dial accepted unverified, against the pin the real machine authored
+	// and put in this frame. It runs before anything is written, shown, or signed.
+	if p.VerifyMachine != nil {
+		if err := p.VerifyMachine(machPayload); err != nil {
+			return nil, err
+		}
 	}
 	// A device that cannot produce a consent at all fails CLOSED here, BEFORE msg3, so
 	// the machine is never handed a handshake it will have to refuse: a pairing that
