@@ -883,3 +883,27 @@ is unwired", now "the app does not open on the pairing step". Each move came fro
 
 **Found only by running**: the polling loop had a bug of its own — under `set -euo pipefail`, `awk`
 with no file and `grep` with no match exit non-zero, so the first poll killed the script.
+
+## 4.8 B54's own fence does not survive the real gate — and I reported a lucky sample as green
+
+`TestB54_ARePairingWithNoPinClearsTheOneThePhoneHeld` **fails 2 runs in 3** under `go test ./...`,
+measured. It passes in isolation and passes when `mobile/conformance` is run alone. **The assertion is
+deterministic** — a specific pin hash is or is not present — so this is not a timing flake in the
+usual sense: **something is leaking state into it.**
+
+**Two process failures here, both mine.**
+
+**I reported the suite as "wholly green" on a single run.** An agent flagged this fence as red under
+whole-repo runs and reproduced it at an earlier commit without its own work; my one green sample
+appeared to contradict it, and I nearly recorded it as resolved. Three runs later the truth is 2 of 3
+red. **A single green run of an order-dependent test proves nothing**, and I have spent this phase
+telling agents exactly that.
+
+**And it landed hours ago, having passed every gate I ran at the time**, because I ran the package
+rather than the suite. The requirement it enforces — that a re-pairing with no published pin clears
+the one the phone held — is the loop with no exit that B54 exists to close, so a fence that only holds
+in isolation is close to no fence at all.
+
+**Assigned.** The instruction is to find the leaked state, not to make the test pass: reordering,
+`-p 1`, or moving the assertion would each turn a real defect into a green, and this phase has now
+found ten fences that were green for exactly that kind of reason.
