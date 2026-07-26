@@ -59,6 +59,7 @@ package skeleton
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,7 +167,14 @@ func TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke(t *testing.T) {
 	}
 	rig.Eventually("the take_control resolved as a daemon-granted lease", func() bool {
 		out, err := rig.App().Outcome(op.OperationID)
-		return err == nil && out.Resolved && out.Code == protocol.OpLease
+		if err != nil || !out.Resolved {
+			return false
+		}
+		if out.Code != protocol.OpLease {
+			t.Fatalf("the machine refused the phone's take_control: code=%q message=%q%s",
+				out.Code, out.Message, rig.gatewayTail())
+		}
+		return true
 	})
 	// The gate opened: the phone will now accept keystrokes for this session.
 	rig.Eventually("the phone adopted the lease confirmation", func() bool {
@@ -314,7 +322,7 @@ func (r *s19Rig) openApp(relayURL string) *swarmmobile.App {
 	app, err := swarmmobile.NewApp(&swarmmobile.Config{
 		StateDir:  r.phoneDir,
 		RelayURL:  relayURL,
-		MachineID: "",
+		MachineID: r.sk.api.endpointID,
 	}, r.custody)
 	if err != nil {
 		r.t.Fatalf("swarmmobile.NewApp: %v", err)
@@ -584,17 +592,26 @@ func (r *s19Rig) AwaitGatewayExit() {
 	}
 }
 
-// gatewayTail is the sidecar's output, appended to a timeout message. Most failures in this
-// chain are the gateway refusing something, and without this they read as silence.
+// gatewayTail is what the machine has to say, appended to every timeout message. A hop in
+// this chain that stops answering is otherwise pure silence: the sidecar's own output names
+// the refusal, and the machine's session list says whether the daemon ever acted.
 func (r *s19Rig) gatewayTail() string {
-	if r.gwLog == nil {
-		return ""
+	var b strings.Builder
+	if r.gwLog != nil {
+		if out := strings.TrimSpace(r.gwLog.String()); out != "" {
+			b.WriteString("\ngateway sidecar output:\n" + out)
+		}
 	}
-	out := strings.TrimSpace(r.gwLog.String())
-	if out == "" {
-		return ""
+	if views, err := r.owner.List(); err == nil {
+		b.WriteString("\nmachine sessions:")
+		for _, v := range views {
+			fmt.Fprintf(&b, "\n  %s group=%s", v.ID, v.Group)
+		}
+		if len(views) == 0 {
+			b.WriteString(" (none)")
+		}
 	}
-	return "\ngateway sidecar output:\n" + out
+	return b.String()
 }
 
 // s19Buffer is a concurrency-safe sink for the sidecar's stdout/stderr: os/exec writes from

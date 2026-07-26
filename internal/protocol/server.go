@@ -1119,7 +1119,10 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: " + err.Error())
 		return
 	}
-	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, Session: cc.stampView(m, status.Derive(m.Status))})
+	// TEMPORARY S19 PROBE -- REVERT. OperationID stands in so the RED author can see what the
+	// chain does AFTER the launch leg; without it a successful remote launch answers with an
+	// unattributable reply and the phone's op never resolves. Not a fix.
+	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, OperationID: cc.opID, Session: cc.stampView(m, status.Derive(m.Status))})
 }
 
 func (cc *clientConn) handleKill(c Control) {
