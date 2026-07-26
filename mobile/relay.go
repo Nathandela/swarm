@@ -398,11 +398,26 @@ func checkRelayPin(machinePin, presented []byte) error {
 	return nil
 }
 
+// dial names the PINNED MACHINE as the peer whose revocation verdict this handset is here
+// for, and that is what keeps PB-APP-10's signal alive (ADR-007 B49).
+//
+// A ban used to refuse the banned routing id's every dial, whoever placed it. That made
+// every device_revoke mutual assured destruction — a stolen handset removed the machine
+// from the relay for good and no party the owner controlled could undo it — so the ban is
+// now scoped to the relationship it ended, and a scoped verdict has to be ASKED FOR. The
+// relay cannot supply the missing coordinate itself: after a revoke the machine and the
+// handset hold identical relay state, so no rule it can apply tells them apart.
+//
+// This is the one place that knows which answer matters to this device. An empty
+// destination — a handset whose durable state has no machine yet — asks for no verdict and
+// is admitted, which is correct: it has no relationship for a revoke to have ended.
 func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 	ks := a.core.KeyStore()
+	target, _ := a.destination()
 	return relay.DialSecure(ctx, a.relayURL, relay.ClientAuth{
 		RelayAuthPub: ed25519.PublicKey(ks.RelayAuthPublic()),
 		Sign:         ks.SignRelayAuth,
+		Peer:         target,
 	}, a.handsetSecurity())
 }
 

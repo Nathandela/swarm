@@ -675,6 +675,20 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteRelayOpTimeout)
 	defer cancel()
+	// NO ClientAuth.Peer, AND THAT IS A DECISION RATHER THAN AN OMISSION (ADR-007 B49).
+	//
+	// Peer asks the relay "has this counterparty revoked me?", and the answer is a refused
+	// handshake. The machine must never ask, because it is the only party that can perform a
+	// recovery: `swarm remote pair` and `swarm remote revoke` both run over this connection,
+	// and a machine refused here cannot re-pair, which is precisely the mutual assured
+	// destruction B49 measured -- a stolen handset's revoke removed the machine's relay
+	// identity for good.
+	//
+	// Nothing is lost by not asking. No legitimate flow revokes a machine at the relay: this
+	// CLI is the only production caller of the verb, and the phone's own RevokeThisDevice
+	// rides the sealed command plane to the gateway instead. A ban standing against this
+	// machine is therefore an attacker's, and the owner sitting at this terminal does not
+	// need the relay to tell them their machine is theirs.
 	cl, err := relay.DialSecure(ctx, cfg.RelayURL, relay.ClientAuth{
 		RelayAuthPub: id.RelayAuthPublic(),
 		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },

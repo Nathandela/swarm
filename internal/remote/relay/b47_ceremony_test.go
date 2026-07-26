@@ -19,6 +19,17 @@ package relay
 // So the consent is bound to the CEREMONY that produced it. A replay presents a retired
 // ceremony id and is refused; a re-pair is a fresh ceremony, so a fresh id, and is
 // accepted exactly as before -- ban lift included. Nothing is keyed on revocation at all.
+//
+// THE DIALS BELOW NAME THEIR MACHINE, which is ADR-007 B49 arriving in the same tree. A ban
+// no longer stands against a routing id globally -- that shape made every device_revoke
+// mutual assured destruction -- so "is the phone banned" is only answerable with respect to
+// a banner, and the handset asks about the machine that revoked it exactly as
+// mobile/relay.go's dial does. Every assertion in this file is unchanged.
+//
+// THE TWO FIXES MEET HERE AND NOWHERE ELSE, and the meeting is structural rather than
+// coordinated: retirement is checked in handleAuthorizeDevice, strictly UPSTREAM of
+// authorizePair, so B49's ban-clear inherits this replay protection without either change
+// knowing about the other. A replayed consent never reaches the delete; a fresh one does.
 
 import (
 	"context"
@@ -50,7 +61,7 @@ func TestB47_AReplayedConsentDoesNotUnRevoke(t *testing.T) {
 	if err := machine.DeviceRevoke(ctx, phoneRID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if _, err := Dial(ctx, srv.URL(), authFor(phonePub, phonePriv)); err == nil {
+	if _, err := Dial(ctx, srv.URL(), authForPeer(phonePub, phonePriv, machine.RoutingID())); err == nil {
 		t.Fatal("precondition: revoke did not take effect, so this test proves nothing")
 	}
 
@@ -60,7 +71,7 @@ func TestB47_AReplayedConsentDoesNotUnRevoke(t *testing.T) {
 			"  Anything that can read the machine's state directory can otherwise undo the owner's "+
 			"only remedy for a lost handset, without the phone ever being asked.", err)
 	}
-	if c, err := Dial(ctx, srv.URL(), authFor(phonePub, phonePriv)); err == nil {
+	if c, err := Dial(ctx, srv.URL(), authForPeer(phonePub, phonePriv, machine.RoutingID())); err == nil {
 		_ = c.Close()
 		t.Fatal("the revoked phone dials again after a consent replay")
 	}
@@ -89,7 +100,7 @@ func TestB47_AFreshCeremonyStillRecoversARevokedDevice(t *testing.T) {
 	if err := machine.DeviceRevoke(ctx, phoneRID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if !srv.st.isRevoked(phoneRID) {
+	if !srv.st.revokedBy(phoneRID, machine.RoutingID()) {
 		t.Fatal("precondition: the phone is not banned, so the recovery below is not a recovery")
 	}
 
@@ -102,10 +113,10 @@ func TestB47_AFreshCeremonyStillRecoversARevokedDevice(t *testing.T) {
 			"  This is PB-STATE-10's only remedy for a recovered handset. Refusing it makes revoke "+
 			"and re-pair mutually exclusive again, which is worse than the replay it was meant to stop.", err)
 	}
-	if srv.st.isRevoked(phoneRID) {
+	if srv.st.revokedBy(phoneRID, machine.RoutingID()) {
 		t.Fatal("the re-pairing did not lift the ban its own revoke placed (ADR-007 B22)")
 	}
-	c, err := Dial(ctx, srv.URL(), authFor(phonePub, phonePriv))
+	c, err := Dial(ctx, srv.URL(), authForPeer(phonePub, phonePriv, machine.RoutingID()))
 	if err != nil {
 		t.Fatalf("the recovered phone still cannot dial: %v", err)
 	}
