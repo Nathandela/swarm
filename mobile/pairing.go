@@ -80,6 +80,22 @@ const (
 	pairOriginMismatch = "refused_origin_mismatch"
 )
 
+// errLateCancel is what a Cancel or a SAS rejection gets when it arrives while the pairing's
+// durable effects are already being written (ADR-007 B58).
+//
+// IT LOSES, AND IT SAYS SO. Cancel means "stop before it lands"; once pin() has written the
+// machine coordinates the pairing is COMPLETE, and publishing `cancelled` over them would leave
+// the phone pinned to a machine it believes it cancelled -- PB-PAIR-4's half-paired state,
+// reached through the one verb that exists to prevent it. Rolling the write back instead is a
+// larger change than a window this size justifies, and it would have to un-pin coordinates the
+// machine has already enrolled against.
+//
+// So the state stays `paired` and this rides alongside it, naming the verb that DOES undo a
+// completed pairing. A user who is told nothing would reasonably believe the cancel worked.
+var errLateCancel = classed(ErrClassPairingFailed, errors.New(
+	"swarmmobile: the pairing completed before this was cancelled and the device is now paired; "+
+		"use revoke to undo it"))
+
 // pairingTTL is how long the phone will wait on a rendezvous before declaring
 // rendezvous_timeout.
 //
@@ -453,35 +469,71 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 		p.persistState()
 		return
 	}
+	// next is DECIDED here and PUBLISHED after the durable write below, so no observer can
+	// read a terminal label while the effects it implies have not landed.
+	var next string
+	var failErr error
 	switch {
 	case err == nil && p.app.differentMachine(out):
 		// The handshake succeeded and authenticated a machine that is not the one this phone
 		// is pinned to. Nothing is pinned: the pairing the user had is left exactly as it was.
-		p.state = pairDifferentMachine
+		next = pairDifferentMachine
 	case err == nil:
-		p.state = pairPaired
+		next = pairPaired
 	case errors.Is(err, pairing.ErrPairingDeclined):
-		p.state = pairDeclined
+		next = pairDeclined
 	case errors.Is(err, pairing.ErrRateLimited):
-		p.state = pairRateLimited
+		next = pairRateLimited
 	case errors.Is(err, relay.ErrRendezvousExpired), errors.Is(err, relay.ErrRendezvousBurned):
 		// The rendezvous is gone: its TTL elapsed, or the QR was already used. Both look
 		// identical from here and lead to the same place -- ask the machine for a fresh QR --
 		// so they share a state rather than inventing a distinction the phone cannot make.
-		p.state = pairExpired
+		next = pairExpired
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		p.state = pairTimeout
+		next = pairTimeout
 	case ctx.Err() != nil:
-		p.state = pairCancelled
+		next = pairCancelled
 	default:
-		p.state, p.err = pairFailed, err
+		next, failErr = pairFailed, err
 	}
-	pinned := p.state == pairPaired
+	// THE OUTCOME IS DECIDED HERE AND PUBLISHED BELOW, after the durable write (ADR-007
+	// B58). It used to be assigned to p.state at the top of this switch and the label was
+	// therefore visible while pin() had not yet run -- and every observer reads `paired` as
+	// "the effects have landed". The transport loop was the observer that acted
+	// destructively on it (B57); the ordering is wrong regardless of who is watching.
+	//
+	// p.mu IS NOT HELD ACROSS pin(). pin() takes the core lock and the app lock, and holding
+	// a third across both would order this package's locks against phonecore's for no reason
+	// the property needs: publishing after the write is what the property asks for, not
+	// publishing under the same lock as the write.
+	settled := p.state
 	p.mu.Unlock()
 
-	if pinned && out != nil {
+	if next == pairPaired && out != nil {
 		p.app.pin(out)
 	}
+
+	// The settled-state guard, RE-ASKED after the write, because the write is a window the
+	// user can act inside. Its answer differs from the one at the top of this function and
+	// PB-PAIR-4 is why: a pairing whose effects have landed is COMPLETE, so a Cancel arriving
+	// now cannot un-land them, and publishing `cancelled` over them would leave the phone
+	// pinned to a machine it believes it cancelled -- the half-paired state that requirement
+	// forbids. So the user's answer LOSES here, and it loses VISIBLY: pairErrLateCancel says
+	// the pairing completed and names the verb that undoes it.
+	p.mu.Lock()
+	if p.state != settled {
+		// Someone settled it while the write was in flight.
+		if next == pairPaired && out != nil {
+			p.state, p.err = pairPaired, errLateCancel
+		}
+	} else {
+		p.state = next
+		if next == pairFailed {
+			p.err = failErr
+		}
+	}
+	p.mu.Unlock()
+
 	p.persistState()
 }
 

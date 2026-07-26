@@ -2878,3 +2878,48 @@ closed before a screen renders. `androidx.biometric` is therefore confined to **
 and fenced out of every unit test, widening the `dev/swarm/phone/ui`-scoped fence in `s16_ui_test.go`
 to the whole unit-test source set: a Robolectric shadow driven to "succeeded" would read as proof the
 gate works.
+
+### B60 — round 3: PB-PAIR-4 and PB-SEC-2 are NOT MET, and B40 became renewable
+
+Four findings from the round-3 external review. **The honest count is at most 139 of 143.**
+
+**(1) PB-PAIR-4 is NOT MET — the fifth requirement invalidated by another fix.** A post-accept
+`Complete` failure **reverses the machine's interpretation after the phone has already acted**:
+`internal/skeleton/pairing_transactional_test.go` requires the machine to report failure and retain no
+enrollment, while the phone has pinned. **That is precisely a half-pair**, which PB-PAIR-4 exists to
+forbid, and it is marked `shipped`. The repair is that final acceptance must follow a durable
+machine-side commit, or the protocol needs a persisted prepare/commit either side can resume — **a
+post-accept failure must not be allowed to reverse a decision the phone has acted on.**
+
+**(2) B58's new durability fence tests DELAY, not FAILURE — and this is residual 4.9 turned on its own
+author.** `App.pin` receives `Core.Mutate`'s error and **returns void** (`mobile/pairing.go`), so a
+caller publishing `paired` cannot distinguish a successful write from a refused one. The new ordering
+test's custody seam **only sleeps and always succeeds**, so it proves publication after a *slow
+successful* write and says nothing about a *refused* one. **The success-delay fence cannot transfer to
+the failure branch in the same arm** — which is exactly the generalisation an agent recorded two hours
+earlier, now applied to the fence that agent was writing. `pin` must return its error, and `finish`
+must publish a distinct failure state **without clearing the pairing-attempt record**.
+
+**(3) A stale biometric callback resurrects authorization. PB-SEC-2 returns to NOT MET.**
+`AuthorizationLedger.endPrompt` does not require the callback to belong to the **currently active**
+prompt: after an invalidation clears `inFlight`, a queued `SUCCEEDED` callback still resolves to
+`AUTHORIZED`, and the per-use gate then exercises its released cipher and runs the destructive action.
+Worse: prompt A starts, a screen lock invalidates it, prompt B starts for the same operation, **A's
+stale callback clears B's marker and runs A**, and B's later callback also authorizes because
+`endPrompt` accepts callbacks with no matching active prompt. **The tests only invalidate an
+already-completed authorization; none invalidates while a prompt is outstanding.** Each prompt needs an
+unforgeable generation, and a callback must authorize only if that generation is still active.
+
+**(4) B40 is now RENEWABLE — B47 and B55 composed to make it worse.** Consent retirement is stored in
+the orientation `(machine, phone)`, but a phone-initiated `device_revoke(machine)` looks for the
+**reverse** row and therefore **retires nothing**. The machine requests no peer verdict (B55,
+deliberately) and **re-presents the still-live phone consent on every gateway connect**, restoring both
+edges — after which the handset can revoke again. **A self-restoring, repeatable sever/purge
+primitive.** Existing consent tests cover only the machine-revokes-phone orientation. B40 can no longer
+be classified as "open, no replacement designed": its reach and repeatability must be re-measured
+against the current composition.
+
+**This is the third consecutive round in which the FIXES composed into something worse than their
+parts** — B37 (two residuals), B49 (a fix deleting another's remedy), and now B40 renewed by the
+interaction of a retirement orientation and a deliberate verdict asymmetry. **Every one was invisible
+to review of either change alone.**

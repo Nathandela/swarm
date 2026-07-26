@@ -44,6 +44,12 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
+    "PB-PAIR-4": "a post-accept Complete failure reverses the machine's interpretation "
+                 "after the phone has pinned -- precisely the half-pair this requirement "
+                 "forbids (ADR-007 B60)",
+    "PB-SEC-2": "a stale biometric callback resurrects authorization after an "
+                "invalidation: endPrompt accepts callbacks with no matching active "
+                "prompt (ADR-007 B60)",
     "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
                 "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
                 "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "
