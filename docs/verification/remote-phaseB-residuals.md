@@ -761,3 +761,22 @@ in `ConsentMessage`, stored in the pairs value, checked in `handleDeviceRevoke`.
 **B44 does not make it worse** — verified explicitly in round 2 rather than assumed: B44 leaves the
 wake tier entirely alone, and B40 is a wake-tier issue. No requirement, SHIPPED entry or evidence
 claim depends on B40 being closed, so it is not a count error.
+
+## 4.7 The `git add -A` escalated from untidy to DANGEROUS — fifth occurrence, and it committed a mutation
+
+Commit `184a7aa` contains `case false && errors.Is(...)` on **both** new transport-verdict arms — a
+deliberate mutation an agent had injected to prove its own fence bites. My wholesale staging committed
+it. HEAD is clean (a later commit captured the corrected tree), and the fences pass, so nothing shipped
+— but the intermediate commit **re-opened the exact defect the agent was fixing**.
+
+**The agent's own framing is the one to keep**: *"`add -A` during a mutation round commits a
+deliberately broken tree that passes review because the diff looks like the surrounding work."*
+
+That is the escalation. The first four sweeps captured *finished* work that happened to be correct —
+luck, not process. This one captured work that was **deliberately broken at that instant**, and it is
+undetectable by reading the diff, because a mutation is designed to look like the code around it.
+
+**The rule, restated as a rule and not an intention**: while any agent holds the shared tree, staging
+is by **explicit pathspec against that agent's reported file list**, or not at all. I have written
+some version of this note five times; the previous four described it as a discipline I had skipped
+once. It is not a discipline problem. `git add -A` must not be typed in this orchestration.
