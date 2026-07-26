@@ -509,8 +509,22 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	settled := p.state
 	p.mu.Unlock()
 
+	// A REFUSED WRITE IS NOT A PAIRING (ADR-007 B60). pin() reports whether the machine
+	// coordinates actually landed, and a publication that cannot tell a successful write
+	// from a refused one is the same defect as publishing before the write -- one step
+	// deeper. The state that goes out is pairFailed rather than a value of its own because
+	// PB-PAIR-5's rule is that a state earns its own value when the USER'S NEXT MOVE
+	// differs, and here it does not: try the pairing again. What differs is the reason, and
+	// that rides on the error.
+	//
+	// It also keeps PB-PAIR-4's recovery record, and that is not incidental: persist()
+	// clears the durable attempt only for pairPaired and pairCancelled, so a failed write
+	// leaves the next launch able to explain itself. Publishing `paired` here would have
+	// erased the one record that survives the process.
 	if next == pairPaired && out != nil {
-		p.app.pin(out)
+		if perr := p.app.pin(out); perr != nil {
+			next, failErr = pairFailed, classed(ErrClassPairingFailed, perr)
+		}
 	}
 
 	// The settled-state guard, RE-ASKED after the write, because the write is a window the
@@ -522,13 +536,15 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	// the pairing completed and names the verb that undoes it.
 	p.mu.Lock()
 	if p.state != settled {
-		// Someone settled it while the write was in flight.
+		// Someone settled it while the write was in flight. The user's answer loses ONLY if
+		// the write landed: with nothing pinned there is no completed pairing to be too late
+		// for, so a cancel that raced a REFUSED write stands exactly as it would have.
 		if next == pairPaired && out != nil {
 			p.state, p.err = pairPaired, errLateCancel
 		}
 	} else {
 		p.state = next
-		if next == pairFailed {
+		if failErr != nil {
 			p.err = failErr
 		}
 	}
@@ -739,7 +755,7 @@ func (a *App) differentMachine(out *pairing.DeviceOutcome) bool {
 // key the drain just installed while the monotonically-merged watermark survives at that
 // grant's coordinates. The re-appended bootstrap frame is then refused as a replay forever.
 // phonecore.Core.Mutate carries the whole account.
-func (a *App) pin(out *pairing.DeviceOutcome) {
+func (a *App) pin(out *pairing.DeviceOutcome) error {
 	var newEpoch bool
 	err := a.core.Mutate(func(st *phonecore.State) {
 		st.MachineStatic = out.MachineStatic
@@ -793,8 +809,13 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 		}
 		st.EpochID = out.Machine.EpochID
 	})
+	// THE ERROR IS RETURNED, not swallowed (ADR-007 B60). This used to be a bare `return`
+	// on a void function, so finish() published `paired` without being able to know whether
+	// anything had been written -- a refused Keystore unwrap, a full disk or a read-only data
+	// directory all produced a phone that said it was paired and held none of the machine
+	// coordinates a pairing exists to pin.
 	if err != nil {
-		return
+		return err
 	}
 	if newEpoch {
 		a.mu.Lock()
@@ -806,6 +827,7 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 	// terminal "revoked" stale. Without this the recovered handset stays on that screen until
 	// the Android process is rebuilt -- the brick reached through the remedy.
 	a.rearmAfterPairing()
+	return nil
 }
 
 func (p *Pairing) setSAS(s string) {

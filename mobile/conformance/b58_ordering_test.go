@@ -117,9 +117,9 @@ func TestB58_TheLabelIsPublishedAfterTheDurableWrite(t *testing.T) {
 		t.Fatal("the watcher never observed `paired`, so this fence asserted nothing")
 	}
 	if w.sawPairedWithoutEffects > 0 {
-		t.Fatalf("an observer read `paired` while the pairing's durable pin was not yet "+
-			"readable. Every observer takes that label to mean the effects have landed -- the "+
-			"transport loop is one, and it acts on the answer. finish() must complete pin() "+
+		t.Fatalf("an observer read `paired` while the pairing's durable pin was not yet " +
+			"readable. Every observer takes that label to mean the effects have landed -- the " +
+			"transport loop is one, and it acts on the answer. finish() must complete pin() " +
 			"before it publishes (ADR-007 B58)")
 	}
 }
