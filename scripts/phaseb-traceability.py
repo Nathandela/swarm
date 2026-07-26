@@ -47,9 +47,10 @@ NOT_MET = {
     "PB-PAIR-4": "a post-accept Complete failure reverses the machine's interpretation "
                  "after the phone has pinned -- precisely the half-pair this requirement "
                  "forbids (ADR-007 B60)",
-    "PB-SEC-2": "a stale biometric callback resurrects authorization after an "
-                "invalidation: endPrompt accepts callbacks with no matching active "
-                "prompt (ADR-007 B60)",
+    "PB-SEC-2": "the ledger's callback-identity hole is FIXED (ADR-007 B63), but two "
+                "halves remain: same-operation supersession is inexpressible without a "
+                "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
+                "new biometric enrolment. Neither fix closes the other",
     "PB-PUSH-9": "\"deletion on revoke/disable\" is dead: one self-consent writes a "
                  "self-edge, so grantsAnyone() is true forever and no revoke by any "
                  "party ever drops that handset's push token again -- measured on a "

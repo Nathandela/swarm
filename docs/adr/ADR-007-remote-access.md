@@ -3205,3 +3205,61 @@ the same switch arm* (4.9), and *a success-delay fence cannot transfer to the fa
 **Fencing B60(2) requires a seam that can fail the WRITE without failing the HANDSHAKE**: an
 injectable `phonecore.Store`. That is new product-facing surface and was correctly not added on an
 implementer's own judgement.
+
+---
+
+### B63 — B60(3) fixed, B60(3)'s own claim narrowed, and PB-SEC-2 stays NOT MET on two remaining halves
+
+**Fixed (9f43244).** `endPrompt` now refuses a callback that does not belong to the prompt on
+screen. The independent RED author confirmed the defect reproduces — a virgin ledger that has
+never prompted for anything granted REVOKE on `endPrompt(REVOKE, SUCCEEDED, t)` — and
+mutation-verified the fix in both directions. Full Kotlin suite after: 41 classes, 270 tests, 0
+failures.
+
+**My claim (b) in B60(3) was too broad, and is withdrawn.** I recorded that a stale callback
+"can clear a NEWER prompt's marker while doing so", implying cross-operation clobbering. It
+cannot: `if (inFlight == operation)` never matches when the operations differ, so a stale
+callback for a DIFFERENT operation leaves the newer prompt's marker intact. The real hazard was
+the unconditional grant beneath that check, not the marker. Left uncorrected, an implementer
+would have hunted a consequence that does not exist.
+
+**PB-SEC-2 remains NOT MET on two distinct halves, and this is the trap worth naming.** The fix
+above closes the ledger's callback-identity hole. It does not close either of these, and an
+implementer briefed on one alone would report the requirement met while the other still ships:
+
+1. **Same-operation supersession.** Two prompts for the SAME operation are indistinguishable at
+   `endPrompt`, because the signature carries nothing that separates them. Prompt #1 for KILL
+   outstanding, invalidate, prompt #2 for KILL begun, then #1's late callback — still resolves
+   against #2. Closing it needs a per-prompt token issued by `beginPrompt` and presented back.
+   Deliberately NOT fenced by the RED author, because writing that test would have prescribed the
+   fix's API.
+2. **B61(3), the Keystore entry re-minted on an enrolment change.** Distinct file, layer and
+   trigger; neither fix closes the other. Verified independent rather than assumed: the ledger
+   mutation left the gate-level test green because the cipher path was never entered differently,
+   and re-minting in `cipherFor` cannot affect a callback arriving after `invalidate` emptied the
+   ledger.
+
+**Caution for whoever takes B61(3):** that code carries an explicit written rationale
+(`BiometricPrompts.kt:253-262` — *"unlike a KEK, a gate entry SEALS NOTHING… the honest recovery
+is to make a new one"*). It is a considered decision, not an oversight, so the counter-argument
+must be made on its merits: auto-re-minting discards the one signal
+`setInvalidatedByBiometricEnrollment(true)` exists to raise, so an attacker who enrols their own
+fingerprint passes the gate on the next attempt. B61(3) was a code read, not a mutation-verified
+finding, and is not certified to the same standard as the rest of this entry.
+
+**Adjacent, recorded, unfenced.** `invalidate` sets `inFlight = null`, so after a screen lock a
+second `BiometricPrompt` can start while the first is still on screen — `REFUSE_SECOND` is
+defeated across any invalidation. That is a `beginPrompt`-side property. Also: a stale callback
+carrying `SUCCEEDED` maps through `PerUseGate.reasonFor` to `KEY_NOT_RELEASED`, "the unlock was
+accepted but the key was not released", which is the wrong story for this case; the tests assert
+only that SOME refusal reaches the caller, so a new refusal reason is free to be added.
+
+**A methodology note that cost me twenty minutes and nearly a false attribution.** After applying
+this fix, `WakeNotificationTest` failed with `java.io.EOFException` — the worker JVM dying, not an
+assertion — in both a full run and an isolated one, while passing at HEAD. That pattern reads
+exactly like a regression. It was not: it is the sixth distinct timing/resource failure today on a
+box that hit load average 57 on 8 cores, and the same test passes with the fix in place once load
+drops. **Isolation is not sufficient to discriminate a load artefact from a regression when the
+load is sustained** — the discriminator is re-running BOTH arms at the same load, which is what
+finally settled it. Residual 4.7's rule about the shared tree has a sibling here: the shared
+MACHINE is not observable either.
