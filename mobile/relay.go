@@ -206,7 +206,12 @@ func (a *App) run(ctx context.Context) {
 			// connRevoked is held for the same reason, and it only ever survives a retry
 			// inside the post-pairing window rearmAfterPairing opens: hiding it behind a
 			// spinner there would put back exactly the loop PB-APP-10 forbids.
-			if s := a.currentConn(); s != connReauthRequired && s != connRevoked {
+			// The transport-policy verdicts join this list for the reason the two above are
+			// on it: they survive a retry only while a pairing is in flight (B58), and
+			// overwriting them with "reconnecting" there would put the spinner back over the
+			// one screen that says what is actually wrong.
+			if s := a.currentConn(); s != connReauthRequired && s != connRevoked &&
+				s != connRelayUntrusted && s != connRelayInsecure {
 				a.setConn(connReconnecting)
 			}
 			select {
@@ -262,7 +267,12 @@ func (a *App) run(ctx context.Context) {
 				// pinned and the platform has no trust roots to fall back to. Both are
 				// answered by pairing again, which is the only channel that carries a pin.
 				a.setConn(connRelayUntrusted)
-				if a.withinPairingGrace() {
+				// ADR-007 B58: NOT TERMINAL while a pairing is running. The remedy for this
+				// verdict IS a pairing, so ending the loop during one destroys the recovery the
+				// user is in the middle of performing -- and on a FIRST pairing this is the
+				// ordinary path, because a handset that holds no pin yet is refused on every
+				// retry. The STATE still stands, so nothing is hidden; only the retry survives.
+				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
 				a.setClient(nil)
@@ -271,7 +281,9 @@ func (a *App) run(ctx context.Context) {
 				// The MACHINE named a cleartext relay. Nothing on the handset can fix it and
 				// re-pairing carries the same URL, so this says what is actually wrong.
 				a.setConn(connRelayInsecure)
-				if a.withinPairingGrace() {
+				// B58, same reason: a pairing in flight may be about to publish a relay URL
+				// this phone will accept.
+				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
 				a.setClient(nil)

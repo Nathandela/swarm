@@ -336,6 +336,29 @@ func (a *App) rearmAfterPairing() {
 	}()
 }
 
+// pairingInFlight reports whether a handshake is running right now (ADR-007 B57/B58).
+//
+// A TRANSPORT VERDICT REACHED DURING A PAIRING MUST NOT BE TERMINAL, because the thing that
+// would clear it is the pairing already running. The window is real and it is the ORDINARY
+// path, not an edge: a handset pairing for the first time holds no relay pin, an unpinned dial
+// on a pinning-only platform is refused before a packet, and the transport loop is retrying
+// that refusal every reconnectDelay for the whole time the user is comparing SAS symbols.
+//
+// withinPairingGrace cannot serve here and that is why this exists. It is opened by
+// rearmAfterPairing, which runs at the END of pin() -- after the durable write -- so it is
+// still closed during the window this covers. Worse, rearm polls the dead generation's channel
+// ONCE and non-blockingly, so a loop that dies between that poll and its own deferred close is
+// never restarted by anything: Start and rearmAfterPairing are the only two launch sites.
+//
+// Membership spans the write. startPairingJoin adds the handle before the goroutine starts and
+// deletes it in that goroutine's defer, and join -> finish -> pin all run inside it, so this
+// stays true until the pairing's durable effects have landed.
+func (a *App) pairingInFlight() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.pairings) > 0
+}
+
 // withinPairingGrace reports whether a "revoked" from the relay is still explicable by a
 // pairing this app has just completed.
 func (a *App) withinPairingGrace() bool {

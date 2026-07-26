@@ -74,6 +74,14 @@ func newB54Machine(t *testing.T, relayURL string) *b54Machine {
 // the QR for it.
 func (m *b54Machine) offer(t *testing.T, pin []byte) string {
 	t.Helper()
+	return m.offerAt(t, pin, m.relayURL)
+}
+
+// offerAt is offer with the URL the QR names stated separately from the one the MACHINE dials.
+// They differ whenever the phone reaches the relay through a TLS terminator and the machine
+// speaks to the plain relay behind it, which is the topology a pin is meaningful in at all.
+func (m *b54Machine) offerAt(t *testing.T, pin []byte, qrURL string) string {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -122,7 +130,7 @@ func (m *b54Machine) offer(t *testing.T, pin []byte) string {
 	}
 
 	qr, err := pairing.EncodeQR(pairing.QRPayload{
-		RelayURL: m.relayURL, RendezvousID: rid, PairingSecret: secret,
+		RelayURL: qrURL, RendezvousID: rid, PairingSecret: secret,
 	})
 	if err != nil {
 		t.Fatalf("EncodeQR: %v", err)
