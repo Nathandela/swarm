@@ -677,12 +677,27 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 		// The relay's SPKI pin (ADR-007 B33/B34), and pairing is the ONLY channel that can
 		// carry it: the QR has no room (MaxRelayURLLen = 39 leaves one byte of slack in the
 		// v6-L symbol) and every later frame already rides the connection the pin is meant
-		// to protect. A machine that publishes NO pin leaves what is already there, for the
-		// same reason MachineEndpointID does below -- overwriting a known pin with nothing
-		// would silently downgrade a handset that had one.
-		if len(out.Machine.RelaySPKIPin) > 0 {
-			st.RelaySPKIPin = out.Machine.RelaySPKIPin
-		}
+		// to protect.
+		//
+		// ADOPTED VERBATIM, INCLUDING ITS ABSENCE (ADR-007 B54). This assignment is
+		// deliberately NOT guarded by `if len(...) > 0`, and it is the one coordinate here
+		// that differs from MachineEndpointID below.
+		//
+		// It used to be guarded, on the reasoning that overwriting a known pin with nothing
+		// silently downgrades a handset that had one. That is true and it is the wrong trade,
+		// because of where the two states lead. `swarm remote init --relay-pin` is optional,
+		// so "publishes no pin" is the ordinary case, and a phone that keeps a stale pin
+		// fails every dial with ErrPinMismatch, reports relay_untrusted, and is told to pair
+		// again -- which re-runs this code, keeps the stale pin, and returns it to the same
+		// screen. There is no on-device exit. The downgrade the guard prevented recovers the
+		// moment the operator supplies a pin; the loop it created recovers never.
+		//
+		// And adoption is right on its own terms, not merely the lesser evil: a completed
+		// pairing is authenticated by the Noise handshake and confirmed by two operators
+		// comparing a SAS. What it carries is the machine's own statement about its own
+		// relay, made over the one channel this design trusts for exactly that. An absent pin
+		// is part of the statement, not a gap in it.
+		st.RelaySPKIPin = out.Machine.RelaySPKIPin
 		// The machine's NAME (S19), and the only production source a handset has for it:
 		// Config.MachineID is "" on a phone, and the gateway's reconcile record -- the one
 		// other authenticated frame carrying it -- cannot arrive before the gateway exists,
