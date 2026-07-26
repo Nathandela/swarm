@@ -77,12 +77,6 @@ func (f *fakeUpstream) isClosed() bool {
 	}
 }
 
-func (f *fakeUpstream) inputCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.inputs)
-}
-
 // mustSnap builds a real, decodable vt snapshot whose grid contains text, so the
 // tap's mirror can seed from it exactly as it will from a live shim snapshot.
 func mustSnap(t *testing.T, text string) []byte {

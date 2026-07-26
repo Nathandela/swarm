@@ -91,14 +91,22 @@ func TestGateway_AppendFailureDoesNotAdvanceCursor(t *testing.T) {
 	sink := newTestRelaySink(t, app, ackTestKey())
 	g := New("", sink)
 
-	// Record A: append succeeds -> cursor advances to 5.
-	g.deliver(protocol.JournalRecord{Cursor: 5, SessionID: "m/s1", Type: "launched"})
+	// Record A: append succeeds -> cursor advances to 5. The RETURN is checked, not only the
+	// cursor: a deliver that failed for some unrelated reason also leaves the cursor at 5, so
+	// the cursor assertion alone passes vacuously against a broken success path.
+	if err := g.deliver(protocol.JournalRecord{Cursor: 5, SessionID: "m/s1", Type: "launched"}); err != nil {
+		t.Fatalf("deliver of record A: %v; the injected appender fails only the SECOND call", err)
+	}
 	if got := g.Cursor(); got != 5 {
 		t.Fatalf("after a successful delivery, Cursor() = %d, want 5", got)
 	}
 
-	// Record B: append fails -> cursor must NOT advance past the last acked record (5).
-	g.deliver(protocol.JournalRecord{Cursor: 6, SessionID: "m/s2", Type: "launched"})
+	// Record B: append fails -> cursor must NOT advance past the last acked record (5). The
+	// returned error must be the INJECTED one: any other failure would hold the cursor at 5
+	// for a reason this test is not about.
+	if err := g.deliver(protocol.JournalRecord{Cursor: 6, SessionID: "m/s2", Type: "launched"}); !errors.Is(err, errAppendFailed) {
+		t.Fatalf("deliver of record B = %v, want the injected %v", err, errAppendFailed)
+	}
 	if got := g.Cursor(); got != 5 {
 		t.Fatalf("after a FAILED relay append, Cursor() = %d, want it to stay at 5 "+
 			"(advancing to 6 drops the un-appended record on the next reconnect)", got)
@@ -126,15 +134,21 @@ func TestGateway_FailedRecordRedeliveredAfterReconnect(t *testing.T) {
 	recA := protocol.JournalRecord{Cursor: 5, SessionID: "m/s1", Type: "launched"}
 	recB := protocol.JournalRecord{Cursor: 6, SessionID: "m/s2", Type: "launched"}
 
-	g.deliver(recA) // append #1 ok
-	g.deliver(recB) // append #2 FAILS
+	if err := g.deliver(recA); err != nil { // append #1 ok
+		t.Fatalf("deliver of A: %v", err)
+	}
+	if err := g.deliver(recB); !errors.Is(err, errAppendFailed) { // append #2 FAILS
+		t.Fatalf("deliver of B = %v, want the injected %v", err, errAppendFailed)
+	}
 	if got := g.Cursor(); got != 5 {
 		t.Fatalf("after B's append failed, Cursor() = %d, want 5 so the reconnect "+
 			"re-reads from 5 and re-includes B", got)
 	}
 
 	// Reconnect re-reads from the un-advanced cursor (5) and re-delivers B.
-	g.deliver(recB) // append #3 ok
+	if err := g.deliver(recB); err != nil { // append #3 ok
+		t.Fatalf("re-deliver of B after the reconnect: %v", err)
+	}
 	if got := g.Cursor(); got != 6 {
 		t.Fatalf("after B was re-delivered and acked, Cursor() = %d, want 6", got)
 	}

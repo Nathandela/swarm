@@ -56,8 +56,15 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 	sink := newTestRelaySink(t, app, key)
 
 	roster := []protocol.JournalRecord{{Cursor: 5, SessionID: "s1", Type: "roster", Group: "working"}}
-	sink.Snapshot(roster, 5)
-	sink.Event(protocol.JournalRecord{Cursor: 6, SessionID: "s2", Type: "launched"})
+	// Both returns are checked. This test decrypts what was appended, so a seal or append
+	// that silently failed would leave app.envs short and be reported as a count mismatch --
+	// the right symptom attributed to the wrong cause.
+	if err := sink.Snapshot(roster, 5); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := sink.Event(protocol.JournalRecord{Cursor: 6, SessionID: "s2", Type: "launched"}); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
 
 	if len(app.envs) != 2 {
 		t.Fatalf("appended %d envelopes; want 2 (one roster + one event)", len(app.envs))
@@ -162,7 +169,12 @@ func TestRelaySink_AppendErrorSurfaced(t *testing.T) {
 	var key crypto.ContentKey
 	app := &fakeAppender{err: context.DeadlineExceeded}
 	sink := newTestRelaySink(t, app, key)
-	sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "s1", Type: "launched"})
+	// The append is EXPECTED to fail, so the return carries it too: Err() alone would pass
+	// against a sink that stashed the error and told its caller everything was fine, which is
+	// precisely the seam the gateway's cursor gating depends on.
+	if err := sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "s1", Type: "launched"}); err == nil {
+		t.Fatalf("Event returned nil for a failing append; the gateway gates its cursor on this return")
+	}
 	if sink.Err() == nil {
 		t.Fatalf("a failed mailbox append was not surfaced via Err()")
 	}

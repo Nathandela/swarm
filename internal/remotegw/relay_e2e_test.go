@@ -73,8 +73,12 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 		Key:      key,
 		Now:      func() time.Time { return time.Unix(1_700_000_000, 0) },
 	})
-	sink.Snapshot([]protocol.JournalRecord{{Cursor: 5, SessionID: "m/s1", Type: "roster", Group: status.Group("working")}}, 5)
-	sink.Event(protocol.JournalRecord{Cursor: 6, SessionID: "m/s2", Type: "launched"})
+	if err := sink.Snapshot([]protocol.JournalRecord{{Cursor: 5, SessionID: "m/s1", Type: "roster", Group: status.Group("working")}}, 5); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := sink.Event(protocol.JournalRecord{Cursor: 6, SessionID: "m/s2", Type: "launched"}); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
 	if err := sink.Err(); err != nil {
 		t.Fatalf("relay sink error: %v", err)
 	}

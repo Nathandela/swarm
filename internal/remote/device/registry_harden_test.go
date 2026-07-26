@@ -100,7 +100,10 @@ func TestRegistry_AddRejectsInvalidCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
-	for _, c := range []Capability{Capability(0), Capability(0xFF)} {
+	// capInvalid by name, not Capability(0): the zero value is the tier a corrupted or
+	// zero-initialised record carries, and naming it is what ties this guard to the constant
+	// that declares it invalid.
+	for _, c := range []Capability{capInvalid, Capability(0xFF)} {
 		rec := fullRecord(t, 0x88, c, 1)
 		if err := reg.Add(rec); err == nil {
 			t.Fatalf("Add with capability %d = nil error; want rejection", uint8(c))

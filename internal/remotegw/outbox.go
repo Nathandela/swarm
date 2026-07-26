@@ -196,7 +196,7 @@ func loadOutbox(path string) (uint64, []OutboxEntry, error) {
 	}
 	pending := make([]OutboxEntry, 0, len(f.Pending))
 	for _, rec := range f.Pending {
-		pending = append(pending, OutboxEntry{Cursor: rec.Cursor, Envelope: rec.Envelope})
+		pending = append(pending, OutboxEntry(rec))
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Cursor < pending[j].Cursor })
 	return f.Cursor, pending, nil
@@ -209,7 +209,7 @@ func loadOutbox(path string) (uint64, []OutboxEntry, error) {
 func persistOutbox(path string, cursor uint64, pending []OutboxEntry) error {
 	f := outboxFile{SchemaVersion: outboxSchemaVersion, Cursor: cursor}
 	for _, e := range pending {
-		f.Pending = append(f.Pending, outboxRecord{Cursor: e.Cursor, Envelope: e.Envelope})
+		f.Pending = append(f.Pending, outboxRecord(e))
 	}
 	data, err := json.Marshal(f)
 	if err != nil {
