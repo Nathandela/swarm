@@ -7,11 +7,22 @@
 //
 //	device scans QR -> claims rendezvous -> msg1 (e)
 //	machine msg2 (e,ee,s,es + MachinePayload)   // hostname, routing, relay-auth, recipient, epoch
-//	device  msg3 (s,se + DevicePayload)         // name, routing, relay-auth, recipient
+//	device  msg3 (s,se + DevicePayload)         // name, routing, relay-auth, recipient, ConsentDeferred
 //	both derive SAS from the Noise channel binding
 //	machine shows SAS + Allow? [y/N] (mandatory desktop confirm, fail-closed)
-//	on affirmative confirm ONLY: machine pins device static + records routing,
-//	sends its acceptance, burns the rendezvous; device pins machine static.
+//	device  shows SAS to its own operator (DeviceSAS gate, fail-closed)
+//	device  msg4 (transport frame)              // the relay-route consent, or an empty ABORT
+//	on affirmative confirm AND a non-empty msg4 ONLY: machine pins device static +
+//	records routing, sends its acceptance, burns the rendezvous; device pins machine
+//	static on that acceptance.
+//
+// msg4 EXISTS BECAUSE THE SAS CANNOT PRECEDE msg3 (ADR-007 B52). Writing msg3 is what
+// creates the channel binding, so anything carried in msg3 is inside the transcript the
+// SAS attests and cannot be chosen after the operator has compared it. The consent is the
+// one field that must be: a phone whose operator REJECTS the SAS must not have already
+// released a standing grant over its own relay route. Neither end commits before it has
+// the other's answer — the machine holds the consent before it accepts, the device holds
+// the acceptance before it pins.
 //
 // This file is the FAILING-FIRST (TDD RED, GG-5) seam: every function is an
 // unimplemented stub returning ErrUnimplemented. The exported types + signatures
@@ -127,6 +138,29 @@ type DeviceSASFunc func(ctx context.Context, sas [6]string) error
 // that can never deliver it the epoch grant, which is a silently broken pairing.
 type DeviceConsentFunc func(machine MachinePayload) ([]byte, error)
 
+// DeviceVerifyFunc is the device's check on the machine payload it has just
+// authenticated, run the instant msg2 is decoded — BEFORE msg3 is written, before the SAS
+// is shown, and before any consent exists. A non-nil error fails the pairing CLOSED with
+// nothing sent and nothing pinned; a nil func is a no-op.
+//
+// IT EXISTS FOR ADR-007 B48. The pairing rendezvous dials under unverified TLS, because it
+// is the dial that fetches the pin that would verify it (B45). B48 amends that ruling:
+// leaving the certificate unchecked also lowered the cost of B46's consent harvest from
+// "hold a certificate valid for the operator's relay" to "be on the path". The remedy is
+// not to verify the dial — it cannot be — but to compare what it presented against
+// MachinePayload.RelaySPKIPin, which the REAL machine authored and which reaches the phone
+// only inside this authenticated frame. A network attacker terminating that TLS cannot
+// make the two agree.
+//
+// It runs at msg2 rather than later because that is the first moment the comparison is
+// possible and the last moment before the operator is asked to do anything: an operator
+// should never be shown a SAS for a connection already known to be terminated.
+//
+// It does NOT cover a QR-holder, who is a legitimate party to the ceremony and presents
+// the relay's real certificate. That case belongs to the SAS gate and the deferred
+// consent (B52).
+type DeviceVerifyFunc func(machine MachinePayload) error
+
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
 // attempt before any transport work; a nil RateLimiter is unlimited.
@@ -191,7 +225,25 @@ type DevicePayload struct {
 	// ("has authorized nobody"), which any holder of the target's PUBLIC key could
 	// satisfy — and that key is disclosed by msg2, by msg3, and by an unprotected
 	// auth_init. See internal/remote/relay/store.go mayActOn.
+	//
+	// IT NO LONGER RIDES IN msg3 (ADR-007 B52). msg3 is written before the SAS exists —
+	// the channel binding is created BY writing it — so a signature carried here is one
+	// the phone released before its operator could compare anything, which is B46's
+	// harvest. RunDevice sends it in msg4 instead, and the machine fills this field in
+	// from that frame. A msg3 that still carries one is a pre-B52 build and is REFUSED:
+	// its credential is already out.
 	ConsentSig []byte
+	// ConsentDeferred is the device stating in msg3 that its relay-route consent will
+	// follow in msg4, once its operator has compared the SAS.
+	//
+	// IT CONVEYS NO AUTHORITY, WHICH IS THE POINT. It exists so the machine's fail-closed
+	// refusal can keep the position it had when the signature was here — BEFORE the
+	// operator is prompted — and it draws the distinction that refusal was always about:
+	// a build that WILL grant a route once its operator confirms, versus one that grants
+	// none (an older build, or a hostile one). A marker that granted anything would be a
+	// thing released before the SAS gate, and this whole argument would restart one level
+	// down.
+	ConsentDeferred bool
 }
 
 // MachineParams configures one machine-side (Noise XXpsk0 responder) pairing.
@@ -214,7 +266,8 @@ type DeviceParams struct {
 	Payload          DevicePayload       // carried to the machine in msg3
 	Limiter          RateLimiter         // optional device-side rate limit (nil => unlimited)
 	DeviceSAS        DeviceSASFunc       // optional; surfaces the SAS before the decision (nil => no-op)
-	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg3
+	VerifyMachine    DeviceVerifyFunc    // optional; checks the authenticated msg2 payload (ADR-007 B48)
+	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg4
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -346,13 +399,22 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	if err != nil {
 		return nil, fmt.Errorf("pairing: decode device payload: %w", err)
 	}
-	// Fail CLOSED on a device that granted no relay route (ADR-007 B38). The machine
+	// Fail CLOSED on a device that granted no relay route (ADR-007 B38, B52). The machine
 	// refuses BEFORE the operator is prompted, so a confirm is never spent on a pairing
 	// whose grant delivery would then fail fatally at gateway start
-	// (cmd/swarm-remote/deliver.go, whose failure is fatal in main.go). The check is on
-	// presence only: this package does not import relay and cannot verify the signature,
-	// and the relay itself is the authority that must — a check here would be advisory
-	// and a check there is the fence.
+	// (cmd/swarm-remote/deliver.go, whose failure is fatal in main.go).
+	//
+	// The check is on the DEFERRAL MARKER, because the signature itself now arrives in
+	// msg4, after the phone's own SAS gate. What is being distinguished is unchanged: a
+	// build that will grant a route once its operator confirms, versus one that grants
+	// none (an older build, or a hostile one). Presence is all this package can check —
+	// it does not import relay and cannot verify a signature, and the relay is the
+	// authority that must; a check here would be advisory and a check there is the fence.
+	//
+	// A msg3 that CARRIES a signature is refused too, and that is not belt-and-braces: it
+	// is a pre-B52 device whose standing credential is already out on the wire, released
+	// before its operator could compare anything. This machine cannot repair that phone,
+	// so it refuses the pairing rather than completing one whose credential is harvested.
 	//
 	// It DECLINES rather than merely returning, for the same reason the confirm gate below
 	// does: the device is parked on rt.Recv waiting for this machine's decision, and a
@@ -360,7 +422,7 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// reporting a timeout for what is actually a refusal, and holding the rendezvous
 	// unburned meanwhile. Found by TestB38_AMachineRefusesAMsg3WithNoConsentBeforeTheConfirm,
 	// which hung before this line existed.
-	if len(devPayload.ConsentSig) == 0 {
+	if !devPayload.ConsentDeferred || len(devPayload.ConsentSig) != 0 {
 		_ = m.sendDecision(ctx, sess, rt, label, false)
 		return nil, ErrNoConsent
 	}
@@ -393,6 +455,34 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		}
 	}
 
+	// msg4: the consent the device released after ITS operator's SAS gate — read AFTER the
+	// confirm above and BEFORE any acceptance below (ADR-007 B52).
+	//
+	// THAT ORDER IS THE WHOLE OF THE PARTIAL-FAILURE ARGUMENT. The machine commits to
+	// nothing until it holds the consent, and the device pins nothing until it holds the
+	// acceptance, so there is no ordering in which one side is enrolled and the other is
+	// not. Reading it before the confirm would instead block the desktop prompt on the
+	// phone — leaving the operator nothing to compare the phone's SAS against — and
+	// sending acceptance first would strand a pinned device against a machine that then
+	// failed.
+	//
+	// It also closes a defect that has nothing to do with the consent: before msg4 existed
+	// NOTHING after msg3 reached this machine, so it accepted and enrolled devices whose
+	// operator had REFUSED the SAS, spending PB-STATE-10's single-device slot on a pairing
+	// the user declined.
+	consent, err := recvConsent(ctx, sess, rt)
+	if err != nil || len(consent) == 0 {
+		_ = m.sendDecision(ctx, sess, rt, label, false)
+		if err != nil {
+			return nil, fmt.Errorf("pairing: recv relay-route consent: %w", err)
+		}
+		// A zero-length msg4 is the device's well-formed ABORT: its operator refused the
+		// SAS, or it could not sign. Same meaning, same path, and answered rather than
+		// left to a timeout.
+		return nil, ErrNoConsent
+	}
+	devPayload.ConsentSig = consent
+
 	// Affirmative confirm (R-PAIR.7): send acceptance over the authenticated
 	// channel, pin the device static + record its routing, and burn the rendezvous.
 	if err := m.sendDecision(ctx, sess, rt, label, true); err != nil {
@@ -403,6 +493,30 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		DeviceStatic: deviceStatic,
 		Device:       devPayload,
 	}, nil
+}
+
+// sendConsent writes msg4 over the established Noise transport: the device's relay-route
+// consent, or a ZERO-LENGTH frame meaning "no route granted". The empty frame is a
+// well-formed ABORT rather than silence — the device sends it when its operator refuses
+// the SAS and when signing fails — so the machine never parks on a receive reporting a
+// timeout for a question that was settled minutes earlier.
+func sendConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, consent []byte) error {
+	frame, err := sess.Encrypt(consent)
+	if err != nil {
+		return err
+	}
+	return rt.Send(ctx, frame)
+}
+
+// recvConsent reads msg4 and opens it under the authenticated transport. A frame that
+// does not decrypt is an error; a frame that decrypts to nothing is the device's abort,
+// which the caller distinguishes by length.
+func recvConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport) ([]byte, error) {
+	frame, err := rt.Recv(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return sess.Decrypt(frame)
 }
 
 // sendDecision encrypts the machine's final accept/decline signal over the
@@ -491,28 +605,33 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	if err != nil {
 		return nil, fmt.Errorf("pairing: decode machine payload: %w", err)
 	}
-	// THE RELAY-ROUTE CONSENT (ADR-007 B27/B38), signed HERE and not earlier, because
-	// this is the first moment the device knows WHO it is consenting to: msg2 is the
-	// authenticated frame that carries the machine's relay-auth key, and the consent
-	// names the routing id derived from it. Signing it into the payload the device was
-	// configured with, before the handshake, would be consenting to a machine the
-	// device had not yet met.
-	//
-	// Fail CLOSED (ErrNoConsent) rather than sending an empty one: a msg3 without it
-	// completes a handshake and enrolls a device the machine can never deliver the
-	// epoch grant to, which is a pairing that looks successful and does nothing.
+	// The device's own check on the authenticated machine payload (ADR-007 B48): the relay
+	// certificate this dial accepted unverified, against the pin the real machine authored
+	// and put in this frame. It runs before anything is written, shown, or signed.
+	if p.VerifyMachine != nil {
+		if err := p.VerifyMachine(machPayload); err != nil {
+			return nil, err
+		}
+	}
+	// A device that cannot produce a consent at all fails CLOSED here, BEFORE msg3, so
+	// the machine is never handed a handshake it will have to refuse: a pairing that
+	// completes without a route grants the phone a machine that can never deliver it the
+	// epoch grant, which is a pairing that looks successful and does nothing.
 	if p.Consent == nil {
 		return nil, ErrNoConsent
 	}
-	consent, err := p.Consent(machPayload)
-	if err != nil {
-		return nil, fmt.Errorf("pairing: sign relay-route consent: %w", err)
-	}
-	if len(consent) == 0 {
-		return nil, ErrNoConsent
-	}
-	p.Payload.ConsentSig = consent
-	// msg3 (s, se + device payload): device -> machine. Completes the handshake.
+	// msg3 (s, se + device payload): device -> machine. Completes the handshake, and
+	// carries NO SIGNATURE (ADR-007 B52) — only the device's statement that one will
+	// follow once its operator has compared the SAS. See DevicePayload.ConsentDeferred,
+	// and TestB52_NoSharedSASExistsBeforeMsg3 for why the signature cannot stay here:
+	// writing msg3 is what CREATES the channel binding, so a payload field is inside the
+	// very transcript the SAS attests and cannot be chosen after the SAS is shown.
+	//
+	// msg3 is SENT here rather than withheld until the gate, which would look strictly
+	// safer. It is not: the machine derives its half of the SAS from msg3, so a withheld
+	// msg3 leaves the desktop blank and the phone operator comparing against nothing.
+	p.Payload.ConsentSig = nil
+	p.Payload.ConsentDeferred = true
 	msg3, err := sess.WriteMessage(encodeDevicePayload(p.Payload))
 	if err != nil {
 		return nil, fmt.Errorf("pairing: write msg3: %w", err)
@@ -534,17 +653,46 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// machine's decision and BEFORE any pin, so the operator can compare it
 	// out-of-band against the desktop SAS at the right moment. A non-nil error
 	// fails the pairing CLOSED: nothing is pinned and no outcome is returned.
+	//
+	// AND BEFORE THE CONSENT IS PRODUCED (ADR-007 B46/B52). This gate is the only thing
+	// that ever tells this phone it is talking to the wrong machine, so anything released
+	// above it is released to whoever is on the wire. A rejecting operator used to have
+	// already handed an interceptor a STANDING grant over this phone's relay route —
+	// enough to authorize itself and then permanently ban the phone, whose relay-auth key
+	// is minted once per install.
 	if p.DeviceSAS != nil {
 		if err := p.DeviceSAS(ctx, sas); err != nil {
+			_ = sendConsent(ctx, sess, rt, nil) // an ANSWERED refusal, not silence
 			return nil, err
 		}
 	}
+
+	// msg4: the relay-route consent (ADR-007 B27/B38), signed over the machine the device
+	// AUTHENTICATED in msg2 — the consent names the routing id derived from that frame's
+	// relay-auth key, so a consent built before the handshake would name whatever machine
+	// the device was configured for, which on a photographed QR is not the one on the wire.
+	consent, cErr := p.Consent(machPayload)
+	if cErr != nil || len(consent) == 0 {
+		_ = sendConsent(ctx, sess, rt, nil)
+		if cErr != nil {
+			return nil, fmt.Errorf("pairing: sign relay-route consent: %w", cErr)
+		}
+		return nil, ErrNoConsent
+	}
+	// A failed send is REMEMBERED, not returned: the machine may have declined and burned
+	// the rendezvous while the operator was still comparing, in which case its decision is
+	// already waiting below and ErrPairingDeclined is the honest cause, not a transport
+	// error naming a symptom.
+	sendErr := sendConsent(ctx, sess, rt, consent)
 
 	// Wait for the machine's authenticated decision (R-PAIR.5). No machine static
 	// is pinned unless the machine affirmatively accepts; a decline / timeout on
 	// the machine side surfaces here as ErrPairingDeclined with no pin.
 	frame, err := rt.Recv(ctx)
 	if err != nil {
+		if sendErr != nil {
+			return nil, fmt.Errorf("pairing: send relay-route consent: %w", sendErr)
+		}
 		return nil, fmt.Errorf("pairing: recv decision: %w", err)
 	}
 	decision, err := sess.Decrypt(frame)
@@ -655,7 +803,11 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 }
 
 // encodeDevicePayload serialises the msg3 device payload (R-PAIR.3 + A14 +
-// ADR-007 2026-07-20 + B38's route consent): six length-prefixed byte fields.
+// ADR-007 2026-07-20 + B38's route consent + B52's deferral marker): six
+// length-prefixed byte fields followed by the one-byte marker. The marker rides
+// last, so the six-field prefix is byte-identical to the previous encoding and a
+// truncated frame still fails as a malformed payload rather than as a false
+// deferral.
 func encodeDevicePayload(p DevicePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.DeviceName))
@@ -664,7 +816,11 @@ func encodeDevicePayload(p DevicePayload) []byte {
 	b = appendField(b, p.RecipientPub)
 	b = appendField(b, p.DeviceCommandSignPub)
 	b = appendField(b, p.ConsentSig)
-	return b
+	var marker byte
+	if p.ConsentDeferred {
+		marker = 1
+	}
+	return append(b, marker)
 }
 
 // decodeDevicePayload is the inverse of encodeDevicePayload.
@@ -691,8 +847,9 @@ func decodeDevicePayload(b []byte) (DevicePayload, error) {
 	if p.ConsentSig, b, ok = readField(b); !ok {
 		return DevicePayload{}, errMalformedPayload
 	}
-	if len(b) != 0 {
+	if len(b) != 1 {
 		return DevicePayload{}, errMalformedPayload
 	}
+	p.ConsentDeferred = b[0] == 1
 	return p, nil
 }

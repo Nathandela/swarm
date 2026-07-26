@@ -165,7 +165,7 @@ func startTestRelay(t *testing.T, ctx context.Context, appendPerMin int) (*relay
 	}
 	t.Cleanup(func() { phone.Close() })
 	if err := phone.AuthorizeDevice(ctx, mPub,
-		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
+		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("authorize device: %v", err)
 	}
 	return srv, phone, mPub, mPriv

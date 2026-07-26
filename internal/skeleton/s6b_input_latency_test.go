@@ -231,7 +231,7 @@ func s6bNewLatencyRig(t *testing.T) s6bLatencyRig {
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
-		Consent: phoneConsentFor(ks),
+		Consent: phoneConsentFor(ks, fill16(0x11)),
 	}
 
 	mEnd, dEnd := rendezvousPair()
@@ -276,11 +276,11 @@ func s6bNewLatencyRig(t *testing.T) s6bLatencyRig {
 	}
 	t.Cleanup(func() { _ = phoneRelay.Close() })
 	if err := machineRelay.AuthorizeDevice(ctx, pPub,
-		ed25519.Sign(pPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
+		e2eConsent(pPriv, relay.RoutingID(mPub))); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}
 	if err := phoneRelay.AuthorizeDevice(ctx, mPub,
-		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
+		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("phone authorize machine: %v", err)
 	}
 

@@ -14,6 +14,8 @@ package relay
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -132,12 +134,32 @@ func authFor(pub ed25519.PublicKey, priv ed25519.PrivateKey) ClientAuth {
 }
 
 // consentTo is the named device's own consent for grantee's routing id — the
-// signature handleAuthorizeDevice verifies before it records a pairing (ADR-007
+// credential handleAuthorizeDevice verifies before it records a pairing (ADR-007
 // B27, mandatory since B38). Production obtains it during the SAS-authenticated
-// pairing ceremony and carries it in pairing msg3; a test signs the same statement
+// pairing ceremony and carries it in pairing msg4; a test signs the same statement
 // with the same key directly, so the wire bytes are identical.
+//
+// Each call mints a FRESH ceremony id, which is what a real pairing produces (ADR-007
+// B47). A test that needs to replay one ceremony's credential, or to supersede it with
+// another, names the ceremony itself through consentToCeremony.
 func consentTo(priv ed25519.PrivateKey, granteeRID string) []byte {
-	return ed25519.Sign(priv, ConsentMessage(granteeRID))
+	return consentToCeremony(priv, newTestCeremonyID(), granteeRID)
+}
+
+// consentToCeremony is consentTo with the ceremony named, for the tests whose subject is
+// the ceremony binding itself.
+func consentToCeremony(priv ed25519.PrivateKey, ceremonyID, granteeRID string) []byte {
+	return MarshalConsent(ceremonyID, ed25519.Sign(priv, ConsentMessage(ceremonyID, granteeRID)))
+}
+
+// newTestCeremonyID mints a rendezvous-shaped id, the same 16 random bytes hex-encoded
+// that internal/skeleton's BeginPairing puts in the QR.
+func newTestCeremonyID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("relay test: crypto/rand: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // devConsent is consentTo through a real crypto.KeyStore, i.e. through the custody
@@ -147,11 +169,12 @@ func consentTo(priv ed25519.PrivateKey, granteeRID string) []byte {
 // ConsentMessage's domain separator.
 func devConsent(t *testing.T, ks crypto.KeyStore, granteeRID string) []byte {
 	t.Helper()
-	sig, err := ks.SignRelayAuth(ConsentMessage(granteeRID))
+	ceremonyID := newTestCeremonyID()
+	sig, err := ks.SignRelayAuth(ConsentMessage(ceremonyID, granteeRID))
 	if err != nil {
 		t.Fatalf("SignRelayAuth(consent): %v", err)
 	}
-	return sig
+	return MarshalConsent(ceremonyID, sig)
 }
 
 // dialAuthed dials and completes the relay-auth challenge/response, failing the

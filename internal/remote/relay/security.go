@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -140,6 +141,10 @@ type Security struct {
 	// its own. A configured pin still wins over it (tlsConfig), so it can only ever be a
 	// relaxation of the DEFAULT, never of an explicit one.
 	unverifiedTLS bool
+	// observer records the SPKI the peer presented on an unverified dial (ADR-007 B48).
+	// It is unexported and populated only by DialRawSecure, so a Security value cannot be
+	// assembled to spy on a dial it does not own, and a nil observer records nothing.
+	observer *spkiObserver
 	// trustRoots overrides the platform's stated trust-root source, and is honoured ONLY
 	// inside a test binary -- see WithTrustRootSource, which is the only thing that sets
 	// it. It exists because the branch it reaches was unreachable in every test that
@@ -292,9 +297,21 @@ func (s Security) tlsConfig() (*tls.Config, error) {
 	if !s.pinned() && s.unverifiedTLS {
 		// ADR-007 B45, and the ONE dial that reaches this: the peer is authenticated by the
 		// Noise handshake and the SAS the operator compares, not by this certificate.
+		//
+		// UNVERIFIED IS NOT UNOBSERVED (ADR-007 B48). The certificate cannot be CHECKED here
+		// -- the pin that would check it is what this dial exists to fetch -- but it can be
+		// RECORDED, and msg2 then carries the machine's own RelaySPKIPin to compare it
+		// against. A network attacker terminating this TLS cannot make the two agree,
+		// because the real machine authored the pin and the attacker cannot reach msg2's
+		// contents. See Conn.PeerSPKI.
+		obs := s.observer
 		return &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: true, //nolint:gosec // B45: the pairing peer is authenticated by Noise + SAS, not by TLS
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				obs.record(rawCerts)
+				return nil // recording only: this dial verifies nothing, by construction
+			},
 		}, nil
 	}
 	if s.pinned() {
@@ -344,6 +361,39 @@ func (s Security) tlsConfig() (*tls.Config, error) {
 	default:
 		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
 	}
+}
+
+// spkiObserver records the SHA-256 SubjectPublicKeyInfo digest of the leaf certificate a
+// peer presented on ONE dial, so an unverified pairing dial can be compared against the
+// pin msg2 delivers (ADR-007 B48). It records the first certificate in the presented
+// chain -- the leaf -- because that is the key the peer proved possession of, and it is
+// the same value relaycfg pins and MachinePayload.RelaySPKIPin carries.
+type spkiObserver struct {
+	mu   sync.Mutex
+	spki []byte
+}
+
+func (o *spkiObserver) record(rawCerts [][]byte) {
+	if o == nil || len(rawCerts) == 0 {
+		return
+	}
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return // an undecodable certificate yields no observation, never a wrong one
+	}
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.spki = sum[:]
+}
+
+func (o *spkiObserver) get() []byte {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]byte(nil), o.spki...)
 }
 
 // isLoopbackLiteral reports whether host is a loopback IP literal. A name is

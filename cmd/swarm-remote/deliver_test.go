@@ -94,7 +94,7 @@ func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
 		// the same relay-auth key the device authenticated under. It is what the relay
 		// verifies before recording the route the append below travels, so without it this
 		// whole test is the refusal path rather than the bootstrap path.
-		DeviceConsentSig: ed25519.Sign(devicePriv, relay.ConsentMessage(machineRelay.RoutingID())),
+		DeviceConsentSig: e2eConsent(devicePriv, machineRelay.RoutingID()),
 		Grant:            seeded,
 	}
 

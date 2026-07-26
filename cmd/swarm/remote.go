@@ -885,12 +885,30 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// Block until the phone reaches the SAS gate. A terminal result arriving FIRST (a
 	// rendezvous/TTL failure or a dropped session, before any gate) unblocks here fail
 	// closed rather than hanging.
+	//
+	// AND THE EXPIRY IS A DEADLINE, NOT A DECORATION (ADR-007 B46). This wait used to have
+	// none of its own: the command printed `expires:` and then waited past it forever, so a
+	// QR the relay had already dropped stayed on screen as though it still worked. It does
+	// not -- the rendezvous slot is purged and its id burned at the relay -- and a phone
+	// scanning after that point cannot reach this machine at all. Stopping when the printed
+	// window closes is what makes the printed window true.
+	var expired <-chan time.Time
+	if sess.ExpiresAt != nil {
+		timer := time.NewTimer(time.Until(*sess.ExpiresAt))
+		defer timer.Stop()
+		expired = timer.C
+	}
 	var pending protocol.PairingPending
 	select {
 	case pending = <-sess.Pending():
 	case <-sess.Result():
 		fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
 		fmt.Fprintln(stderr, "remote pair: pairing ended before the device connected")
+		return 1
+	case <-expired:
+		fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
+		fmt.Fprintln(stderr, "remote pair: the pairing window closed before the device connected; "+
+			"the code above is dead, so run `swarm remote pair` again for a fresh one")
 		return 1
 	}
 

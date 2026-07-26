@@ -544,7 +544,7 @@ func newPeers(t *testing.T, srv *relay.Server) peers {
 	}
 	t.Cleanup(func() { _ = machine.Close() })
 	if err := machine.AuthorizeDevice(testCtx(t), dPub,
-		ed25519.Sign(dPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
+		e2eConsent(dPriv, relay.RoutingID(mPub))); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	return peers{

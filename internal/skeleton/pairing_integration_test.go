@@ -72,6 +72,7 @@ package skeleton
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -140,9 +141,16 @@ type devLegResult struct {
 // AUTHENTICATED. It is byte-identical to what mobile/pairing.go installs, deliberately —
 // a fixture that signed something else would leave every e2e test here passing against a
 // consent the relay would refuse.
-func phoneConsentFor(ks crypto.KeyStore) pairing.DeviceConsentFunc {
+func phoneConsentFor(ks crypto.KeyStore, rendezvousID [16]byte) pairing.DeviceConsentFunc {
 	return func(m pairing.MachinePayload) ([]byte, error) {
-		return ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(m.MachineRelayAuthPub)))
+		// ADR-007 B47: bound to THIS ceremony by the rendezvous id the QR carried, so the
+		// credential a revoke retires cannot be replayed back into authority.
+		ceremonyID := hex.EncodeToString(rendezvousID[:])
+		sig, err := ks.SignRelayAuth(relay.ConsentMessage(ceremonyID, relay.RoutingID(m.MachineRelayAuthPub)))
+		if err != nil {
+			return nil, err
+		}
+		return relay.MarshalConsent(ceremonyID, sig), nil
 	}
 }
 
@@ -169,7 +177,7 @@ func runDeviceLeg(ctx context.Context, ks crypto.KeyStore, dEnd pairing.Rendezvo
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
-		Consent: phoneConsentFor(ks),
+		Consent: phoneConsentFor(ks, qp.RendezvousID),
 	}
 	ch := make(chan devLegResult, 1)
 	go func() {

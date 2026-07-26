@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -31,6 +32,15 @@ var (
 	// encryption but AUDITABILITY — an operator inspecting this store finds every device
 	// identifier in one place instead of discovering one smuggled into the item log.
 	bucketTokens = []byte("tokens")
+	// bucketConsents is "pairer\x00device" -> the ceremony id of the ONE route consent
+	// currently authorizing that pair, and bucketRetired is
+	// "pairer\x00device\x00ceremony" -> {1} for every id that has stopped being it
+	// (ADR-007 B47). Together they are what makes `swarm remote revoke` durable against a
+	// grantee that still holds the signature: a retired id is refused forever, a fresh
+	// ceremony is accepted exactly as before, and NOTHING is keyed on whether the pairing
+	// was revoked — which is what leaves B22's ban lift and PB-STATE-10's recovery intact.
+	bucketConsents = []byte("consents")
+	bucketRetired  = []byte("retired_consents")
 )
 
 type store struct {
@@ -43,7 +53,7 @@ func openStore(path string) (*store, error) {
 		return nil, err
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketItems, bucketSeq, bucketPairs, bucketRevoked, bucketTokens} {
+		for _, b := range [][]byte{bucketItems, bucketSeq, bucketPairs, bucketRevoked, bucketTokens, bucketConsents, bucketRetired} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -258,6 +268,20 @@ func pairKey(a, b string) []byte {
 	return k
 }
 
+// retiredKey names one (pair, ceremony) tombstone. It is scoped to the PAIR, not global:
+// two different machines running ceremonies that happened to share an id retire only
+// their own, and a stranger cannot retire a pair it is not half of.
+func retiredKey(pairer, device, ceremonyID string) []byte {
+	k := pairKey(pairer, device)
+	k = append(k, 0)
+	return append(k, ceremonyID...)
+}
+
+// errConsentRetired is authorizePair's refusal for a consent whose ceremony has been
+// superseded or revoked. It is mapped to ErrConsentRetired at the handler, which is where
+// a wire code exists to carry it.
+var errConsentRetired = errors.New("relay: route consent ceremony retired")
+
 // authorizePair records BOTH directed authorizations of one consented pairing —
 // pairer grants device authority over the pairer's route, and device grants
 // pairer authority over the device's — AND lifts any ban standing against device,
@@ -312,8 +336,41 @@ func pairKey(a, b string) []byte {
 // shape can be placed. B24 and this line are unchanged and remain right: no weaker
 // rule stops a revoked device un-banning itself through a throwaway identity,
 // since a throwaway is by construction not the banned party.
-func (s *store) authorizePair(pairer, device string) error {
+//
+// THE CEREMONY ID IS WHAT MAKES A REVOKE DURABLE (ADR-007 B47), and it is deliberately
+// NOT a check on whether this pair was revoked. Restoring access and lifting the ban are
+// the same act, and PB-STATE-10 requires that act, so a rule shaped "refuse a consent for
+// a revoked pairing" would test green and re-brick the recovery flow. The rule here is
+// about the CREDENTIAL instead:
+//
+//   - a retired ceremony id is refused forever. Replaying the bytes a revoke left behind
+//     therefore restores nothing, which is the whole of B47.
+//   - recording a new id retires the previous one. Retiring only at revoke would leave
+//     every earlier ceremony's consent live, so a holder of two would spend one and keep
+//     the spare.
+//   - re-presenting the LIVE id is idempotent. cmd/swarm-remote's deliverEpochGrant
+//     re-presents the same stored bytes on every gateway connect and its failure is fatal,
+//     so a credential that were single-USE rather than single-CEREMONY would brick the
+//     machine on its second boot.
+//
+// A re-pairing is a new ceremony, hence a new id, hence accepted — ban lift and all.
+func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
+		cb := tx.Bucket(bucketConsents)
+		rb2 := tx.Bucket(bucketRetired)
+		key := pairKey(pairer, device)
+		if rb2.Get(retiredKey(pairer, device, ceremonyID)) != nil {
+			return errConsentRetired
+		}
+		if live := cb.Get(key); live != nil && !bytes.Equal(live, []byte(ceremonyID)) {
+			if err := rb2.Put(retiredKey(pairer, device, string(live)), []byte{1}); err != nil {
+				return err
+			}
+		}
+		if err := cb.Put(key, []byte(ceremonyID)); err != nil {
+			return err
+		}
+
 		pb := tx.Bucket(bucketPairs)
 		if err := pb.Put(pairKey(pairer, device), []byte{1}); err != nil {
 			return err
@@ -461,6 +518,21 @@ func (s *store) revokeAndPurge(pairer, rid string) error {
 		pb := tx.Bucket(bucketPairs)
 		_ = pb.Delete(pairKey(pairer, rid))
 		_ = pb.Delete(pairKey(rid, pairer))
+		// ADR-007 B47, in the SAME transaction as the edges and the ban: retire the
+		// ceremony that authorized this pair. The signature is a durable artifact the
+		// grantee still holds, so without this the revoke is undone by re-presenting bytes
+		// the machine already has on disk — and the phone is never asked. A later pairing
+		// signs a new consent over a new ceremony and is unaffected.
+		cb := tx.Bucket(bucketConsents)
+		key := pairKey(pairer, rid)
+		if live := cb.Get(key); live != nil {
+			if err := tx.Bucket(bucketRetired).Put(retiredKey(pairer, rid, string(live)), []byte{1}); err != nil {
+				return err
+			}
+			if err := cb.Delete(key); err != nil {
+				return err
+			}
+		}
 		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte(pairer)); err != nil {
 			return err
 		}

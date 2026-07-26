@@ -61,7 +61,7 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 	// consent for the phone's route -- the relay records nothing from a caller's say-so
 	// alone (ADR-007 B27/B38).
 	if err := phone.AuthorizeDevice(ctx, mPub,
-		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
+		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("authorize device: %v", err)
 	}
 
