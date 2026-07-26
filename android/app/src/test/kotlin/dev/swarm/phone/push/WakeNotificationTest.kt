@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -184,6 +185,79 @@ class WakeNotificationTest {
                 "requirement is met by rendering the generic alert forever",
             lockedText != unlockedText || locked.actions?.size != unlocked.actions?.size,
         )
+    }
+
+    /**
+     * The clause PB-PUSH-4's 2026-07-26 amendment ADDED, and which nothing asserted.
+     *
+     * The amendment weakened "authenticated -> content rendered" to "authenticated -> a
+     * *distinguishable* notification that still reads NO session content", explicitly because
+     * distinguishability alone is satisfiable by a defect. Only the first half had a test: the
+     * content-leak loop above runs against `contentReady = false` only, so an implementation
+     * that appended a session name on the authenticated path was distinguishable, leaked, and
+     * green. The behaviour was right by construction, so this closes a missing CHECK rather
+     * than a live defect -- see the mutation note below.
+     *
+     * HOW IT IS ASSERTED, because a leak-marker list would not do it. The test supplies no
+     * session content, so "the rendered text does not contain build-box-17" is satisfied by any
+     * implementation that leaked something ELSE. What can be asserted exactly is that the
+     * authenticated notification is the locked one PLUS A KNOWN CONSTANT: the difference is
+     * compared against the string resource itself, so ANY added text that is not that resource
+     * fails, whatever it is and wherever it came from.
+     *
+     * It doubles as the non-vacuity control for the distinguishability test above: an
+     * implementation that ignored `contentReady` produces an empty difference, which is not the
+     * resource either.
+     */
+    @Test
+    fun `an authenticated device is told more without being told anything about a session`() {
+        val locked = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+        val unlocked = WakeNotifications.build(context, text = GENERIC, contentReady = true)
+
+        val lockedText = locked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        val unlockedText = unlocked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+
+        assertTrue(
+            "PB-PUSH-4: the authenticated notification is not an EXTENSION of the locked one " +
+                "(locked=$lockedText, authenticated=$unlockedText). Authenticating may add a " +
+                "constant invitation; it may not rewrite the line the Go core supplied",
+            unlockedText.startsWith(lockedText),
+        )
+        assertEquals(
+            "PB-PUSH-4: authenticating added text that is not the constant invitation. The " +
+                "amendment permits a DISTINGUISHABLE notification that still reads no session " +
+                "content, so the only thing the authenticated path may add is this resource",
+            context.getString(R.string.wake_notification_open),
+            unlockedText.removePrefix(lockedText).trim(),
+        )
+        assertEquals(
+            "PB-PUSH-4/PB-KEY-2: the authenticated notification carries an action. An action " +
+                "opens a screen, which on this path is a tap that drives a content read",
+            0,
+            unlocked.actions?.size ?: 0,
+        )
+    }
+
+    /**
+     * The claim WakeNotifications makes about itself in prose -- "both are string resources with
+     * no arguments, so there is no interpolation site here for a session id to arrive at" -- as
+     * an assertion.
+     *
+     * It guards a different edit from the test above: not a call site that appends content, but
+     * a resource that GROWS a format specifier, after which a session id has somewhere to be
+     * passed and the next reader sees a `getString(id, ...)` overload that looks intended.
+     */
+    @Test
+    fun `the notification strings offer nowhere to interpolate a session`() {
+        for (id in listOf(R.string.wake_notification_open, R.string.app_name, R.string.wake_channel_name)) {
+            val value = context.getString(id)
+            assertFalse(
+                "PB-PUSH-4: the notification string \"$value\" contains a format specifier. " +
+                    "Every string on the wake path is argument-less by design; one that takes an " +
+                    "argument is an interpolation site for the session content this path must never read",
+                value.contains('%'),
+            )
+        }
     }
 
     private companion object {

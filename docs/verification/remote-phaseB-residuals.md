@@ -664,3 +664,47 @@ The discipline is not "be careful": it is that **the shared tree must not be sta
 agent holds it**. The first sweep captured scratch probe patches labelled `TEMPORARY -- REVERT` that
 were *approximately correct fixes*, which is what made them dangerous. The second captured finished
 work that happened to be correct, which is luck, not process.
+
+## 4.6 A fourth "green everywhere, broken in fact": the AAR is untracked and no Go gate sees it
+
+`android/app/libs/swarm.aar` is **generated and untracked**. When the PB-KEY-7 work added
+`App.UnlockContent`, production Kotlin called it against an on-disk AAR that predated it — **the
+Android module did not compile**, while `go build ./...`, `go test ./...` and `golangci-lint` were all
+green.
+
+**Anyone landing a Go-side facade verb must rebuild the AAR or the app breaks silently for the next
+person to touch Kotlin.** The Go gates cannot see it by construction, and the Android gate fails at
+`:app:requireSwarmAar` in a way that reads as green if you check the last line instead of the exit
+status (residual 2.11). Fourth instance of the shape this phase keeps finding: **the gate is green and
+the fact is false.**
+
+## 1.11 PB-E2E-2's blocking reason has CHANGED, and the irony is load-bearing
+
+Investigated empirically rather than reasoned about. **The emulator is not the problem**: the AVD
+exists, boots headless in ~10s, and both APKs build and install.
+
+**It is now blocked FIRST by residual 1.9 — the handset pin — and only second by the session
+command.** The smoke provisions `ws://10.0.2.2:8787` (the emulator's route to host loopback), which is
+not a loopback IP *literal*, so the cleartext refusal that closed B37 rejects it. Measured through the
+real pairing verb: `pair_start: open rendezvous: relay: cleartext ws:// refused; use wss://`.
+
+**The machine side is repairable with work already landed, and that was proven**: a self-signed cert
+through the TLS terminator, `swarm remote init --relay-url wss://... --relay-pin ...`, and pairing
+proceeded to a minted QR. **The handset cannot follow** — it would dial `wss://` on a pinning-only
+platform with no pin, i.e. `ErrPinRequired`. (That last step is a deduction from two tested facts, not
+an observation; Go cannot be run on the emulator to watch it.)
+
+**The requirement that would have caught residual 1.9 end to end is the requirement residual 1.9 now
+prevents from running.** When the consent-signature agent lands the `MachinePayload` pin, the phone
+hop becomes possible; `MaxRelayURLLen` is not a constraint (`wss://10.0.2.2:8443` is 19 characters).
+
+**Two more proofs the smoke had never run**, found by trying: it invokes `swarm-relay --listen ... --tls off --db ...` and that binary accepts only `--config`; and it passes `swarm remote pair --yes`,
+a flag that does not exist.
+
+**RULING on the session command.** No launch verb is added to `swarm remote` — that stands, and the
+reasoning stands: new *product* surface added to make a demonstration pass is how a demonstration
+stops being about the product. **But a test-only operator helper speaking the existing
+`protocol.Client.Launch` over the daemon UDS is APPROVED**, because it is not product surface: it is
+the same API the TUI uses and the same one S19's exit demonstration already drives, a session created
+that way is indistinguishable to the daemon, and the smoke's own contract already states the command
+is the operator's. It must live outside the shipped binaries and say so.
