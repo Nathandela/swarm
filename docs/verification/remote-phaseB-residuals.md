@@ -803,6 +803,8 @@ That is the escalation. The first four sweeps captured *finished* work that happ
 luck, not process. This one captured work that was **deliberately broken at that instant**, and it is
 undetectable by reading the diff, because a mutation is designed to look like the code around it.
 
+**THE MISSING HALF OF THE RULE, added 2026-07-26 after I sampled an agent mid-mutation.** I held a merge because a fence was red and I could not tell what that meant. The agent's answer is the generalisation: **a red fence, a live mutation and a real regression are three different things that look identical from outside, and the only reliable discriminator is the agent holding the tree saying which one it is.** So the rule is not only "do not stage wholesale" — it is that the state of a shared tree is **not observable**, and any conclusion drawn from `git status`, `git diff` or a test result while an agent holds it is a guess. Waiting is correct even when it costs a merge; the alternative is committing a mutation, which I have already done once.
+
 **The rule, restated as a rule and not an intention**: while any agent holds the shared tree, staging
 is by **explicit pathspec against that agent's reported file list**, or not at all. I have written
 some version of this note five times; the previous four described it as a discipline I had skipped
