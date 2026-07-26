@@ -2695,3 +2695,39 @@ test of the app's startup path impossible on an emulator — not only PB-E2E-2's
 in the same position, and so is any future `connectedAndroidTest` that constructs the runtime. If option
 3 is taken, **that entire test tier is deferred with it, and the `androidTest` source set currently
 reads as coverage that can never execute** — the same shape as residuals 4.4 and 4.6, one tier up.
+
+### B57 — `paired` is published before the pin is durable, and `relay_untrusted` is terminal
+
+Found while diagnosing a flaky fence, and it is a product defect in the pairing/transport seam.
+
+`Pairing.finish()` sets the `paired` label **under `p.mu`, unlocks, and only then calls `App.pin()`** —
+so the label is public before the durable write it implies. Meanwhile `App.run` retries every 250 ms
+and `App.dial` reads `State().RelaySPKIPin`, so **a dial landing in that window uses the PRE-PAIRING
+pin.**
+
+That would be a self-correcting hiccup, except for what B45/B54 just built: **`relay_untrusted` is
+TERMINAL.** A dial in that window against a relay the *old* pin does not match sets the terminal state
+and **returns from the loop**. So a **successful pairing can be immediately followed by a permanent
+`relay_untrusted`, whose remedy is "pair this phone again" — which is exactly what the user just did.**
+
+**Same shape as B54's loop, one layer up**: a terminal state whose remedy re-enters the condition that
+produced it. And **the window widens under exactly the load that broke the fence**, which is how it was
+found at all.
+
+**It is narrow** — `pin()` normally completes well inside 250 ms — and `rearmAfterPairing`'s grace
+window **may already cover it**, which is unverified. **Assigned, not assumed.**
+
+**The fix direction, to be evaluated rather than obeyed**: the `paired` label must not be published
+before the durable state it implies, since every observer reasonably reads it as "the pairing's effects
+are visible". If the ordering exists to avoid holding the lock across I/O, then the durable write
+should complete before publication without the lock being held across it — not the label moved earlier.
+
+**The diagnostic lesson, which is mine.** I saw a **deterministic assertion** failing 2 runs in 3 and
+concluded state was leaking into it. The assertion *is* deterministic — a specific hash is or is not
+present — but **the precondition it rests on is asynchronous**, and *determinism of the assertion says
+nothing about determinism of what it observes*. That is a distinct trap from the one I was guarding
+against, and I sent an agent hunting the wrong thing.
+
+**Also worth recording**: `go test ./...` **without `-count=1` serves cached package results**, so any
+attempt to reproduce an order-dependent failure without it proves nothing. Three "clean" runs were
+meaningless for that reason.
