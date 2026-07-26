@@ -260,9 +260,19 @@ classes=32 tests=208 failures=0 errors=0     (baseline 205 across 31; +3 in 1 ne
 2. **`PhoneSurface` acts on the first row of the triage inbox** because the surface has no
    navigation. That is the bounded-scope consequence of "a minimal Activity, not a finished
    app"; a session picker belongs to the PB-APP-1..8 work, not here.
-3. **`device_revoke` is now gated on PB-SYNC-7 reconciliation** (see above). Whether the panic
-   action should be exempt is a spec question with a real argument on each side, and it is not
-   S18's to answer.
+3. **CORRECTED 2026-07-26 — this residual has been answered, and the answer went the other way.**
+   It originally read: *"`device_revoke` is now gated on PB-SYNC-7 reconciliation. Whether the
+   panic action should be exempt is a spec question with a real argument on each side, and it is
+   not S18's to answer."* It was answered by **PB-STATE-4's amendment of 2026-07-26**
+   (`e16b0c7`): `RevokeThisDevice` is **EXEMPT** from the reconcile fail-closed gate. The
+   boundary drawn is not "revoke is special" — the gate protects ops whose **target is selected
+   from synchronized state** (`kill`, `launch`, `take_control`), because stale state makes them
+   act on the wrong object, and a self-revoke selects no target and only removes capability.
+   Implemented at `mobile/commands.go:557`; both directions required by the amendment are tested
+   and green (`TestPBSTATE4_AnUnreconciledPhoneCompletesItsRevokeEndToEnd`, and
+   `TestPBSTATE4_TheRevokeExemptionDoesNotWidenToTheStateSelectedVerbs` over Kill/Launch/
+   TakeControl). S18's own reading — that exempting it would be a spec decision rather than an
+   implementation one — was right; the decision was then taken.
 4. **Two pre-existing flakes in the shared suite** (`TestS6B_GatewayInputLatencyIsNotPollGated`,
    `TestPBSAS2_PhoneSASMatchesTheMachineAndTheKAT`), reproduced at HEAD and characterised in
    the table above. Neither is S18's, and neither has an owner recorded anywhere I could find.
