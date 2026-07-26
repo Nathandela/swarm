@@ -2778,3 +2778,103 @@ against `ErrPinMismatch` (a wrong persisted pin), while the case that actually b
 `ErrPinRequired` (a fresh handset with none). **A fence against the reproducible error rather than the
 real one is the defect class this phase has found ten times**, and it would be built deliberately here.
 Keep the seam narrow and inert in release, as the existing one is.
+### B59 — PB-SEC-2's per-use tier is WIRED; `AUTH_DEVICE_CREDENTIAL` is REFUSED, and B44's exit is built
+
+B51 recorded the ninth uncalled-symbol instance. This records what closed it, and the two judgement
+calls it forced.
+
+**What was built.** `PerUseGate` runs a per-use action only after the platform hands back a
+`CryptoObject` **whose key actually operates** — the cipher the prompt released is used, and a failure
+to use it refuses the action. The ledger is **never consulted as the gate**: PB-SEC-2's criterion is
+that a test must fail if the implementation is an in-memory `authenticated = true` flag, and the ledger
+*is* an in-memory map, so it decides only whether prompting is worth doing and what is in flight. The
+chain from the button to the spec is `PhoneSurface.perUseButton` → `PerUseGate` → `KeystorePerUseCiphers`
+→ `CustodyProvisioning.provisionGate` → `KeystoreSpecs.forOperation`, and every link is fenced.
+
+**Only TWO of the four operations have a production call site, and building fences for the other two
+was refused.** `App.RevokeThisDevice` and `App.Kill` are reached from `PhoneSurface`. `App.Launch` is
+ledgered unbound — PB-APP-6's screen does not exist — and the phone may **never set the kill switch**
+(`handleRemoteSetControl` refuses the remote tier before consulting its backend, PB-SEC-6), so
+`App.KillSwitchEngaged` is a READ. Gating either in production would be a fence guarding a path
+production does not take, which is this phase's tenth instance of that shape. Instead the Go fence
+requires **every** production call of a per-use verb — launch included — to be declared through
+`perUseButton`, so the gate is mandatory the day a launch screen lands and vacuous for nobody today
+(revoke and kill make it load-bearing now, and a floor fails the check if fewer than two call sites
+are found).
+
+**`AUTH_DEVICE_CREDENTIAL` is REFUSED. The argument, and what each answer strands.**
+
+Adding it (`AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL`) would let a PIN, pattern or password
+satisfy the content KEK and the per-use entries. Four things decided it:
+
+1. **With a prompt built, it rescues exactly one case.** B51 listed four states where the content KEK
+   refuses. Three are fixed by the prompt alone: the post-reboot credential unlock is followed by a
+   `BIOMETRIC_STRONG` prompt that *does* satisfy the key; the 60-second idle lapse is a fresh prompt;
+   `ERROR_LOCKOUT_PERMANENT` is cleared by unlocking the phone at the lock screen and then prompting.
+   The only case the credential authenticator uniquely rescues is **a handset with no enrolled Class-3
+   biometric**.
+2. **It would not rescue even that one on an existing install.** `setUserAuthenticationParameters` is
+   baked into the key at generation and `KeystoreCustodyBootstrap.ensure` returns early when the alias
+   exists — so a spec change reaches **fresh installs only**. To rescue a stranded handset it must be
+   paired with a deliberate re-provision of the content KEK, and re-provisioning that KEK destroys the
+   three content-tier device scalars it seals (`GateInvalidation`'s own note): that **is** a re-pair,
+   and a re-pair rescues the handset without weakening anything.
+3. **The cost lands on the declared adversary.** The threat model is a device someone else is holding.
+   A device credential is shoulder-surfable and is the same secret that got the phone open, so
+   "authenticated" would quietly change from *a Class-3 biometric, now* to *whatever unlocked the
+   phone* — the semantic twin of the per-use-as-timed downgrade this whole slice exists to remove.
+4. **The refusal has an exit, which is what makes it a refusal rather than a brick.**
+   `BiometricManager.canAuthenticate` distinguishes NONE_ENROLLED from NO_HARDWARE, and those have
+   opposite remedies. A handset with nothing enrolled is told to enrol a fingerprint or face unlock —
+   an action the user can perform. A handset with no Class-3 sensor is told that nothing here will
+   change that, which is the **one** refusal in the table with `PerUseRemedy.NONE`, asserted as the
+   only one by test.
+
+**So what is stranded, stated plainly rather than left implied**: a handset with Class-3 hardware and
+nothing enrolled cannot use revoke, kill or the content tier **until the user enrols something**, and a
+handset with no Class-3 sensor cannot use them at all. The rejected alternative would have admitted
+both at the price of making a PIN sufficient for every install that came after it.
+
+**And refusing had a bill that was nearly left unpaid.** Point 4 above was written before anyone
+checked what a PIN-only handset actually does, and what it does is **fail during provisioning, before
+any prompt can be offered**: `KeystoreSpecs.kek(CONTENT)` requests `AUTH_BIOMETRIC_STRONG`, and the
+platform refuses to *generate* such a key with nothing enrolled. `DeviceCapabilities.probe` cannot see
+it — USER_AUTH_PER_USE is answered from the **API level**, a fact about the platform rather than about
+the handset — so the `InvalidAlgorithmParameterException` fell through `routeStartupFailure` to
+`SwarmErrorTokens.UNKNOWN`: *"something failed in a way the app does not recognise"*, remedy **NONE**.
+An app that will not start, for a population that is not an edge case, saying nothing they could act
+on. `PhoneRuntime.refuseAHandsetThatCannotHoldTheContentKek` now asks before provisioning and routes
+NONE_ENROLLED to `UserAuthenticationRequired` — whose remedy is `AUTHENTICATE`, which is what the
+unlock control keys on, so the control appears, finds it cannot prompt, and shows *"add one in system
+settings"*. One mechanism reached by two roads. A transient answer proceeds rather than refusing:
+generation checks **enrolment**, not whether the sensor is free this second, and refusing there would
+be residuals §2.8 — an app that will not start — through a new door.
+
+The decision is **fenced in both directions**: `s20_pbsec2_peruse_test.go` fails if `KeystoreSpecs` and
+`BiometricPrompts` disagree about device credentials. Half of this decision is worse than either whole
+answer — a prompt that accepts a PIN over a biometric-only key is one the user can satisfy that
+releases no key.
+
+**B44's hole is closed, and the sharpest instance of it was on the STARTUP path.**
+`PhoneRuntime.construct` opens the sealed store under the content KEK, so a lapsed window means no
+phone can be built **at all** — every screen is downstream of `runtime.phone()`, and what the user got
+was "authenticate" with nothing anywhere to authenticate with. `ContentUnlockPolicy` now decides from
+the **routed remedy** whether to offer a prompt, on both the ready path and the unavailable one; a
+destroyed key, an unsupported handset and a lost grant get no button, because a prompt offered for a
+refusal it cannot fix is PB-APP-10's failure loop reached through the remedy.
+
+**The residual B44 recorded is NOT closed, and its stated reason is now false.** B44 declined a
+foreground `AUTH_TIMEOUT_EXPIRED` timer because its remedy "would be a `BiometricPrompt` this app does
+not have". That prompt exists. `ContentLock`'s header is corrected in place rather than left standing,
+and the residual now rests on a smaller claim it can carry: a continuously-foregrounded session means
+the device is unlocked and the user is present, and every re-acquisition after a lock, a backgrounding
+or process death is already Keystore-gated.
+
+**What is NOT established, and may not be read out of any file added here.** No test executes
+`BiometricPrompts`. Nothing claims a real prompt was shown, accepted or refused on any device, or that
+a real Keystore withheld a real key. PB-E2E-5 is deferred (B31), and B56 makes the whole `androidTest`
+tier unexecutable besides — an instrumented test cannot reach a prompt because PB-KEY-8 fails the app
+closed before a screen renders. `androidx.biometric` is therefore confined to **one** translation file
+and fenced out of every unit test, widening the `dev/swarm/phone/ui`-scoped fence in `s16_ui_test.go`
+to the whole unit-test source set: a Robolectric shadow driven to "succeeded" would read as proof the
+gate works.

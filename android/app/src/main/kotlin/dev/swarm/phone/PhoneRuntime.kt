@@ -14,13 +14,18 @@ import dev.swarm.phone.keys.DeviceCapabilities
 import dev.swarm.phone.keys.FileCustodyBacking
 import dev.swarm.phone.keys.GoCustodyFailure
 import dev.swarm.phone.keys.KeyCustodyException
+import dev.swarm.phone.keys.KeyRole
 import dev.swarm.phone.keys.KeyTier
 import dev.swarm.phone.keys.KeystoreCustodyBootstrap
 import dev.swarm.phone.keys.KeystoreKekProvider
 import dev.swarm.phone.keys.KeystoreKeyCustody
 import dev.swarm.phone.keys.PersistentCustodyBacking
+import dev.swarm.phone.keys.PlatformCapability
 import dev.swarm.phone.keys.Recovery
 import dev.swarm.phone.keys.SealedStore
+import dev.swarm.phone.keys.deviceBiometricAvailability
+import dev.swarm.phone.runtime.ContentProvisioning
+import dev.swarm.phone.runtime.ContentUnlockPolicy
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.SwarmErrorTokens
@@ -166,10 +171,46 @@ class PhoneRuntime(private val context: Context) {
         }
     }
 
+    /**
+     * PB-SEC-2's precondition, asked before anything tries to CREATE the content KEK.
+     *
+     * `DeviceCapabilities.probe` answers USER_AUTH_PER_USE from the API LEVEL, which is a fact
+     * about the platform and not about this handset -- so a user with a PIN and no fingerprint
+     * passed the capability plan and then hit `KeyGenerator.init` throwing
+     * `InvalidAlgorithmParameterException`, because the platform will not generate an
+     * `AUTH_BIOMETRIC_STRONG` key with nothing enrolled. That is not a [KeyCustodyException], so
+     * [routeStartupFailure] fell through to `SwarmErrorTokens.UNKNOWN`: "something failed in a way
+     * the app does not recognise", remedy NONE. An app that will not start, for a reason the user
+     * could have fixed in thirty seconds, with nothing telling them so.
+     *
+     * IT IS ADR-007 B59'S BILL. Refusing `AUTH_DEVICE_CREDENTIAL` is what makes an enrolled
+     * Class-3 biometric mandatory, so naming this refusal is part of that decision rather than a
+     * separate concern -- see [ContentUnlockPolicy.provisioningFor] for why each answer routes
+     * where it does, and why a transient answer proceeds instead of refusing.
+     */
+    private fun refuseAHandsetThatCannotHoldTheContentKek() {
+        when (ContentUnlockPolicy.provisioningFor(deviceBiometricAvailability(context))) {
+            ContentProvisioning.PROCEED -> Unit
+            // REAUTHENTICATE, whose remedy is AUTHENTICATE -- the same remedy the unlock control
+            // keys on, so the user gets the control, it finds it cannot prompt, and it says to
+            // enrol. One mechanism reached by two roads rather than a second error class.
+            ContentProvisioning.NEEDS_ENROLMENT ->
+                throw KeyCustodyException.UserAuthenticationRequired(KeyTier.CONTENT)
+
+            // Nothing the user does to this handset helps, which is exactly what
+            // DEVICE_UNSUPPORTED means and what PlatformCapabilityMissing routes to.
+            ContentProvisioning.UNSUPPORTED -> throw KeyCustodyException.PlatformCapabilityMissing(
+                KeyRole.COMMAND_SIGN,
+                PlatformCapability.USER_AUTH_PER_USE,
+            )
+        }
+    }
+
     private fun construct(): App {
         val backing = FileCustodyBacking(custodyDir)
         val bootstrap = bootstrapOver(backing)
 
+        refuseAHandsetThatCannotHoldTheContentKek()
         refuseAnOrphanedStateDirectory(backing)
         for (tier in KeyTier.entries) bootstrap.ensure(tier)
 
@@ -254,6 +295,20 @@ class PhoneRuntime(private val context: Context) {
         for (tier in KeyTier.entries) bootstrap.discard(tier)
         coreDir.deleteRecursively()
     }
+
+    /**
+     * PB-SEC-2's per-use gate keys, over the same provisioning path the tier KEKs take.
+     *
+     * IT IS ASKED FOR HERE AND NOT BUILT AT THE SCREEN, for the reason [strongBoxPreferred]
+     * exists: provisioning is one platform conversation, and a second construction of
+     * [CustodyProvisioning] beside a screen is a second place the read-back could be omitted.
+     * The gate entries themselves are provisioned lazily on first use -- they seal nothing, so
+     * there is no first-launch ordering to get right and nothing to lose by not having them.
+     */
+    fun perUseCiphers(): dev.swarm.phone.keys.PerUseCipherSource =
+        dev.swarm.phone.keys.KeystorePerUseCiphers(
+            CustodyProvisioning(AndroidKeystoreProvisioner(), AndroidKeyInfoReader()),
+        )
 
     private fun bootstrapOver(backing: PersistentCustodyBacking) = KeystoreCustodyBootstrap(
         backing = backing,

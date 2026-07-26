@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
@@ -365,8 +366,29 @@ func (a *App) handsetSecurity() relay.Security {
 	if pin := a.core.State().RelaySPKIPin; len(pin) > 0 {
 		sec.PinnedSPKISHA256 = pin
 	}
+	if src := os.Getenv(envTestTrustRoots); src != "" {
+		sec = relay.WithTrustRootSource(sec, relay.TrustRootSource(src))
+	}
 	return sec
 }
+
+// envTestTrustRoots names the handset's platform for a test that has to reach the
+// pinning-only branch. It is FORWARDED, not interpreted: relay.WithTrustRootSource honours it
+// only inside a test binary and its field is unexported, so a release build ignores whatever
+// this variable says -- and that inertness is proven where the rule lives, by a non-test
+// binary, in internal/remote/transport's TestPBNET2_TheTrustRootOverrideIsInertInAReleaseBuild.
+//
+// Forwarding rather than re-deciding is the whole design. A second copy of "only in tests" here
+// would be a second thing to get wrong and a second thing to prove, and this phase has spent
+// itself on rules that existed in two places and disagreed.
+//
+// WHY IT IS NEEDED AT ALL. The case that bites a handset is a phone with NO pin yet: on a
+// pinning-only platform that dial is refused with ErrPinRequired, which is the ordinary first
+// pairing. On the desktop the suite runs on, the same dial verifies against the system roots
+// and fails with a generic x509 error that never reaches the verdict -- so without this the
+// ordinary path can only be fenced by proxy, through ErrPinMismatch, which is a different
+// error reached a different way (ADR-007 B58).
+const envTestTrustRoots = "SWARM_TEST_TRUST_ROOTS"
 
 // errRelayPinUnmatched is the phone's refusal when the certificate its UNVERIFIED pairing
 // dial accepted is not the one the machine pinned in msg2 (ADR-007 B48). It reaches the

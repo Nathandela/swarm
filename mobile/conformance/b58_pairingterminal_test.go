@@ -211,3 +211,119 @@ func (m *b58Machine) offer(t *testing.T, pin []byte) string {
 	t.Helper()
 	return m.inner.offerAt(t, pin, m.phoneURL)
 }
+
+// TestB58_TheFirstPairingSurvivesAPinningOnlyPlatform is the ORDINARY path, fenced directly
+// instead of by proxy.
+//
+// The two tests above drive ErrPinMismatch -- a phone holding the WRONG pin -- because that is
+// what a desktop can produce. The case that actually bites a handset is ErrPinRequired: a phone
+// holding NO pin at all, which is every phone until msg2 delivers one, refused before a packet
+// because relay.TrustRootSourceFor makes Android pinning-only. On this host the identical dial
+// verifies against the system roots and fails with a generic x509 error that falls through to
+// `continue` and never reaches the verdict at all -- so without stating the platform, the
+// ordinary first pairing is fenced only by a different error reached a different way.
+//
+// The override is FORWARDED to relay.WithTrustRootSource, which honours it only inside a test
+// binary and whose inertness in a release build is proven by a non-test binary in
+// internal/remote/transport. Nothing here re-decides that rule.
+func TestB58_TheFirstPairingSurvivesAPinningOnlyPlatform(t *testing.T) {
+	t.Setenv("SWARM_TEST_TRUST_ROOTS", "pinned")
+
+	_, relayURL := s16FreshRelay(t)
+	_, wss, spki := newPinTap(t, relayURL)
+
+	// NO PIN SEEDED. This is a fresh install, which is the whole point: the phone cannot hold a
+	// pin before the pairing that delivers it.
+	dir, custody := t.TempDir(), newTestCustody(t)
+	app, err := swarmmobile.NewApp(&swarmmobile.Config{
+		StateDir: dir, RelayURL: wss, MachineID: testMachineID,
+	}, custody)
+	if err != nil {
+		t.Fatalf("swarmmobile.NewApp: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	seen := &connWatch{}
+	if err := app.SetEventListener(seen); err != nil {
+		t.Fatalf("SetEventListener: %v", err)
+	}
+
+	machine := newB58Machine(t, relayURL, wss)
+	p := s16BeginConfirmed(t, app, machine.offer(t, spki))
+	s16AwaitSAS(t, p)
+
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start: %v", err)
+	}
+	eventually(t, "a phone with no pin on a pinning-only platform never reported "+
+		"relay_untrusted; the platform override did not reach the dial, so this test is not "+
+		"exercising ErrPinRequired at all", func() bool {
+		st, err := app.ConnectionState()
+		return err == nil && st == "relay_untrusted"
+	})
+
+	// THE DISCRIMINATOR IS THE `connecting` EVENT, and choosing it is the whole test.
+	//
+	// Two observables that suggest themselves both fail here. A dial count is blind: an
+	// ErrPinRequired refusal is decided from the policy BEFORE a socket opens, so nothing
+	// reaches the tap whether the loop lives or dies. And "does it come online" is VACUOUS --
+	// measured, not assumed: with the guard removed this test passed three times out of three,
+	// because rearmAfterPairing restarts the dead loop and wins its race on an idle machine.
+	//
+	// What separates the two worlds is HOW it comes back. A surviving loop is mid-generation,
+	// so its next iteration goes straight to online. A loop that DIED and was rearmed starts a
+	// fresh generation, whose first act is setConn(connConnecting). So a `connecting` event
+	// after the verdict is proof the loop ended -- exactly what must not happen during a
+	// pairing, and exactly what rearm papers over afterwards.
+	if err := p.Confirm(); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	s16AwaitState(t, p, "paired")
+
+	eventually(t, "the phone never came online after its FIRST pairing delivered the relay pin "+
+		"on a pinning-only platform", func() bool {
+		st, err := app.ConnectionState()
+		return err == nil && st == "online"
+	})
+
+	if n := seen.connectingAfterVerdict(); n > 0 {
+		t.Fatalf("the transport loop reported `connecting` %d time(s) after the pin verdict, "+
+			"which only a FRESH generation does -- so the loop ended during the pairing and "+
+			"rearmAfterPairing restarted it. That rearm is a race it can lose: it polls the dead "+
+			"generation's channel once, non-blockingly, and nothing else ever relaunches the "+
+			"loop. On a first pairing this is the ordinary path (ADR-007 B57)", n)
+	}
+}
+
+// connWatch records the connection states the facade reports, so a test can tell a loop that
+// SURVIVED from one that died and was restarted underneath it.
+type connWatch struct {
+	mu     sync.Mutex
+	states []string
+}
+
+func (w *connWatch) OnEvent(e *swarmmobile.Event) {
+	if e == nil || e.Kind != "connection" {
+		return
+	}
+	w.mu.Lock()
+	w.states = append(w.states, e.State)
+	w.mu.Unlock()
+}
+
+// connectingAfterVerdict counts `connecting` reports that follow the first pin verdict. A
+// generation already running never emits one; only a newly launched one does.
+func (w *connWatch) connectingAfterVerdict() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, seenVerdict := 0, false
+	for _, st := range w.states {
+		switch {
+		case st == "relay_untrusted":
+			seenVerdict = true
+		case seenVerdict && st == "connecting":
+			n++
+		}
+	}
+	return n
+}

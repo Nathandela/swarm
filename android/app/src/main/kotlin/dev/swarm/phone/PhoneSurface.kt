@@ -9,13 +9,25 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import dev.swarm.phone.keys.AuthorizationLedger
+import dev.swarm.phone.keys.BiometricPolicy
+import dev.swarm.phone.keys.BiometricPrompts
+import dev.swarm.phone.keys.GateResolution
+import dev.swarm.phone.keys.GatedOperation
+import dev.swarm.phone.keys.InvalidationEvent
+import dev.swarm.phone.keys.PerUseGate
+import dev.swarm.phone.keys.PerUseRefusalReason
+import dev.swarm.phone.keys.PerUseRefusalText
+import dev.swarm.phone.keys.PromptOutcome
 import dev.swarm.phone.runtime.ConnectivityPolicy
+import dev.swarm.phone.runtime.ContentUnlockPolicy
 import dev.swarm.phone.runtime.LifecycleConvergence
 import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
 import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.FacadeBridge
+import dev.swarm.phone.ui.RoutedError
 import swarmmobile.App
 
 /**
@@ -55,7 +67,33 @@ import swarmmobile.App
  * to put a switch on. The panels are hosted here rather than in Activities of their own so that
  * [SecureWindow.protect]'s one window still covers every one of them.
  */
-class PhoneSurface(private val activity: AppCompatActivity, private val runtime: PhoneRuntime) {
+class PhoneSurface(
+    private val activity: AppCompatActivity,
+    private val runtime: PhoneRuntime,
+    /**
+     * THE PROCESS'S ONE [AuthorizationLedger], passed in rather than defaulted. It is
+     * `SwarmApplication.contentLock`'s, which is the only one every [InvalidationEvent] reaches;
+     * a default here would be a parameter somebody eventually leaves off (ADR-007 B18(c)), and
+     * what they would get is a per-use gate no screen lock can clear.
+     */
+    ledger: AuthorizationLedger,
+) {
+
+    /**
+     * PB-SEC-2's PER-USE tier, and the reason this constructor gained a parameter.
+     *
+     * ADR-007 B51: `KeystoreSpecs.forOperation` was referenced from `src/test/` alone, the ledger
+     * had no production caller, and there was no `BiometricPrompt` in the app -- so revoke and
+     * kill were gated by the content KEK's 60-second TIMED window, exactly like typing. This is
+     * where that stops being true, because this is the only place those verbs are reached from.
+     */
+    private val prompts = BiometricPrompts(activity)
+
+    private val perUse = PerUseGate(
+        prompt = prompts,
+        ciphers = runtime.perUseCiphers(),
+        ledger = ledger,
+    )
 
     private val status = label(bold = true)
 
@@ -73,7 +111,14 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
     private val settings = SettingsSurface(activity, runtime)
 
     private val takeControl = gatedButton("Take control") { app, session -> app.takeControl(session) }
-    private val kill = gatedButton("Kill session") { app, session -> app.kill(session) }
+
+    /**
+     * PER-USE (requirements 6.0), so it goes through [perUse] and not through [gatedButton].
+     * Ending someone's session is one prompt away from a phone in a stranger's hand.
+     */
+    private val kill = perUseButton("Kill session", GatedOperation.KILL) { app, session ->
+        app.kill(session)
+    }
 
     /**
      * PB-E2E-2's "types", and PB-INPUT-3's precondition beside it: the machine refuses input
@@ -105,7 +150,31 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
      * It revokes THIS device. The kill switch is owner-tier only and this app can never set it,
      * so revoke is the phone-side response to a lost device (mobile/screen_coverage.tsv).
      */
-    private val revoke = gatedButton("Revoke this device") { app, _ -> app.revokeThisDevice() }
+    private val revoke = perUseButton("Revoke this device", GatedOperation.REVOKE) { app, _ ->
+        app.revokeThisDevice()
+    }
+
+    /**
+     * ADR-007 B44's missing exit, as a control.
+     *
+     * WHY IT HAS TO EXIST. B44 made a screen lock return the content tier to locked, and
+     * [renderReady] asks [PhoneRuntime.unlockContent] on the way back -- with a comment
+     * asserting the Keystore "will answer", which is false after a credential unlock (mandatory
+     * post-reboot), after the biometric idle timeout, after repeated failures, and always on a
+     * handset with no enrolled Class-3 biometric. Until this button existed the refusal was a
+     * sentence on screen and nothing else: a gate whose exit is unbuilt.
+     *
+     * IT IS HIDDEN UNLESS IT WOULD HELP. [dev.swarm.phone.runtime.ContentUnlockPolicy] decides
+     * from the ROUTED remedy, so a destroyed key or an unsupported handset gets no button to
+     * press forever -- PB-APP-10's failure loop, reached through the remedy.
+     */
+    private val unlockContent = SecureWindow.gate(
+        Button(activity).apply {
+            text = "Unlock your sessions"
+            visibility = View.GONE
+            setOnClickListener { promptForContent() }
+        },
+    )
 
     /** The session the controls act on, chosen in [renderReady] and never from an Intent. */
     private var session: String = ""
@@ -130,8 +199,8 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
                 setPadding(PADDING, PADDING, PADDING, PADDING)
                 layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
                 for (child in listOf(
-                    status, notice, pairing.root, peekTitle, peek, takeControl, typed, send, kill,
-                    revoke, settings.root, outcome,
+                    status, notice, unlockContent, pairing.root, peekTitle, peek, takeControl,
+                    typed, send, kill, revoke, settings.root, outcome,
                 )) {
                     addView(child)
                 }
@@ -148,7 +217,8 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
      * than being remembered about.
      */
     val gatedActions: List<View> =
-        listOf(takeControl, send, kill, revoke) + pairing.gatedActions + settings.gatedActions
+        listOf(takeControl, send, kill, revoke, unlockContent) +
+            pairing.gatedActions + settings.gatedActions
 
     /**
      * Draw. Called from onResume, so a phone that was unavailable when the screen opened -- a
@@ -318,6 +388,15 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
         // PB-APP-9: the ROUTED message, never the platform's own words. A Keystore alias is not
         // a remedy, and `detail` exists for a bug report rather than for a person.
         status.text = startup.error.message
+
+        // THE SHARPEST CASE B44 LEFT OPEN, and the reason the offer is made here too rather than
+        // only on the ready path. `PhoneRuntime.construct` opens the sealed store under the
+        // content KEK, so a handset whose window has lapsed cannot build a phone AT ALL: every
+        // screen is downstream of `runtime.phone()`, and what the user got was "authenticate"
+        // with nothing anywhere to authenticate with. The refusal is not cached
+        // (`PhoneRuntime.phone` remembers only successes), so a prompt followed by a redraw is
+        // the whole recovery.
+        showContentUnlock(startup.error)
         notice.text = ""
         peekTitle.text = ""
         peek.text = ""
@@ -334,7 +413,15 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
         // has not authenticated on refuses, and PB-APP-9's routed message is what says so. A
         // phone whose content custody is live answers without consulting Keystore at all, so this
         // costs nothing on every other redraw.
-        runtime.unlockContent()?.let { outcome.text = it.message }
+        //
+        // AND ITS REFUSAL NOW HAS A WAY FORWARD (ADR-007 B44/B59). The comment above used to end
+        // "and therefore the moment the Keystore-backed content KEK will answer", which is false
+        // in four states -- after a credential unlock, after the biometric idle timeout, after
+        // repeated failures, and always with no Class-3 biometric enrolled. When the routed
+        // remedy says a fresh authentication fixes it, the control below offers one.
+        val contentRefusal = runtime.unlockContent()
+        contentRefusal?.let { outcome.text = it.message }
+        showContentUnlock(contentRefusal)
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
         status.text = bridge.connectionBanner().text
@@ -368,6 +455,27 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
         setActionsEnabled(true)
     }
 
+    /**
+     * Show the unlock control exactly when it would help, and say what to do when it would not.
+     *
+     * BOTH HALVES ARE THE SAME DEFECT CLASS. A refusal a prompt can fix with no prompt offered is
+     * a dead end; a prompt offered for a refusal no prompt can fix is a button the user presses
+     * forever. [ContentUnlockPolicy] decides from the ROUTED remedy so the decision is made once,
+     * in `ErrorRouter`'s table, rather than restated here where it would drift.
+     */
+    private fun showContentUnlock(refusal: RoutedError?) {
+        if (!ContentUnlockPolicy.offersUnlock(refusal)) {
+            unlockContent.visibility = View.GONE
+            return
+        }
+        val availability = prompts.availability()
+        unlockContent.visibility = View.VISIBLE
+        unlockContent.isEnabled = ContentUnlockPolicy.canPrompt(availability)
+        // A handset that cannot prompt gets the advice INSTEAD of a live button, rather than a
+        // disabled control with no explanation beside it.
+        if (!unlockContent.isEnabled) outcome.text = ContentUnlockPolicy.adviceFor(availability)
+    }
+
     private fun setActionsEnabled(enabled: Boolean) {
         // Revoke stays live: it is the panic action, and a phone whose session list is empty
         // (or whose machine is unreachable) is exactly the state its owner may need it in.
@@ -397,6 +505,76 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
                 setOnClickListener { invoke(verb) }
             },
         )
+
+    /**
+     * A control for an operation requirements 6.0 puts in the PER-USE tier: the verb runs only
+     * after [PerUseGate] has obtained a fresh, CryptoObject-carried authorization for THIS use of
+     * THIS operation.
+     *
+     * IT IS A SEPARATE FACTORY FROM [gatedButton] SO THE DIFFERENCE IS VISIBLE AT THE CALL SITE,
+     * and android/gate/s20_pbsec2_peruse_test.go requires every production call of a per-use
+     * facade verb to be declared through this one. Sharing a factory with a flag would put the
+     * whole of PB-SEC-2's second tier behind a boolean somebody eventually copies wrong -- and a
+     * per-use tier that silently behaves as the timed one is exactly the downgrade ADR-007 B51
+     * found shipped.
+     */
+    private fun perUseButton(
+        text: String,
+        operation: GatedOperation,
+        verb: (App, String) -> Any?,
+    ): Button = SecureWindow.gate(
+        Button(activity).apply {
+            this.text = text
+            setOnClickListener {
+                perUse.authorize(
+                    operation,
+                    onRefused = { refusal ->
+                        // PB-APP-9: the refusal reaches the user. A gated action that reports
+                        // nothing leaves the screen looking identical whether it ran or not,
+                        // which for "revoke this device" is the worst possible ambiguity.
+                        outcome.text = refusal.message
+                        render()
+                    },
+                ) { invoke(verb) }
+            }
+        },
+    )
+
+    /**
+     * The content tier's re-authentication, and the retry that follows it.
+     *
+     * IT IS A RETRY AND NOT AN ASSUMPTION. A successful prompt is a statement about the user;
+     * whether the content KEK now answers is the Keystore's to say, and [PhoneRuntime
+     * .unlockContent] is asked again so that a refusal which survives the prompt is reported
+     * rather than papered over.
+     */
+    private fun promptForContent() {
+        val availability = prompts.availability()
+        if (!ContentUnlockPolicy.canPrompt(availability)) {
+            outcome.text = ContentUnlockPolicy.adviceFor(availability)
+            return
+        }
+        prompts.confirmForContent { promptOutcome ->
+            if (BiometricPolicy.resolve(promptOutcome) != GateResolution.AUTHORIZED) {
+                outcome.text = PerUseRefusalText.messageFor(refusalFor(promptOutcome))
+                return@confirmForContent
+            }
+            render()
+        }
+    }
+
+    /**
+     * A failed content prompt, in the per-use gate's own words. The two prompts fail for the same
+     * platform reasons and a second wording table would drift from this one on the first edit.
+     */
+    private fun refusalFor(promptOutcome: PromptOutcome): PerUseRefusalReason = when (promptOutcome) {
+        PromptOutcome.CANCELLED -> PerUseRefusalReason.CANCELLED
+        PromptOutcome.FAILED -> PerUseRefusalReason.FAILED
+        PromptOutcome.LOCKED_OUT -> PerUseRefusalReason.LOCKED_OUT
+        PromptOutcome.LOCKED_OUT_PERMANENT -> PerUseRefusalReason.LOCKED_OUT_PERMANENT
+        // Unreachable: SUCCEEDED resolves to AUTHORIZED and the caller returned above.
+        PromptOutcome.SUCCEEDED -> PerUseRefusalReason.KEY_NOT_RELEASED
+    }
 
     private fun invoke(verb: (App, String) -> Any?) {
         when (val startup = runtime.phone()) {
