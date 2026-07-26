@@ -2731,3 +2731,50 @@ against, and I sent an agent hunting the wrong thing.
 **Also worth recording**: `go test ./...` **without `-count=1` serves cached package results**, so any
 attempt to reproduce an order-dependent failure without it proves nothing. Three "clean" runs were
 meaningless for that reason.
+
+### B58 — B57 is a SHIPPING BLOCKER: the first pairing on Android is a coin toss
+
+B57 was recorded as a narrow race. It is not. **The worst case is the FIRST pairing on a handset**, and
+it is the ordinary path.
+
+A fresh handset holds no pin. On a pinning-only platform an unpinned dial is refused with
+`ErrPinRequired`, which B45's switch maps to `connRelayUntrusted` — **terminal**. So while the user is
+completing their very first pairing, the transport loop is failing **terminally** on every 250 ms
+retry, and whether the handset ever connects depends on winning a race.
+
+**`rearmAfterPairing` does not cover it — it is a lost wakeup.** It polls `dead.done` **once,
+non-blocking**, and acts only on a generation already dead at that instant. Only `Start` and
+`rearmAfterPairing` ever launch the loop, so a loop that dies *after* rearm has polled is **never
+restarted by anything**. The losing interleaving: the label publishes, the loop dials with the
+pre-pairing pin and returns terminally (the grace window is not set yet, because `rearmAfterPairing`
+has not run), then `pin()` writes and rearms — and if that poll lands before the dying loop's deferred
+`close(done)`, rearm sees nothing to re-arm and **the loop is gone**. In the winning interleaving the
+user still sees a terminal state flash. **The grace window is not a guard here; it is a coin toss whose
+outcome the user sees either way.**
+
+**It does not reproduce on darwin, which is why nothing caught it.** With no pin and `TrustRootsSystem`
+the same dial fails with a generic x509 error that falls through to `continue` rather than to a
+terminal verdict. **The bug is invisible on the platform the suite runs on and ordinary on the platform
+that ships.**
+
+**RULINGS.**
+
+**(1) Build the terminal-state half FIRST, and it stands alone.** A transport verdict reached **while a
+pairing is in flight** must not be terminal — the thing that would clear it is the pairing already
+running. `App` already tracks in-flight pairings, so this needs no new state, and **it removes the
+brick even if the ordering is never touched.** That independence is why it goes first.
+
+**(2) The mid-write `Cancel` question is ruled: once the durable write has landed, the pairing is
+COMPLETE and `Cancel` no longer wins.** It becomes a no-op that tells the user the pairing completed
+and the remedy is `revoke`. The reason is PB-PAIR-4's own principle — **never half-paired**. Letting a
+late `Cancel` publish over landed durable effects would create exactly the half-paired state that
+requirement forbids: a phone pinned to a machine it believes it cancelled. And rolling the write back
+is a larger change than the window justifies. **`Cancel` means "stop before it lands"; after it lands,
+the verb is `revoke`.** So the settled-state guard is re-checked under the lock after the write, and a
+user answer arriving mid-write loses **with a message**, not silently.
+
+**(3) Extend the platform seam to the `App` level — approved.** Today a fence can only be written
+against `ErrPinMismatch` (a wrong persisted pin), while the case that actually bites is
+`ErrPinRequired` (a fresh handset with none). **A fence against the reproducible error rather than the
+real one is the defect class this phase has found ten times**, and it would be built deliberately here.
+Keep the seam narrow and inert in release, as the existing one is.
