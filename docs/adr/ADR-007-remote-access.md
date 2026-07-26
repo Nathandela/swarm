@@ -3045,3 +3045,163 @@ genuinely single transactions.
 
 **The honest count moves to 138 of 143.** PB-PUSH-9 joins PB-PAIR-4, PB-SEC-2 and PB-E2E-2 as
 NOT MET. PB-E2E-5 remains excluded.
+
+---
+
+### B62 — round 3, the threat audit: the daemon parks forever in the ORDINARY order of operations
+
+Eight findings, each carrying its own provenance: executed, read, or inferred. Six are not in
+B60 or B61. The reviewer independently confirmed B60(4)'s mechanism in code rather than
+inheriting it, and independently reproduced B61(2)'s durable-store growth with different
+numbers (200 self-consents at 32 KB ids taking `relay.db` to 16,777,216 bytes).
+
+**B62(1) — CRITICAL. The machine parks forever on msg4 after an affirmative confirm, and the
+shipped phone's only abort path is structurally incapable of sending the abort.**
+
+No attacker is required, and this is not the tail case. The owner scans the QR, the desktop
+shows the SAS, the owner presses `y` on the desktop FIRST — that prompt is in front of them —
+then turns to the phone. From that moment anything that cancels the phone's context hangs the
+daemon permanently. Each link read:
+
+1. `internal/remote/pairing/pairing.go:473` — after the confirm the machine blocks on
+   `recvConsent(ctx, ...)`, which the relay parks on `sc.ctx.Done()`
+   (`internal/remote/relay/server.go:1372-1385`). `Conn.RendezvousRecv` (`client.go:397`) passes
+   the caller's ctx straight through; there is no timeout.
+2. `internal/protocol/server.go:2098` — the production ctx is
+   `context.WithCancel(context.Background())`. **No deadline.** `pairWindow`
+   (`internal/skeleton/pairing.go:288`) is only the ANNOUNCED `ExpiresAt`; nothing enforces it on
+   the `Pair` goroutine.
+3. `mobile/pairing.go:440-448` — the shipped `DeviceSAS` closure returns exactly `nil` or
+   `ctx.Err()`. There is no third return.
+4. `mobile/pairing.go:541-559` — `RejectSAS` and `Cancel` both call `cancelHandshake()`, which
+   cancels that ctx AND `CloseNow()`s the socket. `pairingTTL` = 60 s cancels the same ctx.
+5. `internal/remote/pairing/pairing.go:665` — `_ = sendConsent(ctx, sess, rt, nil)`, commented
+   *"an ANSWERED refusal, not silence"*, runs on **the ctx that was just cancelled**.
+
+So the abort frame is never sent on any production path that produces it. Measured, deterministic
+over three runs against a transport faithful to `relay.Conn`: two sends attempted, one refused by
+the dead ctx, machine still parked six seconds after an affirmative confirm.
+
+**The daemon consequence is the severe part.** `Pair` never returns, so `result()` never fires, so
+`clearPairing` never runs (`internal/protocol/server.go:2191`, reachable only from `result` and
+the `BeginPairing` error path), so `cc.pair != nil` forever and **every later `pair_start` on that
+connection is refused "pairing already in progress"** (`:2102`). There is no `pair_cancel` op.
+Only dropping the whole owner connection escapes. The relay conn leaks with it.
+
+**A composition, and no single change is wrong.** B52 introduced msg4; B46 tightened the window
+to 60 s; the production ctx never had a deadline. Before B52 the machine's last receive was msg3,
+which PRECEDES the confirm — afterwards it only ever sent. B52 introduced the first machine-side
+receive with no clock and placed it after the point where the operator believes the pairing is
+done. `RejectSAS` — which `mobile/pairing.go:886-892` calls *"the ONLY signal this protocol has
+for a MITM"* — is the path most certain to hang the machine.
+
+**B62(1a) — the fence for exactly this cannot fail, and it is the clearest instance yet.**
+`b52_consent_release_test.go:223` passes `context.WithTimeout(context.Background(), 2*time.Second)`
+into `Pair`. **Its green comes entirely from a deadline the TEST injects and production never
+supplies.** Changing only that literal to `10*time.Minute` fails the test by name. A test that
+supplies the very safety property whose absence is the defect.
+
+**B62(1b) — and the second is worse.** `b52_consent_release_test.go:173` sets `DeviceSAS` to
+return a hand-made non-nil error on a LIVE ctx. Per link 3 the shipped phone cannot produce that
+shape. The fence for B52's central claim tests a rejection production cannot make and is silent
+on the one it can.
+
+**B62(2) — independent confirmation of B61(2)**, with the additional observation that this changes
+the CLASS of B39's growth: durable relay state was O(identities) and is now O(operations) at up to
+32 KB each, under a per-identity budget that B62(7) shows resets on demand.
+
+**B62(3) — B41's own remediation instruction was never carried out.**
+`internal/remote/supervise/unit.go:288-306` still has no `NoNewPrivileges`, `ProtectSystem`,
+`ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies` or `SystemCallFilter`. More consequential:
+**ADR-007 line 46, the D4/R1 paragraph, is verbatim unchanged** and still reads *"Sidecar isolation
+(below) limits blast radius on daemon/PTY state (defense-in-depth)"* — the sentence B41 ruled false
+and demanded be withdrawn. Nineteen entries later a reader of the Decision section still gets it.
+**The finding lives in an appendix that contradicts the body**, which is a new failure mode for this
+record: an ADR whose later entries falsify its earlier body without amending it.
+
+**B62(4) — B50's impossibility result has been FALSIFIED by B52, and the replacement remedy kills
+B60(4) at the root.** B50 proved no remedy could exist because *"`bucketPairs` is symmetric by
+construction — nothing anywhere writes one edge alone."* True when written. B52 then added
+`bucketConsents`, written on exactly one key (`store.go:394`) and deleted on one key (`store.go:581`).
+Measured: `consents[machine|phone]=true`, `consents[phone|machine]=false`. The asymmetric durable
+fact B50 declared absent is now in the store.
+
+`handleDeviceRevoke` (`server.go:1105`) gates on `mayActOn` alone, which a paired phone satisfies —
+so a once-unlocked stolen handset, using only the wake-tier `RELAY_AUTH` key (deliberately not
+user-auth-gated per B9/B16) and speaking the relay protocol directly, severs the owner's remote
+access from anywhere, instantly, unattributably, and per B60(4) repeatably.
+
+**Remedy: require the caller to be the PAIRER (`consents[caller|target] != nil`), not merely
+`mayActOn`.** One bucket lookup, zero new state, zero new wire fields. Checked against every
+constraint B55 enumerated: `swarm remote revoke` holds; PB-STATE-10's stranded-device recovery
+holds; the stolen phone is refused (it never calls `authorize_device` — B38 deleted the one in
+`onConnected`); B46's interceptor holds; B24 is untouched. **B60(4)'s renewable cycle dies with it**,
+because the cycle's first step is the phone's revoke.
+
+Also verified, because it would have changed the severity: PB-STATE-10's LOCAL recovery is not
+bricked by the stolen phone's revoke — `runRemoteRevoke` treats every relay purge failure as a
+warning (`cmd/swarm/remote.go:555-583`), so the device slot frees.
+
+**B62(5) — the sixth "names a mechanism without checking what it gates".**
+`cmd/swarm/remote.go:687-691`, repeated at `cmd/swarm-remote/config.go:191-194` and
+`internal/remote/relay/server.go:740-744`, argues *"No legitimate flow revokes a machine at the
+relay: this CLI is the only production caller."* Both halves true. The unchecked join:
+**`device_revoke` is not gated on being a legitimate flow — it is gated on `mayActOn`**, a store
+predicate the stolen handset's key satisfies directly. The sentence surveys the shipped app's
+CALLERS; the verb's gate is a relay-side PREDICATE. And B55's conclusion is true of the BAN and
+silent about the EDGE DELETION, which the same paragraph calls "the enforcement".
+
+**B62(6) — B54's ruling is falsified for the one case it claims is only fixable that way.** B54
+records *"the case that is ONLY fixable this way — a machine that legitimately has no pin — is
+currently unrecoverable."* Adopting the absent pin does not make that machine reachable on Android,
+the only platform Phase B ships: `TrustRootSourceFor("android")` is `TrustRootsPinned`, so
+`tlsConfig` returns `ErrPinRequired` (`security.go:359-360`) → `connRelayUntrusted` → "pair again"
+→ adopt no pin → `ErrPinRequired`. `handsetSecurity`'s own doc block states this outcome verbatim.
+The no-op loop B54 exists to break is preserved for that case; only the sentinel changed. **Narrow
+the ruling to the stale-pin half and record the no-pin machine as still unrecoverable** — noting,
+per B61(7), that no `--relay-pin` is the DEFAULT.
+
+**B62(7) — B39 unchanged; the ceremony binding does not shrink the minting reach.** Measured: 12
+successful re-auths on ONE live socket; with `OpsPerMin=4`, 36 `authorize_device` calls landed in
+one window and 12 leaked rate windows stayed resident. `handleAuthInit`/`handleAuthResp` have no
+`!sc.authed` guard; `registerSession` overwrites `sc.rid` while `removeConn` reaps only the CURRENT
+rid. Neither ceremony-bound consent nor the pair-scoped ban touches this, because both constrain
+WHOSE routing ids may be named and a self-consenting attacker signs its own.
+
+**B62(8) — an additional candidate for "invalidated by a fix to a different requirement".**
+R-PAIR.6's 60 s window was tightened by B46 for a 3-message handshake containing ONE human
+decision. B52 then put a SECOND human decision inside the same window and nothing re-derived the
+TTL. This is the benign trigger for B62(1).
+
+**Confirmed closes, recorded so they are not re-audited.** B49's mutual assured destruction is
+CLOSED. B52(c)'s `burned` sweep is closed and correctly bounded — the durable set is the one that
+got away. B53(b)'s `ConsentDeferred` marker is INERT as required: a device that sends the marker
+and then nothing leaves the machine PARKED, never half-enrolled; the parking is B62(1) and the
+marker itself carries no authority. B48 is wired and correct under attack — `Peer` is derived from
+`MachineRelayAuthPub`, not from the asserted `MachineRoutingID`, which is the exact hazard
+`ConsentMessage`'s own doc names. B47's mechanism is correct; the defect is its storage.
+
+---
+
+### Residual 4.10 — the third form of the fence-that-cannot-fail, stated by the agent that hit it
+
+Recorded verbatim because it is sharper than the two forms already on the list:
+
+> **When the failure I want to inject is reachable only through a seam the happy path also uses,
+> the fence tests whichever comes first — and that is never the thing I meant.**
+
+Earned, not theorised. The implementer of B60(2) wrote the durability fence, measured it vacuous
+three separate ways against the mutation that swallows `pin`'s error — refusing both tiers after
+SAS, refusing the wake tier only, and a gated custody refusing after N further calls at N ∈
+{0,1,3,4} — and **deleted it rather than leave a green test standing over an unfenced fix.** The
+cause is structural: the handshake and the durable write draw on the same tiers, so any refusal
+reachable through `KeyCustody` breaks `RunDevice` before `pin` is ever called, and the pairing then
+fails for a reason unrelated to the change.
+
+The two earlier forms — *a fence written for one error class does not transfer to another error in
+the same switch arm* (4.9), and *a success-delay fence cannot transfer to the failure branch*
+(B60(2)) — are special cases of this one.
+
+**Fencing B60(2) requires a seam that can fail the WRITE without failing the HANDSHAKE**: an
+injectable `phonecore.Store`. That is new product-facing surface and was correctly not added on an
+implementer's own judgement.
