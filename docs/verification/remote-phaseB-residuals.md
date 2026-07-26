@@ -561,3 +561,43 @@ appear), `Paste`, `Resync`, `Launch`, `KillSwitchEngaged`, `PendingOpCount`. Two
 unbound (`IsRunning`, `Resize`). `Presence` is ledgered as a **decision, not an omission**: it is a
 blocking relay round-trip and `render()` is now event-driven, so wiring it naively would issue an RPC
 per journal record on the main thread — a performance defect introduced by fixing a correctness one.
+
+## 1.9 A release handset fails closed on every `wss://` dial until a pin channel exists
+
+Consequence of applying transport policy (B34/B37): `TrustRootSourceFor("android")` is
+`TrustRootsPinned`, so the pin **is** the whole of relay TLS verification on that platform. Applying
+the policy made a latent fail-closed live — **a release handset now refuses every `wss://` dial with
+`ErrPinRequired`**, because no channel has ever carried a pin to the phone.
+
+**This is correct behaviour and a shipping blocker at the same time**, and it is recorded as a
+residual rather than "fixed" by weakening the policy, which was the available shortcut.
+
+Not a pure regression: per this ADR's own reasoning the Conscrypt-era trust store is stale or empty
+on Android 14+, so those handsets fail today regardless. **The handsets that genuinely regress are
+Android 13 and earlier against a public-CA relay.**
+
+**The QR cannot carry the pin, measured rather than assumed**: the v6-L budget is 134 bytes and
+`MaxRelayURLLen = 39` already puts the symbol at 133 — one character of slack. A 32-byte pin is ~43
+base64 characters. Two channels that are not the QR:
+
+- **Machine half — one field in `relay.json`**, already read by all three machine dial paths, written
+  by `swarm remote init --relay-pin`. No size budget at all. Closes the machine side completely.
+- **Handset half — `pairing.MachinePayload`**, zero QR bytes. It already carries five keys the phone
+  pins at pairing, so a pin beside them inherits their trust properties exactly: a payload that could
+  substitute the pin could already substitute `MachineSignPub`. **Assigned into the consent-signature
+  change**, because that agent is already altering this message format and a second format change
+  later would be worse than one now. Its limit, to be stated at the field: it protects every dial
+  *after* pairing, not the pairing dial itself.
+
+## 4.4 A third fence that cannot fail — in the file the missing-policy defect was recorded against
+
+`wireTap` in `internal/remote/transport/harness_test.go` is a **raw TCP** tap, so
+`TestTLS_RedirectToCleartextIsRefused`'s assertion that no `auth_init` appears on the wire is
+**unfalsifiable**: client-to-server websocket frames are **masked**, so the literal string can never
+be found whether or not the frame was sent. Pre-existing, found by the agent that had just written
+websocket-level taps for its own fences after its first raw-TCP attempt saw 542 bytes and no
+`auth_init`.
+
+Third instance of "a guard that cannot fail" in this phase, and the second found in the *same file*
+as a defect already recorded there. **Grep-shaped assertions over an encoded transport are the
+recurring shape**: the encoding, not the absence, is what makes them pass.

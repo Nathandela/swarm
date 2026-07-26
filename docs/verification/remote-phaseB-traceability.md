@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 136 |
-| Evidenced (measured on disk) | 136 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
+| Shipped (asserted by hand) | 137 |
+| Evidenced (measured on disk) | 137 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -87,7 +87,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-LIFE-6 | S4 | shipped | `docs/verification/remote-phaseB-s4-evidence.md` |
 | PB-LIFE-7 | S4b | shipped | `docs/verification/remote-phaseB-s4b-evidence.md` |
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
-| PB-NET-2 | S6 | **NOT MET** | ADR-007 B35 — the transport-security policy has no production caller, so no pin and no cleartext refusal is applied on the dial path (ADR-007 B34/B37) |
+| PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-4 | S6 | **NOT MET** | ADR-007 B35 — its queue clause is unreachable by design -- QueuedOp is constructed nowhere outside tests and resolveSend requires a live connection before authoring any mutating op (ADR-007 B42) |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
