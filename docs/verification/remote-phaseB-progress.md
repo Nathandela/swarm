@@ -1285,3 +1285,58 @@ a count that quietly includes two slices it should not.
 Every slice from S15 onward has ordered commits. The failure is confined to S17 and S18b, and the
 cause was mine: I dispatched those two as a combined slice under time pressure and did not require
 the RED commit to land before the implementer started.
+
+### The app never dialled the relay, and three requirements were unreachable because of it
+
+The S19b UI agent found that **`App.Start` had no production caller**. Nothing in the app ever
+opened the relay connection, so "observes / takes control / types" could not have worked even once
+the controls existed. Two more of the same shape came with it: `LifecycleConvergence.planFor` and
+`ConnectivityPolicy` had no production callers either, and **`Config.RelayURL` is read once at
+construction**, so the App that runs a fresh install's first pairing was built with `""` and could
+*never* connect — the user pairs successfully and sits on an empty roster forever.
+
+This is the defect class this phase keeps finding, at its largest scale yet: **a facade verb that
+exists, is unit-tested, is traced in a coverage artifact, and is called by nothing.** Six such verbs
+in one slice. It is also why the requirement mattered: PB-E2E-2 pairs *and then observes in the same
+session*, which is the difference between the demonstration working and appearing to.
+
+### Rulings on the UI slice's seven findings
+
+1. **The runbook cannot create the session it needs, and stopping loudly is correct.** `swarm remote`
+   has no launch verb and sessions otherwise come from the interactive TUI, so the script halts at a
+   named variable with an explanation rather than skipping the clause or inventing a flag.
+   **Accepted.** The runbook must document the TUI-created session as an operator precondition. The
+   absence of a non-interactive session-creation path is recorded as a residual, not fixed at
+   closure — new product surface added to make a demonstration automatable is how a demonstration
+   stops being about the product.
+2. **Three terminal pairing states have no `PairingStep`** — `different_machine`, `rate_limited`,
+   `failed` — so a user who scans another machine's code while pinned is told "the pairing call
+   itself failed". True, general, and **not** PB-PAIR-5's "every terminal state explicit and
+   distinct". This is a requirement violation and is **assigned**, not accepted.
+3. **A pairing interrupted mid-handshake cannot be explicitly resolved**; only a fresh `BeginPairing`
+   overwrites PB-PAIR-4's record. Showing the scan controls with an interrupted notice is
+   **accepted** — the alternative was a screen with no action at all. The missing facade verb is a
+   recorded residual.
+4. **`androidx.camera:camera-video` ships in the APK**, pulled transitively by `camera-view`.
+   **Accepted as carried**: excluding it while only `PreviewView` is used is a `NoClassDefFoundError`
+   waiting for whoever later reaches for `CameraController`, and gambling on runtime behaviour to
+   save a dependency in an exit demonstration is the wrong trade. Recorded in the inventory.
+5. `--refresh-dependencies` fails verification on three buildscript artifacts. **Pre-existing**,
+   reproduced with the slice's own changes stashed back to HEAD. Ordinary builds unaffected.
+6. **The smoke does not exercise the camera, deliberately** — the payload arrives by the manual-entry
+   path. The scanner is wired and shipped; nothing in the run claims a camera decoded anything.
+   Correct, and consistent with ADR-007 B31.
+7. `biometricGate = false` with no switch, because the module has nowhere durable to keep a
+   handset-local preference and a switch whose value does not survive the process is worse than
+   none. **Accepted**: it claims the least.
+
+### The S17 reachability gate, and the limit its author refused to hide
+
+The deletion fence now inverts the existing call-graph walk and requires the function holding the
+verb to have a transitive caller **outside the push package** — demonstrated failing against HEAD,
+naming the uncalled function. Its author reported plainly that the walk **cannot** cheaply reach an
+OS entry point: the last two hops are listeners installed in property initialisers, which a walker
+built on `fun NAME(` cannot cross, and following them needs a different tool. What the gate proves is
+**strictly stronger than presence and strictly weaker than end-to-end reachability**, and that
+sentence is in the test's own doc comment. A control described as stronger than it is retires the
+question it was written to keep open.
