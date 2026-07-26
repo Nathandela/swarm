@@ -246,6 +246,14 @@ func (m *s10Machine) drainPhoneCommands() []schema.RemoteCommand {
 		}
 		fr, ferr := remotegw.OpenMailboxFrame(m.recv, m.keys.ContentKey, it.Envelope)
 		if ferr != nil {
+			// LOGGED, not silent. The cursor has already advanced, so a frame that will not
+			// open is lost for good and every later poll returns nothing -- which reads to
+			// the caller as "the phone stopped sending", the wrong diagnosis with no way to
+			// tell it from the right one. A bare `continue` here is what left the
+			// `different_machine` failure unattributable between "never appended",
+			// "appended elsewhere" and "appended but unopenable". The cursor still
+			// advances: not advancing would spin forever on a genuinely bad frame.
+			m.t.Logf("drainPhoneCommands: mailbox item at cursor %d would not open: %v", it.Cursor, ferr)
 			continue
 		}
 		if fr.Kind == remotegw.FrameInput {
