@@ -2107,3 +2107,53 @@ radius (defense-in-depth)" buys address-space separation and nothing else.
 relay-bytes parser, leaving logic bugs** — and that qualification, which is the actual load-bearing
 argument, appears nowhere in R1. R1 must state it, and must stop claiming defence-in-depth it did not
 ship.
+
+### B42 — two more requirements shipped-but-unmet, and an amendment resting on a dead mechanism
+
+**PB-PAIR-5 — the clean instance of the failure mode I said I could not see.** I amended it to retire
+`already-paired` and substitute `different_machine`, with the criterion "each is user-legible, not an
+opaque error". Verified in the app: `PairingStep` **still declares `ALREADY_PAIRED`** — the state the
+amendment declared unreachable — and declares **no `DIFFERENT_MACHINE`**. `stepOf` returns null for
+it and the user gets the **generic** pairing-failed message. The Go guard is correct and does not
+break same-machine re-pair; the *criterion* is unmet, in the app, for the state my own amendment
+created. It read `shipped`. **An amendment is a change to what must be true, and nothing re-checked
+the surface it moved the requirement onto.**
+
+**PB-NET-4 — a requirement invalidated by a fix to a different one, the second confirmed instance.**
+Its clause "only high-level idempotent ops may queue, with a stated bound" is counted met over
+`OpQueue`, whose evidence cites a boundedness test. `QueuedOp{}` is constructed **nowhere outside
+tests**, and `resolveSend` requires a live connection before authoring any mutating op — so the queue
+is not merely unreached, it is **unreachable by design**. The connection model and ADR-007 D7's
+live-only input rule killed it; nothing re-derived PB-NET-4. Same shape as PB-KEY-7 dying to
+PB-KEY-10's fix.
+
+**And PB-STATE-9's amendment — also mine — reasons at length about `PendingOps` carrying "session ids
+and, for a launch, the command line the user typed", concluding the purge must leave it. It carries
+nothing, ever.** The argument is sound and the mechanism is dead. A residual note that "none is
+harmful today; each is a trap for the next slice that adds a caller" is therefore **false for this
+one**: it is already load-bearing for a shipped requirement and for an amendment's reasoning.
+
+**Three further findings recorded here rather than in their own entries:**
+
+- **The fast-clock defect is worse than "goes deaf".** On `ErrStaleAge` the phone **acks the relay**
+  and commits nothing, so frames are **permanently destroyed as they arrive** while the connection
+  reads `online`. Correcting the clock recovers nothing. And the relay does not need a wrong clock:
+  **withholding delivery for ten minutes and then releasing** makes the phone ack-and-discard
+  everything. That is silent, permanent content destruction **performed by the victim and reported as
+  health** — not the loss-of-function the residual describes.
+- **B29's scope must be re-derived, not inherited.** Its acceptance rested on "one sender in v1", and
+  B27's first-use clause made every never-paired target reachable by anyone. Its trigger was never
+  multi-device; it is **any handset before its first connect**. B37 withdrew the premise B29 was
+  accepted against.
+- **The phone's drain wedges where the gateway's deliberately does not.** The gateway advances its
+  cursor past a malformed item precisely so a poisoned envelope cannot wedge the loop; the phone
+  returns on any open error and re-reads the same page. One unopenable frame stalls that mailbox for
+  its whole retention window — and B28 relies on that behaviour without asking who can inject one.
+
+**On the ledger's own correctness**: its Java-spelling model lowercases only the first letter, but
+gobind lowercases the whole leading uppercase run (`SAS()` binds as `sas()`). No `App` verb has a
+leading acronym today, so it does not fire — but the file's stated defence is that its matcher is
+correct in both spellings, and it is not.
+
+**On E15.1**: the strengthened fence is `strings.Contains(file, req)`. It moved from "the file exists"
+to "the file mentions it" — **one step, not the step** — and PB-NET-2 passed it while NOT MET.

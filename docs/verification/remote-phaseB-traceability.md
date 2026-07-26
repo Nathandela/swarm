@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 138 |
-| Evidenced (measured on disk) | 138 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
+| Shipped (asserted by hand) | 136 |
+| Evidenced (measured on disk) | 136 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -89,7 +89,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | **NOT MET** | ADR-007 B35 — the transport-security policy has no production caller, so no pin and no cleartext refusal is applied on the dial path (ADR-007 B34/B37) |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-4 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-4 | S6 | **NOT MET** | ADR-007 B35 — its queue clause is unreachable by design -- QueuedOp is constructed nowhere outside tests and resolveSend requires a live connection before authoring any mutating op (ADR-007 B42) |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
@@ -102,7 +102,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-PAIR-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-| PB-PAIR-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-5 | S16 | **NOT MET** | ADR-007 B35 — the app declares the RETIRED state (ALREADY_PAIRED) and not the one the amendment substituted (DIFFERENT_MACHINE); stepOf returns null and the user gets the generic pairing-failed message (ADR-007 B42) |
 | PB-PAIR-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-7 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PUSH-0 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |

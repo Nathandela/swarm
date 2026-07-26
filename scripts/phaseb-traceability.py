@@ -54,6 +54,12 @@ NOT_MET = {
     "PB-E2E-2": "the emulator smoke has never run -- its own evidence file disclaims it "
                 "and no log or screenshot exists; counted shipped only because evidence "
                 "is measured per SLICE, not per requirement (ADR-007 B38)",
+    "PB-PAIR-5": "the app declares the RETIRED state (ALREADY_PAIRED) and not the one "
+                 "the amendment substituted (DIFFERENT_MACHINE); stepOf returns null and "
+                 "the user gets the generic pairing-failed message (ADR-007 B42)",
+    "PB-NET-4": "its queue clause is unreachable by design -- QueuedOp is constructed "
+                "nowhere outside tests and resolveSend requires a live connection before "
+                "authoring any mutating op (ADR-007 B42)",
 }
 
 
