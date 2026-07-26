@@ -254,7 +254,13 @@ is tagged plaintext signed by the machine key pinned at pairing, so its arrival 
 connected and delivering; the coordinates are ones this phone already consumed; and the phone can
 open nothing with what it has. Re-delivery can never help — only a seq-advancing re-grant can.
 
-**It is reached in ordinary use.** The lock purge deliberately preserves the grant watermark (the
+**It is reached in ordinary use.
+
+> **CORRECTION 2026-07-26 (round-2 audit) — the paragraph above describes PRE-B44 behaviour and is now FALSE.** ADR-007 B44 changed exactly this: the lock no longer destroys the sealed content key, and `grantLossDetected`'s keyless test now also requires `!contentSealed`, which is **true** after an ordinary screen lock. So a screen lock is now **deliberately excluded** from the terminal grant-loss detector — the opposite of what this paragraph claims, and the change was made precisely because presenting a fine phone as permanently lost was the brick B44 closed on its way.
+>
+> **PB-KEY-3 itself remains MET**: the genuine cross-epoch-rotation grant loss the requirement cares about still reaches the terminal state, because `contentSealed` is false for an epoch the phone never received a key for. What is stale is this file's *narrative*, not the requirement.
+>
+> **Fourth instance of the class**: a later fix to a *different* requirement (PB-KEY-7/PB-SEC-2, B44) invalidated a claim in an earlier requirement's evidence, and nothing re-derived it. The first three invalidated the requirements themselves; this one invalidated only the evidence — which is worse in one way, because the traceability index goes on citing the file and no check reads its prose.** The lock purge deliberately preserves the grant watermark (the
 watermark IS the replay defence) while destroying the content key, so after any screen lock the phone
 is keyless at exactly the coordinates the gateway is about to resend.
 

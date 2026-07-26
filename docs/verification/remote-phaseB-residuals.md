@@ -742,3 +742,22 @@ That reviewer's run **terminated early on its host's content filter** after prod
 Its report is therefore **partial**, and is recorded as partial rather than as a clean pass — an
 audit that stopped is not an audit that found nothing. The other three round-2 reviewers are
 unaffected.
+
+## 1.13 ADR-007 B40 — stolen phone bans its own machine (cross-referenced here at last)
+
+Recorded in the ADR since round 1 and **absent from this ledger**, which bills itself as the
+consolidated open-items list — a cross-referencing gap the round-2 verifier caught by grepping for it
+and finding nothing.
+
+`mayActOn` is symmetric, so a paired phone may `device_revoke` its own machine, and RELAY_AUTH is
+deliberately in the **wake tier** (not user-gated) so background reconnect works on a locked handset.
+A stolen once-unlocked phone therefore permanently bans the machine's relay identity **and pre-empts
+the documented remedy**, because `swarm remote revoke` needs the machine to reach the relay.
+
+**Consent did NOT close it**, and the consent author said so: consent authenticates *who* granted, not
+*what* was granted. Closing it needs a **capability scope** in the signed statement — roughly one byte
+in `ConsentMessage`, stored in the pairs value, checked in `handleDeviceRevoke`.
+
+**B44 does not make it worse** — verified explicitly in round 2 rather than assumed: B44 leaves the
+wake tier entirely alone, and B40 is a wake-tier issue. No requirement, SHIPPED entry or evidence
+claim depends on B40 being closed, so it is not a count error.
