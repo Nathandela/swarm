@@ -42,6 +42,19 @@ type Record struct {
 	Capability     Capability `json:"capability"`
 	PairedAt       time.Time  `json:"paired_at"`
 	GrantedEpoch   uint32     `json:"granted_epoch"`
+	// ConsentSig is the device's relay-route consent for THIS machine, signed with the
+	// device's relay-auth key during the pairing ceremony and carried in msg3 (ADR-007
+	// B27/B38). It is persisted because the two machine-side callers that need it —
+	// cmd/swarm/remote.go authorizeAtRelay at pairing and cmd/swarm-remote's
+	// deliverEpochGrant on every gateway connect — run in different processes at
+	// different times, and neither can re-derive it: only the device can produce it.
+	//
+	// It is NOT a secret and storing it beside the pinned public keys leaks nothing: it
+	// names this machine's routing id as its sole grantee, so a copy authorizes nobody
+	// else (relay.ConsentMessage). It is not validated here for length, because the
+	// relay is the authority that verifies it and a record that merely fails there is a
+	// re-pair, not a corrupt registry.
+	ConsentSig []byte `json:"consent_sig,omitempty"`
 }
 
 // envelope is the versioned on-disk container so the format can migrate forward.
@@ -347,5 +360,6 @@ func cloneRecord(rec Record) Record {
 	rec.CommandSignPub = append([]byte(nil), rec.CommandSignPub...)
 	rec.RecipientPub = append([]byte(nil), rec.RecipientPub...)
 	rec.RoutingID = append([]byte(nil), rec.RoutingID...)
+	rec.ConsentSig = append([]byte(nil), rec.ConsentSig...)
 	return rec
 }

@@ -21,7 +21,7 @@ func mailboxFixture(t *testing.T, srv *Server, clk *fakeClock) (machine, device 
 	dPub, dPriv := newRelayAuthKey(t)
 	machine = dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
 	device = dialAuthed(t, srv.URL(), authFor(dPub, dPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID = RoutingID(dPub)

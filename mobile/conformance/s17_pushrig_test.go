@@ -334,7 +334,7 @@ func (r *s17Rig) dialMachine() {
 	}
 	r.machineRelay = cl
 	r.t.Cleanup(func() { _ = cl.Close() })
-	if err := cl.AuthorizeDevice(r.ctx, r.phonePub()); err != nil {
+	if err := cl.AuthorizeDevice(r.ctx, r.phonePub(), r.phoneConsent()); err != nil {
 		r.t.Fatalf("machine authorize phone: %v", err)
 	}
 	r.newNotifier()
@@ -350,6 +350,25 @@ func (r *s17Rig) phonePub() ed25519.PublicKey {
 		r.t.Fatalf("reading the phone's relay-auth pub: %v", err)
 	}
 	return ed25519.PublicKey(core.KeyStore().RelayAuthPublic())
+}
+
+// phoneConsent is the phone's relay-route consent for this rig's machine (ADR-007
+// B27/B38), signed through the phone's own custody -- the same statement mobile/pairing.go
+// signs into msg3, so the machine's authorize below is the production call.
+func (r *s17Rig) phoneConsent() []byte {
+	r.t.Helper()
+	core, err := phonecore.Resume(phonecore.Config{
+		Dir: r.Dir, Machine: s17Machine,
+		WakeSealer: r.Custody.wakeSealer(), ContentSealer: r.Custody.contentSealer(),
+	})
+	if err != nil {
+		r.t.Fatalf("resuming the phone to sign its relay-route consent: %v", err)
+	}
+	sig, err := core.KeyStore().SignRelayAuth(relay.ConsentMessage(relay.RoutingID(r.machinePub)))
+	if err != nil {
+		r.t.Fatalf("phone signs its relay-route consent: %v", err)
+	}
+	return sig
 }
 
 func (r *s17Rig) seedState(ks crypto.KeyStore) {

@@ -369,6 +369,20 @@ func (p *Pairing) join(base context.Context) {
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
+		// The relay-route consent (ADR-007 B27/B38): this phone granting THE MACHINE IT
+		// JUST AUTHENTICATED, and no other party, the right to append to, wake, and revoke
+		// this phone's relay route. It is signed with the relay-auth key through the same
+		// custody that answers the relay's connection challenge (KeyStore.SignRelayAuth) --
+		// no new key, no new crypto, kept apart from the challenge by ConsentMessage's
+		// domain separator.
+		//
+		// The grantee is derived from MachineRelayAuthPub rather than taken from
+		// MachineRoutingID, so the consent binds to the key the relay will actually
+		// authenticate the machine under and not to a routing-id string the machine
+		// asserted alongside it.
+		Consent: func(m pairing.MachinePayload) ([]byte, error) {
+			return ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(m.MachineRelayAuthPub)))
+		},
 		// The SAS gate: surfaced to the screen, then held until the operator has compared
 		// it against the machine's own display. Returning an error here fails the pairing
 		// CLOSED -- nothing is pinned.
@@ -644,6 +658,15 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 		st.MachineStatic = out.MachineStatic
 		st.MachineSignPub = out.Machine.MachineSignPub
 		st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
+		// The relay's SPKI pin (ADR-007 B33/B34), and pairing is the ONLY channel that can
+		// carry it: the QR has no room (MaxRelayURLLen = 39 leaves one byte of slack in the
+		// v6-L symbol) and every later frame already rides the connection the pin is meant
+		// to protect. A machine that publishes NO pin leaves what is already there, for the
+		// same reason MachineEndpointID does below -- overwriting a known pin with nothing
+		// would silently downgrade a handset that had one.
+		if len(out.Machine.RelaySPKIPin) > 0 {
+			st.RelaySPKIPin = out.Machine.RelaySPKIPin
+		}
 		// The machine's NAME (S19), and the only production source a handset has for it:
 		// Config.MachineID is "" on a phone, and the gateway's reconcile record -- the one
 		// other authenticated frame carrying it -- cannot arrive before the gateway exists,

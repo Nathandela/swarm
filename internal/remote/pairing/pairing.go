@@ -69,6 +69,13 @@ var (
 	// ErrPairingDeclined is the device-side result when the machine does not
 	// affirmatively accept (declined or timed out): no machine static is pinned.
 	ErrPairingDeclined = errors.New("pairing: machine did not accept; no pin established (device side, R-PAIR.5)")
+	// ErrNoConsent is returned when the device cannot produce the relay-route consent
+	// msg3 must carry (DeviceParams.Consent absent or failing), or when the machine
+	// receives a msg3 without one. Both are fail-closed: a pairing that completes
+	// without it leaves a relay unable to tell the machine from a stranger holding the
+	// phone's public key, and leaves the machine unable to deliver the epoch grant
+	// that makes the pairing usable at all (ADR-007 B27/B38).
+	ErrNoConsent = errors.New("pairing: device relay-route consent missing; pairing failed closed (ADR-007 B38)")
 )
 
 // RendezvousTransport is the pairing package's seam onto the relay rendezvous
@@ -103,6 +110,23 @@ type ConfirmFunc func(ctx context.Context, sas [6]string, deviceName string) (bo
 // error fails the pairing CLOSED (nothing pinned); a nil callback is a no-op.
 type DeviceSASFunc func(ctx context.Context, sas [6]string) error
 
+// DeviceConsentFunc produces the device's relay-route consent for the machine it
+// has just authenticated (R-PAIR.3, ADR-007 B27/B38). RunDevice invokes it exactly
+// once, AFTER msg2 has been decrypted and decoded — so the machine payload it is
+// handed is authenticated under the Noise+PSK channel — and places the result in
+// DevicePayload.ConsentSig before msg3 is written.
+//
+// IT TAKES THE WHOLE PAYLOAD, NOT THE ROUTING ID, deliberately: the relay derives a
+// routing id from a relay-auth public key, so a consent signed over a routing id
+// STRING the machine merely asserted would bind to whatever the machine typed there.
+// Signing over a value the caller derives from MachineRelayAuthPub binds the consent
+// to the key the relay will actually authenticate the grantee under.
+//
+// A nil func, or a non-nil error, fails the pairing CLOSED with ErrNoConsent: a
+// device that completes a pairing without granting a route has paired with a machine
+// that can never deliver it the epoch grant, which is a silently broken pairing.
+type DeviceConsentFunc func(machine MachinePayload) ([]byte, error)
+
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
 // attempt before any transport work; a nil RateLimiter is unlimited.
@@ -127,7 +151,23 @@ type MachinePayload struct {
 	// the machine is -- and it must be here rather than on the gateway's later reconcile
 	// record, because PB-LIFE-3 starts the gateway only AFTER pairing.
 	MachineEndpointID string
-	EpochID           uint32
+	// RelaySPKIPin is the SHA-256 of the relay certificate's SubjectPublicKeyInfo
+	// (ADR-007 B33's pin, B34's missing channel), OPTIONAL: empty means the machine
+	// has no pin configured and the phone learns none.
+	//
+	// IT IS HERE BECAUSE THERE IS NOWHERE ELSE. relay.TrustRootSourceFor("android")
+	// is TrustRootsPinned, so a release handset refuses every dial without a pin —
+	// and the pairing QR cannot carry one: MaxRelayURLLen = 39 already puts the
+	// symbol at 133 bytes of a 134-byte v6-L budget, one character of slack, while a
+	// 32-byte pin is ~43 base64 characters. This payload costs zero QR bytes and the
+	// pin inherits exactly the trust properties of the five keys beside it — a party
+	// that could substitute the pin here could already substitute MachineSignPub.
+	//
+	// ITS LIMIT, STATED HERE RATHER THAN DISCOVERED LATER: it does not protect the
+	// PAIRING dial that carries it, only every dial after it. The pairing dial's own
+	// protection is the cleartext refusal and the consent signature below.
+	RelaySPKIPin []byte
+	EpochID      uint32
 }
 
 // DevicePayload is the device's authenticated msg3 handshake payload (R-PAIR.3;
@@ -139,6 +179,19 @@ type DevicePayload struct {
 	DeviceRelayAuthPub   []byte
 	RecipientPub         []byte // A14: device sealed-box recipient X25519 pub, pinned at pairing
 	DeviceCommandSignPub []byte // R-CRY.16 / ADR-007 2026-07-20: device Ed25519 command-signing pub, pinned at pairing for R-POL.9
+	// ConsentSig is the device's relay-auth signature over relay.ConsentMessage of the
+	// MACHINE's routing id: the device granting this machine, and no other party,
+	// authority over the device's relay route (ADR-007 B27's consent signature, made
+	// mandatory by B38). It is opaque here — this package never parses it, so it does
+	// not import relay — and it is produced by DeviceParams.Consent from the machine
+	// payload the device just AUTHENTICATED in msg2, never from a guess.
+	//
+	// It is what carries the ceremony's outcome to a relay that cannot witness the
+	// ceremony. Without it the relay had to infer consent from the target's state
+	// ("has authorized nobody"), which any holder of the target's PUBLIC key could
+	// satisfy — and that key is disclosed by msg2, by msg3, and by an unprotected
+	// auth_init. See internal/remote/relay/store.go mayActOn.
+	ConsentSig []byte
 }
 
 // MachineParams configures one machine-side (Noise XXpsk0 responder) pairing.
@@ -161,6 +214,7 @@ type DeviceParams struct {
 	Payload          DevicePayload       // carried to the machine in msg3
 	Limiter          RateLimiter         // optional device-side rate limit (nil => unlimited)
 	DeviceSAS        DeviceSASFunc       // optional; surfaces the SAS before the decision (nil => no-op)
+	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg3
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -292,6 +346,16 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	if err != nil {
 		return nil, fmt.Errorf("pairing: decode device payload: %w", err)
 	}
+	// Fail CLOSED on a device that granted no relay route (ADR-007 B38). The machine
+	// refuses BEFORE the operator is prompted, so a confirm is never spent on a pairing
+	// whose grant delivery would then fail fatally at gateway start
+	// (cmd/swarm-remote/deliver.go, whose failure is fatal in main.go). The check is on
+	// presence only: this package does not import relay and cannot verify the signature,
+	// and the relay itself is the authority that must — a check here would be advisory
+	// and a check there is the fence.
+	if len(devPayload.ConsentSig) == 0 {
+		return nil, ErrNoConsent
+	}
 	deviceStatic := sess.PeerStatic()
 
 	// SAS from the Noise channel binding (R-PAIR.4): on a MITM the two ends bind
@@ -419,6 +483,27 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	if err != nil {
 		return nil, fmt.Errorf("pairing: decode machine payload: %w", err)
 	}
+	// THE RELAY-ROUTE CONSENT (ADR-007 B27/B38), signed HERE and not earlier, because
+	// this is the first moment the device knows WHO it is consenting to: msg2 is the
+	// authenticated frame that carries the machine's relay-auth key, and the consent
+	// names the routing id derived from it. Signing it into the payload the device was
+	// configured with, before the handshake, would be consenting to a machine the
+	// device had not yet met.
+	//
+	// Fail CLOSED (ErrNoConsent) rather than sending an empty one: a msg3 without it
+	// completes a handshake and enrolls a device the machine can never deliver the
+	// epoch grant to, which is a pairing that looks successful and does nothing.
+	if p.Consent == nil {
+		return nil, ErrNoConsent
+	}
+	consent, err := p.Consent(machPayload)
+	if err != nil {
+		return nil, fmt.Errorf("pairing: sign relay-route consent: %w", err)
+	}
+	if len(consent) == 0 {
+		return nil, ErrNoConsent
+	}
+	p.Payload.ConsentSig = consent
 	// msg3 (s, se + device payload): device -> machine. Completes the handshake.
 	msg3, err := sess.WriteMessage(encodeDevicePayload(p.Payload))
 	if err != nil {
@@ -509,8 +594,8 @@ func readField(b []byte) (field, rest []byte, ok bool) {
 }
 
 // encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14 +
-// enrollment keystone + S19's endpoint id): the six length-prefixed byte fields
-// followed by the 4-byte big-endian epoch id. Each added field rides BEFORE the
+// enrollment keystone + S19's endpoint id + B34's relay SPKI pin): the seven
+// length-prefixed byte fields followed by the 4-byte big-endian epoch id. Each added field rides BEFORE the
 // epoch trailer, so the epoch-trailer contract is undisturbed.
 func encodeMachinePayload(p MachinePayload) []byte {
 	var b []byte
@@ -520,6 +605,7 @@ func encodeMachinePayload(p MachinePayload) []byte {
 	b = appendField(b, p.RecipientPub)
 	b = appendField(b, p.MachineSignPub)
 	b = appendField(b, []byte(p.MachineEndpointID))
+	b = appendField(b, p.RelaySPKIPin)
 	b = binary.BigEndian.AppendUint32(b, p.EpochID)
 	return b
 }
@@ -550,6 +636,9 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 		return MachinePayload{}, errMalformedPayload
 	}
 	p.MachineEndpointID = string(endpoint)
+	if p.RelaySPKIPin, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
 	if len(b) != 4 {
 		return MachinePayload{}, errMalformedPayload
 	}
@@ -558,7 +647,7 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 }
 
 // encodeDevicePayload serialises the msg3 device payload (R-PAIR.3 + A14 +
-// ADR-007 2026-07-20): five length-prefixed byte fields.
+// ADR-007 2026-07-20 + B38's route consent): six length-prefixed byte fields.
 func encodeDevicePayload(p DevicePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.DeviceName))
@@ -566,6 +655,7 @@ func encodeDevicePayload(p DevicePayload) []byte {
 	b = appendField(b, p.DeviceRelayAuthPub)
 	b = appendField(b, p.RecipientPub)
 	b = appendField(b, p.DeviceCommandSignPub)
+	b = appendField(b, p.ConsentSig)
 	return b
 }
 
@@ -588,6 +678,9 @@ func decodeDevicePayload(b []byte) (DevicePayload, error) {
 		return DevicePayload{}, errMalformedPayload
 	}
 	if p.DeviceCommandSignPub, b, ok = readField(b); !ok {
+		return DevicePayload{}, errMalformedPayload
+	}
+	if p.ConsentSig, b, ok = readField(b); !ok {
 		return DevicePayload{}, errMalformedPayload
 	}
 	if len(b) != 0 {

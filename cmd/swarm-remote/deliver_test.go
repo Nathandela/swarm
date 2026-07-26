@@ -26,14 +26,16 @@ import (
 type authSpy struct {
 	*relay.Client
 	authorized ed25519.PublicKey
+	consent    []byte
 }
 
-func (s *authSpy) AuthorizeDevice(ctx context.Context, devicePub ed25519.PublicKey) error {
+func (s *authSpy) AuthorizeDevice(ctx context.Context, devicePub ed25519.PublicKey, consentSig []byte) error {
 	s.authorized = devicePub
-	return s.Client.AuthorizeDevice(ctx, devicePub)
+	s.consent = consentSig
+	return s.Client.AuthorizeDevice(ctx, devicePub, consentSig)
 }
 
-func dialRelayClient(t *testing.T, ctx context.Context, url string) (*relay.Client, ed25519.PublicKey) {
+func dialRelayClient(t *testing.T, ctx context.Context, url string) (*relay.Client, ed25519.PublicKey, ed25519.PrivateKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -47,7 +49,7 @@ func dialRelayClient(t *testing.T, ctx context.Context, url string) (*relay.Clie
 		t.Fatalf("relay.Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	return c, pub
+	return c, pub, priv
 }
 
 func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
@@ -67,8 +69,8 @@ func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
 	}
 	defer relaySrv.Close()
 
-	machineRelay, _ := dialRelayClient(t, ctx, relaySrv.URL())
-	deviceRelay, devicePub := dialRelayClient(t, ctx, relaySrv.URL())
+	machineRelay, _, _ := dialRelayClient(t, ctx, relaySrv.URL())
+	deviceRelay, devicePub, devicePriv := dialRelayClient(t, ctx, relaySrv.URL())
 
 	// Seed the sealed grant exactly as enroll.Enroll produces it.
 	dks, err := crypto.NewFileKeyStore(t.TempDir())
@@ -88,7 +90,12 @@ func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
 	p := gatewayParams{
 		PhoneTarget:        deviceRelay.RoutingID(), // the device's own mailbox
 		DeviceRelayAuthPub: devicePub,
-		Grant:              seeded,
+		// The device's relay-route consent for THIS machine (ADR-007 B27/B38), signed with
+		// the same relay-auth key the device authenticated under. It is what the relay
+		// verifies before recording the route the append below travels, so without it this
+		// whole test is the refusal path rather than the bootstrap path.
+		DeviceConsentSig: ed25519.Sign(devicePriv, relay.ConsentMessage(machineRelay.RoutingID())),
+		Grant:            seeded,
 	}
 
 	spy := &authSpy{Client: machineRelay}

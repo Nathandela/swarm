@@ -119,7 +119,7 @@ func TestPBPUSH6_PushTokenSurvivesARelayRestart(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -180,8 +180,11 @@ func TestPBPUSH6_TokenDeleteAlsoSurvivesARestart(t *testing.T) {
 
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	for _, pub := range []ed25519.PublicKey{ed25519.PublicKey(delPub), ed25519.PublicKey(keepPub)} {
-		if err := machine.AuthorizeDevice(testCtx(t), pub); err != nil {
+	for _, d := range []struct {
+		pub  ed25519.PublicKey
+		priv ed25519.PrivateKey
+	}{{ed25519.PublicKey(delPub), delPriv}, {ed25519.PublicKey(keepPub), keepPriv}} {
+		if err := machine.AuthorizeDevice(testCtx(t), d.pub, consentTo(d.priv, machine.RoutingID())); err != nil {
 			t.Fatalf("AuthorizeDevice: %v", err)
 		}
 	}
@@ -238,8 +241,11 @@ func TestPBPUSH6_RevokedDeviceTokenIsNotResurrectedByARestart(t *testing.T) {
 
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	for _, pub := range []ed25519.PublicKey{ed25519.PublicKey(revPub), ed25519.PublicKey(livePub)} {
-		if err := machine.AuthorizeDevice(testCtx(t), pub); err != nil {
+	for _, d := range []struct {
+		pub  ed25519.PublicKey
+		priv ed25519.PrivateKey
+	}{{ed25519.PublicKey(revPub), revPriv}, {ed25519.PublicKey(livePub), livePriv}} {
+		if err := machine.AuthorizeDevice(testCtx(t), d.pub, consentTo(d.priv, machine.RoutingID())); err != nil {
 			t.Fatalf("AuthorizeDevice: %v", err)
 		}
 	}
@@ -298,7 +304,7 @@ func TestPBPUSH6_TokenIsNotStoredInTheClearAlongsideTheCiphertext(t *testing.T) 
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
@@ -352,7 +358,7 @@ func TestPBPUSH7_SecondTokenForOneRoutingIDReplacesTheFirst(t *testing.T) {
 
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
@@ -387,7 +393,7 @@ func TestPBPUSH2_UnregisteredSinkErrorPrunesTheStoredToken(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv2.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -431,7 +437,7 @@ func TestPBPUSH5_SinkFailureNeverFailsTheTrigger(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)

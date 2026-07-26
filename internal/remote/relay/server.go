@@ -756,7 +756,8 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 		return sc.replyErr(code)
 	}
 	var req struct {
-		DevicePub []byte `json:"device_pub"`
+		DevicePub  []byte `json:"device_pub"`
+		ConsentSig []byte `json:"consent_sig"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
@@ -764,16 +765,38 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 	if len(req.DevicePub) != ed25519.PublicKeySize {
 		return sc.replyErr(codeBadRequest)
 	}
-	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
-	// THIS VERB IS ACCEPTED FROM ANYONE AND CONFERS NOTHING ON THE CALLER. It
-	// records one directed edge: sc.rid authorized deviceRID. requireAuth above
-	// proves an identity and nothing more — relay auth is open registration, so
-	// "authenticated" never meant "the owner's machine" — and a caller naming a
-	// routing id is a statement about the CALLER's intent, not about the named
-	// party. Authority to act on deviceRID's route would be the OTHER edge, which
-	// only deviceRID can write. Refusing the call instead would be worse and not
-	// safer: the machine's grant at a first pairing is exactly this shape.
+	// THE NAMED DEVICE MUST HAVE CONSENTED, AND THIS IS THE ONLY PLACE THAT CAN BE
+	// ESTABLISHED (ADR-007 B27's consent signature, made mandatory by B38).
 	//
+	// requireAuth above proves an identity and nothing more — relay auth is OPEN
+	// REGISTRATION, so "authenticated" never meant "the owner's machine" — and a
+	// caller naming a routing id is a statement about the CALLER's intent, not
+	// about the named party. The relay cannot witness the QR/SAS ceremony that
+	// conveys the real consent, so at this handler "machine authorizes the phone it
+	// just paired" and "stranger authorizes the machine whose pubkey it photographed"
+	// are the SAME SHAPE, and no predicate over the caller distinguishes them.
+	//
+	// B27 tried to distinguish them by the TARGET's state instead — you may act on a
+	// target that has authorized nobody — and that rested on the premise that a
+	// target's relay-auth pubkey is disclosed only at the relay handshake and over the
+	// SAS-authenticated channel. B37 and B38 falsified the premise three ways: an
+	// unprotected auth_init discloses it to a passive observer, pairing msg2 discloses
+	// it to a QR photographer one round-trip BEFORE the mandatory desktop confirm and
+	// before the SAS exists at all, and msg3 discloses the device's before the SAS
+	// check. Holding the pubkey was the whole attack, and the harm was permanent: this
+	// same rule gates device_revoke, revokeAndPurge records the ATTACKER as the banner,
+	// and only the banner may lift a ban.
+	//
+	// So the target's consent is CARRIED here rather than inferred: the named device's
+	// own relay-auth key over ConsentMessage(sc.rid). It is verified under the pubkey
+	// the caller named, which is the key deviceRID derives from, so a caller cannot
+	// name one party and satisfy the check with another's signature. It names the
+	// GRANTEE's routing id, so it is not transferable to any other caller.
+	if len(req.ConsentSig) != ed25519.SignatureSize ||
+		!ed25519.Verify(ed25519.PublicKey(req.DevicePub), ConsentMessage(sc.rid), req.ConsentSig) {
+		return sc.replyErr(codeNotAuthorized)
+	}
+	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
 	// ADR-007 B22: this also LIFTS a ban standing against deviceRID — but ONLY one
 	// sc.rid itself placed (B24). See store.authorizePair.
 	if err := sc.s.st.authorizePair(sc.rid, deviceRID); err != nil {

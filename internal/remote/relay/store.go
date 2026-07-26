@@ -258,20 +258,27 @@ func pairKey(a, b string) []byte {
 	return k
 }
 
-// authorizePair records ONE DIRECTED authorization — pairer authorized device —
-// AND lifts any ban standing against device, in ONE transaction, so a crash
-// between the two can never leave a routing id authorized-but-banned (granted on
-// paper and refused at the handshake).
+// authorizePair records BOTH directed authorizations of one consented pairing —
+// pairer grants device authority over the pairer's route, and device grants
+// pairer authority over the device's — AND lifts any ban standing against device,
+// in ONE transaction, so a crash between them can never leave a routing id
+// authorized-but-banned (granted on paper and refused at the handshake).
 //
-// THE EDGE IS DIRECTED (ADR-007 B27), AND THAT IS ADR-007 B25's MISSING CHECK.
-// It used to be written BOTH ways, so `authorize_device` — behind requireAuth
-// alone, over open registration — manufactured a mutual pairing out of one side's
-// say-so, and every verb meaning "act on somebody else's route" gated on exactly
-// that. A keypair minted seconds ago could name the machine and thereby acquire
-// it: append to its mailbox, push to it, revoke it. Stored directed, the same
-// call records only what it actually is — the CALLER's intent. Consent to be
-// acted upon is the OTHER direction, and only the named party can write it. See
-// mayActOn for what that buys and for the one exception it cannot avoid.
+// THE EDGES ARE STORED DIRECTED (ADR-007 B27) AND BOTH ARE EARNED, WHICH IS WHAT
+// B25 WAS MISSING AND B38 MADE MANDATORY. Its caller, handleAuthorizeDevice,
+// admits nothing here until the NAMED DEVICE's own relay-auth key has signed
+// ConsentMessage(pairer) — so the device->pairer edge carries the device's proof,
+// and the pairer->device edge is the caller's grant over its OWN route, which is
+// the one statement a caller has always been entitled to make about itself.
+//
+// It used to be written both ways off ONE side's say-so with no proof at all, so
+// `authorize_device` — behind requireAuth alone, over open registration —
+// manufactured a mutual pairing out of a stranger's word, and every verb meaning
+// "act on somebody else's route" gated on exactly that. A keypair minted seconds
+// ago could name the machine and thereby acquire it: append to its mailbox, push
+// to it, revoke it. The direction is preserved rather than collapsed because
+// mayActOn reads exactly one of the two, and reading the caller's own edge as
+// authority is the bug itself.
 //
 // CLEARING THE BAN IS ADR-007 B22 AND IT IS NOT A WEAKENING. revokeAndPurge is
 // the only writer of bucketRevoked and nothing else ever cleared it, while the
@@ -300,15 +307,18 @@ func pairKey(a, b string) []byte {
 // rather than assumed, because B24's own note said this policy made the mirror
 // hole permanent: the ban an attacker placed on the machine stuck, since only its
 // placer could lift it and the placer was the attacker. That escalation is gone
-// now — not by weakening this rule, but because mayActOn no longer lets a
-// stranger reach device_revoke at all, so no ban of that shape can be placed.
-// B24 and this line are unchanged and remain right: no weaker rule stops a
-// revoked device un-banning itself through a throwaway identity, since a
-// throwaway is by construction not the banned party.
+// now — not by weakening this rule, but because a stranger cannot reach
+// device_revoke at all without the target's signed consent, so no ban of that
+// shape can be placed. B24 and this line are unchanged and remain right: no weaker
+// rule stops a revoked device un-banning itself through a throwaway identity,
+// since a throwaway is by construction not the banned party.
 func (s *store) authorizePair(pairer, device string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
 		if err := pb.Put(pairKey(pairer, device), []byte{1}); err != nil {
+			return err
+		}
+		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
 			return err
 		}
 		rb := tx.Bucket(bucketRevoked)
@@ -319,14 +329,13 @@ func (s *store) authorizePair(pairer, device string) error {
 	})
 }
 
-// isPaired reports a MUTUAL pairing: each party has authorized the other. It is
-// the honest reading of "these two are paired" now that the edge is directed.
+// isPaired reports a MUTUAL pairing: each party has authorized the other.
 //
-// IT IS DELIBERATELY NOT THE GATE FOR ACTING ON A ROUTE, and reinstating it as
-// one would put ADR-007 B25 back: a first pairing is genuine before the second
-// leg exists, so a mutual gate refuses the epoch grant that makes the pairing
-// usable. mayActOn is the authority decision; this is the fact, and its only
-// consumer is the fence that pins it (b25_authority_test.go).
+// IT IS DELIBERATELY NOT THE GATE FOR ACTING ON A ROUTE. mayActOn is the
+// authority decision and it reads ONE direction, because authority is asymmetric:
+// "the phone may act on the machine" and "the machine may act on the phone" are
+// different facts even when both hold. This is the fact, and its only consumers
+// are the fences that pin it (b25_authority_test.go, b38_consent_test.go).
 func (s *store) isPaired(a, b string) bool {
 	paired := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
@@ -338,79 +347,48 @@ func (s *store) isPaired(a, b string) bool {
 }
 
 // mayActOn is the relay's authority decision — may source append to, push to, or
-// revoke target's route? THE RULE, WHICH IS ADR-007 B27: the target must have
-// authorized the source, or have authorized nobody at all.
+// revoke target's route? THE RULE, WHICH IS ADR-007 B27 WITH ITS EXCEPTION
+// REMOVED (B38): the target must have authorized the source. There is no second
+// clause.
 //
-// The first clause is the property ADR-007 B25 found missing, and it is the only
-// clause that matters once a device is paired. Authentication proves identity;
-// authority is the TARGET's own authorize, which only the target can write since
-// authorizePair stores the edge directed. A stranger naming the machine writes
-// the other direction and gets nothing from it.
+// Authentication proves identity; authority is the TARGET's own authorize, which
+// only the target can put here — either by calling authorize_device itself, or by
+// signing ConsentMessage(source) during the SAS ceremony and letting source carry
+// that proof to handleAuthorizeDevice. A stranger naming the machine writes the
+// OTHER direction (its own grant over its own route) and gets nothing from it.
 //
-// THE SECOND CLAUSE IS A BOOTSTRAP EXCEPTION AND IT IS LOAD-BEARING: without it
-// there is no first pairing at all. deliverEpochGrant (cmd/swarm-remote)
-// authorizes the phone and IMMEDIATELY appends the sealed epoch grant — the
-// append that delivers the ContentKey, i.e. what makes a pairing usable — and its
-// failure is fatal. The phone need not have connected yet, so it cannot have
-// consented at the relay yet, and it cannot consent before it holds the grant
-// either. That circularity is what falsified the mutual-pairing direction ADR-007
-// B25 recorded, measured at TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap.
+// THE DELETED CLAUSE WAS "OR THE TARGET HAS AUTHORIZED NOBODY AT ALL", and it was
+// load-bearing until the consent signature existed. deliverEpochGrant
+// (cmd/swarm-remote) authorizes the phone and IMMEDIATELY appends the sealed epoch
+// grant — the append that delivers the ContentKey, i.e. what makes a pairing
+// usable — and its failure is fatal, with the phone not yet connected and so
+// unable to have consented at the relay. That circularity is what falsified ADR-007
+// B25's mutual-pairing direction, measured at
+// TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap.
 //
-// The relay cannot witness the QR ceremony that DID convey the phone's consent,
-// so at the relay "machine authorizes phone, then appends to phone" and "stranger
-// authorizes machine, then appends to machine" are the same shape, and no
-// predicate over the caller distinguishes them. The asymmetry that does survive
-// is not about the caller: the stranger's target is an ESTABLISHED identity that
-// has already authorized somebody, and a bootstrapping target has authorized
-// nobody.
+// It is not circular any more, and that is the whole of the fix: the phone's
+// consent is obtained where it actually happens — in the pairing ceremony, over a
+// channel the relay cannot see — and CARRIED to the relay by the machine. The
+// bootstrap append is authorized by the phone, not by the phone's silence. Pinned
+// from both sides by TestB38_ConsentedAuthorizeBootstraps (the grant still lands
+// with the phone offline) and TestB38_ObserverOfThePubkeyCannotBanANeverPairedMachine
+// (a never-connected machine cannot be banned by a party holding its pubkey).
 //
-// THE RESIDUAL, accepted in ADR-007 B27 rather than smoothed over: this is trust
-// on first use, and the entry records the complete fix it does not take. A
-// party that knows a NEVER-PAIRED identity's relay-auth pubkey can act on it
-// until it authorizes someone. That pubkey is disclosed at the relay handshake
-// and over the SAS-authenticated pairing channel, so the window is reachable in
-// practice by the RELAY OPERATOR, to whom the threat model already concedes
-// availability — not by an anonymous party who can merely open a socket to the
-// relay, which is the line B25 drew and the one this fix has to hold.
+// THE CLAUSE IS UNREACHABLE RATHER THAN MERELY UNNEEDED, WHICH IS WHY IT IS DELETED
+// AND NOT KEPT AS BELT-AND-BRACES — and it is stated because it is the one part of
+// this change no fence can catch. Under the consent rule authorizePair writes both
+// edges or neither, so `granted(source, target)` can never hold while
+// `granted(target, source)` does not: the second clause's own precondition is
+// unsatisfiable. Restoring it changes no observable behaviour TODAY. It is removed
+// so that it cannot come back to life silently if anyone ever makes consent
+// optional again, which is exactly how it became a hole the first time.
 func (s *store) mayActOn(source, target string) bool {
-	ok := false
+	granted := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
-		pb := tx.Bucket(bucketPairs)
-		if pb.Get(pairKey(target, source)) != nil {
-			ok = true
-			return nil
-		}
-		if pb.Get(pairKey(source, target)) == nil {
-			return nil // not even the caller's own intent: nothing to bootstrap.
-		}
-		ok = !hasActedAsAuthority(tx, target)
+		granted = tx.Bucket(bucketPairs).Get(pairKey(target, source)) != nil
 		return nil
 	})
-	return ok
-}
-
-// hasActedAsAuthority reports whether rid has ever authorized or banned another
-// party — whether it is past its first use, and so whether mayActOn's bootstrap
-// exception is closed for it.
-//
-// A BAN COUNTS, and leaving it out would be a hole rather than an omission:
-// revokeAndPurge DELETES the authorization it severs, so counting live grants
-// alone would RE-OPEN the bootstrap window of a machine that revoked its only
-// device — handing a stranger the same permanent lockout ADR-007 B25 describes,
-// one revoke later.
-func hasActedAsAuthority(tx *bolt.Tx, rid string) bool {
-	prefix := append([]byte(rid), 0)
-	if k, _ := tx.Bucket(bucketPairs).Cursor().Seek(prefix); bytes.HasPrefix(k, prefix) {
-		return true
-	}
-	banned := false
-	_ = tx.Bucket(bucketRevoked).ForEach(func(_, banner []byte) error {
-		if bytes.Equal(banner, []byte(rid)) {
-			banned = true
-		}
-		return nil
-	})
-	return banned
+	return granted
 }
 
 // pairedPeers enumerates the routing ids rid has AUTHORIZED (used to fan a

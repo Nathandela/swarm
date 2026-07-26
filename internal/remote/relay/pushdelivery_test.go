@@ -90,7 +90,7 @@ func TestPushDelivery_SlowProviderDoesNotHoldTheRequestLoop(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
@@ -140,7 +140,7 @@ func TestPushDelivery_UnregisteredVerdictAfterTheWaitStillPrunes(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -192,7 +192,7 @@ func TestPushDelivery_CloseJoinsInFlightDeliveries(t *testing.T) {
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
@@ -267,7 +267,7 @@ func TestPushDelivery_CallerWaitsForTheVerdictSoThePruneIsNotARace(t *testing.T)
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)

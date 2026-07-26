@@ -52,13 +52,17 @@ func newB25Party(t *testing.T, srv *Server) b25Party {
 	}
 }
 
-// b25LegitPair wires the machine and the phone the way PRODUCTION wires them, both legs,
-// so that nothing these tests assert depends on the one-sided fixture shape:
+// b25LegitPair wires the machine and the phone the way PRODUCTION wires them, so that
+// nothing these tests assert depends on a fixture shape production never takes:
+// cmd/swarm/remote.go authorizeAtRelay at pairing and cmd/swarm-remote/deliver.go
+// deliverEpochGrant on every gateway connect, both carrying the CONSENT the phone signed
+// during the SAS ceremony (ADR-007 B27/B38, pairing msg3 -> device.Record.ConsentSig).
 //
-//   - machine authorizes phone — cmd/swarm/remote.go authorizeAtRelay at pairing, and
-//     cmd/swarm-remote/deliver.go deliverEpochGrant on every gateway connect;
-//   - phone authorizes machine — mobile/relay.go onConnected, on every authenticated
-//     reconnect.
+// ONE CALL IS THE WHOLE PAIRING NOW, and that is a change from the two-legged wiring this
+// fixture used to mirror. A consented authorize_device records both directed edges at once —
+// the phone's proven grant over its own route, and the machine's grant over its own — so the
+// phone-side leg mobile/relay.go used to issue on every reconnect is gone from production:
+// it could only ever have written an edge it cannot prove, which is the hole itself.
 //
 // It then round-trips one append each way, so the tests below start from a pairing that is
 // demonstrably live rather than merely recorded.
@@ -67,11 +71,9 @@ func b25LegitPair(t *testing.T, srv *Server, clk *fakeClock) (machine, phone b25
 	machine = newB25Party(t, srv)
 	phone = newB25Party(t, srv)
 
-	if err := machine.cl.AuthorizeDevice(testCtx(t), machine.pubOf(phone)); err != nil {
+	if err := machine.cl.AuthorizeDevice(testCtx(t), machine.pubOf(phone),
+		consentTo(phone.priv, machine.rid)); err != nil {
 		t.Fatalf("machine authorizes phone (cmd/swarm/remote.go authorizeAtRelay): %v", err)
-	}
-	if err := phone.cl.AuthorizeDevice(testCtx(t), phone.pubOf(machine)); err != nil {
-		t.Fatalf("phone authorizes machine (mobile/relay.go onConnected): %v", err)
 	}
 
 	sp := newSealParty(t, []byte("machine-sender-pub-000000000000x"), []byte("device-recipient-pub-0000000000x"))
@@ -113,7 +115,7 @@ func TestB25_AuthorizeDeviceNeedsNoConsent(t *testing.T) {
 
 	// Naming the machine. Nothing here proves any relationship to it — the routing id is
 	// derived from the machine's relay-auth PUBLIC key, which the stranger is free to know.
-	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine))
+	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine), nil)
 
 	if srv.st.isPaired(stranger.rid, machine.rid) || srv.st.isPaired(machine.rid, stranger.rid) {
 		t.Fatalf("ADR-007 B25: a stranger PAIRED ITSELF with the machine by naming it.\n"+
@@ -165,7 +167,7 @@ func TestB25_SelfPairedStrangerCanFloodTheMachineMailbox(t *testing.T) {
 	}
 
 	stranger := newB25Party(t, srv)
-	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine))
+	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine), nil)
 
 	sp := newSealParty(t, []byte("stranger-sender-pub-00000000000x"), []byte("machine-recipient-pub-000000000x"))
 
@@ -247,7 +249,7 @@ func TestB25_StrangerCanPermanentlyBanTheMachine(t *testing.T) {
 	machine, phone := b25LegitPair(t, srv, clk)
 
 	stranger := newB25Party(t, srv)
-	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine))
+	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine), nil)
 
 	// THE PROPERTY. An identity the machine never authorized may not revoke it.
 	// handleDeviceRevoke gates on isPaired(sc.rid, req.Target) and nothing else.
@@ -274,12 +276,13 @@ func TestB25_StrangerCanPermanentlyBanTheMachine(t *testing.T) {
 		t.Fatalf("stranger's revoke landed and the machine now fails to dial with %v, want ErrRevoked", redialErr)
 	}
 
-	// THE B24 INTERACTION. The phone reconnects and does exactly what mobile/relay.go
-	// onConnected does on every authenticated reconnect: authorize the machine. Before B24
-	// this cleared the ban. It is the owner's only automatic recovery path.
-	phoneAgain := dialAuthed(t, srv.URL(), authFor(phone.pub, phone.priv))
-	if err := phoneAgain.AuthorizeDevice(testCtx(t), phone.pubOf(machine)); err != nil {
-		t.Fatalf("the phone's reconnect authorize (mobile/relay.go onConnected) failed outright: %v; "+
+	// THE B24 INTERACTION. The owner's own machine re-authorizes the phone — the recovery
+	// path cmd/swarm/remote.go authorizeAtRelay takes on a re-pair, and the only automatic
+	// clear that exists. It is driven explicitly because what this test measures is the ban
+	// SURVIVING the owner's every remedy.
+	if err := machine.cl.AuthorizeDevice(testCtx(t), machine.pubOf(phone),
+		consentTo(phone.priv, machine.rid)); err != nil {
+		t.Fatalf("the owner's re-authorize (cmd/swarm/remote.go authorizeAtRelay) failed outright: %v; "+
 			"this test needs that path REACHED, because what it measures is the ban surviving it", err)
 	}
 

@@ -124,7 +124,15 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 		t.Fatalf("machine dial: %v", err)
 	}
 	t.Cleanup(func() { _ = machine.Close() })
-	if err := machine.AuthorizeDevice(ctx, phonePub); err != nil {
+	// The phone's relay-route consent, signed through its own custody exactly as
+	// mobile/pairing.go signs it into msg3 (ADR-007 B27/B38). Without it the machine's
+	// authorize is refused and the ban below could never be lifted -- which is the
+	// recovery PB-STATE-10 is about.
+	phoneConsent, err := provision.KeyStore().SignRelayAuth(relay.ConsentMessage(relay.RoutingID(mPub)))
+	if err != nil {
+		t.Fatalf("phone signs its relay-route consent: %v", err)
+	}
+	if err := machine.AuthorizeDevice(ctx, phonePub, phoneConsent); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}
 	if err := machine.DeviceRevoke(ctx, phoneRID); err != nil {
@@ -181,7 +189,7 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 		func(s []string) bool {
 			return len(s) >= stranded+2 && s[stranded] == "connecting" && s[stranded+1] == "revoked"
 		})
-	if err := machine.AuthorizeDevice(ctx, phonePub); err != nil {
+	if err := machine.AuthorizeDevice(ctx, phonePub, phoneConsent); err != nil {
 		t.Fatalf("machine authorize after the refused dial: %v", err)
 	}
 

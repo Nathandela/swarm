@@ -80,7 +80,12 @@ type gatewayParams struct {
 	// bootstrap. Grant is nil when no sidecar was persisted (a pre-grant pairing), which
 	// deliverEpochGrant treats as a no-op.
 	DeviceRelayAuthPub ed25519.PublicKey
-	Grant              *crypto.EpochGrant
+	// DeviceConsentSig is the paired device's relay-route consent for this machine
+	// (ADR-007 B27/B38), carried from its registry record. Without it the relay refuses
+	// the AuthorizeDevice above and the grant append behind it, so it is resolved here
+	// with the key it accompanies rather than looked up later.
+	DeviceConsentSig []byte
+	Grant            *crypto.EpochGrant
 }
 
 // resolveGatewayParams loads the machine identity, relay URL, and the single
@@ -189,6 +194,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		Outbox:             outbox,
 		Inbound:            inbound,
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
+		DeviceConsentSig:   rec.ConsentSig,
 		Grant:              sealedGrant,
 		StateDir:           stateDir,
 		DeviceID:           rec.DeviceID,

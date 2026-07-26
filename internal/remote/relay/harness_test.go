@@ -131,6 +131,29 @@ func authFor(pub ed25519.PublicKey, priv ed25519.PrivateKey) ClientAuth {
 	}
 }
 
+// consentTo is the named device's own consent for grantee's routing id — the
+// signature handleAuthorizeDevice verifies before it records a pairing (ADR-007
+// B27, mandatory since B38). Production obtains it during the SAS-authenticated
+// pairing ceremony and carries it in pairing msg3; a test signs the same statement
+// with the same key directly, so the wire bytes are identical.
+func consentTo(priv ed25519.PrivateKey, granteeRID string) []byte {
+	return ed25519.Sign(priv, ConsentMessage(granteeRID))
+}
+
+// devConsent is consentTo through a real crypto.KeyStore, i.e. through the custody
+// boundary the phone actually signs behind (KeyStore.SignRelayAuth). It exists to
+// show the consent needs NO new key and no new crypto: the relay-auth key that
+// answers the connection challenge is the key that signs the grant, kept apart by
+// ConsentMessage's domain separator.
+func devConsent(t *testing.T, ks crypto.KeyStore, granteeRID string) []byte {
+	t.Helper()
+	sig, err := ks.SignRelayAuth(ConsentMessage(granteeRID))
+	if err != nil {
+		t.Fatalf("SignRelayAuth(consent): %v", err)
+	}
+	return sig
+}
+
 // dialAuthed dials and completes the relay-auth challenge/response, failing the
 // test if the authenticated connection cannot be established.
 func dialAuthed(t *testing.T, url string, auth ClientAuth) *Client {

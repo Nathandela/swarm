@@ -115,10 +115,10 @@ func TestRelay_DeviceAuthorizedOnlyForPairedRoutes(t *testing.T) {
 
 	// m1 authorizes device; m2 authorizes device2. Routes are paired m1<->device
 	// and m2<->device2.
-	if err := m1.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := m1.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, m1.RoutingID())); err != nil {
 		t.Fatalf("m1.AuthorizeDevice: %v", err)
 	}
-	if err := m2.AuthorizeDevice(testCtx(t), ed25519.PublicKey(d2Pub)); err != nil {
+	if err := m2.AuthorizeDevice(testCtx(t), ed25519.PublicKey(d2Pub), consentTo(d2Priv, m2.RoutingID())); err != nil {
 		t.Fatalf("m2.AuthorizeDevice: %v", err)
 	}
 
@@ -159,7 +159,7 @@ func TestRelay_TokenRegisterRefreshDelete(t *testing.T) {
 	device := dialAuthed(t, srv.URL(), authFor(dPub, dPriv))
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -208,7 +208,7 @@ func TestRelay_RevokedDeviceDeauthorizedAndPurged(t *testing.T) {
 	mPub, mPriv := newRelayAuthKey(t)
 	dPub, dPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -255,7 +255,7 @@ func TestRelay_RevokedDeviceLiveSocketClosed(t *testing.T) {
 	device := dialAuthed(t, srv.URL(), authFor(dPub, dPriv))
 	devRID := RoutingID(dPub)
 
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 	mPub, mPriv := newRelayAuthKey(t)
 	dPub, dPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
@@ -350,7 +350,7 @@ func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 	// attack: the relay has no registration step to refuse.
 	aPub, aPriv := newRelayAuthKey(t)
 	attacker := dialAuthed(t, srv.URL(), authFor(aPub, aPriv))
-	if err := attacker.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := attacker.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, attacker.RoutingID())); err != nil {
 		t.Fatalf("a self-minted identity could not even issue authorize_device (%v); this test "+
 			"needs that path REACHED, because what it fences is the ban surviving it", err)
 	}
@@ -383,7 +383,7 @@ func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
 	mPub, mPriv := newRelayAuthKey(t)
 	dPub, dPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
@@ -394,7 +394,7 @@ func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
 	}
 
 	// The re-pair: the SAME machine authorizes the same handset again.
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("re-authorize after revoke: %v", err)
 	}
 	conn, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv))

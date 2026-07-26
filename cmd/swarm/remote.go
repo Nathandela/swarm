@@ -698,11 +698,14 @@ func purgeRelayState(stateDir, routingID string, stderr io.Writer) {
 // stays, idempotently, for every reconnect after.
 func authorizeAtRelay(stateDir, deviceID string, stderr io.Writer) {
 	rec, ok := deviceRecord(stateDir, deviceID)
-	if !ok || len(rec.RelayAuthPub) != ed25519.PublicKeySize {
+	// The consent is as load-bearing as the key: without it the relay refuses the
+	// authorize outright (ADR-007 B38), so a record missing one is a device this
+	// machine can open no route to, and there is nothing to attempt.
+	if !ok || len(rec.RelayAuthPub) != ed25519.PublicKeySize || len(rec.ConsentSig) == 0 {
 		return
 	}
 	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
-		return cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub))
+		return cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub), rec.ConsentSig)
 	})
 	if err != nil && !errors.Is(err, errRelayNotProvisioned) {
 		fmt.Fprintf(stderr, "remote pair: the device is paired, but the machine could not open its "+

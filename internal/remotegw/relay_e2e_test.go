@@ -57,8 +57,11 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 	defer machine.Close()
 
 	// The phone authorizes the machine's relay-auth key, so the machine may append to
-	// the phone's mailbox (relay-level pairing, R-REL.11).
-	if err := phone.AuthorizeDevice(ctx, mPub); err != nil {
+	// the phone's mailbox (relay-level pairing, R-REL.11), carrying the machine's signed
+	// consent for the phone's route -- the relay records nothing from a caller's say-so
+	// alone (ADR-007 B27/B38).
+	if err := phone.AuthorizeDevice(ctx, mPub,
+		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
 		t.Fatalf("authorize device: %v", err)
 	}
 

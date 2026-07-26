@@ -72,7 +72,14 @@ import (
 // relay may replay a frame from before the user turned pushes off) -- so a counter that
 // restarts means every toggle from that moment on is silently refused, forever, while the
 // settings screen shows the user's new value. A brick with no visible symptom.
-const StateSchemaVersion = 6
+// v7 adds relay_spki_pin, the relay certificate's SubjectPublicKeyInfo hash the phone pins
+// at pairing (ADR-007 B33/B34). It has no other channel: the pairing QR cannot carry it
+// (MaxRelayURLLen = 39 already leaves one byte of slack in the v6-L symbol), so msg2
+// delivers it once and this file is the only place it survives to the next dial. The bump is
+// what makes a downgrade fail LOUDLY rather than quietly: a v6 build reading a v7 blob would
+// drop the pin, and a handset whose platform trust-root source is TrustRootsPinned would then
+// refuse every dial with no way for the user to tell a lost pin from a hostile relay.
+const StateSchemaVersion = 7
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -119,20 +126,26 @@ type State struct {
 	// machine may append back. Without it a restored phone holds a valid content key, a
 	// valid send-seq and no destination -- and nothing fails loudly.
 	MachineRelayAuthPub []byte
-	RoutingID           string                    // this phone's relay routing id
-	EpochID             uint32                    // current epoch the content key belongs to
-	Keys                crypto.EpochKeys          // wake + content keys for EpochID
-	SendSeq             map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive             map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch          uint32                    // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq            uint64                    // highest accepted grant seq for GrantEpoch
-	WakeReplay          uint64                    // highest accepted push-wake counter
-	RelayCursor         uint64                    // relay mailbox read cursor the next poll resumes from
-	Sessions            []CachedSession           // journal-derived session model
-	Snapshots           []Snapshot                // server-rendered terminal grids, latest per session
-	PendingOps          []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
-	OpOutcomes          map[string]schema.Control // durable operation outcomes, keyed by operation id
-	Stale               map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	// RelaySPKIPin is the SHA-256 of the relay certificate's SubjectPublicKeyInfo, pinned
+	// at pairing from MachinePayload (ADR-007 B33/B34). Empty means the machine published
+	// no pin. It is a coordinate rather than a key: it says which relay this phone is
+	// willing to reach the machine through, and it must survive a restart because pairing
+	// is the ONE authenticated moment it can be learned.
+	RelaySPKIPin []byte
+	RoutingID    string                    // this phone's relay routing id
+	EpochID      uint32                    // current epoch the content key belongs to
+	Keys         crypto.EpochKeys          // wake + content keys for EpochID
+	SendSeq      map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive      map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch   uint32                    // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq     uint64                    // highest accepted grant seq for GrantEpoch
+	WakeReplay   uint64                    // highest accepted push-wake counter
+	RelayCursor  uint64                    // relay mailbox read cursor the next poll resumes from
+	Sessions     []CachedSession           // journal-derived session model
+	Snapshots    []Snapshot                // server-rendered terminal grids, latest per session
+	PendingOps   []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	OpOutcomes   map[string]schema.Control // durable operation outcomes, keyed by operation id
+	Stale        map[Bucket]bool           // buckets whose content may not be trusted until reconciled
 	// StaleStreams are the REPAIR CHANNELS whose content may not be trusted (PB-SYNC-1).
 	// It is a second set rather than a view over Stale because marking and clearing happen
 	// at different granularities and one bit cannot carry both: a gap in the SHARED bucket
@@ -196,6 +209,7 @@ func (s State) clone() State {
 	s.MachineStatic = slices.Clone(s.MachineStatic)
 	s.MachineSignPub = slices.Clone(s.MachineSignPub)
 	s.MachineRelayAuthPub = slices.Clone(s.MachineRelayAuthPub)
+	s.RelaySPKIPin = slices.Clone(s.RelaySPKIPin)
 	s.SendSeq = maps.Clone(s.SendSeq)
 	s.Receive = maps.Clone(s.Receive)
 	s.Sessions = slices.Clone(s.Sessions)
@@ -254,6 +268,7 @@ type stateFile struct {
 	MachineStatic       []byte `json:"machine_static,omitempty"`
 	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
 	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
+	RelaySPKIPin        []byte `json:"relay_spki_pin,omitempty"`
 	RoutingID           string `json:"routing_id"`
 	EpochID             uint32 `json:"epoch_id"`
 
@@ -796,6 +811,7 @@ func (s *fileStore) load() error {
 		MachineStatic:       f.MachineStatic,
 		MachineSignPub:      f.MachineSignPub,
 		MachineRelayAuthPub: f.MachineRelayAuthPub,
+		RelaySPKIPin:        f.RelaySPKIPin,
 		RoutingID:           f.RoutingID,
 		EpochID:             f.EpochID,
 		PushPreference:      f.PushPreference,
@@ -1026,6 +1042,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		MachineStatic:       st.MachineStatic,
 		MachineSignPub:      st.MachineSignPub,
 		MachineRelayAuthPub: st.MachineRelayAuthPub,
+		RelaySPKIPin:        st.RelaySPKIPin,
 		RoutingID:           st.RoutingID,
 		EpochID:             st.EpochID,
 		PushPreference:      st.PushPreference,

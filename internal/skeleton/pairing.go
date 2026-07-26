@@ -42,6 +42,10 @@ type pairingConfig struct {
 	Hostname     string              // MachinePayload.Hostname
 	RoutingID    []byte              // MachinePayload.MachineRoutingID
 	RelayAuthPub []byte              // MachinePayload.MachineRelayAuthPub
+	// RelaySPKIPin is the SHA-256 of the relay certificate's SubjectPublicKeyInfo, read
+	// from relay.json and carried VERBATIM into MachinePayload (ADR-007 B33/B34). Empty
+	// means no pin is configured; this daemon neither derives nor validates one.
+	RelaySPKIPin []byte
 
 	// EndpointID is the daemon's federation endpoint id, carried into MachinePayload so
 	// the paired phone can NAME the machine it just paired with (S19). Every mutating
@@ -183,6 +187,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			RecipientPub:        cfg.RecipientPub,
 			MachineSignPub:      cfg.SignPub,
 			MachineEndpointID:   cfg.EndpointID,
+			RelaySPKIPin:        cfg.RelaySPKIPin,
 			EpochID:             cfg.EpochID,
 		},
 	}

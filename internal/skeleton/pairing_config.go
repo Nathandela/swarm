@@ -14,9 +14,9 @@ import (
 // The CLI and the daemon assembly must agree on this path.
 const remoteIdentityFile = "machine.key"
 
-// remoteRelayFile is the relay-URL config `swarm remote init --relay-url` persists and
-// loadPairingConfig reads back: <stateDir>/remote/relay.json, {"relay_url":"..."}. The
-// CLI writer and this reader must agree on this filename + shape.
+// remoteRelayFile is the relay config `swarm remote init` persists and loadPairingConfig
+// reads back: <stateDir>/remote/relay.json, {"relay_url":"...","relay_spki_pin":"..."}.
+// The CLI writer and this reader must agree on this filename + shape.
 const remoteRelayFile = "relay.json"
 
 // loadPairingConfig reads the machine's pairing identity and maps it onto a
@@ -69,10 +69,17 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 	// (nil NewRendezvous). Present-but-malformed is fail-closed as an error, consistent
 	// with corrupt-identity handling: assembly aborts rather than starting with pairing
 	// silently half-configured.
-	relayURL, err := loadRelayURL(stateDir)
+	relayURL, pin, err := loadRelayConfig(stateDir)
 	if err != nil {
 		return nil, err
 	}
+	// The relay SPKI pin travels to the phone in msg2 and NOWHERE ELSE (ADR-007 B33/B34):
+	// the pairing QR has no room for it -- MaxRelayURLLen = 39 already leaves one byte of
+	// slack in the v6-L symbol -- and a handset whose platform trust-root source is
+	// TrustRootsPinned refuses every dial without one. It is OPTIONAL here: a machine with
+	// no pin configured still pairs, and the pin's absence is decided at the phone's DIAL
+	// site, not here (see mobile).
+	cfg.RelaySPKIPin = pin
 	if relayURL != "" {
 		// PB-PAIR-7: the URL survives onto the config as well as into the rendezvous
 		// closure, so BeginPairing can put it in the QR verbatim. It used to be read only
@@ -85,26 +92,33 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 	return cfg, nil
 }
 
-// loadRelayURL reads <stateDir>/remote/relay.json ({"relay_url":"..."}). It returns
+// loadRelayConfig reads <stateDir>/remote/relay.json
+// ({"relay_url":"...","relay_spki_pin":"<base64 sha256 of the relay SPKI>"}). It returns
 // "" (no relay configured) when the file is ABSENT — the fail-closed default that
 // leaves NewRendezvous nil — and a non-nil error when the file is present but
 // unreadable, unparseable, or carries an empty relay_url.
-func loadRelayURL(stateDir string) (string, error) {
+//
+// The pin is OPTIONAL and is not validated for length here. It is an opaque value this
+// daemon only forwards: the phone is the party that must decide what an absent or wrong
+// pin means, at its dial site, and a machine-side length check would only turn a
+// misconfiguration into a daemon that will not start.
+func loadRelayConfig(stateDir string) (url string, spkiPin []byte, err error) {
 	b, err := os.ReadFile(filepath.Join(stateDir, "remote", remoteRelayFile))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return "", nil, nil
 		}
-		return "", err
+		return "", nil, err
 	}
 	var rc struct {
-		RelayURL string `json:"relay_url"`
+		RelayURL     string `json:"relay_url"`
+		RelaySPKIPin []byte `json:"relay_spki_pin"`
 	}
 	if err := json.Unmarshal(b, &rc); err != nil {
-		return "", fmt.Errorf("parse relay.json: %w", err)
+		return "", nil, fmt.Errorf("parse relay.json: %w", err)
 	}
 	if rc.RelayURL == "" {
-		return "", fmt.Errorf("relay.json present but relay_url is empty")
+		return "", nil, fmt.Errorf("relay.json present but relay_url is empty")
 	}
-	return rc.RelayURL, nil
+	return rc.RelayURL, rc.RelaySPKIPin, nil
 }

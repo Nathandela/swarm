@@ -19,7 +19,7 @@ func TestRelayStore_SurvivesRestart(t *testing.T) {
 	mPub, mPriv := newRelayAuthKey(t)
 	dPub, dPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	devRID := RoutingID(dPub)
@@ -59,9 +59,9 @@ func TestRelayStore_NoPlaintextAtRest(t *testing.T) {
 	srv, cfg, _, clk := startTestRelay(t, nil)
 
 	mPub, mPriv := newRelayAuthKey(t)
-	dPub, _ := newRelayAuthKey(t)
+	dPub, dPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))

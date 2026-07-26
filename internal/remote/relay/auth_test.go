@@ -89,7 +89,8 @@ func TestRelay_StoresNoIdentityKeys(t *testing.T) {
 	}
 
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dev.RelayAuthPublic())); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dev.RelayAuthPublic()),
+		devConsent(t, dev, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, id.NoiseStaticPublic(), dev.RecipientPublic())
