@@ -33,10 +33,24 @@ enum class PlatformCapability {
  */
 enum class CapabilityState { PRESENT, ABSENT, UNKNOWN }
 
+/**
+ * A capability the handset did not confirm that NO row consumes.
+ *
+ * It is recorded and not refused. At the pinned minSdk the platform is meant to offer it, so
+ * a non-PRESENT answer means a Keystore not behaving as its API level promises -- worth
+ * knowing, and not worth an app that will not start (residuals §2.8).
+ */
+data class CapabilityAnomaly(
+    val capability: PlatformCapability,
+    val state: CapabilityState,
+)
+
 sealed class CustodyPlan {
     data class Provisioned(
         val rows: Map<KeyRole, CustodyRow>,
         val strongBox: Boolean,
+        /** Non-PRESENT answers that did not stop provisioning. Empty on a capable handset. */
+        val anomalies: List<CapabilityAnomaly>,
     ) : CustodyPlan()
 
     /** PB-KEY-8's "defined refusal when the handset lacks the required algorithm". */
@@ -50,63 +64,155 @@ sealed class CustodyPlan {
 object CustodyPlanner {
 
     /**
-     * The capabilities the design REQUIRES, each mapped to the role that most needs it, so
-     * PB-KEY-8's "defined refusal" can name a role rather than shrug.
+     * The capabilities the design CONSUMES, each mapped to the role that most needs it, so
+     * PB-KEY-8's "defined refusal" can name a role rather than shrug. Non-PRESENT on any of
+     * them is a refusal, and UNKNOWN fails closed exactly as ABSENT does.
      *
-     * STRONGBOX is deliberately absent: its absence is a fallback, not a refusal, because it
-     * is device-dependent and refusing without it would refuse most handsets.
+     * WHY THE CURVE25519 ENTRIES ARE GONE (residuals §2.8). KEYSTORE_X25519 and
+     * KEYSTORE_ED25519 used to be here, and refusing over them refused a handset over
+     * something the design never asks for: ADR-007 B17(a) makes every row KEYSTORE_WRAPPED,
+     * so the X25519/Ed25519 private halves live in the Go core and Keystore is asked only for
+     * the AES-GCM KEK that seals them. The argument for keeping them was a canary -- at the
+     * pinned minSdk both are meant to be present, so a non-PRESENT answer means a Keystore
+     * misbehaving -- and that argument is intact, but its price was not: on such a handset the
+     * app would not provision AT ALL, over a capability nothing uses. So the canary moved to
+     * [canaries], which records the same answer without being able to stop the app starting.
      *
-     * These are required even though ADR-007 B17(a) means no row is KEYSTORE_NATIVE. They are
-     * a fail-closed FLOOR, not a claim about where the operation runs: `SWARM_ANDROID_MIN_SDK`
-     * is 33 and every one of them is guaranteed there, so a handset that answers ABSENT is a
-     * handset whose Keystore is not behaving as its API level promises. Downgrading silently
-     * on that answer is exactly what PB-KEY-8 exists to prevent.
+     * If a row ever becomes KEYSTORE_NATIVE, its algorithm belongs back in this map -- and
+     * KeyCustodyMatrixTest derives the consumed set from the matrix so that omission fails
+     * a test rather than shipping.
+     *
+     * STRONGBOX is deliberately in neither list: its absence is a fallback, not a refusal,
+     * because it is device-dependent and refusing without it would refuse most handsets.
      */
     private val required = linkedMapOf(
         PlatformCapability.KEYSTORE_AES_GCM to KeyRole.RELAY_AUTH,
         PlatformCapability.USER_AUTH_PER_USE to KeyRole.COMMAND_SIGN,
-        PlatformCapability.KEYSTORE_X25519 to KeyRole.NOISE_STATIC,
-        PlatformCapability.KEYSTORE_ED25519 to KeyRole.COMMAND_SIGN,
+    )
+
+    /**
+     * Probed, recorded, never fatal: capabilities the platform guarantees at the pinned
+     * minSdk that no row consumes. A non-PRESENT answer here says something is wrong with
+     * this Keystore, so it is carried on the plan rather than dropped -- but it cannot refuse
+     * a phone, because the design does not use it.
+     */
+    private val canaries = listOf(
+        PlatformCapability.KEYSTORE_X25519,
+        PlatformCapability.KEYSTORE_ED25519,
     )
 
     fun forDevice(capabilities: Map<PlatformCapability, CapabilityState>): CustodyPlan {
         for ((capability, role) in required) {
-            // A capability the probe never reported is UNKNOWN, not PRESENT. Defaulting an
-            // absent map entry to present is the same defect as treating UNKNOWN as present,
-            // one layer down.
-            val state = capabilities[capability] ?: CapabilityState.UNKNOWN
-            if (state != CapabilityState.PRESENT) {
-                return CustodyPlan.Refused(
-                    role = role,
-                    capability = capability,
-                    reason = "this handset reports $capability as $state. $role needs it, and a " +
-                        "silent downgrade to software-only custody is what PB-KEY-8 forbids: " +
-                        "UNKNOWN is a probe that could not answer, which fails closed exactly " +
-                        "as ABSENT does.",
-                )
-            }
+            if (stateOf(capabilities, capability) == CapabilityState.PRESENT) continue
+            return CustodyPlan.Refused(
+                role = role,
+                capability = capability,
+                reason = "this handset reports $capability as " +
+                    "${stateOf(capabilities, capability)}. $role needs it, and a silent " +
+                    "downgrade to software-only custody is what PB-KEY-8 forbids: UNKNOWN is " +
+                    "a probe that could not answer, which fails closed exactly as ABSENT does.",
+            )
         }
         return CustodyPlan.Provisioned(
             rows = KeyCustodyMatrix.rows,
             // Claimed only on PRESENT. An UNKNOWN StrongBox that the plan claimed would have
             // every later decision taken against a guarantee the key does not carry.
             strongBox = capabilities[PlatformCapability.STRONGBOX] == CapabilityState.PRESENT,
+            anomalies = canaries.mapNotNull { capability ->
+                val state = stateOf(capabilities, capability)
+                if (state == CapabilityState.PRESENT) null else CapabilityAnomaly(capability, state)
+            },
         )
     }
+
+    /**
+     * A capability the probe never reported is UNKNOWN, not PRESENT. Defaulting an absent map
+     * entry to present is the same defect as treating UNKNOWN as present, one layer down.
+     */
+    private fun stateOf(
+        capabilities: Map<PlatformCapability, CapabilityState>,
+        capability: PlatformCapability,
+    ): CapabilityState = capabilities[capability] ?: CapabilityState.UNKNOWN
+}
+
+/**
+ * `KeyInfo.getSecurityLevel()`'s answer set, one constant per platform constant.
+ *
+ * IT IS NOT A BOOLEAN, and that is the whole of residuals §2.7's fix. The platform can say
+ * SOFTWARE -- "this key is not in secure hardware" -- or UNKNOWN -- "I cannot tell you which
+ * level this is". They are different statements and a boolean makes them the same `false`.
+ * The distinction decides whether an answer is a DENIAL the design refuses or a SILENCE it
+ * records, and collapsing them forces a choice between accepting a software KEK and refusing
+ * to start on a handset that denied nothing.
+ *
+ * The names mirror the platform's constants exactly. An invented vocabulary here is one more
+ * mapping to get wrong at the one place (`AndroidKeyInfoReader`) that no test on this machine
+ * can exercise.
+ */
+enum class KeystoreSecurityLevel {
+
+    /** The platform states the key is NOT in secure hardware. */
+    SOFTWARE,
+
+    /** The platform declines to name a level. NOT a statement that the key is in software. */
+    UNKNOWN,
+
+    /** Secure hardware whose enclave the platform declines to name. */
+    UNKNOWN_SECURE,
+
+    TRUSTED_ENVIRONMENT,
+
+    STRONGBOX,
+    ;
+
+    /**
+     * Did the platform AFFIRM secure hardware. [UNKNOWN] is false because an unnamed level
+     * rounded up to hardware is a guarantee the key does not carry.
+     */
+    val insideSecureHardware: Boolean
+        get() = when (this) {
+            TRUSTED_ENVIRONMENT, STRONGBOX, UNKNOWN_SECURE -> true
+            SOFTWARE, UNKNOWN -> false
+        }
+
+    /**
+     * Did the platform DENY secure hardware -- PB-SEC-1's at-rest floor, which is the
+     * question `provision` refuses on.
+     *
+     * IT IS NOT `!insideSecureHardware`. Refusing everything that is not an affirmative
+     * would refuse [UNKNOWN], and a handset that never said its key was in software would
+     * then be a handset the app cannot start on. That failure mode is residuals §2.8, and
+     * it is the worst outcome in this class of defect.
+     *
+     * Both properties are exhaustive `when`s with no `else`, so a level added later fails
+     * to compile here rather than falling silently into one side.
+     */
+    val deniesSecureHardware: Boolean
+        get() = when (this) {
+            SOFTWARE -> true
+            UNKNOWN, UNKNOWN_SECURE, TRUSTED_ENVIRONMENT, STRONGBOX -> false
+        }
 }
 
 /**
  * The fields of android.security.keystore.KeyInfo this design depends on, lifted into a
  * plain record so the verification logic is testable off-device. The mapping from a real
  * KeyInfo is trivial and is itself only provable on a handset (PB-E2E-5).
+ *
+ * [insideSecureHardware] and [strongBoxBacked] are DERIVED from [securityLevel] rather than
+ * stored beside it. They were separate fields, and a record can hold two fields that
+ * disagree -- which for these two means claiming hardware backing the key does not have.
  */
 data class KeyInfoRecord(
-    val insideSecureHardware: Boolean,
-    val strongBoxBacked: Boolean,
+    val securityLevel: KeystoreSecurityLevel,
     val userAuthenticationRequired: Boolean,
     val userAuthenticationValidityDurationSeconds: Int,
     val invalidatedByBiometricEnrollment: Boolean,
-)
+) {
+    val insideSecureHardware: Boolean get() = securityLevel.insideSecureHardware
+
+    val strongBoxBacked: Boolean get() = securityLevel == KeystoreSecurityLevel.STRONGBOX
+}
 
 /** Reads back what the platform actually generated. */
 interface KeyInfoReader {
@@ -153,9 +259,11 @@ class CustodyProvisioning(
         // quietly gave neither, and every test above this line still passes.
         //
         // What the read-back can and cannot see, said plainly: it compares the ACHIEVED
-        // parameters against the ones REQUESTED. That the key is really inside a TEE, or
-        // really in StrongBox, is hardware attestation on a physical handset -- PB-E2E-5,
-        // deferred -- and is not asserted here or anywhere in this slice.
+        // parameters against the ones REQUESTED, and -- for the one parameter that has no
+        // requested value to compare with -- against the design's own floor. That the key is
+        // really inside a TEE, or really in StrongBox, is hardware attestation on a physical
+        // handset (PB-E2E-5, deferred) and is not asserted here or anywhere in this slice:
+        // everything below reads the platform's REPORT, which a broken platform can lie in.
         val alias = generated.keystoreAlias
         val info = reader.read(alias)
         val downgrades = buildList {
@@ -181,6 +289,32 @@ class CustodyProvisioning(
             }
             if (info.strongBoxBacked && !generated.isStrongBoxBacked) {
                 add("the platform reports StrongBox for a key that did not request it")
+            }
+            // THE ONE ENTRY THAT IS A FLOOR AND NOT A COMPARISON (residuals §2.7). Every
+            // check above compares achieved against requested; this one cannot, because
+            // KeyGenParameterSpec has NO "require secure hardware" setter and so there is no
+            // requested value to compare with. Until this line the security level was read
+            // into KeyInfoRecord and compared with nothing at all: a handset returning a
+            // purely software KEK provisioned cleanly, and PB-SEC-1's at-rest claim was void
+            // on that device with nothing in the product ever saying so.
+            //
+            // It refuses the DENIAL only. KeystoreSecurityLevel.UNKNOWN -- the platform
+            // declining to name a level -- provisions and is recorded, because refusing an
+            // answer that denied nothing turns this fix into residuals §2.8: an app that
+            // will not start. What the user sees on a denial is DEVICE_UNSUPPORTED
+            // (KeystoreDowngrade -> Recovery.REPROVISION_KEK in PhoneRuntime's table), which
+            // is the honest verdict: nothing the user does to this handset fixes it.
+            //
+            // FOR THIS TO BE WRONG a handset we intend to support would have to report
+            // SECURITY_LEVEL_SOFTWARE for a plain AES-256/GCM Keystore key at the pinned
+            // minSdk. Nothing here claims that has been observed either way -- PB-E2E-5 is
+            // deferred (ADR-007 B31) -- but a device that does report it is now a device
+            // that says so out loud instead of one that provisions in silence.
+            if (info.securityLevel.deniesSecureHardware) {
+                add(
+                    "the platform reports ${info.securityLevel}: this key is not in secure " +
+                        "hardware, so everything sealed under it is protected by software alone",
+                )
             }
         }
         if (downgrades.isNotEmpty()) {
