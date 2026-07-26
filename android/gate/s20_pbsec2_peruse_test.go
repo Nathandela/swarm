@@ -59,23 +59,130 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Reading Kotlin as CODE and not as prose.
+// ---------------------------------------------------------------------------
+
+// kotlinCodeOnly strips `//` line comments and `/* */` block comments, leaving string literals
+// intact.
+//
+// IT EXISTS BECAUSE THE FIRST DRAFT OF THIS FILE WAS DEFEATED BY ITS OWN DOCUMENTATION. Check
+// (1) below asks whether a symbol is REFERENCED from production Kotlin. Run against the
+// pre-fix sources it correctly reported `KeystoreSpecs.forOperation`, `endPrompt` and
+// `.consume(` unreached -- and wrongly reported `PerUseGate` and `beginPrompt` REACHED, because
+// a KDoc comment elsewhere in the module names them in a sentence. A fence that a comment can
+// satisfy is a fence that the next person to write a thorough comment turns off, silently, and
+// that is the same failure class the fence is pointed at: something that reads as coverage and
+// is not.
+//
+// The scan is a small state machine rather than a regexp because the two hazards pull opposite
+// ways: `//` inside a string literal is code, and a quote inside a comment is prose. Getting
+// either wrong changes what the check can see.
+func kotlinCodeOnly(src string) string {
+	var out strings.Builder
+	out.Grow(len(src))
+	const (
+		code = iota
+		lineComment
+		blockComment
+		str
+		charLit
+	)
+	state := code
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		next := byte(0)
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		switch state {
+		case code:
+			switch {
+			case c == '/' && next == '/':
+				state = lineComment
+				i++
+			case c == '/' && next == '*':
+				state = blockComment
+				i++
+			case c == '"':
+				state = str
+				out.WriteByte(c)
+			case c == '\'':
+				state = charLit
+				out.WriteByte(c)
+			default:
+				out.WriteByte(c)
+			}
+		case lineComment:
+			if c == '\n' {
+				state = code
+				out.WriteByte(c)
+			}
+		case blockComment:
+			if c == '*' && next == '/' {
+				state = code
+				i++
+			} else if c == '\n' {
+				// Kept so reported line numbers and the shape of the file survive.
+				out.WriteByte(c)
+			}
+		case str, charLit:
+			out.WriteByte(c)
+			// A backslash escapes whatever follows, including the closing quote.
+			if c == '\\' {
+				if i+1 < len(src) {
+					out.WriteByte(next)
+					i++
+				}
+				continue
+			}
+			if (state == str && c == '"') || (state == charLit && c == '\'') {
+				state = code
+			}
+		}
+	}
+	return out.String()
+}
+
+// ---------------------------------------------------------------------------
 // (1) The per-use subjects are reached from production Kotlin.
 // ---------------------------------------------------------------------------
 
-// perUseSubjects are the symbols ADR-007 B51 found referenced from `src/test/` alone, plus the
-// gate that now carries them. Each maps to the file that DECLARES it, which is excluded from
-// the search: a declaration is not a caller, and counting it is how "reached" becomes "exists".
+// perUseSubjects is the CHAIN from the button a person presses to the per-use
+// KeyGenParameterSpec, one link per row. Each symbol maps to the file that DECLARES it, which
+// is excluded from the search: a declaration is not a caller, and counting it is exactly how
+// "reached" degrades into "exists".
+//
+// IT IS A CHAIN AND NOT A SET, because the defect it is pointed at is a broken link rather than
+// a missing symbol. Every one of these existed and was tested when ADR-007 B51 found the tier
+// unimplemented; what was missing was that anything called them.
+//
+//	PhoneSurface -> perUseCiphers -> KeystorePerUseCiphers -> provisionGate -> forOperation
+//	PhoneSurface -> PerUseGate -> beginPrompt / endPrompt / consume
 var perUseSubjects = map[string]string{
-	// B51's headline. The per-use KeyGenParameterSpec.
-	"KeystoreSpecs.forOperation": "Provisioning.kt",
-	// The alias table that gives each per-use operation its own Keystore entry.
-	"KeystoreAliases.forOperation": "Custody.kt",
-	// The three ledger verbs with no production caller.
+	// The gate itself, so this fails the day it is deleted rather than passing quietly.
+	"PerUseGate": "PerUseGate.kt",
+	// The three ledger verbs B51 found with no production caller.
 	"beginPrompt": "BiometricPolicy.kt",
 	"endPrompt":   "BiometricPolicy.kt",
 	".consume(":   "BiometricPolicy.kt",
-	// The gate itself, so this check fails the day it is deleted rather than passing quietly.
-	"PerUseGate": "PerUseGate.kt",
+	// The Keystore half: the screen asks the runtime, the runtime builds the cipher source, the
+	// cipher source provisions the per-use entry.
+	"perUseCiphers":         "PhoneRuntime.kt",
+	"KeystorePerUseCiphers": "BiometricPrompts.kt",
+	"provisionGate":         "Provisioning.kt",
+	// The alias table that gives each per-use operation its own Keystore entry, so no one
+	// authorization can be pointed at whichever operation the caller picks.
+	"KeystoreAliases.forOperation": "Custody.kt",
+}
+
+// perUseSpecCallers are functions whose BODY must name B51's literal subject.
+//
+// `KeystoreSpecs.forOperation` cannot be checked the way the chain above is: its only caller,
+// `CustodyProvisioning.provisionGate`, lives in the same file that declares it, so excluding the
+// declaring file would report it unreached however well wired it is. The chain establishes that
+// `provisionGate` is reached; this establishes that `provisionGate` is what reaches the spec.
+var perUseSpecCallers = map[string]string{
+	"provisionGate": "KeystoreSpecs.forOperation",
 }
 
 // TestPBSEC2_ThePerUseSubjectsAreReachedFromProductionKotlin.
@@ -96,6 +203,13 @@ func TestPBSEC2_ThePerUseSubjectsAreReachedFromProductionKotlin(t *testing.T) {
 			"tempting repair is to relax the check", len(files))
 	}
 
+	// CODE ONLY. A KDoc sentence naming a symbol is not a caller, and the first draft of this
+	// check was defeated by exactly that -- see kotlinCodeOnly.
+	code := map[string]string{}
+	for _, f := range files {
+		code[f] = kotlinCodeOnly(readFileOrFail(t, f, "PB-SEC-2"))
+	}
+
 	var unreached []string
 	for symbol, declaredIn := range perUseSubjects {
 		reached := false
@@ -103,13 +217,32 @@ func TestPBSEC2_ThePerUseSubjectsAreReachedFromProductionKotlin(t *testing.T) {
 			if filepath.Base(f) == declaredIn {
 				continue
 			}
-			if strings.Contains(readFileOrFail(t, f, "PB-SEC-2"), symbol) {
+			if strings.Contains(code[f], symbol) {
 				reached = true
 				break
 			}
 		}
 		if !reached {
 			unreached = append(unreached, symbol+" (declared in "+declaredIn+")")
+		}
+	}
+
+	// And the last link, which no cross-file search can make: B51's literal subject, inside the
+	// body of the function the chain above proved is reached.
+	for fn, spec := range perUseSpecCallers {
+		found := false
+		for _, f := range files {
+			body, ok := kotlinFunBody(code[f], fn)
+			if !ok {
+				continue
+			}
+			found = true
+			if !strings.Contains(body, spec) {
+				unreached = append(unreached, spec+" (not named in the body of "+fn+")")
+			}
+		}
+		if !found {
+			unreached = append(unreached, fn+" (no such function in production Kotlin)")
 		}
 	}
 	sort.Strings(unreached)
@@ -163,7 +296,13 @@ const perUseCallSiteFloor = 2
 // nested inside a helper function declared elsewhere would be attributed to that helper's
 // declaration line. The direction of the error is toward FAILING (the helper's line will not
 // name perUseButton), which is the safe direction for a fence.
-var kotlinMemberDecl = regexp.MustCompile(`(?m)^\s*(?:private\s+|internal\s+)?(?:val|var|fun)\s`)
+//
+// The indentation class is `[ \t]` and NOT `\s`, which matches newlines: with `\s*` the match
+// start walks back over any blank lines above the declaration and the reported line comes out
+// empty. That is not cosmetic -- an empty declaration string contains no "perUseButton", so
+// every call site reads as ungated and the check fails over correct code. It showed up the
+// moment comment-stripping turned KDoc blocks into blank lines.
+var kotlinMemberDecl = regexp.MustCompile(`(?m)^[ \t]*(?:private[ \t]+|internal[ \t]+)?(?:val|var|fun)[ \t]`)
 
 func kotlinDeclarationOf(src string, offset int) string {
 	locs := kotlinMemberDecl.FindAllStringIndex(src[:offset], -1)
@@ -192,7 +331,9 @@ func TestPBSEC2_EveryPerUseFacadeVerbIsReachedThroughThePerUseButton(t *testing.
 	var sites []site
 
 	for _, f := range kotlinFiles(t, kotlinMainRoot(t)) {
-		src := readFileOrFail(t, f, "PB-SEC-2")
+		// CODE ONLY: a verb named in a KDoc sentence is not a call site, and counting one would
+		// fail this check over a comment.
+		src := kotlinCodeOnly(readFileOrFail(t, f, "PB-SEC-2"))
 		for _, verb := range perUseFacadeVerbs {
 			for at := 0; ; {
 				i := strings.Index(src[at:], verb)
