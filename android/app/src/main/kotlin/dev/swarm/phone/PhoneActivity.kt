@@ -40,7 +40,11 @@ class PhoneActivity : AppCompatActivity() {
         // screenshot, a screen recorder or the recents thumbnailer can catch.
         SecureWindow.protect(this)
 
-        surface = PhoneSurface(this, (application as SwarmApplication).phoneRuntime)
+        // The ledger is the APPLICATION's, not one of this screen's. It is what every
+        // InvalidationEvent clears, so a per-use prompt left in flight by a screen lock is
+        // cleared with everything else rather than wedging the gate for the life of the process.
+        val app = application as SwarmApplication
+        surface = PhoneSurface(this, app.phoneRuntime, app.contentLock.ledger)
         setContentView(surface.root)
     }
 

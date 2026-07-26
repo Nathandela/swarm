@@ -254,6 +254,41 @@ class CustodyProvisioning(
             fallback.also { provisioner.generate(it) }
         }
 
+        return readBack(generated)
+    }
+
+    /**
+     * PB-SEC-2's per-use gate key for [operation] -- the second caller of the read-back, and the
+     * one ADR-007 B51 found missing entirely.
+     *
+     * IT IS NOT STRONGBOX-BACKED, and that is a decision rather than an omission. This key seals
+     * NOTHING: it exists only so a `BiometricPrompt.CryptoObject` has something the platform will
+     * refuse to operate without a fresh Class-3 biometric. StrongBox has a small, shared key slot
+     * budget and its own unavailable-fallback path, and spending four slots on tokens that
+     * protect no data would take them from the tier KEKs that do. The TEE-backed floor below is
+     * the property that matters here, and it is checked exactly as it is for a KEK.
+     *
+     * THE READ-BACK IS THE POINT ON THIS PATH MORE THAN ON THE OTHER. B51's whole finding is a
+     * per-use tier silently behaving as a timed one; `userAuthenticationValidityDurationSeconds`
+     * is the platform's own answer to that question, and comparing it against the requested 0 is
+     * what makes "the platform gave us a windowed key instead" a refusal rather than a surprise.
+     */
+    fun provisionGate(operation: GatedOperation): ProvisionedKey {
+        require(BiometricPolicy.specFor(operation).requiresCryptoObject) {
+            "$operation is a timed tier; its authorization is the shared window key, not a " +
+                "per-use gate entry"
+        }
+        val spec = KeystoreSpecs.forOperation(operation, strongBox = false)
+        provisioner.generate(spec)
+        return readBack(spec)
+    }
+
+    /**
+     * The achieved parameters against the requested ones. Shared by both provisioning paths, so
+     * a downgrade the tier KEKs refuse is a downgrade the gate keys refuse too -- two copies of
+     * this table would be two things to get wrong, and the way it goes wrong is silent.
+     */
+    private fun readBack(generated: KeyGenParameterSpec): ProvisionedKey {
         // GENERATE, THEN READ BACK. A key whose KeyInfo is never read is how a software
         // fallback ships unnoticed: the request said per-use and auth-required, the platform
         // quietly gave neither, and every test above this line still passes.

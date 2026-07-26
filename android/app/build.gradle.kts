@@ -273,9 +273,34 @@ kotlin {
 // file.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PB-SEC-2 / ADR-007 B51 and B57: androidx.biometric is the ONLY way an app can require a
+// Class-3 biometric per use.
+//
+// WHY IT IS HERE AT ALL. Requirements 6.0 puts revoke, kill switch, launch and kill in a
+// PER-USE tier, and per-use is not a number -- it is a CryptoObject bound to one operation,
+// which on Android means BiometricPrompt. Until this line the app had no prompt of any kind, so
+// those four operations were gated by exactly what typing is gated by: the content KEK's
+// 60-second timed window, which is the silent downgrade PB-SEC-2 exists to forbid. The same
+// absence left ADR-007 B44's screen-lock purge with no way back in.
+//
+// WHAT IT COSTS, stated because PB-SEC-14 is the requirement it trades against. It regenerates
+// android/app/gradle.lockfile and android/gradle/verification-metadata.xml, and it adds rows to
+// android/dependency-inventory.tsv -- androidx.biometric itself plus the fragment/lifecycle
+// modules it pulls, most of which androidx.appcompat already brings. Verification was
+// REGENERATED and not disabled: enforcement being live is itself PB-SEC-14's evidence.
+//
+// The alternative -- android.hardware.biometrics.BiometricPrompt, the framework class, with no
+// dependency at all -- was rejected. It is API 28+ so the minSdk is not the obstacle; what it
+// lacks is BiometricManager.canAuthenticate's status taxonomy, which is what tells a handset
+// with nothing enrolled from one with no sensor. Those two have opposite remedies, and a gate
+// that cannot tell them apart refuses one user with advice they cannot act on.
+// ---------------------------------------------------------------------------
+
 dependencies {
     implementation(files(swarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
 
     implementation("com.google.zxing:core:3.5.3")

@@ -255,6 +255,20 @@ class PhoneRuntime(private val context: Context) {
         coreDir.deleteRecursively()
     }
 
+    /**
+     * PB-SEC-2's per-use gate keys, over the same provisioning path the tier KEKs take.
+     *
+     * IT IS ASKED FOR HERE AND NOT BUILT AT THE SCREEN, for the reason [strongBoxPreferred]
+     * exists: provisioning is one platform conversation, and a second construction of
+     * [CustodyProvisioning] beside a screen is a second place the read-back could be omitted.
+     * The gate entries themselves are provisioned lazily on first use -- they seal nothing, so
+     * there is no first-launch ordering to get right and nothing to lose by not having them.
+     */
+    fun perUseCiphers(): dev.swarm.phone.keys.PerUseCipherSource =
+        dev.swarm.phone.keys.KeystorePerUseCiphers(
+            CustodyProvisioning(AndroidKeystoreProvisioner(), AndroidKeyInfoReader()),
+        )
+
     private fun bootstrapOver(backing: PersistentCustodyBacking) = KeystoreCustodyBootstrap(
         backing = backing,
         provisioning = CustodyProvisioning(AndroidKeystoreProvisioner(), AndroidKeyInfoReader()),

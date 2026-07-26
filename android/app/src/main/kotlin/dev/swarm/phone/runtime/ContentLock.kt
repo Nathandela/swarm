@@ -9,6 +9,11 @@ import android.content.IntentFilter
 import android.os.Bundle
 import dev.swarm.phone.keys.AuthorizationLedger
 import dev.swarm.phone.keys.InvalidationEvent
+import dev.swarm.phone.keys.PerUseRefusalReason
+import dev.swarm.phone.keys.PerUseRefusalText
+import dev.swarm.phone.keys.PromptAvailability
+import dev.swarm.phone.ui.Remedy
+import dev.swarm.phone.ui.RoutedError
 
 /**
  * PB-KEY-7's lock purge and PB-SEC-2's invalidation clause, wired.
@@ -40,15 +45,29 @@ import dev.swarm.phone.keys.InvalidationEvent
  * WHAT IS DELIBERATELY NOT HERE: a foreground timer for [InvalidationEvent.AUTH_TIMEOUT_EXPIRED].
  * The content KEK is provisioned with `setUserAuthenticationParameters(60,
  * AUTH_BIOMETRIC_STRONG)`, so the platform refuses the unwrap once the window has lapsed and the
- * remedy is a fresh authentication. This app ships no `BiometricPrompt` -- androidx.biometric is
- * not a dependency -- so a timer that locked a live foreground session would produce a refusal
- * with no in-app way to satisfy it, which is the "gate whose only exit is unbuilt" failure that
- * makes a phone worse than one that purges nothing. The enum value stays, and it routes here
- * exactly like the others for whoever wires the prompt.
+ * remedy is a fresh authentication.
+ *
+ * THE REASON ORIGINALLY RECORDED HERE IS NOW STALE, and it is corrected rather than quietly
+ * dropped. It read: "this app ships no `BiometricPrompt` -- androidx.biometric is not a
+ * dependency -- so a timer would produce a refusal with no in-app way to satisfy it". That was
+ * true and is no longer: [ContentUnlockPolicy] and `dev.swarm.phone.keys.BiometricPrompts` build
+ * exactly that exit (ADR-007 B57). What remains is a SCOPE decision on its own merits, and it is
+ * a smaller claim than the one it replaces: a continuously-foregrounded session means the device
+ * is unlocked and the user is present, every re-acquisition after a lock, a backgrounding or
+ * process death is already Keystore-gated, and a timer would be a second clock beside the one
+ * the platform keeps. The enum value stays and routes here exactly like the others.
  */
 class ContentLock(
     private val core: ContentLockSink,
-    private val ledger: AuthorizationLedger = AuthorizationLedger(),
+    /**
+     * THE PROCESS'S ONE LEDGER, and it is public because `dev.swarm.phone.keys.PerUseGate` must
+     * be given THIS one rather than a second. A gate holding a ledger of its own would keep an
+     * in-flight prompt marker across the screen lock that this class exists to react to -- and
+     * `AuthorizationLedger.beginPrompt` refuses every later prompt while one is marked in
+     * flight, so the gate would wedge shut for the life of the process, with no way to
+     * authorize anything and nothing on screen explaining it.
+     */
+    val ledger: AuthorizationLedger = AuthorizationLedger(),
 ) {
 
     /** The last event that reached [invalidate], for a test and for a bug report. */
@@ -88,6 +107,66 @@ class ContentLock(
  */
 fun interface ContentLockSink {
     fun lockContent()
+}
+
+/**
+ * THE WAY BACK IN -- ADR-007 B44's hole, which was that there was none.
+ *
+ * B44 made a screen lock return the content tier to locked on every screen-off, and
+ * `PhoneSurface.renderReady` asks `PhoneRuntime.unlockContent` on the way back with a comment
+ * asserting that this "is the moment the Keystore-backed content KEK will answer". It is not,
+ * in four states: after a device-credential unlock (mandatory post-reboot), after the biometric
+ * idle timeout, after repeated failures, and always on a handset with no enrolled Class-3
+ * biometric -- because the content KEK carries `AUTH_BIOMETRIC_STRONG` and nothing else
+ * ([dev.swarm.phone.keys.KeystoreSpecs.kek]). On refusal the app offered nothing at all.
+ *
+ * SO THIS DECIDES WHEN TO OFFER A PROMPT, AND WHEN NOT TO. Both halves are the same defect
+ * class. A refusal a prompt can fix, with no prompt offered, is a dead end. A prompt offered for
+ * a refusal it cannot fix -- a destroyed key, an unsupported handset, a lost grant -- is a
+ * button the user can press forever, which is PB-APP-10's failure LOOP reached through the
+ * remedy.
+ *
+ * IT ROUTES ON THE REMEDY, NOT ON THE ERROR STATE. [dev.swarm.phone.ui.Remedy.AUTHENTICATE] is
+ * the taxonomy's own name for "a fresh authentication fixes this", and it is decided once, in
+ * `ErrorRouter`'s single table. Matching on states here would be a second copy of that decision,
+ * and the two would drift on the first row anybody added.
+ */
+object ContentUnlockPolicy {
+
+    /** @param error what `PhoneRuntime.unlockContent` answered; null means it did not refuse. */
+    fun offersUnlock(error: RoutedError?): Boolean = error?.remedy == Remedy.AUTHENTICATE
+
+    /**
+     * Whether a prompt is worth putting on screen at all. A control that cannot prompt is a
+     * control that does nothing, which is the same dead end one step further along.
+     */
+    fun canPrompt(availability: PromptAvailability): Boolean =
+        availability == PromptAvailability.READY
+
+    /**
+     * What the user is told INSTEAD of a prompt. Every state has an answer, including READY --
+     * where the answer is what the prompt is for, so a screen never has an empty string to show.
+     *
+     * The wording is shared with the per-use gate's table wherever the situation is the same
+     * one, because it is: a handset with nothing enrolled cannot use the content tier and cannot
+     * revoke, for one reason.
+     */
+    fun adviceFor(availability: PromptAvailability): String = when (availability) {
+        PromptAvailability.READY ->
+            "Unlock to restore your sessions on this phone."
+
+        PromptAvailability.NONE_ENROLLED ->
+            PerUseRefusalText.messageFor(PerUseRefusalReason.NO_BIOMETRIC_ENROLLED)
+
+        PromptAvailability.NO_HARDWARE ->
+            PerUseRefusalText.messageFor(PerUseRefusalReason.NO_BIOMETRIC_HARDWARE)
+
+        PromptAvailability.TEMPORARILY_UNAVAILABLE ->
+            PerUseRefusalText.messageFor(PerUseRefusalReason.BIOMETRIC_UNAVAILABLE)
+
+        PromptAvailability.SECURITY_UPDATE_REQUIRED ->
+            PerUseRefusalText.messageFor(PerUseRefusalReason.SECURITY_UPDATE_REQUIRED)
+    }
 }
 
 /**
