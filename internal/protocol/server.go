@@ -1256,10 +1256,28 @@ func (cc *clientConn) handleDeviceRevoke(c Control) {
 	// grant.Delete cleanup failure or a committed-registry durability error -- and internal/protocol
 	// has no logger, so the failure became invisible. Reply error whenever RevokeDevice reported one:
 	// the device is already revoked + severed above, so the client's idempotent retry is harmless,
-	// but the operator must learn of a stranded sidecar / unconfirmed durability. Only a clean
-	// (err==nil) revoke -- whether it removed a device or was an idempotent no-op -- replies OK.
+	// but the operator must learn of a stranded sidecar / unconfirmed durability.
 	if err != nil {
 		cc.replyError("device_revoke: " + err.Error())
+		return
+	}
+	// An OWNER-tier revoke that removed nothing is a REFUSAL, not a success (residuals §3).
+	// `swarm remote revoke <id>` printed "revoked device <id>" and exited 0 for an id the
+	// machine had never paired -- during a device-loss incident, exactly the output that says
+	// the lost handset is cut off, produced by a command that cut nothing off. It was not even
+	// inert: cmd/swarm's runRemoteRevoke purges the machine's outbound journal once the daemon
+	// reports no error, so a mistyped id also dropped the frames queued for the phone that IS
+	// paired. `device_regrant` already fails closed on an unknown id; this is the same refusal
+	// for the same condition, so the two verbs answer a typo the same way.
+	//
+	// OWNER TIER ONLY, and the exclusion is the point rather than caution. The remote tier is
+	// the phone's own panic button arriving over an at-least-once relay: a retry of a revoke
+	// that already succeeded legitimately removes nothing, and answering that with an error
+	// would tell a handset its revocation failed when it did not. `removed` is computed inside
+	// RevokeDevice's transaction, so on the owner tier -- one operator, one command -- it is a
+	// presence answer and not a race.
+	if !removed && !cc.srv.remoteTier {
+		cc.replyError(fmt.Sprintf("device_revoke: no such device %q; nothing to revoke", c.TargetDeviceID))
 		return
 	}
 	cc.replyOK(c.TargetDeviceID)
