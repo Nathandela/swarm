@@ -33,10 +33,24 @@ enum class PlatformCapability {
  */
 enum class CapabilityState { PRESENT, ABSENT, UNKNOWN }
 
+/**
+ * A capability the handset did not confirm that NO row consumes.
+ *
+ * It is recorded and not refused. At the pinned minSdk the platform is meant to offer it, so
+ * a non-PRESENT answer means a Keystore not behaving as its API level promises -- worth
+ * knowing, and not worth an app that will not start (residuals §2.8).
+ */
+data class CapabilityAnomaly(
+    val capability: PlatformCapability,
+    val state: CapabilityState,
+)
+
 sealed class CustodyPlan {
     data class Provisioned(
         val rows: Map<KeyRole, CustodyRow>,
         val strongBox: Boolean,
+        /** Non-PRESENT answers that did not stop provisioning. Empty on a capable handset. */
+        val anomalies: List<CapabilityAnomaly>,
     ) : CustodyPlan()
 
     /** PB-KEY-8's "defined refusal when the handset lacks the required algorithm". */
@@ -50,49 +64,75 @@ sealed class CustodyPlan {
 object CustodyPlanner {
 
     /**
-     * The capabilities the design REQUIRES, each mapped to the role that most needs it, so
-     * PB-KEY-8's "defined refusal" can name a role rather than shrug.
+     * The capabilities the design CONSUMES, each mapped to the role that most needs it, so
+     * PB-KEY-8's "defined refusal" can name a role rather than shrug. Non-PRESENT on any of
+     * them is a refusal, and UNKNOWN fails closed exactly as ABSENT does.
      *
-     * STRONGBOX is deliberately absent: its absence is a fallback, not a refusal, because it
-     * is device-dependent and refusing without it would refuse most handsets.
+     * WHY THE CURVE25519 ENTRIES ARE GONE (residuals §2.8). KEYSTORE_X25519 and
+     * KEYSTORE_ED25519 used to be here, and refusing over them refused a handset over
+     * something the design never asks for: ADR-007 B17(a) makes every row KEYSTORE_WRAPPED,
+     * so the X25519/Ed25519 private halves live in the Go core and Keystore is asked only for
+     * the AES-GCM KEK that seals them. The argument for keeping them was a canary -- at the
+     * pinned minSdk both are meant to be present, so a non-PRESENT answer means a Keystore
+     * misbehaving -- and that argument is intact, but its price was not: on such a handset the
+     * app would not provision AT ALL, over a capability nothing uses. So the canary moved to
+     * [canaries], which records the same answer without being able to stop the app starting.
      *
-     * These are required even though ADR-007 B17(a) means no row is KEYSTORE_NATIVE. They are
-     * a fail-closed FLOOR, not a claim about where the operation runs: `SWARM_ANDROID_MIN_SDK`
-     * is 33 and every one of them is guaranteed there, so a handset that answers ABSENT is a
-     * handset whose Keystore is not behaving as its API level promises. Downgrading silently
-     * on that answer is exactly what PB-KEY-8 exists to prevent.
+     * If a row ever becomes KEYSTORE_NATIVE, its algorithm belongs back in this map -- and
+     * KeyCustodyMatrixTest derives the consumed set from the matrix so that omission fails
+     * a test rather than shipping.
+     *
+     * STRONGBOX is deliberately in neither list: its absence is a fallback, not a refusal,
+     * because it is device-dependent and refusing without it would refuse most handsets.
      */
     private val required = linkedMapOf(
         PlatformCapability.KEYSTORE_AES_GCM to KeyRole.RELAY_AUTH,
         PlatformCapability.USER_AUTH_PER_USE to KeyRole.COMMAND_SIGN,
-        PlatformCapability.KEYSTORE_X25519 to KeyRole.NOISE_STATIC,
-        PlatformCapability.KEYSTORE_ED25519 to KeyRole.COMMAND_SIGN,
+    )
+
+    /**
+     * Probed, recorded, never fatal: capabilities the platform guarantees at the pinned
+     * minSdk that no row consumes. A non-PRESENT answer here says something is wrong with
+     * this Keystore, so it is carried on the plan rather than dropped -- but it cannot refuse
+     * a phone, because the design does not use it.
+     */
+    private val canaries = listOf(
+        PlatformCapability.KEYSTORE_X25519,
+        PlatformCapability.KEYSTORE_ED25519,
     )
 
     fun forDevice(capabilities: Map<PlatformCapability, CapabilityState>): CustodyPlan {
         for ((capability, role) in required) {
-            // A capability the probe never reported is UNKNOWN, not PRESENT. Defaulting an
-            // absent map entry to present is the same defect as treating UNKNOWN as present,
-            // one layer down.
-            val state = capabilities[capability] ?: CapabilityState.UNKNOWN
-            if (state != CapabilityState.PRESENT) {
-                return CustodyPlan.Refused(
-                    role = role,
-                    capability = capability,
-                    reason = "this handset reports $capability as $state. $role needs it, and a " +
-                        "silent downgrade to software-only custody is what PB-KEY-8 forbids: " +
-                        "UNKNOWN is a probe that could not answer, which fails closed exactly " +
-                        "as ABSENT does.",
-                )
-            }
+            if (stateOf(capabilities, capability) == CapabilityState.PRESENT) continue
+            return CustodyPlan.Refused(
+                role = role,
+                capability = capability,
+                reason = "this handset reports $capability as " +
+                    "${stateOf(capabilities, capability)}. $role needs it, and a silent " +
+                    "downgrade to software-only custody is what PB-KEY-8 forbids: UNKNOWN is " +
+                    "a probe that could not answer, which fails closed exactly as ABSENT does.",
+            )
         }
         return CustodyPlan.Provisioned(
             rows = KeyCustodyMatrix.rows,
             // Claimed only on PRESENT. An UNKNOWN StrongBox that the plan claimed would have
             // every later decision taken against a guarantee the key does not carry.
             strongBox = capabilities[PlatformCapability.STRONGBOX] == CapabilityState.PRESENT,
+            anomalies = canaries.mapNotNull { capability ->
+                val state = stateOf(capabilities, capability)
+                if (state == CapabilityState.PRESENT) null else CapabilityAnomaly(capability, state)
+            },
         )
     }
+
+    /**
+     * A capability the probe never reported is UNKNOWN, not PRESENT. Defaulting an absent map
+     * entry to present is the same defect as treating UNKNOWN as present, one layer down.
+     */
+    private fun stateOf(
+        capabilities: Map<PlatformCapability, CapabilityState>,
+        capability: PlatformCapability,
+    ): CapabilityState = capabilities[capability] ?: CapabilityState.UNKNOWN
 }
 
 /**
