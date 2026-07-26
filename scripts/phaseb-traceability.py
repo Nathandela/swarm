@@ -44,10 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-SEC-2": "the per-use tier is unimplemented -- forOperation and the authorization "
-                "ledger have no production callers and there is no BiometricPrompt, so the "
-                "four per-use ops are gated by the same 60s timed window as input, which is "
-                "the downgrade the policy file exists to prevent (ADR-007 B51)",
     "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
                 "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
                 "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "
