@@ -189,6 +189,50 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
+     * PB-KEY-7's lock purge, reached from [dev.swarm.phone.runtime.ContentLock].
+     *
+     * IT NEVER CONSTRUCTS A PHONE. `ready` is only set once one was built, so a screen turning off
+     * on a handset whose app has not been opened does not reach Keystore, the filesystem or the
+     * native library on the way -- and there is nothing there to purge in the first place.
+     *
+     * THE ERROR IS SWALLOWED, and that is the honest handling rather than a shortcut. The memory
+     * half of the purge is unconditional and has already happened when this returns; a failure
+     * means only that the decrypted caches AT REST survived it, on a full disk or a data
+     * directory gone read-only. There is no user present at a screen lock and no screen left to
+     * report to, and the next successful lock finishes the job.
+     */
+    @Synchronized
+    fun lockContent() {
+        val live = ready ?: return
+        try {
+            live.app.purgeKeys()
+        } catch (refused: Exception) {
+            // See above: the live key and the decrypted caches are gone regardless.
+        }
+    }
+
+    /**
+     * PB-KEY-7's "require a fresh unwrap before restoring content", and PB-SEC-2's gate.
+     *
+     * It is a REQUEST, not a promise: the Keystore-backed content KEK answers only while the
+     * device has authenticated inside the window it was provisioned with, so this legitimately
+     * refuses on a locked handset. The refusal is routed like every other facade failure, by the
+     * caller that has a screen to put it on ([PhoneSurface]).
+     *
+     * @return null when content custody is live, or the routed reason it is not.
+     */
+    @Synchronized
+    fun unlockContent(): RoutedError? {
+        val live = ready ?: return null
+        return try {
+            live.app.unlockContent()
+            null
+        } catch (refused: Exception) {
+            routeStartupFailure(refused)
+        }
+    }
+
+    /**
      * The remedy for the permanent verdict, and the only implementation it can have.
      *
      * A destroyed KEK means the material it sealed exists nowhere else -- the three content-tier

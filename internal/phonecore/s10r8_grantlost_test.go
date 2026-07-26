@@ -28,12 +28,21 @@ package phonecore
 // help, however long anyone waits. Only a machine-side re-grant, which advances the seq, can
 // -- and that is PB-KEY-3's terminal state in its own terms.
 //
-// IT IS ALSO REACHED IN ORDINARY USE, which is why it is not a corner. dropKeyMaterial
-// preserves GrantEpoch/GrantSeq across a PB-KEY-7 lock purge deliberately (the watermark is
-// the replay defence and destroying it re-opens the hole), while destroying the content key.
-// The phone therefore comes back from a screen lock keyless with its watermark at the exact
-// coordinates of the sidecar the gateway is about to re-send. Every re-delivery after that is
-// a replay, forever.
+// THE TRIGGER USED TO BE THE SCREEN LOCK, AND THAT WAS THE BUG. This file originally reached
+// the state through PB-KEY-7's purge: the purge destroyed the content key and deliberately kept
+// GrantEpoch/GrantSeq (the watermark is the replay defence), so the phone came back from a
+// screen lock keyless with its watermark at the exact coordinates of the sidecar the gateway
+// was about to re-send -- and every re-delivery after that was a replay, forever. ADR-007 B35
+// established that this is a BRICK rather than a feature: PB-KEY-10 delivers the epoch key
+// inside Go, so nothing on the handset could put it back, and the only exit was physical access
+// to the machine. The purge no longer destroys the sealed key, and TestS10_R8_AScreenLockIs-
+// NotTheTerminalState below is the fence that keeps it that way.
+//
+// WHAT REMAINS REACHABLE is PB-KEY-3's own scenario: a phone that has moved to an epoch it
+// holds no key for, with a relay that can still deliver only the retired one. mobile.App.pin
+// zeroes State.Keys when a pairing lands in a different epoch, and resealTier carries a sealed
+// key only into the epoch it was sealed for -- so the phone is genuinely keyless, not merely
+// locked, and the sidecar the gateway re-appends is refused by the watermark.
 
 import (
 	"errors"
@@ -61,15 +70,25 @@ func TestS10_R8_APurgedKeyAndAReplayedSidecarIsTheTerminalState(t *testing.T) {
 		t.Fatalf("precondition: a working handset reports the grant channel already lost")
 	}
 
-	// THE SCREEN LOCKS (PB-KEY-7). The content key and every cache of what it decrypted are
-	// destroyed; the grant watermark deliberately survives, because it IS the replay defence.
-	if err := c.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
+	// THE PHONE MOVES TO AN EPOCH IT HOLDS NO KEY FOR. This is mobile.App.pin's own act -- it
+	// zeroes State.Keys when a pairing lands in a different epoch, because the tier keys belong
+	// to the old one -- and resealTier then writes no content-key field at all, since a key is
+	// carried only into the epoch it was sealed for. The phone is now genuinely keyless: not
+	// holding one, and holding none at rest either. The grant watermark deliberately survives,
+	// because it IS the replay defence.
+	rotate := c.State()
+	rotate.EpochID, rotate.Keys = 8, crypto.EpochKeys{}
+	if err := c.Save(rotate); err != nil {
+		t.Fatalf("the epoch rotation: %v", err)
 	}
 	if got := c.State(); got.Keys.ContentKey != (crypto.ContentKey{}) || got.GrantEpoch != 7 || got.GrantSeq != 1 {
-		t.Fatalf("precondition: after the purge the phone holds content key present=%v and watermark "+
+		t.Fatalf("precondition: after the rotation the phone holds content key present=%v and watermark "+
 			"(%d,%d); want no key and the watermark intact at (7,1)",
 			got.Keys.ContentKey != crypto.ContentKey{}, got.GrantEpoch, got.GrantSeq)
+	}
+	if err := c.UnsealContent(); err != nil || c.State().Keys.ContentKey != (crypto.ContentKey{}) {
+		t.Fatalf("precondition: a fresh unwrap recovered a content key, so the phone is LOCKED rather "+
+			"than keyless and everything below would be measuring the wrong state (err=%v)", err)
 	}
 
 	// The gateway reconnects and re-appends the SAME sidecar -- the only thing it has.
@@ -110,6 +129,54 @@ func TestS10_R8_APurgedKeyAndAReplayedSidecarIsTheTerminalState(t *testing.T) {
 	}
 	if restarted.StreamStale(StreamGrant) {
 		t.Errorf("the grant channel is still reported lost after a re-grant landed")
+	}
+}
+
+// TestS10_R8_AScreenLockIsNotTheTerminalState is the fence on ADR-007 B35's decision, at the
+// exact seam where the brick was.
+//
+// The gateway re-appends its bootstrap sidecar ONCE PER GATEWAY SESSION, so a phone that locks
+// its screen and stays connected will be handed a replay within seconds. If a lock leaves the
+// phone looking keyless, that replay is grantLossDetected's proof and the phone is marked
+// PB-KEY-3 TERMINAL -- exitable only at the machine -- by the ordinary act of putting it in a
+// pocket. That is a permanent exposure traded for a live-process one, and it is worse.
+//
+// Both halves are asserted: the state is not entered, and the phone genuinely recovers.
+func TestS10_R8_AScreenLockIsNotTheTerminalState(t *testing.T) {
+	m := newS10Machine(t)
+	dir, wake, content, frame, keys := s10r8Provisioned(t, m)
+	c := s10r8Resume(t, dir, wake, content, &recordingAcker{})
+
+	if _, err := c.Router().AcceptCommit(frame, 1200); err != nil {
+		t.Fatalf("the machine's bootstrap grant: %v", err)
+	}
+
+	// The screen locks. The content key leaves memory; the SEALED copy stays, behind the KEK.
+	if err := c.PurgeKeys(); err != nil {
+		t.Fatalf("PurgeKeys: %v", err)
+	}
+	if c.State().Keys.ContentKey != (crypto.ContentKey{}) {
+		t.Fatalf("precondition: the lock did not clear the live content key")
+	}
+
+	// The gateway reconnects and re-appends the same sidecar, which it does every session.
+	if _, err := c.Router().AcceptCommit(frame, 1201); !errors.Is(err, crypto.ErrGrantReplay) {
+		t.Fatalf("re-delivery of the same sidecar after a lock = %v; want crypto.ErrGrantReplay", err)
+	}
+	if c.StreamStale(StreamGrant) {
+		t.Errorf("PB-KEY-3/PB-KEY-7: a SCREEN LOCK put the phone into the terminal state. The phone " +
+			"holds its sealed content key at rest and one fresh unwrap restores it, so a replayed " +
+			"sidecar proves nothing -- and the state it was put in has no exit but physical access " +
+			"to the machine")
+	}
+
+	// And the recovery is local, immediate, and needs neither the machine nor the network.
+	if err := c.UnsealContent(); err != nil {
+		t.Fatalf("PB-KEY-7: the fresh unwrap after a lock failed: %v", err)
+	}
+	if got := c.State().Keys.ContentKey; got != keys.ContentKey {
+		t.Errorf("PB-KEY-7: the content key was not restored by a fresh unwrap.\n got %x\nwant %x",
+			got, keys.ContentKey)
 	}
 }
 

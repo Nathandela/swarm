@@ -635,9 +635,14 @@ func (a *App) InstallWakeKey(key []byte) (err error) {
 	return core.Mutate(func(st *phonecore.State) { copy(st.Keys.WakeKey[:], key) })
 }
 
-// InstallContentKey installs the epoch CONTENT key. It is also PB-KEY-7's recovery path:
-// after PurgeKeys, re-installing the tier key restores content operations, so the first
-// screen lock does not brick the app.
+// InstallContentKey installs the epoch CONTENT key.
+//
+// IT IS NOT PB-KEY-7'S RECOVERY PATH, and the claim that it was is the false statement
+// ADR-007 B35 names in this file. Kotlin has no source for these bytes: PB-KEY-10 moved epoch
+// key delivery entirely into Go (App.Start -> drain -> AcceptCommit -> installGrant, opened
+// under the recipient key in device.key), and every reference to the Kotlin-side epoch-key blob
+// is under src/test/. A screen lock is recovered by UnlockContent -- a fresh Keystore unwrap of
+// the blob the lock deliberately leaves at rest -- and by nothing else.
 func (a *App) InstallContentKey(key []byte) (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -651,11 +656,28 @@ func (a *App) InstallContentKey(key []byte) (err error) {
 	return core.Mutate(func(st *phonecore.State) { copy(st.Keys.ContentKey[:], key) })
 }
 
-// PurgeKeys is PB-KEY-7's lock purge: zeroize the installed tier keys, destroy the SEALED
-// copies at rest with them, and drop every DECRYPTED cache. Invalidating the biometric gate
-// is not enough while the process still holds already-decrypted session content, and
-// zeroizing only the live copy is not enough while the durable one survives the restart. It
-// is recoverable by InstallContentKey.
+// PurgeKeys is PB-KEY-7's lock purge. It is the verb the Android lifecycle layer calls on
+// every InvalidationEvent -- backgrounding, screen off, auth expiry -- and it must never be
+// reached from an exported component (PB-SEC-11); see dev.swarm.phone.runtime.ContentLock.
+//
+// WHAT IT DOES. Zeroize the live epoch CONTENT key, unbind MailboxRouter from it, drop the
+// decrypted session/snapshot/reply caches from memory AND destroy their sealed container at
+// rest, and forget the content-tier coordinates this process can no longer re-seal. The
+// content tier is left LOCKED -- exactly where a process woken by a push already is.
+//
+// WHAT IT DELIBERATELY DOES NOT DO, per ADR-007 B35/B36. It does not destroy the sealed
+// content key at rest, and it does not touch the wake tier at all. Destroying the content key
+// is a permanent brick: the handset holds no other source for those bytes and the grant
+// watermark refuses the machine's re-appended grant as a replay, so the first screen lock
+// would land the phone in PB-KEY-3's terminal state. Destroying the wake key stops the handset
+// being wakeable, because a push arrives with nobody there to authorize anything (B9/B16).
+//
+// RECOVERY IS UnlockContent -- a fresh Keystore unwrap, which is PB-KEY-7's own recovery
+// clause and the round trip PB-SEC-2's 60-second window is enforced at.
+//
+// An error means the DECRYPTED CACHES at rest survived (a full disk, a read-only data
+// directory). The memory half has happened regardless: it cannot fail, PB-KEY-7 lists it
+// first, and gating it behind a write that can fail left the key live with the screen locked.
 func (a *App) PurgeKeys() (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -677,6 +699,27 @@ func (a *App) PurgeKeys() (err error) {
 	a.needs = map[string]string{}
 	a.mu.Unlock()
 	return err
+}
+
+// UnlockContent is PB-KEY-7's "require a fresh unwrap before restoring content", as a verb.
+//
+// It re-opens the content tier through the Keystore-backed KEK, which is the gate: it succeeds
+// only while the device has authenticated inside the window that KEK was provisioned with
+// (PB-SEC-2's 60 seconds), and otherwise refuses with the reauth verdict PB-APP-9's table
+// already routes to "authenticate again". There is no flag beside it and no other way back
+// from PurgeKeys.
+//
+// IT IS SAFE TO CALL AT ANY TIME. An unlocked core answers without consulting Keystore, and a
+// phone that has never been granted a key has no sealed blob to open, so this is not a prompt
+// trigger for a device that is merely waiting for its first grant (PB-APP-10's transient
+// waiting state, which is not this one).
+func (a *App) UnlockContent() (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	return core.UnsealContent()
 }
 
 // ---- read models ---------------------------------------------------------------

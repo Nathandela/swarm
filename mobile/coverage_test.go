@@ -62,7 +62,12 @@ var requiredScreenElements = []string{
 	// adjacent requirements that have nowhere else to land on this surface
 	"op.outcome",          // PB-SYNC-2 / PB-STATE-1, and the S7 ReplyCache.Take residual
 	"key_custody.install", // PB-KEY-1's single documented crossing
-	"callbacks",           // PB-BIND-6's delivery plane
+	// PB-KEY-7's lock purge and PB-SEC-2's fresh unwrap, as ONE element because a lock with no
+	// way back is a brick and a way back with no lock is nothing (ADR-007 B35/B36). It has no
+	// screen of its own on purpose: the trigger is the Android lifecycle, not a control a person
+	// presses, and PB-SEC-11 forbids the one exported component from reaching either verb.
+	"key_custody.lock",
+	"callbacks", // PB-BIND-6's delivery plane
 
 	// ADDED BY SLICE S16, additively. This list is PB-BIND-3's enumeration transcribed, and
 	// it is hard-coded here so deleting a row from the TSV cannot make a requirement vanish --

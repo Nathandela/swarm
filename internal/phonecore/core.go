@@ -238,6 +238,24 @@ func (c *Core) PurgeKeys() error {
 	return err
 }
 
+// UnsealContent restores content operations by re-opening the content tier through its KEK --
+// PB-KEY-7's "require a fresh unwrap", and the only way back from PurgeKeys.
+//
+// It REBINDS on success for the same reason PurgeKeys does: the live objects must come back
+// onto the restored epoch key, or the router keeps refusing frames the phone can now open.
+// A refusal changes nothing at all, so a locked core stays exactly locked.
+func (c *Core) UnsealContent() error {
+	c.mu.Lock()
+	err := c.store.UnsealContent()
+	c.st = c.store.Load().clone()
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.rebind()
+	return nil
+}
+
 // persist writes st through custody and adopts whatever custody made of it (the file store
 // merges the replay guards monotonically). A failed write leaves the in-memory copy
 // untouched, so nothing is claimed that is not durable.
@@ -384,9 +402,16 @@ func (c *Core) MarkGrantLost() error {
 // machine. And a phone that is merely keyless has proved nothing: the gateway may simply not
 // have reconnected yet, which is answered by waiting, not by a re-grant.
 //
-// WHAT IT DELIBERATELY DOES NOT CLAIM. A locked content tier cannot reach here at all: the
-// sealed-box open runs before the replay check, so a locked handset is refused with
-// crypto.ErrKeyAuthRequired and is neither marked nor acked (see acceptBootstrap). And a
+// A LOCKED CONTENT TIER IS EXCLUDED TWICE, and after ADR-007 B35 it needs to be. The first
+// exclusion is the one that was always here: the sealed-box open runs before the replay check
+// and uses the RECIPIENT key, which is a content-tier device scalar unsealed per operation, so
+// a handset whose Keystore is refusing never reaches this function. The second is the caller's
+// keyless test, which now asks whether the phone HAS a key rather than whether this process is
+// holding one -- because the lock purge stopped destroying the sealed key, and a purge taken
+// while the KEK still opens (a backgrounding with the device unlocked, mid-drain) would
+// otherwise present a phone that is fine as one that is permanently lost.
+//
+// WHAT IT DELIBERATELY DOES NOT CLAIM. A
 // relay serving a very old retained grant to a keyless phone marks it when the gateway may
 // yet deliver a good one -- a false positive that costs one message which the real grant
 // clears on arrival, in the transaction that installs the key. That direction is the safe
@@ -422,7 +447,11 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 	c.mu.Lock()
 	epoch, seq, keys, err := c.grants.Accept(c.ks, ed25519.PublicKey(c.st.MachineSignPub), g)
 	if err != nil {
-		keyless := c.st.Keys.ContentKey == (crypto.ContentKey{})
+		// KEYLESS MEANS THE PHONE HAS NO KEY, not that this process is not holding one. A
+		// content tier that is merely LOCKED holds its sealed key at rest and recovers it with
+		// a fresh unwrap, so treating it as keyless would make PB-KEY-3's terminal state the
+		// ordinary consequence of a screen lock -- see State.contentSealed.
+		keyless := c.st.Keys.ContentKey == (crypto.ContentKey{}) && !c.st.contentSealed
 		c.mu.Unlock()
 		if grantLossDetected(err, keyless) {
 			// The mark is advisory state ABOUT the refusal, never a second verdict on it: the

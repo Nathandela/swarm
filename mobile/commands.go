@@ -539,6 +539,27 @@ func (a *App) resolveSend(conn func() (*relay.Client, error)) (sendCtx, error) {
 	}
 	st := core.State()
 	if st.Keys.ContentKey == (crypto.ContentKey{}) {
+		// PB-SEC-2, and it is the whole of ADR-007 B36. The content key used to be unwrapped
+		// ONCE, at Resume, and read from this State copy for every send thereafter -- so after a
+		// single resume neither a screen lock nor the stated 60-second freshness window stopped
+		// any content operation, and the Keystore that enforces both was never asked again.
+		//
+		// ASKING IT HERE IS THE ENFORCEMENT. The tier sealer holds the FETCHER and never a key
+		// (keycustody.go), so this is a real Keystore round trip: it succeeds only while the
+		// device has authenticated inside the window the content KEK was provisioned with
+		// (setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG)), and otherwise refuses
+		// with the reauth verdict the Android side already routes to a prompt. A phone that
+		// holds the key answers from memory and never reaches here, which is what a 60-second
+		// authorization window means; a phone whose lock purged it must earn it back.
+		//
+		// It is cheap on the keyless-and-awaiting-grant path this shares with PB-KEY-3: there is
+		// no sealed content blob to open, so no KEK is consulted at all.
+		if err := core.UnsealContent(); err != nil {
+			return sendCtx{}, err
+		}
+		st = core.State()
+	}
+	if st.Keys.ContentKey == (crypto.ContentKey{}) {
 		// PB-KEY-3's two keyless states are NOT the same failure and must not share a screen.
 		// Waiting for a grant resolves itself when the machine's next one lands; grant LOSS
 		// never will, and telling that user to pair again is a brick -- BeginPairing fail-fasts

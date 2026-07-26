@@ -281,10 +281,21 @@ func TestPBSEC11_NoExportedComponentCanActOnTheSession(t *testing.T) {
 	}
 
 	// Verbs that act on a live session or on key custody.
+	//
+	// PurgeKeys and UnlockContent were added when PB-KEY-7 was finally wired, and they are the
+	// reason this list is not only about exfiltration. ADR-007 B36 recorded that PB-SEC-11 and
+	// PB-KEY-7 pull in opposite directions -- the obvious home for the lock purge is
+	// PhoneActivity.onPause, and that Activity is exported with a LAUNCHER filter -- and that
+	// only the first had ever been resolved. The resolution is dev.swarm.phone.runtime
+	// .ContentLock, owned by the Application object, which is not a component and which nothing
+	// outside the process can start. Naming both verbs here is what stops the next author
+	// moving them one file over: UnlockContent asks Keystore to restore content custody, and
+	// PurgeKeys reachable from an intent is a denial of service against the session.
 	sessionVerbs := []string{
 		"SendInput", "Paste", "Resize", "TakeControl", "ReleaseControl", "Interrupt",
 		"Kill", "Launch", "Delete", "TerminalWatch", "SubscribeJournal", "Peek", "Roster",
 		"InstallContentKey", "InstallWakeKey", "RevokeThisDevice",
+		"PurgeKeys", "UnlockContent",
 	}
 
 	var findings []string

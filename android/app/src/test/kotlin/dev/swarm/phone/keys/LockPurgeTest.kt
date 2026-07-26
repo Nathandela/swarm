@@ -13,10 +13,16 @@ import org.junit.Test
  * native key custody, purge decrypted session/snapshot/reply caches and sensitive UI state,
  * and require a fresh unwrap before restoring content."
  *
- * The Go half is App.PurgeKeys (mobile/app.go:305-325), already shipped by S8. This is the
- * ANDROID half: the events that must reach it, the Kotlin-side material that must be
- * destroyed alongside it, and the recovery -- because a purge with no way back bricks the app
- * on the first screen lock.
+ * The Go half is App.PurgeKeys. This is the ANDROID half: the events that must reach it, the
+ * Kotlin-side material that must be destroyed alongside it, and the recovery -- because a purge
+ * with no way back bricks the app on the first screen lock.
+ *
+ * WHAT THE PURGE MEANS CHANGED WITH ADR-007 B35/B36, in one direction, and these tests changed
+ * with it. It ends CONTENT custody: the live epoch content key, the router binding and the
+ * decrypted caches. It leaves the sealed content key at rest -- destroying it is a permanent
+ * brick, because PB-KEY-10 delivers the epoch key inside Go and the grant watermark refuses a
+ * re-delivery as a replay -- and it leaves the WAKE tier entirely alone, because a push arrives
+ * with nobody there to authorize anything.
  *
  * Plain JVM.
  */
@@ -49,9 +55,10 @@ class LockPurgeTest {
 
             assertEquals("$event did not purge the Go core's key custody", 1, core.purgeCount)
             assertFalse("$event left content custody available", session.contentAvailable())
-            assertFalse(
-                "$event left the session believing the wake key is still installed. " +
-                    "App.PurgeKeys clears st.Keys wholesale, so it is not",
+            assertTrue(
+                "$event dropped the WAKE tier as well. App.PurgeKeys does not touch it " +
+                    "(ADR-007 B35), so a session that forgets it reports the sole background " +
+                    "wake path as unavailable while it is in fact working",
                 session.wakeAvailable(),
             )
         }
@@ -114,30 +121,45 @@ class LockPurgeTest {
     }
 
     /**
-     * The interaction with ADR-007 B16 that is easy to miss. App.PurgeKeys clears
-     * `st.Keys` WHOLESALE -- `st.Keys = crypto.EpochKeys{}` (mobile/app.go:317) -- so the wake
-     * key goes with the content key. Since a high-priority FCM push is the SOLE background
-     * wake path, a locked handset that received a push after a lock purge has no wake key in
-     * the core, and the Android side must put it back without any authentication.
+     * THIS TEST IS THE INVERSE OF THE ONE IT REPLACES, and the replacement is the point rather
+     * than a tidy-up. It was `the_wake_tier_is_reinstallable_after_a_purge_without_authentication`
+     * -- ADR-007 B17(b)'s named fence -- and B35 established that it pinned a property the
+     * product cannot have, twice over:
      *
-     * An implementation that assumes the wake tier survived the purge produces a wake path
-     * that works until the first screen lock and then silently stops.
+     *  - the CLAIM was that App.PurgeKeys clears `st.Keys` wholesale, so a push arriving after a
+     *    lock finds no wake key and Kotlin must re-install it. The purge no longer touches the
+     *    wake tier at all, precisely so that this situation cannot arise;
+     *  - and the REMEDY was unbuildable regardless. PB-KEY-10 moved epoch-key delivery entirely
+     *    into Go, so the Android side has no source for those bytes: every `CustodyBlobs.tierKey`
+     *    reference outside this test tree is under `src/test/`, and a wired production re-install
+     *    would have thrown on its first call rather than restoring anything.
+     *
+     * So the fence stays at the same seam -- where the wrong model would be reintroduced -- and
+     * asserts what has to be true instead: a screen lock leaves the sole background wake path
+     * working, with nothing to re-install and nobody present to authorize it if there were.
      */
     @Test
-    fun the_wake_tier_is_reinstallable_after_a_purge_without_authentication() {
+    fun the_wake_tier_survives_a_lock_and_needs_no_reinstall() {
         val (session, core, kek) = unlockedSession()
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
-        kek.lockedTiers = setOf(KeyTier.CONTENT)
         val wakeInstallsBefore = core.installedWake.size
 
-        PushWakePath.prepare(session)
+        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
+        kek.lockedTiers = setOf(KeyTier.CONTENT)
 
         assertTrue(
-            "after a purge the core holds no wake key either (App.PurgeKeys clears both " +
-                "tiers), so the push path must re-install it -- while locked",
+            "the lock dropped the wake tier. A high-priority FCM push is the SOLE background " +
+                "wake path (ADR-007 B9/B16) and the handset holds no other source for the key, " +
+                "so a lock that takes it stops the phone being wakeable for good",
+            session.wakeAvailable(),
+        )
+
+        // And the push path still runs on a locked handset, which is the property that matters.
+        PushWakePath.prepare(session)
+        assertTrue(session.wakeAvailable())
+        assertTrue(
+            "the push path could not arm itself while the CONTENT tier was locked",
             core.installedWake.size > wakeInstallsBefore,
         )
-        assertTrue(session.wakeAvailable())
         assertFalse("re-arming the wake path must not restore content custody", session.contentAvailable())
     }
 

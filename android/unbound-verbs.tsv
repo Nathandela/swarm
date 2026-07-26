@@ -17,13 +17,20 @@
 # WHAT THE CHECK CANNOT SEE, so this file is not read as a complete inventory of unreachable
 # facade surface:
 #
-#   App.InstallWakeKey, App.InstallContentKey and App.PurgeKeys read as CALLED and are not.
-#   They are called through the `CoreKeyCustody` interface (keys/Custody.kt), whose only
-#   implementation in the repository is the test fixture `RecordingCore`. No production class
-#   implements it, so `KeyCustodySession` -- the class holding ADR-007 B8's single deliberate
-#   Java -> Go key crossing -- has no production caller either. Establishing that needs a type
-#   checker; the check matches names. It is recorded here rather than left to be discovered a
-#   seventh time.
+#   App.InstallWakeKey and App.InstallContentKey read as CALLED and are not. They are called
+#   through the `CoreKeyCustody` interface (keys/Custody.kt), whose only implementation in the
+#   repository is the test fixture `RecordingCore`. No production class implements it, so
+#   `KeyCustodySession` -- the class holding ADR-007 B8's single deliberate Java -> Go key
+#   crossing -- has no production caller either. Establishing that needs a type checker; the
+#   check matches names. It is recorded here rather than left to be discovered a seventh time.
+#
+#   The INSTALL half is superseded rather than merely unwired (ADR-007 B35): PB-KEY-10 moved
+#   epoch-key delivery entirely into Go, so the Kotlin side has no source for those bytes and a
+#   wired adapter would have thrown on its first call. App.PurgeKeys is no longer in this
+#   paragraph: it is called from `PhoneRuntime.lockContent`, reached from
+#   `dev.swarm.phone.runtime.ContentLock` on every InvalidationEvent, and its recovery half
+#   App.UnlockContent from `PhoneRuntime.unlockContent` -- both by direct call on the bound App,
+#   which the name-matching check does see.
 #
 # THE LEDGER COVERS EVERY BOUND RECEIVER, not just `App`. It was hardcoded to the `App`
 # receiver until 2026-07-26, and four bound methods lived in the blind spot that left --

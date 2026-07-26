@@ -350,11 +350,26 @@ func TestPBAPP10_AGrantLossDeviceShowsPBKEY3sStateAndIsNeverSentToRePair(t *test
 		return err == nil && sum.Reconciled
 	})
 
-	// PB-KEY-7's lock purge: the phone is now keyless and its grant watermark is untouched.
-	// This is a production verb, not state surgery -- and PB-KEY-10 is why it is terminal:
-	// InstallContentKey has no production caller, so a re-grant is the only way back.
-	if err := app.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
+	// THE PHONE LANDS IN AN EPOCH IT HOLDS NO KEY FOR. This replaced PurgeKeys as the setup
+	// when ADR-007 B35 established that a screen lock must NOT leave the phone keyless: the
+	// lock now keeps the sealed key at rest and one fresh unwrap restores it, so it proves
+	// nothing about delivery and is fenced the other way by
+	// TestPBKEY7_AScreenLockIsNotGrantLossAndRecoversLocally below.
+	//
+	// What remains is PB-KEY-3's own scenario, and it is still a production path with nothing
+	// supplied by hand: mobile.App.pin zeroes State.Keys when a pairing lands in a DIFFERENT
+	// epoch -- the tier keys belong to the old one -- and phonecore.resealTier carries a sealed
+	// key only into the epoch it was sealed for, so the blob goes with it. The phone is then
+	// genuinely keyless, not merely locked, with its grant watermark standing at the sidecar's
+	// own coordinates.
+	m.pairEpoch = s10BootstrapEpoch + 1
+	runPairing(t, app, m)
+	eventually(t, "the phone never moved to the epoch the second pairing published", func() bool {
+		sum, err := app.StateSummary()
+		return err == nil && sum.EpochID == int64(s10BootstrapEpoch+1)
+	})
+	if err := app.UnlockContent(); err != nil {
+		t.Fatalf("UnlockContent on the rotated phone: %v", err)
 	}
 
 	// The gateway re-appends the same sidecar frame every session. On a keyless phone whose
@@ -374,10 +389,18 @@ func TestPBAPP10_AGrantLossDeviceShowsPBKEY3sStateAndIsNeverSentToRePair(t *test
 
 	// PB-KEY-3 forbids an "indefinite decrypt-failure loop", so the identity must reach the
 	// caller with no user action and no verb the UI has to know to call.
+	// REVOKE is the probe, and it is the right one rather than a convenient one. A rotated
+	// phone is by construction UNRECONCILED -- ReconciledEpoch belongs to the epoch it left,
+	// and the machine's reconcile record for the new one is sealed under a key this phone does
+	// not have -- so every target-selecting verb refuses on PB-SYNC-7's gate before the grant
+	// verdict is ever consulted. device_revoke is exempt from that gate by PB-STATE-4's
+	// amendment precisely because it selects no target, which makes it the one verb that can
+	// reach resolveSend here. It is also the verb that matters: the panic button on a handset
+	// whose grant is gone must say so, not report a sync problem the user cannot fix.
 	var lastErr error
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, lastErr = app.TakeControl(testMachineID + "/sess-grantloss"); lastErr != nil &&
+		if _, lastErr = app.RevokeThisDevice(); lastErr != nil &&
 			errors.Is(lastErr, phonecore.ErrGrantLost) {
 			break
 		}

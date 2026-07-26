@@ -63,12 +63,24 @@
 // KeyCustody's methods are called PER OPERATION and their answers are never memoized:
 // that is what makes the content tier's gate real, because an auth-gated Keystore key
 // re-checks authorisation on every unwrap and a cached answer would keep decrypting
-// content after the screen locked (PB-KEY-7). PurgeKeys is PB-KEY-7's lock purge: it zeroizes the installed tier keys, takes
-// their SEALED copies at rest with them, and drops every decrypted cache -- and is
-// recoverable by re-installing the tier key (a screen lock must not brick the app).
-// An error from PurgeKeys means the copies AT REST survived (a full disk, a read-only data
-// directory); everything in memory is purged either way, because zeroizing cannot fail and
-// PB-KEY-7 names it first. Retrying is worthwhile, and re-locking is not required.
+// content after the screen locked (PB-KEY-7).
+//
+// PurgeKeys and UnlockContent are PB-KEY-7's lock and its recovery, and they are a PAIR: a
+// lock with no way back is a brick, and a way back with no lock is nothing. PurgeKeys
+// zeroizes the live epoch CONTENT key, unbinds the router from it, and drops the decrypted
+// session/snapshot/reply caches from memory and from disk. It deliberately leaves the SEALED
+// content key at rest and does not touch the wake tier at all (ADR-007 B35): the handset holds
+// no other source for either, so destroying the first is PB-KEY-3's terminal state at the
+// first screen lock and destroying the second stops the phone being wakeable. UnlockContent is
+// the fresh Keystore unwrap that restores content operations, and it is the round trip at
+// which PB-SEC-2's 60-second window is enforced -- the content KEK is provisioned with
+// setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG), so it answers only while the
+// device has authenticated inside that window and otherwise returns the reauth verdict.
+//
+// An error from PurgeKeys means the decrypted caches AT REST survived (a full disk, a
+// read-only data directory); everything in memory is purged either way, because zeroizing
+// cannot fail and PB-KEY-7 names it first. Retrying is worthwhile, and re-locking is not
+// required.
 //
 // SendInput is the only other []byte parameter. Keystrokes are sensitive but are not KEY
 // material, and they are inbound-only too.
