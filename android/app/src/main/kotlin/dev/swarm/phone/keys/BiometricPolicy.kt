@@ -192,9 +192,30 @@ class AuthorizationLedger {
      * Records the result and clears the in-flight marker WHATEVER the outcome. A resolution
      * path that cleared it only on success wedges the gate on the first cancel: every later
      * prompt is refused as concurrent and no prompt can ever start again.
+     *
+     * ADR-007 B60(3). A CALLBACK THAT DOES NOT BELONG TO THE PROMPT ON SCREEN AUTHORIZES
+     * NOTHING. The `inFlight` check used to decide only whether to CLEAR the marker while the
+     * grant below ran unconditionally, so a ledger that had never prompted for an operation
+     * would authorize it on any callback naming it.
+     *
+     * The reachable flow is not a race to be won: `ContentLockTriggers` invalidates on
+     * ACTION_SCREEN_OFF, nothing in the app calls `BiometricPrompt.cancelAuthentication`, and
+     * `BiometricPrompts.show` answers on the main executor -- so the prompt survives behind the
+     * keyguard and its callback lands after the lock emptied the ledger. Without this refusal
+     * the session is killed on an authority ADR-007 B44 says the lock destroyed.
+     *
+     * ABANDONED rather than a refusal that clears: the marker belongs to whatever prompt is
+     * genuinely on screen, and a stale callback must not disturb it.
+     *
+     * WHAT THIS DOES NOT CLOSE, stated so it is chosen rather than assumed: two prompts for the
+     * SAME operation are indistinguishable here, because the signature carries nothing that
+     * separates them. Superseding prompt #1 with prompt #2 for the same operation and then
+     * delivering #1's callback still resolves against #2. Closing that needs a per-prompt token
+     * issued by `beginPrompt` and presented back here.
      */
     fun endPrompt(operation: GatedOperation, outcome: PromptOutcome, atMillis: Long): GateResolution {
-        if (inFlight == operation) inFlight = null
+        if (inFlight != operation) return GateResolution.ABANDONED
+        inFlight = null
         val resolution = BiometricPolicy.resolve(outcome)
         if (resolution == GateResolution.AUTHORIZED) {
             grantedAtMillis[operation] = atMillis
