@@ -158,13 +158,56 @@ func (c *Core) State() State {
 	return c.st.clone()
 }
 
-// Save adopts st as the phone's durable state and REBINDS every component derived from it
-// (send-seq epoch, grant watermark, epoch content key, receive high-waters, caches, op
-// queue). It is how the app records a pairing, an accepted grant or an epoch rotation: a
-// Save that persisted the coordinates but left the live objects on the old epoch would keep
-// reserving seqs against a stream that no longer exists.
+// Save ADOPTS st wholesale as the phone's durable state and REBINDS every component derived
+// from it (send-seq epoch, grant watermark, epoch content key, receive high-waters, caches,
+// op queue). It is the verb for a caller that holds an ENTIRE state and means all of it -- a
+// reseed, a fixture, a whole-blob restore: a Save that persisted the coordinates but left the
+// live objects on the old epoch would keep reserving seqs against a stream that no longer
+// exists.
+//
+// IT IS THE WRONG VERB FOR CHANGING A FIELD, and Mutate exists for that. The adopt is blind:
+// whatever the caller read is what lands, so every core-internal persist between the caller's
+// read and this write is reverted. See Mutate for the transaction that made that a silent
+// brick on a paired handset.
 func (c *Core) Save(st State) error {
 	if err := c.persist(st); err != nil {
+		return err
+	}
+	c.rebind()
+	return nil
+}
+
+// Mutate applies fn to the durable state UNDER THE CORE LOCK, persists the result and rebinds.
+// It is how a caller CHANGES A FIELD, and it is the only shape that is safe to do so from
+// outside the core: the read and the write are one transaction, so nothing can land in
+// between and nothing that landed before it is reverted.
+//
+// THE HAZARD IT REPLACES was not a lost field, it was a brick. Seven gomobile facade sites
+// read the state, worked with this lock released and Saved the snapshot back. State.EpochID
+// and State.Keys are adopted as given -- fileStore.mergeGuards raises only the replay-guard
+// coordinates -- so a snapshot taken before the drain consumed the machine's epoch grant
+// carried the epoch keys back to what they were, and App.pin ZEROES them itself when the
+// pairing lands in a new epoch, which is right against its own snapshot and destroys the key
+// the grant just installed. resealTier then writes no content-key field at all, so the
+// destruction reaches disk. The window is the normal pairing sequence: pin runs on the pairing
+// goroutine, deliver.go appends the bootstrap frame once per gateway session, and the drain
+// consumes it concurrently.
+//
+// It is TERMINAL because GrantEpoch/GrantSeq ARE merged monotonically. The watermark survives
+// at the coordinates of the grant whose key was just destroyed, crypto.GrantReceiver enforces
+// strict (epoch, seq) monotonicity, and the gateway re-appending the very same frame next
+// session is refused as a replay -- forever. The phone holds no content key, cannot obtain
+// one, and the only exit is a machine-side re-grant at a higher seq.
+//
+// fn RUNS WITH c.mu HELD and must touch nothing but the State it is handed. Calling back into
+// the Core from inside it deadlocks.
+func (c *Core) Mutate(fn func(*State)) error {
+	c.mu.Lock()
+	st := c.st.clone()
+	fn(&st)
+	err := c.persistLocked(st)
+	c.mu.Unlock()
+	if err != nil {
 		return err
 	}
 	c.rebind()

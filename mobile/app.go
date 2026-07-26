@@ -613,9 +613,7 @@ func (a *App) InstallWakeKey(key []byte) (err error) {
 		return classed(ErrClassInvalidRequest,
 			fmt.Errorf("swarmmobile: wake key must be %d bytes", len(crypto.WakeKey{})))
 	}
-	st := core.State()
-	copy(st.Keys.WakeKey[:], key)
-	return core.Save(st)
+	return core.Mutate(func(st *phonecore.State) { copy(st.Keys.WakeKey[:], key) })
 }
 
 // InstallContentKey installs the epoch CONTENT key. It is also PB-KEY-7's recovery path:
@@ -631,9 +629,7 @@ func (a *App) InstallContentKey(key []byte) (err error) {
 		return classed(ErrClassInvalidRequest,
 			fmt.Errorf("swarmmobile: content key must be %d bytes", len(crypto.ContentKey{})))
 	}
-	st := core.State()
-	copy(st.Keys.ContentKey[:], key)
-	return core.Save(st)
+	return core.Mutate(func(st *phonecore.State) { copy(st.Keys.ContentKey[:], key) })
 }
 
 // PurgeKeys is PB-KEY-7's lock purge: zeroize the installed tier keys, destroy the SEALED
@@ -1088,9 +1084,7 @@ func (a *App) RegisterPushToken(token string) (err error) {
 	if token == "" {
 		return classed(ErrClassInvalidRequest, errors.New("swarmmobile: RegisterPushToken requires a token"))
 	}
-	st := core.State()
-	st.PushToken = token
-	if err = core.Save(st); err != nil {
+	if err = core.Mutate(func(st *phonecore.State) { st.PushToken = token }); err != nil {
 		return err
 	}
 	cl, cerr := a.conn()
@@ -1127,9 +1121,7 @@ func (a *App) DeletePushToken() (err error) {
 // no second flag to keep in step, and the converse holds too -- re-registration carries what
 // durable state HOLDS, and after a deletion that is nothing.
 func (a *App) dropPushToken(core *phonecore.Core) error {
-	st := core.State()
-	st.PushToken = ""
-	if err := core.Save(st); err != nil {
+	if err := core.Mutate(func(st *phonecore.State) { st.PushToken = "" }); err != nil {
 		return err
 	}
 	cl, cerr := a.conn()
@@ -1190,12 +1182,17 @@ func (a *App) SetPushPreference(pref *PushPreference) (op *Op, err error) {
 	if pref == nil {
 		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: SetPushPreference requires a preference"))
 	}
-	st := core.State()
-	next := st.PushPreference.Version + 1
-	st.PushPreference = phonecore.PushPreference{
-		Alerts: pref.Alerts, Mentions: pref.Mentions, Version: next,
-	}
-	if err = core.Save(st); err != nil {
+	// The DRAW AND THE WRITE ARE ONE TRANSACTION. Beyond the whole-blob hazard every site
+	// here shares, this one has its own: two toggles racing would both read version N and
+	// both claim N+1, and the machine refuses anything that does not STRICTLY exceed what it
+	// holds -- so the second is silently dropped while the settings screen shows its value.
+	var next uint64
+	if err = core.Mutate(func(st *phonecore.State) {
+		next = st.PushPreference.Version + 1
+		st.PushPreference = phonecore.PushPreference{
+			Alerts: pref.Alerts, Mentions: pref.Mentions, Version: next,
+		}
+	}); err != nil {
 		return nil, err
 	}
 	// The signed tuple names LaunchSessionSentinel: a preference has no target session, and

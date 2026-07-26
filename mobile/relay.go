@@ -15,6 +15,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
@@ -370,12 +371,13 @@ func (a *App) adoptReconcile() {
 	if err := a.core.Reconcile(); err != nil {
 		return
 	}
-	st := a.core.State()
-	if st.ReconciledEpoch != st.EpochID {
+	// Under the core lock: the adoption is recorded against the epoch durable state holds
+	// when the record lands, never against a snapshot a concurrent grant has moved on from
+	// (phonecore.Core.Mutate).
+	if err := a.core.Mutate(func(st *phonecore.State) {
 		st.ReconciledEpoch = st.EpochID
-		if err := a.core.Save(st); err != nil {
-			return
-		}
+	}); err != nil {
+		return
 	}
 	a.mu.Lock()
 	a.reconciled = true

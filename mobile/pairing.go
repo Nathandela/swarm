@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
@@ -629,17 +630,27 @@ func (a *App) differentMachine(out *pairing.DeviceOutcome) bool {
 // re-arms both on the next launch by comparing ReconciledEpoch against EpochID; on
 // Android that launch can be hours away, and the whole window is one in which the live
 // App permits mutations it cannot bound.
+//
+// IT MUTATES UNDER THE CORE LOCK, and that is the requirement rather than a tidy-up. This
+// runs on the PAIRING goroutine while the relay drain runs on its own, and the machine's
+// epoch grant lands immediately after a pairing -- so a read-modify-write across a released
+// lock reverts State.EpochID and State.Keys to the pre-grant snapshot, destroying the content
+// key the drain just installed while the monotonically-merged watermark survives at that
+// grant's coordinates. The re-appended bootstrap frame is then refused as a replay forever.
+// phonecore.Core.Mutate carries the whole account.
 func (a *App) pin(out *pairing.DeviceOutcome) {
-	st := a.core.State()
-	st.MachineStatic = out.MachineStatic
-	st.MachineSignPub = out.Machine.MachineSignPub
-	st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
-	newEpoch := st.EpochID != out.Machine.EpochID
-	if newEpoch {
-		st.Keys = crypto.EpochKeys{}
-	}
-	st.EpochID = out.Machine.EpochID
-	if err := a.core.Save(st); err != nil {
+	var newEpoch bool
+	err := a.core.Mutate(func(st *phonecore.State) {
+		st.MachineStatic = out.MachineStatic
+		st.MachineSignPub = out.Machine.MachineSignPub
+		st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
+		newEpoch = st.EpochID != out.Machine.EpochID
+		if newEpoch {
+			st.Keys = crypto.EpochKeys{}
+		}
+		st.EpochID = out.Machine.EpochID
+	})
+	if err != nil {
 		return
 	}
 	if newEpoch {
