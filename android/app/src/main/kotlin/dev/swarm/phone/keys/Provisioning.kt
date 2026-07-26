@@ -96,17 +96,83 @@ object CustodyPlanner {
 }
 
 /**
+ * `KeyInfo.getSecurityLevel()`'s answer set, one constant per platform constant.
+ *
+ * IT IS NOT A BOOLEAN, and that is the whole of residuals §2.7's fix. The platform can say
+ * SOFTWARE -- "this key is not in secure hardware" -- or UNKNOWN -- "I cannot tell you which
+ * level this is". They are different statements and a boolean makes them the same `false`.
+ * The distinction decides whether an answer is a DENIAL the design refuses or a SILENCE it
+ * records, and collapsing them forces a choice between accepting a software KEK and refusing
+ * to start on a handset that denied nothing.
+ *
+ * The names mirror the platform's constants exactly. An invented vocabulary here is one more
+ * mapping to get wrong at the one place (`AndroidKeyInfoReader`) that no test on this machine
+ * can exercise.
+ */
+enum class KeystoreSecurityLevel {
+
+    /** The platform states the key is NOT in secure hardware. */
+    SOFTWARE,
+
+    /** The platform declines to name a level. NOT a statement that the key is in software. */
+    UNKNOWN,
+
+    /** Secure hardware whose enclave the platform declines to name. */
+    UNKNOWN_SECURE,
+
+    TRUSTED_ENVIRONMENT,
+
+    STRONGBOX,
+    ;
+
+    /**
+     * Did the platform AFFIRM secure hardware. [UNKNOWN] is false because an unnamed level
+     * rounded up to hardware is a guarantee the key does not carry.
+     */
+    val insideSecureHardware: Boolean
+        get() = when (this) {
+            TRUSTED_ENVIRONMENT, STRONGBOX, UNKNOWN_SECURE -> true
+            SOFTWARE, UNKNOWN -> false
+        }
+
+    /**
+     * Did the platform DENY secure hardware -- PB-SEC-1's at-rest floor, which is the
+     * question `provision` refuses on.
+     *
+     * IT IS NOT `!insideSecureHardware`. Refusing everything that is not an affirmative
+     * would refuse [UNKNOWN], and a handset that never said its key was in software would
+     * then be a handset the app cannot start on. That failure mode is residuals §2.8, and
+     * it is the worst outcome in this class of defect.
+     *
+     * Both properties are exhaustive `when`s with no `else`, so a level added later fails
+     * to compile here rather than falling silently into one side.
+     */
+    val deniesSecureHardware: Boolean
+        get() = when (this) {
+            SOFTWARE -> true
+            UNKNOWN, UNKNOWN_SECURE, TRUSTED_ENVIRONMENT, STRONGBOX -> false
+        }
+}
+
+/**
  * The fields of android.security.keystore.KeyInfo this design depends on, lifted into a
  * plain record so the verification logic is testable off-device. The mapping from a real
  * KeyInfo is trivial and is itself only provable on a handset (PB-E2E-5).
+ *
+ * [insideSecureHardware] and [strongBoxBacked] are DERIVED from [securityLevel] rather than
+ * stored beside it. They were separate fields, and a record can hold two fields that
+ * disagree -- which for these two means claiming hardware backing the key does not have.
  */
 data class KeyInfoRecord(
-    val insideSecureHardware: Boolean,
-    val strongBoxBacked: Boolean,
+    val securityLevel: KeystoreSecurityLevel,
     val userAuthenticationRequired: Boolean,
     val userAuthenticationValidityDurationSeconds: Int,
     val invalidatedByBiometricEnrollment: Boolean,
-)
+) {
+    val insideSecureHardware: Boolean get() = securityLevel.insideSecureHardware
+
+    val strongBoxBacked: Boolean get() = securityLevel == KeystoreSecurityLevel.STRONGBOX
+}
 
 /** Reads back what the platform actually generated. */
 interface KeyInfoReader {
@@ -153,9 +219,11 @@ class CustodyProvisioning(
         // quietly gave neither, and every test above this line still passes.
         //
         // What the read-back can and cannot see, said plainly: it compares the ACHIEVED
-        // parameters against the ones REQUESTED. That the key is really inside a TEE, or
-        // really in StrongBox, is hardware attestation on a physical handset -- PB-E2E-5,
-        // deferred -- and is not asserted here or anywhere in this slice.
+        // parameters against the ones REQUESTED, and -- for the one parameter that has no
+        // requested value to compare with -- against the design's own floor. That the key is
+        // really inside a TEE, or really in StrongBox, is hardware attestation on a physical
+        // handset (PB-E2E-5, deferred) and is not asserted here or anywhere in this slice:
+        // everything below reads the platform's REPORT, which a broken platform can lie in.
         val alias = generated.keystoreAlias
         val info = reader.read(alias)
         val downgrades = buildList {
@@ -181,6 +249,32 @@ class CustodyProvisioning(
             }
             if (info.strongBoxBacked && !generated.isStrongBoxBacked) {
                 add("the platform reports StrongBox for a key that did not request it")
+            }
+            // THE ONE ENTRY THAT IS A FLOOR AND NOT A COMPARISON (residuals §2.7). Every
+            // check above compares achieved against requested; this one cannot, because
+            // KeyGenParameterSpec has NO "require secure hardware" setter and so there is no
+            // requested value to compare with. Until this line the security level was read
+            // into KeyInfoRecord and compared with nothing at all: a handset returning a
+            // purely software KEK provisioned cleanly, and PB-SEC-1's at-rest claim was void
+            // on that device with nothing in the product ever saying so.
+            //
+            // It refuses the DENIAL only. KeystoreSecurityLevel.UNKNOWN -- the platform
+            // declining to name a level -- provisions and is recorded, because refusing an
+            // answer that denied nothing turns this fix into residuals §2.8: an app that
+            // will not start. What the user sees on a denial is DEVICE_UNSUPPORTED
+            // (KeystoreDowngrade -> Recovery.REPROVISION_KEK in PhoneRuntime's table), which
+            // is the honest verdict: nothing the user does to this handset fixes it.
+            //
+            // FOR THIS TO BE WRONG a handset we intend to support would have to report
+            // SECURITY_LEVEL_SOFTWARE for a plain AES-256/GCM Keystore key at the pinned
+            // minSdk. Nothing here claims that has been observed either way -- PB-E2E-5 is
+            // deferred (ADR-007 B31) -- but a device that does report it is now a device
+            // that says so out loud instead of one that provisions in silence.
+            if (info.securityLevel.deniesSecureHardware) {
+                add(
+                    "the platform reports ${info.securityLevel}: this key is not in secure " +
+                        "hardware, so everything sealed under it is protected by software alone",
+                )
             }
         }
         if (downgrades.isNotEmpty()) {

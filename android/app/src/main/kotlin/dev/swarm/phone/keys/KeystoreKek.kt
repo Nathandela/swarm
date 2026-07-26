@@ -156,18 +156,31 @@ class AndroidKeyInfoReader : KeyInfoReader {
             ?: throw KeyCustodyException.KeystoreKeyMissing(alias)
         val info = SecretKeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
             .getKeySpec(key, KeyInfo::class.java) as KeyInfo
-        val level = info.securityLevel
         return KeyInfoRecord(
-            // UNKNOWN_SECURE counts and UNKNOWN does not: the first is the platform declining
-            // to name the enclave, the second is the platform declining to claim one at all.
-            insideSecureHardware = level == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT ||
-                level == KeyProperties.SECURITY_LEVEL_STRONGBOX ||
-                level == KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE,
-            strongBoxBacked = level == KeyProperties.SECURITY_LEVEL_STRONGBOX,
+            securityLevel = securityLevelOf(info.securityLevel),
             userAuthenticationRequired = info.isUserAuthenticationRequired,
             userAuthenticationValidityDurationSeconds = info.userAuthenticationValidityDurationSeconds,
             invalidatedByBiometricEnrollment = info.isInvalidatedByBiometricEnrollment,
         )
+    }
+
+    /**
+     * The platform's int onto [KeystoreSecurityLevel], one constant per constant.
+     *
+     * UNKNOWN_SECURE and UNKNOWN are kept APART, which the boolean this replaced could not
+     * do: the first is the platform declining to name the enclave, the second is the
+     * platform declining to claim one at all. Only the second shares a bucket with SOFTWARE
+     * under "did not affirm hardware", and only SOFTWARE is a denial the design refuses.
+     *
+     * A level the platform adds later falls to UNKNOWN and NOT to SOFTWARE. The wrong way
+     * round would refuse a device over a constant that did not exist when this was written.
+     */
+    private fun securityLevelOf(level: Int): KeystoreSecurityLevel = when (level) {
+        KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeystoreSecurityLevel.STRONGBOX
+        KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> KeystoreSecurityLevel.TRUSTED_ENVIRONMENT
+        KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE -> KeystoreSecurityLevel.UNKNOWN_SECURE
+        KeyProperties.SECURITY_LEVEL_SOFTWARE -> KeystoreSecurityLevel.SOFTWARE
+        else -> KeystoreSecurityLevel.UNKNOWN
     }
 }
 

@@ -216,9 +216,20 @@ class KeystoreSpecTest {
         override fun read(alias: String): KeyInfoRecord = record
     }
 
+    /**
+     * `strongBox` picks the security level rather than setting a separate flag: StrongBox IS
+     * a level, and KeyInfoRecord derives `strongBoxBacked` from it so the two can no longer
+     * be given disagreeing values (residuals §2.7). The non-StrongBox case is
+     * TRUSTED_ENVIRONMENT, an affirmative answer, so these fixtures still exercise a
+     * hardware-backed key -- the levels that are NOT affirmative have their own file,
+     * KeystoreHardwareFloorTest.
+     */
     private fun faithfulRecord(spec: KeyGenParameterSpec, strongBox: Boolean) = KeyInfoRecord(
-        insideSecureHardware = true,
-        strongBoxBacked = strongBox,
+        securityLevel = if (strongBox) {
+            KeystoreSecurityLevel.STRONGBOX
+        } else {
+            KeystoreSecurityLevel.TRUSTED_ENVIRONMENT
+        },
         userAuthenticationRequired = spec.isUserAuthenticationRequired,
         userAuthenticationValidityDurationSeconds = spec.userAuthenticationValidityDurationSeconds,
         invalidatedByBiometricEnrollment = spec.isInvalidatedByBiometricEnrollment,
