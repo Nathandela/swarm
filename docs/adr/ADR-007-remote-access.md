@@ -1656,3 +1656,41 @@ skipped.
 storage-format change whose failure mode is "the product silently stops working for one user until a
 retention window expires" is exactly the class of decision that must be findable by whoever
 eventually runs the upgrade.
+
+### B29 — the append/push RATE windows share the same defect; accepted for v1, with the reason
+
+`appendRate[req.Target]` and `pushRate[req.Target]` (`internal/remote/relay/server.go`) are keyed
+**per target and shared across senders** — the identical "shared resource with no owner" shape as
+the depth cap B27 fixed, five lines from it. An authorized sender can burn a target's whole
+`MailboxAppendPerMin` and the legitimate phone gets `ErrQuotaExceeded` until the window rolls.
+
+**Reach after B27, which is why this is acceptable rather than urgent.** You must be authorized by
+the target to append at all, so in single-device v1 the only party who can do this is the owner's own
+phone. The exception is a fresh target's **first-use window**: a stranger holding a new phone's
+relay-auth pubkey could burn its append budget and delay the epoch grant by up to a minute. That is
+**transient and self-healing** — the window rolls, the gateway retries — where the B25 defect it
+shares a shape with was permanent.
+
+**Why it is NOT fixed here, which is the part worth recording.** The obvious fix — key the rate
+window per `(source, target)` — **mints map entries under attacker-chosen keys**, which is precisely
+the unbounded per-key state the auth path already refuses by design: `handleAuthInit`'s R1-H1/H2
+remediation meters by **transport source** specifically so that a victim identity's budget cannot be
+exhausted and no per-key state is minted. Per-sender *depth* is free of that hazard because it is
+**derived from stored items** rather than kept in a map; per-sender *rate* has no such backing store.
+So the fix needs a bounded or swept map, and that is a design decision rather than a line change —
+one that would trade a fairness bug for a memory-exhaustion bug if taken carelessly.
+
+**Decision: accepted as a residual for single-device v1.** The trigger for revisiting is explicit:
+**multi-device support, or any change that widens who may append to a target** — the relay code
+already supports more than one device, so this is a "when", not an "if". Whoever takes it must not
+key an unbounded map by attacker-chosen keys; that constraint is the whole content of this entry.
+
+**The general result behind B27 and this entry**, argued rather than asserted, and recorded at the cap
+site in code: no quota policy can simultaneously bound a target's storage and guarantee fairness
+between senders while the sender set is unbounded. With a finite total ceiling, `k` minted identities
+divide it and starve the legitimate sender — eviction is not available, because the read/ack cursor
+protocol requires a stored item eventually reach its reader. With no total ceiling, storage grows
+per identity. The only remaining lever is not a quota at all: **bound the sender set**, which is what
+the authority rule does. The two defects were filed as independent and **one of them was only ever
+fixable second** — the depth fix alone would have *measured* as a fix, because the flood test would
+have stopped showing the phone refused while the mailbox grew per identity with no test watching.
