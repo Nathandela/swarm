@@ -525,3 +525,39 @@ exit**, so the run reads as green to anyone not checking the status. `./android/
 run first. Recorded because "the gate passed" and "the gate ran" are different claims, and this phase
 has now confused them twice: here, and with Gradle's cached `up-to-date` results reporting BUILD
 SUCCESSFUL while an earlier run's XML was read.
+
+## 2.12 §2.9 and §2.10(a) CLOSED; a seventh instance, and nine verbs with no control
+
+**Closed** (`1a0004e`): observation is wired (listener installed, journal subscribed, terminal
+watched, all withdrawn on pause while a socket still exists), and the custody capability gate is
+invoked before anything touches Keystore.
+
+**§2.10(a)'s runbook note is now STALE and must be corrected before a device session.** The gate is
+live, but a handset whose Curve25519 probe answers ABSENT or UNKNOWN now **provisions and shows a
+notice line** — it does not refuse. Only a Keystore that cannot make an AES key at all refuses, and
+such a handset could not have started before either, so the gate replaces an opaque failure with a
+named one.
+
+**The durable control**: `android/gate/boundverbledger_test.go` + `android/unbound-verbs.tsv`. Every
+exported `App` verb, enumerated from source, must be called from production Kotlin or ledgered with a
+reason. It needed a **second dimension** nobody anticipated: a third of the verbs reach Kotlin only
+through `FacadeBridge`, so a bridge method nothing calls made its verbs read as wired — **four were in
+exactly that state**.
+
+**A SEVENTH instance, which the ledger records but cannot fail on.** `App.InstallWakeKey`,
+`InstallContentKey` and `PurgeKeys` read as CALLED and are not: they reach production through the
+`CoreKeyCustody` interface (`keys/Custody.kt:555`), whose **only implementation in the repository is
+the test fixture `RecordingCore`**. So `KeyCustodySession` — the class holding **ADR-007 B8's single
+deliberate Java -> Go key crossing** — has no production implementation, while five test files
+construct it themselves. Establishing this needs a type checker; the ledger matches names, and that
+limit is in its header. **Under investigation: superseded by `KeystoreKeyCustody`, or a missing
+wire.** Both answers are bad in different ways — a divergent second custody implementation looking
+authoritative, or the two-tier key design not working as specified.
+
+**Nine bound verbs have no control at all** — product gaps, recorded rather than hidden:
+`ReleaseControl` (**the app can take a lease and cannot give one back**), `Interrupt` (PB-APP-3's
+persistent Stop), `UndeliveredInputs`/`ClearUndeliveredInputs` (PB-INPUT-1's UX state has nowhere to
+appear), `Paste`, `Resync`, `Launch`, `KillSwitchEngaged`, `PendingOpCount`. Two are legitimately
+unbound (`IsRunning`, `Resize`). `Presence` is ledgered as a **decision, not an omission**: it is a
+blocking relay round-trip and `render()` is now event-driven, so wiring it naively would issue an RPC
+per journal record on the main thread — a performance defect introduced by fixing a correctness one.
