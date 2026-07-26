@@ -1239,3 +1239,28 @@ and the open error, so:
 Recorded because it is a **pre-committed** discriminator: the prediction is written down before the
 evidence arrives, so whoever sees the next occurrence cannot fit the story to whichever answer turns
 up. That is the discipline that kept these two items from being merged into one on an unproven link.
+
+### PB-E2E-2 is blocked by a scope bound I set wrongly
+
+The S19 RED author reports the app has **no scanner, no destination confirmation, no SAS display, no
+confirm control and no keyboard** — so four of PB-E2E-2's five in-app actions have no subject. The
+module also has no `androidTest` source set and no instrumentation runner.
+
+**This is my error, not a slice's.** Ruling on PB-SEC-4 I bounded S18's Activity as "enough Window
+and View to carry these assertions **and S19's smoke**". I wrote that without checking what the smoke
+required, and what landed does not carry it. A scope bound asserted rather than checked is the same
+failure as a security property asserted rather than checked, and I have now made both.
+
+**Ruling: the missing surface is real, unassigned work and is assigned, not amended away.** The
+facade verbs it needs all exist and are exercised for real by PB-E2E-1's Go chain — what is missing
+is the Android UI wiring to them. Amending PB-E2E-2 down to what the current APK can demonstrate
+would convert "the product works" into "the library works", which is precisely the distinction the
+requirement was written to force.
+
+**The RED author was right not to invent a substitute.** An instrumented test calling the bound
+facade directly would prove the Go core runs on an Android runtime; it would not be "APK installs,
+pairs, SAS matches, observes, takes control, types". That substitution would have read as coverage.
+
+Its runbook tension is accepted as it chose: the emulator smoke is a script rather than a Go test,
+because an always-run emulator boot would wedge PB-E2E-4's own `go test ./...` gate and an env-gated
+test would be the skip the phase forbids. The script is what PB-E2E-2's criterion literally asks for.

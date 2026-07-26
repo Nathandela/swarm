@@ -173,10 +173,17 @@ owned one-to-one by `remote-phaseB-manifest.tsv`. **These criteria were written 
 still open and deliberately include ones the tree fails today** — an exit criterion authored to match
 what was already built grades its own homework.
 
-- E15.1 **Every one of the 143 active requirements has an evidence file**, not merely a slice that
-  claims to have shipped it. `scripts/phaseb-traceability.py` reports *asserted shipped* and
-  *measured evidenced* separately because the shipped list is hand-maintained and nothing verifies
-  it; **the two numbers must be equal at close.** (Currently unequal.)
+- E15.1 **Every one of the 143 active requirements has an evidence file that NAMES IT.**
+  `scripts/phaseb-traceability.py` reports *asserted shipped* and *measured evidenced* separately
+  because the shipped list is hand-maintained and nothing verifies it; the two numbers must be equal
+  at close. **STRENGTHENED 2026-07-26 — as originally written this criterion had the exact defect
+  this epic keeps finding.** "Evidenced" measured only that the slice's file *exists*, so a
+  requirement could count as evidenced by a document that never mentions it; the count reached
+  130/130 while **13 shipped requirements cited evidence naming something else** (PB-APP-2/-4/-5/-6,
+  PB-DOC-5, PB-GW-5, PB-NET-4/-6/-7, PB-STATE-2/-3/-4/-5). The S19 RED author found this and fenced
+  it in `internal/verify/phaseb_evidence_test.go`, with a parse-count control so a formatting change
+  cannot silence the check. **That fence, not the traceability count, is the criterion.** (Currently
+  failing.)
 - E15.2 **GG-4 holds for real**: `go build ./...`, `go vet ./...`, `go test ./...` and
   `golangci-lint run ./...` all green, plus `-race` on every package that spawns goroutines. The
   linter lives at `~/go/bin/golangci-lint` and is **not on PATH**, which has already produced two
