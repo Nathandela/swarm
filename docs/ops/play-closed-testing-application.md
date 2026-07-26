@@ -212,11 +212,34 @@ client and it is not a remote desktop -- it is a window onto processes you alrea
 |---|---|
 | App icon | 512 × 512 PNG, 32-bit, ≤ 1 MB, no alpha |
 | Feature graphic | 1024 × 500 PNG/JPEG |
-| Phone screenshots | **2–8 required.** 16:9 or 9:16, each side 320–3840 px |
+| Phone screenshots | **2–8 required. THESE NEED A PHYSICAL HANDSET — see below.** 16:9 or 9:16, each side 320–3840 px |
 | 7" / 10" tablet screenshots | optional unless you declare tablet support |
 
-Also fix blocker #1 while you are making the icon — generate `mipmap-*/ic_launcher` and add
-`android:icon="@mipmap/ic_launcher"` to `<application>`.
+The launcher icon (blocker #1) is **done** — an adaptive vector icon using the app's own design
+tokens, verified in the built APK at every density bucket. It does **not** cover the two store
+assets above: the Console's 512×512 field is a separate PNG upload and cannot be satisfied by a
+vector.
+
+### Screenshots need a physical Android 13+ handset — you cannot use an emulator
+
+This is a hard dependency and the most likely thing to slip the sprint, so plan for it now.
+
+The app **cannot start on a standard emulator, and that is correct behaviour, not a bug**. The
+emulator's keymaster reports `SECURITY_LEVEL_SOFTWARE`; `PB-KEY-8`'s hardware-downgrade refusal
+fails closed before any screen renders. That is recorded as `PB-E2E-2` — a requirement in direct
+conflict with `PB-KEY-8`, resolved in `PB-KEY-8`'s favour because the alternative is an app that
+silently accepts software-backed keys.
+
+Consequences:
+
+- Play's mandatory 2–8 phone screenshots must come from a **real device running Android 13+**.
+- So must any hands-on verification of the pairing flow.
+- The same handset is what finally lets you close `PB-E2E-5` — real biometrics, real camera, real
+  FCM delivery, real Doze, real Keystore attestation — which is the largest unvalidated area in
+  the project.
+
+If you do not already have an Android 13+ device to hand, **acquiring one is on the critical
+path**, ahead of most of the Console work.
 
 **Categorisation**
 
