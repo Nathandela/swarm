@@ -21,6 +21,7 @@ package enroll
 import (
 	"bytes"
 	"crypto/ed25519"
+	"errors"
 	"testing"
 	"time"
 
@@ -38,6 +39,14 @@ func deviceOutcome(t *testing.T) (crypto.KeyStore, *pairing.MachineOutcome) {
 	if err != nil {
 		t.Fatalf("device keystore: %v", err)
 	}
+	// The relay-route consent msg3 carried (ADR-007 B27/B38). It is opaque to enroll --
+	// only the relay verifies it -- so what matters here is that a real handshake would
+	// have supplied one, and that an outcome without one is refused (TestEnroll_
+	// RefusesAnOutcomeWithNoRouteConsent below).
+	consent, err := ks.SignRelayAuth([]byte("swarm-relay-consent-v1\x00machine-routing-id-0001"))
+	if err != nil {
+		t.Fatalf("device signs its relay-route consent: %v", err)
+	}
 	return ks, &pairing.MachineOutcome{
 		DeviceStatic: ks.NoiseStaticPublic(),
 		Device: pairing.DevicePayload{
@@ -46,7 +55,27 @@ func deviceOutcome(t *testing.T) (crypto.KeyStore, *pairing.MachineOutcome) {
 			DeviceRelayAuthPub:   ks.RelayAuthPublic(),
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
+			ConsentSig:           consent,
 		},
+	}
+}
+
+// TestEnroll_RefusesAnOutcomeWithNoRouteConsent is the fail-closed half of ADR-007 B38 at
+// the enrollment keystone. A device admitted without a route consent is one the machine can
+// never open a relay route to: authorizeAtRelay is refused, deliverEpochGrant is refused,
+// and deliverEpochGrant's failure is FATAL to the gateway (cmd/swarm-remote/main.go). The
+// operator would see a pairing succeed and a machine that never works.
+func TestEnroll_RefusesAnOutcomeWithNoRouteConsent(t *testing.T) {
+	_, out := deviceOutcome(t)
+	out.Device.ConsentSig = nil
+	_, machinePriv, _ := ed25519.GenerateKey(nil)
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	if _, err := Enroll(out, device.CapFull, machinePriv, 7, 1, keys, time.Unix(1_700_000_000, 0)); !errors.Is(err, ErrNoConsent) {
+		t.Fatalf("Enroll with no route consent = %v; want ErrNoConsent -- a device enrolled here "+
+			"is a pairing that completes and a gateway that dies on its next start", err)
 	}
 }
 

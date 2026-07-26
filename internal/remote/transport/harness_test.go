@@ -543,7 +543,8 @@ func newPeers(t *testing.T, srv *relay.Server) peers {
 		t.Fatalf("relay.Dial(machine): %v", err)
 	}
 	t.Cleanup(func() { _ = machine.Close() })
-	if err := machine.AuthorizeDevice(testCtx(t), dPub); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), dPub,
+		ed25519.Sign(dPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	return peers{

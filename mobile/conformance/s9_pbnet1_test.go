@@ -303,19 +303,20 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 			"State.Machine, so the app cannot tell a paired install from a fresh one")
 	}
 
-	// The machine authorizes the phone with the routing key the HANDSHAKE carried
-	// (msg3's DevicePayload), which is the only place it can have learned it. The relay's
-	// pairing relation is undirected (store.addPair), so this one call is what makes
-	// appends legal in both directions -- and it is deliberately driven from the pairing
-	// outcome rather than from a value this test kept on the side, because a fixture here
-	// would let the handshake carry nothing and every step below still pass.
+	// The machine authorizes the phone with the routing key AND THE ROUTE CONSENT the
+	// HANDSHAKE carried (msg3's DevicePayload), which is the only place it can have learned
+	// either. The consent is what makes the call legal at all (ADR-007 B27/B38) and it records
+	// both directed edges, so this one call is what makes appends legal in both directions --
+	// and both values are deliberately driven from the pairing outcome rather than from
+	// something this test kept on the side, because a fixture here would let the handshake
+	// carry nothing and every step below still pass.
 	devicePub := out.Device.DeviceRelayAuthPub
 	if len(devicePub) != ed25519.PublicKeySize {
 		t.Fatalf("the pairing outcome carried a %d-byte device relay-auth pub, want %d; the "+
 			"machine cannot address the phone at all", len(devicePub), ed25519.PublicKeySize)
 	}
 	phoneTarget := relay.RoutingID(ed25519.PublicKey(devicePub))
-	if err := machineCl.AuthorizeDevice(ctx, ed25519.PublicKey(devicePub)); err != nil {
+	if err := machineCl.AuthorizeDevice(ctx, ed25519.PublicKey(devicePub), out.Device.ConsentSig); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}
 

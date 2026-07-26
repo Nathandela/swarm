@@ -133,6 +133,7 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
+		Consent: phoneConsentFor(ks),
 	}
 
 	mEnd, dEnd := rendezvousPair()
@@ -181,10 +182,12 @@ func newPhonesimHarness(t *testing.T) phonesimHarness {
 		t.Fatalf("phone dial: %v", err)
 	}
 	t.Cleanup(func() { _ = phoneRelay.Close() })
-	if err := machineRelay.AuthorizeDevice(ctx, pPub); err != nil {
+	if err := machineRelay.AuthorizeDevice(ctx, pPub,
+		ed25519.Sign(pPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}
-	if err := phoneRelay.AuthorizeDevice(ctx, mPub); err != nil {
+	if err := phoneRelay.AuthorizeDevice(ctx, mPub,
+		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
 		t.Fatalf("phone authorize machine: %v", err)
 	}
 

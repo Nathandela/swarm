@@ -45,6 +45,7 @@ package phonecore
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -83,6 +84,7 @@ func fullState() State {
 		MachineStatic:       bytes.Repeat([]byte{0xA1}, 32),
 		MachineSignPub:      bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
 		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+		RelaySPKIPin:        bytes.Repeat([]byte{0xD4}, sha256.Size),
 		RoutingID:           "rid-m1",
 		EpochID:             7,
 		PushToken:           "fcm-token-m1",
@@ -425,11 +427,19 @@ var sealedTags = map[string]bool{
 // the v5 literal must go on restoring the same fullState().
 const stateV6Fixture = `{"schema_version":6,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
 
+// stateV7Fixture is the PINNED v7 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v7 adds relay_spki_pin (ADR-007 B33/B34), the ONE coordinate a handset
+// cannot re-learn without re-pairing -- msg2 is its only channel, because the QR has no room
+// for it -- so a build that stops reading it leaves a pinning-only platform unable to dial
+// and unable to say why.
+const stateV7Fixture = `{"schema_version":7,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"EBaE3Bdu6rALf4KpmJgkUQ8vhYzj3JKs4Yuotx7gzLUv+Kwvcoi0tGTXcIKc9dZtz5f8xj6IPS45mCDn","content_key":"HAAHxTrbcrBi5XRWefLS34Fo3cP4wAYLtjS9yZgNK9l1tGcL6Dq9HVgF/KQmWx1xW8hyY0/9lmTeI1zz","wake_state":"KtkliB1bq/J5u7IxtFcKrN3dZISvExKteu91vzErxFE/TtU0fFdKBAvuEvWxm1oRdsZegekXuCd5tp2K/1fcjXmNbgMdlUS3f+E=","content_kept":"BcyyV6bCHEHoCl7SFwz9x9QIMmxWPIGWV0lpCgBcK415TC20pUECSPq2grb2II89LaUd2qU66o125A8vWd6QCOZs4A3IcxOuTbUgF13NfXt/cPWpZ0VdAAgrEYlZ1vIlLrQlqzLEcvqLvjLcKqNNQ2Bmyf33um0aGCB8U5cW7PPuHcKKoJ65QBMkml+BHXt8JA50mtS0Ts7uq1gMm6XjayvslgaxHY2WPH1QK911QY76IiEW5m9tpmWLqNGRFfv1Obhk9ztlo2ts5VyWOizaZNJuZ29dBS/bjw8ppHOGvXBRrh23JTAKxh1ZmmsxQF/20QLNouiV/V1qP0zMFuBqzlfuXn9kB8nHZdjb3iwlabWXSQN+rIOyPOjygpyMcNE3j38+PXBuVlx+G+9AwCHTLbVV2TuuY5xabcbbcCiYcVCAOaXbr8Fcl3ooRLjZ7cwl8zhYnJuQEGf5JhjX0suTSqcZd4O4XbHokHcsBbg6Wdn9oQwoLKOjRz7u00kblx1GO2DfiY5AHMyYw8jOpfkfhKAN1u1F","content_purgeable":"FtMqSl/uWSWlKM5N5GWhsvtgpRiiq9mnLBbFxUlcC+nCGkUUD1TQ1YzP7JaMOGDR0o0EcEOBjaD+X3k+jrnkj36Myicx+IID3GsSjEeHL0ANciRIEfPSZN1a6FHeRc8U+0d34P5RCJ+7zGhdb+6MAHM7myzKc6oegCZIvAXy5S+i0Py7umWaz81nnuZlyYUzwbAgOLBuC7HsfgB0CM0ISsqiO7qPqUd639EOGB4whjF9sSz3eN2nv7x162XEvGWc/4GX/Bu8IwtT+qtfB5pqWKwo4oRjc0XS434JxUhXMWGUzMhoJVuodgNUvNQ4kApFWIkbXBulavM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
 var stateFixtures = map[int]string{
 	1: stateV1Fixture,
 	4: stateV4Fixture,
 	5: stateV5Fixture,
 	6: stateV6Fixture,
+	7: stateV7Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

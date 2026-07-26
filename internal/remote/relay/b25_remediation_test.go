@@ -52,46 +52,48 @@ func TestB25Fix_AFirstPairingCanStillDeliverTheEpochGrant(t *testing.T) {
 	phonePub, phonePriv := newRelayAuthKey(t)
 	phoneRID := RoutingID(phonePub)
 
-	// The phone has never connected: it exists only as a public key the machine learned
-	// over the pairing channel. This is the whole point — the relay cannot witness the
-	// ceremony that conveyed its consent.
-	if err := machine.cl.AuthorizeDevice(testCtx(t), phonePub); err != nil {
+	// The phone has never connected: it exists only as a public key AND A SIGNED CONSENT
+	// that the machine learned over the pairing channel. That consent is the whole point —
+	// the relay cannot witness the ceremony, so the ceremony's outcome is carried to it.
+	if err := machine.cl.AuthorizeDevice(testCtx(t), phonePub, consentTo(phonePriv, machine.rid)); err != nil {
 		t.Fatalf("machine authorizes the freshly paired phone: %v", err)
 	}
 
 	sp := newSealParty(t, []byte("machine-sender-pub-000000000000x"), []byte("device-recipient-pub-0000000000x"))
 	if _, err := machine.cl.MailboxAppend(testCtx(t), phoneRID, sp.sealMailbox(t, 1, []byte("epoch-grant"), clk)); err != nil {
 		t.Fatalf("the epoch grant could not be delivered to a phone that has not connected yet: %v\n"+
-			"store.mayActOn's bootstrap clause is what admits this append: the target has authorized "+
-			"nobody, so its first peer is admitted. Without it deliverEpochGrant fails at its second "+
-			"call, the failure is FATAL to the gateway, and no device can ever complete a first "+
-			"pairing — the measurement that falsified ADR-007 B25's mutual-pairing direction.", err)
+			"The phone's SIGNED CONSENT, carried in the same authorize_device, is what admits this "+
+			"append (ADR-007 B27/B38). It replaced mayActOn's trust-on-first-use clause, which admitted "+
+			"it because the target had authorized nobody — and which any party holding the target's "+
+			"PUBLIC key could satisfy. Without an admitting rule of some kind deliverEpochGrant fails "+
+			"at its second call, the failure is FATAL to the gateway, and no device can ever complete "+
+			"a first pairing — the measurement that falsified ADR-007 B25's mutual-pairing direction.", err)
 	}
 
-	// And the window is not a free-for-all: the exception admits the FIRST peer, so once
-	// the phone has authorized the machine back, the ordinary rule carries the route.
+	// And it is not a free-for-all: the consent names the machine, so the route it opens is
+	// that one route, and it keeps carrying appends once the phone is actually online.
 	phoneCl := dialAuthed(t, srv.URL(), authFor(phonePub, phonePriv))
-	if err := phoneCl.AuthorizeDevice(testCtx(t), machine.pub); err != nil {
-		t.Fatalf("phone authorizes the machine (mobile/relay.go onConnected): %v", err)
-	}
 	if _, err := machine.cl.MailboxAppend(testCtx(t), phoneRID, sp.sealMailbox(t, 2, []byte("journal"), clk)); err != nil {
-		t.Fatalf("the machine cannot append to the phone that just authorized it: %v", err)
+		t.Fatalf("the machine cannot append to the phone it paired with: %v", err)
+	}
+	if _, err := phoneCl.MailboxAppend(testCtx(t), machine.rid, sp.sealMailbox(t, 3, []byte("command"), clk)); err != nil {
+		t.Fatalf("the paired phone cannot append to its machine: %v", err)
 	}
 }
 
-// TestB25Fix_ARevokeDoesNotReopenTheBootstrapWindow is the hole the bootstrap exception
-// opens on its own, and it is reachable through the product's own recovery flow.
+// TestB25Fix_ARevokeDoesNotReopenTheBootstrapWindow keeps its name and every assertion,
+// and the mechanism under it has changed: there is no bootstrap window left to reopen.
 //
-// The exception keys on "the target has authorized nobody". revokeAndPurge DELETES the
-// authorization it severs, so a machine whose only device has been revoked — `swarm
-// remote revoke`, PB-STATE-10's second step, the thing the owner is told to do when a
-// handset is lost — has no live grant left. Counting live grants alone would say that
-// machine has authorized nobody, put it back in its bootstrap window, and hand any
-// party that can open a socket the whole of ADR-007 B25 again: self-pair, revoke, and
-// the machine's relay identity is destroyed with a ban only the attacker can lift.
+// It was written against mayActOn's trust-on-first-use clause, which keyed on "the target
+// has authorized nobody" — and revokeAndPurge DELETES the authorization it severs, so a
+// machine whose only device has been revoked (`swarm remote revoke`, PB-STATE-10's second
+// step, the thing the owner is told to do when a handset is lost) had no live grant left and
+// fell back INTO that window. ADR-007 B38 deleted the clause outright, so the state this
+// test drives is no longer special-cased anywhere.
 //
-// So mayActOn's window closes on having authorized OR BANNED anyone, and this is the
-// half no other test covers.
+// The property it asserts is exactly as load-bearing as before, which is why it stays: after
+// the owner's own recovery step, a stranger must still not be able to revoke the machine. A
+// future rule that re-introduces any "has authorized nobody" reasoning fails here first.
 func TestB25Fix_ARevokeDoesNotReopenTheBootstrapWindow(t *testing.T) {
 	srv, _, _, clk := startTestRelay(t, nil)
 	machine, phone := b25LegitPair(t, srv, clk)
@@ -102,7 +104,7 @@ func TestB25Fix_ARevokeDoesNotReopenTheBootstrapWindow(t *testing.T) {
 	}
 
 	stranger := newB25Party(t, srv)
-	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine))
+	_ = stranger.cl.AuthorizeDevice(testCtx(t), stranger.pubOf(machine), nil)
 
 	revokeErr := stranger.cl.DeviceRevoke(testCtx(t), machine.rid)
 	if !errors.Is(revokeErr, ErrNotAuthorized) {
@@ -113,7 +115,8 @@ func TestB25Fix_ARevokeDoesNotReopenTheBootstrapWindow(t *testing.T) {
 			"store.mayActOn admits a caller when the target has authorized nobody, and revokeAndPurge "+
 			"deletes the grant it severs — so counting live grants alone re-opens the bootstrap window "+
 			"of every machine that has revoked its only device, which is the recovery step PB-STATE-10 "+
-			"tells the owner to perform. hasActedAsAuthority must count the BAN as well as the grant.",
+			"tells the owner to perform. No authority rule may key on the target having authorized "+
+			"nobody: a relay-auth PUBLIC key is not a secret (ADR-007 B37/B38).",
 			revokeErr, redialErr)
 	}
 
@@ -147,7 +150,7 @@ func TestB25Fix_OneSendersBacklogDoesNotRefuseAnothersAppend(t *testing.T) {
 
 	// The target authorizes both senders: both may append to it, by the ordinary rule.
 	for _, peer := range []b25Party{noisy, quiet} {
-		if err := target.cl.AuthorizeDevice(testCtx(t), target.pubOf(peer)); err != nil {
+		if err := target.cl.AuthorizeDevice(testCtx(t), target.pubOf(peer), consentTo(peer.priv, target.rid)); err != nil {
 			t.Fatalf("target authorizes a sender: %v", err)
 		}
 	}

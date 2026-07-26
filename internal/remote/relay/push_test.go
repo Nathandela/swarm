@@ -23,7 +23,7 @@ func pushFixture(t *testing.T, srv *Server) (machine *Client, devRID, token stri
 	}
 	mPub, mPriv := newRelayAuthKey(t)
 	machine = dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	return machine, RoutingID(dPub), token

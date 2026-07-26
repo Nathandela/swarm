@@ -1,9 +1,11 @@
 package skeleton
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
@@ -67,6 +69,20 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 	relayCfg, err := loadRelayConfig(stateDir)
 	if err != nil {
 		return nil, err
+	}
+	// The relay SPKI pin travels to the phone in msg2 and NOWHERE ELSE (ADR-007 B33/B34):
+	// the pairing QR has no room for it. OPTIONAL here -- a machine with no pin configured
+	// still pairs, and what an absent pin MEANS is decided at the phone's dial site.
+	if relayCfg.SPKIPin != "" {
+		// Decoded HERE rather than forwarded as text: relaycfg.Security() already rejects a
+		// malformed pin at assembly, so a phone can only ever receive one this machine itself
+		// would dial under. Forwarding the base64 would let the two ends disagree about what
+		// "malformed" means, which is how a pin ends up carried and never consulted.
+		pin, perr := base64.StdEncoding.DecodeString(strings.TrimSpace(relayCfg.SPKIPin))
+		if perr != nil {
+			return nil, fmt.Errorf("relay.json: relay_spki_pin is not base64: %w", perr)
+		}
+		cfg.RelaySPKIPin = pin
 	}
 	if relayCfg.RelayURL != "" {
 		// The transport policy is resolved HERE rather than inside the closure, so a

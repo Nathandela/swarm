@@ -219,7 +219,7 @@ func (m *s10Machine) enrollAndDeliver() {
 	}
 	m.Record, m.Grant = res.Record, res.Grant
 
-	if err := m.conn.AuthorizeDevice(m.ctx, ed25519.PublicKey(m.Record.RelayAuthPub)); err != nil {
+	if err := m.conn.AuthorizeDevice(m.ctx, ed25519.PublicKey(m.Record.RelayAuthPub), m.Record.ConsentSig); err != nil {
 		m.t.Fatalf("machine authorize device: %v", err)
 	}
 	frame, err := grant.MarshalBootstrap(m.Grant)

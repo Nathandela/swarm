@@ -80,6 +80,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
+	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // injectPairing wires the coreAPI pairing seam with a test identity generated exactly
@@ -133,6 +134,18 @@ type devLegResult struct {
 	err     error
 }
 
+// phoneConsentFor is the device-side relay-route consent callback every device leg in
+// this package supplies (ADR-007 B27/B38): the phone's relay-auth key signing
+// relay.ConsentMessage over the routing id derived from the MACHINE PAYLOAD IT JUST
+// AUTHENTICATED. It is byte-identical to what mobile/pairing.go installs, deliberately —
+// a fixture that signed something else would leave every e2e test here passing against a
+// consent the relay would refuse.
+func phoneConsentFor(ks crypto.KeyStore) pairing.DeviceConsentFunc {
+	return func(m pairing.MachinePayload) ([]byte, error) {
+		return ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(m.MachineRelayAuthPub)))
+	}
+}
+
 // runDeviceLeg scripts the phone side of the handshake on the shared rendezvous, using
 // the secret + rendezvous id recovered from the pair_start QR (as a real phone would).
 // It mirrors enroll_e2e_test.go's DeviceParams so the enrolled record is well-formed.
@@ -156,6 +169,7 @@ func runDeviceLeg(ctx context.Context, ks crypto.KeyStore, dEnd pairing.Rendezvo
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
+		Consent: phoneConsentFor(ks),
 	}
 	ch := make(chan devLegResult, 1)
 	go func() {

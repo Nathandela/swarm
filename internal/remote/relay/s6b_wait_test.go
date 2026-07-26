@@ -94,7 +94,7 @@ func s6bFixture(t *testing.T, srv *Server) s6bPeers {
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
 	devAuth := authFor(dPub, dPriv)
 	device := dialAuthed(t, srv.URL(), devAuth)
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	return s6bPeers{

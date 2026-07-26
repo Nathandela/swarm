@@ -35,6 +35,12 @@ var (
 	// ErrNoRecipientKey is returned when the outcome carries no device recipient
 	// key: the epoch grant would have no seal target (A14).
 	ErrNoRecipientKey = errors.New("enroll: pairing outcome missing device recipient key")
+	// ErrNoConsent is returned when the outcome carries no relay-route consent
+	// (ADR-007 B27/B38). Admitting the device anyway would enroll one the machine
+	// can never open a relay route to: authorizeAtRelay is refused, deliverEpochGrant
+	// is refused, and its failure is fatal to the gateway. Fail here instead, where
+	// the operator is still in front of the confirm prompt.
+	ErrNoConsent = errors.New("enroll: pairing outcome missing device relay-route consent (ADR-007 B38)")
 )
 
 // Result carries the two artifacts an enrollment produces: the registry Record to
@@ -66,6 +72,9 @@ func Enroll(out *pairing.MachineOutcome, cap device.Capability, machineGrantPriv
 	if len(out.Device.RecipientPub) != 32 {
 		return Result{}, ErrNoRecipientKey
 	}
+	if len(out.Device.ConsentSig) == 0 {
+		return Result{}, ErrNoConsent
+	}
 
 	rec := device.Record{
 		DeviceID:       device.DeviceIDFor(out.Device.DeviceCommandSignPub),
@@ -75,6 +84,7 @@ func Enroll(out *pairing.MachineOutcome, cap device.Capability, machineGrantPriv
 		CommandSignPub: out.Device.DeviceCommandSignPub,
 		RecipientPub:   out.Device.RecipientPub,
 		RoutingID:      out.Device.DeviceRoutingID,
+		ConsentSig:     out.Device.ConsentSig,
 		Capability:     cap,
 		PairedAt:       now,
 		GrantedEpoch:   epochID,

@@ -229,6 +229,14 @@ func newDeviceParams(id *crypto.Identity, secret [32]byte, rid [16]byte) DeviceP
 			DeviceRelayAuthPub: []byte("device-relay-auth-pub-ed25519!!!"),
 			RecipientPub:       id.RecipientPublic(),
 		},
+		// The relay-route consent msg3 must carry (ADR-007 B27/B38). This package never
+		// parses it — the relay is what verifies it — so a representative opaque value
+		// derived from the machine payload the device authenticated is exactly what the
+		// production callback returns in shape, and it keeps the derivation visible: a
+		// consent that ignored its argument would not catch a payload swap.
+		Consent: func(m MachinePayload) ([]byte, error) {
+			return append([]byte("consent-for:"), m.MachineRelayAuthPub...), nil
+		},
 	}
 }
 

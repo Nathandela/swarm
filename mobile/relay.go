@@ -287,8 +287,22 @@ func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 }
 
 // onConnected re-establishes the per-connection state the relay does not persist: the
-// machine's authorization to append to this phone's mailbox, and the push token
-// (PB-PUSH-9 requires re-registration on every authenticated reconnect).
+// push token (PB-PUSH-9 requires re-registration on every authenticated reconnect).
+//
+// IT NO LONGER AUTHORIZES THE MACHINE, and the deletion is the point rather than a
+// simplification (ADR-007 B38). That call was `authorize_device` naming the machine, and
+// the relay now records nothing from such a call without the NAMED party's signed consent
+// — which only the machine can produce and the phone has never held. Making the phone
+// carry the machine's consent would have been redundant as well as unprovable: a consented
+// authorize_device records BOTH directed edges at once, so the machine's own call, at
+// pairing (cmd/swarm/remote.go authorizeAtRelay) and on every gateway connect
+// (cmd/swarm-remote/deliver.go), already writes the edge this one used to write.
+//
+// What was silently depending on it: nothing that survives. Its documented job was "the
+// machine's authorization to append to this phone's mailbox", which the pairs bucket holds
+// durably in bbolt; its side effect was ADR-007 B22's ban-lift, which belongs to the owner's
+// machine and is still performed there. What it also did, and could not stop doing, was
+// assert an authority relation from one side's say-so — the whole of ADR-007 B25.
 //
 // THE TOKEN ARM RECONCILES IN BOTH DIRECTIONS, which is what makes an offline DELETION reach
 // the relay at all. It used to register when durable state held a token and do nothing when it
@@ -305,9 +319,6 @@ func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 // the relay holds nothing either -- and a phone whose user deleted it, which is the case this
 // arm exists for.
 func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
-	if _, pub := a.destination(); len(pub) == ed25519.PublicKeySize {
-		_ = cl.AuthorizeDevice(ctx, pub)
-	}
 	if token := a.core.State().PushToken; token != "" {
 		_ = cl.TokenRegister(ctx, token)
 	} else {

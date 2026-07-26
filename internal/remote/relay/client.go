@@ -471,10 +471,22 @@ func (c *Client) Done() <-chan struct{} { return c.conn.Done() }
 // Close severs the connection. It is idempotent.
 func (c *Client) Close() error { return c.conn.Close() }
 
-// AuthorizeDevice pairs this machine with a device's relay-auth key, authorizing
-// mailbox/push routing between the two.
-func (c *Client) AuthorizeDevice(ctx context.Context, devicePub ed25519.PublicKey) error {
-	_, err := c.conn.control(ctx, "authorize_device", map[string]any{"device_pub": []byte(devicePub)})
+// AuthorizeDevice pairs this caller with the named device, authorizing
+// mailbox/push routing between the two — in BOTH directions, which is why it
+// takes the device's consent.
+//
+// consentSig is the device's own signature over ConsentMessage(c.RoutingID()),
+// produced by the device's relay-auth key during the SAS-authenticated pairing
+// ceremony and carried here by the caller (ADR-007 B27, made mandatory by B38).
+// Without it the relay has no way to tell this call from a stranger naming a
+// routing id it merely read off an unprotected auth_init or a photographed QR,
+// because at the relay those two are the same shape. An absent, malformed, or
+// non-matching signature is refused with ErrNotAuthorized.
+func (c *Client) AuthorizeDevice(ctx context.Context, devicePub ed25519.PublicKey, consentSig []byte) error {
+	_, err := c.conn.control(ctx, "authorize_device", map[string]any{
+		"device_pub":  []byte(devicePub),
+		"consent_sig": consentSig,
+	})
 	return err
 }
 

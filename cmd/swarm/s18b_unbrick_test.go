@@ -681,7 +681,7 @@ func (r *s18bRig) s18bMachineAppendsToPhone(t *testing.T, n int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	rec := r.s18bDeviceRecord(t, r.deviceID)
-	if err := cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub)); err != nil {
+	if err := cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub), rec.ConsentSig); err != nil {
 		t.Fatalf("machine AuthorizeDevice: %v", err)
 	}
 	for i := 0; i < n; i++ {

@@ -93,6 +93,7 @@ func TestPhonesim_GrantDeliveredOverMailboxBootstrapsE2E(t *testing.T) {
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
+		Consent: phoneConsentFor(ks),
 	}
 
 	mEnd, dEnd := rendezvousPair()
@@ -172,10 +173,12 @@ func TestPhonesim_GrantDeliveredOverMailboxBootstrapsE2E(t *testing.T) {
 	if err != nil || loaded == nil {
 		t.Fatalf("grant.Load (gateway read-back): grant=%v err=%v", loaded, err)
 	}
-	if err := machineRelay.AuthorizeDevice(ctx, pPub); err != nil {
+	if err := machineRelay.AuthorizeDevice(ctx, pPub,
+		ed25519.Sign(pPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
 		t.Fatalf("gateway authorize device (mailbox route): %v", err)
 	}
-	if err := phoneRelay.AuthorizeDevice(ctx, mPub); err != nil {
+	if err := phoneRelay.AuthorizeDevice(ctx, mPub,
+		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
 		t.Fatalf("phone authorize machine: %v", err)
 	}
 	frame, err := grant.MarshalBootstrap(loaded)

@@ -294,7 +294,7 @@ func TestRelay_SweepLoopPresenceSilentPushNoManualCall(t *testing.T) {
 	// then its gateway drops.
 	mPub, mPriv := newRelayAuthKey(t)
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
-	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub)); err != nil {
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	if err := machine.Close(); err != nil {

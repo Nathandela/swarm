@@ -101,6 +101,8 @@ func s15MachineStatic() []byte   { return s15Filled(0xC1) }
 func s15MachineSignPub() []byte  { return s15Filled(0xC2) }
 func s15MachineRelayPub() []byte { return s15Filled(0xC3) }
 
+func s15RelaySPKIPin() []byte { return s15Filled(0xD4) }
+
 func s15Filled(first byte) []byte {
 	b := make([]byte, 32)
 	for i := range b {
@@ -132,6 +134,7 @@ func s15State() State {
 		MachineStatic:       s15MachineStatic(),
 		MachineSignPub:      s15MachineSignPub(),
 		MachineRelayAuthPub: s15MachineRelayPub(),
+		RelaySPKIPin:        s15RelaySPKIPin(),
 		RoutingID:           s15RoutingID,
 		EpochID:             s15EpochID,
 		SendSeq:             map[uint32]uint64{s15EpochID: s15SendCeiling},
@@ -277,6 +280,10 @@ func s15Inventory() []s15Tier {
 			why: "a public key pinned at pairing"},
 		{field: "MachineRelayAuthPub", needles: s15Raw(s15MachineRelayPub()),
 			why: "a public key, and the destination the wake path needs to reach the machine at all"},
+		{field: "RelaySPKIPin", needles: s15Raw(s15RelaySPKIPin()),
+			why: "a hash of a public key from a public certificate; it is a REFUSAL criterion, not a " +
+				"secret, and the wake path must apply it with no user present -- a pin behind the " +
+				"content seal would leave a locked handset dialling unpinned or not at all"},
 		{field: "RoutingID", needles: s15Str(s15RoutingID),
 			why: "this phone's own relay routing id, derived from the relay-auth public key; the wake " +
 				"path must state it with no user present"},
