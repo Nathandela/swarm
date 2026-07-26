@@ -294,14 +294,23 @@ if [ "${SWARM_E2E2_PHONE_READY:-0}" != "1" ]; then
 
   Everything before this point ran. Nothing after it has ever run.
 
-  ADR-007 B45 has landed, so the handset CAN now dial: relay.PairingSecurity lets the pairing
-  rendezvous complete, and the pin it delivers is consulted on every session dial after it.
-  This gate stays down until a run past it has actually been attempted and its result recorded
-  -- lifting it on the strength of the argument alone is what left this script reading as
-  though it had run for a whole phase.
+  ADR-007 B45 has landed and the TRANSPORT half is unblocked: attempted on 2026-07-26 with
+  SWARM_E2E2_PHONE_READY=1, the run reaches the emulator, installs the APK, mints and extracts
+  the QR, and launches the instrumented test. The gate stays down because the run still does
+  not PASS, and it now fails somewhere new:
 
-  Re-run with SWARM_E2E2_PHONE_READY=1 to attempt it. Until a result is recorded here, the
-  artifacts in the output directory cover the MACHINE half only.
+      dev.swarm.phone.PbE2E2PairAndTypeTest FAILED
+      java.lang.AssertionError: PB-E2E-2: the app did not open on the pairing step,
+                                so there is nothing to pair with
+
+  That is an APP-side failure at the first of the five in-app actions, not a transport one --
+  the phone gets as far as being asked to pair and does not present the pairing step. It
+  reproduces on a freshly cleared install (`adb shell pm clear`), so it is not leftover state
+  from an earlier run. Nothing beyond that point -- SAS, observe, take control, type, the
+  force-stop, the resume -- has ever executed.
+
+  Re-run with SWARM_E2E2_PHONE_READY=1 to attempt it. PB-E2E-2 remains NOT MET, and the reason
+  has moved from the transport to the app.
 
 BLOCKED
   exit 2

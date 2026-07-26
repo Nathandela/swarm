@@ -2573,3 +2573,29 @@ that looks like a free fix, the receive-ordering that removes the partial-failur
 empty-consent abort (measured as a 90-second package timeout when removed), and this caveat. **Both
 agents flagged their own weakened fences rather than letting me find them**, which is the only reason
 consolidating onto one branch without re-verifying the other was safe.
+
+### B54 — the machine's published payload is authoritative on every completed pairing
+
+I briefed a fix using `MachineRelayAuthPub` as a discriminator for the sticky pin. **The implementer
+refused it and was right**: `differentMachine` already refuses the whole pairing before `pin()` runs,
+keying on `MachineStatic`, so the discriminator would only matter for a pairing carrying a *different*
+relay-auth pub with the *same* Noise static — which `machineid` cannot produce, since both live in one
+identity blob. It could only have been tested against a state the product cannot construct: **the
+"fence guarding a path production does not take" this phase has now found ten times, nearly built
+deliberately on my instruction.**
+
+**The reachable defect is the same-machine case and it is worse than the one I described.** The
+operator re-runs `swarm remote init --relay-url X` **without** `--relay-pin` — the common case, since
+the flag is optional. The machine publishes no pin; the phone keeps the stale one; every dial fails
+`ErrPinMismatch` -> `relay_untrusted` -> *"Pair this phone again."* The user re-pairs; same
+`MachineStatic`, so no refusal; the machine publishes no pin; **the old pin is kept again.** The
+state's own remedy is a **no-op**, and there is no on-device way out.
+
+**Decision: a completed pairing adopts the machine's published payload verbatim, including the absence
+of a pin.** A completed pairing is SAS-confirmed and authenticated by both operators; treating a
+missing pin as "dropped by accident" **second-guesses the machine's authority over its own relay**.
+The accident case still recovers the moment the operator supplies a pin. The case that is *only*
+fixable this way — a machine that legitimately has no pin — is currently **unrecoverable**.
+
+This inverts a decision the code states deliberately, which is why the implementer declined to take it
+alone. That was the right call.

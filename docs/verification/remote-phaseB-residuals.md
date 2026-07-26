@@ -833,3 +833,45 @@ parameter addition plus two buckets with **no change to ban semantics** — and 
 edit then falling entirely inside the ban logic B47 deliberately does not touch. They conflict
 textually in `authorizePair` and `revokeAndPurge` while being orthogonal in meaning: one decides
 *which consent bytes* may authorize a pairing, the other *which ban* a re-pair lifts.
+
+## 1.15 `presence` is a worse unbounded map than `burned`, and single-use rendezvous does not survive a restart
+
+From an enumeration of **every** deletion site in `server.go`, done because I asked for an independent
+read on unbounded growth:
+
+| map | reaped |
+|---|---|
+| `burned` | **never** |
+| `presence` | **only by `device_revoke`** — `SweepPresence` sets `notified` and deletes nothing |
+| `appendRate`, `pushRate` | **never** (B39) |
+| `opsRate` | at disconnect, for the rid held **at that moment only** — so a re-authenticated socket leaks the earlier rid (B39) |
+| `tokens`, `rendezvous`, `sessions`, `waits`, `conns` | reaped |
+
+**`presence` is the one to look at and it is not the map the approved sweep covers.** Registration is
+open, so an attacker mints arbitrary routing ids and **every one that authenticates leaves a permanent
+entry**; only an explicit `device_revoke` removes it. Attacker-controlled unbounded growth, the same
+shape as B39's rate maps, and a burn sweep does not touch it.
+
+**And a correctness note on `burned` that outranks its size**: it is **in-memory only**, so the
+single-use rendezvous property **does not survive a relay restart**. A TTL sweep and a process restart
+have the same effect on it — so whoever adds the timestamped sweep must state **the property being
+preserved**, not merely the bound being enforced. A sweep designed only to bound the map will silently
+inherit "single-use, until we restart".
+
+## 1.16 PB-E2E-2's blocker has moved from the TRANSPORT to the APP — measured, by running it
+
+The smoke now runs past the transport gate: it reaches the emulator, installs, mints and extracts the
+QR, and launches the instrumented test. It then fails **inside the app**, at the first of the five
+in-app actions:
+
+`java.lang.AssertionError: PB-E2E-2: the app did not open on the pairing step, so there is nothing to pair with`
+
+Reproduced on a freshly cleared install — `adb install -r` preserves app data, so run N+1 was starting
+on run N's state, and `adb shell pm clear` is now part of the script.
+
+**PB-E2E-2 remains NOT MET**, and the gate stays down. The value is that the reason is now **measured
+rather than reasoned**, and it has moved twice: originally "no session command", then "the handset pin
+is unwired", now "the app does not open on the pairing step". Each move came from *running* it.
+
+**Found only by running**: the polling loop had a bug of its own — under `set -euo pipefail`, `awk`
+with no file and `grep` with no match exit non-zero, so the first poll killed the script.
