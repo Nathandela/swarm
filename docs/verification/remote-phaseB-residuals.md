@@ -641,3 +641,26 @@ websocket-level taps for its own fences after its first raw-TCP attempt saw 542 
 Third instance of "a guard that cannot fail" in this phase, and the second found in the *same file*
 as a defect already recorded there. **Grep-shaped assertions over an encoded transport are the
 recurring shape**: the encoding, not the absence, is what makes them pass.
+
+## 1.10 A rotated relay key is now a MACHINE availability event, not only a handset one
+
+Consequence of closing B34's machine half (`relay_spki_pin` in `relay.json`, honoured on all three
+machine dial paths). Previously a rotated relay certificate took the **handsets** offline; now it also
+takes the **machine** down — the sidecar exits, and `swarm remote revoke` cannot reach the relay to
+purge.
+
+**Strictly less severe than the handset case, because it is repairable locally**: re-run
+`swarm remote init --relay-pin` with the new value. It is new surface all the same, and it is a second
+argument for `--reuse-key` at renewal rather than against it — B33 already established that an SPKI
+pin survives renewal **only** if the renewal reuses the key.
+
+## 4.5 My `git add -A` swept an agent's work into a commit — for the SECOND time
+
+Both times the agent caught it and both times the work survived. Recorded because the *first*
+occurrence is already in the log with the note "I have committed with explicit pathspecs all phase
+precisely to avoid this, and skipped it once" — and I then did it again.
+
+The discipline is not "be careful": it is that **the shared tree must not be staged wholesale while any
+agent holds it**. The first sweep captured scratch probe patches labelled `TEMPORARY -- REVERT` that
+were *approximately correct fixes*, which is what made them dangerous. The second captured finished
+work that happened to be correct, which is luck, not process.

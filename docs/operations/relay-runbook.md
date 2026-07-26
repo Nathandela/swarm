@@ -29,12 +29,19 @@ is not on loopback. So the demonstration is two processes:
 The gateway (`swarm-remote`) reaches the relay over **loopback cleartext**, which is the
 configuration that needs no pin and never leaves the host. Only the phone's hop is TLS.
 
-> **The gateway cannot pin, and does not verify what you might assume.** `cmd/swarm-remote` dials
-> with `relay.Dial` (`main.go`), not `relay.DialSecure`, so `relay.Security` — the pin, the
-> cleartext refusal, the redirect re-check — is not applied on the gateway's connection at all. A
-> `wss://` relay URL still gets Go's default `http.DefaultClient` TLS verification against the
-> system roots, so a **publicly-trusted** certificate works and a **self-signed** one does not,
-> with no pin knob to make it work. Keep the gateway on `ws://127.0.0.1:PORT`.
+> **The gateway CAN pin, as of ADR-007 B34/B37 — this note previously said it could not.** All
+> three machine-side dial paths — the gateway sidecar (`cmd/swarm-remote`), the CLI's short-lived
+> owner connection (`withMachineRelay`, which is what carries a revoke) and the daemon's pairing
+> rendezvous — now dial through `relay.DialSecure`/`DialRawSecure` under `relay.MachineSecurity()`,
+> so the cleartext refusal, the redirect re-check and the pin all apply. The pin is provisioned
+> with `swarm remote init --relay-pin` (§4a) and is read from `relay.json` by one parser
+> (`internal/remote/relaycfg`) that all three share, so it cannot reach some of them and not
+> others.
+>
+> Two consequences for the topology above. **Loopback cleartext is still admitted** — a
+> `ws://127.0.0.1:PORT` connection has no on-path position for an observer to occupy — so the
+> gateway hop drawn above needs no change and no pin. **A `ws://` URL to anything else is now
+> refused outright**, where it previously ran and merely went unverified.
 
 `scripts/relay-tls-terminator.py` is the terminator used below. It is a stdlib TLS-to-TCP pipe
 written so this runbook is executable on a machine with nothing installed; it has no access
@@ -103,6 +110,37 @@ distinction is the whole point of this section.
   Step 9 checks it.
 - Omitting `push_credentials` is a **supported** configuration: the relay boots with no push
   transport and everything else is unaffected (PB-PUSH-5). See the operator runbook §6.
+
+## 4a. Provision the machine with the relay and its pin
+
+```bash
+swarm remote init --relay-url wss://<LAN-IP>:8443 --relay-pin "$(
+  openssl x509 -in relay.crt -pubkey -noout |
+    openssl pkey -pubin -outform der |
+    openssl dgst -sha256 -binary | openssl base64
+)"
+```
+
+This writes `<stateDir>/remote/relay.json` at 0600 with `relay_url` and `relay_spki_pin`, which is
+what all three machine dial paths read.
+
+- **The pin is optional and mandatory in effect once set.** Omit `--relay-pin` and the machine
+  behaves as it did before this section existed; supply it and a relay presenting any other public
+  key is refused with `relay.ErrPinMismatch` on every machine dial path.
+- **A pin on a `ws://` URL is refused at `remote init`**, not at the next dial. Cleartext presents
+  no certificate, so the pin could never be checked, and a configured control that silently does
+  nothing is the failure this section exists to avoid.
+- **A malformed pin is refused at `remote init` too**, with `relay.ErrPinMalformed`, against the
+  same parser every dial path uses — so the CLI cannot accept a value a dial would later reject.
+  Paste the §3 output verbatim; a trailing newline is tolerated.
+- `--relay-url` is capped at 39 characters (`pairing.MaxRelayURLLen`) because it is carried into
+  the pairing QR verbatim. The pin is **not** in the QR and costs it nothing.
+
+> **The handset is a different question and is NOT solved here.** `TrustRootSourceFor` makes
+> Android pinning-only, and the phone has no channel for a pin yet — the pairing QR has no field
+> for one and no room for one. A release handset therefore refuses every `wss://` dial with
+> `relay.ErrPinRequired`. That is ADR-007 residual 1.9 and it is a shipping blocker tracked
+> separately; this section provisions the **machine** only.
 
 ## 5. Start both processes
 
@@ -197,6 +235,13 @@ openssl req -new -x509 -key relay.key -out relay.crt -days 90 \
 
 Re-run step 6 after any reissue. The pin must be **unchanged**; if it moved, the key rotated and
 every paired handset is about to go offline.
+
+**And so is the machine, which is new.** Now that §4a provisions a pin the gateway, the CLI and the
+pairing rendezvous all honour, a rotated key takes the *machine* down alongside the handsets: the
+sidecar exits on a failed dial and `swarm remote revoke` cannot reach the relay to purge anything.
+A rotation therefore needs `swarm remote init --relay-pin <new value>` re-run on the machine, and
+the machine can be repaired locally where a handset cannot — which is an argument for §8b, not a
+reason to relax it.
 
 Both halves are pinned by test rather than left as prose —
 `internal/remote/transport/pin_renewal_test.go`:
