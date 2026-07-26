@@ -1040,7 +1040,36 @@ Tracked here rather than in `bd`: `.beads/` exists in this worktree but its `iss
 unset, and initialising the shared tracker with a guessed prefix would affect every worktree. That
 is the user's call, not mine.
 
-### GG-4 is NOT met: `golangci-lint` is not clean
+### GG-4's lint gate: RESOLVED — and my measurement of it was wrong
+
+**CORRECTED 2026-07-26. I reported 25 findings as measured rather than taken on report, and 25 was
+itself short: the true baseline was 31.** golangci-lint defaults to `max-same-issues: 3`, which
+silently suppresses duplicates of an identical message — hiding six errcheck findings. The count I
+criticised another agent for getting wrong, I then got wrong myself, in the same direction and for a
+subtler reason: I ran the tool correctly and read a report that was complete-looking rather than
+complete.
+
+**Any runbook line must be `~/go/bin/golangci-lint run --max-same-issues=0 --max-issues-per-linter=0
+./...`** — the full path (it is not on PATH) *and* the caps lifted, or the gate reports clean while
+suppressing.
+
+**Now 0.** The last finding was `internal/remote/crypto/identity_test.go:77` inside the FROZEN
+package, and it was a true positive for the linter and wrong for the code: `%s` **is** the subject
+there, since the list enumerates the fmt verbs a log line can reach an `Identity` through, so
+collapsing it into `id.String()` would remove that verb from the leak fence. Annotated with the
+reason at the site, matching the precedent already carried by its non-frozen twin in
+`internal/remote/machineid`. A comment changes no crypto behaviour, which is what the freeze protects.
+
+### Two gaps that pass unnoticed, recorded because nothing checks them
+
+- **`gofmt` is not in golangci-lint's default linter set**, and 10 files are unformatted at HEAD
+  (`internal/protocol/*`, `internal/remote/device/*_test.go`, `internal/remote/pairing/`,
+  `internal/remotegw/terminal_watcher.go`, `internal/skeleton/`, `cmd/swarm/`). GG-4 does not
+  currently mean "formatted" by any mechanism. Either it should, or GG-4 should stop implying it.
+- **The original wording of this section (below) is left in place deliberately**, so the correction
+  above is legible as a correction rather than as the record having always said 31.
+
+### Superseded: GG-4 as originally recorded
 
 Measured at the S18 merge with **v1.64.8**: **25 findings** — 12 errcheck, 5 unused, 4 gosimple,
 3 ineffassign, 1 staticcheck. **All pre-existing**; S18 introduced exactly one (`refuse` unused) and
