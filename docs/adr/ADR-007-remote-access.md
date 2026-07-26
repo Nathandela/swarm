@@ -2655,3 +2655,43 @@ unrecorded live defect. They were real **in its baseline** — my wholesale stag
 in `184a7aa`, corrected in `4a4cef2`, and it branched inside that window. HEAD is clean and both fences
 pass. **My `git add -A` did not merely risk shipping a mutation; it poisoned another agent's baseline and
 cost it investigation time on a defect that no longer existed.** Sixth entry on this; residual 4.7 stands.
+
+### B56 — PB-E2E-2 and PB-KEY-8 are in DIRECT CONFLICT; the app cannot start on a standard emulator, correctly
+
+**Measured by running it, not reasoned.** The app opens on the session surface showing *"Something
+failed in a way the app does not recognise"* — never the pairing step. Cause, from a temporary log at
+the one catch site: `KeystoreDowngrade: dev.swarm.phone.kek.wake was generated weaker than requested:
+the platform reports SECURITY_LEVEL_SOFTWARE`. **The emulator's keymaster reports software-only
+backing, and PB-KEY-8's downgrade refusal fails the app closed.** Every screen is downstream of
+`runtime.phone()`, so the pairing step never renders — which is exactly what the instrumented test
+reports as "nothing to pair with".
+
+**This is the product working as specified.** PB-KEY-8 requires refusing a key weaker than requested,
+and the provisioning code's own comment states the condition under which it would be wrong: *"a handset
+we intend to support would have to report SECURITY_LEVEL_SOFTWARE"*. **The author reasoned about
+handsets. Nobody asked what an EMULATOR reports — and PB-E2E-2 requires the app to run on one.**
+
+**So PB-E2E-2's acceptance criterion is unsatisfiable as written**, and that explains its entire
+history: why the instrumented tests never ran, and why the requirement sat `shipped` unverified through
+three separate investigations that each found a different proximate blocker. Six dead invocations and
+the whole transport chain were repaired; **the app still cannot start.**
+
+**RULING.**
+
+- **Option 1 — an emulator image with a hardware-backed keystore — is to be CHECKED, and it is a
+  bounded experiment rather than an argument.** It costs no security and no scope. Nobody has proven it
+  impossible, and an unproven belief is exactly what this phase keeps finding underneath a stalled
+  requirement.
+- **Option 2 — a debug-build carve-out on the downgrade refusal — is REJECTED**, as it has been four
+  times in other clothes. It weakens the control PB-SEC-1's at-rest claim rests on **so that a
+  demonstration can pass**, which makes the demonstration about itself. The implementer declined to take
+  it on its own judgement and was right.
+- **Option 3 — re-scope PB-E2E-2 onto a physical handset, merging it into PB-E2E-5 — is the fallback
+  if option 1 fails**, and PB-E2E-2 then stays **NOT MET** rather than becoming met. An exclusion is
+  honest; a green produced by disabling the custody gate is not.
+
+**The structural consequence is larger than one requirement.** PB-KEY-8 makes **every** instrumented
+test of the app's startup path impossible on an emulator — not only PB-E2E-2's. `PbE2E2ResumeTest` is
+in the same position, and so is any future `connectedAndroidTest` that constructs the runtime. If option
+3 is taken, **that entire test tier is deferred with it, and the `androidTest` source set currently
+reads as coverage that can never execute** — the same shape as residuals 4.4 and 4.6, one tier up.
