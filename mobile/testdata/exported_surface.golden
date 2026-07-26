@@ -35,9 +35,11 @@ field JournalEntry.Group string
 field JournalEntry.SessionID string
 field JournalEntry.Type string
 field LaunchSpec.Agent string
+field LaunchSpec.Cols int
 field LaunchSpec.Cwd string
 field LaunchSpec.Options string
 field LaunchSpec.Prompt string
+field LaunchSpec.Rows int
 field Op.Action string
 field Op.OperationID string
 field Op.SessionID string

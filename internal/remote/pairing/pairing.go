@@ -119,7 +119,15 @@ type MachinePayload struct {
 	MachineRelayAuthPub []byte
 	RecipientPub        []byte // A14: machine sealed-box recipient X25519 pub, pinned at pairing
 	MachineSignPub      []byte // enrollment keystone: machine Ed25519 grant-signing pub, pinned at pairing so the phone can verify epoch grants (F3)
-	EpochID             uint32
+	// MachineEndpointID is the machine's federation endpoint id (S19). It is the machine's
+	// NAME, where Hostname is only its label: every mutating command the phone authors signs
+	// over it, and crypto.Command.Canonical refuses an empty one, so a phone that completes
+	// this handshake without it can author nothing. It is pinned here for the same reason the
+	// three keys above are -- the pairing is the one authenticated moment the phone learns who
+	// the machine is -- and it must be here rather than on the gateway's later reconcile
+	// record, because PB-LIFE-3 starts the gateway only AFTER pairing.
+	MachineEndpointID string
+	EpochID           uint32
 }
 
 // DevicePayload is the device's authenticated msg3 handshake payload (R-PAIR.3;
@@ -501,9 +509,9 @@ func readField(b []byte) (field, rest []byte, ok bool) {
 }
 
 // encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14 +
-// enrollment keystone): the five length-prefixed byte fields followed by the
-// 4-byte big-endian epoch id. MachineSignPub rides as the fifth length-prefixed
-// field BEFORE the epoch trailer, so the epoch-trailer contract is undisturbed.
+// enrollment keystone + S19's endpoint id): the six length-prefixed byte fields
+// followed by the 4-byte big-endian epoch id. Each added field rides BEFORE the
+// epoch trailer, so the epoch-trailer contract is undisturbed.
 func encodeMachinePayload(p MachinePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.Hostname))
@@ -511,6 +519,7 @@ func encodeMachinePayload(p MachinePayload) []byte {
 	b = appendField(b, p.MachineRelayAuthPub)
 	b = appendField(b, p.RecipientPub)
 	b = appendField(b, p.MachineSignPub)
+	b = appendField(b, []byte(p.MachineEndpointID))
 	b = binary.BigEndian.AppendUint32(b, p.EpochID)
 	return b
 }
@@ -536,6 +545,11 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 	if p.MachineSignPub, b, ok = readField(b); !ok {
 		return MachinePayload{}, errMalformedPayload
 	}
+	var endpoint []byte
+	if endpoint, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.MachineEndpointID = string(endpoint)
 	if len(b) != 4 {
 		return MachinePayload{}, errMalformedPayload
 	}

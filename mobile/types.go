@@ -241,11 +241,20 @@ type Snapshot struct {
 // LaunchSpec is a remote launch request. Options is a comma-separated list of key=value
 // pairs ("model=opus,thinking=on"); an empty string means no options. It is a string
 // rather than a map because gomobile binds no map type.
+//
+// Cols/Rows are the terminal grid the new session's PTY is opened at. They are REQUIRED by
+// the machine -- the daemon refuses a launch with fewer than one column -- and they are the
+// phone's to supply because only the phone knows the size of the view the user will watch
+// the session in. Left at zero they default (defaultLaunchCols x defaultLaunchRows): the
+// Android launch sheet has no terminal view to measure before the session exists, and a
+// refused launch is a worse answer than a conventional grid the user can resize.
 type LaunchSpec struct {
 	Agent   string
 	Cwd     string
 	Prompt  string
 	Options string
+	Cols    int
+	Rows    int
 }
 
 // Op identifies one mutating operation the app authored. OperationID is the durable

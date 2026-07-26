@@ -1119,7 +1119,13 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: " + err.Error())
 		return
 	}
-	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, Session: cc.stampView(m, status.Derive(m.Status))})
+	// OperationID for the reason replyOK and replyError carry it (see clientConn.opID): a
+	// reply is claimed BY operation id (PB-SYNC-2). Untagged, a launch that SUCCEEDED is
+	// unattributable -- the gateway seals it verbatim onto the phone's reply bucket and
+	// phonecore.foldContent drops a command reply naming no op rather than mis-key it -- so
+	// the op stays in flight for the life of the phone process while the session runs.
+	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, OperationID: cc.opID,
+		Session: cc.stampView(m, status.Derive(m.Status))})
 }
 
 func (cc *clientConn) handleKill(c Control) {

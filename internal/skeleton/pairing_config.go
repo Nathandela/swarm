@@ -57,6 +57,12 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		Hostname:     id.Hostname(),
 		RoutingID:    id.RoutingID(),
 		RelayAuthPub: id.RelayAuthPublic(),
+		// The phone's name for this machine (S19), from the SAME function serve.go derives
+		// the daemon's served endpoint id with, over the SAME state directory. Deriving it
+		// here rather than accepting it from the assembly is what keeps the two from
+		// drifting: a phone that signs over a different id has every command refused, and
+		// the refusal names a signature failure rather than a mismatched address.
+		EndpointID: endpointID(stateDir),
 	}
 
 	// A configured relay URL wires the live rendezvous seam; its absence is fail-closed

@@ -644,6 +644,24 @@ func (a *App) pin(out *pairing.DeviceOutcome) {
 		st.MachineStatic = out.MachineStatic
 		st.MachineSignPub = out.Machine.MachineSignPub
 		st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
+		// The machine's NAME (S19), and the only production source a handset has for it:
+		// Config.MachineID is "" on a phone, and the gateway's reconcile record -- the one
+		// other authenticated frame carrying it -- cannot arrive before the gateway exists,
+		// which PB-LIFE-3 defers until after this pairing. Every mutating verb signs over it
+		// and crypto.Command.Canonical refuses an empty one, so a pairing that does not write
+		// it here leaves the phone paired and unable to author anything.
+		//
+		// A machine that publishes NO id leaves what is already there, and that guard is not
+		// politeness. Persisting Machine="" is the S9 defect in full (phonecore.OpenStore's
+		// own doc carries it): the load-time filter discards a blob stamped with a machine
+		// that is not the caller's, so the next process start would throw away the pairing,
+		// the epoch, the sealed content key, the relay cursor and the send-seq ceilings --
+		// silently, on the first Android process death. Overwriting a known name with nothing
+		// is strictly worse than keeping it, and the machine side is where an absent id is
+		// caught (internal/skeleton's S19 tests).
+		if out.Machine.MachineEndpointID != "" {
+			st.Machine = out.Machine.MachineEndpointID
+		}
 		newEpoch = st.EpochID != out.Machine.EpochID
 		if newEpoch {
 			st.Keys = crypto.EpochKeys{}

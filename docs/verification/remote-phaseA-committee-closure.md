@@ -263,3 +263,52 @@ After seven rounds (REVISE -> REJECT x4 -> REVISE -> majority SHIPS x2), the com
 
 Phase A (the machine backend + control plane + full input + safety) SHIPS for single-device v1. The mobile
 app + the deferred production-lifecycle glue are Phase B.
+
+## SCOPED NOTE — the Phase B §4.6 finding (PB-DOC-5, added 2026-07-26)
+
+**This is a scoped note, not a retraction, and it must not be read as one.** The closure's
+"no relay-adversary-reachable confidentiality or integrity hole" statement above **stands**. The
+Phase B audit re-examined it, and what follows is the only correction the re-examination
+supports.
+
+**The shipped-Phase-A exploit claim was investigated and DISPROVED.** Phase B's opus H1 alleged
+that the gateway's in-memory inbound replay guard let a retaining relay inject keystrokes into a
+live PTY on the shipped tree. It does not, and each blocking mechanism was traced: no production
+phone client imports `phonecore`, so nothing on the shipped tree regresses a send-seq; a gateway
+restart yields an empty `LeaseManager`, which drops input naming no live lease; and a replayed
+`take_control` is refused by the single-use `operation_id` in the durable idempotency store.
+**No future reader should resurrect the exploit claim from this note.**
+
+**What WAS reproduced, and is therefore recorded here, is narrower.** Two facts about the shipped
+tree, both true and neither an exploit:
+
+1. **The gateway's inbound replay guard and mailbox read cursor did not survive a restart.**
+   `NewCommandBridge` built a fresh `crypto.MailboxReceiver` with a zero cursor on every start
+   and `SetCursor` was never called from production startup, so `Accept`'s staleness test
+   (`seen && Seq <= hi`) was skipped entirely on a fresh receiver. `cmd/swarm-remote` persisted
+   only its two outbound seq files and no inbound state at all.
+2. **The bounded-age check was disabled**, and could not be enabled without a phone-side change:
+   every phone->machine seal set only `{Version, EpochID, Seq}`, so an age check turned on
+   against those frames computes an age of decades and refuses every legitimate command and
+   keystroke.
+
+**The consequence for this document's own claim** is one of scope, and it is stated rather than
+implied: the unanimous no-hole finding was verified **within a single gateway run**. Across a
+restart, the safety of the inbound path rested on *incidental* downstream mechanisms — an empty
+lease map, a shared monotonic sequencer, single-use operation ids — rather than on the replay
+guard meant to provide it. That is worth recording precisely because a future routing or
+sequencing change is what turns a latent defect of that shape into a live one.
+
+**The conditional Phase-B trace remains VALID** and is not disproved: against a phone holding
+durable keys but a *regressed send-seq* — the intermediate state Phase B itself creates — a
+legitimate `take_control` at seq 1 opens a lease, a retained input at seq 60 is gap-dropped but
+advances the high-water, and seqs 61.. are then contiguous and route to the live lease. That
+trace is why PB-GW-1 and PB-STATE-3/-4 exist, and why Phase B sequences the gateway's durable
+inbound state and the phone's durable send-seq to land together.
+
+**Both facts are closed in Phase B.** (1) is slice S2 (`remote-phaseB-s2-evidence.md`): durable
+per-(sender, epoch) inbound high-waters and cursor, stamped with the machine identity, seeded at
+startup. (2) is tracked with the phone's `IssuedAt` stamping, whose bound is 10 minutes.
+
+Recorded by slice S19 under PB-DOC-5. S2 reproduced and scoped the finding but did not amend this
+document, which is the gap S19's PB-E2E-3 fence surfaced.

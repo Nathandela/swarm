@@ -56,6 +56,14 @@ import (
 // already wrote.
 const s10BootstrapEpoch = uint32(11)
 
+// s10MachineEndpointID is the endpoint id this machine publishes in its pairing payload
+// (S19). ONE machine has ONE name: in production it is skeleton.endpointID(stateDir), and the
+// pairing payload, the gateway's reconcile record (RelaySink.Machine) and the id the daemon
+// verifies signatures against are all that same value. So this fixture must not invent a
+// second one -- a machine whose handshake and whose reconcile record name different endpoints
+// has the phone refuse every authority it publishes, and its blob discarded on the next load.
+const s10MachineEndpointID = testMachineID
+
 // s10Machine is the machine side of a first run, assembled from the real components: a
 // pairing identity, a grant-signing key, an authenticated relay connection, and -- after
 // the handshake -- the enrollment record and the sealed grant enroll.Enroll produced.
@@ -141,6 +149,7 @@ func (m *s10Machine) pairWith(secret [32]byte, rid [16]byte) (qr string, sasSeen
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.identity.RecipientPublic(),
 			MachineSignPub:      m.signPub,
+			MachineEndpointID:   s10MachineEndpointID,
 			EpochID:             s10BootstrapEpoch,
 		},
 	})

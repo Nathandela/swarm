@@ -23,6 +23,8 @@ package swarmmobile
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -35,9 +37,45 @@ import (
 // TakeControl acquires the live control lease for a session (PB-INPUT-3). It is also the
 // COMMAND frame that absorbs a burned seq-reservation block after a restart, which is why
 // the app must re-lease before typing.
+//
+// IT MINTS THE ONE-SHOT GATE TOKEN the daemon requires. handleTakeControl refuses an empty
+// one BEFORE authorization, and deliberately does not settle for a hash check, because
+// SHA256("") is a valid 32-byte hash -- so a take_control sealed through the ordinary
+// command path is refused at the machine and the phone can never take control or type. The
+// token is bound into the signature (ContentHash = SHA256(token)) and carried on the wire,
+// so the daemon recomputes the hash from what arrived and a relay that swaps the token
+// breaks the signature.
+//
+// THE TOKEN IS RANDOM, NOT ATTESTED, and that boundary is deliberate. §6.0's biometric
+// freshness is PB-SEC-2's, and real biometric backing is PB-E2E-5, which is DEFERRED: no
+// code here may imply an Android BiometricPrompt gated this. What the token delivers today
+// is the property the daemon actually enforces -- one-shot, unforgeable by the relay, bound
+// to this exact command -- and the biometric gate attaches to its minting when that slice
+// lands.
 func (a *App) TakeControl(session string) (op *Op, err error) {
 	defer barrier(&err)
-	return a.signedCommand(schema.ActionTakeControl, session, nil, commandBody{})
+	token, err := newGateToken()
+	if err != nil {
+		return nil, err
+	}
+	return a.signedCommand(schema.ActionTakeControl, session, nil, commandBody{gate: token})
+}
+
+// gateTokenBytes is the entropy behind one gate token. 16 bytes is the same width the phone
+// simulator has always minted and the same order as the operation id beside it: the token is
+// single-use and short-lived, and its job is to be unguessable by a relay that sees only
+// ciphertext.
+const gateTokenBytes = 16
+
+// newGateToken mints one one-shot gate token. A custody or entropy failure is RETURNED: a
+// take_control carrying an empty token is refused at the machine with a message about the
+// gate rather than about the phone, which is a failure reported as somebody else's.
+func newGateToken() (string, error) {
+	raw := make([]byte, gateTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", classed(ErrClassInternal, err)
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 // opTakeControlEnd is the lease teardown's wire action. take_control_end has no signed
@@ -90,6 +128,16 @@ func (a *App) Kill(session string) (op *Op, err error) {
 	return a.signedCommand(schema.ActionKill, session, nil, commandBody{})
 }
 
+// defaultLaunchCols / defaultLaunchRows are the grid a launch carries when the caller named
+// none. The daemon REFUSES a launch below one column, so there is no "unset" to forward: the
+// choice is a default or a launch that never reaches a PTY. 80x24 is the conventional
+// terminal and the size the daemon's own session tap opens its emulator at, so a session
+// launched from a sheet that has measured nothing renders the way every other one does.
+const (
+	defaultLaunchCols = 80
+	defaultLaunchRows = 24
+)
+
 // Launch starts a session on the machine (PB-APP-6).
 //
 // The signed tuple names no session -- a launch has none yet -- so WHAT is launched is
@@ -98,16 +146,28 @@ func (a *App) Kill(session string) (op *Op, err error) {
 // length-prefixed encoding here is forbidden: a one-byte divergence yields signature
 // verification failures with no compile error and no daemon error until a real launch is
 // refused.
+//
+// THE GEOMETRY IS THE PHONE'S TO SEND, and not because the signature forces it:
+// LaunchContentHash excludes Cols/Rows as cosmetic, so the gateway could legally fill them.
+// It is the phone's because only the phone knows the grid -- the size of the view the user
+// is about to watch this session in -- and a machine-side default would open every remotely
+// launched session at a width nobody chose.
 func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 	defer barrier(&err)
 	if spec == nil {
 		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: Launch requires a LaunchSpec"))
+	}
+	cols, rows := spec.Cols, spec.Rows
+	if cols < 1 || rows < 1 {
+		cols, rows = defaultLaunchCols, defaultLaunchRows
 	}
 	req := &schema.LaunchReq{
 		Agent:         spec.Agent,
 		Cwd:           spec.Cwd,
 		InitialPrompt: spec.Prompt,
 		Options:       parseOptions(spec.Options),
+		Cols:          cols,
+		Rows:          rows,
 	}
 	return a.signedCommand(schema.ActionLaunch, schema.LaunchSessionSentinel,
 		schema.LaunchContentHash(req), commandBody{launch: req})
@@ -524,6 +584,10 @@ type sendCtx struct {
 type commandBody struct {
 	launch *schema.LaunchReq
 	prefs  *schema.PushPrefs
+	// gate is take_control's one-shot gate token. It is a string rather than a bool-plus-
+	// field because it changes BOTH halves of the frame: the signature covers SHA256(it) and
+	// the envelope carries it beside the signed tuple, and the two must be the same value.
+	gate string
 }
 
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
@@ -582,14 +646,29 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	// now+TTLSeconds and a 30-minute cap, so one flat short TTL makes the SIGNATURE the
 	// thing that ends a typing session.
 	expiresAt := time.Now().Add(phonecore.CommandTTLFor(action))
-	cmd, err := phonecore.SignCommand(core.KeyStore(), phonecore.CommandInput{
-		Action:      action,
-		Machine:     core.State().Machine,
-		Session:     session,
-		OperationID: id,
-		ExpiresAt:   expiresAt,
-		ContentHash: contentHash,
-	})
+	// take_control signs a DIFFERENT tuple: its content hash is SHA256(gate token), and the
+	// rule that it is is phonecore's, not this package's. Re-deriving it here would be the
+	// same forbidden duplication as re-deriving LaunchContentHash -- a divergence produces a
+	// signature the daemon rejects, with no compile error and no message naming the cause.
+	var cmd schema.DeviceCommandAuth
+	if body.gate != "" {
+		cmd, err = phonecore.SignTakeControl(core.KeyStore(), phonecore.TakeControlInput{
+			Machine:     core.State().Machine,
+			Session:     session,
+			OperationID: id,
+			ExpiresAt:   expiresAt,
+			GateToken:   body.gate,
+		})
+	} else {
+		cmd, err = phonecore.SignCommand(core.KeyStore(), phonecore.CommandInput{
+			Action:      action,
+			Machine:     core.State().Machine,
+			Session:     session,
+			OperationID: id,
+			ExpiresAt:   expiresAt,
+			ContentHash: contentHash,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -614,6 +693,14 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		env, err = phonecore.SealLaunchEnvelope(sc.key, sc.epoch, seq, cmd, body.launch)
 	case body.prefs != nil:
 		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
+	case body.gate != "":
+		// The wire token rides beside the signed tuple so the gateway can rebuild the
+		// take_control Control the daemon verifies against. The requested lifetime is the
+		// horizon this command was SIGNED for: the daemon takes the earliest of it, its own
+		// 30-minute cap and the signed ExpiresAt, so asking for anything else would either be
+		// ignored or would end the typing session before the signature did.
+		env, err = phonecore.SealTakeControlEnvelope(sc.key, sc.epoch, seq, cmd, body.gate,
+			int(phonecore.CommandTTLFor(action).Seconds()))
 	default:
 		env, err = phonecore.SealCommandEnvelope(sc.key, sc.epoch, seq, cmd)
 	}

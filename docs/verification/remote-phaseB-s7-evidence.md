@@ -144,3 +144,86 @@ go build ./... && go vet                                                        
 59 tests green in `phonecore`. Persistence is one versioned JSON blob written
 temp+fsync+rename+dir-fsync, maps travelling as sorted arrays for byte-stability, replay guards
 merged monotonically on save.
+
+## Per-requirement evidence (PB-E2E-3)
+
+Added in S19. The traceability table cites this file for **PB-STATE-1, PB-STATE-2, PB-STATE-3,
+PB-STATE-4, PB-STATE-5, PB-STATE-7, PB-STATE-8 and PB-GW-6**, and until now it named only the
+first, last and the range form `PB-STATE-1..5` in its title — so four shipped rows cited a
+document that never mentioned them and no auditor could get from the row to the proof. What
+follows is reconstructed from the tests, not from recollection: every test named below is in the
+tree and can be run.
+
+### PB-STATE-2 — process-death acceptance
+
+`internal/phonecore/processdeath_test.go`:
+`TestProcessDeath_TypingLaunchAndKillSurviveAKillWhileAReplayDoesNot`. It SIGKILLs a real second
+process mid-session (`TestHelperPhoneCoreSession` is that process) and restarts it over the same
+state directory, then asserts BOTH directions on one run: an input frame, a `take_control` and a
+`kill` are all accepted by the gateway's real inbound guard after the restart, while a frame
+captured before the kill is still refused as a replay. The RED form is quoted verbatim above —
+`post-restart frame 1 refused by the gateway: crypto: stale or reordered sequence number`.
+
+The requirement's own clarification is honoured rather than assumed: what survives is the durable
+send-seq, keys and coordinates, **not the lease**. The lease is a live gateway->daemon socket and
+cannot survive a phone restart by construction, so the post-restart sequence is re-`TakeControl` ->
+await the confirmed generation -> type. S19's `TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke`
+is the first test that runs that sequence through the real facade rather than through `phonesim`.
+
+### PB-STATE-3 — reserve-a-ceiling-and-burn-the-gap
+
+`internal/phonecore/sendseq_test.go`, seven tests, each pinning one clause:
+`TestSendSeq_ReservesABlockRatherThanFsyncingPerKeystroke` (the cost claim, measured on the
+suite's counting store), `TestSendSeq_NeverReusesASeqAcrossACrashAtAnyPointInTheWindow` (the
+acceptance criterion verbatim, including a crash between reservation and use),
+`TestSendSeq_ResumesAtTheReservedCeilingNotTheLastIssuedSeq` (the burn),
+`TestSendSeq_ReservesOnFirstUseNotOnOpen`, `TestSendSeq_ReservationFailureIssuesNoSeq` (a failed
+reservation issues nothing rather than a seq nothing recorded), `TestSendSeq_IsKeyedPerEpoch` (a
+revoke rotates the epoch and the stream legitimately restarts at 1). The block size is §6.0's 256.
+
+The gap consequence PB-STATE-3 defers to PB-STATE-8 is pinned by
+`TestGapIsAbsorbedByTheRelease_NotByAKeystroke` and `TestOperationGapForcesOutcomeReconciliation`:
+the burned block is absorbed by the next COMMAND frame, never by an input frame, because the
+gateway drops a gapped input frame silently.
+
+### PB-STATE-4 — crash-atomic writes, fail-closed corruption, a named rollback anchor
+
+Two halves, and the second is the one the requirement was rewritten to force.
+
+*Atomicity and fail-closed*: the blob is written temp+fsync+rename+dir-fsync and the in-memory
+copy advances only after the write lands. `internal/phonecore/state_test.go`:
+`TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty` (unreadable or unversioned is
+`ErrCorruptState`; a blob belonging to another machine is not corrupt and loads empty, so a
+re-pair works) and `TestStateStore_UnknownFutureSchemaFailsClosed`.
+
+*The rollback anchor, per coordinate*: `internal/phonecore/rollback_test.go` tests one authority
+each, which is precisely what the requirement's "not send-seq alone" demands —
+`TestRollback_SendSeqResumesAboveTheGatewayInboundHighWater` (a),
+`TestRollback_ReceiveHighWatersRefuseRetainedFramesPerBucket` (b, and *per bucket*: the shared
+journal/terminal bucket and the sender-zero reply bucket have independent seq spaces),
+`TestRollback_GrantWatermarkRefusesAnOlderSignedGrant` (c, a correctly-signed older grant is
+refused), and `TestRollback_FailsClosedForMutatingOpsAndMarksChannelsStale` for the unreachable
+case. `TestReconcile_RefusesAnAuthorityForAnotherMachineOrEpoch` closes the S1b residual named
+above: `SeedFrom` is monotonic, so adopting a foreign authority would be unrewindable.
+
+*The 2026-07-26 revoke exemption is NOT S7's* and is not claimed here. It landed with S18b and its
+two-directional test is `mobile/conformance/pbstate4_revokeexempt_test.go`
+(`TestPBSTATE4_AnUnreconciledPhoneCompletesItsRevokeEndToEnd` and
+`TestPBSTATE4_TheRevokeExemptionDoesNotWidenToTheStateSelectedVerbs`).
+
+### PB-STATE-5 — a schema version with a forward-migration path
+
+`internal/phonecore/state_test.go`: `TestStateStore_PinnedV1FixtureStillLoads` and
+`TestStateStore_PinnedSealedFixturesStillLoad` load byte-literal fixtures of EVERY shipped schema
+version and assert every coordinate of that version survives — which is the migration test, and
+the only mechanical form of one: a fixture regenerated by the current writer would prove nothing.
+`TestStateSchemaVersion_IsPinnedToTheDurableFieldSet` fences the version against the field set, so
+a new durable field cannot land without a bump, and `TestStateStore_UnknownFutureSchemaFailsClosed`
+is the "unknown future version fails closed" half.
+
+### What this file does NOT establish
+
+The four rows above are all `internal/phonecore` properties, exercised at the core and (for
+PB-STATE-2) against a real second process. None of them was exercised through the **bound facade**
+until S19: `internal/phonesim`, which drives nearly every integration test in this repo, never
+constructs a `phonecore.Core` at all. See `docs/verification/remote-phaseB-s19-evidence.md`.

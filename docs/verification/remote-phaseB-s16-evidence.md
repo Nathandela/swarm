@@ -288,3 +288,106 @@ reached through the remedy**), and a transient full disk at construction tells t
 destroyed. Unfenced — there is no runtime test at all, and the custody test accepts the two
 recoveries as a pair so it cannot see them merged one layer up. It is the same brick class as
 PB-STATE-10, so it is being fixed there.
+
+## Per-requirement evidence (PB-E2E-3)
+
+Added in S19. The traceability table cites this file for **PB-APP-1..10, PB-PAIR-2/-3/-4/-5/-6,
+PB-SAS-3 and PB-TOK-1**. The header's range form `PB-APP-1..10` is not a mention: four shipped
+rows — PB-APP-2, PB-APP-4, PB-APP-5, PB-APP-6 — cited a document in which their identifiers do
+not appear, so an auditor holding the row had no path to the proof. Reconstructed from the tests.
+
+**Two of the four turned out to be partly unearned, and that is recorded here rather than
+smoothed over.** S19's exit demonstration found that PB-APP-4's take-control half and PB-APP-6's
+launch were both UNREACHABLE in production while their rows read `shipped`. Each section below
+says what S16 established and what it did not.
+
+### PB-APP-2 — the triage inbox
+
+*Criterion: "UI test covering all four Groups and the empty state."*
+
+`android/app/src/test/kotlin/dev/swarm/phone/ui/TriageInboxTest.kt`, six cases:
+`every group is its own section in triage order` (all four Groups, in order),
+`an empty group is still a section and says so`, `an inbox with no sessions at all reports the
+empty state` (the criterion's second half — the two empty states are distinct, because a phone
+that shows nothing is otherwise indistinguishable from a dead one), `the need summary is one line
+and comes from the wire`, `a roster built over a stale journal is never presented as live`, and
+`an absent session is marked absent and not stale`.
+
+The facade side is `screen_coverage.tsv` row `sessions_with_group` (`App.Session`,
+`Session.Group`), whose rule is that Group is VERBATIM from the wire and never derived on-device;
+`mobile/conformance` exercises the roster against a real relay and a real gateway opener.
+
+*Scope*: these are JVM unit tests over the presentation layer, not instrumented device tests.
+`android/gate/s16_ui_test.go`'s `TestS16_NoUnitTestClaimsAPhysicalHandsetProperty` fences that
+they keep claiming only policy.
+
+### PB-APP-4 — terminal peek and take-control
+
+*Criterion: "UI + integration test; asserts only sanitized text is rendered."*
+
+**The peek half is established.** `mobile/conformance/s16_appverbs_test.go`'s
+`TestPBAPP4_ThePeekRendersTheDaemonsBytesAndNothingElse` asserts the phone renders the daemon's
+own lines joined verbatim, that the grid arrives at the geometry the daemon rendered, and that a
+terminal snapshot never reaches the journal read model. `android/gate/s16_ui_test.go` fences the
+negative that ADR-007 D2 actually requires — that no Android source contains terminal-escape
+handling, i.e. there is no second renderer on the device — and
+`android/app/src/test/kotlin/dev/swarm/phone/ui/SessionScreensTest.kt`'s `TerminalPeekTest` covers
+`the grid is the daemon-rendered text verbatim`, `the lease is acquired and released explicitly`,
+`the keyboard is enabled only while the lease is held`, and `a stale grid is banner-marked and the
+keyboard stays available`.
+
+**The take-control half was NOT established by S16, and was not reachable in production.**
+`App.TakeControl` minted no gate token, so it sealed through the ordinary command path with a nil
+content hash; the daemon's `handleTakeControl` refuses an empty `GateToken` before authorization,
+so a real handset could never acquire a lease and therefore never type. Every S16-era fence sat on
+a path that does not reach that check: this suite's harness GRANTS ITSELF the lease
+(`harness.Drain` answers each take_control with a locally-sealed `OpLease`), and the Kotlin tests
+model the lease as a state flag. Closed in S19 —
+`mobile/conformance/s19_gatetoken_test.go` for the token and its binding,
+`internal/skeleton/s19_e2e_test.go` for the whole chain against a real daemon.
+
+### PB-APP-5 — the machine pane
+
+*Criterion: "UI test; revoke + kill switch gated per PB-SEC-2."*
+
+`android/app/src/test/kotlin/dev/swarm/phone/ui/MachineAndLaunchTest.kt`, `MachinePaneTest`:
+`the pane shows presence, the paired device and the activity log` covers the four display
+elements; `the kill switch is displayed and can never be set from the phone` is the read-only
+half, which the facade enforces structurally (`android/gate` and `mobile/coverage_test.go`'s
+`TestPBBIND3_FacadeCannotEnableTheKillSwitch` — the bound surface exports no setter at all, so
+the screen cannot regress into one). The PB-SEC-2 gating is `destructive actions demand a per-use
+authentication and typing does not`, `an authentication for one action never authorises another`,
+and `backgrounding or a screen lock invalidates every outstanding grant`.
+
+The activity log is served by `App.ReadJournal`, exercised over the real relay in
+`mobile/conformance/s16_staleness_test.go`, which also pins that a page over a stale journal is
+never presented as live.
+
+### PB-APP-6 — launch
+
+*Criterion: "UI + façade test."*
+
+`android/app/src/test/kotlin/dev/swarm/phone/ui/MachineAndLaunchTest.kt`, `LaunchScreenTest`:
+`a submitted spec becomes one launch operation`, `a policy rejection is rendered with its reason
+and is not retried` (the criterion's "policy rejection surfaced"), `a rate limited refusal is
+distinguishable from a policy one`, and `an unanswered launch stays pending rather than being
+guessed at`. The façade half is `App.Launch` and `screen_coverage.tsv` row `launch`, whose rule is
+that the content hash must come from the canonical `schema.LaunchContentHash`.
+
+**Two production defects survived all of it, and S19 found both.** (1) `swarmmobile.LaunchSpec`
+carried no terminal geometry, so `App.Launch` built a `LaunchReq` with `Cols=0, Rows=0` and the
+daemon refused every remote launch with `launch: cols/rows out of range`. (2) The daemon's
+SUCCESSFUL launch reply carried no `OperationID`, so a launch that actually ran was
+unattributable: `phonecore.foldContent` drops an untagged reply rather than mis-key it, and the op
+stayed pending for the life of the phone process. Note what that means for the fourth Kotlin case
+above — `an unanswered launch stays pending` was, in production, the behaviour of a launch that
+SUCCEEDED. Both closed in S19: `mobile/conformance/s19_launchgeometry_test.go` and
+`internal/protocol/s19_launchreply_test.go`, with the chain in `internal/skeleton/s19_e2e_test.go`.
+
+### The pattern across the four
+
+Three of these rows (PB-APP-2, -4, -5) are carried by JVM UI tests plus facade-level conformance
+tests, and that is what their criteria ask for. What no S16 fence could do is reach the machine:
+this suite's harness answers the phone itself, so every requirement whose real gate lives in the
+daemon — the lease gate, the launch validator, the reply tagging — was satisfiable while the
+product did not work. That is defect class (v) in the S19 brief, and PB-E2E-1 exists because of it.

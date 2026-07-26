@@ -124,3 +124,44 @@ go build ./... && go vet ./internal/remotegw/ ./cmd/swarm-remote/               
 ```
 Run on a throwaway copy with slice S1b's in-flight RED files removed there only — the package
 does not compile in-tree while two slices are live in it.
+
+## Per-requirement evidence (PB-E2E-3)
+
+Added in S19. The traceability table cites this file for **PB-GW-1, PB-GW-3, PB-GW-4, PB-GW-5 and
+PB-DOC-5**; its title named only the first three, so two shipped rows cited a document that never
+mentioned them. The two below are the DOCUMENTATION rows of this slice, and they are the pair the
+requirements deliberately split.
+
+### PB-GW-5 — the closure records only what was reproduced
+
+The requirement is a prohibition as much as an instruction: the Phase A closure "must not be
+amended to assert an exploit that was disproved". What discharges it is the "Scope, carefully"
+section above, which is this slice's own record of the split — the full keystroke-injection
+exploit was investigated and **disproved** for the shipped tree (three independent blocking
+mechanisms traced: no production phone client imports `phonecore`, a restart yields an empty
+`LeaseManager` that drops input naming no lease, and a replayed `take_control` is refused by a
+single-use `operation_id` in the durable idempotency store), while the narrower two facts — no
+durable inbound high-water, a disabled bounded-age check — were reproduced and are what S2 fixes.
+
+The verification that the prohibition HELD is now mechanical: the note landed in
+`docs/verification/remote-phaseA-committee-closure.md` states in its own first paragraph that the
+closure's no-hole finding stands and that no reader should resurrect the exploit claim from it.
+
+### PB-DOC-5 — the scoped note on the Phase A closure
+
+**This row could not be substantiated when S19 audited it, and the reason is worth stating.**
+PB-DOC-5's acceptance criterion is a document change — "Closure amended with the reproduced
+finding only; a note distinguishing the two claims" — and S2 performed the *analysis* (above)
+without ever amending `remote-phaseA-committee-closure.md`. That file contained no mention of
+§4.6, of the disproved exploit, or of the single-gateway-run scope, so the requirement's
+deliverable did not exist while its row read `shipped`. The traceability table could not see it,
+because a row is measured by whether its evidence FILE exists.
+
+The note now exists: `docs/verification/remote-phaseA-committee-closure.md`, section
+"SCOPED NOTE — the Phase B §4.6 finding (PB-DOC-5, added 2026-07-26)". It records the two
+reproduced facts and nothing else, states that the closure's no-hole claim stands, states the
+scope correction (verified within a single gateway run; across a restart the property rested on
+incidental downstream mechanisms), and keeps the still-valid conditional Phase-B trace separate
+from the disproved shipped-Phase-A one.
+
+It is dated to S19 rather than backdated to S2, because that is when it was written.

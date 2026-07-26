@@ -43,6 +43,15 @@ type pairingConfig struct {
 	RoutingID    []byte              // MachinePayload.MachineRoutingID
 	RelayAuthPub []byte              // MachinePayload.MachineRelayAuthPub
 
+	// EndpointID is the daemon's federation endpoint id, carried into MachinePayload so
+	// the paired phone can NAME the machine it just paired with (S19). Every mutating
+	// command the phone authors signs over it and this daemon verifies that signature
+	// against its own id, so it must be the id the daemon SERVES under -- loadPairingConfig
+	// derives it from the same state directory serve.go does, from the same function.
+	// Without it a completed pairing leaves the phone unable to author anything:
+	// crypto.Command.Canonical refuses an empty Machine before a byte is sealed.
+	EndpointID string
+
 	// RelayURL is the configured relay endpoint, carried VERBATIM into the pairing QR
 	// (PB-PAIR-7) so a phone that has only scanned the camera channel knows where to
 	// dial. It is the same string NewRendezvous was built from -- the machine's own
@@ -173,6 +182,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			MachineRelayAuthPub: cfg.RelayAuthPub,
 			RecipientPub:        cfg.RecipientPub,
 			MachineSignPub:      cfg.SignPub,
+			MachineEndpointID:   cfg.EndpointID,
 			EpochID:             cfg.EpochID,
 		},
 	}

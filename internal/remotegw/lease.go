@@ -17,6 +17,7 @@ package remotegw
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -46,6 +47,7 @@ type LeaseConn struct {
 
 	mu         sync.Mutex
 	gen        uint64 // captured OpLease generation (0 until granted)
+	refusal    string // the daemon's OpError text, if it refused (see readLoop)
 	leased     chan struct{}
 	leasedOnce sync.Once
 	dead       chan struct{}
@@ -96,9 +98,10 @@ func DialLease(socketPath string, cmd protocol.RemoteCommand) (*LeaseConn, error
 }
 
 // readLoop drains the lease connection: it captures the OpLease generation (the lease
-// grant) and treats OpDetach, an OpError refusal, or a connection close as lease-death.
-// Post-F3 the daemon sends a remote controller OpLease + OpDetach only, so there is no raw
-// output frame to drain (any stray non-control frame is ignored).
+// grant), captures the REASON on an OpError refusal, and treats a refusal, an OpDetach or a
+// connection close as lease-death. Post-F3 the daemon sends a remote controller OpLease +
+// OpDetach only, so there is no raw output frame to drain (any stray non-control frame is
+// ignored).
 func (lc *LeaseConn) readLoop() {
 	defer lc.markDead()
 	for {
@@ -124,8 +127,20 @@ func (lc *LeaseConn) readLoop() {
 				lc.mu.Unlock()
 				lc.leasedOnce.Do(func() { close(lc.leased) })
 			}
-		case protocol.OpDetach, protocol.OpError:
-			return // lease lost (detach) or refused (never granted): dead
+		case protocol.OpError:
+			// CAPTURE THE REASON before dying. The daemon refuses a take_control for six
+			// distinct causes -- an absent gate token, an unknown device, a forged or expired
+			// signature, an insufficient capability, the kill switch, a consumed operation id
+			// -- and each one says so in this frame. Returning without reading it collapsed
+			// all six into "the lease died before it was granted", which names the transport
+			// and not one of the causes; the phone then shows a dead keyboard with no way to
+			// tell a policy refusal from a broken socket.
+			lc.mu.Lock()
+			lc.refusal = ctrl.Error
+			lc.mu.Unlock()
+			return
+		case protocol.OpDetach:
+			return // lease lost: dead
 		default:
 			// OpOK (a resize/other ack) or any other control: nothing to do.
 		}
@@ -139,15 +154,30 @@ func (lc *LeaseConn) markDead() {
 
 // AwaitLease blocks until the readLoop captures the OpLease grant (returning its nonzero
 // generation), the lease dies, or the timeout elapses.
+//
+// A death the DAEMON explained is reported in the daemon's own words, wrapped so
+// errors.Is(err, errLeaseDead) still holds for a caller classifying the failure. A death with
+// no explanation -- the connection dropped, the session ended -- is the bare sentinel, which
+// is then a true statement rather than a catch-all.
 func (lc *LeaseConn) AwaitLease(timeout time.Duration) (uint64, error) {
 	select {
 	case <-lc.leased:
 		return lc.Generation(), nil
 	case <-lc.dead:
+		if reason := lc.refusalReason(); reason != "" {
+			return 0, fmt.Errorf("%w: the machine refused it: %s", errLeaseDead, reason)
+		}
 		return 0, errLeaseDead
 	case <-time.After(timeout):
 		return 0, errLeaseTimeout
 	}
+}
+
+// refusalReason is the daemon's OpError text, or "" when the lease died without one.
+func (lc *LeaseConn) refusalReason() string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.refusal
 }
 
 // WriteDataIn writes a wire.TDataIn keystroke frame on the lease connection. The daemon

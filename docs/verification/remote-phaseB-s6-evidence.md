@@ -139,3 +139,64 @@ go build ./... && go vet (scoped)                                          clean
 Pre-existing load flake recorded, with evidence it is independent of this slice:
 `TestRelay_SweepLoopPresenceSilentPushNoManualCall` (a 5ms sweep ticker against a 3s bound)
 passes 3/3 isolated under `-race` and **still reproduces with all three new S6 tests excluded**.
+
+## Per-requirement evidence (PB-E2E-3)
+
+Added in S19. The traceability table cites this file for **PB-NET-2, PB-NET-3, PB-NET-4, PB-NET-6
+and PB-NET-7**, and until now it named only the first two outside the range form in its title, so
+three shipped rows cited a document that never mentioned them. Reconstructed from the tests
+below, every one of which is in `internal/remote/transport` and can be run.
+
+### PB-NET-4 — resilience, with the numbers stated
+
+Each clause of the requirement has its own test, and the numeric clauses are asserted against
+§6.0's table rather than against the implementation's own constants:
+
+- **Bounded exponential backoff with a stated ceiling**: `TestBackoffBudgetIsTheCommitteeBudget`
+  (initial 500 ms, factor 2, ceiling 30 s — read from the budget, so a drifted constant fails)
+  and `TestBackoffScheduleDoublesToACeiling`.
+- **Jitter**: `TestReconnectDelaysStayWithinTheJitterBand` (+/-20%).
+- **Connection state surfaced**: `TestConnectionStateIsSurfaced`.
+- **Re-auth after reconnect**: `TestReAuthenticatesAfterReconnect` — a second `auth_init` after a
+  cut, which is what makes the reconnect a new authenticated session rather than a resumed one.
+- **Input and resize are never queued or replayed** (ADR-007 D7):
+  `TestLiveFramesAreNeverQueuedAndNeverReplayed`. This is the clause the two-send-method design
+  above makes structural: `SendLive` has no queue to fall back to.
+- **The idempotent-op queue's bound and drop signal**: `TestIdempotentOpQueueIsBoundedAndRejectsNew`
+  — 64 ops, the 65th refused with an error, never a silent drop and never drop-oldest.
+- **The reconnect drain is paced**: `TestReconnectDrainIsPacedNotABurst`, added by the review as
+  B2 above; §6.0's anti-burst clause was unimplemented and the pre-existing test drove exactly the
+  burst it forbade.
+
+The reviewer's mutation run is what makes these non-vacuous: no reconnect fails 5 tests, `SendLive`
+falling back to the queue fails the D7 test, and a drop-oldest queue is caught.
+
+### PB-NET-6 — the Phase A relay-adversary properties, across process restarts
+
+`internal/remote/transport/restart_test.go`: `TestReplayIsRefusedAcrossAProcessRestart` (seq
+gating survives a restart — the clause v1's single-process criterion could not see),
+`TestDurableCursorSurvivesProcessRestart`, `TestHostilePaginationTerminates` (a relay that pages
+forever is refused with `ErrStuckPage` rather than wedging the transport),
+`TestMailboxCapSurfacesACleanRefusal`, `TestRelayAdversaryPropertiesHoldThroughTheSession` (the
+replay/reorder/dup set through the real client), and `TestConcurrentDrainsDeliverEachItemOnce`,
+which is the N1 defect found in review: two concurrent drains delivered 10 items for a 5-item
+mailbox, the exact shape a foreground drain plus a push-wake drain takes on a handset.
+
+**The requirement's second half is NOT S6's and is not claimed here.** "plus the PB-STATE-2
+restart case" is `internal/phonecore`'s process-death test, which landed in S7; see
+`remote-phaseB-s7-evidence.md`. S6 covers the transport across a restart of the transport's own
+process.
+
+### PB-NET-7 — hygiene
+
+`internal/remote/transport/hygiene_test.go`, one test per clause:
+`TestNonWaitRequestTimeoutIsTheCommitteeBudget` and `TestEveryCallTimesOutAgainstASilentRelay`
+(timeouts everywhere, at §6.0's 10 s), `TestContextCancellationIsHonoured` and
+`TestDialHonoursCallerContext` (cancellation honoured on both the request and the dial),
+`TestCallsAfterCloseFailCleanly`, and `TestNoGoroutineLeakAcrossConnectDisconnectCycles` — the
+acceptance criterion's leak assertion over repeated connect/disconnect. The `-race` half of the
+criterion is the gate block above.
+
+**Its one honest exception is already recorded in the residuals**: `Close()` deadlocks if an
+`OnState` callback calls `Close()`. That is a hygiene defect inside PB-NET-7's own subject
+matter, so it is named here rather than left in a list a reader of this row would not reach.
