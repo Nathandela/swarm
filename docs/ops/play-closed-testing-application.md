@@ -8,10 +8,40 @@ moved since this was written, it is marked **[VERIFY]** — the Console is autho
 
 ---
 
-## 0. Read this first: five blockers
+## 0. Read this first: the blockers
 
 None of these stop you filling in the forms. All of them stop you shipping a build testers can
-use. Ordered by how long they take.
+use.
+
+### Blocker 0 — the daemon hangs in the ordinary order of operations
+
+**This is the one that matters, and it is not a security nicety.** Found and measured by the
+round-3 threat audit; recorded as ADR-007 B62(1).
+
+The owner scans the QR, the desktop shows the verification code, and the owner presses `y` on
+the desktop **first** — that prompt is the one in front of them. From that moment, anything
+that cancels the phone's side (rejecting the code, cancelling, or the 60-second pairing timer
+expiring) parks the daemon **permanently**. `Pair` never returns, so the pairing is never
+cleared, so **every later pairing attempt on that connection is refused "pairing already in
+progress"**. There is no cancel operation; only dropping the owner connection escapes.
+
+Two causes compose, and neither change was wrong alone: the production pairing context has no
+deadline (`internal/protocol/server.go:2098` — the window value is computed two lines away and
+never applied), and the abort frame is sent on the context that was just cancelled
+(`internal/remote/pairing/pairing.go:665`), so **the abort is never delivered on any production
+path that produces it**.
+
+Both existing tests for this are vacuous. One injects its own 2-second deadline into `Pair` and
+takes its green entirely from a safety property production never supplies — changing the literal
+to ten minutes fails it by name. The other drives a rejection shape the shipped phone cannot
+produce.
+
+**Ship without this and the closed test teaches you nothing**, because pairing is the first
+thing every tester does and the natural button order breaks it.
+
+### The rest
+
+Ordered by how long they take.
 
 | # | Blocker | Where | Effort |
 |---|---|---|---|
@@ -19,13 +49,36 @@ use. Ordered by how long they take.
 | 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below. | external hosting | 30 min |
-| 5 | **Three Phase B requirements are NOT MET**, two of them security: `PB-SEC-2` (the per-use biometric gate — a stale callback can resurrect authorization), `PB-PAIR-4` (a half-paired state is reachable), `PB-E2E-2`. Separately `PB-E2E-5` (real-hardware validation of biometrics, camera, FCM delivery, Doze, Keystore attestation) is **deferred and unvalidated**. | see `docs/verification/remote-phaseB-residuals.md` | in progress |
+| 5 | **Four Phase B requirements are NOT MET**: `PB-SEC-2` (per-use biometric gate — a stale callback can resurrect authorization), `PB-PAIR-4` (a half-paired state is reachable), `PB-PUSH-9` (deletion on revoke is dead — see below), `PB-E2E-2`. Separately `PB-E2E-5` (real-hardware validation of biometrics, camera, FCM delivery, Doze, Keystore attestation) is **deferred and unvalidated**. | `docs/verification/remote-phaseB-residuals.md` | in progress |
 
 **On #5 and closed testing.** Closed testing is genuinely the right venue to burn down
 `PB-E2E-5` — it is the only way to get real handsets, real Doze, real FCM. That argues *for*
-shipping to a closed track soon. It does not argue for shipping `PB-SEC-2` broken: the per-use
-biometric gate is the control standing between a picked-up unlocked phone and the ability to
-type into a shell on your laptop. Land that fix before you invite testers, even internal ones.
+shipping to a closed track soon.
+
+For a **trusted, closed loop of people you know**, these are defensible to defer — but know what
+you are deferring:
+
+- **`PB-SEC-2`** — the per-use biometric gate stands between a picked-up *unlocked* handset and
+  typing into a shell on your laptop. It needs physical possession, so it is a real hole rather
+  than an urgent one for twelve known testers. Land it if it is ready; do not hold the sprint.
+- **`PB-PUSH-9`** — revoking a phone no longer deletes its push token, in either the cache or on
+  disk (ADR-007 B61(1)). Matters when you start revoking real devices.
+
+### One thing to fix even for a closed loop: the relay
+
+You will be **operating the relay** for the closed test, so this is your infrastructure, not a
+future concern. Two defects (ADR-007 B61(2), independently confirmed as B62(2)):
+
+- The relay never checks that the device being authorized is not the caller, so **a party can
+  consent to itself**.
+- The retired-consents bucket is **never swept**, and the ceremony ID is never validated for
+  length or shape.
+
+Composed: no victim and no pairing needed. Measured at 400 calls with 32 KB IDs → 33.7 MB, linear,
+and the store never returns pages to the OS — roughly **72 GB/day of unreclaimable disk from a
+single source**. Your named testers will not trip it by accident; anyone who finds your relay
+can. The fix is a length check plus refusing self-consent, which is cheap enough to take before
+you expose a relay to the internet.
 
 **Also check before upload:** Play's minimum `targetSdk` for *new* apps rises every August.
 The app targets **35**. **[VERIFY]** in the Console whether 35 is still accepted for a new app
