@@ -1264,3 +1264,24 @@ pairs, SAS matches, observes, takes control, types". That substitution would hav
 Its runbook tension is accepted as it chose: the emulator smoke is a script rather than a Go test,
 because an always-run emulator boot would wedge PB-E2E-4's own `go test ./...` gate and an env-gated
 test would be the skip the phase forbids. The script is what PB-E2E-2's criterion literally asks for.
+
+### GG-5 is not satisfied for S17 or S18b, and cannot be retroactively satisfied
+
+`git log --follow` shows `android/gate/s17_pushclient_test.go`, `internal/phonecore/wake.go` and
+`cmd/swarm/s18b_unbrick_test.go` all first appearing in **`3b6694f`** — the RED files and the GREEN
+implementations landed in the **same commit**. GG-5 requires the failing-first run to be evidenced
+by ordered commits or recorded output, and E15.3 restates it. Neither exists for these two slices.
+
+What does exist is each author's own vacuous-pass probe, written into the test headers, and the
+evidence backfill's 13 applied-and-reverted mutations — which demonstrate the tests *can* fail, and
+that the guards fire on the defects they name. **That is real evidence of test quality and it is not
+evidence of test-first order.** The two are different claims and conflating them would be the
+comfortable move.
+
+**This cannot be fixed now.** Re-ordering history would manufacture the evidence rather than record
+it, which is worse than the gap. It is stated here so the audit sees an honest "not met" rather than
+a count that quietly includes two slices it should not.
+
+Every slice from S15 onward has ordered commits. The failure is confined to S17 and S18b, and the
+cause was mine: I dispatched those two as a combined slice under time pressure and did not require
+the RED commit to land before the implementer started.
