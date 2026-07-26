@@ -821,6 +821,12 @@ leaves a revoke that is **genuinely permanent for both parties**, with no legiti
 step, and the merged tree must demonstrate **both** properties — a replayed consent is refused, **and**
 a legitimately revoked device can be recovered by the flow PB-STATE-10 documents.
 
+**REFINED 2026-07-26 — the composition is structural, not coordinated, and that is better.** The B49 agent's rebase probe established the precise join: its ban-clear lives inside `authorizePair`, which runs **only after** `handleAuthorizeDevice` has verified the consent. So B47's ceremony binding sits **strictly upstream** of B49's delete, and that delete **inherits the replay protection for free** — the owner's re-pair is a fresh ceremony that verifies and unbricks; the attacker's replay names a stale id, is refused at verification, and the ban stands. **The join is verification ORDER, not shared state**, so neither change has to know about the other. That is B50's demand — that the owner's re-pair and the attacker's replay stop being the same call with the same arguments — satisfied **structurally rather than by coordination**.
+
+The merge constraint still holds (both land together, and the merged tree must show both properties), but the *reasoning* burden is gone: neither agent has to carry the other's half.
+
+**The arbitration cost also evaporated.** The generation counter was **abandoned**, not deferred — it had the same bootstrap contradiction it was meant to avoid — so `authorizePair` and `revokeAndPurge` may have no second author at all. The contested surface moved to `ConsentMessage`'s shape, which is mechanical. A read-only `merge-tree` probe against current upstream exits clean.
+
 **This is the round-2 lesson applied prospectively rather than retrospectively.** Every composition
 found so far was found *after* both halves shipped: two residuals safe alone and critical together
 (B37), a fix that deleted another defect's only remedy (B49), a fix that recreated its own bug on the
