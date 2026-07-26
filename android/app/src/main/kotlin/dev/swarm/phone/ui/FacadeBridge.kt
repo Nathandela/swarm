@@ -32,33 +32,70 @@ class FacadeBridge(private val app: App) {
      * The roster as rows. gomobile has no list type, so a collection crosses as an opaque
      * handle with Count/At and is walked here once rather than at every screen.
      */
-    fun roster(): List<SessionRow> {
-        val list = app.roster()
-        return (0 until list.count()).map { index -> rowOf(list.at(index)) }
-    }
+    fun roster(): List<SessionRow> = rosterView().rows
 
     fun sessionRow(sessionId: String): SessionRow = rowOf(app.session(sessionId))
 
     /**
-     * PB-APP-2's screen. The roster is rendered from the journal stream, so the stream's own
-     * state is what says whether the list is whole -- asking the roster handle would be the
-     * same question one hop further from the answer.
+     * PB-APP-2's screen, with its PB-APP-8 verdict READ OFF THE HANDLE THAT CARRIED IT.
+     *
+     * This used to ask `App.StreamState("journal")` beside the roster instead, and the two are
+     * the same fact: `App.Roster` sets `SessionList.stale` from exactly that stream. Asking
+     * separately is what `SessionList.Stale` exists to stop -- its own Go doc says the flag
+     * rides on the handle "rather than being left to the caller ... a screen that has to
+     * remember to call StreamState beside every Roster() is a screen that will forget once, and
+     * the failure is silent and looks exactly like a working app".
+     *
+     * It had already gone wrong in the softer way: `SessionList.Stale` was reached by NO Kotlin
+     * at all, while a unit test asserting the inbox is never presented as live carried the
+     * comment "this is the assertion that makes swarmmobile.SessionList.Stale reach a user".
+     * It did not -- that assertion drives `TriageInbox.from`'s parameter, and what fills the
+     * parameter is this line.
      */
-    fun triageInbox(): TriageInbox =
-        TriageInbox.from(roster(), journalStale = app.streamState(JOURNAL_STREAM) == STREAM_STALE)
-
-    /** PB-APP-3's event list, and the machine pane's activity log. */
-    fun journal(afterCursor: Long, limit: Long): List<JournalRow> {
-        val page = app.readJournal(afterCursor, limit)
-        return (0 until page.count()).map { index ->
-            val entry = page.at(index)
-            JournalRow(
-                cursor = entry.getCursor(),
-                type = entry.getType(),
-                group = entry.getGroup(),
-            )
-        }
+    fun triageInbox(): TriageInbox {
+        val roster = rosterView()
+        return TriageInbox.from(roster.rows, journalStale = roster.stale)
     }
+
+    /**
+     * PB-APP-3's event list, and the machine pane's activity log.
+     *
+     * It returns the PAGE and not the rows: the cursor to read from next and the stream's stale
+     * mark are on the handle, and dropping them left a caller unable to advance and unable to
+     * say the log has a hole. See [JournalPageView].
+     */
+    fun journal(afterCursor: Long, limit: Long): JournalPageView {
+        val page = app.readJournal(afterCursor, limit)
+        return JournalPageView(
+            rows = (0 until page.count()).map { index ->
+                val entry = page.at(index)
+                JournalRow(
+                    cursor = entry.getCursor(),
+                    type = entry.getType(),
+                    group = entry.getGroup(),
+                )
+            },
+            nextCursor = page.nextCursor(),
+            stale = page.stale(),
+        )
+    }
+
+    /**
+     * The roster handle read ONCE: its rows and its own staleness verdict, together.
+     *
+     * Together is the point. Two calls to `App.Roster` would answer two different questions
+     * about two different reads, and the second could report a stream repaired between them --
+     * which is a list drawn from the holed read, labelled with the whole one.
+     */
+    private fun rosterView(): RosterView {
+        val list = app.roster()
+        return RosterView(
+            rows = (0 until list.count()).map { index -> rowOf(list.at(index)) },
+            stale = list.stale(),
+        )
+    }
+
+    private data class RosterView(val rows: List<SessionRow>, val stale: Boolean)
 
     /**
      * PB-APP-4's grid.
@@ -156,9 +193,6 @@ class FacadeBridge(private val app: App) {
     )
 
     private companion object {
-        /** One of the four repair channels; the one the roster and the journal both ride. */
-        const val JOURNAL_STREAM = "journal"
-
         /** `App.StreamState` answers "stale" or "live". */
         const val STREAM_STALE = "stale"
     }

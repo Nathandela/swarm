@@ -80,6 +80,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // boundVerbFloor is the "cannot pass by measuring nothing" floor on the SCAN, not on the
@@ -154,6 +155,67 @@ func receiverTypeName(expr ast.Expr) string {
 		return id.Name
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------------
+// The OTHER bound types, which the ledger did not cover and which carried four instances.
+// ---------------------------------------------------------------------------
+
+// boundTypeFloor is the "cannot pass by measuring nothing" floor on the golden scan. The
+// facade binds five method-carrying types today (App, JournalPage, Pairing, SessionList,
+// UndeliveredList); a run that found fewer has stopped reading the golden.
+const boundTypeFloor = 4
+
+// nonAppMethodFloor is the same idea for the methods themselves.
+const nonAppMethodFloor = 12
+
+var goldenMethod = regexp.MustCompile(`(?m)^method\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\(`)
+
+// boundTypeMethods is every exported method on every bound type, keyed by receiver, read from
+// the PINNED EXPORTED SURFACE (mobile/testdata/exported_surface.golden).
+//
+// WHY THE GOLDEN AND NOT A SECOND AST WALK. The golden is regenerated from the facade's own
+// types by mobile/golden_test.go, which fails the build if it drifts from the source -- so it
+// is source-derived and fenced, and it is the artifact PB-BIND-7 already treats as the
+// authority on what crosses. Re-deriving the same set here would be a second parser to keep in
+// step with the first.
+//
+// WHAT IS DELIBERATELY OUT OF SCOPE, stated rather than left to be assumed away:
+//
+//   - `field` rows. gobind binds a struct field as a getter/setter pair, so every field is
+//     nominally a bound symbol; requiring a caller for each would demand rows for getters that
+//     exist only so a struct can cross at all. This file is the bound-VERB ledger and the
+//     four instances it was extended for are all methods.
+//   - `ifacemethod` rows (EventListener.OnEvent, KeyCustody.*). Those are IMPLEMENTED by
+//     Kotlin and called by Go, so "does production Kotlin call it" is the wrong question --
+//     and android/unbound-verbs.tsv's header already records what the check cannot see about
+//     the custody interface.
+//   - package-level `func` rows (NewApp, DecodeQR). They have no receiver, so a call site
+//     carries no dot and the matcher's one deliberate strengthening does not apply.
+func boundTypeMethods(t *testing.T) map[string][]string {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), "mobile", "testdata", "exported_surface.golden")
+	src := readFileOrFail(t, path, "PB-BIND-3")
+	out := map[string][]string{}
+	for _, m := range goldenMethod.FindAllStringSubmatch(src, -1) {
+		out[m[1]] = append(out[m[1]], m[2])
+	}
+	for _, methods := range out {
+		sort.Strings(methods)
+	}
+	return out
+}
+
+// nonAppBoundTypes are the bound receivers other than App, in a stable order.
+func nonAppBoundTypes(methods map[string][]string) []string {
+	var out []string
+	for name := range methods {
+		if name != "App" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -236,14 +298,50 @@ func liveBridgeMethods(declared []string, bridgeSrc, elsewhere string) map[strin
 // The Kotlin side of the question.
 // ---------------------------------------------------------------------------
 
+// gobindJavaName is the Java spelling gobind emits for an exported Go method name. It is a
+// transcription of golang.org/x/mobile/bind.lowerFirst (bind/gen.go), which is the function
+// that actually names the binding, and it is NOT "lower-case the first letter".
+//
+// THE RULE IS: lower-case the WHOLE LEADING UPPER-CASE RUN, except that if the run is followed
+// by a lower-case letter, its LAST character stays upper-case (that character begins the next
+// word).
+//
+//	Roster        -> roster        (run of one)
+//	TerminalWatch -> terminalWatch (run of one)
+//	SAS           -> sas           (the whole name is the run)
+//	SASCode       -> sasCode       (run of four, C begins the next word)
+//
+// WHY THIS MATTERS AND HOW IT WAS FOUND. This file previously modelled the spelling as
+// `ToLower(name[:1]) + name[1:]`, which answers `sAS` for `SAS` -- a string no call site can
+// contain. `swarmmobile.Pairing` exports `SAS()` and PairingSurface calls `live.sas()`, so the
+// moment the ledger was extended past the `App` receiver the old model reported a verb the app
+// calls on every SAS screen as UNCALLED, and the repair a reader reaches for is a ledger row
+// excusing live code. No `App` verb has a leading acronym today, which is why the defect never
+// fired -- but this file's stated defence is that its matcher is correct in BOTH spellings, and
+// with the old model it was not.
+func gobindJavaName(goName string) string {
+	var conv []rune
+	for i, r := range goName {
+		if !unicode.IsUpper(r) {
+			if len(conv) > 1 {
+				conv[len(conv)-1] = unicode.ToUpper(conv[len(conv)-1])
+			}
+			return string(conv) + goName[i:]
+		}
+		conv = append(conv, unicode.ToLower(r))
+	}
+	return string(conv)
+}
+
 // boundVerbCall matches a CALL to a bound verb in EITHER SPELLING.
 //
-// gobind LOWERCASES the first letter when it emits the Java binding -- `swarmmobile.App`
-// declares terminalWatch, subscribeJournal, setEventListener -- so no correct Kotlin call site
-// contains the Go-cased name. A single-spelling matcher has produced a false green here twice:
-// once matching only the Go casing (five S17 assertions became unsatisfiable by any correct
-// implementation, s17_pushclient_test.go:99-105), and the inverse would miss a Java-cased call
-// through a generated stub. Both are accepted, which is s17NamesVerb's rule.
+// gobind LOWERCASES the leading upper-case run when it emits the Java binding -- `swarmmobile.App`
+// declares terminalWatch, subscribeJournal, setEventListener; `swarmmobile.Pairing` declares
+// sas -- so no correct Kotlin call site contains the Go-cased name. A single-spelling matcher
+// has produced a false green here twice: once matching only the Go casing (five S17 assertions
+// became unsatisfiable by any correct implementation, s17_pushclient_test.go:99-105), and the
+// inverse would miss a Java-cased call through a generated stub. Both are accepted, which is
+// s17NamesVerb's rule. The Java spelling is [gobindJavaName]'s, not a first-letter fold.
 //
 // IT REQUIRES THE DOT, which s17NamesVerb does not, and that is the one place this is
 // deliberately STRONGER rather than a second weaker walk: without it `fun terminalWatch(` --
@@ -251,7 +349,7 @@ func liveBridgeMethods(declared []string, bridgeSrc, elsewhere string) map[strin
 // shadowed by a local wrapper nobody calls -- satisfies the check that the verb is called.
 // Every App verb reaches Kotlin through an instance, so a call site always carries the dot.
 func boundVerbCall(goName string) *regexp.Regexp {
-	lower := strings.ToLower(goName[:1]) + goName[1:]
+	lower := gobindJavaName(goName)
 	return regexp.MustCompile(`\.\s*(?:` +
 		regexp.QuoteMeta(goName) + `|` + regexp.QuoteMeta(lower) + `)\s*\(`)
 }
@@ -335,14 +433,15 @@ func qualify(owner string, names []string) []string {
 // ---------------------------------------------------------------------------
 
 // unledgeredVerbs are the verbs that production Kotlin does not call and the ledger does not
-// excuse. It is the set that must be empty.
-func unledgeredVerbs(verbs []string, kotlin string, ledger map[string]ledgerRow) []string {
+// excuse. It is the set that must be empty. owner namespaces the ledger lookup, so a row about
+// one receiver cannot silence a same-named method on another.
+func unledgeredVerbs(owner string, verbs []string, kotlin string, ledger map[string]ledgerRow) []string {
 	var out []string
 	for _, v := range verbs {
 		if callsBoundVerb(kotlin, v) {
 			continue
 		}
-		if _, excused := ledger["App."+v]; excused {
+		if _, excused := ledger[owner+"."+v]; excused {
 			continue
 		}
 		out = append(out, v)
@@ -396,7 +495,7 @@ func TestBoundVerbs_EveryBoundVerbIsCalledFromProductionKotlinOrLedgered(t *test
 	kotlin := stripKotlinComments(appKotlinSource(t))
 	ledger := ledgerIndex(readUnboundLedger(t))
 
-	for _, verb := range unledgeredVerbs(verbs, kotlin, ledger) {
+	for _, verb := range unledgeredVerbs("App", verbs, kotlin, ledger) {
 		t.Errorf("swarmmobile.App.%s has NO production-Kotlin caller and no row in %s.\n"+
 			"A bound verb with no caller is this phase's standing defect class: it compiles, its "+
 			"Go tests pass, and the app a user installs cannot reach it -- the Go toolchain never "+
@@ -405,6 +504,58 @@ func TestBoundVerbs_EveryBoundVerbIsCalledFromProductionKotlinOrLedgered(t *test
 			"The check looks for `.%s(` or `.%s(` in production Kotlin with comments stripped.",
 			verb, mustRel(t, unboundLedgerPath(t)), verb,
 			verb, strings.ToLower(verb[:1])+verb[1:])
+	}
+}
+
+// TestBoundVerbs_EveryMethodOnEveryOtherBoundTypeIsCalledOrLedgered is the SAME question over
+// the receivers the ledger never asked it about.
+//
+// THE LEDGER WAS HARDCODED TO `App`, and four bound methods lived in the blind spot it left:
+//
+//	SessionList.Stale       PB-APP-8 at PB-APP-2's screen. TriageInboxTest carries the comment
+//	                        "this is the assertion that makes swarmmobile.SessionList.Stale
+//	                        reach a user" -- and it did not: the assertion is driven by
+//	                        TriageInbox.from's `journalStale` PARAMETER, which FacadeBridge
+//	                        filled from App.StreamState. The handle's own verdict, which the Go
+//	                        doc says rides on the handle precisely so a caller cannot forget to
+//	                        ask, was never read.
+//	JournalPage.Stale       the same fact for PB-APP-3's chronology, also never read.
+//	JournalPage.NextCursor  so journal paging could not advance: FacadeBridge.journal took an
+//	                        `afterCursor` and returned rows with no way to compute the next one.
+//	UndeliveredList.Dropped PB-INPUT-1's overflow count.
+//
+// Every one of them is the standing defect class on a receiver the control did not look at.
+func TestBoundVerbs_EveryMethodOnEveryOtherBoundTypeIsCalledOrLedgered(t *testing.T) {
+	byType := boundTypeMethods(t)
+	if len(byType) < boundTypeFloor {
+		t.Fatalf("the golden scan found %d bound types with methods, want at least %d.\n"+
+			"The facade has not shrunk; this file has stopped reading "+
+			"mobile/testdata/exported_surface.golden, and a ledger checked against a surface of "+
+			"nothing passes vacuously.\nfound: %v", len(byType), boundTypeFloor, byType)
+	}
+	kotlin := stripKotlinComments(appKotlinSource(t))
+	ledger := ledgerIndex(readUnboundLedger(t))
+
+	total := 0
+	for _, owner := range nonAppBoundTypes(byType) {
+		methods := byType[owner]
+		total += len(methods)
+		for _, m := range unledgeredVerbs(owner, methods, kotlin, ledger) {
+			t.Errorf("swarmmobile.%s.%s has NO production-Kotlin caller and no row in %s.\n"+
+				"A bound method with no caller is this phase's standing defect class, and the "+
+				"handle types are where it hid longest: the ledger only ever asked about the "+
+				"`App` receiver, so a fact the facade goes to the trouble of carrying -- a stale "+
+				"roster, a page cursor, a dropped-input count -- could be dropped on the floor by "+
+				"the adapter with every check green.\n"+
+				"Either read it from production Kotlin, or add a `%s.%s` row saying why it is "+
+				"deliberately unbound.\n"+
+				"The check looks for `.%s(` or `.%s(` in production Kotlin with comments stripped.",
+				owner, m, mustRel(t, unboundLedgerPath(t)), owner, m, m, gobindJavaName(m))
+		}
+	}
+	if total < nonAppMethodFloor {
+		t.Fatalf("the golden scan found %d methods on non-App bound types, want at least %d",
+			total, nonAppMethodFloor)
 	}
 }
 
@@ -447,8 +598,12 @@ func TestBoundVerbs_EveryBridgeMethodIsReachableOrLedgered(t *testing.T) {
 // TestBoundVerbs_TheLedgerCannotOutliveTheSymbolsItExcuses is the rot check. A ledger nobody
 // can invalidate is a file that only ever grows.
 func TestBoundVerbs_TheLedgerCannotOutliveTheSymbolsItExcuses(t *testing.T) {
+	byType := boundTypeMethods(t)
 	declared := append(qualify("App", boundAppVerbs(t)),
 		qualify("FacadeBridge", facadeBridgeMethods(t))...)
+	for _, owner := range nonAppBoundTypes(byType) {
+		declared = append(declared, qualify(owner, byType[owner])...)
+	}
 	rows := readUnboundLedger(t)
 
 	for _, r := range staleLedgerRows(declared, rows) {
@@ -520,7 +675,7 @@ class PhoneSurface(private val app: App) {
 	verbs := []string{"Roster", "SubscribeJournal", "AttachDebugger"}
 
 	t.Run("an added verb with no caller and no row fails", func(t *testing.T) {
-		got := unledgeredVerbs(verbs, kotlin, map[string]ledgerRow{})
+		got := unledgeredVerbs("App", verbs, kotlin, map[string]ledgerRow{})
 		if len(got) != 1 || got[0] != "AttachDebugger" {
 			t.Fatalf("the check reported %v, want exactly [AttachDebugger].\n"+
 				"A verb added to the facade and called by nothing must be reported. If this "+
@@ -533,7 +688,7 @@ class PhoneSurface(private val app: App) {
 		ledger := map[string]ledgerRow{
 			"App.AttachDebugger": {Symbol: "App.AttachDebugger", Reason: "x"},
 		}
-		if got := unledgeredVerbs(verbs, kotlin, ledger); len(got) != 0 {
+		if got := unledgeredVerbs("App", verbs, kotlin, ledger); len(got) != 0 {
 			t.Fatalf("the check reported %v over a ledgered verb; the ledger is the escape "+
 				"hatch and it must work, or the only way to add a verb is to wire it the same "+
 				"day", got)
@@ -544,10 +699,24 @@ class PhoneSurface(private val app: App) {
 		ledger := map[string]ledgerRow{
 			"FacadeBridge.AttachDebugger": {Symbol: "FacadeBridge.AttachDebugger", Reason: "x"},
 		}
-		if got := unledgeredVerbs(verbs, kotlin, ledger); len(got) != 1 {
+		if got := unledgeredVerbs("App", verbs, kotlin, ledger); len(got) != 1 {
 			t.Fatalf("the check reported %v; a row about a bridge method must not excuse a "+
 				"facade verb that happens to share its name, or one row silences two symbols",
 				got)
+		}
+	})
+
+	// A row about the SAME method name on ANOTHER bound type must not excuse it either. The
+	// handle types collide with App by construction -- Count, At and Stale all appear on more
+	// than one -- so an unnamespaced lookup would let one row silence three receivers.
+	t.Run("a row on another bound type does not excuse it", func(t *testing.T) {
+		ledger := map[string]ledgerRow{
+			"SessionList.Stale": {Symbol: "SessionList.Stale", Reason: "x"},
+		}
+		got := unledgeredVerbs("JournalPage", []string{"Stale"}, "", ledger)
+		if len(got) != 1 {
+			t.Fatalf("the check reported %v; a row about SessionList.Stale must not excuse "+
+				"JournalPage.Stale, which is a different fact about a different stream", got)
 		}
 	})
 
@@ -637,6 +806,56 @@ func TestBoundVerbs_TheMatcherReadsBothSpellingsAndNothingElse(t *testing.T) {
 	if callsBoundVerb(commented, "TerminalWatch") {
 		t.Errorf("a commented-out call satisfies the check.\n"+
 			"stripKotlinComments left: %q", commented)
+	}
+}
+
+// TestBoundVerbs_TheJavaSpellingLowersTheWholeLeadingAcronym is the mutation for the matcher's
+// OTHER half, and it is the one the old model failed.
+//
+// This file modelled gobind's Java spelling as `ToLower(name[:1]) + name[1:]` -- a first-letter
+// fold. gobind (golang.org/x/mobile/bind.lowerFirst) lowers the WHOLE leading upper-case run,
+// keeping its last character upper-cased only when a lower-case letter follows. The two models
+// disagree on exactly one shape: a name that begins with an acronym.
+//
+// It was not a latent hazard. `swarmmobile.Pairing` exports `SAS()`, which binds as `sas()`,
+// and PairingSurface calls `live.sas()` on the comparison screen -- so the first extension of
+// this ledger past the `App` receiver would have reported a verb the app calls on every pairing
+// as UNCALLED, and the repair a reader reaches for is a ledger row excusing live code.
+//
+// The synthetic verb below is the general case, so the fence does not depend on the facade
+// keeping a leading-acronym method.
+func TestBoundVerbs_TheJavaSpellingLowersTheWholeLeadingAcronym(t *testing.T) {
+	for _, tc := range []struct{ goName, java string }{
+		{"Roster", "roster"},                     // a run of one: unchanged by either model
+		{"TerminalWatch", "terminalWatch"},       // ditto, and the shape the file already knew
+		{"SAS", "sas"},                           // the live instance: Pairing.SAS
+		{"URLPolicy", "urlPolicy"},               // the synthetic acronym-leading verb
+		{"HTTPRelayDial", "httpRelayDial"},       // a longer run, still one word boundary
+		{"ID", "id"},                             // the whole name is the run
+		{"SetEventListener", "setEventListener"}, // regression: no acronym at all
+	} {
+		t.Run(tc.goName, func(t *testing.T) {
+			if got := gobindJavaName(tc.goName); got != tc.java {
+				t.Errorf("gobindJavaName(%q) = %q, want %q (golang.org/x/mobile/bind.lowerFirst)",
+					tc.goName, got, tc.java)
+			}
+			// The point of the model is the matcher, so assert the matcher too: the call site a
+			// correct implementation contains is the JAVA one, and it must be recognised.
+			if !callsBoundVerb("app."+tc.java+"(x)", tc.goName) {
+				t.Errorf("callsBoundVerb(%q, %q) = false.\n"+
+					"That is a verb the app calls reported as uncalled, whose tempting repair is "+
+					"a ledger row excusing live code", "app."+tc.java+"(x)", tc.goName)
+			}
+			// And the first-letter fold this file used to carry must NOT be what is matched,
+			// or the mutation above passes for the wrong reason.
+			if fold := strings.ToLower(tc.goName[:1]) + tc.goName[1:]; fold != tc.java {
+				if callsBoundVerb("app."+fold+"(x)", tc.goName) {
+					t.Errorf("callsBoundVerb accepts %q, which gobind never emits. A matcher that "+
+						"accepts a spelling no binding contains reports a verb as called on the "+
+						"strength of a call site that cannot compile", "app."+fold+"(")
+				}
+			}
+		})
 	}
 }
 

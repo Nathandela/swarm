@@ -102,7 +102,12 @@ class TriageInboxTest {
      * an inbox drawn while that stream has an unrepaired hole may be missing a session, an exit
      * or a needs_input. It must not be presented as live.
      *
-     * This is the assertion that makes swarmmobile.SessionList.Stale reach a user.
+     * IT IS HALF OF WHAT MAKES swarmmobile.SessionList.Stale REACH A USER, and it used to claim
+     * to be all of it. This test drives `journalStale`, which is a PARAMETER: it proves the
+     * model does the right thing with the fact, and nothing about whether the fact arrives. It
+     * did not -- `SessionList.Stale` was called by no Kotlin at all, and FacadeBridge filled the
+     * parameter from a separate `App.StreamState` read. The other half is FacadeBridge.triageInbox
+     * reading the handle, fenced by android/gate/boundverbledger_test.go.
      */
     @Test
     fun `a roster built over a stale journal is never presented as live`() {

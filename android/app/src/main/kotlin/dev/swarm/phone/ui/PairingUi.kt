@@ -33,11 +33,18 @@ enum class ScannerState {
 enum class SasAnswer { MATCHES, DOES_NOT_MATCH }
 
 /**
- * Every step a pairing attempt can be in, including all five of PB-PAIR-5's terminal states.
+ * Every step a pairing attempt can be in, including every one of PB-PAIR-5's terminal states.
  *
  * COLLAPSING THE TERMINALS INTO ONE "pairing failed" is what the requirement exists to
  * prevent: the screen could then only show an error string beside it, which is the opaque
- * error, and three of these need genuinely different next steps from the user.
+ * error, and each of these needs a genuinely different next step from the user.
+ *
+ * THE SET IS THE CORE'S, NOT THIS FILE'S. mobile/pairing.go owns the state alphabet and
+ * android/gate/pairingstates_test.go compares the two, because they drifted silently once:
+ * PB-PAIR-5's 2026-07-25 amendment retired `already-paired` and substituted
+ * `different_machine`, the Go side followed it, and this enum did not -- so the state the
+ * amendment created was the one state with no step, and the user got the generic
+ * pairing-failed message for it. `rate_limited` and `failed` had never had a step either.
  */
 enum class PairingStep {
     /** No attempt in progress. The scanner is offered. */
@@ -76,8 +83,32 @@ enum class PairingStep {
     /** The code was scanned after it expired. */
     QR_EXPIRED,
 
-    /** The machine already has this device registered. */
-    ALREADY_PAIRED,
+    /**
+     * The QR belonged to a machine OTHER than the one this phone is pinned to.
+     *
+     * PB-PAIR-5's fifth terminal state since the 2026-07-25 amendment, replacing the retired
+     * `already-paired`. It is decided MID-HANDSHAKE, because PB-PAIR-7 kept the machine's Noise
+     * static out of the QR and nothing before msg2 knows which machine a code belongs to.
+     *
+     * Nothing was joined and NOTHING WAS LOST: the guard exists because `pin()` used to assign
+     * the machine identity unconditionally, so a phone paired to A that scanned B's code
+     * silently re-pinned to B and abandoned A -- v1 is single-machine, so the user's first sign
+     * of it was an empty roster.
+     */
+    DIFFERENT_MACHINE,
+
+    /** The relay refused the attempt under its own per-source budget. Retryable, later. */
+    RATE_LIMITED,
+
+    /**
+     * The handshake failed for a reason none of the states above name.
+     *
+     * It is the LAST resort and not a bucket: every condition the core can distinguish has its
+     * own value above, and this one exists so that a failure the core could not classify still
+     * lands on a step rather than falling through `stepOf` to the generic error router --
+     * which is what happened to `different_machine` and `rate_limited` before this slice.
+     */
+    FAILED,
 }
 
 /**
@@ -264,7 +295,9 @@ object PairingFlow {
         PairingStep.SAS_MISMATCH,
         PairingStep.RENDEZVOUS_TIMEOUT,
         PairingStep.QR_EXPIRED,
-        PairingStep.ALREADY_PAIRED,
+        PairingStep.DIFFERENT_MACHINE,
+        PairingStep.RATE_LIMITED,
+        PairingStep.FAILED,
         -> true
     }
 
@@ -311,9 +344,22 @@ object PairingFlow {
         PairingStep.QR_EXPIRED ->
             "That code has expired. Ask your machine for a new one."
 
-        PairingStep.ALREADY_PAIRED ->
-            "Your machine already has this device registered. Remove it there before pairing " +
-                "this phone again."
+        // It names the CAUSE and then says nothing changed, in that order. Both halves are
+        // load-bearing: retrying the same code fails the same way, and the defect this state
+        // closes used to abandon the pairing the user already had -- so a message that does not
+        // say the old one is intact leaves them believing it happened.
+        PairingStep.DIFFERENT_MACHINE ->
+            "That code belongs to a different machine from the one this phone is paired with. " +
+                "Nothing changed, and your existing pairing is intact. Scan the code from your " +
+                "own machine."
+
+        PairingStep.RATE_LIMITED ->
+            "Too many pairing attempts from here. Wait a minute, then ask your machine for a " +
+                "new code and try again."
+
+        PairingStep.FAILED ->
+            "The pairing did not finish and nothing was joined. Ask your machine for a new " +
+                "code and try again."
     }
 
     private fun stepOnly(step: PairingStep) = PairingAttempt(

@@ -25,9 +25,15 @@
 #   checker; the check matches names. It is recorded here rather than left to be discovered a
 #   seventh time.
 #
+# THE LEDGER COVERS EVERY BOUND RECEIVER, not just `App`. It was hardcoded to the `App`
+# receiver until 2026-07-26, and four bound methods lived in the blind spot that left --
+# SessionList.Stale, JournalPage.Stale, JournalPage.NextCursor and UndeliveredList.Dropped, each
+# a fact the facade goes to the trouble of carrying and the adapter dropped on the floor. The
+# first three are now read by FacadeBridge; the rows below are what is left.
+#
 # Columns: symbol <TAB> reason
-# Symbols are namespaced: App.<Verb> for a bound facade verb, FacadeBridge.<method> for the one
-# adapter between the screen models and the facade.
+# Symbols are namespaced: App.<Verb> and <Handle>.<Method> for a bound facade method,
+# FacadeBridge.<method> for the one adapter between the screen models and the facade.
 #
 #symbol	reason
 App.ClearUndeliveredInputs	PB-INPUT-1's undelivered-input ledger has no screen. The acknowledgement half cannot be wired before the list it acknowledges, and neither exists on the minimal surface. Pairs with App.UndeliveredInputs.
@@ -44,5 +50,7 @@ App.Launch	PB-APP-6's launch screen: MachineAndLaunch is the model, and the surf
 App.KillSwitchEngaged	PB-APP-5/PB-SEC-6, READ ONLY by design -- the phone may never SET the switch. It exists so a CodeKillSwitch refusal is legible, and legibility needs a place to put it: the surface routes refusals through PB-APP-9's taxonomy and has no machine-status pane.
 FacadeBridge.journal	PB-APP-3's activity list has no screen. The journal SUBSCRIPTION is wired -- App.SetEventListener and App.SubscribeJournal now run, so an event redraws the roster -- but nothing renders the rows themselves, and inventing a display format in PhoneSurface would be a second copy of a model. Carries App.ReadJournal with it.
 FacadeBridge.clockBanner	PB-TIME-1's verdict banner. Reaching it means putting a clock-skew notice on a surface whose scope ruling is "a real window with real controls and no more"; it belongs with the machine pane. Carries App.ClockVerdict with it.
-FacadeBridge.streamView	PB-APP-8's per-stream stale/repairing pair. TriageInbox already asks App.StreamState for the journal stream, which is what the roster needs; this is the four-channel view and it has no screen. Carries App.ResyncPending with it.
+FacadeBridge.streamView	PB-APP-8's per-stream stale/repairing pair. The roster gets the journal stream's verdict off SessionList.Stale, which is the same fact one hop closer; this is the four-channel view with the in-flight repair beside it, and it has no screen. Carries App.ResyncPending with it.
 FacadeBridge.sessionRow	One row BY ID, for a session detail screen. The surface renders the roster through TriageInbox and picks its target from the first row, so it never looks a session up by id. Carries App.Session with it.
+UndeliveredList.Dropped	PB-INPUT-1's overflow count: how many undelivered records were discarded because the ledger itself is bounded. It cannot be wired before the list it counts, and App.UndeliveredInputs has no screen (see its own row) -- a count with no list beside it is a number the user cannot act on. Pairs with App.UndeliveredInputs and App.ClearUndeliveredInputs.
+Pairing.DeadlineMillis	PB-PAIR-4's countdown, and the one row here that is a DECISION rather than a missing screen. The 60 s rendezvous TTL is the RELAY's and the phone's own deadline is derived from it, so a ticking display would be the phone asserting an expiry only the relay can enforce -- and PairingStep.RENDEZVOUS_TIMEOUT already tells the user the same thing at the moment it becomes true, with a next step attached.
