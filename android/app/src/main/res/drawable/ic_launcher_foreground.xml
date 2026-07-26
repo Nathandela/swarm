@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon's foreground layer: a shell prompt, `>` and a cursor rule.
+
+  WHY THIS MARK. The product is a terminal multi-agent tracker, and the prompt chevron is the
+  one symbol that reads as "terminal" at 48dp without any detail to lose. It carries no text,
+  so it needs no localisation and no font, and it is a single stroke weight, so it survives
+  the monochrome and themed-icon treatments Android applies without becoming a smudge.
+
+  WHY IT IS A VECTOR AND WHY THERE ARE NO PNG BUCKETS. minSdk is 33 and adaptive icons landed
+  at 26, so mipmap-anydpi-v26 resolves on every device this app supports; a density ladder of
+  rasterised copies would be twelve files that can disagree with each other and with this one.
+
+  GEOMETRY. The canvas is the adaptive 108x108dp. Everything here sits inside the 66dp safe
+  circle the launcher mask is guaranteed not to clip: the drawn extent including stroke width
+  spans roughly x 34.5..75.5 and y 38.5..69.5, whose furthest corner is about 26.5dp from the
+  centre against the 33dp the safe circle allows. A mark that merely looks centred is one that
+  a round mask on someone else's launcher crops.
+
+  COLOUR IS A TOKEN, NOT A VALUE. swarm_text_primary is the same origin every other colour in
+  this app comes from (android/design-tokens.tsv, PB-TOK-1). An icon-only literal would be a
+  colour that entered the product without passing through that origin, which is precisely what
+  the token gate exists to refuse.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The chevron. -->
+    <path
+        android:pathData="M38,42 L52,54 L38,66"
+        android:strokeColor="@color/swarm_text_primary"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- The cursor rule, on the prompt's baseline. -->
+    <path
+        android:pathData="M59,66 L72,66"
+        android:strokeColor="@color/swarm_text_primary"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+</vector>
