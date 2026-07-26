@@ -187,7 +187,12 @@ type Server struct {
 	// cache, not the record: the store is what survives a restart.
 	tokens     map[string]string
 	rendezvous map[string]*rdvSlot
-	burned     map[string]bool // completed (single-use) rendezvous ids
+	// burned is rid -> the instant the burn may be forgotten: a rendezvous id that is
+	// spent, whether it COMPLETED or merely aged out (ADR-007 B47b). It is a window and
+	// not a tombstone because rendezvous_create carries no requireAuth, so a permanent
+	// entry is one an unauthenticated stranger can mint at will — a fix that traded the
+	// hijack below for memory exhaustion would not be a fix. See burnRendezvous.
+	burned map[string]time.Time
 	conns      map[*serverConn]struct{}
 	authRate   map[string]*rateWindow // pre-signature auth_init attempts, keyed by TRANSPORT SOURCE (ConnPerMin)
 	opsRate    map[string]*rateWindow // state-touching ops: pre-signature keyed by source, post-signature keyed by "rid:"+rid (OpsPerMin)
@@ -214,7 +219,7 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 		presence:    make(map[string]*presenceEntry),
 		tokens:      make(map[string]string),
 		rendezvous:  make(map[string]*rdvSlot),
-		burned:      make(map[string]bool),
+		burned:      make(map[string]time.Time),
 		conns:       make(map[*serverConn]struct{}),
 		authRate:    make(map[string]*rateWindow),
 		opsRate:     make(map[string]*rateWindow),
@@ -1219,10 +1224,10 @@ func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
 	now := sc.s.clk.Now()
 	sc.s.mu.Lock()
 	sc.s.purgeExpiredRendezvous(now)
-	// HI-1: never blindly overwrite. A burned (completed, single-use) id or a live
-	// slot is refused so the original creator's in-flight pairing is never
-	// orphaned or hijacked.
-	if sc.s.burned[req.ID] {
+	// HI-1: never blindly overwrite. A burned id — one that COMPLETED, or one whose slot
+	// aged out, which the purge above has just burned (ADR-007 B47b) — or a live slot is
+	// refused so the original creator's in-flight pairing is never orphaned or hijacked.
+	if sc.s.isBurned(req.ID, now) {
 		sc.s.mu.Unlock()
 		return sc.replyErr(codeRendezvousUsed)
 	}
@@ -1254,7 +1259,7 @@ func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
 	now := sc.s.clk.Now()
 	sc.s.mu.Lock()
 	defer sc.s.mu.Unlock()
-	if sc.s.burned[req.ID] {
+	if sc.s.isBurned(req.ID, now) {
 		return sc.replyErr(codeRendezvousUsed)
 	}
 	slot, ok := sc.s.rendezvous[req.ID]
@@ -1262,7 +1267,11 @@ func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
 		return sc.replyErr(codeRendezvousTTL)
 	}
 	if now.Sub(slot.createdAt) >= sc.s.cfg.RendezvousTTL {
-		delete(sc.s.rendezvous, req.ID)
+		// The claimer is told the truth it needs — the slot expired — and the id is spent
+		// on the way out. This is the SECOND site that drops a slot for age, and a fix
+		// applied only to purgeExpiredRendezvous would leave the very path the victim
+		// phone walks handing the label back to a stranger (ADR-007 B47b).
+		sc.s.burnRendezvous(req.ID, now)
 		return sc.replyErr(codeRendezvousTTL)
 	}
 	if slot.creator != nil && slot.claimer != nil {
@@ -1332,6 +1341,7 @@ func (sc *serverConn) handleRendezvousComplete(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	now := sc.s.clk.Now()
 	sc.s.mu.Lock()
 	slot, ok := sc.s.rendezvous[req.ID]
 	// HI-1: only a participant may burn the id, so a third party cannot burn a
@@ -1340,16 +1350,49 @@ func (sc *serverConn) handleRendezvousComplete(payload []byte) error {
 		sc.s.mu.Unlock()
 		return sc.replyErr(codeNotAuthorized)
 	}
-	delete(sc.s.rendezvous, req.ID)
-	sc.s.burned[req.ID] = true
+	sc.s.burnRendezvous(req.ID, now)
 	sc.s.mu.Unlock()
 	return sc.replyOK(map[string]any{})
+}
+
+// burnRendezvous spends a rendezvous id for burnWindow(). Caller holds s.mu.
+//
+// EXPIRY BURNS, IT DOES NOT MERELY FREE (ADR-007 B47b). handleRendezvousCreate's own
+// comment claims "a burned or live slot is refused so the original creator's in-flight
+// pairing is never orphaned or hijacked" — true of Complete and exactly false past TTL,
+// because expiry used to delete the slot and leave the label available. The machine's
+// QR is still on the owner's screen at that point (internal/skeleton caps its announced
+// window at this same TTL, but a screen does not blank itself), so an unauthenticated
+// stranger re-created the label, the next phone to scan claimed the STRANGER's slot, and
+// the real machine sat orphaned on Recv with no error at all.
+func (s *Server) burnRendezvous(id string, now time.Time) {
+	delete(s.rendezvous, id)
+	s.burned[id] = now.Add(s.burnWindow())
+}
+
+// burnWindow is how long a spent rendezvous id stays refused. One RendezvousTTL past the
+// burn: the QR that named the id was already dead when the slot expired, so a whole
+// further slot-lifetime of refusal is a generous margin, and it is bounded so the burn
+// set cannot grow without limit.
+func (s *Server) burnWindow() time.Duration { return s.cfg.RendezvousTTL }
+
+// isBurned reports whether id is inside its burn window. Caller holds s.mu.
+func (s *Server) isBurned(id string, now time.Time) bool {
+	until, ok := s.burned[id]
+	return ok && now.Before(until)
 }
 
 func (s *Server) purgeExpiredRendezvous(now time.Time) {
 	for id, slot := range s.rendezvous {
 		if now.Sub(slot.createdAt) >= s.cfg.RendezvousTTL {
-			delete(s.rendezvous, id)
+			s.burnRendezvous(id, now)
+		}
+	}
+	// Collect burns whose window has closed, so the set stays bounded by the burn
+	// window rather than by the process lifetime.
+	for id, until := range s.burned {
+		if !now.Before(until) {
+			delete(s.burned, id)
 		}
 	}
 }

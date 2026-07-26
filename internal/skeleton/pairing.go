@@ -17,12 +17,38 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/enroll"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
+	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// defaultPairTTL bounds a rendezvous when the request carries no explicit TTL. It is
-// advisory (the pair_start ExpiresAt the phone displays); the daemon's real gate is
-// the mandatory SAS confirm, not a wall clock.
+// defaultPairTTL bounds a rendezvous when the request carries no explicit TTL, and
+// pairWindow caps every announced expiry at the relay's authoritative slot lifetime.
+//
+// IT WAS 3 MINUTES AGAINST A 60-SECOND SLOT (ADR-007 B46). The old comment called this
+// expiry "advisory... the daemon's real gate is the mandatory SAS confirm, not a wall
+// clock". The SAS is indeed the gate for what a pairing MEANS, and it decides nothing
+// about whether the rendezvous still exists: past relay.Config.RendezvousTTL the slot is
+// purged, and this daemon went on printing an expiry two minutes into that gap with the
+// QR still on the owner's screen. That gap is the interval an expired rendezvous id can
+// be re-created in (B47b, fenced at the relay by burnRendezvous) -- so the announcement
+// is brought back inside the thing it announces rather than left to be caught downstream.
+//
+// The bound is the DEFAULT relay config's TTL because that is the only value a machine
+// can know: the deployed relay's own setting is not on any wire the daemon reads, and the
+// phone transcribes the same 60 s constant (mobile/pairing.go). Announcing SHORTER than a
+// relay that was tuned longer costs a retry; announcing longer is the defect above.
 const defaultPairTTL = 3 * time.Minute
+
+// pairWindow is the announced expiry for a requested TTL: the request, or the daemon
+// default when it asks for nothing, clamped to the relay slot.
+func pairWindow(requested time.Duration) time.Duration {
+	if requested <= 0 {
+		requested = defaultPairTTL
+	}
+	if slot := relay.DefaultConfig().RendezvousTTL; requested > slot {
+		return slot
+	}
+	return requested
+}
 
 // pairingConfig carries the machine-side pairing identity + enrollment material and
 // the rendezvous seam BeginPairing drives one pairing on. It is nil until provisioned
@@ -259,11 +285,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		result(res) // OUTSIDE lifecycleMu (round-5 finding 2): the owner-socket write cannot stall a revoke/pair
 	}()
 
-	ttl := time.Duration(req.TTLSeconds) * time.Second
-	if ttl <= 0 {
-		ttl = defaultPairTTL
-	}
-	expiresAt := now.Add(ttl)
+	expiresAt := now.Add(pairWindow(time.Duration(req.TTLSeconds) * time.Second))
 	return protocol.PairView{
 		QR:           qr,
 		RendezvousID: hex.EncodeToString(id[:]),
