@@ -322,7 +322,7 @@ func (r *s19Rig) openApp(relayURL string) *swarmmobile.App {
 	app, err := swarmmobile.NewApp(&swarmmobile.Config{
 		StateDir:  r.phoneDir,
 		RelayURL:  relayURL,
-		MachineID: r.sk.api.endpointID,
+		MachineID: "",
 	}, r.custody)
 	if err != nil {
 		r.t.Fatalf("swarmmobile.NewApp: %v", err)
@@ -665,6 +665,11 @@ func (r *s19Rig) LaunchFromPhone(script string, existing ...string) string {
 	if err != nil {
 		r.t.Fatalf("App.Launch: %v", err)
 	}
+	// PB-SYNC-2: the verdict is claimed BY OPERATION ID, so a reply the machine sends without
+	// one is unattributable -- phonecore drops it from the durable model and the op stays in
+	// flight for the life of the process. A launch that appears on the machine while this
+	// times out is that defect rather than a slow relay, which is why the machine's session
+	// list rides the failure.
 	r.Eventually("the phone's launch was answered by the machine", func() bool {
 		out, err := r.app.Outcome(op.OperationID)
 		if err != nil || !out.Resolved {
