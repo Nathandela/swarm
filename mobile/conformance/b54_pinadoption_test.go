@@ -167,24 +167,35 @@ func TestB54_ARePairingWithNoPinClearsTheOneThePhoneHeld(t *testing.T) {
 	app := s16UnpairedApp(t, dir, relayURL, custody)
 
 	// ---- control: the machine publishes a pin and the phone adopts it ----
+	//
+	// WAITED FOR, NOT READ INSTANTLY, and the reason is a happens-before this fence originally
+	// got wrong. Pairing.finish() sets the "paired" label under p.mu, UNLOCKS, and only then
+	// calls App.pin() -- so s16AwaitState(..., "paired") synchronises with the state machine
+	// and NOT with the durable write. Reading immediately after the label is a race the write
+	// normally wins on an idle machine and loses under `go test ./...`, which is exactly the
+	// 2-in-3 flake this fence showed. Proven rather than surmised: inserting a 200ms sleep
+	// between that unlock and pin() makes the instantaneous read fail every time.
+	//
+	// The wait is bounded and the property is unchanged: a product that never writes the pin
+	// times out here and fails.
 	want := sha256.Sum256([]byte("the relay this machine used to be behind"))
 	b54PairOnce(t, app, machine.offer(t, want[:]))
-	if got := b54PersistedPin(t, dir, custody); string(got) != string(want[:]) {
-		t.Fatalf("after a pairing that published a pin the phone holds %x, want %x.\n"+
-			"The rig never delivered a pin, so the assertion below would be vacuous", got, want)
-	}
+	eventually(t, "the phone never adopted the pin its machine published -- the rig delivered "+
+		"none, so the assertion below would be vacuous", func() bool {
+		return string(b54PersistedPin(t, dir, custody)) == string(want[:])
+	})
 
 	// ---- the fence: the SAME machine re-pairs publishing none ----
 	// This is `swarm remote init --relay-url X` without --relay-pin: the common case, since
 	// the flag is optional.
 	b54PairOnce(t, app, machine.offer(t, nil))
 
-	if got := b54PersistedPin(t, dir, custody); len(got) != 0 {
-		t.Fatalf("the phone still holds pin %x after re-pairing with a machine that published "+
-			"none.\nThat is ADR-007 B54's loop and it has no exit: every dial now fails "+
-			"ErrPinMismatch, the phone reports relay_untrusted, its remedy is \"pair this phone "+
-			"again\", and pairing again lands right back here. A completed pairing is "+
-			"SAS-confirmed and authenticated -- the machine's payload is its own statement about "+
-			"its own relay, and an absent pin is part of that statement", got)
-	}
+	eventually(t, "the phone still holds the pin it learned earlier, after re-pairing with a "+
+		"machine that published none.\nThat is ADR-007 B54's loop and it has no exit: every dial "+
+		"now fails ErrPinMismatch, the phone reports relay_untrusted, its remedy is \"pair this "+
+		"phone again\", and pairing again lands right back here. A completed pairing is "+
+		"SAS-confirmed and authenticated -- the machine's payload is its own statement about its "+
+		"own relay, and an absent pin is part of that statement", func() bool {
+		return len(b54PersistedPin(t, dir, custody)) == 0
+	})
 }
