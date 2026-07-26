@@ -775,36 +775,38 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | **S1b Protocol additions**: reconciliation frame, lease confirmation, reply correlation id | PB-SYNC-7 | opus | S1 |
 | **S2b Gateway outbound durability**: append budget, coalescing, delivery-unknown semantics, outbox | PB-GW-7, PB-GW-8 | opus | S2 |
 | **S3 QR renderer + payload** (machine-side; zero façade coupling — startable immediately) | PB-PAIR-1, **PB-PAIR-7** | opus | — |
-| S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-*, PB-OPS-4 | opus | — |
-| S5 Design tokens | PB-TOK-* | fable | — |
+| S4 Gateway supervision (3 states) + release artifacts | PB-LIFE-1..6, PB-OPS-4 | opus | — |
+| S5 Design tokens | PB-TOK-2, PB-TOK-3 | fable | — |
+| **S4b Gateway supervision: the revoked terminal state** (split from S4) | PB-LIFE-7 | opus | S4 |
 | **S6 Transport resilience + TLS** | PB-NET-2, 3, 4, 6, 7 | opus | S1 |
 | **S6b Low-latency input path**: request-id correlation + concurrent dispatch, both hops (ADR B7) | PB-NET-5 | opus | S6 |
-| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2, S2b** (PB-STATE-4's rollback authorities *are* PB-GW-1's inbound high-water and PB-GW-8's outbound ceilings, so neither can ship after it) |
+| **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2, S2b** (PB-STATE-4's rollback authorities *are* PB-GW-1's inbound high-water and PB-GW-8's outbound ceilings, so neither can ship after it), S1b |
 | **S7b Gateway age check** (split out: it depends on the phone seal change) | PB-GW-2 | opus | S2, S7 |
 | **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2** (sole owner; S19 contributes emulator evidence but does not own it) | opus | S6, S7 |
 | S9 Façade<->transport integration | PB-NET-1 | opus | S8 |
-| S10 Per-bucket resync + grant recovery | PB-SYNC-1..6, **PB-SYNC-8**, PB-KEY-3/4 | opus | S8, S9 |
-| S11 Input/lease semantics, coalescing, clock skew | PB-INPUT-*, PB-TIME-* | opus | S8 |
+| S10 Per-bucket resync + grant recovery | PB-SYNC-1..6, **PB-SYNC-8**, PB-KEY-3/4, **PB-KEY-10** | opus | S8, S9 |
+| S11 Input/lease semantics, coalescing, clock skew | PB-INPUT-1..6, PB-TIME-1..3 | opus | S8 |
 | S12 Push: trigger, seam rename, FCM sender, preference verb | PB-PUSH-0..3, 5..8, **PB-PUSH-10** (machine side) | opus | S0, S8 (PB-PUSH-8 needs a façade method + signed-action work) |
 
 **Stage 2 — Android**
 
 | Slice | Requirements | Model | Depends on |
 |---|---|---|---|
-| S13 Android skeleton + build + CI + runtime policy | PB-TOOL-*, PB-RUN-* | fable | S8 |
-| **S14 Key custody on Android** (resolves PB-KEY-2's homelessness) | PB-KEY-1, 2, 5, 6, 7, **8**; PB-SEC-1, 2 | opus | S13, S0, S7 *(PB-KEY-6's failable-`KeyStore` **signature** lands in S7 so S6/S7/S8 build against it once; only the Android implementation is here)* |
+| S13 Android skeleton + build + CI + runtime policy | PB-TOOL-1..7, PB-RUN-1..5, **PB-TOK-4** *(reassigned from S5)* | fable | S8 |
+| **S14 Key custody on Android** (resolves PB-KEY-2's homelessness) | PB-KEY-1, 2, 5, 6, 7, **8**; PB-SEC-1, 2 | opus | S13, S0, S7 *(PB-KEY-6's failable-`KeyStore` **signature** lands in S7 so S6/S7/S8 build against it once; only the Android implementation is here)*, S14a |
+| **S14a Epoch key rotation on Android custody** (split from S14) | PB-KEY-9 | opus | S7 |
 | S15 State sealing + backup exclusion (breaks the v2 cycle) | PB-STATE-6/9, PB-SEC-10 | opus | S14, S7 |
-| S16 Screens + phone-side pairing | PB-APP-*, PB-PAIR-2..6, PB-SAS-3 | fable, opus review | S13, S5, S3, S10, S11, S12 |
-| S17 Push receiver | PB-PUSH-4, **PB-PUSH-9** (sole owner: token lifecycle is client-side by definition) | fable | S13, S12, S14 |
-| S18 App security hardening | PB-SEC-3..8, 11..14 *(no PB-SEC-9 exists; PB-SEC-10 is owned by S15)* | opus | S16, S17 |
+| S16 Screens + phone-side pairing | PB-APP-1..10, PB-PAIR-2..6, PB-SAS-3, **PB-TOK-1** *(reassigned from S5)* | fable, opus review | S13, S5, S3, S10, S11, S12, S14 |
+| S17 Push receiver | PB-PUSH-4, **PB-PUSH-9** (sole owner: token lifecycle is client-side by definition) | fable | S13, S12, S14, S15 |
+| S18 App security hardening | PB-SEC-3..8, 11..14 *(no PB-SEC-9 exists; PB-SEC-10 is owned by S15)* | opus | S16, S17, S4 |
 | **S18b Fail-closed recovery** (was homeless: needs both the fail-closed path and the unblock) | PB-STATE-10 | opus | S7, S10, S16 |
 
 **Stage 3 — integration**
 
 | Slice | Requirements | Model | Depends on |
 |---|---|---|---|
-| S19 E2E + emulator smoke | PB-E2E-1..4 | opus | S4, S7b, S9, S10, S11, S15, S16, S17, S18, S18b |
-| S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3 *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
+| S19 E2E + emulator smoke | PB-E2E-1..4 | opus | S4, S4b, S6b, S7b, S9, S10, S11, S15, S16, S17, S18, S18b |
+| S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3, **PB-OPS-5** *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
 | S21 Physical-handset gate (deferred; no device here) | PB-E2E-5 | — | S19 |
 
 **Ownership is machine-checked, not prose.** The authoritative assignment lives in
