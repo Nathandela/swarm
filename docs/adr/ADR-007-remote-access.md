@@ -3263,3 +3263,61 @@ drops. **Isolation is not sufficient to discriminate a load artefact from a regr
 load is sustained** — the discriminator is re-running BOTH arms at the same load, which is what
 finally settled it. Residual 4.7's rule about the shared tree has a sibling here: the shared
 MACHINE is not observable either.
+
+---
+
+### B65 — the app allows screenshots: PB-SEC-4 withdrawn by product decision, and inverted rather than deleted
+
+**Decision, made by the owner on 2026-07-26:** the shipped app permits screenshots and screen
+recording. `FLAG_SECURE` and `setRecentsScreenshotEnabled(false)` are removed from
+`SecureWindow.protect()`.
+
+**Why this is defensible rather than a concession.** `SecureWindow.kt`'s own documentation
+already conceded the limits of what was being bought: *"FLAG_SECURE is a platform hint the
+compositor honours. It does not stop a camera pointed at the screen, it is not attested, and an
+accessibility service can still read the rendered screen."* PB-SEC-12's own gate says the same
+thing twice in prose. So the protection stops an app that can already screenshot, and stops
+nothing that has accessibility access or a second camera. Against that, it blocks users of a
+DEVELOPER TOOL from sharing terminal output, which is an ordinary thing to want and which the
+product exists to put in front of them.
+
+**The two arguments that were specific, and were answered rather than overwritten.**
+`android/window-security.tsv` did not argue generically; two of its seven rows carried real
+reasoning, and a decision that ignored them would be worse than the original.
+
+- **The pairing screen shows the SAS.** The row's argument stands on its own terms: a screenshot
+  of the SAS hands an interceptor the one value the comparison exists to protect. What makes the
+  trade acceptable is that the SAS is live for the seconds of a ceremony bounded at 60 s, the
+  comparison is made against a screen the owner is looking at, and an attacker positioned to
+  screenshot the handset mid-ceremony has already lost the ceremony's premise. It is a narrowing
+  of margin, not the removal of a control — and it is recorded as such rather than waved away.
+- **The terminal peek shows session content sealed at rest by S15 and kept out of logs by
+  PB-SEC-3.** Allowing screenshots does undo one layer of that, one level up. The layers below it
+  are unchanged, and they are the ones that survive device loss, which is the threat those
+  requirements were written against; a screenshot requires an adversary already executing on the
+  unlocked handset.
+
+**Inverted, not deleted, and this is the load-bearing part.** Both the requirement and its gate
+survive with their polarity reversed. The gate now asserts that NO source file names
+`FLAG_SECURE` or `setRecentsScreenshotEnabled`, keeps the bidirectional TSV join, and asserts the
+rows read `false`. Reinstating the flag therefore FAILS a gate.
+
+That is deliberate. A requirement deleted leaves nothing behind; a requirement inverted keeps the
+one property the original actually bought — that this is a DECISION and not drift. It also means
+the next person to add `FLAG_SECURE` back, for what will feel at the time like an obvious security
+improvement, is made to read this entry first. Both directions are mutation-proven: re-adding the
+flag fails the gate by name, and flipping a TSV row to `true` fails it too.
+
+**PB-SEC-12 is untouched.** It is UI-redress: overlay and tapjacking protection on gated actions,
+clipboard hygiene, and documented IME/accessibility limits. It has no screenshot clause.
+`filterTouchesWhenObscured` on the destructive and authorising controls stays exactly as it was,
+and conflating the two would have removed a defence nobody asked to remove.
+
+**A note on how this arrived, because the sequence matters.** The need surfaced as a build
+problem — Play requires 2-8 phone screenshots and the flag made every capture black — and the
+first remedy briefed was a debug-only guard. That would have been the wrong shape: it keeps a
+control the owner does not want, adds a build-variant branch to a security-relevant path, and
+requires a gate asserting the guard is exactly `BuildConfig.DEBUG` to stop it rotting. The owner's
+ruling replaced a workaround with a decision. **Recorded because the workaround was already
+briefed and half-built when it was cancelled** — the tempting move under sprint pressure is the
+one that unblocks the immediate task without settling the question underneath it.
