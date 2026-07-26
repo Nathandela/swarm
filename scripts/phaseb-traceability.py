@@ -48,9 +48,11 @@ NOT_MET = {
                 "ledger have no production callers and there is no BiometricPrompt, so the "
                 "four per-use ops are gated by the same 60s timed window as input, which is "
                 "the downgrade the policy file exists to prevent (ADR-007 B51)",
-    "PB-E2E-2": "the emulator smoke has never run -- its own evidence file disclaims it "
-                "and no log or screenshot exists; counted shipped only because evidence "
-                "is measured per SLICE, not per requirement (ADR-007 B38)",
+    "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
+                "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
+                "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "
+                "screen renders. PB-E2E-2 and PB-KEY-8 are in direct conflict; "
+                "measured by running it (ADR-007 B56)",
 }
 
 
