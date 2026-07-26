@@ -621,7 +621,7 @@ keeps only what the handset demonstration actually needs; the rest returns to Ph
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| PB-OPS-5 | **The certificate pin must survive renewal.** S6 pins a leaf DER, so on Android — where the trust-root source is pinning-only — **every Let's Encrypt renewal (60-90 days) breaks the handset**. PB-OPS-1 offers "a pinned OR real certificate", but under pinning-only the "real certificate" half does not exist: a publicly-trusted cert must still be pinned. Pinning the **SPKI hash** rather than the full leaf DER survives renewal at the same security level. | Runbook states the renewal hazard; either the pin is SPKI-based or the operational consequence is documented and accepted. |
+| PB-OPS-5 | **The certificate pin must survive renewal.** S6 pins a leaf DER, so on Android — where the trust-root source is pinning-only — **every Let's Encrypt renewal (60-90 days) breaks the handset**. PB-OPS-1 offers "a pinned OR real certificate", but under pinning-only the "real certificate" half does not exist: a publicly-trusted cert must still be pinned. Pinning the **SPKI hash** rather than the full leaf DER survives renewal at the same security level — **AMENDED 2026-07-26: only if the renewal REUSES THE KEY.** certbot generates a fresh keypair per renewal by default, and a fresh key is a fresh SPKI, so an unqualified SPKI pin breaks on exactly the cadence it was adopted to survive. It is a **necessary half**; the operator must also configure key reuse and the runbook must say so. The S20 implementer declined to restate the claim and pinned it the other way — `TestPBOPS5_SPKIPinIsBrokenByARenewalThatROTATESTheKey` asserts the pin **failing** on a rekeyed renewal. **Also note the premise has moved**: ADR-007 B34 records that no production caller reaches `DialSecure`, so neither pin is on the path a phone takes and the live defect is the absent policy, not renewal fragility. | Runbook states the renewal hazard; either the pin is SPKI-based or the operational consequence is documented and accepted. |
 | PB-OPS-1 | A **local/TLS relay runbook sufficient for the handset demonstration** — enough to stand up a reachable relay with a pinned or real certificate. Production deployment, VPS provisioning and image publishing return to Phase C. | Runbook executed once with an artifact as evidence. |
 | PB-OPS-2 | Operator runbook for the flows Phase B introduces: install, pair, revoke, kill switch, device loss, push configuration. | Each step executed once during verification. |
 | PB-OPS-3 | Honest metadata disclosure covering relay operator and push provider. | ADR section consistent with PB-PUSH-3 and ADR-007 D11. |
@@ -687,7 +687,7 @@ checks, TLS renewal automation, resource limits, and cross-version compatibility
 | Handset attack surface incomplete | codex#11 | PB-SEC-10..14 |
 | Vibe criteria | codex#14, opus, fable F12 | §9 |
 | ABI set / production-ready escape hatch | codex#12 | PB-TOOL-2, §10, §13 |
-| Relay ops floor | codex#13 | PB-OPS-1..4 (v3's PB-OPS-5 was deleted by the §6.18 scope correction; this row pointed at a phantom id) |
+| Relay ops floor | codex#13 | PB-OPS-1..5 (**corrected 2026-07-26**: the note claiming v3's PB-OPS-5 was deleted and that this row pointed at a phantom id is STALE — PB-OPS-5 is live at §6.17, owned by S20, and delivered) |
 | Sequencing | all three | §11 |
 
 ### Round 2

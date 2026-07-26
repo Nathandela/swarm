@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 130 |
-| Evidenced (measured on disk) | 130 |
-| Remaining | 13 |
+| Shipped (asserted by hand) | 142 |
+| Evidenced (measured on disk) | 142 |
+| Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
 ## Every requirement
@@ -44,15 +44,15 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-BIND-6 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-BIND-7 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-DOC-1 | S0 | shipped | `docs/adr/ADR-007-remote-access.md` |
-| PB-DOC-2 | S20 | pending | — |
-| PB-DOC-3 | S20 | pending | — |
-| PB-DOC-4 | S20 | pending | — |
+| PB-DOC-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-DOC-3 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-DOC-4 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-5 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
-| PB-DOC-7 | S20 | pending | — |
-| PB-E2E-1 | S19 | pending | — |
-| PB-E2E-2 | S19 | pending | — |
-| PB-E2E-3 | S19 | pending | — |
-| PB-E2E-4 | S19 | pending | — |
+| PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-2 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
 | PB-GW-1 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
 | PB-GW-2 | S7b | shipped | `docs/verification/remote-phaseB-s7b-evidence.md` |
@@ -92,11 +92,11 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-OPS-1 | S20 | pending | — |
-| PB-OPS-2 | S20 | pending | — |
-| PB-OPS-3 | S20 | pending | — |
+| PB-OPS-1 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-OPS-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-OPS-3 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-4 | S4 | shipped | `docs/verification/remote-phaseB-s4-evidence.md` |
-| PB-OPS-5 | S20 | pending | — |
+| PB-OPS-5 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-PAIR-1 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PAIR-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
