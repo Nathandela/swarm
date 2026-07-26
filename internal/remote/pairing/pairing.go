@@ -353,7 +353,15 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// presence only: this package does not import relay and cannot verify the signature,
 	// and the relay itself is the authority that must — a check here would be advisory
 	// and a check there is the fence.
+	//
+	// It DECLINES rather than merely returning, for the same reason the confirm gate below
+	// does: the device is parked on rt.Recv waiting for this machine's decision, and a
+	// machine that walks away silently leaves it there until its own deadline elapses —
+	// reporting a timeout for what is actually a refusal, and holding the rendezvous
+	// unburned meanwhile. Found by TestB38_AMachineRefusesAMsg3WithNoConsentBeforeTheConfirm,
+	// which hung before this line existed.
 	if len(devPayload.ConsentSig) == 0 {
+		_ = m.sendDecision(ctx, sess, rt, label, false)
 		return nil, ErrNoConsent
 	}
 	deviceStatic := sess.PeerStatic()
