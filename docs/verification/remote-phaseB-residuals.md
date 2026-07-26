@@ -182,7 +182,45 @@ moves it to device-protected storage so the wake path can run before first unloc
 push-woken app — the rules need a `device_root` exclusion too. **Not added speculatively; AGP lint
 could not be run here to confirm the domain token.** `S15`.
 
-### 2.7 The wake KEK is not user-authentication-gated *(BY DESIGN)*
+### 2.7 The Keystore read-back never compares `insideSecureHardware` *(OPEN — found in S20)*
+
+**What.** `CustodyProvisioning.provision`
+(`android/app/src/main/kotlin/dev/swarm/phone/keys/Provisioning.kt`) does the right thing in general
+— it generates, then reads `KeyInfo` back, and throws `KeystoreDowngrade` when the achieved
+parameters differ from the requested ones. But its `downgrades` list compares only
+`userAuthenticationRequired`, `userAuthenticationValidityDurationSeconds`,
+`invalidatedByBiometricEnrollment`, and a spuriously-reported StrongBox. **`insideSecureHardware` is
+read into `KeyInfoRecord` and never compared against anything.** A handset whose Keystore returns a
+purely software KEK provisions cleanly, `strongBoxBacked` is `false`, and nothing objects.
+
+**Reachable: not by an adversary — but it silently voids PB-SEC-1's at-rest claim on any device
+where it is true.** Partly a limit of the API: `KeyGenParameterSpec` has no "require secure
+hardware" setter, so there is no requested value to compare against.
+
+**Status: OPEN, and it is why the gate's step 2a is a human observation** rather than an assertion —
+nothing in the product will report a software-only KEK.
+
+### 2.8 Provisioning refuses over two capabilities no matrix row consumes *(OPEN — found in S20)*
+
+**What.** `CustodyPlan.forDevice` returns `Refused` unless `KEYSTORE_X25519` and `KEYSTORE_ED25519`
+both probe `PRESENT` (`UNKNOWN` fails closed as `ABSENT` does). But **no row in `KeyCustodyMatrix`
+is `KEYSTORE_NATIVE`** — every role is `KEYSTORE_WRAPPED`, with the X25519/Ed25519 private halves in
+the Go core sealed under an **AES-GCM** Keystore KEK (ADR-007 B17(a)). So the app requires two
+Keystore capabilities it never uses.
+
+**Why it may still be right:** its own comment argues the canary case — at API 33 both are meant to
+be guaranteed, so a non-`PRESENT` answer means a Keystore misbehaving, and failing closed beats
+downgrading silently.
+
+**Reachable: no adversary; a plausible hard failure on a real device.** On a handset whose
+Curve25519 probe answers `ABSENT` or `UNKNOWN`, the app refuses to provision at all.
+
+**Status: OPEN, undecidable without a device**, which is exactly why it is step 2c of the gate and
+deliberately first. Note also that this corrects how B31 and PB-KEY-8 frame the Curve25519 risk:
+KeyMint's Curve25519 support does not gate any role's *backing*, because no role asks Keystore for a
+Curve25519 key. It gates *whether the app provisions at all*.
+
+### 2.9 The wake KEK is not user-authentication-gated *(BY DESIGN)*
 
 ADR-007 B9/B16. `KEYSTORE_WRAPPED` is accurate for `RELAY_AUTH` — the key *is* wrapped by a
 Keystore AES key — but the tier's gate is the **split**, not the KEK. Stated because PB-KEY-8's
@@ -373,7 +411,10 @@ a trap for the next slice that adds a caller.
 - **PB-E2E-5 (physical handset)** — ADR-007 **B31**, approved by enumeration: no real biometrics, no
   camera, no FCM delivery, no Doze, no hardware Keystore attestation. **An emulator is not a
   handset**, and every Android claim in this phase is *what the app asks the platform for*, never
-  what the platform then does.
+  what the platform then does. The gate's runbook is
+  `docs/operations/physical-handset-gate.md`, **every step of it marked UNRUN**; writing it
+  surfaced the two entries below, which are residuals rather than deferrals because they are
+  properties of the shipped code and not of the missing device.
 - **Nothing has ever run against Google.** No account, no Firebase project, no
   `google-services.json`. The FCM sender is complete and tested against a fake endpoint; **no test
   in this repository is evidence that a wake would be delivered.**

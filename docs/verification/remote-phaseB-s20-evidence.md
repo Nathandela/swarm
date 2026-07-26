@@ -12,7 +12,8 @@ PB-OPS-5.** Eight, all of which this file names.
 | `go build ./...` | green |
 | `go vet ./...` | green |
 | `~/go/bin/golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 ./...` | **0 findings** |
-| `go test ./...` | see §8 — one **deliberate** red, which is PB-DOC-7 doing its job |
+| `go test ./...` | **green** (§8). It was red at `60ed08d` on `TestPBDOC7_TheRepositoryPasses` — PB-DOC-7 finding a real §11 defect — and `e21c076` closed it. |
+| `check-phaseb-manifest.py`, default **and** `--strict-section11` | both exit 0 |
 
 ---
 
@@ -28,6 +29,7 @@ PB-OPS-5.** Eight, all of which this file names.
 | **PB-OPS-3** | **Authored**; its ADR half is drafted for its owner | `docs/operations/metadata-disclosure.md` + §9 |
 | **PB-DOC-3** | **Authored** | `docs/verification/remote-phaseB-residuals.md` |
 | **PB-DOC-4** | **Authored** | `docs/research/remote-v1-roadmap.md:282-307` |
+| **PB-E2E-5's runbook** | **Authored, every step UNRUN** — added to scope after the initial hand-off; the gate itself is S21's and needs a human with a device | `docs/operations/physical-handset-gate.md` |
 
 ---
 
@@ -147,9 +149,14 @@ $ go test -run 'TestPBDOC7' -count=1 ./internal/verify/
 Read the diagnostic: the checker **printed its success verdict on a tree with a deleted ownership
 row**, because it never looked at the tree it was handed. That is the failing-first run.
 
-### 3c. **THE HEADLINE FINDING: §11 assigns three requirements to the wrong slices, via wildcards**
+### 3c. **THE HEADLINE FINDING: §11 assigned three requirements to the wrong slices, via wildcards**
 
-With §11 parsed, the checker rejects the repository:
+> **RESOLVED by `e21c076`** — §11 now enumerates all seven family wildcards and closes twelve
+> completeness gaps. Both the default and the `--strict-section11` runs are clean, and
+> `internal/verify` is green. The finding is left legible below because the defect is the reason the
+> check exists, not because it is still open.
+
+With §11 parsed, the checker rejected the repository:
 
 ```
 $ python3 scripts/check-phaseb-manifest.py
@@ -204,10 +211,14 @@ specifically; the checker existed for two rounds with nothing running it on push
 §11 states its own contract — *"The slice table above is the readable view; the manifest is the
 source of truth"* — so an **omission** there is drift while a **contradiction** is the readable
 table lying. The default rejects contradictions. `--strict-section11` also demands completeness and
-is how whoever amends §11 knows when they are finished:
+is how whoever amends §11 knows when they are finished.
+
+**It was used for exactly that and it now passes too**, because `e21c076` took the full fix rather
+than the minimum. The run below is the pre-amendment output — the worklist, kept because it is the
+measurement of how far the readable table had drifted:
 
 ```
-$ python3 scripts/check-phaseb-manifest.py --strict-section11
+$ python3 scripts/check-phaseb-manifest.py --strict-section11        # at 60ed08d
 S11REQ    S4 claims PB-LIFE-7, which the manifest gives to S4b
 S11REQ    S5 claims PB-TOK-1, which the manifest gives to S16
 S11REQ    S5 claims PB-TOK-4, which the manifest gives to S13
@@ -268,12 +279,21 @@ survives all three: the manifest checker compares spec ↔ **manifest** and neve
 document; PB-E2E-3's fence iterates the rows that **exist** and is blind by construction to a
 requirement with no row; this compares spec ↔ **generated document**.
 
-**One thing PB-DOC-2 needs that is not mine to assert:** `scripts/phaseb-traceability.py`'s
-`SHIPPED` list stops at S18b, so PB-E2E-1..4 read *pending*. S19 has landed (`de2b612`) and has an
-evidence file. Adding `"S19"` (and later `"S20"`) is the orchestrator's assertion — the script's own
-comment says only the orchestrator knows whether a slice was gated — so I have not made it. **E15.1
-requires shipped == evidenced at close; that will not hold until this is updated and the file
-regenerated.**
+**One thing PB-DOC-2 needed that was not mine to assert — now done.** `scripts/phaseb-traceability.py`'s
+`SHIPPED` list stopped at S18b, so PB-E2E-1..4 read *pending*. Adding S19 and S20 is the
+orchestrator's assertion (the script's own comment says only the orchestrator knows whether a slice
+was gated), so I did not make it. **Applied by `9c1f1a2`**, and re-verified here:
+
+```
+| Requirements                    | 143 |
+| Shipped (asserted by hand)      | 142 |
+| Evidenced (measured on disk)    | 142 |
+| Remaining                       | 1   |   <- PB-E2E-5, deferred by ADR-007 B31
+| **Shipped with NO evidence file** | **0** |
+```
+
+and regenerating the index produces a byte-identical file. **E15.1's shipped == evidenced now
+holds**, with the single remaining requirement being the one B31 approves as deferred.
 
 ---
 
@@ -420,6 +440,58 @@ Keystore attestation. PB-E2E-5 stays deferred and an emulator is not a handset.
 
 ---
 
+## 6b. PB-E2E-5's runbook — added to scope, and every step of it is UNRUN
+
+`docs/operations/physical-handset-gate.md`, owed by S20 per ADR-007 **B31** ("a runbook written in
+advance, with every step marked unrun"). The gate itself remains S21's and is not assignable to an
+agent.
+
+Structure: an unmissable banner, a per-step `[UNRUN]` tag the operator removes one at a time, and a
+result sheet whose tables must be filled in rather than summarised. It covers B31's full
+enumeration — hardware-backed Keystore via `KeyInfo` **and attestation**, real biometrics (success,
+cancel, per-use vs timed, and a re-enrolled fingerprint invalidating a key), real camera pairing
+with a wrong-destination negative control, real FCM (registration, foreground, backgrounded, Doze,
+locked-device, after-reboot, token rotation, re-registration against an **empty** relay store),
+reboot, lock/unlock, process death, and Wi-Fi ↔ cellular handoff.
+
+**Its §0 is the part that matters**, and it is written around your two specifics. The recording rule
+is *what the device reported, per role and per alias* — never that a step succeeded — because a
+software-only key unwraps perfectly, a device with no biometric enrolled skips the prompt and
+succeeds, and a push that never arrives looks like a quiet machine. Every fallback-vs-hardware
+outcome has its own column, and PB-KEY-8's defined fallback is recorded as *simultaneously* a pass
+for PB-KEY-8 and a fail for the hardware-backing claims.
+
+### Two findings that came out of writing it — both in the shipped custody code
+
+1. **`insideSecureHardware` is read back and never compared.** `CustodyProvisioning.provision`
+   generates-then-reads-back correctly, but its `downgrades` list checks only
+   `userAuthenticationRequired`, the validity window, `invalidatedByBiometricEnrollment` and a
+   spurious StrongBox. **A handset returning a purely software KEK provisions cleanly and nothing
+   objects.** Partly an API limit — `KeyGenParameterSpec` has no "require secure hardware" setter —
+   which is precisely why step 2a makes it a human observation.
+2. **`CustodyPlan.forDevice` refuses to provision without `KEYSTORE_X25519` and `KEYSTORE_ED25519`,
+   and no row in `KeyCustodyMatrix` consumes either.** Every role is `KEYSTORE_WRAPPED` per ADR-007
+   B17(a), so the asymmetric private halves live in the Go core under an **AES-GCM** KEK and Keystore
+   is never asked for a Curve25519 key. Defensible as a fail-closed canary (its comment argues that
+   at API 33 both are guaranteed), but on a device whose probe answers `ABSENT`/`UNKNOWN` **the app
+   will not provision at all**, over a capability it does not use.
+
+**This corrects how B31 and PB-KEY-8 frame the Curve25519 risk.** Both call the Curve25519 fallback
+paths "most likely to be taken and least likely to have been exercised". Per the shipped matrix,
+KeyMint's Curve25519 support does not gate any role's *achieved backing* — no role asks Keystore for
+such a key, and a report claiming "X25519 is hardware-backed on this device" would be false whatever
+the device supports. What it gates is **whether the app provisions at all**. The runbook records the
+`KeyInfo` measurement against the two **AES KEK aliases**, which is where hardware backing is real
+and measurable, and puts the capability probe first.
+
+Both are recorded as residuals (`remote-phaseB-residuals.md` §2.7, §2.8) because they are properties
+of the shipped code, not of the missing device.
+
+**Scope was not compressed to absorb this.** The other eight are unchanged from the state you
+committed at `60ed08d`.
+
+---
+
 ## 7. PB-OPS-3 and PB-DOC-3 and PB-DOC-4
 
 **PB-OPS-3** — `docs/operations/metadata-disclosure.md`. Covers the relay operator (routing ids,
@@ -464,7 +536,19 @@ go vet ./...     green
 gofmt -l  (on the files this slice adds or edits)                                clean
 ```
 
-`go test ./...` produced exactly two failures. None of the four known flags fired on this run:
+**`go test ./...` — fully green after `e21c076`.** No failures, and none of the four known flakes
+fired.
+
+```
+$ python3 scripts/check-phaseb-manifest.py                     -> manifest OK, exit 0
+$ python3 scripts/check-phaseb-manifest.py --strict-section11   -> manifest OK, exit 0
+$ go test -count=1 ./internal/verify/                           -> ok  1.484s
+$ go test ./...                                                 -> no failures
+```
+
+### The two runs before that, recorded rather than overwritten
+
+**First run — two failures, one of them deliberate.**
 
 ```
 --- FAIL: TestRunShim_LaunchesAgentPersistsAndLeadsSession (11.66s)
@@ -477,24 +561,25 @@ FAIL	github.com/Nathandela/swarm/cmd/swarm	45.345s
 FAIL	github.com/Nathandela/swarm/internal/verify	4.156s
 ```
 
-**`TestRunShim_...` is a FIFTH load-dependent flake and it is not on the brief's known list.**
-Reproduced only under full-suite load; `-count=3` in isolation passes (`ok 16.439s`). S20 touches
-nothing under `cmd/swarm`. Recorded here and in the residuals file so it gets an owner rather than
-being absorbed into "the suite is a bit flaky" — a fifth unowned flake is how the fourth stopped
-being read.
+`TestPBDOC7_TheRepositoryPasses` was PB-DOC-7 working on its first run, and it is green now that §11
+is amended.
 
-**The second failure is deliberate: `TestPBDOC7_TheRepositoryPasses` is PB-DOC-7 working on its
-first run.** §11 assigns three requirements to slices the manifest gives to someone else (§3c).
-**I am boundaried out of `docs/specifications/`, so I cannot clear it.** The two-cell amendment in
-§10a turns it green — verified by running the checker and all 14 controls against a copy with the
-amendment applied (§3d). Shipping the check disabled instead would have been shipping the defect,
-which is the one thing PB-DOC-7 exists to prevent.
+**`TestRunShim_...` is a FIFTH load-dependent flake and it is not on the brief's known list.** It
+did **not** reproduce on the second full run. Observed once under full-suite load; `-count=3` in
+isolation passes (`ok 16.439s`). S20 touches nothing under `cmd/swarm`. Recorded here and in the
+residuals file so it gets an owner rather than being absorbed into "the suite is a bit flaky" — a
+fifth unowned flake is how the fourth stopped being read, and an intermittent one that disappears on
+the next run is the easiest of all to lose.
 
 `android/gate`'s PB-E2E-2 is another agent's and was not run here.
 
 ---
 
 ## 9. Drafted for the owner of `docs/adr/` — I did not write these into the ADR
+
+> **ALL APPLIED by `3cb1f78`**, as ADR-007 **B32** (disclosure), **B33** (the SPKI pin), and — beyond
+> what I drafted — **B34**, which records the no-production-caller finding of §11 as a decision in
+> its own right. The drafts are kept below as the record of what this slice proposed.
 
 ### 9a. PB-OPS-3's ADR-007 section
 
@@ -553,6 +638,11 @@ which is the one thing PB-DOC-7 exists to prevent.
 
 ## 10. Drafted for the owner of `docs/specifications/` — three amendments
 
+> **ALL APPLIED.** `e21c076` took the **full** §11 fix (10b), not the minimum, so both the default
+> and strict runs are clean; `9c1f1a2` amended PB-OPS-5's text (10c), corrected the stale §10
+> traceability row, and marked S19/S20 shipped. Kept below as the record of what was proposed and
+> why.
+
 ### 10a. §11, minimum fix (clears the red gate)
 
 ```
@@ -590,18 +680,26 @@ suggested:
 
 ---
 
-## 11. What I could not substantiate, stated as prominently as what I could
+## 11. Final status of all eight, and the one thing that outranks them
+
+**All eight are satisfied**, two of them only after the companion amendments this slice could not
+make itself. The intermediate state is kept in the rows below rather than smoothed away: a
+requirement that was unmet for three commits and a requirement that was never in question are not
+the same object, and the audit should be able to tell them apart.
 
 | Requirement | Status |
 |---|---|
-| PB-OPS-5 | **Delivered**, with the requirement's own claim corrected (§2c) and an ADR note owed (§9b) |
-| PB-OPS-1 | **Delivered and executed** (§5) |
-| PB-OPS-2 | **Delivered and executed** (§6), with three operator-facing defects found and one still open |
-| PB-DOC-3 | **Delivered** |
-| PB-DOC-4 | **Delivered**, and the discrepancy reported rather than resolved in prose |
-| PB-DOC-2 | **Delivered and verified**, but E15.1 will not hold until `SHIPPED` is updated (§4) — not mine to assert |
-| **PB-DOC-7** | **Implementation delivered; the requirement is NOT SATISFIED at this commit.** Its own check finds a live wildcard-ownership defect in §11, which I am boundaried out of fixing. §10a closes it. |
-| **PB-OPS-3** | **Document delivered; the requirement is NOT SATISFIED at this commit.** Its acceptance criterion names an ADR section and `docs/adr/` is outside my boundary. §9a closes it. |
+| PB-OPS-5 | **SATISFIED.** Delivered and tested; the requirement's own claim was wrong and is corrected (§2c, amended by `9c1f1a2`); ADR note merged as B33. |
+| PB-OPS-1 | **SATISFIED.** Delivered and executed (§5). |
+| PB-OPS-2 | **SATISFIED.** Delivered and executed (§6). Three operator-facing defects found; one (`revoke` reporting success for an unpaired id) remains open and is recorded as a residual. |
+| PB-DOC-3 | **SATISFIED.** |
+| PB-DOC-4 | **SATISFIED**, discrepancy reported rather than resolved in prose. |
+| PB-DOC-2 | **SATISFIED.** Was contingent on the `SHIPPED` list, which was not mine to assert; applied by `9c1f1a2`, and E15.1's shipped == evidenced now holds at 142/142 with PB-E2E-5 the sole remainder (§4). |
+| PB-DOC-7 | **SATISFIED as of `e21c076`.** Was **NOT satisfied** at `60ed08d`: its own check found a live wildcard-ownership defect in §11 that I was boundaried out of fixing. §11 now enumerates all seven wildcards; default **and** `--strict-section11` runs are clean. |
+| PB-OPS-3 | **SATISFIED as of `3cb1f78`.** Was **NOT satisfied** at `60ed08d`: its acceptance criterion names an ADR section and `docs/adr/` was outside my boundary. Merged as ADR-007 B32. |
+
+Plus, added to scope after the initial hand-off: **PB-E2E-5's runbook** (§6b) — authored, every step
+marked `[UNRUN]`. The gate itself is S21's and needs a human with a device.
 
 **One finding that belongs to no requirement of mine and outranks most of them:** the entire
 PB-NET-2 transport-security policy — the pin, the cleartext refusal, the redirect re-check — has
@@ -609,6 +707,15 @@ PB-NET-2 transport-security policy — the pin, the cleartext refusal, the redir
 `relay.DialRaw`, `cmd/swarm-remote/main.go` with `relay.Dial`; no non-test file constructs a
 `relay.Security` at all. The handset therefore applies no transport policy: a `ws://` URL from a
 pairing QR runs in cleartext with nothing refusing it. The SPKI pin this slice adds is correct and
-tested and **is not yet on the path a phone takes.** Recorded in the residuals file §1.1 and in
-both runbooks. It needs an owner and it is not S20's to fix — carrying a pin to the handset has no
-channel today (§9b).
+tested and **is not yet on the path a phone takes.**
+
+**Now recorded as ADR-007 B34**, which also relocates B33's premise: the live defect is not renewal
+fragility but the absence of any policy. It is open, it needs an owner before any deployment where
+the relay is not the operator's own trusted host, and it is not a call-site change — carrying a pin
+to the handset needs a decision about the pairing QR's size budget (`MaxRelayURLLen = 39`).
+
+Two further open items came out of writing the handset-gate runbook and are recorded as residuals
+§2.7 and §2.8: **`insideSecureHardware` is read back and never compared**, so a software-only KEK
+provisions cleanly with nothing objecting; and **provisioning refuses without two Keystore
+capabilities no matrix row consumes**, which is the most likely way the deferred gate fails on first
+contact with hardware.

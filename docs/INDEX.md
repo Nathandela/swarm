@@ -9,6 +9,7 @@
 - [Relay runbook](operations/relay-runbook.md) — standing up a TLS-terminated relay for the handset demonstration, and the certificate-renewal hazard (PB-OPS-1, PB-OPS-5)
 - [Operator runbook](operations/operator-runbook.md) — install, pair, revoke, kill switch, device loss, push configuration (PB-OPS-2)
 - [Metadata disclosure](operations/metadata-disclosure.md) — what the relay operator and the push provider actually observe (PB-OPS-3)
+- [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the deferred PB-E2E-5 gate a human with a device follows (ADR-007 B31)
 
 ## The plan
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
