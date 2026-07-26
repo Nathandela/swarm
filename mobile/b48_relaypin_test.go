@@ -22,7 +22,7 @@ func TestB48_CheckRelayPin(t *testing.T) {
 		want       error
 	}{
 		{"the certificate is the one the machine pinned", pin, pin, nil},
-		{"a terminator presented something else", pin, other, ErrRelayPinUnmatched},
+		{"a terminator presented something else", pin, other, errRelayPinUnmatched},
 		{"the machine configured no pin, so it claimed nothing", nil, other, nil},
 		{"a cleartext loopback dial observed no certificate", pin, nil, nil},
 		{"neither side has anything to say", nil, nil, nil},
@@ -40,10 +40,10 @@ func TestB48_CheckRelayPin(t *testing.T) {
 // difference between a pin and a hint.
 func TestB48_APrefixOfThePinIsNotAMatch(t *testing.T) {
 	pin := bytes.Repeat([]byte{0xD4}, 32)
-	if err := checkRelayPin(pin, pin[:16]); !errors.Is(err, ErrRelayPinUnmatched) {
-		t.Fatalf("checkRelayPin with a truncated observation = %v, want ErrRelayPinUnmatched", err)
+	if err := checkRelayPin(pin, pin[:16]); !errors.Is(err, errRelayPinUnmatched) {
+		t.Fatalf("checkRelayPin with a truncated observation = %v, want errRelayPinUnmatched", err)
 	}
-	if err := checkRelayPin(pin[:16], pin); !errors.Is(err, ErrRelayPinUnmatched) {
-		t.Fatalf("checkRelayPin with a truncated pin = %v, want ErrRelayPinUnmatched", err)
+	if err := checkRelayPin(pin[:16], pin); !errors.Is(err, errRelayPinUnmatched) {
+		t.Fatalf("checkRelayPin with a truncated pin = %v, want errRelayPinUnmatched", err)
 	}
 }

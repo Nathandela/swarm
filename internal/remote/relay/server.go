@@ -797,14 +797,27 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 	// the caller named, which is the key deviceRID derives from, so a caller cannot
 	// name one party and satisfy the check with another's signature. It names the
 	// GRANTEE's routing id, so it is not transferable to any other caller.
-	if len(req.ConsentSig) != ed25519.SignatureSize ||
-		!ed25519.Verify(ed25519.PublicKey(req.DevicePub), ConsentMessage(sc.rid), req.ConsentSig) {
+	// AND IT NAMES THE CEREMONY THAT PRODUCED IT (ADR-007 B47). The id rides in the
+	// credential, but it is not TRUSTED from there: the signature is verified OVER it, so a
+	// holder cannot relabel a retired consent into a live one. That is what lets the store
+	// retire an id and have the retirement mean something.
+	ceremonyID, sig, perr := ParseConsent(req.ConsentSig)
+	if perr != nil || ceremonyID == "" || len(sig) != ed25519.SignatureSize ||
+		!ed25519.Verify(ed25519.PublicKey(req.DevicePub), ConsentMessage(ceremonyID, sc.rid), sig) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
 	// ADR-007 B22: this also LIFTS a ban standing against deviceRID — but ONLY one
 	// sc.rid itself placed (B24). See store.authorizePair.
-	if err := sc.s.st.authorizePair(sc.rid, deviceRID); err != nil {
+	switch err := sc.s.st.authorizePair(sc.rid, deviceRID, ceremonyID); {
+	case err == nil:
+	case errors.Is(err, errConsentRetired):
+		// Distinct from not_authorized on purpose: the credential is well-formed and
+		// genuinely signed by the named device, and the remedy is a new pairing rather
+		// than a different caller. A refusal that does not name its remedy is the
+		// PB-STATE-10 wall this project has already hit once.
+		return sc.replyErr(codeConsentRetired)
+	default:
 		return sc.replyErr(codeBadRequest)
 	}
 	return sc.replyOK(map[string]any{})

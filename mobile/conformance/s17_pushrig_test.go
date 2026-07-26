@@ -364,11 +364,7 @@ func (r *s17Rig) phoneConsent() []byte {
 	if err != nil {
 		r.t.Fatalf("resuming the phone to sign its relay-route consent: %v", err)
 	}
-	sig, err := core.KeyStore().SignRelayAuth(relay.ConsentMessage(relay.RoutingID(r.machinePub)))
-	if err != nil {
-		r.t.Fatalf("phone signs its relay-route consent: %v", err)
-	}
-	return sig
+	return consentFrom(r.t, core.KeyStore(), relay.RoutingID(r.machinePub))
 }
 
 func (r *s17Rig) seedState(ks crypto.KeyStore) {

@@ -59,7 +59,7 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 	// The machine authorizes the phone so the phone may append commands to the machine
 	// mailbox (relay-level pairing).
 	if err := machineRelay.AuthorizeDevice(ctx, pPub,
-		ed25519.Sign(pPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
+		e2eConsent(pPriv, relay.RoutingID(mPub))); err != nil {
 		t.Fatalf("authorize phone: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 	// The phone authorizes the machine so the machine may append the reply to the phone
 	// mailbox (relay-level pairing, reverse direction).
 	if err := phoneRelay.AuthorizeDevice(ctx, mPub,
-		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
+		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("phone authorize machine: %v", err)
 	}
 	if _, err := machineRelay.MailboxAppend(ctx, phoneRelay.RoutingID(), replyEnv); err != nil {

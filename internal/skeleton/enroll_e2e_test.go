@@ -141,7 +141,7 @@ func TestEnrollmentE2E_PairThenCommandNoManualSetup(t *testing.T) {
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),
 		},
-		Consent: phoneConsentFor(ks),
+		Consent: phoneConsentFor(ks, fill16(0x11)),
 	}
 
 	// Run both pairing legs concurrently over the in-memory rendezvous.

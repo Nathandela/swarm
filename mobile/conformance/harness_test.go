@@ -155,10 +155,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("machine dial: %v", err)
 	}
 	t.Cleanup(func() { _ = h.machineRelay.Close() })
-	phoneConsent, err := ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(mPub)))
-	if err != nil {
-		t.Fatalf("phone signs its relay-route consent: %v", err)
-	}
+	phoneConsent := consentFrom(t, ks, relay.RoutingID(mPub))
 	if err := h.machineRelay.AuthorizeDevice(ctx, ks.RelayAuthPublic(), phoneConsent); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}

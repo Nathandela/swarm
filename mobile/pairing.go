@@ -396,8 +396,20 @@ func (p *Pairing) join(base context.Context) {
 		// MachineRoutingID, so the consent binds to the key the relay will actually
 		// authenticate the machine under and not to a routing-id string the machine
 		// asserted alongside it.
+		//
+		// It is bound to THIS CEREMONY by the rendezvous id the QR carried (ADR-007 B47):
+		// a consent whose ceremony the relay has retired -- because the owner revoked this
+		// device, or because a later pairing superseded it -- authorizes nothing, so the
+		// bytes left behind in the machine's state directory cannot undo a revoke. The id
+		// comes from the scanned payload rather than from anything the machine asserted,
+		// which is the same rule the grantee follows one line below.
 		Consent: func(m pairing.MachinePayload) ([]byte, error) {
-			return ks.SignRelayAuth(relay.ConsentMessage(relay.RoutingID(m.MachineRelayAuthPub)))
+			ceremonyID := hex.EncodeToString(payload.RendezvousID[:])
+			sig, err := ks.SignRelayAuth(relay.ConsentMessage(ceremonyID, relay.RoutingID(m.MachineRelayAuthPub)))
+			if err != nil {
+				return nil, err
+			}
+			return relay.MarshalConsent(ceremonyID, sig), nil
 		},
 		// ADR-007 B48: the certificate this dial accepted UNVERIFIED, checked against the
 		// pin the real machine authored and put inside the authenticated msg2. It runs

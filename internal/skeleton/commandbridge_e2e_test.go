@@ -58,11 +58,11 @@ func TestCommandBridgeE2E_PhoneKillThroughRelayAndDaemon(t *testing.T) {
 	}
 	defer phoneRelay.Close()
 	if err := machineRelay.AuthorizeDevice(ctx, pPub,
-		ed25519.Sign(pPriv, relay.ConsentMessage(relay.RoutingID(mPub)))); err != nil {
+		e2eConsent(pPriv, relay.RoutingID(mPub))); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)
 	}
 	if err := phoneRelay.AuthorizeDevice(ctx, mPub,
-		ed25519.Sign(mPriv, relay.ConsentMessage(relay.RoutingID(pPub)))); err != nil {
+		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("phone authorize machine: %v", err)
 	}
 

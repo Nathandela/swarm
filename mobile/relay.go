@@ -312,9 +312,16 @@ func (a *App) handsetSecurity() relay.Security {
 	return sec
 }
 
-// ErrRelayPinUnmatched is the phone's refusal when the certificate its UNVERIFIED pairing
-// dial accepted is not the one the machine pinned in msg2 (ADR-007 B48).
-var ErrRelayPinUnmatched = errors.New("swarm: the relay presented a certificate the machine did not pin; the pairing connection is being intercepted")
+// errRelayPinUnmatched is the phone's refusal when the certificate its UNVERIFIED pairing
+// dial accepted is not the one the machine pinned in msg2 (ADR-007 B48). It reaches the
+// user as ErrClassPairingFailed: the attempt ended with nothing pinned, and the remedy is
+// to pair again — on a network the owner trusts.
+//
+// It is unexported because the Android app never names it: PB-BIND-7's golden surface is
+// what the app compiles against, and a sentinel the screens only ever see through
+// App.ErrorClass does not belong on it.
+var errRelayPinUnmatched = classed(ErrClassPairingFailed,
+	errors.New("swarm: the relay presented a certificate the machine did not pin; the pairing connection is being intercepted"))
 
 // checkRelayPin is B48's amendment to B45, and it is the whole of it: the pairing dial
 // cannot VERIFY the relay -- it is the dial that fetches the pin -- so what it presented
@@ -342,7 +349,7 @@ func checkRelayPin(machinePin, presented []byte) error {
 		return nil
 	}
 	if !bytes.Equal(machinePin, presented) {
-		return ErrRelayPinUnmatched
+		return errRelayPinUnmatched
 	}
 	return nil
 }

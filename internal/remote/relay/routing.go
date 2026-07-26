@@ -67,14 +67,65 @@ func AuthChallengeMessage(nonce []byte, routingID string) []byte {
 // explicitly by its routing id, so the signature is NOT a bearer token — a copy
 // taken off the machine's disk, off the wire, or out of a device registry authorizes
 // only the one routing id it names, and any other caller presenting it is refused.
-// There is no nonce and none is needed: the statement is a standing grant, not a
-// challenge response, and it is revoked by device_revoke rather than by expiry.
 //
-// It is deterministic in its input and carries no length prefix because it has one
-// variable-length field at the end, so no two grantees share an encoding.
-func ConsentMessage(granteeRoutingID string) []byte {
-	b := make([]byte, 0, len(consentContext)+len(granteeRoutingID))
+// AND IT BINDS THE CEREMONY THAT PRODUCED IT (ADR-007 B47). This used to read "there
+// is no nonce and none is needed: the statement is a standing grant... and it is
+// revoked by device_revoke rather than by expiry". Both halves were true and the join
+// was never checked: revokeAndPurge deletes the pairs edges and writes a ban, and the
+// SIGNATURE is a durable artifact the grantee still holds — so re-presenting the
+// identical bytes rewrote both edges and, because authorizePair clears a ban placed by
+// that same pairer, lifted the ban in the same transaction. `swarm remote revoke` was
+// undone by a file, and the phone was never asked.
+//
+// THE CEREMONY ID IS THE RENDEZVOUS ID, WHICH IS WHY THERE IS NO BOOTSTRAP HERE. Both
+// parties hold it from the QR before msg1, so nothing has to be fetched from the relay
+// before the machine can speak — the recorded alternative, a relay-held generation
+// counter, would have to reach the phone in msg2 while being keyed by a routing id the
+// machine does not learn until msg3, which is deliverEpochGrant's own shape.
+//
+// It is NOT a challenge and confers no freshness on the connection: the statement stays
+// a standing grant, presentable as often as the machine's gateway needs it (see
+// store.authorizePair, where a re-presentation of the LIVE id is idempotent). What it
+// buys is that the relay can RETIRE one, which is what a revoke now does.
+//
+// It is deterministic in its inputs, and the ceremony id is length-prefixed because
+// there are now two variable-length fields: without it "ab"+"c" and "a"+"bc" would
+// share an encoding (F11 — no splicing).
+func ConsentMessage(ceremonyID, granteeRoutingID string) []byte {
+	b := make([]byte, 0, len(consentContext)+4+len(ceremonyID)+len(granteeRoutingID))
 	b = append(b, consentContext...)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(ceremonyID)))
+	b = append(b, ceremonyID...)
 	b = append(b, granteeRoutingID...)
 	return b
+}
+
+// MarshalConsent packages a signed consent for carriage: the ceremony id the signature
+// covers, then the signature. It travels as ONE opaque credential rather than two
+// parameters so everything that stores or forwards it — the device registry, the gateway
+// params, authorize_device — keeps handling a single blob, and so no call site can hold a
+// signature and a ceremony id that were never produced together.
+//
+// Carrying the id is not trusting it: ParseConsent only reads it back out, and
+// handleAuthorizeDevice verifies the signature OVER it, so a relabelled credential
+// verifies against nothing.
+func MarshalConsent(ceremonyID string, sig []byte) []byte {
+	b := make([]byte, 0, 4+len(ceremonyID)+len(sig))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(ceremonyID)))
+	b = append(b, ceremonyID...)
+	return append(b, sig...)
+}
+
+// ParseConsent is the inverse of MarshalConsent. A malformed or truncated credential is
+// an error, never a zero-length ceremony id that might match a stored one.
+func ParseConsent(b []byte) (ceremonyID string, sig []byte, err error) {
+	if len(b) < 4 {
+		return "", nil, ErrConsentMalformed
+	}
+	n := binary.BigEndian.Uint32(b[:4])
+	b = b[4:]
+	if uint32(len(b)) < n {
+		return "", nil, ErrConsentMalformed
+	}
+	return string(b[:n]), b[n:], nil
 }

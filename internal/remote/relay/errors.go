@@ -37,6 +37,13 @@ var (
 	// ErrRendezvousBurned is returned when a completed (single-use) rendezvous
 	// id is claimed again.
 	ErrRendezvousBurned = errors.New("relay: rendezvous already used")
+	// ErrConsentRetired refuses a route consent whose pairing ceremony has been
+	// superseded or revoked (ADR-007 B47). It is DISTINCT from ErrNotAuthorized
+	// because its remedy is: the credential is well-formed and genuinely signed by
+	// the named device, and what it needs is a new pairing, not a different caller.
+	ErrConsentRetired = errors.New("relay: this pairing's route consent has been retired; pair the device again")
+	// ErrConsentMalformed refuses a credential that is not a consent at all.
+	ErrConsentMalformed = errors.New("relay: malformed route consent")
 )
 
 // wire error codes. The client maps a received code back to the sentinel above.
@@ -53,6 +60,7 @@ const (
 	codeRendezvousExists = "rendezvous_exists"
 	codeAuthFailed       = "auth_failed"
 	codeUnsupported      = "unsupported"
+	codeConsentRetired   = "consent_retired"
 )
 
 // codeToErr maps a wire error code to its sentinel. An unrecognised code becomes
@@ -67,6 +75,7 @@ var codeToErr = map[string]error{
 	codeRendezvousTTL:    ErrRendezvousExpired,
 	codeRendezvousUsed:   ErrRendezvousBurned,
 	codeRendezvousExists: ErrRendezvousExists,
+	codeConsentRetired:   ErrConsentRetired,
 }
 
 // errorBody is the JSON shape of an r_error reply.
