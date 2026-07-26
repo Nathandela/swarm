@@ -1694,3 +1694,53 @@ per identity. The only remaining lever is not a quota at all: **bound the sender
 the authority rule does. The two defects were filed as independent and **one of them was only ever
 fixable second** — the depth fix alone would have *measured* as a fix, because the flood test would
 have stopped showing the phone refused while the mailbox grew per identity with no test watching.
+
+### B30 — `Core.Save` is a deliberate whole-blob adopt; `Core.Mutate` is the field-update verb
+
+A lost-update defect in `phonecore.Core.Save`, found by an agent investigating a flake and fixed by
+another. **Both the reported mechanism and my brief restating it were wrong**, and the correction
+matters more than the fix, because the wrong mechanism was plausible enough to survive two retellings.
+
+**What was claimed**: seven facade sites read the state, work with the core lock released, then
+`Save` it back; a rolled-back `SendSeq` re-issues a consumed seq and every later frame is rejected
+with `ErrStaleSeq` forever.
+
+**Why that is false.** `fileStore.Save` already calls `mergeGuards` (`internal/phonecore/state.go`),
+which raises **every replay-guard coordinate monotonically** — `SendSeq`, `Receive`,
+`GrantEpoch`/`GrantSeq`, `WakeReplay`, `RelayCursor`. Durable custody refuses to rewind them. Five of
+the seven fields named were already protected, and the `ErrStaleSeq` brick is **unreachable**. (They
+are unprotected only behind an injected in-memory store, which is test wiring; production always goes
+through `OpenStore` — so the hazard was demonstrable only in a configuration production never runs.)
+
+**The real mechanism, which is worse.** What *is* adopted blindly is **`EpochID` and `Keys`**.
+`App.pin` zeroes `State.Keys` when a pairing lands in a new epoch — correct against its own snapshot
+— and destroys the content key the concurrent drain just installed; `resealTier` then writes no
+content-key field at all, so the destruction reaches disk. Meanwhile the grant watermark **was**
+merged monotonically, so it stands at the coordinates of the grant whose key was just destroyed, and
+`crypto.GrantReceiver` enforces strict `(epoch, seq)` monotonicity. **The gateway re-appending the
+same bootstrap frame is therefore refused as a replay forever.** The handset holds no content key,
+cannot obtain one, and the only exit is a machine-side re-grant at a higher seq. Silent, and
+unrecoverable from the phone — the original verdict, reached by a different route.
+
+**The decision.** `Core.Mutate(fn func(*State))` — clone under `c.mu`, apply, persist, unlock,
+rebind — is the verb for changing a field; all seven sites are converted. **`Save` remains a
+whole-blob adopt on purpose**, for reseed, restore and fixture, and that split is now load-bearing
+and enforced by an AST fence over every non-test importer. A `PinMachine`-style alternative was
+evaluated and rejected: it needs a bespoke core verb per hazard and another the next time the facade
+gains a field, where `Mutate` is one seam.
+
+**A second defect fell out of the same change**: `SetPushPreference` drew its PB-PUSH-10 version
+**outside** the lock, so two toggles both read N and both claimed N+1 — and the machine refuses
+anything not strictly exceeding what it holds, so the second was silently dropped while the settings
+screen displayed its value. Now atomic.
+
+**Not to be confused with B29.** That entry concerns the **relay's** append/push rate windows keyed
+per target, a shared-resource-with-no-owner defect on a different component with a different fix and
+a different trigger. This is a **phone-side** lost update. They are not the same class and closing
+one says nothing about the other; recorded because the implementer reasonably asked whether they were.
+
+**The lesson.** The brief I wrote asserted a failure chain I had not run, taken from a report that
+had not run it either, and it survived because it was *coherent* — a rolled-back counter causing
+stale-seq rejection is exactly what one would expect. It was falsified in minutes by someone who
+printed the values. **A mechanism nobody has executed is a story, however many people have repeated
+it**, and this is the fourth time in this ADR that a plausible chain proved wrong under measurement.
