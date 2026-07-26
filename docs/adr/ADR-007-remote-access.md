@@ -2599,3 +2599,59 @@ fixable this way — a machine that legitimately has no pin — is currently **u
 
 This inverts a decision the code states deliberately, which is why the implementer declined to take it
 alone. That was the right call.
+
+### B55 — the revoked SIGNAL is asked for by the dialer; the ban becomes a fact about one relationship
+
+B49's fix, and the reasoning is a proof about a whole class rather than a survey of options.
+
+**B27's objection to pair-scoping was re-derived against current code and no longer stands.** It rested
+on an **anonymous** party reaching `device_revoke` repeatedly. B38's consent signature removed the
+anonymous party — nothing reaches that verb without the target's signature over `ConsentMessage(caller)`.
+The purge is scoped anyway, using the sender already stored in each record. **This is the check round 2
+said nothing in this phase performs: re-deriving a recorded remedy against the code as it is now.**
+
+**The impossibility result.** After a revoke the machine and the handset hold **identical** relay state —
+no edges, one ban — so the relay cannot tell them apart, and **every rule symmetric in (banner, victim)
+either refuses both registrations (today's mutual assured destruction) or neither (PB-APP-10's signal
+lost)**. Four candidate asymmetries were checked and each fails for its own reason:
+
+- *refuse iff banned and no surviving grants* — symmetric (the machine has none either), and **reopens
+  B24**, since a revoked device restores a surviving grant by self-pairing a throwaway (B50);
+- *refuse iff banned by the party that was the pairer* — closes the stolen-phone entry point cheaply, but
+  **B46's interceptor IS the pairer** of the pairing it forms, so it still bricks the phone. Fails the
+  "one defect, two entry points" test;
+- *widen the ban-lift so any consented re-pair clears every ban on the pairer* — **B24's hole verbatim**;
+- *the phone re-learns at op time* — an idle revoked phone sits on `online` forever, **PB-APP-10's
+  failure loop in a new costume**.
+
+**The repair: the dialer names the peer whose verdict it wants.** `ClientAuth.Peer` rides `auth_init`;
+the verdict moves to `handleAuthResp`, **after the signature verifies** — strictly narrower than the
+pre-auth ban oracle it replaces. The handset names its pinned machine and gets `ErrRevoked` at the same
+delivery point, with the same terminal state and grace window. **The machine names nobody, deliberately**:
+no legitimate flow revokes a machine at the relay, since `swarm remote revoke` is the only production
+caller and the phone's own revoke rides the sealed command plane to the gateway. So a stolen phone's ban
+reaches **no verdict the machine consults**, and an interceptor's ban names the interceptor, so the phone
+never consults it. **Both entry points die, and the phone-side one dies independently of B47.**
+
+Enforcement stays server-side in the **deleted edge**; only the **signal** is advisory — which is B26's
+own diagnosis, that the ban was carrying a signalling job on a global-authority mechanism. That sentence
+is now in the code, not only here.
+
+**Two findings from building it, both of which would have shipped silently.** bbolt's `Cursor.Delete`
+leaves the cursor on the deleted slot, so a scoped purge deleting **adjacent** records can leave half a
+revoked backlog drainable — the first fence used one frame per sender and could not have caught it. And
+the grace-window fixture had a **second** modelling gap beyond its missing pairing record: it minted a
+**fresh machine relay-auth key per ceremony**, so the recovery pairing re-pinned the handset onto a
+machine that had revoked nobody — invisible under a global ban, incoherent under a scoped one.
+
+**Three residuals recorded rather than fixed**: `handleDeviceRevoke` still severs the victim's live
+socket unconditionally (transient, bounded by quota, and conditioning it would blur ME-1); `isPaired`'s
+doc still claims an asymmetry B50 falsified and should be struck; and legacy ban rows go dead on upgrade
+rather than being migrated — which **un-bricks every identity a global ban already destroyed**, at the
+cost of a re-pair prompt that has by then served its purpose.
+
+**A process note that is mine.** This agent reported the two `case false &&` disabled dial arms as an
+unrecorded live defect. They were real **in its baseline** — my wholesale staging committed a mutation
+in `184a7aa`, corrected in `4a4cef2`, and it branched inside that window. HEAD is clean and both fences
+pass. **My `git add -A` did not merely risk shipping a mutation; it poisoned another agent's baseline and
+cost it investigation time on a defect that no longer existed.** Sixth entry on this; residual 4.7 stands.
