@@ -633,16 +633,234 @@ func TestS17_ProductionKotlinAsksFirebaseForATokenAtLeastOnce(t *testing.T) {
 	}
 }
 
+// s17PushPackagePrefix is the file-path fragment identifying the push package, used to ask
+// whether a deletion is reached from OUTSIDE the file that defines it.
+const s17PushPackagePrefix = "dev/swarm/phone/push/"
+
+// s17DeclarationFiles maps every production Kotlin function name to the repo-relative files
+// declaring it. s17Bodies deliberately loses this -- it concatenates same-named bodies -- and
+// the reachability question below is partly about WHERE a caller lives.
+func s17DeclarationFiles(t *testing.T) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	for _, f := range kotlinFiles(t, kotlinMainRoot(t)) {
+		rel := mustRel(t, f)
+		src := readFileOrFail(t, f, "PB-PUSH-9")
+		for _, m := range s17FunDecl.FindAllStringSubmatch(src, -1) {
+			out[m[1]] = append(out[m[1]], rel)
+		}
+	}
+	return out
+}
+
+// s17CallersOf inverts the call graph: for each function name, who calls it.
+func s17CallersOf(bodies map[string]string) map[string][]string {
+	callers := map[string][]string{}
+	for name, body := range bodies {
+		for _, call := range s17CallsIn(body) {
+			if call == name {
+				continue // a self-call is not a caller; recursion is not reachability
+			}
+			if _, declared := bodies[call]; !declared {
+				continue
+			}
+			callers[call] = append(callers[call], name)
+		}
+	}
+	return callers
+}
+
+// s17DeletionSinks are the production functions whose own bodies call App.DeletePushToken.
+func s17DeletionSinks(bodies map[string]string) []string {
+	var out []string
+	for name, body := range bodies {
+		if s17NamesVerb(s17StripComments(body), "DeletePushToken") {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// s17ReachedFromOutsideThePushPackage answers the question the fence is actually about: is the
+// deletion CALLED, transitively, by code that is not the push package talking to itself.
+//
+// It returns the chain it found, so a passing run names the path rather than asserting one.
+func s17ReachedFromOutsideThePushPackage(
+	bodies map[string]string, files map[string][]string, sink string, depth int,
+) []string {
+	seen := map[string]bool{sink: true}
+	frontier := []string{sink}
+	callers := s17CallersOf(bodies)
+	chain := []string{sink}
+	for hop := 0; hop < depth; hop++ {
+		var next []string
+		for _, name := range frontier {
+			for _, caller := range callers[name] {
+				if seen[caller] {
+					continue
+				}
+				seen[caller] = true
+				next = append(next, caller)
+				outside := false
+				for _, f := range files[caller] {
+					if !strings.Contains(filepath.ToSlash(f), s17PushPackagePrefix) {
+						outside = true
+					}
+				}
+				if outside {
+					return append(chain, caller)
+				}
+			}
+		}
+		if len(next) == 0 {
+			return nil
+		}
+		sort.Strings(next)
+		chain = append(chain, next[0])
+		frontier = next
+	}
+	return nil
+}
+
 // TestS17_ProductionKotlinDeletesTheTokenOnRevokeOrDisable. Deletion is listed in the
 // requirement beside registration. A revoked device that keeps a registered token leaves a
 // provider-visible identifier for it in the relay's store and leaves the machine able to wake a
 // handset its owner disowned.
+//
+// THIS FENCE USED TO BE VACUOUS, and it was vacuous in the exact way PB-PUSH-9's own text warns
+// about. It required the string `deletePushToken(` to appear ANYWHERE in production Kotlin --
+// so it passed on `PushTokens.disable`, a function that carried the call and that NOTHING CALLED
+// for the whole of S17 and S18. Its own source comment said so: "[disable] has no caller yet".
+// The requirement's warning is "a facade method can exist while no Android code ever calls it";
+// the fence written to catch that reproduced it one layer up, on the wrapper instead of on the
+// facade method.
+//
+// SO IT ASKS FOR A CALLER, and for that caller to be outside the push package -- because
+// `PushTokens` calling itself would satisfy a bare caller check while the deletion was still
+// unreachable from any screen. The walk is the same bounded one the callback fences above use,
+// inverted; nothing new was written to answer it.
+//
+// WHAT IT STILL CANNOT SEE, stated rather than left for a reader to assume closed. It does NOT
+// prove a user's tap reaches the deletion. The last two hops of the real chain are a listener
+// installed in a PROPERTY INITIALIZER (`private val needsInput = gatedSwitch(...)`) and a panel
+// constructed in another property initializer, and neither is a `fun` body -- so a walker built
+// on `fun NAME(` cannot cross them, and following them would mean indexing class bodies and
+// constructors, which is a different tool from the brace matcher this file is. What is proved is
+// strictly stronger than presence and strictly weaker than end-to-end reachability: the deletion
+// is called, and it is called by a screen rather than by the push package alone.
 func TestS17_ProductionKotlinDeletesTheTokenOnRevokeOrDisable(t *testing.T) {
-	src := s17StripComments(s17KotlinMain(t))
-	if !s17NamesVerb(src, "DeletePushToken") {
-		t.Errorf("PB-PUSH-9: no production Kotlin calls App.DeletePushToken. The verb exists on " +
+	bodies := s17Bodies(t)
+	sinks := s17DeletionSinks(bodies)
+	if len(sinks) == 0 {
+		t.Fatalf("PB-PUSH-9: no production Kotlin calls App.DeletePushToken. The verb exists on " +
 			"the facade and no screen and no callback reaches it, so 'deletion on revoke/disable' " +
 			"is a method with no caller")
+	}
+
+	files := s17DeclarationFiles(t)
+	var orphaned []string
+	for _, sink := range sinks {
+		if chain := s17ReachedFromOutsideThePushPackage(bodies, files, sink, 4); chain != nil {
+			t.Logf("PB-PUSH-9: DeletePushToken is reached via %s", strings.Join(chain, " <- "))
+			return
+		}
+		orphaned = append(orphaned, sink+" (declared in "+strings.Join(files[sink], ", ")+")")
+	}
+	t.Errorf("PB-PUSH-9: App.DeletePushToken is CALLED but nothing outside the push package "+
+		"reaches the call. The requirement's word is \"deletion on revoke/DISABLE\", and disable "+
+		"is a user turning notifications off -- which happens on a screen. A wrapper nothing "+
+		"presses is the defect PB-PUSH-9 warns about in its own text, moved one layer up.\n"+
+		"function(s) holding the call, with no caller outside %s:\n\t%s",
+		s17PushPackagePrefix, strings.Join(orphaned, "\n\t"))
+}
+
+// TestS17_TheDeletionFenceFailsOnAnUncalledDisable is the fence on the fence, and it exists
+// because the version above replaced one that could not fail.
+//
+// It is driven against SYNTHETIC Kotlin for the reason
+// TestS17_TheReachabilityWalkFollowsExpressionBodiedHelpers already establishes: against the
+// production tree a check that understands nothing and a codebase that does nothing wrong are
+// indistinguishable, which is exactly how the presence check survived two slices.
+//
+// `uncalled` is the state of this repository at the commit that introduced this test's
+// predecessor -- PushTokens.disable verbatim, with no caller anywhere. The old fence passed on
+// it. `called` differs only by a settings panel that presses it.
+func TestS17_TheDeletionFenceFailsOnAnUncalledDisable(t *testing.T) {
+	const uncalled = `
+object PushTokens {
+    fun requestInitialToken(context: Context) {
+        register(context, "t")
+    }
+
+    fun register(context: Context, token: String) {
+        phoneOf(context)?.registerPushToken(token)
+    }
+
+    fun disable(context: Context) {
+        val app = phoneOf(context) ?: return
+        app.deletePushToken()
+    }
+}
+`
+	const called = uncalled + `
+class SettingsSurface {
+    private fun onToggled(value: Boolean) {
+        reconcileTheToken(value)
+    }
+
+    private fun reconcileTheToken(wanted: Boolean) {
+        if (!wanted) PushTokens.disable(activity) else PushTokens.requestInitialToken(activity)
+    }
+}
+`
+	pushFile := "android/app/src/main/kotlin/" + s17PushPackagePrefix + "PushTokens.kt"
+	screenFile := "android/app/src/main/kotlin/dev/swarm/phone/SettingsSurface.kt"
+
+	for _, tc := range []struct {
+		name    string
+		src     string
+		files   map[string][]string
+		reached bool
+	}{
+		{
+			name: "uncalled disable, which the presence check passed",
+			src:  uncalled,
+			files: map[string][]string{
+				"requestInitialToken": {pushFile}, "register": {pushFile}, "disable": {pushFile},
+			},
+			reached: false,
+		},
+		{
+			name: "disable pressed from a settings panel",
+			src:  called,
+			files: map[string][]string{
+				"requestInitialToken": {pushFile}, "register": {pushFile}, "disable": {pushFile},
+				"onToggled": {screenFile}, "reconcileTheToken": {screenFile},
+			},
+			reached: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bodies := s17BodiesIn(tc.src)
+			sinks := s17DeletionSinks(bodies)
+			if len(sinks) != 1 || sinks[0] != "disable" {
+				t.Fatalf("the sink finder did not locate disable; it found %v", sinks)
+			}
+			chain := s17ReachedFromOutsideThePushPackage(bodies, tc.files, "disable", 4)
+			if tc.reached && chain == nil {
+				t.Errorf("PB-PUSH-9: the fence reports a disable that a settings panel calls as "+
+					"unreached, so it would fail on a correct implementation -- which is how a "+
+					"fence gets deleted rather than fixed.\nsource:\n%s", tc.src)
+			}
+			if !tc.reached && chain != nil {
+				t.Errorf("PB-PUSH-9: the fence reports an UNCALLED PushTokens.disable as reached "+
+					"via %v. That is the state this repository was in for two slices, and the "+
+					"presence check it replaced passed on it: a facade method with no caller, "+
+					"reported as coverage of \"deletion on revoke/disable\".\nsource:\n%s",
+					chain, tc.src)
+			}
+		})
 	}
 }
 

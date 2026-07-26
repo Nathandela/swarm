@@ -152,6 +152,16 @@ android {
         targetSdk = pinnedApiLevel("SWARM_ANDROID_TARGET_SDK")
         versionCode = 1
         versionName = "0.1.0"
+
+        // PB-E2E-2. Without this the module has no instrumented test task at all and
+        // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
+        // "APK installs, pairs ..., takes control, types" would have nothing to drive the
+        // installed APK from.
+        //
+        // AndroidJUnitRunner and not a custom one: the smoke drives the shipped Activity through
+        // the same instrumentation every Android project uses, and a bespoke runner is one more
+        // thing between the requirement and the app.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -248,12 +258,39 @@ kotlin {
 // under section 13. Slice S17 does not close it and claims no part of it.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PB-PAIR-3 / ADR-007 B21: the QR scanner is `com.google.zxing:core` for decoding plus
+// `androidx.camera` (CameraX) for frame capture, and ML Kit is named and rejected there.
+//
+// The property that decides it is recorded in the ADR and restated here because here is where
+// a contributor adds the tempting alternative: everything shipped is inside the APK the release
+// key signs -- no Play Services, no downloaded model, no dynamic code loading. ZXing's decoder
+// is weaker than ML Kit's, which is accepted: the QR is on a screen about a metre away, and
+// PB-PAIR-2's manual-entry fallback doubles as the fallback for a code that will not decode.
+//
+// android/gate/s16_ui_test.go fences this BIDIRECTIONALLY -- a scanner dependency here that
+// ADR-007 does not name fails the build, which is what stops the choice being made in a Gradle
+// file.
+// ---------------------------------------------------------------------------
+
 dependencies {
     implementation(files(swarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
 
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.7.0")
+
+    // PB-E2E-2's instrumented source set. These are on NO variant runtime classpath, so nothing
+    // here ships in the APK a user installs; android/dependency-inventory.tsv records each one
+    // in that class.
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }

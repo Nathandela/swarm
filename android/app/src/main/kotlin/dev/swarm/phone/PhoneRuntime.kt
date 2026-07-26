@@ -77,6 +77,34 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
+     * Throw away the built phone so the URL [rememberRelay] just learned takes effect.
+     *
+     * WITHOUT THIS A FRESH INSTALL CANNOT USE THE PAIRING IT JUST COMPLETED. `mobile.Config
+     * .RelayURL` is read once, at construction, and the phone core has no verb to re-target a
+     * live App -- so the App that ran the pairing was built with the empty URL a fresh install
+     * has, and `Start` on it can never connect. The user would pair successfully and then sit on
+     * an empty roster until something happened to rebuild the process, with nothing on screen
+     * saying why. PB-E2E-2 pairs and then observes IN THE SAME SESSION, so this is the whole
+     * difference between the demonstration working and appearing to.
+     *
+     * THE OLD APP IS CLOSED, not dropped. Two Apps over one state directory is the condition
+     * [phone]'s synchronization exists to prevent, and the old one owns a goroutine draining the
+     * relay. Close waits for the pairing goroutine it may still hold, which by this point has
+     * finished -- a pairing that reached PAIRED is what brought us here.
+     */
+    @Synchronized
+    fun rebuildAfterPairing() {
+        val previous = ready
+        ready = null
+        try {
+            previous?.app?.close()
+        } catch (torn: Exception) {
+            // A close that refuses leaves a phone the next `phone()` rebuilds anyway. There is
+            // nothing a user could do about it and nothing to report to.
+        }
+    }
+
+    /**
      * Everything that can refuse, in the order the refusals mean something.
      *
      * `Throwable` and not `Exception`: a missing native library is an `Error`, and a phone that
