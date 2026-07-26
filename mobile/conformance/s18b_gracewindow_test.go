@@ -33,6 +33,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -135,9 +136,32 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 		t.Fatalf("machine revoke phone: %v", err)
 	}
 
-	// The stranded handset: same device.key, same routing id, banned at the relay. Its durable
-	// pairing state is irrelevant here -- the ban is keyed by relay-auth routing id alone, which
-	// is exactly why a handset recovers into it without a full app-data wipe.
+	// The stranded handset: same device.key, same routing id, and THE PAIRING RECORD IT WOULD
+	// ACTUALLY HOLD -- which is why a handset recovers into this state without a full app-data
+	// wipe rather than in spite of one.
+	//
+	// THE RECORD USED TO BE OMITTED, and the omission was invisible while the ban was global:
+	// a ban keyed by relay-auth routing id alone answered every dial, so a handset that knew
+	// nothing about its machine was still refused. The ban is now scoped to the relationship it
+	// ended (ADR-007 B49, because a global one made every revoke mutual assured destruction),
+	// and a scoped verdict is asked for by naming the peer -- so the fixture has to hold the
+	// coordinate a real stranded handset holds. MachineRelayAuthPub is wake-tier durable state
+	// written at pairing; it is how the phone reaches its machine after any restart, which is
+	// the same restart this test is simulating. The fixture was modelling something LESS than
+	// the handset the requirement is about.
+	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), testMachineID,
+		custody.wakeSealer(), custody.contentSealer())
+	if err != nil {
+		t.Fatalf("open the stranded phone's state: %v", err)
+	}
+	if err := store.Save(phonecore.State{
+		Machine:             testMachineID,
+		MachineRelayAuthPub: mPub,
+		RoutingID:           phoneRID,
+	}); err != nil {
+		t.Fatalf("seed the stranded phone's pairing record: %v", err)
+	}
+
 	log := &s18bConnLog{}
 	app, err := swarmmobile.NewApp(&swarmmobile.Config{
 		StateDir: dir, RelayURL: relayURL, MachineID: testMachineID,
@@ -166,7 +190,12 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 	if err != nil {
 		t.Fatalf("machine sign key: %v", err)
 	}
-	mp := s16MachinePairing(t, relayURL, mSignPub, testEpochID, true)
+	// UNDER THE MACHINE'S OWN RELAY IDENTITY -- the one that placed the ban. A machine's
+	// relay-auth key is durable state and `swarm remote pair` re-pairs under it; a ceremony
+	// that minted a fresh one would re-pin the handset onto a machine that has revoked
+	// nobody, so the refusal this test holds the race open for could not happen and the
+	// recovery below would prove nothing about lifting a ban.
+	mp := s16MachinePairingAs(t, relayURL, mSignPub, mPub, testEpochID, true)
 	p := s16BeginConfirmed(t, app, mp.QR)
 	s16AwaitSAS(t, p)
 	if err := p.Confirm(); err != nil {

@@ -226,7 +226,13 @@ func TestRelay_RevokedDeviceDeauthorizedAndPurged(t *testing.T) {
 	}
 
 	// Relay-auth is invalidated: the revoked device can no longer authenticate.
-	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+	//
+	// The dial NAMES ITS MACHINE, exactly as mobile/relay.go's does. A ban is scoped to the
+	// relationship it ended (ADR-007 B49) rather than standing against the routing id
+	// globally, because a global one made every device_revoke mutual assured destruction —
+	// so the verdict is the named peer's, and this is the peer that placed it. The assertion
+	// is unchanged.
+	if _, err := Dial(testCtx(t), srv.URL(), authForPeer(dPub, dPriv, RoutingID(mPub))); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("revoked device reconnect: got %v, want ErrRevoked", err)
 	}
 	// The relay-side mailbox is purged (no drainable pre-rotation backlog).
@@ -330,6 +336,11 @@ func TestRelay_DuplicateConnectionResolved(t *testing.T) {
 // always self-pair with any target -- so authorize_device succeeding for a stranger is not
 // what changed and is not what this fences. What changed is that the same open verb started
 // clearing bans.
+//
+// The dials NAME THE BANNING MACHINE (ADR-007 B49): a ban is scoped to the relationship it
+// ended, so the verdict belongs to the peer that placed it. Every assertion is unchanged --
+// what this fences is that a THIRD party cannot clear that relationship's ban, which is the
+// rule B49's key-shape change preserves rather than relaxes.
 func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 	srv, _, _, _ := startTestRelay(t, nil)
 
@@ -342,7 +353,7 @@ func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
 		t.Fatalf("DeviceRevoke: %v", err)
 	}
-	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+	if _, err := Dial(testCtx(t), srv.URL(), authForPeer(dPub, dPriv, RoutingID(mPub))); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("precondition: the revoked device dials with %v, want ErrRevoked", err)
 	}
 
@@ -355,7 +366,7 @@ func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 			"needs that path REACHED, because what it fences is the ban surviving it", err)
 	}
 
-	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+	if _, err := Dial(testCtx(t), srv.URL(), authForPeer(dPub, dPriv, RoutingID(mPub))); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("ADR-007 B24: a self-minted third-party identity lifted the ban the machine "+
 			"placed -- the revoked device now dials with %v, want ErrRevoked.\n"+
 			"That is B22's falsified claim in one path: a revoked device mints a throwaway "+
@@ -377,6 +388,10 @@ func TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt(t *testing.T) {
 // PB-STATE-10 is unsatisfiable. A policy that keys a ban to its placer must therefore still
 // let THAT placer lift it -- which is what `swarm remote revoke` and `swarm remote pair` do,
 // both over the machine's own relay identity (cmd/swarm/remote.go withMachineRelay).
+//
+// The dials name that same machine as their peer (ADR-007 B49), which is what makes the
+// before/after pair meaningful once a ban is scoped to one relationship: the handset asks the
+// banner for its verdict and gets ErrRevoked, then asks again after the re-pair and is let in.
 func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
 	srv, _, _, _ := startTestRelay(t, nil)
 
@@ -389,7 +404,7 @@ func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
 	if err := machine.DeviceRevoke(testCtx(t), RoutingID(dPub)); err != nil {
 		t.Fatalf("DeviceRevoke: %v", err)
 	}
-	if _, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv)); !errors.Is(err, ErrRevoked) {
+	if _, err := Dial(testCtx(t), srv.URL(), authForPeer(dPub, dPriv, RoutingID(mPub))); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("precondition: the revoked device dials with %v, want ErrRevoked", err)
 	}
 
@@ -397,7 +412,7 @@ func TestRelay_TheBanningMachineCanLiftItsOwnBan(t *testing.T) {
 	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
 		t.Fatalf("re-authorize after revoke: %v", err)
 	}
-	conn, err := Dial(testCtx(t), srv.URL(), authFor(dPub, dPriv))
+	conn, err := Dial(testCtx(t), srv.URL(), authForPeer(dPub, dPriv, RoutingID(mPub)))
 	if err != nil {
 		t.Fatalf("ADR-007 B22/B24: the machine that placed the ban re-authorized the handset and "+
 			"it still cannot reach the relay: %v.\nThe phone's relay-auth key is minted once per "+

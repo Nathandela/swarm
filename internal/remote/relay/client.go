@@ -50,6 +50,10 @@ type PresenceInfo struct {
 type ClientAuth struct {
 	RelayAuthPub ed25519.PublicKey
 	Sign         func(challenge []byte) ([]byte, error)
+
+	// Peer is the routing id of the counterparty whose revocation of THIS identity the
+	// dialer wants to be told about, and it is optional (ADR-007 B49).
+	Peer string
 }
 
 // Conn is a raw, unauthenticated framed connection to the relay over a single
@@ -458,7 +462,10 @@ func DialSecure(ctx context.Context, url string, auth ClientAuth, sec Security) 
 func authenticate(ctx context.Context, conn *Conn, auth ClientAuth) (*Client, error) {
 	rid := RoutingID(auth.RelayAuthPub)
 
-	resp, err := conn.control(ctx, "auth_init", map[string]any{"relay_auth_pub": []byte(auth.RelayAuthPub)})
+	resp, err := conn.control(ctx, "auth_init", map[string]any{
+		"relay_auth_pub": []byte(auth.RelayAuthPub),
+		"peer":           auth.Peer,
+	})
 	if err != nil {
 		_ = conn.Close()
 		return nil, err

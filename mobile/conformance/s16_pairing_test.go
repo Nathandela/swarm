@@ -61,9 +61,28 @@ type s16Pairing struct {
 	got bool
 }
 
-// s16MachinePairing starts a real responder over the real relay rendezvous. decide is the
-// machine operator's verdict at its own SAS gate, so a test can drive PB-PAIR-5's "declined".
+// s16MachinePairing starts a real responder over the real relay rendezvous under a freshly
+// minted machine relay-auth identity. decide is the machine operator's verdict at its own SAS
+// gate, so a test can drive PB-PAIR-5's "declined".
 func s16MachinePairing(t *testing.T, relayURL string, machineSignPub ed25519.PublicKey,
+	epoch uint32, decide bool) *s16Pairing {
+	t.Helper()
+	mAuthPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("machine relay-auth key: %v", err)
+	}
+	return s16MachinePairingAs(t, relayURL, machineSignPub, mAuthPub, epoch, decide)
+}
+
+// s16MachinePairingAs is s16MachinePairing over a STATED machine relay-auth identity.
+//
+// It exists because a machine's relay-auth key is durable machine state: `swarm remote pair`
+// re-pairs a replacement handset under the SAME identity the machine has always had, and
+// therefore under the same identity that placed any ban. A fixture that mints a fresh one per
+// ceremony models a machine that changes identity every time it pairs, which no production
+// path does -- and that difference is invisible to any test whose assertions do not span a
+// revoke and its recovery.
+func s16MachinePairingAs(t *testing.T, relayURL string, machineSignPub, mAuthPub ed25519.PublicKey,
 	epoch uint32, decide bool) *s16Pairing {
 	t.Helper()
 
@@ -81,11 +100,6 @@ func s16MachinePairing(t *testing.T, relayURL string, machineSignPub ed25519.Pub
 	if _, err := rand.Read(p.RID[:]); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	mAuthPub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("machine relay-auth key: %v", err)
-	}
-
 	m := pairing.NewMachine(pairing.MachineParams{
 		Static:       machineID.NoiseStatic(),
 		Secret:       p.Secret,

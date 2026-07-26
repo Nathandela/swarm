@@ -380,7 +380,11 @@ type serverConn struct {
 	authNonce  []byte
 	pendingPub ed25519.PublicKey
 	pendingRID string
-	superseded atomic.Bool
+	// pendingPeer is the counterparty this dial is here about, named by the dialer in
+	// auth_init and answered in auth_resp (ADR-007 B49). Empty means "no verdict wanted",
+	// which is what every machine-side dial sends.
+	pendingPeer string
+	superseded  atomic.Bool
 
 	rdvID    string
 	rdvInbox chan []byte
@@ -659,6 +663,7 @@ func (sc *serverConn) handleHello(payload []byte) error {
 func (sc *serverConn) handleAuthInit(payload []byte) error {
 	var req struct {
 		RelayAuthPub []byte `json:"relay_auth_pub"`
+		Peer         string `json:"peer"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
@@ -668,9 +673,6 @@ func (sc *serverConn) handleAuthInit(payload []byte) error {
 	}
 	pub := ed25519.PublicKey(append([]byte(nil), req.RelayAuthPub...))
 	rid := RoutingID(pub)
-	if sc.s.st.isRevoked(rid) {
-		return sc.replyErr(codeRevoked)
-	}
 	// Pre-signature rate limiting is keyed by the TRANSPORT SOURCE, never by the
 	// presented relay-auth pubkey (which is unproven until a signature verifies).
 	// A per-source auth_init window (ConnPerMin) bounds one network source without
@@ -696,6 +698,7 @@ func (sc *serverConn) handleAuthInit(payload []byte) error {
 	sc.authNonce = nonce
 	sc.pendingPub = pub
 	sc.pendingRID = rid
+	sc.pendingPeer = req.Peer
 	return sc.replyOK(map[string]any{"nonce": nonce})
 }
 
@@ -715,6 +718,36 @@ func (sc *serverConn) handleAuthResp(payload []byte) error {
 	msg := AuthChallengeMessage(sc.authNonce, sc.pendingRID)
 	if len(req.Signature) != ed25519.SignatureSize || !ed25519.Verify(sc.pendingPub, msg, req.Signature) {
 		return sc.replyErr(codeAuthFailed)
+	}
+	// THE REVOKED VERDICT, AND IT IS THE PEER'S ALONE (ADR-007 B49). A ban used to be a
+	// standing refusal of the banned identity: one global row, consulted by every dial it
+	// ever made, liftable only by its banner. That made every device_revoke MUTUAL ASSURED
+	// DESTRUCTION — whoever fired first removed the other from the relay for good, and no
+	// party the owner controlled could undo it, because lifting demands a signature under
+	// the victim's own key that the banner has never held.
+	//
+	// ENFORCEMENT IS THE DELETED EDGE; THIS IS ONLY THE SIGNAL. A ban never enforced
+	// anything: registration is open, so a banned party mints a fresh keypair and returns.
+	// What actually severs access is the pairs edge revokeAndPurge deletes, which is
+	// server-side and unforgeable. The ban's whole job is to TELL a revoked handset, so
+	// PB-APP-10 can show a re-pair prompt instead of a reconnect loop — and a signal is
+	// answered to whoever asks for it, which is why the dialer names the peer whose verdict
+	// it is here for and gets no other party's.
+	//
+	// The relay cannot supply that asymmetry itself: after a revoke the machine and the
+	// handset hold identical state — no edges, one ban — so every rule symmetric in
+	// (banner, victim) either refuses both registrations or neither. The handset names its
+	// pinned machine (mobile/relay.go); the machine names nobody, because no legitimate
+	// flow revokes a machine at the relay — `swarm remote revoke` is the only production
+	// caller of the verb, and the phone's own RevokeThisDevice rides the sealed command
+	// plane to the gateway instead. So a stolen handset's ban reaches no verdict the
+	// machine consults.
+	//
+	// It is answered HERE rather than at auth_init, where the ban used to be read, because
+	// a ban is a fact about a PROVEN identity: pre-signature it was a free oracle for
+	// anyone holding a routing id.
+	if sc.pendingPeer != "" && sc.s.st.revokedBy(sc.pendingRID, sc.pendingPeer) {
+		return sc.replyErr(codeRevoked)
 	}
 	// No global auth counter is charged here: admission is bounded by the per-source
 	// auth_init window (above) plus MaxConcurrentConnections/HandshakeTimeout, none
@@ -1072,7 +1105,8 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	if !sc.s.st.mayActOn(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
-	if err := sc.s.st.revokeAndPurge(sc.rid, req.Target); err != nil {
+	forgotToken, err := sc.s.st.revokeAndPurge(sc.rid, req.Target)
+	if err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
 	sc.s.mu.Lock()
@@ -1084,7 +1118,13 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	}
 	// The durable half rode inside revokeAndPurge's single transaction above; this drops
 	// the cache so no push reaches the revoked device before the next restart either.
-	delete(sc.s.tokens, req.Target)
+	// It follows the durable decision rather than repeating it: the token survives a
+	// revoke that leaves another relationship standing (ADR-007 B49), and a cache cleared
+	// where the row was kept would silence a handset the relay can still legitimately
+	// wake, until a restart happened to re-hydrate it.
+	if forgotToken {
+		delete(sc.s.tokens, req.Target)
+	}
 	delete(sc.s.presence, req.Target)
 	sc.s.mu.Unlock()
 	// ME-1: sever the revoked target's live socket OUTSIDE s.mu (mirrors

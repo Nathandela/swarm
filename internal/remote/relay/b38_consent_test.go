@@ -106,7 +106,7 @@ func TestB38_ObserverOfThePubkeyCannotBanANeverPairedMachine(t *testing.T) {
 	}
 
 	// The measurement that makes this a DoS finding: the machine's FIRST EVER dial.
-	if srv.st.isRevoked(machineRID) {
+	if srv.st.revokedBy(machineRID, attacker.rid) {
 		t.Fatalf("ADR-007 B38: the machine is banned at the relay by a party it never met (rid %s)", machineRID)
 	}
 	if _, err := Dial(testCtx(t), srv.URL(), authFor(machinePub, machinePriv)); err != nil {

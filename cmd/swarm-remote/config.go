@@ -188,6 +188,10 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 			// The MACHINE identity is a software key with no custody gate, so it never
 			// refuses; relay.ClientAuth.Sign is failable for the PHONE (ADR-007 B18(a)).
 			Sign: func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
+			// NO Peer, deliberately, for the reason cmd/swarm/remote.go withMachineRelay
+			// states in full (ADR-007 B49): asking the relay whether the paired handset has
+			// revoked this machine turns a stolen handset into a permanent kill switch over
+			// the gateway, and no legitimate flow revokes a machine at the relay.
 		},
 		// C5 (finding, re-audit): the relay keys the phone's mailbox by
 		// relay.RoutingID(its relay-auth pub) -- the SAME deriver the relay (client.go:

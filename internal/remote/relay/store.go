@@ -21,9 +21,28 @@ var (
 	// key per authorize_device, naming who granted whom. The direction is the
 	// authority check itself (see authorizePair and mayActOn), not a storage detail.
 	bucketPairs = []byte("pairs")
-	// bucketRevoked is rid -> the routing id that BANNED it (ADR-007 B24). The value is
-	// load-bearing, not a marker: it is what authorizePair matches the pairer against, and
-	// it is the whole of "the owner's machine lifts the ban it placed".
+	// bucketRevoked is "banned\x00banner" -> {1}: a ban is a fact about ONE RELATIONSHIP,
+	// not about the banned identity (ADR-007 B49). It was rid -> banner, one row per banned
+	// party, consulted by every dial that party ever made — and that shape is what made every
+	// device_revoke MUTUAL ASSURED DESTRUCTION. Whoever fired first removed the other from
+	// the relay entirely, only the banner could lift it (B24), and the banner was reachable
+	// by nobody: lifting needs an authorize_device naming the victim, which since B38 demands
+	// a signature under the VICTIM's own private relay-auth key that the banner never held.
+	//
+	// THE BAN ENFORCES NOTHING AND NEVER DID, which is the correction B26 diagnosed and this
+	// key shape finally expresses: relay registration is OPEN, so a banned identity mints a
+	// fresh keypair and returns — the ban stops only the identity an attacker trivially
+	// changes and an honest owner never can. What severs access is the deleted pairs edge,
+	// which is server-side and unforgeable. The ban's whole remaining job is to TELL the
+	// banned party (PB-APP-10's re-pair prompt), and it was carrying that signalling job on a
+	// global-authority mechanism. The mismatch was the vulnerability.
+	//
+	// A ROW WRITTEN BY THE OLD SHAPE IS DEAD RATHER THAN MISREAD, and that is the right
+	// migration: the two key shapes cannot collide (a bare rid is 32 bytes and contains no
+	// 0x00; a pair key is 65 bytes and contains exactly one), and nothing reads the bucket
+	// except revokedBy, which asks for the pair shape. So an existing relay's stored bans
+	// stop answering at the next start — which un-bricks every identity a global ban had
+	// already destroyed, and costs a re-pair prompt that has by then served its purpose.
 	bucketRevoked = []byte("revoked")
 	// bucketTokens holds rid -> push token (PB-PUSH-6). It is a NEW durable device
 	// identifier at rest in the untrusted relay's store, and it has its own named bucket
@@ -327,6 +346,11 @@ var errConsentRetired = errors.New("relay: route consent ceremony retired")
 // TestRelay_ABanIsLiftedOnlyByTheIdentityThatPlacedIt and
 // TestRelay_TheBanningMachineCanLiftItsOwnBan.
 //
+// THE CLEAR IS NOW A ONE-KEY DELETE RATHER THAN A COMPARE, and that is the same rule, not a
+// weaker one: bucketRevoked is keyed by the PAIR (ADR-007 B49), so the row this deletes is by
+// construction the ban THIS pairer placed on THIS device. No other party's ban is reachable
+// from here, which is what the value comparison used to enforce by hand.
+//
 // THE BANNER-SCOPED CLEAR SURVIVES THE DIRECTED EDGE, and it has to be checked
 // rather than assumed, because B24's own note said this policy made the mirror
 // hole permanent: the ban an attacker placed on the machine stuck, since only its
@@ -378,11 +402,7 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
 			return err
 		}
-		rb := tx.Bucket(bucketRevoked)
-		if !bytes.Equal(rb.Get([]byte(device)), []byte(pairer)) {
-			return nil // not banned, or banned by somebody else: the grant still stands.
-		}
-		return rb.Delete([]byte(device))
+		return tx.Bucket(bucketRevoked).Delete(pairKey(device, pairer))
 	})
 }
 
@@ -504,17 +524,46 @@ func (s *store) loadTokens() (map[string]string, error) {
 	return out, err
 }
 
-// revokeAndPurge atomically unpairs pairer<->rid, marks rid revoked BY pairer,
-// drops rid's push token, and drops rid's mailbox — in ONE transaction (ME-1),
-// so a crash/read mid-revoke can never observe rid as still-paired,
-// not-yet-revoked, still-pushable, or holding a pre-revoke backlog.
+// revokeAndPurge atomically unpairs pairer<->rid, records the ban pairer places on
+// rid, drops the frames PAIRER queued for rid, and — only if this severed rid's last
+// relationship — drops rid's push token, in ONE transaction (ME-1), so a crash/read
+// mid-revoke can never observe rid as still-paired, not-yet-revoked, still-pushable,
+// or holding a pre-revoke backlog from this sender.
 //
-// Recording the banner is ADR-007 B24: it is the only thing that lets
-// authorizePair tell the owner's machine lifting its own ban from a stranger
-// lifting it. It is also why there is no second, banner-less writer of this
-// bucket — one would place a ban nobody could ever lift.
-func (s *store) revokeAndPurge(pairer, rid string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+// Recording the banner is ADR-007 B24: it is the only thing that lets authorizePair
+// tell the owner's machine lifting its own ban from a stranger lifting it. It is also
+// why there is no second, banner-less writer of this bucket — one would place a ban
+// nobody could ever lift.
+//
+// EVERYTHING THIS DESTROYS IS SCOPED TO THE PAIR, AND THAT IS ADR-007 B27's OBJECTION
+// ANSWERED RATHER THAN ARGUED AROUND. B27 falsified pair-scoping the ban by pointing
+// out that this function ALSO deleted the target's whole mailbox and its push token,
+// both keyed per TARGET — so scoping the ban left an attacker able to destroy every
+// undelivered frame and silence the handset, repeatedly, on demand. The anonymous reach
+// that made that critical is gone (B38: nothing reaches device_revoke without the
+// target's own signed consent), but the objection is structural and is met on its own
+// terms: the stored record carries its SENDER (recordV1, what mailboxDepthFrom reads),
+// so the purge deletes exactly the revoker's frames and leaves every other sender's
+// alone.
+//
+// THE TOKEN IS THE ONE THING THAT CANNOT REPAIR ITSELF, which is why it is conditioned
+// rather than simply left. Backgrounding DISCONNECTS the phone (ADR-007 B16), so the
+// push token is what a backgrounded handset is woken BY: drop it and there is no wake,
+// therefore no reconnect, therefore no re-registration to restore it — the silence is
+// permanent, not a nuisance the next connect repairs. So it is forgotten only when no
+// relationship remains that could ever wake this device, which is exactly when a
+// retained token would be an unreachable provider-visible identifier for a device its
+// owner disowned (PB-PUSH-6). One party to one relationship cannot silence a handset
+// another relationship still depends on.
+//
+// It reports whether the token was forgotten, because the relay holds a WRITE-THROUGH
+// CACHE of the token map and the two halves must not disagree: a cache cleared while the
+// durable row stands resurrects the token on the next restart, and a durable row deleted
+// while the cache stands keeps pushing until one. The condition is decided once, inside
+// the transaction that decides everything else about this revoke.
+func (s *store) revokeAndPurge(pairer, rid string) (bool, error) {
+	forgotToken := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bucketPairs)
 		_ = pb.Delete(pairKey(pairer, rid))
 		_ = pb.Delete(pairKey(rid, pairer))
@@ -533,27 +582,63 @@ func (s *store) revokeAndPurge(pairer, rid string) error {
 				return err
 			}
 		}
-		if err := tx.Bucket(bucketRevoked).Put([]byte(rid), []byte(pairer)); err != nil {
+		// The ban is keyed by the PAIR (ADR-007 B49), and the retirement above is keyed by
+		// the same pair. That is not a coincidence worth leaving implicit: the retirement is
+		// what stops a replayed consent lifting this ban, and it is exactly as durable as
+		// the ban it protects — a relay that loses one loses the other in the same instant,
+		// so no surviving revocation is ever left for a replay to undo.
+		if err := tx.Bucket(bucketRevoked).Put(pairKey(rid, pairer), []byte{1}); err != nil {
 			return err
 		}
 		// In the SAME transaction as the revocation: a token purged separately could
 		// survive a crash between the two writes and be resurrected by the next restart,
 		// resuming pushes to a handset whose access the owner withdrew.
-		if err := tx.Bucket(bucketTokens).Delete([]byte(rid)); err != nil {
-			return err
+		if !grantsAnyone(pb, rid) {
+			if err := tx.Bucket(bucketTokens).Delete([]byte(rid)); err != nil {
+				return err
+			}
+			forgotToken = true
 		}
-		root := tx.Bucket(bucketItems)
-		if root.Bucket([]byte(rid)) != nil {
-			return root.DeleteBucket([]byte(rid))
+		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
+		if mb == nil {
+			return nil
+		}
+		src := []byte(pairer)
+		c := mb.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if isRecord(v) && bytes.Equal(v[9:recordHead], src) {
+				// c.Delete() leaves the cursor ON the deleted slot, so the loop's own
+				// c.Next() is what advances: an extra advance here steps over the record
+				// that shifted down and leaves it drainable. Fenced by
+				// TestB49_ARevokeDoesNotDestroyAnotherSendersQueuedFrames, whose revoker
+				// queues two ADJACENT frames for exactly this reason.
+				if err := c.Delete(); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
+	return forgotToken, err
 }
 
-func (s *store) isRevoked(rid string) bool {
+// grantsAnyone reports whether rid still has an outbound grant — some party it has
+// authorized to act on its route. It is the "is any relationship left" question the
+// revoke asks before forgetting a device's push token, and it reads the same directed
+// edge pairedPeers enumerates.
+func grantsAnyone(pb *bolt.Bucket, rid string) bool {
+	prefix := append([]byte(rid), 0)
+	k, _ := pb.Cursor().Seek(prefix)
+	return k != nil && bytes.HasPrefix(k, prefix)
+}
+
+// revokedBy reports whether banner has revoked banned. It is a PAIR lookup, and the
+// relay's only consumer is the handshake verdict a dialer asks for by naming its peer
+// (ADR-007 B49) — never a standing refusal of the banned identity itself.
+func (s *store) revokedBy(banned, banner string) bool {
 	revoked := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
-		revoked = tx.Bucket(bucketRevoked).Get([]byte(rid)) != nil
+		revoked = tx.Bucket(bucketRevoked).Get(pairKey(banned, banner)) != nil
 		return nil
 	})
 	return revoked
