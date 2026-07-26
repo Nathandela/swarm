@@ -44,11 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-KEY-7": "no purge trigger exists, and wiring one as specified would brick the "
-                "phone at the first screen lock (ADR-007 B35)",
-    "PB-SEC-2": "the freshness gate does nothing on the send path: the content key is "
-                "unwrapped once at Resume and read from Go memory thereafter, so no "
-                "re-authorization occurs per use (ADR-007 B36)",
     "PB-E2E-2": "the emulator smoke has never run -- its own evidence file disclaims it "
                 "and no log or screenshot exists; counted shipped only because evidence "
                 "is measured per SLICE, not per requirement (ADR-007 B38)",

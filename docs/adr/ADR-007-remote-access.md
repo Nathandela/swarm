@@ -1894,7 +1894,7 @@ one-line wire-up would have produced a crash, not a feature.
 reverse-bound so the result is inbound — and the epoch keys crossing *less* is a **narrowing**, which
 B8 explicitly permits. No bound `App` method returns `[]byte`; both directions remain fenced.
 
-**B17(b) is now FALSE.** It states that after a purge "the Android side must re-install it, without any
+**B17(b) is now FALSE and is hereby STRUCK — see B44, which supersedes it entirely.** It states that after a purge "the Android side must re-install it, without any
 authentication, before it can open the envelope". **The Android side no longer has any source for
 those bytes.** The same false claim is repeated in code at `mobile/app.go` on `InstallContentKey`
 ("PB-KEY-7's recovery path... so the first screen lock does not brick the app").
@@ -2201,3 +2201,65 @@ recoverable and loud; a deletion is neither. It also gives the relay-adversary n
 schedules delivery anyway, whereas **acking gave it destruction**, which is strictly more. The
 previous behaviour let a hostile relay withhold delivery for ten minutes and then release, and have
 the victim permanently delete its own inbound plane while reporting itself healthy.
+
+### B44 — the lock RETURNS the content tier to locked; it does not destroy it. B17(b) is struck.
+
+B35 recorded three options and took none. The implementer found a **fourth**, and it is better than all
+three: **a screen lock puts the phone into exactly the state a push-woken process is already in** — a
+state the design has modelled since S15 and which the load path already handles.
+
+`PurgeKeys` now drops from **memory** precisely what a locked *load* leaves unread — epoch content
+key, send-seq ceilings, receive high-waters, op queue, the three decrypted caches — and unbinds the
+router; destroys **at rest** only the decrypted caches; **carries** the sealed content key verbatim,
+which is what an unopened tier has always meant to every `Save`; and does not touch the wake tier.
+Recovery is `App.UnlockContent`, **a fresh Keystore unwrap** — which is PB-KEY-7's own recovery
+clause, and the round trip at which PB-SEC-2's 60-second window binds. The equivalence between a lock
+and a locked load is fenced by test.
+
+**Why B35's objection to option (1) does not apply here.** B35 rejected "purge memory only" as
+contradicting PB-KEY-7's at-rest clause. That clause says *purge the decrypted session, snapshot and
+reply caches* — and those **are** destroyed at rest, cheaply, because PB-SYNC-2 re-derives all three
+by resync. **The text B35 was actually reading was `Store.PurgeKeys`'s implementation doc and B17(b),
+not the requirement.** I wrote B35; that misreading is mine.
+
+**Why destroying the sealed key at rest buys nothing.** It is sealed under an auth-gated Keystore KEK,
+so a locked handset cannot open it. Destroying it helps only against an attacker who has **already
+defeated Keystore** — who therefore also holds `device.key`, the recipient key and the command-signing
+seed. Against that attacker the cost is total and permanent, and the benefit is zero.
+
+**PB-SEC-11 is resolved, not traded.** The trigger is an `Application`-owned lifecycle callback plus a
+**runtime-registered, non-exported** `ACTION_SCREEN_OFF` receiver. An `Application` subclass is **not
+a component**: no intent filter, no manifest entry, unreachable from another process — verified, zero
+manifest references. It is also strictly stronger than `onPause`: a hostile app can start the Activity
+(which *foregrounds* us and purges nothing) but cannot background the process or turn the screen off.
+
+**A brick closed on the way.** With the sealed key retained, `grantLossDetected`'s keyless test —
+"no key in this process" — would have marked PB-KEY-3 **terminal at every screen lock**, the same
+brick by another road. It now asks whether the phone *has* a key at rest, not whether this process
+holds one.
+
+**B17(b) is struck**, not merely marked false, and the four tests that pinned the falsified at-rest
+destruction were **inverted in place** with the reasoning recorded in each — including
+`the_wake_tier_is_reinstallable_after_a_purge_without_authentication`, which pinned an impossible
+property twice over.
+
+**B35's line "no `ProcessLifecycleOwner`, no `ACTION_SCREEN_OFF`, no `onStop`/`onTrimMemory`" is now
+stale** — both signals exist.
+
+**Residuals, accepted with reasons.** PB-SEC-2's mid-session lapse *while continuously foregrounded*
+is deliberately not closed: every re-acquisition is Keystore-gated, so lock, background and process
+death are covered and the window binds at each; a foreground timer would produce a refusal whose only
+remedy is a `BiometricPrompt` **this app does not have**, and wiring a gate whose exit is unbuilt is
+the failure class this phase keeps finding. Narrow by construction — continuously foregrounded means
+the device is unlocked and the user is present.
+
+**Two findings the implementer surfaced rather than buried**: `MarkGrantLost` may now have **no
+production trigger** (its only one was the lock brick — a seventh uncalled-symbol instance *created by
+B35's own falsified premise*), and a genuinely grant-lost phone reads `unreconciled` **before** it
+reads grant-lost, so a user in a terminal state is shown a transient sync problem — PB-APP-10's
+failure loop, a refusal-precedence decision still open.
+
+**And the naming**: `PurgeKeys` no longer purges plural or destroys at rest. `LockContent` is the
+honest name; it was kept only to bound gate risk across the golden surface, screen coverage and eight
+test files. B35's own lesson argues for renaming it, and that is recorded as follow-up rather than
+done under a security fix.
