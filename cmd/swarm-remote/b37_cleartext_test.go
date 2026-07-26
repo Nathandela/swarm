@@ -30,6 +30,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 )
 
 // gwTap is a websocket proxy in front of the real relay: it forwards every frame verbatim
@@ -148,6 +149,19 @@ func gwAuth(t *testing.T) relay.ClientAuth {
 	}
 }
 
+// gatewayParamsFor builds the sidecar's params the way resolveGatewayParams does: the
+// transport policy is RESOLVED FROM THE PROVISIONING, not chosen by the caller. Handing
+// run() a hand-built relay.Security would let this fence pass against a sidecar that
+// dials under whatever it is given, which is the shape of the defect it exists to catch.
+func gatewayParamsFor(t *testing.T, relayURL string) gatewayParams {
+	t.Helper()
+	sec, err := relaycfg.Config{RelayURL: relayURL}.Security()
+	if err != nil {
+		t.Fatalf("resolve the machine transport policy: %v", err)
+	}
+	return gatewayParams{RelayURL: relayURL, RelayAuth: gwAuth(t), RelaySecurity: sec}
+}
+
 // TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey drives run()
 // against a cleartext relay it must refuse, having first proved through the same tap that
 // a permitted URL does reach the handshake.
@@ -161,7 +175,7 @@ func TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey(t *tes
 	// deliberate: the assertion is what crossed the wire, not that the gateway ran.
 	ctlCtx, ctlCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer ctlCancel()
-	err := run(ctlCtx, gatewayParams{RelayURL: tap.literalURL(), RelayAuth: gwAuth(t)})
+	err := run(ctlCtx, gatewayParamsFor(t, tap.literalURL()))
 	if errors.Is(err, relay.ErrCleartextRefused) {
 		t.Fatalf("the loopback relay a developer runs, and the one S19 spawns the real "+
 			"sidecar against, was refused: %v", err)
@@ -179,7 +193,7 @@ func TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey(t *tes
 	// deadline.
 	fenceCtx, fenceCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer fenceCancel()
-	err = run(fenceCtx, gatewayParams{RelayURL: tap.namedURL(), RelayAuth: gwAuth(t)})
+	err = run(fenceCtx, gatewayParamsFor(t, tap.namedURL()))
 	if !errors.Is(err, relay.ErrCleartextRefused) {
 		t.Fatalf("run() against a cleartext relay returned %v, want relay.ErrCleartextRefused", err)
 	}

@@ -59,7 +59,7 @@ The async mailbox `seq` is the durable journal cursor (one coordinate; a gateway
 
 ### D7. Input and approval semantics (residuals R3, R4 folded into D6)
 
-Raw `input`/`resize` are **live-only** — they require a live connection holding the current lease generation and are never durably queued or replayed; on disconnect a queued keystroke resolves to an explicit "delivery unknown / not sent." Take-control opens a **signed one-shot `take_control` op** (device signature + a single biometric gate token) establishing a bounded authenticated control session (TTL + explicit end); keystrokes ride that session, not per-keystroke signatures. Discrete ops (interrupt/kill/approve/launch) each carry their own signature + gate token. Only high-level idempotent ops enter the offline queue.
+Raw `input`/`resize` are **live-only** — they require a live connection holding the current lease generation and are never durably queued or replayed; on disconnect a queued keystroke resolves to an explicit "delivery unknown / not sent." Take-control opens a **signed one-shot `take_control` op** (device signature + a single biometric gate token) establishing a bounded authenticated control session (TTL + explicit end); keystrokes ride that session, not per-keystroke signatures. Discrete ops (interrupt/kill/approve/launch) each carry their own signature + gate token. ~~Only high-level idempotent ops enter the offline queue.~~ **WITHDRAWN 2026-07-26 (ADR-007 B43): there is no offline queue and there cannot be one built from these commands.** A queued op carries a signature valid for one minute and is never re-signed on replay, and re-signing at drain would need PB-SEC-2's per-use biometric for exactly the op list this sentence names — a prompt, not a queue. The phone instead refuses while offline with `ErrClassOffline`, tells the user, and surfaces the state, which is what PB-NET-4's other clauses require.
 
 Approval binds an immutable `(machine, session, agent-instance{shim_pid, shim_start_time}, interaction_id, content_hash, expires_at)` tuple, with `operation_id` separated from `interaction_id`, daemon-authoritative expiry (phone countdowns are display-only), a byte-exact content canonicalization + SHA-256 hash, and interaction consumption/supersession state; a stale or mismatched approve is rejected daemon-side and never translated into a blind keystroke. The delivery mechanism (whether a minutes-later decision can be applied to the synchronous in-PTY prompt) is resolved by spike S-C; the binding/validation layer above is Phase 1 regardless.
 
@@ -2157,3 +2157,47 @@ correct in both spellings, and it is not.
 
 **On E15.1**: the strengthened fence is `strings.Contains(file, req)`. It moved from "the file exists"
 to "the file mentions it" — **one step, not the step** — and PB-NET-2 passed it while NOT MET.
+
+### B43 — the offline queue is withdrawn; and one more of my amendments had the unchecked shape
+
+**PB-NET-4's queue clause and D7's "only high-level idempotent ops enter the offline queue" are
+withdrawn.** The queue is not unwired — it is **unbuildable from the commands this system authors**.
+A queued op is a *pre-signed* `DeviceCommandAuth`; `sealSignedCommand` stamps `ExpiresAt = now +
+CommandTTLFor(action)`, one minute for an ordinary op; `opqueue.go` states it is never re-signed on
+replay; `deviceauth.go` refuses it as `command expired`. **So the queue delivers nothing for any
+outage longer than sixty seconds — every outage a queue exists for.** Re-signing at drain is
+unavailable, because PB-SEC-2 pins the biometric gate **per use** for exactly the op list D7 names: a
+drain would be a prompt, not a queue.
+
+**Third confirmed instance of a requirement invalidated by a fix to a different one.** §6.0's
+signed-horizon-by-op-class and PB-SEC-2's per-use gate landed later, and nothing re-derived PB-NET-4
+against either. The phone's actual behaviour — refuse with `ErrClassOffline`, tell the user, surface
+the state — satisfies PB-NET-4's remaining clauses, which is why this is a withdrawal rather than a
+defect.
+
+**PB-STATE-9's clause (3) loses its subject with it.** It reasoned that `PendingOps` carries "session
+ids and, for a launch, the command line the user typed", concluding the purge must leave it. Nothing
+in production ever writes that field. The **rule** survives — content-tier and non-purgeable is the
+right home *if* a queue is ever built, and it is enforced — but the **justification** is false today,
+and the tier test pins it over a hand-built fixture, i.e. a test over synthetic content for a field
+production never fills.
+
+**And the answer to the question I could not answer myself: one more of my amendments has the
+PB-PAIR-5 shape.** **PB-PUSH-4** — I added the clause "authenticated -> a *distinguishable*
+notification that still reads **no** session content", and **the added half has no assertion**: the
+content-leak loop runs only against the locked path. Low severity, because the behaviour is right by
+construction (the body concatenates two argument-less string resources) — but the clause I wrote to
+make distinguishability safe is unchecked, which is exactly the defect I amended it to prevent.
+**PB-OPS-5** is a weaker variant: its criterion was moved onto a document, the document says it, and
+nothing reads the document. PB-SEC-4, PB-STATE-4 and PB-PUSH-9 were properly re-checked.
+
+**The generalisation, now that there are three of these**: *an amendment changes what must be true,
+and this phase had no step that re-checks the surface a requirement was moved onto.* Every amendment
+was reviewed for whether its new wording was right, and none for whether anything now tests it.
+
+**Ruling on the stale-age trade.** Not acking an age-refused frame leaves it uncompacted, so the
+drain re-reads it until the relay's retention drops it — a bounded stall. **Accepted.** A stall is
+recoverable and loud; a deletion is neither. It also gives the relay-adversary nothing new, since it
+schedules delivery anyway, whereas **acking gave it destruction**, which is strictly more. The
+previous behaviour let a hostile relay withhold delivery for ten minutes and then release, and have
+the victim permanently delete its own inbound plane while reporting itself healthy.

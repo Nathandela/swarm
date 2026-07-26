@@ -115,6 +115,77 @@ func TestPBNET2_NoProductionCodeDialsTheRelayWithoutATransportPolicy(t *testing.
 	}
 }
 
+// TestPBOPS5_OneParserOwnsRelayJSON is the structural half of "the pin must not be
+// applied to two of three dial paths".
+//
+// Three copies of this file's shape used to exist -- cmd/swarm's readRelayURL,
+// cmd/swarm-remote's loadRelayURL and internal/skeleton's loadRelayURL -- each with its
+// own anonymous struct and its own copy of the JSON key, and two of them carried comments
+// saying the writer and the reader "must agree on this filename + shape". Adding a field
+// to two of three produces a machine that reads as pinned and is not, which is worse than
+// no pin: nothing at runtime distinguishes it from a pinned one.
+//
+// The fence looks for the JSON key in a STRING LITERAL, because that is what a fourth
+// reader would have to write in order to exist at all -- a struct tag or an explicit
+// key. It walks the AST rather than the bytes for the reason ADR-007 B42 records as a
+// recurring shape: a text search over source matches the COMMENTS that describe the file
+// (both former readers carried one), so it would fail forever against files that parse
+// nothing.
+func TestPBOPS5_OneParserOwnsRelayJSON(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	var offenders []string
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "testdata", "node_modules", "relaycfg":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			val, uerr := strconv.Unquote(lit.Value)
+			if uerr != nil {
+				return true
+			}
+			// The two forms a reader or writer of this file must use: a struct tag, or
+			// the bare key. Prose that merely MENTIONS the key -- an error message
+			// naming the field it could not find -- is not a parser and does not count.
+			if val != "relay_url" && !strings.Contains(val, `json:"relay_url"`) {
+				return true
+			}
+			rel, _ := filepath.Rel(root, path)
+			offenders = append(offenders, rel+":"+strconv.Itoa(fset.Position(lit.Pos()).Line))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tree: %v", err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("relay.json is parsed or written outside internal/remote/relaycfg, in %v.\n"+
+			"One parser owns the file so a field cannot be added to some readers and not "+
+			"others: a machine pinned on two of its three dial paths reads as covered and is "+
+			"not (ADR-007 B34).", offenders)
+	}
+}
+
 // relayLocalName returns the name the relay package is imported under in f, and whether
 // it is imported at all. The alias is resolved rather than assumed, so a file importing
 // it as `rly` is still checked.

@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 137 |
-| Evidenced (measured on disk) | 137 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
+| Shipped (asserted by hand) | 139 |
+| Evidenced (measured on disk) | 139 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **3** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -89,7 +89,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-4 | S6 | **NOT MET — AWAITING AMENDMENT** | Reconnect/backoff/re-auth/state clauses are met (`docs/verification/remote-phaseB-s6-evidence.md`). The QUEUE clause cannot be met as written and is not a wiring gap: a queued op is a command signed for §6.0's 1-minute horizon that `internal/phonecore/opqueue.go` states is never re-signed on replay, and `internal/skeleton/deviceauth.go` refuses it as "command expired" — proven in `internal/skeleton/b42_offlinequeue_test.go`. Re-signing at drain needs PB-SEC-2's per-use biometric, i.e. the user present, which is a prompt and not a queue. Requires an amendment to PB-NET-4 and to ADR-007 D7's last sentence (ADR-007 B42) |
+| PB-NET-4 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
@@ -102,7 +102,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-PAIR-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-| PB-PAIR-5 | S16 | shipped | `android/gate/pairingstates_test.go` — the app now declares DIFFERENT_MACHINE, RATE_LIMITED and FAILED, retires ALREADY_PAIRED, and `PairingSurface.stepOf` routes every state `mobile/pairing.go` can report; each has its own message. The gate compares the two alphabets in both directions, which is the control that was missing when B42 found the drift |
+| PB-PAIR-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-7 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PUSH-0 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |

@@ -8,7 +8,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -27,8 +27,14 @@ type gatewayParams struct {
 	DaemonSocket string
 	RelayURL     string
 	RelayAuth    relay.ClientAuth
-	PhoneTarget  string
-	Key          crypto.ContentKey
+	// RelaySecurity is the transport policy the sidecar dials under (PB-NET-2), resolved
+	// from the SAME relay.json the URL came from: verified TLS, cleartext refused except
+	// to a loopback IP literal, and the operator's SPKI pin when one is configured
+	// (ADR-007 B34). It is a resolved VALUE rather than a flag the dial re-derives, so
+	// the policy cannot differ between assembly and dial.
+	RelaySecurity relay.Security
+	PhoneTarget   string
+	Key           crypto.ContentKey
 	// WakeKey is the content-free key the push trigger seals its wakes under (PB-PUSH-0).
 	// machineid.Load already materialises it in this process -- marshal/unmarshal read one
 	// buffer holding both signing privates, the content key AND this -- so resolving it
@@ -94,7 +100,14 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		return gatewayParams{}, fmt.Errorf("load machine identity: %w", err)
 	}
 
-	relayURL, err := loadRelayURL(stateDir)
+	relayCfg, err := loadRelayConfig(stateDir)
+	if err != nil {
+		return gatewayParams{}, err
+	}
+	// The transport policy is resolved during ASSEMBLY, alongside the identity and the
+	// device registry, so a malformed pin is a provisioning failure the supervision unit
+	// reports rather than a dial failure that reads as "the relay is down" (ADR-007 B33).
+	relaySecurity, err := relayCfg.Security()
 	if err != nil {
 		return gatewayParams{}, err
 	}
@@ -162,8 +175,9 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	}
 
 	return gatewayParams{
-		DaemonSocket: daemonSocket,
-		RelayURL:     relayURL,
+		DaemonSocket:  daemonSocket,
+		RelayURL:      relayCfg.RelayURL,
+		RelaySecurity: relaySecurity,
 		RelayAuth: relay.ClientAuth{
 			RelayAuthPub: id.RelayAuthPublic(),
 			// The MACHINE identity is a software key with no custody gate, so it never
@@ -195,24 +209,20 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	}, nil
 }
 
-// loadRelayURL reads <stateDir>/remote/relay.json ({"relay_url":"..."}),
-// matching the shape internal/skeleton/pairing_config.go's loadRelayURL
-// reads. Unlike that helper (which treats an absent file as "no relay
-// configured"), the gateway binary requires a relay to run: a missing,
+// loadRelayConfig reads the machine's relay provisioning through the one parser that owns
+// the file (relaycfg). Unlike internal/skeleton's reader -- which treats an absent file as
+// "no relay configured" -- the gateway binary requires a relay to run, so a missing,
 // unreadable, unparseable, or empty relay_url is a fail-closed error here.
-func loadRelayURL(stateDir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(stateDir, "remote", "relay.json"))
+func loadRelayConfig(stateDir string) (relaycfg.Config, error) {
+	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil {
-		return "", fmt.Errorf("read relay.json: %w", err)
+		return relaycfg.Config{}, err
 	}
-	var rc struct {
-		RelayURL string `json:"relay_url"`
+	if !found {
+		return relaycfg.Config{}, fmt.Errorf("read relay.json: %w", os.ErrNotExist)
 	}
-	if err := json.Unmarshal(b, &rc); err != nil {
-		return "", fmt.Errorf("parse relay.json: %w", err)
+	if cfg.RelayURL == "" {
+		return relaycfg.Config{}, fmt.Errorf("relay.json present but relay_url is empty")
 	}
-	if rc.RelayURL == "" {
-		return "", fmt.Errorf("relay.json present but relay_url is empty")
-	}
-	return rc.RelayURL, nil
+	return cfg, nil
 }

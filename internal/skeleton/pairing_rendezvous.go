@@ -52,13 +52,17 @@ var _ pairing.RendezvousTransport = (*relayRendezvous)(nil)
 // conn is leaked on any path (Machine.Pair's final Complete runs before that
 // cancellation).
 //
-// relay.MachineSecurity, not a bare DialRaw: this is the daemon, a release binary, and
+// A transport policy, not a bare DialRaw: this is the daemon, a release binary, and
 // PB-NET-2 applies to every dial it makes (ADR-007 B34/B37). The rendezvous discloses no
 // relay-auth key, but a cleartext hop still exposes the routing metadata the requirement
 // bans, and the relay URL it is handed is whatever `swarm remote init` persisted.
-func relayRendezvousFactory(relayURL string) func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
+//
+// sec is RESOLVED BY THE CALLER from the same relay.json the URL came from, so this
+// machine's configured pin applies to the pairing exchange exactly as it applies to the
+// gateway's connection and the CLI's. A pin on two of the three would be worse than none.
+func relayRendezvousFactory(relayURL string, sec relay.Security) func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
 	return func(ctx context.Context, id [16]byte) (pairing.RendezvousTransport, error) {
-		conn, err := relay.DialRawSecure(ctx, relayURL, relay.MachineSecurity())
+		conn, err := relay.DialRawSecure(ctx, relayURL, sec)
 		if err != nil {
 			return nil, err
 		}

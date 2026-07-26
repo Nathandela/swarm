@@ -55,9 +55,10 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 func run(ctx context.Context, p gatewayParams) error {
 	// PB-NET-2 on the path production takes (ADR-007 B34/B37). The sidecar's auth_init
 	// carries the MACHINE's full relay-auth public key, so a cleartext hop discloses it
-	// to any observer; MachineSecurity refuses ws:// to everything but a loopback IP
-	// literal, and decides it from the URL before a socket is opened.
-	client, err := relay.DialSecure(ctx, p.RelayURL, p.RelayAuth, relay.MachineSecurity())
+	// to any observer; the policy refuses ws:// to everything but a loopback IP literal,
+	// decides it from the URL before a socket is opened, and carries the operator's SPKI
+	// pin when relay.json configures one.
+	client, err := relay.DialSecure(ctx, p.RelayURL, p.RelayAuth, p.RelaySecurity)
 	if err != nil {
 		return fmt.Errorf("dial relay: %w", err)
 	}

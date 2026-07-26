@@ -30,6 +30,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
@@ -84,10 +85,11 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 // and the daemon assembly must agree on it.
 const remoteIdentityFile = "machine.key"
 
-// remoteRelayFile mirrors remoteRelayFile in internal/skeleton/pairing_config.go:
-// <stateDir>/remote/relay.json is the exact path loadRelayURL reads, and the path
-// `swarm remote init --relay-url` must agree on.
-const remoteRelayFile = "relay.json"
+// remoteRelayFile is relaycfg.FileName, re-stated here only for the existence check
+// `swarm remote status` makes. The FILE ITSELF is parsed and written in exactly one
+// place, internal/remote/relaycfg, so its shape cannot drift between the three machine
+// dial paths that read it (ADR-007 B34).
+const remoteRelayFile = relaycfg.FileName
 
 // gatewayBinary is the gateway sidecar's binary name, resolved into the supervision unit's
 // ExecStart. It is the name .goreleaser.yaml's swarm-remote build ships in the SAME archive
@@ -128,15 +130,23 @@ const remoteStateFile = "remote-state.json"
 // identity's redacted, public fingerprint (identity.String()) to stdout — never
 // any private material. An optional --relay-url flag, when non-empty, is
 // VALIDATED (see validateRelayURL) and then persisted to
-// <stateDir>/remote/relay.json ({"relay_url":"..."}, 0600) — the exact shape
-// internal/skeleton.loadRelayURL reads back. Without the flag, relay.json is
-// left untouched (absent), so remote pairing stays unconfigured. An invalid URL
-// is refused BEFORE any filesystem work, so a rejected run provisions nothing
-// and a corrected re-run starts clean.
+// <stateDir>/remote/relay.json at 0600, through the one parser that owns that
+// file (internal/remote/relaycfg). Without the flag, relay.json is left
+// untouched (absent), so remote pairing stays unconfigured.
+//
+// --relay-pin carries the relay certificate's SPKI pin (ADR-007 B34), the value
+// docs/operations/relay-runbook.md section 3 produces. It is OPTIONAL — an
+// unpinned machine keeps today's behaviour, which is what a loopback relay in
+// local development needs — and MANDATORY IN EFFECT once set: all three machine
+// dial paths refuse a relay that does not present the pinned key.
+//
+// Both flags are refused BEFORE any filesystem work, so a rejected run provisions
+// nothing and a corrected re-run starts clean.
 func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("remote init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	relayURL := fs.String("relay-url", "", "relay server URL for remote pairing")
+	relayPin := fs.String("relay-pin", "", "base64 SHA-256 of the relay certificate's SubjectPublicKeyInfo (see the relay runbook)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -145,6 +155,10 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
+	}
+	if err := validateRelayPin(*relayURL, *relayPin); err != nil {
+		fmt.Fprintf(stderr, "remote init: %v\n", err)
+		return 1
 	}
 
 	stateDir := os.Getenv(daemon.EnvStateDir)
@@ -191,13 +205,10 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *relayURL != "" {
-		relayPath := filepath.Join(remoteDir, remoteRelayFile)
-		b, err := json.Marshal(map[string]string{"relay_url": *relayURL})
-		if err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(relayPath, b, 0o600); err != nil {
+		if err := relaycfg.Save(stateDir, relaycfg.Config{
+			RelayURL: *relayURL,
+			SPKIPin:  strings.TrimSpace(*relayPin),
+		}); err != nil {
 			fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
@@ -417,6 +428,38 @@ func validateRelayURL(raw string) error {
 	return nil
 }
 
+// validateRelayPin checks `--relay-pin` BEFORE any filesystem work, so a rejected run
+// provisions nothing (the same contract validateRelayURL has).
+//
+// The three refusals are the three ways this flag is silently useless:
+//
+//   - A pin with no --relay-url has nothing to pin. relay.json is written as a unit, so
+//     the pin would either be dropped or land beside no destination.
+//   - A pin on a ws:// URL can never be applied: cleartext presents no certificate, and
+//     relay.Security refuses the dial rather than running unpinned. Caught here, where the
+//     operator is reading the output, instead of at the gateway's next start.
+//   - A pin that is not base64 of a 32-byte digest is ErrPinMalformed. The relay runbook's
+//     section 3 emits exactly the accepted form, and the value is checked against the same
+//     parser every dial path uses, so `remote init` cannot accept something a dial rejects.
+func validateRelayPin(relayURL, pin string) error {
+	if pin == "" {
+		return nil
+	}
+	if relayURL == "" {
+		return fmt.Errorf("--relay-pin was given without --relay-url; a pin names the " +
+			"certificate a relay must present, so there is nothing for it to apply to")
+	}
+	if u, err := url.Parse(relayURL); err == nil && u.Scheme == "ws" {
+		return fmt.Errorf("--relay-pin was given with the cleartext relay URL %q; a ws:// "+
+			"relay presents no certificate, so the pin can never be checked and the dial is "+
+			"refused rather than run unpinned. Use wss://", relayURL)
+	}
+	if _, err := (relaycfg.Config{RelayURL: relayURL, SPKIPin: pin}).Security(); err != nil {
+		return fmt.Errorf("--relay-pin %q is not usable: %w", pin, err)
+	}
+	return nil
+}
+
 // remoteRevokeUsage is `swarm remote revoke`'s usage message, printed to stderr
 // (and matched by TestRemoteRevoke_RequiresOneArg's "usage" substring check) when
 // the device-id arg is missing or extra args are given.
@@ -610,10 +653,21 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	if stateDir == "" {
 		return errRelayNotProvisioned
 	}
-	relayURL := readRelayURL(stateDir)
+	cfg, found, err := relaycfg.Load(stateDir)
+	if err != nil {
+		return err
+	}
 	idPath := filepath.Join(stateDir, "remote", remoteIdentityFile)
-	if relayURL == "" || !statFileExists(idPath) {
+	if !found || cfg.RelayURL == "" || !statFileExists(idPath) {
 		return errRelayNotProvisioned
+	}
+	// The same transport policy the gateway sidecar dials under, resolved from the same
+	// relay.json: this connection carries the same machine relay-auth key in the same
+	// auth_init frame, and it is the connection that carries a REVOCATION (ADR-007
+	// B34/B37). A malformed pin stops it here rather than mid-verb.
+	sec, err := cfg.Security()
+	if err != nil {
+		return err
 	}
 	id, err := machineid.Load(idPath)
 	if err != nil {
@@ -621,12 +675,10 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteRelayOpTimeout)
 	defer cancel()
-	// The same transport policy the gateway sidecar dials under: this connection carries
-	// the same machine relay-auth key in the same auth_init frame (ADR-007 B34/B37).
-	cl, err := relay.DialSecure(ctx, relayURL, relay.ClientAuth{
+	cl, err := relay.DialSecure(ctx, cfg.RelayURL, relay.ClientAuth{
 		RelayAuthPub: id.RelayAuthPublic(),
 		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
-	}, relay.MachineSecurity())
+	}, sec)
 	if err != nil {
 		return err
 	}
@@ -638,23 +690,6 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 // sitting at a terminal and the local half of the work is already durable, so a relay
 // that is down must cost them a reported delay and not a hang.
 const remoteRelayOpTimeout = 10 * time.Second
-
-// readRelayURL reads <stateDir>/remote/relay.json, the file `swarm remote init
-// --relay-url` writes and internal/skeleton's loadRelayURL reads back. An absent or
-// unreadable file means this machine is not provisioned for remote pairing at all.
-func readRelayURL(stateDir string) string {
-	raw, err := os.ReadFile(filepath.Join(stateDir, "remote", remoteRelayFile))
-	if err != nil {
-		return ""
-	}
-	var cfg struct {
-		RelayURL string `json:"relay_url"`
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return ""
-	}
-	return cfg.RelayURL
-}
 
 // purgeRelayState is the RELAY half of PB-STATE-10's "purge machine and relay state":
 // it empties the revoked handset's mailbox and drops its push token, via the relay's own

@@ -173,6 +173,17 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 	}
 	switch u.Scheme {
 	case "ws", "http":
+		// A CONFIGURED PIN WITHDRAWS THE CARVE-OUT. The caller has stated which peer it
+		// will accept, and cleartext presents no peer at all, so admitting the dial
+		// would leave a configured security control doing nothing -- indistinguishable
+		// at runtime from a machine that verifies its relay. A malformed one is refused
+		// here too, rather than only on the branch that happens to build a TLS config.
+		if _, err := s.pin(); err != nil {
+			return nil, err
+		}
+		if s.pinned() {
+			return nil, ErrCleartextRefused
+		}
 		// The host condition is asked FIRST and separately: it is the one that carries
 		// the security argument (a loopback hop has no on-path position), and neither
 		// opt-in can relax it.
@@ -190,12 +201,26 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 	}
 }
 
-// tlsConfig builds the verification policy for an encrypted dial.
-func (s Security) tlsConfig() (*tls.Config, error) {
+// pinned reports whether this policy names a peer it will accept.
+func (s Security) pinned() bool {
+	return len(s.PinnedCert) > 0 || len(s.PinnedSPKISHA256) > 0
+}
+
+// pin validates the SPKI pin and returns it. A pin that is present but is not a SHA-256
+// digest is ErrPinMalformed, decided before the dial on every scheme.
+func (s Security) pin() ([]byte, error) {
 	if len(s.PinnedSPKISHA256) > 0 && len(s.PinnedSPKISHA256) != sha256.Size {
 		return nil, ErrPinMalformed
 	}
-	if len(s.PinnedCert) > 0 || len(s.PinnedSPKISHA256) > 0 {
+	return s.PinnedSPKISHA256, nil
+}
+
+// tlsConfig builds the verification policy for an encrypted dial.
+func (s Security) tlsConfig() (*tls.Config, error) {
+	if _, err := s.pin(); err != nil {
+		return nil, err
+	}
+	if s.pinned() {
 		pinnedDER := append([]byte(nil), s.PinnedCert...)
 		pinnedSPKI := append([]byte(nil), s.PinnedSPKISHA256...)
 		// Verification is replaced, not disabled: the presented chain must contain
