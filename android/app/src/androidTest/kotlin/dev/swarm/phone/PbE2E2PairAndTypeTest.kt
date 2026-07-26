@@ -30,6 +30,23 @@ import org.junit.runner.RunWith
  * WHAT IT DOES NOT CLAIM. PB-E2E-5 stays deferred: the QR arrives through PB-PAIR-2's
  * manual-entry path rather than through the camera, so nothing here is evidence that a physical
  * camera decodes anything, and an emulator is not a handset. See PhoneScreenDriver.
+ *
+ * THIS TEST CANNOT PASS ON AN EMULATOR, AND NEITHER CAN ANY OTHER TEST IN THIS SOURCE SET
+ * (ADR-007 B56). Read this before concluding it is broken.
+ *
+ * PB-KEY-8 refuses a Keystore KEK the platform reports as software-backed, and every Android
+ * emulator image reports exactly that -- measured: the image ships only the AOSP software
+ * keymint service, no StrongBox instance exists, no image variant in the sdkmanager catalogue
+ * changes the keystore backend, and no emulator feature flag enables a TEE. So
+ * PhoneRuntime.attach() throws KeystoreDowngrade, every screen is downstream of it, and this
+ * test's first assertion reports the symptom ("the app did not open on the pairing step")
+ * rather than the cause.
+ *
+ * The refusal is PB-KEY-8 working as specified and must NOT be relaxed to make this run: that
+ * weakens the control PB-SEC-1's at-rest claim rests on so a demonstration can pass. This
+ * whole tier -- this class, PbE2E2ResumeTest, and any future connectedAndroidTest that
+ * constructs the runtime -- is coverage that can only execute on a physical handset, which is
+ * PB-E2E-5's deferred gate. scripts/pbe2e2-emulator-smoke.sh carries the full measurement.
  */
 @RunWith(AndroidJUnit4::class)
 class PbE2E2PairAndTypeTest {

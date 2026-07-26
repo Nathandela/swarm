@@ -294,23 +294,43 @@ if [ "${SWARM_E2E2_PHONE_READY:-0}" != "1" ]; then
 
   Everything before this point ran. Nothing after it has ever run.
 
-  ADR-007 B45 has landed and the TRANSPORT half is unblocked: attempted on 2026-07-26 with
-  SWARM_E2E2_PHONE_READY=1, the run reaches the emulator, installs the APK, mints and extracts
-  the QR, and launches the instrumented test. The gate stays down because the run still does
-  not PASS, and it now fails somewhere new:
+  THE TRANSPORT IS NO LONGER THE BLOCKER. ADR-007 B45 landed and the run now reaches the
+  emulator, installs the APK, mints and extracts the QR, and launches the instrumented test.
 
-      dev.swarm.phone.PbE2E2PairAndTypeTest FAILED
-      java.lang.AssertionError: PB-E2E-2: the app did not open on the pairing step,
-                                so there is nothing to pair with
+  THE REAL CAUSE IS THE KEYSTORE, AND IT IS NOT A BUG (ADR-007 B56). The app refuses to start:
 
-  That is an APP-side failure at the first of the five in-app actions, not a transport one --
-  the phone gets as far as being asked to pair and does not present the pairing step. It
-  reproduces on a freshly cleared install (`adb shell pm clear`), so it is not leftover state
-  from an earlier run. Nothing beyond that point -- SAS, observe, take control, type, the
-  force-stop, the resume -- has ever executed.
+      KeyCustodyException$KeystoreDowngrade: dev.swarm.phone.kek.wake was generated weaker
+      than requested: the platform reports SOFTWARE: this key is not in secure hardware, so
+      everything sealed under it is protected by software alone
+        at CustodyProvisioning.provision -> PhoneRuntime.construct -> attach -> phone
 
-  Re-run with SWARM_E2E2_PHONE_READY=1 to attempt it. PB-E2E-2 remains NOT MET, and the reason
-  has moved from the transport to the app.
+  Every screen is downstream of PhoneRuntime.phone(), so the pairing step never renders, and
+  the instrumented test reports the SYMPTOM -- "the app did not open on the pairing step".
+  Three investigations of this requirement each found a different proximate blocker; this is
+  the structural one, and it is PB-KEY-8 working exactly as specified.
+
+  NO EMULATOR CAN SATISFY IT, measured on 2026-07-26 rather than assumed:
+    - the image ships one keymint binary, /vendor/bin/hw/android.hardware.security.keymint-
+      service, which is the AOSP SOFTWARE reference implementation;
+    - no StrongBox instance exists (`service list` has IKeyMintDevice/default and no
+      /strongbox);
+    - the sdkmanager catalogue varies images by API level, form factor and app framework
+      (default / google_apis / google_apis_playstore / atd) and by NOTHING that changes the
+      keystore backend;
+    - no `emulator -feature` flag mentions trusty, keymint, keystore or tee.
+
+  THE CONSEQUENCE IS BIGGER THAN THIS SCRIPT. PB-KEY-8 makes EVERY instrumented test of the
+  startup path impossible on an emulator, not only PB-E2E-2's -- PbE2E2ResumeTest is in the
+  same position, and so is any future connectedAndroidTest that constructs the runtime. The
+  androidTest source set currently reads as coverage that can never execute.
+
+  PB-E2E-2 remains NOT MET. The fallback ruled at B56 is to re-scope it onto a physical
+  handset, which merges it into PB-E2E-5 (deferred), and takes the whole instrumented tier
+  with it. Relaxing the custody gate for a debug build is REJECTED: it weakens the control
+  PB-SEC-1's at-rest claim rests on so that a demonstration can pass, which makes the
+  demonstration about itself.
+
+  Re-run with SWARM_E2E2_PHONE_READY=1 to reproduce any of the above.
 
 BLOCKED
   exit 2
