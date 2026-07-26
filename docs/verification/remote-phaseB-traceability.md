@@ -16,20 +16,10 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 120 |
-| Evidenced (measured on disk) | 117 |
-| Remaining | 23 |
-| **Shipped with NO evidence file** | **3** |
-
-## Shipped slices with no evidence file
-
-These 2 slices are implemented and gated, but their only durable record is a commit
-message. That is not sufficient for a per-requirement audit. **Reconstruct each from its
-commit and its tests, never from memory** — an evidence file written from recollection is a
-plausible account of what was intended rather than of what shipped.
-
-- **S17** — 2 requirements: PB-PUSH-4, PB-PUSH-9
-- **S18b** — 1 requirement: PB-STATE-10
+| Shipped (asserted by hand) | 130 |
+| Evidenced (measured on disk) | 130 |
+| Remaining | 13 |
+| **Shipped with NO evidence file** | **0** |
 
 ## Every requirement
 
@@ -118,12 +108,12 @@ plausible account of what was intended rather than of what shipped.
 | PB-PUSH-1 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-2 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-3 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-4 | S17 | shipped | **none — commit message only** |
+| PB-PUSH-4 | S17 | shipped | `docs/verification/remote-phaseB-s17-evidence.md` |
 | PB-PUSH-5 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-6 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-7 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-8 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-9 | S17 | shipped | **none — commit message only** |
+| PB-PUSH-9 | S17 | shipped | `docs/verification/remote-phaseB-s17-evidence.md` |
 | PB-PUSH-10 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-RUN-1 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-RUN-2 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
@@ -135,17 +125,17 @@ plausible account of what was intended rather than of what shipped.
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-SEC-2 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-SEC-3 | S18 | pending | — |
-| PB-SEC-4 | S18 | pending | — |
-| PB-SEC-5 | S18 | pending | — |
-| PB-SEC-6 | S18 | pending | — |
-| PB-SEC-7 | S18 | pending | — |
-| PB-SEC-8 | S18 | pending | — |
+| PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-4 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-5 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-6 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-7 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-8 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-10 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
-| PB-SEC-11 | S18 | pending | — |
-| PB-SEC-12 | S18 | pending | — |
-| PB-SEC-13 | S18 | pending | — |
-| PB-SEC-14 | S18 | pending | — |
+| PB-SEC-11 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-12 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-13 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
+| PB-SEC-14 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-STATE-1 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-2 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-3 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
@@ -155,7 +145,7 @@ plausible account of what was intended rather than of what shipped.
 | PB-STATE-7 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-8 | S7 | shipped | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-9 | S15 | shipped | `docs/verification/remote-phaseB-s15-evidence.md` |
-| PB-STATE-10 | S18b | shipped | **none — commit message only** |
+| PB-STATE-10 | S18b | shipped | `docs/verification/remote-phaseB-s18b-evidence.md` |
 | PB-SYNC-1 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-3 | S10 | shipped | `docs/verification/remote-phaseB-s10-evidence.md` |
