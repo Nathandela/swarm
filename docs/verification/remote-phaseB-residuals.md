@@ -907,3 +907,32 @@ in isolation is close to no fence at all.
 **Assigned.** The instruction is to find the leaked state, not to make the test pass: reordering,
 `-p 1`, or moving the assertion would each turn a real defect into a green, and this phase has now
 found ten fences that were green for exactly that kind of reason.
+
+## 4.9 A fence does not transfer between error classes refused at different depths
+
+The B58 agent's first version of the first-pairing fence **passed 3 runs of 3 with the defect
+restored.** It proved nothing, and it was caught only because the agent mutation-tested its **new**
+fence rather than trusting a green run.
+
+Both obvious observables fail for this error, each in a different way:
+
+- **Dial counting is blind here.** `ErrPinRequired` is decided **from the policy before a socket
+  opens**, so nothing reaches a counting tap whether the loop lives or dies. That observable works for
+  `ErrPinMismatch`, which is refused *during* the handshake — and the two share a switch arm.
+- **"Does the phone come online" is vacuous.** `rearmAfterPairing` restarts the dead loop and wins its
+  race on an idle machine, so the phone recovers either way. Measured, not assumed.
+
+**The discriminator that works is the `connecting` event.** A surviving loop is mid-generation and
+goes straight to `online`; a loop that died and was rearmed starts a **fresh generation** whose first
+act is `setConn(connConnecting)`. So a `connecting` event after the verdict is proof the loop ended —
+exactly what must not happen during a pairing, and exactly what rearm papers over afterwards.
+
+**The generalisation, which is new and worth more than the fence**: *a fence written for one error
+class does not transfer to another error in the same switch arm, because they are refused at
+different depths.* Two errors handled by one line of code are not one thing to test. This would have
+been the **eleventh** instance of "a fence that cannot fail", and the first written while explicitly
+hunting that class.
+
+**Also recorded**: my `git add -A` swept this work into an unrelated commit — the **eighth**
+occurrence. Verified intact after the fact, which is luck rather than process, exactly as residual 4.7
+says.
