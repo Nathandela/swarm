@@ -1931,3 +1931,69 @@ re-grant.
 live-process exposure does not: after one unlock, the Go core keeps `State.Keys.ContentKey` and the
 decrypted session, snapshot and reply caches, with `MailboxRouter` still bound to the content key —
 precisely the scenario PB-KEY-7 was written to close. The wake tier is unaffected and correct.
+
+### B36 — PB-SEC-2's freshness gate does nothing on the send path
+
+Found by the audit committee, tracing further than B35's investigation. The content key is unwrapped
+**once**, at `Resume`, through the tier sealer (which does reach Keystore). Thereafter
+`mobile/commands.go` `resolveSend` reads `core.State().Keys.ContentKey` **straight from Go memory**,
+with no Keystore round-trip, for every outbound send.
+
+So after a single resume, neither a screen lock nor PB-SEC-2's stated 60-second freshness window
+stops any content operation. `AuthorizationLedger.invalidate()` — the layer that decides *when* to
+re-prompt — has **zero production callers**. This is exactly the failure `mobile/keycustody.go`'s own
+comment warns against: "a Go core that had cached the answer would keep decrypting content after the
+screen locked... while every restart-based test still passed." That is the current state, described
+in advance by the code that was meant to prevent it.
+
+**PB-SEC-2 is NOT MET**, alongside PB-KEY-7.
+
+**And the two requirements are in genuine tension with a third, which nobody recorded.**
+`PhoneActivity.onPause` deliberately reaches no facade verb — because the Activity is
+launcher-exported and **PB-SEC-11 forbids an exported component acting on the session**. So the fix
+is not "call PurgeKeys from onPause": that reopens PB-SEC-11. It needs a component the exported
+Activity cannot reach. **PB-SEC-11 and PB-KEY-7/PB-SEC-2 pull in opposite directions and only the
+first was ever resolved** — the requirement set never noticed it had two answers to one question.
+
+### B37 — B27 and B34 COMPOSE into a critical on-path DoS; both residuals are withdrawn
+
+**This is the most serious finding of the audit, and it is mine twice over: I accepted both residuals
+separately and never asked what they did together.**
+
+Each was defensible alone. B27's trust-on-first-use window was accepted because it is "reachable in
+practice only by the relay operator, to whom availability is already conceded". B34 recorded that no
+production caller applies a transport policy, and deferred it as needing a pairing-payload size
+decision.
+
+**Together they are an unauthenticated, remotely-reachable, permanent denial of service against any
+not-yet-paired identity, by an adversary who is NOT the relay operator.** The chain, all cited in the
+tree:
+
+1. Production dials with `relay.Dial` — no pin, no cleartext refusal (`mobile/relay.go`, B34).
+2. `auth_init` sends **the full relay-auth public key** over that connection
+   (`internal/remote/relay/client.go`).
+3. A **passive on-path observer** of a `ws://` connection therefore learns the victim's public key.
+4. The observer registers a throwaway identity and calls `authorize_device` naming the victim.
+5. `mayActOn` permits it: the never-paired victim has authorized nobody (`store.go`, B27's first-use
+   clause).
+6. `device_revoke` is gated by the **same** permissive rule (`server.go`).
+7. `revokeAndPurge` bans the victim and destroys its mailbox and token.
+
+**B27's residual argument is unsound in the shipping composition.** Its premise — that the public key
+is disclosed only at the relay handshake and over the SAS channel — is true of the *protocol* and
+false of the *deployment*, because B34 leaves the handshake itself observable.
+
+**Both residuals are withdrawn. Neither may be re-accepted alone.**
+
+- **B34 is no longer deferred**: transport policy must be applied on the production dial path. Its
+  cost — the pairing QR has no pin field and `MaxRelayURLLen = 39` — is now a cost that must be paid,
+  not a reason to defer. Refusing `ws://` outright does not need a pin channel and closes step 1.
+- **B27's consent-signature design, recorded there and declined as "a substantially larger slice", is
+  now REQUIRED** unless transport security is made mandatory first and proven on the dial path.
+
+**The generalisable failure, which is the reason this entry is long.** Every residual in this ADR was
+judged **in isolation**, against the threat model, and each judgement was defensible. Nothing in this
+phase's apparatus ever asked *what two accepted residuals do in combination* — and the composition
+was strictly worse than either part, converting "conceded to the relay operator" into "available to
+any passive observer". **A list of individually-acceptable residuals is not an acceptable residual
+set.** Every future acceptance must state which other open residuals it was checked against.
