@@ -50,6 +50,10 @@ NOT_MET = {
     "PB-SEC-2": "a stale biometric callback resurrects authorization after an "
                 "invalidation: endPrompt accepts callbacks with no matching active "
                 "prompt (ADR-007 B60)",
+    "PB-PUSH-9": "\"deletion on revoke/disable\" is dead: one self-consent writes a "
+                 "self-edge, so grantsAnyone() is true forever and no revoke by any "
+                 "party ever drops that handset's push token again -- measured on a "
+                 "real relay (ADR-007 B61)",
     "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
                 "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
                 "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "

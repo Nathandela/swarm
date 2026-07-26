@@ -16,9 +16,9 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 139 |
-| Evidenced (measured on disk) | 139 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **3** |
+| Shipped (asserted by hand) | 138 |
+| Evidenced (measured on disk) | 138 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -114,7 +114,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-PUSH-6 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-7 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-8 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-9 | S17 | shipped | `docs/verification/remote-phaseB-s17-evidence.md` |
+| PB-PUSH-9 | S17 | **NOT MET** | "deletion on revoke/disable" is dead: one self-consent writes a self-edge, so grantsAnyone() is true forever and no revoke by any party ever drops that handset's push token again -- measured on a real relay (ADR-007 B61) |
 | PB-PUSH-10 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-RUN-1 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-RUN-2 | S13 | shipped | `docs/verification/remote-phaseB-s13-evidence.md` |

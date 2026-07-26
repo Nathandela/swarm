@@ -2923,3 +2923,125 @@ against the current composition.
 parts** — B37 (two residuals), B49 (a fix deleting another's remedy), and now B40 renewed by the
 interaction of a retirement orientation and a deliberate verdict asymmetry. **Every one was invisible
 to review of either change alone.**
+
+---
+
+### B61 — round 3, the composition audit: self-consent is the root of two shipped defects
+
+The round-3 composition reviewer returned seven findings with B60's four subtracted. Two were
+verified by running code against a real relay with measurements, not inferred from prose. Both
+of those share one root that B50 already recorded and mis-scored.
+
+**The root.** `handleAuthorizeDevice` (`server.go:789`) verifies the caller's signature over
+`ConsentMessage(ceremonyID, sc.rid)` under the pubkey the caller named, derives
+`deviceRID := RoutingID(req.DevicePub)`, and authorizes the pair. **It never checks
+`deviceRID != sc.rid`.** A caller may name its own pubkey and authorize itself. B50 recorded
+this and scored it as identity-row and rate-row growth. That was wrong: it is a capability, and
+two shipped requirements rest on its absence.
+
+**B61(1) — PB-PUSH-9's "deletion on revoke/disable" is dead. The sixth requirement invalidated
+by a correct fix to a different one.** B49 conditioned the push-token drop on
+`grantsAnyone(pb, rid)` (`store.go:596`) so that one party to one relationship could not silence
+a handset another relationship depends on. Correct in isolation. But one self-consent writes
+`pairs[phone\0phone]`, so `grantsAnyone(phone)` is true forever and **no revoke by any party
+ever drops that phone's push token again** — neither the write-through cache nor the durable
+row. Measured on a real relay: after one self-consent, `machine.DeviceRevoke(phoneRID)` leaves
+`cache="phone-token" durable="phone-token"`.
+
+The sentence in `revokeAndPurge`'s own doc comment at `store.go:549-557`, citing PB-PUSH-6's
+"unreachable provider-visible identifier for a device its owner disowned", is now false.
+`TestB49_ARevokeSilencesThePhoneOnlyWhenItSeversItsLastRelationship`
+(`b49_revokescope_test.go:321`) passes throughout, because it asserts the design and never
+constructs the self-edge.
+
+**B61(2) — an unbounded, attacker-writable, never-swept durable store. The ship blocker.**
+`authorizePair` writes one `bucketRetired` row per superseded ceremony (`store.go:578`).
+**Nothing anywhere deletes from that bucket**: the only references in the package are the
+creation loop at line 75, the read at 384, and the write at 578. The only ceremony-id validation
+is `ceremonyID == ""`; `ParseConsent` (`routing.go:121`) reads a `uint32` length out of a frame
+of up to 1 MiB, and no format or length check exists.
+
+Composed with the root, no victim, no pairing and no stolen key are required — one freshly
+minted keypair and one connection. Measured: 400 self-consents carrying ~32 KB ceremony ids grew
+`relay.db` from 0 to 33,714,176 bytes, linear at ~84 KB/call. bbolt never returns pages to the
+OS. At the configured `OpsPerMin: 600` (`config.go:126`) that is roughly **72 GB/day of
+unreclaimable relay disk from a single source**.
+
+**This rhymes, and the rhyme is the point.** B52(c) asked exactly this question about
+`Server.burned` in the same decision — *"A fix that converts a hijack into a memory exhaustion is
+not a fix"* — approved a sweep for the in-memory set, and never asked it of the DURABLE bucket
+the same decision was creating. The standing defect class list gains an entry: **a question
+asked and answered for one store in a decision is not asked of the other store that decision
+creates.**
+
+Note the tension the remedy must hold: a sweep of `bucketRetired` is a retention mechanism, and
+B47 requires a retired ceremony be refused FOREVER. A sweep that forgets a retirement re-opens
+the replay B47 closed.
+
+**B61(3) — B59's refusal of `AUTH_DEVICE_CREDENTIAL` is undone inside its own slice.**
+`keys/Provisioning.kt:436` sets `setInvalidatedByBiometricEnrollment(true)` on every per-use gate
+entry. `keys/BiometricPrompts.kt:263-273` answers `KeyPermanentlyInvalidatedException` with
+`drop(alias)` + `provisionGate(operation)` + retry — minting a fresh key bound to the NEW
+enrolment. The stated reason ("a gate entry SEALS NOTHING") is true and answers the wrong
+question: the entry seals nothing, it AUTHORIZES revoke and kill. B59 refused device credentials
+because a PIN is shoulder-surfable; enrolling a fingerprint needs exactly that PIN, so the
+refused capability is restored by one extra step. Distinct from B60(3), which is the stale
+callback in the ledger; this is the Keystore entry being reissued against an attacker's
+biometric.
+
+**B61(4) — B58's guard was added beside the defect, not over it.** Two gaps.
+(a) `connRevoked` (`mobile/relay.go:259`) is still guarded by `withinPairingGrace()` ALONE while
+the two arms B58 touched got `pairingInFlight() || withinPairingGrace()`. B58's ruling was about
+ANY transport verdict reached during a pairing, and `ErrRevoked`'s remedy is likewise a pairing —
+it is the verdict PB-STATE-10's recovery actually produces.
+(b) The guard is sampled at error-handling time, not dial-start time. A dial that started before
+the durable write and returns `ErrPinMismatch` after the pairing handle is gone ends the loop
+terminally with rearm already spent, and `Start` is a no-op while `a.sess != nil`. The
+in-flight B60(2) fix does not touch this. The fence cannot see it:
+`b58_pairingterminal_test.go` measures over an in-process `httptest` TLS front where a dial
+completes in microseconds, so the straddle window is structurally unreachable — 20 green runs
+over an unreachable question.
+
+**B61(5) — a second entry into PB-PAIR-4, which B60(1)'s repair makes worse.** The machine
+`sendDecision(accept)` at `internal/remote/pairing/pairing.go:601` then returns and the caller
+enrolls. `handleRendezvousSend` (`server.go:1339`) returns `replyOK` when the peer has detached
+or the 16-slot inbox is full. A relay that simply drops msg4's decision — and the relay is the
+declared adversary — leaves the machine ENROLLED and the phone UNPINNED. B52/B53's claim that
+"there is no ordering in which one side is enrolled and the other is not" is false in this
+direction, and B60(1)'s repair (final acceptance must follow a durable machine-side commit)
+STRENGTHENS it by guaranteeing the machine has committed before it sends the frame the relay
+eats.
+
+**B61(6) — B47's durability rests on a best-effort call that swallows its own failure.**
+`purgeRelayState` (`cmd/swarm/remote.go:723`) is the only production caller of relay
+`device_revoke` and therefore the only thing that retires a consent on the owner's revoke.
+Failure is a warning with exit code 0, and `relay.ErrNotAuthorized` is swallowed entirely at
+`:733`. Composed with B60(4): a phone-initiated revoke deletes both pairs edges, so the owner's
+later `swarm remote revoke` finds `mayActOn` false, gets `not_authorized`, prints nothing and
+exits 0 — the machine-orientation consent is never retired either. With
+`TestB47_AnUnknownCeremonyIsAccepted` required so `deliverEpochGrant` survives a store rebuild,
+the stored consent stays spendable forever. B60(4)'s primitive disarms the one call that would
+have retired the other orientation.
+
+**B61(7) — the s20 gate has a receiver-shaped blind spot.**
+`android/gate/s20_pbsec2_peruse_test.go:304` matches the literal `"app.revokeThisDevice("` and
+its floor of 2 is met by the two existing sites, so an ungated third call site naming its
+receiver anything else is invisible AND does not trip the vacuity control. The file's stated
+limit ("TEXT, not types") defends against a fully broken matcher, not a partially blind one.
+Also recorded: `PerUseGate.kt:305` calls `prompt.show` outside any try/catch, so a synchronous
+throw leaves `inFlight` set; `AuthorizationLedger` has no synchronization while reachable from a
+`BroadcastReceiver` and from lifecycle callbacks; and B54's verbatim pin adoption plus
+Android-pinning-only means a machine with **no `--relay-pin` — the DEFAULT, the flag is
+optional** — yields an empty pin, hence `ErrPinRequired` on every dial, hence a terminal
+`relay_untrusted` the instant the pairing handle drops. ADR-007 recorded that as "currently
+unrecoverable" without noting it is the default configuration.
+
+**Clean negatives, recorded so they are not re-audited.** B55's peer-named verdict genuinely
+narrows the oracle (the check runs after signature verification, so the only askable question
+requires the private key). The B47 fences CAN fail (three fail by name when the retired check is
+disabled). The B49 adjacent-frames fence asserts an exact depth delta AND byte-identity of the
+survivors, so it catches under- and over-deletion. `authorizePair` and `revokeAndPurge` are
+genuinely single transactions.
+
+**The honest count moves to 138 of 143.** PB-PUSH-9 joins PB-PAIR-4, PB-SEC-2 and PB-E2E-2 as
+NOT MET. PB-E2E-5 remains excluded.
