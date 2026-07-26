@@ -167,8 +167,23 @@ func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // DialRaw opens an unauthenticated framed connection (rendezvous + adversarial
 // framing use it).
+//
+// It applies NO transport-security policy: the URL is dialed as given. Production
+// callers use DialRawSecure -- see the note on Dial.
 func DialRaw(ctx context.Context, url string) (*Conn, error) {
 	return dialConn(ctx, url, nil, false)
+}
+
+// DialRawSecure is DialRaw under a transport-security policy (PB-NET-2). It is the
+// pairing rendezvous's entry point: no relay-auth key is disclosed there, but it is the
+// first packet either end sends to a URL a scanned QR chose, so the same refusal applies
+// and it is decided before a socket is opened.
+func DialRawSecure(ctx context.Context, url string, sec Security) (*Conn, error) {
+	cfg, err := sec.resolve(url)
+	if err != nil {
+		return nil, err
+	}
+	return dialConn(ctx, url, sec.httpClient(cfg), false)
 }
 
 func (c *Conn) writeFrame(ctx context.Context, tag MsgType, payload []byte) error {
@@ -375,8 +390,13 @@ type Client struct {
 // binding the connection to RoutingID(auth.RelayAuthPub). A revoked key, a rate
 // refusal, or a bad signature returns a non-nil error and no Client.
 //
-// It applies no transport-security policy: the URL is dialed as given. Callers
-// that reach a relay over an untrusted network use DialSecure.
+// It applies no transport-security policy: the URL is dialed as given, so the
+// auth_init frame -- which carries auth.RelayAuthPub in full -- is readable by any
+// observer of a ws:// hop (ADR-007 B37). It remains exported for the test rigs that
+// stand up an in-process relay and dial it deliberately; NO production caller may
+// reach it, which internal/remote/transport's productiondial_test.go enforces at the
+// call site. Production dials go through DialSecure, machine-side ones under
+// MachineSecurity.
 func Dial(ctx context.Context, url string, auth ClientAuth) (*Client, error) {
 	conn, err := dialConn(ctx, url, nil, true)
 	if err != nil {

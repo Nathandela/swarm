@@ -45,14 +45,20 @@ func (r *relayRendezvous) Complete(ctx context.Context, id string) error {
 var _ pairing.RendezvousTransport = (*relayRendezvous)(nil)
 
 // relayRendezvousFactory returns the pairingConfig.NewRendezvous closure for a
-// configured relay URL: it DialRaw's the relay and returns a transport bound to
-// hex(id). The conn lives for the pairing window; a watcher closes it when the pairing
-// ctx is cancelled — which the server does at the terminal outcome (result ->
-// clearPairing -> cancel) or when the owner connection drops — so no conn is leaked on
-// any path (Machine.Pair's final Complete runs before that cancellation).
+// configured relay URL: it dials the relay under the machine's transport policy and
+// returns a transport bound to hex(id). The conn lives for the pairing window; a watcher
+// closes it when the pairing ctx is cancelled — which the server does at the terminal
+// outcome (result -> clearPairing -> cancel) or when the owner connection drops — so no
+// conn is leaked on any path (Machine.Pair's final Complete runs before that
+// cancellation).
+//
+// relay.MachineSecurity, not a bare DialRaw: this is the daemon, a release binary, and
+// PB-NET-2 applies to every dial it makes (ADR-007 B34/B37). The rendezvous discloses no
+// relay-auth key, but a cleartext hop still exposes the routing metadata the requirement
+// bans, and the relay URL it is handed is whatever `swarm remote init` persisted.
 func relayRendezvousFactory(relayURL string) func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
 	return func(ctx context.Context, id [16]byte) (pairing.RendezvousTransport, error) {
-		conn, err := relay.DialRaw(ctx, relayURL)
+		conn, err := relay.DialRawSecure(ctx, relayURL, relay.MachineSecurity())
 		if err != nil {
 			return nil, err
 		}

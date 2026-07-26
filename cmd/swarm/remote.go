@@ -621,10 +621,12 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteRelayOpTimeout)
 	defer cancel()
-	cl, err := relay.Dial(ctx, relayURL, relay.ClientAuth{
+	// The same transport policy the gateway sidecar dials under: this connection carries
+	// the same machine relay-auth key in the same auth_init frame (ADR-007 B34/B37).
+	cl, err := relay.DialSecure(ctx, relayURL, relay.ClientAuth{
 		RelayAuthPub: id.RelayAuthPublic(),
 		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
-	})
+	}, relay.MachineSecurity())
 	if err != nil {
 		return err
 	}

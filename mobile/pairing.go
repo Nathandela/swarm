@@ -341,7 +341,12 @@ func (p *Pairing) join(base context.Context) {
 	ctx, stop := context.WithDeadline(base, deadline)
 	defer stop()
 
-	conn, err := relay.DialRaw(ctx, payload.RelayURL)
+	// Under the handset's transport policy, like every other dial this app makes: the URL
+	// came out of a scanned QR, so it is the LEAST trusted destination the phone ever
+	// reaches. A cleartext one is refused here rather than after the connection, which
+	// matters for the same reason BeginPairing no longer dials at all -- a connection is
+	// already a disclosure (ADR-007 B37).
+	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, handsetSecurity())
 	if err != nil {
 		p.finish(nil, err, ctx)
 		return

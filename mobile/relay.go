@@ -253,12 +253,37 @@ func (a *App) run(ctx context.Context) {
 	a.setConn(connOffline)
 }
 
+// handsetSecurity is the transport policy EVERY dial this handset makes runs under
+// (PB-NET-2, ADR-007 B34/B37). It is the default policy -- TLS verified against the
+// platform's stated trust roots, cleartext refused, the decision re-asked on every
+// redirect hop -- plus the loopback carve-out, which is honoured only inside a test
+// binary and is therefore inert in the shipped .so.
+//
+// SO A RELEASE HANDSET REFUSES CLEARTEXT OUTRIGHT, which is the point: auth_init carries
+// the phone's full relay-auth public key, and a passive observer who reads it can revoke
+// a never-paired identity through B27's first-use clause. The refusal is decided from the
+// URL before a socket is opened, so a QR naming ws:// costs the handset nothing -- not
+// even the connection that would tell an attacker's relay that this phone scanned it.
+//
+// It deliberately does NOT use relay.MachineSecurity: on a handset "loopback" is the
+// handset, so a ws://127.0.0.1 relay is never a legitimate destination, and a QR that
+// named one would be pointing the phone at something already running on it.
+//
+// NOT YET CARRYING A PIN. relay.TrustRootSourceFor makes Android TrustRootsPinned, so on
+// a handset a wss:// dial fails closed with relay.ErrPinRequired until a pin reaches this
+// value. That is ADR-007 B34's open half: the pairing QR has no pin field and
+// MaxRelayURLLen exists to keep the symbol scannable, so carrying one needs a decision
+// about the pairing payload rather than a call-site change.
+func handsetSecurity() relay.Security {
+	return relay.Security{AllowLoopbackCleartext: true}
+}
+
 func (a *App) dial(ctx context.Context) (*relay.Client, error) {
 	ks := a.core.KeyStore()
-	return relay.Dial(ctx, a.relayURL, relay.ClientAuth{
+	return relay.DialSecure(ctx, a.relayURL, relay.ClientAuth{
 		RelayAuthPub: ed25519.PublicKey(ks.RelayAuthPublic()),
 		Sign:         ks.SignRelayAuth,
-	})
+	}, handsetSecurity())
 }
 
 // onConnected re-establishes the per-connection state the relay does not persist: the

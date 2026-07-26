@@ -127,7 +127,39 @@ type Security struct {
 	// no URL reaches cleartext through this policy, whatever this field says --
 	// neither the URL the caller supplies nor any URL a redirect points at.
 	AllowLoopbackCleartext bool
+	// loopbackInRelease is the same carve-out WITHOUT the test-binary condition, and
+	// it is unexported because that is what keeps it honest: only MachineSecurity
+	// sets it, so no caller anywhere can turn cleartext on for a URL of its choosing,
+	// and AllowLoopbackCleartext keeps its stronger property intact.
+	//
+	// See MachineSecurity for why a machine-side process needs it.
+	loopbackInRelease bool
 }
+
+// MachineSecurity is the transport policy every machine-side dial takes: the gateway
+// sidecar, the CLI's short-lived owner connection, and the daemon's pairing rendezvous.
+//
+// It is Security's default policy -- TLS verified against the platform trust roots,
+// cleartext refused, the decision re-asked on every redirect hop -- with ONE exception:
+// a ws:// URL whose host is a loopback IP LITERAL is admitted, in a release build as
+// well as a test binary.
+//
+// WHY THE EXCEPTION IS SAFE, and why it is not the flag ADR-007 B37 forbids. B37's chain
+// begins with a PASSIVE ON-PATH OBSERVER of a cleartext hop; a connection to 127.0.0.1
+// never leaves the host, so there is no path to sit on. The exception cannot be widened
+// into one either: it is decided from the URL, a NAME is never accepted (isLoopbackLiteral
+// parses an IP and does not resolve), and the same decision is re-run on every redirect,
+// so a loopback relay cannot answer the upgrade with "302 -> ws://elsewhere". An operator
+// who set this on a real deployment would gain the ability to speak cleartext to their own
+// machine and nothing else.
+//
+// WHY IT HAS TO EXIST. The relay server is ws://-only (server.go sets "ws://"+addr), the
+// gateway sidecar is a release binary, and the S19 exit demonstration builds and spawns
+// that binary against a real ws://127.0.0.1 relay. Without the exception, local
+// development and the exit demonstration both require a TLS terminator and a pin that has
+// no channel yet -- and the alternative, an environment variable a deployment could set,
+// would be exactly the general kill switch B37 rules out.
+func MachineSecurity() Security { return Security{loopbackInRelease: true} }
 
 // resolve decides whether rawURL may be dialed under this policy and, if so,
 // with what TLS configuration (nil means "plain ws://" or "platform defaults").
@@ -141,7 +173,13 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 	}
 	switch u.Scheme {
 	case "ws", "http":
-		if !s.AllowLoopbackCleartext || !testing.Testing() || !isLoopbackLiteral(u.Hostname()) {
+		// The host condition is asked FIRST and separately: it is the one that carries
+		// the security argument (a loopback hop has no on-path position), and neither
+		// opt-in can relax it.
+		if !isLoopbackLiteral(u.Hostname()) {
+			return nil, ErrCleartextRefused
+		}
+		if !s.loopbackInRelease && !(s.AllowLoopbackCleartext && testing.Testing()) {
 			return nil, ErrCleartextRefused
 		}
 		return nil, nil
