@@ -31,6 +31,27 @@ data class JournalRow(
 )
 
 /**
+ * One page of the activity log: the rows, where the NEXT page starts, and whether the stream
+ * they came from has a hole.
+ *
+ * IT IS A PAGE AND NOT A LIST because both of the other two facts were being dropped, and each
+ * loss was silent. `swarmmobile.JournalPage.NextCursor` is the only thing that says where to
+ * read from next, so a caller handed a bare list could not advance -- it would re-request the
+ * same page from the same cursor forever. `Stale` is PB-APP-8 for a surface that renders as a
+ * CHRONOLOGY, which reads as complete unless it says otherwise: a log with an unrepaired hole
+ * shown as a plain list tells the user the agent did nothing in the gap.
+ *
+ * Both were bound, tested on the Go side, and reached by no Kotlin at all
+ * (android/gate/boundverbledger_test.go now asks about them).
+ */
+data class JournalPageView(
+    val rows: List<JournalRow>,
+    /** Feed this back as the next read's `afterCursor`. Unchanged when the page is empty. */
+    val nextCursor: Long,
+    val stale: Boolean,
+)
+
+/**
  * What pressing Stop resolves to. Four of the five are reached from [SessionDetail.stop] and
  * [SessionDetail.confirmStop]; [KILL] belongs to the separate escalation control and is here so
  * a caller cannot pass the two around as though they were interchangeable.

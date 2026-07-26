@@ -171,10 +171,21 @@ class PairingStepTest {
     }
 
     /**
-     * PB-PAIR-5: five terminal states, each user-legible and each its own. Collapsed into one
+     * PB-PAIR-5: every terminal state explicit, user-legible and its own. Collapsed into one
      * "pairing failed" with prose beside it, the screen can only show an error string -- which
-     * is the opaque error the requirement exists to remove, and three of these need genuinely
-     * different next steps from the user.
+     * is the opaque error the requirement exists to remove, and each of these needs a genuinely
+     * different next step from the user.
+     *
+     * DIFFERENT_MACHINE IS THE ONE THE AMENDMENT ADDED, and the reason this list changed. The
+     * 2026-07-25 amendment retired `already-paired` -- the machine fail-fasts a second pairing
+     * before minting any rendezvous, so the phone has nothing to scan and can never reach it --
+     * and substituted the QR that belongs to a machine this phone is not pinned to, which the
+     * Go core decides mid-handshake from the authenticated machine static. The app kept
+     * declaring the retired state and never learned the substituted one, so the state the
+     * amendment created was the one state that fell through to the generic message.
+     *
+     * RATE_LIMITED and FAILED had never had a step at all. android/gate/pairingstates_test.go
+     * is the control that fails when the core's alphabet and this enum drift again.
      */
     @Test
     fun `every terminal pairing state is explicit and separately legible`() {
@@ -183,12 +194,40 @@ class PairingStepTest {
             PairingStep.SAS_MISMATCH,
             PairingStep.RENDEZVOUS_TIMEOUT,
             PairingStep.QR_EXPIRED,
-            PairingStep.ALREADY_PAIRED,
+            PairingStep.DIFFERENT_MACHINE,
+            PairingStep.RATE_LIMITED,
+            PairingStep.FAILED,
         )
         val messages = states.map { PairingFlow.messageFor(it) }
         messages.forEach { assertTrue("a terminal state with no message is an opaque error", it.isNotBlank()) }
         assertEquals("two states that read identically are one state", states.size, messages.toSet().size)
         states.forEach { assertTrue(PairingFlow.isTerminal(it)) }
+    }
+
+    /**
+     * The substituted state's message must tell the user what actually happened, because its
+     * next step is unlike every other refusal here: nothing is wrong with this phone, nothing
+     * is wrong with the QR, and retrying the SAME code will fail the same way. v1 is
+     * single-machine, so the answer is "you scanned a different machine's code".
+     *
+     * It also has to say that the pairing they already have is intact. The defect the state
+     * closes is that `pin()` used to overwrite the pinned machine unconditionally, so a user
+     * who did this lost the machine they were working on with an empty roster as the first
+     * symptom; a message that does not say "nothing changed" leaves them believing it happened.
+     */
+    @Test
+    fun `the different-machine state names the cause and says nothing was lost`() {
+        val message = PairingFlow.messageFor(PairingStep.DIFFERENT_MACHINE)
+        assertTrue(
+            "the message must name the cause -- another machine's code -- not just report a failure",
+            message.contains("machine", ignoreCase = true),
+        )
+        assertNotEquals(
+            "it must not read as the generic failure it used to fall through to",
+            PairingFlow.messageFor(PairingStep.FAILED),
+            message,
+        )
+        assertFalse("nothing is joined when the QR names another machine", PairingFlow.restore(PairingStep.DIFFERENT_MACHINE).joined)
     }
 
     /**

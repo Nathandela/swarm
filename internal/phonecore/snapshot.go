@@ -276,6 +276,17 @@ type MailboxRouter struct {
 	epoch    uint32                 // the epoch whose buckets are unverified while unadopted
 	stale    map[Bucket]bool        // persisted stale flags, restored from State.Stale
 	staleStr map[string]bool        // persisted per-CHANNEL flags, restored from State.StaleStreams
+
+	// ageRefused is "the last thing this drain did with a frame was throw it away for being
+	// past PB-TIME-2's bound". It is LIVE, never durable, and it is not a stale flag: no seq
+	// was skipped and no repair channel has a hole -- the frames are simply not usable, so
+	// there is nothing for a resync to repair and nothing a later Save should remember.
+	//
+	// It exists because the condition is otherwise INVISIBLE. The websocket is up, so the
+	// connection state machine has nothing to say and App.ConnectionState reads "online" --
+	// which a screen renders as "Connected to your machine." while every frame the machine
+	// sends is refused on arrival. ADR-007 B42.
+	ageRefused bool
 }
 
 // bound copies the router's currently-bound key, receiver and caches.
@@ -339,6 +350,7 @@ func (r *MailboxRouter) rebind(st State) {
 		r.replies.Append(ctrl)
 	}
 	r.recon, r.reconOK, r.adopted, r.reconAt = schema.ReconcileRecord{}, false, false, Bucket{}
+	r.ageRefused = false
 	r.epoch, r.stale = st.EpochID, maps.Clone(st.Stale)
 	if r.stale == nil {
 		r.stale = map[Bucket]bool{}
@@ -686,6 +698,13 @@ type Receipt struct {
 // would have resolved therefore stays UNRESOLVED across a restart -- by design, until the
 // op is re-driven or the machine's reconcile record re-establishes the authorities.
 func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error) {
+	return r.AcceptCommitAt(raw, cursor, time.Now())
+}
+
+// AcceptCommitAt is AcceptCommit with the age clock injected, so PB-TIME-2's bound -- and the
+// RECOVERY from a phone clock that was wrong -- are testable without waiting ten minutes or
+// moving the host's clock. Production reads through AcceptCommit, which passes time.Now().
+func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time) (Receipt, error) {
 	// PB-KEY-10, and it must come BEFORE ParseEnvelope. The machine's bootstrap grant is a
 	// TAGGED PLAINTEXT frame, not a ContentKey-sealed envelope -- deliberately, because it is
 	// what DELIVERS the ContentKey -- so the envelope parser refuses it, commits nothing and
@@ -701,14 +720,38 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 	if g, ok := grantwire.ParseBootstrap(raw); ok {
 		return r.acceptBootstrap(g, cursor)
 	}
-	b, res, f, err := r.open(raw, time.Now())
+	b, res, f, err := r.open(raw, now)
 	if err != nil {
-		if errors.Is(err, crypto.ErrStaleSeq) || errors.Is(err, crypto.ErrStaleAge) {
-			// Already applied, or past PB-TIME-2's bound and therefore never usable. The
-			// ack is the idempotent half of the retry: without it the phone re-reads the
-			// same unusable item on every drain and the relay mailbox never compacts.
-			// Nothing is persisted either way -- a fail-closed refusal commits no content.
+		if errors.Is(err, crypto.ErrStaleSeq) {
+			// ALREADY APPLIED. The content is on disk behind the durable high-water, so the
+			// relay's copy is redundant and the ack destroys nothing. It is the idempotent
+			// half of the retry: without it the phone re-reads the same item on every drain
+			// for the whole retention window and the mailbox never compacts (PB-SYNC-6).
 			return Receipt{Acked: r.ack(cursor) == nil}, err
+		}
+		if errors.Is(err, crypto.ErrStaleAge) {
+			// PAST PB-TIME-2's BOUND, AND THEREFORE NEVER ACKED. This branch used to share
+			// the ack above on the reasoning that the frame is "never usable" -- and that
+			// reasoning is false in the one case that matters. The bound compares the
+			// machine's authenticated stamp against THIS PHONE's clock, so a phone running
+			// eleven minutes fast reads every freshly-sealed frame as past it. The frame is
+			// intact; the phone's reading of it is not. Acking it told the relay to compact
+			// away the only copy, so the phone destroyed its entire inbound plane as it
+			// arrived and correcting the clock recovered nothing (ADR-007 B42).
+			//
+			// It is not a clock bug either. The relay is the declared adversary (ADR-007 D9)
+			// and it schedules delivery: withholding for ten minutes and then releasing puts
+			// every released frame past the bound. Acking made that silent, permanent content
+			// destruction PERFORMED BY THE VICTIM.
+			//
+			// THE COST IS A STALL, AND IT IS THE RIGHT TRADE. An un-acked item is never
+			// compacted, so the drain re-reads it until the relay's own retention cap (§6.0,
+			// 7 d) drops it -- the same bounded stall an unopenable frame already causes. A
+			// stall is recoverable (the frame is still there when the clock is fixed) and it
+			// is loud (InboundAgeRefused stops the phone reading "online"); a deletion is
+			// neither. Nothing is persisted here: a fail-closed refusal commits no content.
+			r.markAgeRefused(true)
+			return Receipt{}, err
 		}
 		gap := false
 		if res != nil {
@@ -716,6 +759,11 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 		}
 		return Receipt{Gap: gap}, err
 	}
+	// A frame the phone TOOK is proof the inbound plane works, so the refusal condition
+	// clears with it. It is cleared here rather than latched until something explicitly
+	// resets it: latching would leave a phone reporting itself broken for the life of the
+	// process over one straggler, which is the brick PB-STATE-10 forbids.
+	r.markAgeRefused(false)
 	if r.core == nil {
 		r.apply(f)
 		return Receipt{Gap: res.Gap, Acked: true}, nil
@@ -789,6 +837,26 @@ func (r *MailboxRouter) acceptBootstrap(g *crypto.EpochGrant, cursor uint64) (Re
 // re-pair -- never by discarding the frame.
 func isCustodyRefusal(err error) bool {
 	return errors.Is(err, crypto.ErrKeyAuthRequired) || errors.Is(err, crypto.ErrKeyInvalidated)
+}
+
+// InboundAgeRefused reports that the phone is DISCARDING the frames the machine sends it,
+// because their authenticated age is past PB-TIME-2's bound as this phone reads its own clock.
+//
+// It is the health signal for a condition the transport cannot see: the websocket is up, so
+// the connection state machine has nothing to say, and a phone that answers "online" while
+// deleting its inbound plane is reporting the destruction as health (ADR-007 B42). It is LIVE
+// -- raised by a refusal, cleared by the next frame the phone takes -- because it describes
+// the drain that is happening now and must not outlive it.
+func (r *MailboxRouter) InboundAgeRefused() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ageRefused
+}
+
+func (r *MailboxRouter) markAgeRefused(refused bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ageRefused = refused
 }
 
 // markStale mirrors the persisted stale flag into the live router.

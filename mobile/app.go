@@ -558,14 +558,33 @@ func (a *App) startPairingJoin(p *Pairing, base context.Context) bool {
 }
 
 // ConnectionState is offline / connecting / online / reconnecting (PB-APP-8).
+//
+// IT IS NOT A READ OF THE SOCKET, and the difference is ADR-007 B42. A phone whose inbound
+// frames are all being refused past PB-TIME-2's bound -- a clock running fast, or a relay that
+// withheld a page for eleven minutes and then released it -- has a live websocket and receives
+// nothing: no journal, no terminal, no lease confirmation, no op outcome. Answering "online"
+// there renders "Connected to your machine." with no banner, which reported the destruction of
+// the phone's whole inbound plane AS HEALTH.
+//
+// It reports connOffline rather than a new state on purpose. "Not connected to your machine"
+// is TRUE of a phone nothing can reach through -- every reply rides the plane being refused, so
+// no op it sends can ever be answered -- and it is a state the screens already render, whereas
+// a new wire literal is one dev.swarm.phone.keys.ConnectionState.of would refuse with error(),
+// i.e. a crash on the very handset this condition describes. The distinct, actionable diagnosis
+// belongs to PB-TIME-1's clock verdict, which is a separate surface.
 func (a *App) ConnectionState() (state string, err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
 		return "", err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.connState, nil
+	state = a.connState
+	a.mu.Unlock()
+	if state == connOnline && core.Router().InboundAgeRefused() {
+		return connOffline, nil
+	}
+	return state, nil
 }
 
 // StateSummary is what the restart actually restored (PB-STATE-1/-2).

@@ -280,32 +280,72 @@ matrix forbids a residual on a non-`SOFTWARE_ONLY` row. `S14`.
 
 ## 4. Class N — no adversary, and one of them is product-fatal
 
-### 4.1 A phone more than 10 minutes FAST goes silently deaf to the whole machine→phone plane
+### 4.1 A phone more than 10 minutes FAST DESTROYED the whole machine→phone plane — CLOSED
 
-**The most serious non-security residual in the phase, and it is worth reading twice.**
-`phonecore/snapshot.go` enforces `InboundMaxAge` on the **phone's** clock, so a fast phone gets
-`ErrStaleAge` for every reply, journal record and snapshot. `mobile/relay.go` **swallows it with no
-stale mark and no event**, and `ConnectionState()` still reads **online**. The user sees a
-connected phone that receives nothing.
+**This entry used to say "goes silently deaf". That was wrong, and the correction is the point.**
+`phonecore/snapshot.go` enforces `InboundMaxAge` on the **phone's** clock, so a fast phone got
+`ErrStaleAge` for every reply, journal record and snapshot — and `AcceptCommit` **acked the relay**
+on that path while committing nothing. The ack is the *delete*: the phone kept no copy and the relay
+held the only one, so every frame was **permanently destroyed as it arrived**, and correcting the
+clock recovered nothing. `ConnectionState()` read **online** throughout, so the destruction was
+reported as health.
 
-**Reachable: by anyone who can move the handset's clock, including the user and the OS.** Not an
-attack in any realistic model — but it is a total loss of function presenting as a healthy
-connection. It is the **third clock wall** (30 s surfaced, 60 s refused opaquely, 10 min deaf) and
-the only one that was undocumented. `S7b`, `S11`.
+**And the relay controls the trigger.** It does not need a wrong phone clock: withholding delivery
+for eleven minutes and then releasing puts every released frame past the bound, and the phone
+ack-and-discards the lot. The relay is the declared adversary (ADR-007 D9), so this was silent,
+permanent content destruction **performed by the victim** and reachable by design — not the loss of
+function this entry described. ADR-007 B42.
 
-**Status: OPEN.** The asymmetry follows from S7b's deliberate one-sidedness (PB-GW-2 is
-inbound-only), and closing it was blocked on the PB-TIME-2 reply-seal gap. S11 closed the
-reply-seal half; **the phone-side bound is still not enabled.**
+**Status: CLOSED (2026-07-26).** Two changes, each fenced:
 
-### 4.2 The offline op queue is safe only by accident, and nothing pins it
+- `AcceptCommit` no longer acks an age refusal (`internal/phonecore/snapshot.go`). `ErrStaleSeq`
+  keeps its ack and must — that frame is already durable, so compaction loses nothing — and the two
+  refusals differ in exactly the fact that decides it: whether the content survived. Correcting the
+  clock now **recovers** the frame, which is the whole difference between a delay and a deletion
+  (`internal/phonecore/b42_staleage_test.go`).
+- `App.ConnectionState()` stops reading `online` while the inbound plane is being refused
+  (`mobile/app.go`, `MailboxRouter.InboundAgeRefused`). It reports `offline`, which is true of a
+  phone nothing can reach through — every reply rides the plane being refused — and needs no new
+  wire literal, which `dev.swarm.phone.keys.ConnectionState.of` would refuse with `error()`
+  (`mobile/conformance/b42_staleage_test.go`).
 
-`OpQueue` stores **unsealed** `QueuedOp` and seals at replay time, so `IssuedAt` is stamped on
-send, not on enqueue. That ordering is the only reason offline replay works at all under the
-10-minute inbound age bound — **and no test asserts it**. A future refactor that sealed at enqueue
-would silently brick offline replay, and the failure would look exactly like the PB-GW-6 brick S7b
-was created to avoid. **Wants a test pinning seal-at-send.** Compounded by the fact that
-`OpQueue.Enqueue` has **zero production callers**, so the hazard is latent in both directions.
-`S7b`.
+**Residual left behind, deliberately:** an un-acked frame is never compacted, so the drain re-reads
+it until the relay's own retention cap (§6.0, 7 d) drops it. That is the same bounded stall an
+unopenable frame already causes (ADR-007 B42's fourth finding: the gateway advances its cursor past
+a malformed item so a poisoned envelope cannot wedge its loop, and the phone does not) and it is the
+right trade: a stall is recoverable and loud, a deletion is neither. **The distinct diagnosis is still
+missing** — the user is told "not connected", not "this phone's clock is eleven minutes fast".
+PB-TIME-1's clock verdict is the right surface and `SkewMonitor` cannot reach it here, because it
+observes only on command replies and no reply can arrive. Wants a slice.
+
+### 4.2 The offline op queue cannot work as specified — PB-NET-4 needs an amendment
+
+**This entry used to say the queue was "safe only by accident" because `OpQueue` seals the
+envelope at replay rather than at enqueue.** That reasoning is about the wrong clock. The envelope
+seal is not what expires: the **signed command tuple** is. `QueuedOp.Cmd` is a
+`schema.DeviceCommandAuth` minted by `mobile.(*App).sealSignedCommand` at
+`phonecore.CommandTTLFor(action)` — §6.0's **1 minute** for an ordinary op — and
+`internal/phonecore/opqueue.go` states in as many words that it "is never re-signed or re-keyed on
+replay". `internal/skeleton/deviceauth.go` refuses it: `if now.After(cmd.ExpiresAt)` →
+`"command expired"`.
+
+So an offline queue built from the commands this system actually authors delivers **nothing** for
+any outage longer than sixty seconds, which is every outage a queue exists for. Re-signing at drain
+time is not available either: PB-SEC-2 pins the biometric gate as **per-use** for revoke, kill
+switch, launch and kill — exactly ADR-007 D7's list of what may queue — so re-authoring needs the
+user present and consenting again, which is a prompt and not a queue.
+
+Proven, executably, in `internal/skeleton/b42_offlinequeue_test.go`.
+
+**Status: OPEN — needs a decision, not code.** PB-NET-4's queue clause and ADR-007 D7's last
+sentence are invalidated by later decisions (§6.0's signed horizon by op class, PB-SEC-2's per-use
+gate) that nobody re-derived them against. Same shape as PB-KEY-7 dying to PB-KEY-10's fix. Until
+amended, PB-NET-4 reads **NOT MET** with its other clauses noted as met. Supporting facts for
+whoever amends it: `QueuedOp{}` is constructed nowhere outside tests, `Core.Ops()` has no
+production caller, `mobile.(*App).resolveSend` requires a live connection before **any** mutating
+op is authored, and `Core` builds its queue as `NewOpQueue(0)` — **unbounded**, so §6.0's "64 ops"
+is not the production object's bound either; the boundedness evidence constructs its own
+`NewOpQueue(2)`. `S7b`, ADR-007 B42.
 
 ### 4.3 Fences on paths production does not take — standing defect class (v)
 
@@ -315,7 +355,7 @@ a trap for the next slice that adds a caller.
 | Symbol | Consequence | Source |
 |---|---|---|
 | `transport.SendLive`, `transport.RetryFor` | PB-INPUT-4's retry table is enforced **nowhere**; the façade appends through `relay.Client.MailboxAppend` directly | `S6b`, `S11` |
-| `OpQueue.Enqueue` | Nothing fills the offline queue | `S7b` |
+| `OpQueue.Enqueue` | Nothing fills the offline queue, and nothing can — see §4.2. Not a missing caller: a wiring change alone would produce commands the daemon refuses | `S7b` |
 | `RelaySink.Err()` | Replay failures are stashed but unreachable and unlogged | `S2b` |
 | `PushTokens.disable` (Kotlin) | "Deletion on disable" is a method with no caller; PB-APP-7's switches are where the call belongs | `S17` |
 | `Sequencer.Next()` | Exported on the gomobile-bound package, issues seqs with no durable reservation | `S7` |

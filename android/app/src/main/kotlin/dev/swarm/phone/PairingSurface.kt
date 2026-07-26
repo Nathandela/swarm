@@ -466,13 +466,17 @@ class PairingSurface(
     /**
      * `swarmmobile`'s pairing state as one of S16's [PairingStep]s.
      *
-     * THREE OF THE CORE'S TERMINAL STATES HAVE NO STEP, and that is reported rather than papered
-     * over: `different_machine` (the QR belongs to a machine this phone is not pinned to),
-     * `rate_limited` and `failed` are terminal in mobile/pairing.go and [PairingStep] enumerates
-     * none of them. They answer null here and [routedStateMessage] shows the routed CLASS
-     * message instead -- true and general, rather than a fourth wording invented at this seam.
-     * Closing the gap properly means adding the constants to S16's model, which is that slice's
-     * decision and not this file's.
+     * EVERY STATE mobile/pairing.go CAN REPORT HAS AN ARM HERE, and that is PB-PAIR-5's
+     * criterion rather than a tidiness rule: a state with no arm answers null, and the screen
+     * then shows the ROUTED CLASS message -- one wording shared with every other pairing
+     * failure, which is exactly the opaque error the requirement exists to remove.
+     *
+     * THREE STATES USED TO HAVE NO ARM. `different_machine` was the sharp one: PB-PAIR-5's
+     * 2026-07-25 amendment retired `already-paired` and substituted it, the Go core followed,
+     * and this file did not -- so the requirement's own new state was the one that fell
+     * through. `rate_limited` and `failed` had never had one.
+     * android/gate/pairingstates_test.go compares this table against the core's constants so
+     * the two cannot drift again.
      */
     private fun stepOf(state: String, sasKnown: Boolean): PairingStep? = when (state) {
         "confirm_destination" -> PairingStep.CONFIRM_DESTINATION
@@ -487,9 +491,20 @@ class PairingSurface(
         "expired" -> PairingStep.QR_EXPIRED
         "cancelled" -> PairingStep.CANCELLED
         "refused_origin_mismatch" -> PairingStep.REFUSED_ORIGIN_MISMATCH
+        "different_machine" -> PairingStep.DIFFERENT_MACHINE
+        "rate_limited" -> PairingStep.RATE_LIMITED
+        "failed" -> PairingStep.FAILED
         else -> null
     }
 
+    /**
+     * The fallback for a state THIS BUILD has never heard of -- a core newer than the app.
+     *
+     * It stays now that every known state has a step. A facade that starts reporting a new one
+     * must land somewhere legible rather than leaving the screen on its last step forever, and
+     * the routed class message is the honest thing to say about a condition this build cannot
+     * name. The gate keeps the KNOWN set covered, so this arm is reached only by version skew.
+     */
     private fun routedStateMessage(state: String): String = ErrorRouter.route(
         if (state == "rate_limited") SwarmErrorTokens.RATE_LIMITED else SwarmErrorTokens.PAIRING_FAILED,
     ).message
