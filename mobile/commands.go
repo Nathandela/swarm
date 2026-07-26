@@ -108,11 +108,6 @@ func (a *App) Launch(spec *LaunchSpec) (op *Op, err error) {
 		Cwd:           spec.Cwd,
 		InitialPrompt: spec.Prompt,
 		Options:       parseOptions(spec.Options),
-		// TEMPORARY S19 PROBE -- REVERT. The daemon refuses a launch whose cols/rows are
-		// outside [1, maxDim] and LaunchSpec carries no geometry; this stands in only so the
-		// RED author can see what the chain does AFTER the launch leg. Not a fix.
-		Cols: 80,
-		Rows: 24,
 	}
 	return a.signedCommand(schema.ActionLaunch, schema.LaunchSessionSentinel,
 		schema.LaunchContentHash(req), commandBody{launch: req})
