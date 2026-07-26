@@ -1797,3 +1797,82 @@ conclusion rather than of the test.
 **Owner and runbook.** The gate needs a named human owner with a device — it is not assignable to an
 agent — and a runbook written in advance, with **every step marked unrun**. The runbook is owed by
 S20; writing it now is what makes the deferral checkable later rather than a promise.
+
+### B32 — Metadata disclosure, restated because push persistence added to it
+
+D11 documents what the relay and the push provider observe, and forbids claiming less exposure than
+exists. Two things changed in Phase B and the disclosure moves with them.
+
+**The relay's at-rest footprint gained a durable device identifier.** PB-PUSH-6 made push tokens
+survive a relay restart, so `bucketTokens` holds a provider-issued, long-lived, device-specific
+identifier **in the clear** — it cannot be encrypted, because the relay must hand it to the provider.
+It is keyed by routing id, the same key that indexes the mailbox, so it is directly correlatable with
+that handset's message cadence and presence history. It is also **the same identifier the push
+provider holds**, which makes it a **join key between two parties whose views are otherwise
+disjoint** — the sharpest way to put it, and the reason this entry exists rather than a line in a
+runbook. Deletion is as durable as registration (same transaction as the revocation), and it lives in
+its own named bucket rather than in the item log so an operator can audit every device identifier in
+one place. That is an **auditability** property, not a confidentiality one, and must not be cited as
+the latter.
+
+**The provider's view is now what PB-PUSH-3 claims, because B20 made it so**: key ids zeroed, a
+constant 78-byte payload, an empty plaintext. What an empty payload does **not** fix: a token plus
+wake timing is an **activity trace**. The content is hidden; the rhythm is not. D11's honesty rule
+requires saying so rather than resting on the payload being empty.
+
+The operator-facing form is `docs/operations/metadata-disclosure.md`; the two must not diverge.
+
+### B33 — The relay pin is over the SPKI, and key reuse is part of the pin
+
+`Security.PinnedCert` compares the full leaf DER. Android's trust-root source is `TrustRootsPinned`,
+so on that platform the pin is the whole of relay TLS verification, and a reissue — which changes the
+serial and validity window even when nothing else does — takes every paired handset offline. On the
+Let's Encrypt cadence that is every 60-90 days.
+
+**Decision**: `Security` gains `PinnedSPKISHA256`, SHA-256 over the presented certificate's
+`RawSubjectPublicKeyInfo`. Either pin alone admits the peer; both may be set. The security level is
+unchanged — the digest admits exactly one public key — and a malformed pin is refused **before the
+dial** with `ErrPinMalformed` rather than inside `VerifyPeerCertificate`.
+
+**The requirement's own claim is wrong as written and is amended rather than repeated.** PB-OPS-5
+said pinning the SPKI "survives renewal at the same security level". That holds **only if the renewal
+reuses the key**, and certbot generates a fresh keypair per renewal by default — a fresh key is a
+fresh SPKI, which breaks an SPKI pin on exactly the cadence it was adopted to survive. An SPKI pin is
+a **necessary half, not the fix**; the operator must also configure key reuse. The S20 implementer
+refused to restate the claim unqualified and pinned it in the opposite direction:
+`TestPBOPS5_SPKIPinIsBrokenByARenewalThatROTATESTheKey` **asserts the pin failing** on a rekeyed
+renewal, so the key-reuse step cannot be silently dropped later.
+
+**Not closed by this entry** — see B34.
+
+### B34 — The transport-security policy has no production caller (PB-NET-2)
+
+The most serious finding of the closure slice, and it belongs to no requirement that slice owned.
+
+`relay.Security` — the certificate pin, the cleartext refusal, the redirect re-check — is applied
+**only** by `relay.DialSecure`, and **no non-test file in the repository constructs a `relay.Security`
+at all**. Production dials go through `relay.Dial` (`mobile/relay.go`, `cmd/swarm-remote/main.go`) or
+`relay.DialRaw` (`mobile/pairing.go`).
+
+**Consequence**: the handset applies **no transport policy**. A `ws://` URL arriving in a pairing QR
+would run the session in cleartext with nothing refusing it, and `ErrPinRequired` — the entire point
+of `TrustRootsPinned` on Android — is raised inside a function the app never reaches.
+`internal/remote/transport/tls_test.go` is green and guards the unreached path. This is the standing
+defect class of this phase — *a fence guarding a path production does not take* — applied to the
+phase's transport-security requirement.
+
+**It also relocates B33's premise.** The brief for that work said the leaf-DER pin breaks handsets on
+every renewal. It would, if it were reached; the live defect is not renewal fragility but the absence
+of any policy. The SPKI pin is right, cheap and prerequisite, and it is **not yet on the path a phone
+takes**.
+
+**Not a one-line fix, which is why it is recorded rather than patched at closure.** Carrying a pin to
+the handset has no channel: the pairing QR has no pin field, and `MaxRelayURLLen = 39` exists because
+the symbol must remain scannable at 80x24 in QR version 6 — a 32-byte pin is ~43 base64 characters
+and pushes the symbol to version 7. So this needs a decision about the pairing payload's size budget,
+not merely a call-site change.
+
+**Owner required before any deployment where the relay is not the operator's own trusted host.**
+Recorded here, in `docs/verification/remote-phaseB-residuals.md`, and in both operator runbooks,
+because a security control that exists, is tested, and is never invoked is indistinguishable from an
+absent one at runtime, and distinguishable from it only by a reader who checks call sites.
