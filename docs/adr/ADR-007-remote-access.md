@@ -2311,3 +2311,89 @@ exercises `ErrPinRequired`: `tlsConfig` switches on `runtime.GOOS` and the suite
 the only test naming it asserts its *message text*. **A seam making the platform injectable is
 APPROVED** — it is security-relevant code and the agent was right to ask first, but a fail-closed
 path that has never been executed is the exact class this phase has spent itself finding.
+
+### B46 — residual 1.12 is B37's DoS re-pointed at the PHONE, and the consent signature made it reachable
+
+**Measured, with a vacuity control, by the round-2 threat reviewer. This supersedes residual 1.12's
+"ordering wart" framing entirely.**
+
+**The attack.** The phone operator does exactly what the design asks: compares the SAS, sees a
+mismatch, **rejects**. `RunDevice` fails closed and pins nothing. But msg3 — carrying the phone's
+standing relay consent — was signed and sent **six lines earlier**. The interceptor walks to the relay
+with the harvested consent: `authorize_device(phonePub, consent)` accepted, `device_revoke(phoneRID)`
+accepted, and the phone's next dial returns `relay-auth registration revoked`. Only the banner lifts a
+ban, the banner is the interceptor, and the phone's relay-auth key is minted once per install.
+**Recovery is a reinstall.** A forged consent is refused in the same run, so the gate is real and the
+pass is not vacuous.
+
+**The consent signature — the fix for B37's DoS against the machine — created the same DoS against the
+phone.** That is the composition lesson again, now inside a single change.
+
+**The author's reachability argument is FALSE, in three joined pieces nobody had put together.** It
+held that a QR photographer cannot reach msg3 as responder because the machine created the rendezvous
+first:
+
+1. The shipped QR carries **no `MachineStaticPub`**, so the phone runs `AllowUnpinnedPeer` — **the QR
+   secret alone suffices to hold the responder role**, no machine private key needed.
+2. `RendezvousTTL` is **60s**; `defaultPairTTL` is **3 minutes**, whose own comment calls expiry
+   *"advisory... the daemon's real gate is the mandatory SAS confirm, not a wall clock"*; and the CLI
+   then blocks on `Pending()` with **no deadline at all**. The QR is announced valid long after the
+   relay slot is gone.
+3. `purgeExpiredRendezvous` **deletes without burning**, and `handleRendezvousCreate` has **no
+   `requireAuth`** — so past TTL an unauthenticated stranger re-creates the same label, a claiming
+   phone attaches to the stranger, and the machine sits orphaned on `Recv` with no error.
+
+The machine created the rendezvous first — for 60 seconds of a window the product calls 180 and which
+in practice never ends.
+
+### B47 — the fifth "names a mechanism without checking what it gates": a revoke does not revoke the consent
+
+`internal/remote/relay/routing.go`: *"There is no nonce and none is needed: the statement is a standing
+grant... and **it is revoked by `device_revoke`** rather than by expiry."* Both halves true; the join
+unchecked. `revokeAndPurge` deletes two `pairs` edges and writes a ban — **the signature is a durable
+artifact the grantee still holds**, and `authorizePair` re-writes both edges *and clears a ban placed
+by that same pairer*, in one transaction.
+
+**Measured**: revoke the phone, dial refused; **replay the identical stored consent bytes, dial
+succeeds.** The phone was never asked.
+
+**`swarm remote revoke <phone>` is undone by bytes already sitting in the machine's state directory** —
+the owner's entire remedy for a lost handset, not durable against anything that can read that
+directory, i.e. against B41's own adversary.
+
+**B47b, the purest instance of the same shape**: *"A burned or live slot is refused so the original
+creator's in-flight pairing is never orphaned or hijacked"* — true of `Complete`, and exactly false
+past TTL, because expiry deletes without burning.
+
+### B48 — B45's ruling is INCOMPLETE and is amended
+
+I ruled the pairing dial may run unverified TLS because "the certificate never protected the payload".
+True of the payload; **false of two other things**:
+
+1. **The routing metadata.** The rendezvous label rides cleartext control frames outside Noise.
+   PB-NET-2 bans exposing exactly that, and TLS was the only thing hiding it. B45 priced payload
+   confidentiality and never priced the clause it was exempting.
+2. **The composition with B46, which is load-bearing.** The pairing dial is the dial that carries the
+   phone's consent out. Under verified TLS an interceptor needs a certificate valid for the operator's
+   relay; under my ruling it needs only an on-path position. **B45 lowered the cost of B46's harvest
+   from "hold a valid certificate" to "be on the path"** — a widening of the one dial that must not be
+   widened, ruled without B46 on the table.
+
+**Amendment, taken from the reviewer**: dial the pairing rendezvous unverified **but capture the
+presented SPKI and compare it against `MachinePayload.RelaySPKIPin` when msg2 arrives.** A pure network
+attacker terminating that TLS cannot make the two agree, because the real machine authored the pin. One
+comparison, no new channel, and it detects precisely the interception the ruling would otherwise
+accept. It does **not** cover the QR-holder case; that is B46's job.
+
+**Also recorded from this review**: B39's severity is **unchanged** — consent bounds *whose* routing ids
+may be named, not *how many*, and an attacker signs its own; 200 identities minted again post-fix. And
+`removeConn` reaps only the socket's **current** rid while re-auth overwrites it, so 25 re-auths leak 25
+routing ids permanently marked connected. **B40 and B41 stand exactly as recorded**, both verified
+independently rather than inherited — and the reviewer **corrected its own round-1 claim** that `User=`
+was missing (the unit is a systemd *user* unit and already runs as that user).
+
+**A clean negative, recorded as a result**: the loopback carve-out was attacked and **held** — userinfo
+confusion, decimal/hex/octal literals, IPv4-mapped IPv6, hostname resolution, redirect into cleartext,
+and whether `coder/websocket` replaces the caller's `CheckRedirect` (it chains it). No path to a
+non-loopback cleartext dial. **And the handset pin IS consulted at the dial site** — my brief's worry
+that B34's defect class had been reintroduced was unfounded.

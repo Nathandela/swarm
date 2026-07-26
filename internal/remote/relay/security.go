@@ -134,6 +134,72 @@ type Security struct {
 	//
 	// See MachineSecurity for why a machine-side process needs it.
 	loopbackInRelease bool
+	// unverifiedTLS accepts ANY certificate on an encrypted dial. It is unexported and
+	// set by PairingSecurity alone, which is the whole of its scope: exactly one dial in
+	// the product may use it, and a caller cannot widen that by assembling a Security of
+	// its own. A configured pin still wins over it (tlsConfig), so it can only ever be a
+	// relaxation of the DEFAULT, never of an explicit one.
+	unverifiedTLS bool
+	// trustRoots overrides the platform's stated trust-root source, and is honoured ONLY
+	// inside a test binary -- see WithTrustRootSource, which is the only thing that sets
+	// it. It exists because the branch it reaches was unreachable in every test that
+	// could run: tlsConfig switches on runtime.GOOS, the suite runs on a desktop, and the
+	// pinning-only refusal that residual 1.9's whole resolution rests on had therefore
+	// never been executed by anything.
+	trustRoots TrustRootSource
+}
+
+// PairingSecurity is the policy the HANDSET's pairing rendezvous dials under, and the only
+// place in the product that accepts an unverified certificate (ADR-007 B45).
+//
+// WHY IT HAS TO EXIST. The relay pin reaches a phone through pairing.MachinePayload, so the
+// pairing dial is the dial that FETCHES the pin and cannot itself be pinned. On a
+// pinning-only platform -- every Android handset -- an unpinned wss:// dial is not merely
+// unverified, it is REFUSED with ErrPinRequired before a packet. Under the default policy the
+// pairing dial is therefore refused, the pin never arrives, and the phone can never pair over
+// wss:// at all. That deadlock is B45.
+//
+// WHY IT IS SOUND. The relay's certificate never protected this exchange in the first place.
+// The payload is a Noise handshake whose peer the operator authenticates by comparing a
+// six-symbol SAS against the machine's own screen, and nothing is pinned until that comparison
+// is confirmed. TLS on this hop buys metadata confidentiality, not content authenticity.
+//
+// WHAT IT COSTS, named rather than buried: a hostile terminator on this one hop learns which
+// routing ids are pairing and when. It learns nothing it could use -- the handshake is sealed
+// against it and a substituted payload fails the SAS -- but that metadata is precisely what
+// PB-NET-2's cleartext ban protects, and this policy gives it up for one dial.
+//
+// WHAT IT DOES NOT RELAX. Cleartext is refused exactly as everywhere else, decided from the
+// URL before any socket: a ws:// pairing URL is still refused outside the loopback carve-out.
+// And a Security carrying a pin ignores this flag entirely, so it can never downgrade a dial
+// that had something better to check.
+func PairingSecurity() Security {
+	return Security{AllowLoopbackCleartext: true, unverifiedTLS: true}
+}
+
+// WithTrustRootSource returns sec with its trust-root source overridden.
+//
+// IT IS HONOURED ONLY INSIDE A TEST BINARY, and the field it sets is unexported, so a release
+// build cannot select a trust-root source it is not on however this is called. That is the
+// same shape as AllowLoopbackCleartext and for the same reason.
+//
+// It exists because the pinning-only refusal had never been executed. TrustRootSourceFor is a
+// pure function of GOOS and tlsConfig consults runtime.GOOS, so on the desktop the whole suite
+// runs on, the ErrPinRequired arm is unreachable -- the only test naming that error asserts its
+// message text. A fail-closed branch that has never run is the defect class this phase exists
+// to find, so the branch is made reachable rather than reasoned about.
+func WithTrustRootSource(sec Security, src TrustRootSource) Security {
+	sec.trustRoots = src
+	return sec
+}
+
+// trustRootSource is the source this policy verifies against: the platform's, unless a test
+// binary has overridden it.
+func (s Security) trustRootSource() TrustRootSource {
+	if s.trustRoots != "" && testing.Testing() {
+		return s.trustRoots
+	}
+	return TrustRootSourceFor(runtime.GOOS)
 }
 
 // MachineSecurity is the transport policy every machine-side dial takes: the gateway
@@ -220,6 +286,17 @@ func (s Security) tlsConfig() (*tls.Config, error) {
 	if _, err := s.pin(); err != nil {
 		return nil, err
 	}
+	// A PIN OUTRANKS THE UNVERIFIED FLAG, so PairingSecurity can only ever relax the
+	// DEFAULT policy and never an explicit one. It is ordered before the flag rather than
+	// after it so that a future caller composing the two gets the stronger answer.
+	if !s.pinned() && s.unverifiedTLS {
+		// ADR-007 B45, and the ONE dial that reaches this: the peer is authenticated by the
+		// Noise handshake and the SAS the operator compares, not by this certificate.
+		return &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, //nolint:gosec // B45: the pairing peer is authenticated by Noise + SAS, not by TLS
+		}, nil
+	}
 	if s.pinned() {
 		pinnedDER := append([]byte(nil), s.PinnedCert...)
 		pinnedSPKI := append([]byte(nil), s.PinnedSPKISHA256...)
@@ -255,7 +332,7 @@ func (s Security) tlsConfig() (*tls.Config, error) {
 			},
 		}, nil
 	}
-	switch TrustRootSourceFor(runtime.GOOS) {
+	switch s.trustRootSource() {
 	case TrustRootsEmbedded:
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(EmbeddedTrustRoots()) {

@@ -347,12 +347,17 @@ func (p *Pairing) join(base context.Context) {
 	// matters for the same reason BeginPairing no longer dials at all -- a connection is
 	// already a disclosure (ADR-007 B37).
 	//
-	// THE PIN IS NOT APPLIED HERE AND CANNOT BE: this is the dial that fetches it, so
-	// State.RelaySPKIPin is empty on the pairing that first learns it (App.handsetSecurity
-	// carries the full argument). What guards this exchange is the Noise handshake and the
-	// SAS the operator compares, not the relay's certificate; what the transport policy
-	// contributes is the cleartext refusal, which is decided from the URL.
-	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, app.handsetSecurity())
+	// relay.PairingSecurity, and this is the ONE dial in the product that uses it
+	// (ADR-007 B45). The pin cannot be applied here -- this is the dial that FETCHES it --
+	// and on a pinning-only platform an unpinned wss:// dial is refused rather than merely
+	// unverified, so under any other policy a handset could never pair over wss:// at all.
+	// What guards this exchange is the Noise handshake and the SAS the operator compares,
+	// not the relay's certificate. Cleartext is refused here exactly as everywhere else.
+	//
+	// Every dial AFTER this one is pinned (App.handsetSecurity), and that scope is fenced:
+	// see mobile/b45_pairingscope_test.go, which fails if this policy becomes reachable
+	// from the session dial.
+	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, relay.PairingSecurity())
 	if err != nil {
 		p.finish(nil, err, ctx)
 		return
