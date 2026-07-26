@@ -51,7 +51,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-DOC-5 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
-| PB-E2E-2 | S19 | **NOT MET** | ADR-007 B35 — UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any screen renders. PB-E2E-2 and PB-KEY-8 are in direct conflict; measured by running it (ADR-007 B56) |
+| PB-E2E-2 | S19 | **NOT MET** | UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any screen renders. PB-E2E-2 and PB-KEY-8 are in direct conflict; measured by running it (ADR-007 B56) |
 | PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
@@ -125,7 +125,7 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | PB-SAS-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-SEC-2 | S14 | **NOT MET** | ADR-007 B35 — the per-use tier is unimplemented -- forOperation and the authorization ledger have no production callers and there is no BiometricPrompt, so the four per-use ops are gated by the same 60s timed window as input, which is the downgrade the policy file exists to prevent (ADR-007 B51) |
+| PB-SEC-2 | S14 | **NOT MET** | the per-use tier is unimplemented -- forOperation and the authorization ledger have no production callers and there is no BiometricPrompt, so the four per-use ops are gated by the same 60s timed window as input, which is the downgrade the policy file exists to prevent (ADR-007 B51) |
 | PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-4 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-5 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |

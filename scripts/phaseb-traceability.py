@@ -134,7 +134,7 @@ def main():
 
     for req, sl in sorted(rows, key=sort_key):
         if req in NOT_MET:
-            status, ev = "**NOT MET**", "ADR-007 B35 — " + NOT_MET[req]
+            status, ev = "**NOT MET**", NOT_MET[req]
         elif sl not in shipped:
             status, ev = "pending", "—"
         else:
