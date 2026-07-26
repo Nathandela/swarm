@@ -12,24 +12,32 @@
 # happening. The facts the smoke is impossible without are asserted, unskippably, in
 # android/gate/s19_pbe2e2_test.go; this file is the run.
 #
-# STATUS: IT DOES NOT PASS TODAY, AND THE REASON IS NOT THIS SCRIPT.
-#   (a) The APK cannot pair. PhoneSurface ships three buttons -- take control, kill, revoke --
-#       and a pairing line that renders PairingFlow's SCAN message; its own comment says it
-#       "does not run a pairing on its own". There is no scanner, no destination confirmation,
-#       no SAS display, no confirm control and no keyboard, so four of the requirement's five
-#       in-app actions have no subject.
-#   (b) The module has no instrumented source set and no testInstrumentationRunner, so there is
-#       nothing to install alongside the APK. Adding one is not a line change: the module pins
-#       its dependency graph (dependencyLocking + verification metadata, PB-SEC-14), so every
-#       androidx.test artifact has to be locked and justified.
-# Both are recorded against S19 as findings. Until they are closed, the steps below run as far
-# as INSTALL and then stop at the first action the app cannot perform -- which is the honest
-# outcome, not a skip.
+# STATUS. The two blockers this file recorded are closed:
+#   (a) The APK now has all five of the requirement's in-app subjects. PairingSurface adds the
+#       scanner (ZXing + CameraX, ADR-007 B21), the destination confirmation, the SAS display
+#       and its two answer controls; PhoneSurface adds the keyboard. PhoneSurface also calls
+#       App.Start, which nothing did -- so before S19 the phone never dialled the relay and
+#       "observes" could not have worked even with the controls present.
+#   (b) The module has an androidTest source set and a testInstrumentationRunner. The two
+#       classes below drive the installed APK through its own controls:
+#         dev.swarm.phone.PbE2E2PairAndTypeTest -- pairs, confirms the destination, compares the
+#           SAS, observes, takes control, types.
+#         dev.swarm.phone.PbE2E2ResumeTest      -- what the app is after the force-stop.
+#       Their preconditions arrive as instrumentation arguments and a missing one is a FAILURE,
+#       never a skip.
 #
-# WHAT THIS RUN DOES NOT COVER, said in the file per the brief: PB-E2E-5 stays deferred. An
-# emulator is not a handset. Nothing here exercises the real camera, real biometrics, real FCM
-# delivery, Doze, reboot, or hardware-backed Keystore attestation, and no artifact this script
-# produces may be read as evidence for any of them.
+# WHAT THIS RUN DOES NOT COVER, said in the file per the brief.
+#
+# PB-E2E-5 STAYS DEFERRED AND AN EMULATOR IS NOT A HANDSET. Nothing here exercises real
+# biometrics, real FCM delivery, Doze, reboot, or hardware-backed Keystore attestation, and no
+# artifact this script produces may be read as evidence for any of them.
+#
+# THE CAMERA IS NOT EXERCISED, and that is a deliberate limit rather than an oversight. The QR
+# reaches the app through PB-PAIR-2's manual-entry path -- the same payload, the same
+# App.BeginPairing, the same display-then-confirm step. The scanner is wired and shipped, and
+# this run says nothing whatever about whether a camera decodes anything. Pointing it at an
+# emulator's virtual scene would prove the pipeline decodes on an emulator; it would still not
+# be a statement about a physical device.
 
 set -euo pipefail
 
@@ -85,7 +93,8 @@ trap 'kill "${RELAY_PID:-}" "${DAEMON_PID:-}" "${GW_PID:-}" 2>/dev/null || true'
 
 log "machine provisioning"
 # The relay URL the PHONE will dial: the emulator's route to the host loopback.
-"$OUT/bin/swarm" remote init --relay-url ws://10.0.2.2:8787
+RELAY_URL="ws://10.0.2.2:8787"
+"$OUT/bin/swarm" remote init --relay-url "$RELAY_URL"
 # R-POL.7: remote launches are confined to configured cwd roots and fail closed with none.
 printf '{"version":1,"allowed_cwd_roots":["%s"]}\n' "$OUT" > "$STATE/remote-policy.json"
 
@@ -108,16 +117,45 @@ cd "$REPO/android"
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 shot 01-installed
 
-log "pair, SAS, observe, take control, type"
-# The owner mints the QR; the app scans (or is handed) it, the two SAS displays are compared,
-# and the phone observes the roster, takes control and types.
+log "a session for the phone to observe"
+# THE ONE STEP THIS RUNBOOK CANNOT PERFORM ITSELF, recorded rather than faked.
 #
-# NOT RUNNABLE TODAY -- see the STATUS note at the top of this file. The instrumented test that
-# performs these five actions through the APK does not exist, and the APK has no surface for
-# four of them. This is the step that fails, and it fails naming the missing surface rather
-# than being skipped.
+# "observes", "takes control" and "types" all need a session to exist on the machine, and this
+# repository has NO non-interactive way to create one: `swarm remote` has init/devices/revoke/
+# regrant/pair/off/on/status and nothing that launches, and sessions are otherwise started
+# through the interactive TUI. The in-product remote path is App.Launch (PB-APP-6), which has no
+# screen on the handset yet -- that is a separate piece of work from PB-E2E-2's five actions and
+# is not invented here.
+#
+# So the command is the operator's, and its absence STOPS the run rather than skipping a clause:
+# a smoke that carried on against an empty roster would report "observes" against nothing.
+#
+#     SWARM_E2E2_SESSION_CMD='<command that leaves one session running on this daemon>' \
+#         scripts/pbe2e2-emulator-smoke.sh
+#
+# swarm-fake-agent (built above) is the agent program such a command would run: it is a scripted
+# PTY program, so it is a real session from the daemon's point of view and needs no API key.
+: "${SWARM_E2E2_SESSION_CMD:?PB-E2E-2 needs one session on the daemon before the phone can observe, take control or type. Set SWARM_E2E2_SESSION_CMD to a command that starts one; see the comment above this line for why this runbook cannot write that command for you.}"
+eval "$SWARM_E2E2_SESSION_CMD"
+
+log "pair, SAS, observe, take control, type"
+# The owner mints the QR on the machine; --yes auto-confirms the machine's own SAS gate, so the
+# comparison this clause is named for is between the six symbols the phone displays (logged by
+# the instrumented test under the SwarmE2E2 tag) and the six the command below prints. Both ends
+# derive them independently from the Noise channel binding: they agree only if nothing is
+# sitting between the phone and the machine.
 "$OUT/bin/swarm" remote pair --yes | tee "$OUT/pair.txt"
-./gradlew --no-daemon :app:connectedDebugAndroidTest
+
+# The QR payload the machine printed, handed to the app. It is passed as an instrumentation
+# argument rather than baked in: a payload in the repository would be a pairing nobody minted.
+QR="$(grep -Eo 'swarm://[^[:space:]]+' "$OUT/pair.txt" | head -1)"
+[ -n "$QR" ] || { echo "no pairing payload in $OUT/pair.txt; the machine did not mint a QR"; exit 1; }
+
+./gradlew --no-daemon :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.swarm.phone.PbE2E2PairAndTypeTest \
+  -Pandroid.testInstrumentationRunnerArguments.swarmQr="$QR" \
+  -Pandroid.testInstrumentationRunnerArguments.swarmRelay="$RELAY_URL"
+adb logcat -d -s SwarmE2E2 | tee "$OUT/phone-sas.txt"
 shot 02-controlling
 
 # ---------------------------------------------------------------------------
@@ -134,13 +172,15 @@ adb shell dumpsys package "$PKG" | grep -i "stopped=true" || {
 shot 03-force-stopped
 
 log "relaunch and prove PB-STATE-2 on a real runtime"
-adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1
-sleep 3
-shot 04-resumed
 # The phone must come back holding its durable coordinates -- pairing, epoch, content key,
-# relay cursor, send-seq ceiling -- not start from zero. Asserted on device by the instrumented
-# test above (StateSummary.Restored plus a send-seq that did not rewind), because nothing off
-# the device can see the phone's durable blob.
+# relay cursor, send-seq ceiling -- not start from zero. Nothing off the device can see the
+# phone's durable blob, so the assertion is made ON the device, through the product: the screen
+# says it is paired (which only the durable blob can say, since a completed pairing clears the
+# attempt record), a session redraws, and a typed line is accepted -- which a phone whose
+# send-seq had rewound would have replayed and had refused.
+./gradlew --no-daemon :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.swarm.phone.PbE2E2ResumeTest
+shot 04-resumed
 
 log "artifacts"
 ls -la "$OUT"

@@ -56,6 +56,19 @@ class PhoneActivity : AppCompatActivity() {
     }
 
     /**
+     * Give back what the surface holds while the screen is not in front of anyone -- the camera
+     * above all. A viewfinder left bound is a camera light left on, on a handset whose whole
+     * threat model is somebody else holding it.
+     *
+     * It reaches no facade verb, which is PB-SEC-11 rather than style: this class is exported
+     * with a LAUNCHER filter, so any app on the device can start it.
+     */
+    override fun onPause() {
+        super.onPause()
+        surface.release()
+    }
+
+    /**
      * The controls PB-SEC-12 clause 1 protects, for the assertion in
      * `PhoneActivityWindowTest`. Exposed by name because a test that went looking for "the
      * buttons" in a view hierarchy would keep passing after the last one was removed.
