@@ -14,6 +14,7 @@ import dev.swarm.phone.runtime.LifecycleConvergence
 import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
+import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.FacadeBridge
 import swarmmobile.App
 
@@ -57,6 +58,13 @@ import swarmmobile.App
 class PhoneSurface(private val activity: AppCompatActivity, private val runtime: PhoneRuntime) {
 
     private val status = label(bold = true)
+
+    /**
+     * PB-KEY-8's non-fatal half. [dev.swarm.phone.keys.CustodyPlanner] records a capability the
+     * handset did not confirm that no matrix row consumes; until this label existed the record
+     * was computed on every launch and read by nobody.
+     */
+    private val notice = label()
     private val peekTitle = label(bold = true)
     private val peek = label().apply { typeface = Typeface.MONOSPACE }
     private val outcome = label()
@@ -105,6 +113,16 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
 
+    /**
+     * The session the MACHINE has been asked to render frames for, which is not the same fact as
+     * [session]. `terminalWatch` is a request that costs the daemon per-session render work, so
+     * what is open has to be tracked in order to be closed.
+     */
+    private var watching: String = ""
+
+    /** True once this surface installed its listener and started journal delivery. */
+    private var observing = false
+
     val root: View = ScrollView(activity).apply {
         addView(
             LinearLayout(activity).apply {
@@ -112,7 +130,7 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
                 setPadding(PADDING, PADDING, PADDING, PADDING)
                 layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
                 for (child in listOf(
-                    status, pairing.root, peekTitle, peek, takeControl, typed, send, kill,
+                    status, notice, pairing.root, peekTitle, peek, takeControl, typed, send, kill,
                     revoke, settings.root, outcome,
                 )) {
                     addView(child)
@@ -159,16 +177,103 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
      */
     fun release() {
         pairing.release()
+
+        // The sink goes FIRST and unconditionally. It is the only thing that can outlive this
+        // screen: PhoneRuntime caches the App across Activity instances, so a listener still
+        // pointed at these views would redraw a window nobody is holding -- and would keep this
+        // Activity reachable for as long as the process lives.
+        PhoneEvents.stopObserving()
+        observing = false
+
         val live = connected ?: return
         if (ConnectivityPolicy.ruleFor(RuntimeState.BACKGROUND).socket != SocketDisposition.CLOSED) {
             return
         }
         connected = null
+
+        // ADR-007 B16: backgrounding DISCONNECTS. Both of these are requests the machine is
+        // still serving on the phone's behalf -- per-session terminal render work, and journal
+        // delivery into a queue nothing is draining -- so they are withdrawn before the socket
+        // goes, while there is still a socket to withdraw them over.
+        unwatch(live)
+        try {
+            live.unsubscribeJournal()
+        } catch (refused: Exception) {
+            // The socket is closing either way, and journal delivery is a phone-side flag the
+            // next Start re-establishes. There is no user present on this path.
+        }
         try {
             live.stop()
         } catch (refused: Exception) {
             // Stop is idempotent and the process may be going away regardless. There is no user
             // present on this path and no screen left to report to.
+        }
+    }
+
+    /**
+     * Start observing, which nothing did -- and it is why PB-APP-3/4/5 were non-functional in
+     * the shipping app rather than merely incomplete.
+     *
+     * `SetEventListener`, `SubscribeJournal` and `TerminalWatch` appeared ZERO times in all
+     * Kotlin (residuals §2.9). So no listener was installed, journal delivery never started, and
+     * the machine was never asked to send terminal frames -- while [FacadeBridge.terminalPeek]
+     * read `App.Peek`, a LOCAL cache that only a watched session ever fills. The peek was
+     * permanently empty, and it failed looking exactly like a quiet machine.
+     *
+     * IT IS IDEMPOTENT AND GUARDED, because [render] runs on every resume and after every gated
+     * action. Installing the same listener twice is harmless; re-subscribing on every button
+     * press is pointless traffic through JNI.
+     */
+    private fun observe(app: App) {
+        if (observing) return
+        try {
+            app.setEventListener(PhoneEvents)
+            app.subscribeJournal()
+        } catch (refused: Exception) {
+            outcome.text = FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message
+            return
+        }
+        // Installed only once the facade accepted both: a sink armed over a listener that was
+        // never installed is a screen waiting for events that cannot arrive.
+        PhoneEvents.observe { render() }
+        observing = true
+    }
+
+    /**
+     * Ask the machine to render [next], and stop it rendering whatever came before.
+     *
+     * THE PEEK IS NOT A PULL. `App.Peek` reads `Router().Snapshots()`, a cache the machine fills
+     * by pushing terminal frames -- and it pushes them only for a session the phone has WATCHED
+     * (PB-APP-4). Without this call the peek is empty forever and says so in the words of a
+     * session with nothing on screen.
+     */
+    private fun watch(app: App, next: String) {
+        if (next == watching) return
+        unwatch(app)
+        if (next.isEmpty()) return
+        try {
+            app.terminalWatch(next)
+            watching = next
+        } catch (refused: Exception) {
+            outcome.text = FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message
+        }
+    }
+
+    /**
+     * Close the open peek. Without it the peek plane leaks per-session server render work for
+     * every session the user ever looked at, which is `App.TerminalUnwatch`'s own reason for
+     * existing.
+     */
+    private fun unwatch(app: App) {
+        val open = watching
+        watching = ""
+        if (open.isEmpty()) return
+        try {
+            app.terminalUnwatch(open)
+        } catch (refused: Exception) {
+            // Recorded as closed regardless: this runs on the way to the background and on a
+            // session that has gone away, and a phone that kept retrying a stale unwatch would
+            // spend a reconnect on a session nobody is looking at.
         }
     }
 
@@ -204,13 +309,16 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
             connected = app
         } catch (refused: Exception) {
             outcome.text = FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message
+            return
         }
+        observe(app)
     }
 
     private fun renderUnavailable(startup: PhoneStartup.Unavailable) {
         // PB-APP-9: the ROUTED message, never the platform's own words. A Keystore alias is not
         // a remedy, and `detail` exists for a bug report rather than for a person.
         status.text = startup.error.message
+        notice.text = ""
         peekTitle.text = ""
         peek.text = ""
         session = ""
@@ -221,6 +329,7 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
         status.text = bridge.connectionBanner().text
+        notice.text = CapabilityNotice.of(startup.anomalies)
 
         // No navigation on this surface, so the target is the first row of the triage inbox --
         // the order TriageInbox already decided is what a user must act on first. Inventing a
@@ -230,6 +339,10 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
             .firstOrNull()
             ?.id
             .orEmpty()
+
+        // Before the peek is read, and on the empty branch too: a session that has gone away
+        // still leaves a watch open on the machine.
+        watch(startup.app, session)
 
         if (session.isEmpty()) {
             peekTitle.text = ""

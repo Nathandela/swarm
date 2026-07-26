@@ -2,9 +2,15 @@ package dev.swarm.phone
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import dev.swarm.phone.keys.AndroidKeyInfoReader
+import dev.swarm.phone.keys.AndroidKeystoreAlgorithms
 import dev.swarm.phone.keys.AndroidKeystoreProvisioner
+import dev.swarm.phone.keys.CapabilityAnomaly
+import dev.swarm.phone.keys.CustodyPlan
+import dev.swarm.phone.keys.CustodyPlanner
 import dev.swarm.phone.keys.CustodyProvisioning
+import dev.swarm.phone.keys.DeviceCapabilities
 import dev.swarm.phone.keys.FileCustodyBacking
 import dev.swarm.phone.keys.GoCustodyFailure
 import dev.swarm.phone.keys.KeyCustodyException
@@ -111,9 +117,53 @@ class PhoneRuntime(private val context: Context) {
      * cannot load its own core still has to produce a state rather than take the process down.
      */
     private fun attach(): PhoneStartup = try {
-        PhoneStartup.Ready(construct())
+        // The capability question is asked FIRST, before anything touches Keystore or the state
+        // directory. A handset that cannot hold the design's keys must be told so by name rather
+        // than discovered halfway through provisioning.
+        val plan = capabilityPlan()
+        PhoneStartup.Ready(construct(), plan.anomalies)
     } catch (failure: Throwable) {
         PhoneStartup.Unavailable(routeStartupFailure(failure), failure.message ?: failure.javaClass.name)
+    }
+
+    /**
+     * PB-KEY-8's gate, at the one moment it can be asked, and the caller [CustodyPlanner] did
+     * not have.
+     *
+     * `CustodyPlanner.forDevice` was fully tested and invoked by nothing: `construct` went
+     * straight to [KeystoreCustodyBootstrap], so [KeyCustodyException.PlatformCapabilityMissing]
+     * was declared, routed by [routeStartupFailure], and never thrown. The shipped app therefore
+     * refused no handset over any capability -- which also made physical-handset runbook step 2c
+     * inert (residuals §2.10(a)).
+     *
+     * WHAT A USER SEES ON EACH PATH, because "a phone that cannot start" is the worst outcome
+     * this file can produce:
+     *
+     *  - PROVISIONED, no anomalies: nothing. The app starts as before.
+     *  - PROVISIONED with anomalies: the app starts, and [PhoneSurface] shows the line
+     *    [dev.swarm.phone.ui.CapabilityNotice] writes. Reaching here needs a Keystore that
+     *    offers no Curve25519 at the pinned minSdk, which is a Keystore not behaving as its API
+     *    level promises -- worth recording, and explicitly not worth refusing over.
+     *  - REFUSED: DEVICE_UNSUPPORTED, whose remedy is REPORT_BUG and which offers no pairing
+     *    (`PhoneStartupRoutingTest`). It is reachable only when this Keystore cannot produce an
+     *    AES key at all, or below API 30 -- and PB-RUN-1 pins minSdk to 33, so the second is
+     *    unreachable on any handset the app installs on. The first was already a phone that
+     *    could not start; what changes is that it now says which capability was missing instead
+     *    of surfacing a platform exception as INTERNAL.
+     */
+    private fun capabilityPlan(): CustodyPlan.Provisioned {
+        val plan = CustodyPlanner.forDevice(
+            DeviceCapabilities(
+                sdkInt = Build.VERSION.SDK_INT,
+                strongBox = strongBoxPreferred,
+                algorithms = AndroidKeystoreAlgorithms(),
+            ).probe(),
+        )
+        return when (plan) {
+            is CustodyPlan.Provisioned -> plan
+            is CustodyPlan.Refused ->
+                throw KeyCustodyException.PlatformCapabilityMissing(plan.role, plan.capability)
+        }
     }
 
     private fun construct(): App {
@@ -164,13 +214,19 @@ class PhoneRuntime(private val context: Context) {
     private fun bootstrapOver(backing: PersistentCustodyBacking) = KeystoreCustodyBootstrap(
         backing = backing,
         provisioning = CustodyProvisioning(AndroidKeystoreProvisioner(), AndroidKeyInfoReader()),
-        // The handset's own answer. StrongBox absence is a fallback and not a refusal --
-        // refusing without it would refuse most handsets -- and what must not happen is a key
-        // claiming hardware it does not have, which CustodyProvisioning's read-back settles from
-        // the KeyInfo rather than from this preference.
-        strongBoxPreferred =
-        context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE),
+        strongBoxPreferred = strongBoxPreferred,
     )
+
+    /**
+     * The handset's own answer, asked ONCE and read by both the capability probe and the
+     * bootstrap. Two copies of a platform question are two things to get wrong.
+     *
+     * StrongBox absence is a fallback and not a refusal -- refusing without it would refuse most
+     * handsets -- and what must not happen is a key claiming hardware it does not have, which
+     * CustodyProvisioning's read-back settles from the KeyInfo rather than from this preference.
+     */
+    private val strongBoxPreferred: Boolean
+        get() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
 
     /**
      * The third way the two situations can be told apart, and the one [KeystoreCustodyBootstrap]
@@ -284,7 +340,16 @@ private fun routeCustodyVerdict(failure: KeyCustodyException): RoutedError = whe
  */
 sealed class PhoneStartup {
 
-    data class Ready(val app: App) : PhoneStartup()
+    /**
+     * @param anomalies capabilities the handset did not confirm that NO matrix row consumes, so
+     *  none of them stopped the app starting. They ride the READY state on purpose: they are a
+     *  property of a phone that works, and the only thing left to do with them is show them
+     *  ([dev.swarm.phone.ui.CapabilityNotice]). A record with no reader is the same as no record.
+     */
+    data class Ready(
+        val app: App,
+        val anomalies: List<CapabilityAnomaly>,
+    ) : PhoneStartup()
 
     /**
      * @param error what to show and what the user can do about it -- PB-APP-9's routed state,
