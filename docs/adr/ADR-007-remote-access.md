@@ -1876,3 +1876,58 @@ not merely a call-site change.
 Recorded here, in `docs/verification/remote-phaseB-residuals.md`, and in both operator runbooks,
 because a security control that exists, is tested, and is never invoked is indistinguishable from an
 absent one at runtime, and distinguishable from it only by a reader who checks call sites.
+
+### B35 — B17(b) is FALSE; PB-KEY-7 is unwired AND unimplementable as specified
+
+The investigation into the seventh uncalled-symbol instance returned **both** answers, and the split
+is the finding. `KeyCustodySession` was written as one class holding two halves with opposite fates.
+
+**The INSTALL half is SUPERSEDED, correctly.** Epoch keys reach `State.Keys` entirely inside Go —
+`App.Start` -> drain -> `AcceptCommit` -> `acceptBootstrap` -> `Core.installGrant` — opened under the
+recipient key in `device.key`. That is **PB-KEY-10's fix (S10)**, and its own headline test is named
+`TestPBKEY10_AFreshPairingObtainsTheEpochKeyWithoutAnyInstallCall`. The Kotlin install path is dead at
+**both** ends: no production `CoreKeyCustody` implementation, and **all 22 `CustodyBlobs.tierKey`
+references are under `src/test/`** — so even a wired adapter would have thrown on first call. A
+one-line wire-up would have produced a crash, not a feature.
+
+**B8 still HOLDS on the live path.** One artifact crosses — `KeyCustody.WakeKEK()/ContentKEK()`,
+reverse-bound so the result is inbound — and the epoch keys crossing *less* is a **narrowing**, which
+B8 explicitly permits. No bound `App` method returns `[]byte`; both directions remain fenced.
+
+**B17(b) is now FALSE.** It states that after a purge "the Android side must re-install it, without any
+authentication, before it can open the envelope". **The Android side no longer has any source for
+those bytes.** The same false claim is repeated in code at `mobile/app.go` on `InstallContentKey`
+("PB-KEY-7's recovery path... so the first screen lock does not brick the app").
+
+**PB-KEY-7 is not achieved, and wiring it as specified would make the product worse.** There is no
+trigger anywhere — no `ProcessLifecycleOwner`, no `ACTION_SCREEN_OFF`, no `onStop`/`onTrimMemory`;
+`PhoneActivity.onPause` reaches no custody verb. And `dropKeyMaterial` (`internal/phonecore/state.go`)
+clears `Keys` while leaving `GrantEpoch`/`GrantSeq` standing, so re-delivery of the same grant is
+refused as a replay — **only a seq-advancing re-grant recovers**, as S10's own evidence states.
+**Wired today, the first screen lock would destroy both epoch keys with no on-device recovery and
+land the phone in PB-KEY-3's terminal state** — the exact outcome the code comment claims it prevents.
+
+**So this is the one instance of the class where wiring the symbol would have been the wrong fix**,
+and it is the reason the investigation was worth running instead of patching.
+
+**What went wrong process-wise, and it is not S10's fault.** PB-KEY-10's fix was correct. It removed
+the Kotlin-side epoch-key copy that PB-KEY-7's purge/recovery cycle had been architected on, and
+**nothing re-derived PB-KEY-7 against the new arrangement**. A requirement can be invalidated by a
+fix to a different requirement, and nothing in this phase's apparatus looks for that.
+
+**`LockPurgeTest` pins a property the product cannot have**:
+`the_wake_tier_is_reinstallable_after_a_purge_without_authentication` is B17(b)'s named fence, over a
+hand-built session and a test-only core. It reads as coverage for something impossible on the live
+path.
+
+**The decision is NOT taken here** — three options, each with a real cost, and it needs its own round:
+(1) purge memory only and leave the sealed tiers at rest, which contradicts S14a's fixes and
+PB-KEY-7's own at-rest clause; (2) keep at-rest destruction and accept a machine re-grant per lock,
+which is unusable; (3) have the phone signal grant-loss and the machine auto-re-grant on the next
+gateway session, which is new machine-side behaviour and PB-KEY-3 currently says only the owner may
+re-grant.
+
+**What IS lost today, stated exactly.** The at-rest gate still holds across a process restart. The
+live-process exposure does not: after one unlock, the Go core keeps `State.Keys.ContentKey` and the
+decrypted session, snapshot and reply caches, with `MailboxRouter` still bound to the content key —
+precisely the scenario PB-KEY-7 was written to close. The wake tier is unaffected and correct.
