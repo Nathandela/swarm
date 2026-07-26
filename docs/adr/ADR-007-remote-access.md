@@ -2263,3 +2263,51 @@ failure loop, a refusal-precedence decision still open.
 honest name; it was kept only to bound gate risk across the golden surface, screen coverage and eight
 test files. B35's own lesson argues for renaming it, and that is recorded as follow-up rather than
 done under a security fix.
+
+### B45 — the pairing dial runs UNVERIFIED TLS; the pin cannot bootstrap itself
+
+Wiring the handset pin did **not** close residual 1.9, and the reason is a bootstrap paradox my own
+framing missed. I wrote that "the pairing dial cannot be pinned and is covered by the cleartext
+refusal". The first half is right. The second is incomplete, and fatally:
+
+**On a pinning-only platform an unpinned `wss://` dial is REFUSED, not merely unverified** —
+`Security.tlsConfig` returns `ErrPinRequired` before a packet moves. The pairing dial is unpinned by
+construction, **because it is the dial that fetches the pin**. So on Android the pairing dial is
+refused, the pin never arrives, and the phone can never pair over `wss://` at all. **The pin it would
+have learned is unreachable through the only channel that carries it.**
+
+**Decision: option 2 — the PAIRING dial, and only the pairing dial, runs unverified TLS.**
+
+The argument, which is the reason this is acceptable rather than a hole: **the pairing payload is a
+Noise handshake the operator authenticates by comparing a SAS.** The relay's certificate is not what
+protects that exchange and never was — a hostile terminator on that hop cannot forge the handshake,
+cannot learn the PSK, and cannot survive the SAS comparison. TLS on this one dial is carrying
+confidentiality of *metadata*, not authenticity of *content*.
+
+**The cost, named rather than buried**: a hostile terminator on that single hop sees the routing
+metadata PB-NET-2's policy exists to hide — which routing ids are pairing, and when. It is one dial,
+once per pairing, and it ends the moment the pin lands.
+
+**The alternatives and why they lose.** (1) Verifying the pairing dial against system roots fails on
+Android 14+ anyway — Go cannot see the Conscrypt store, which is this ADR's own reasoning for
+`TrustRootsPinned` — and fails always for a self-signed relay, which is the runbook's own topology.
+(3) An operator-provisioned pin in the app config is right for a self-hosted deployment and wrong for
+a consumer flow, and adds a facade field. **Option 2 is the only one under which a self-signed relay
+can bootstrap at all**, which is the deployment this project actually documents.
+
+**Two defects this surfaced, both of which must be fixed and neither of which is this decision.**
+
+**(a) A spinner that promises waiting is enough.** `ErrPinMismatch`, `ErrPinRequired` and
+`ErrCleartextRefused` match no sentinel in `App.run`'s dial switch, so they fall through to
+`reconnecting` — **"Lost the link to your machine; reconnecting", with a spinner, forever.** That is
+exactly the PB-APP-10 failure `mobile/relay.go`'s own comments condemn three times, and
+`ConnectionUi.kt` states the rule it breaks: *"A spinner is a promise that waiting is enough."* None
+of these three conditions is ever resolved by waiting. **Pre-existing — it arrived with B37's
+cleartext refusal, not with the pin** — and fixing it needs a new `ConnectionState`, i.e. Go and
+Kotlin moving together, because `ConnectionState.of` errors on an unknown wire string by design.
+
+**(b) The fail-closed branch residual 1.9's resolution rests on is REASONED, NOT MEASURED.** Nothing
+exercises `ErrPinRequired`: `tlsConfig` switches on `runtime.GOOS` and the suite runs on darwin, so
+the only test naming it asserts its *message text*. **A seam making the platform injectable is
+APPROVED** — it is security-relevant code and the agent was right to ask first, but a fail-closed
+path that has never been executed is the exact class this phase has spent itself finding.
