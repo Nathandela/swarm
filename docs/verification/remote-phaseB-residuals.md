@@ -441,3 +441,46 @@ Stated rather than defaulted to the reassuring answer:
    comment. I did not enumerate today's callers.
 3. **Whether the four flakes are one bug.** The progress ledger suspects a shared cause for three of
    them and narrowed the fourth without closing it. I did not reproduce them.
+
+## 2.9 THE APP CANNOT OBSERVE — three more bound verbs with no caller (found 2026-07-26)
+
+Found by running, against the finished tree, the same search I had just written into the audit
+committee's brief: *exported symbols with no non-test caller*. It is the class this phase has found
+five times, and it is present **in the surface built to close the previous instance of it**.
+
+**Measured.** Of 45 bound `App` verbs, 17 have no production-Kotlin caller. Three of those are
+load-bearing for observation, and appear **zero times in ALL Kotlin — `main`, `test` and
+`androidTest` alike**:
+
+- `SetEventListener` — no listener is ever installed, so no journal event can reach the app.
+- `SubscribeJournal` — journal delivery is never started.
+- `TerminalWatch` — the machine is never asked to send terminal frames. `TerminalWatch` also has no
+  non-test **Go** caller: only its own declaration at `mobile/commands.go:275`.
+
+**Why the peek looks wired but is not.** `PhoneSurface` calls `bridge.terminalPeek(...)`, which calls
+`app.peek(session)`, which reads `core.Router().Snapshots().Get(session)` — **a local cache**.
+`TerminalWatch` is the verb that asks the machine to populate it. With nothing subscribing, `Peek`
+returns `no terminal snapshot for ...` forever, and the failure reads as "nothing is happening on the
+machine" rather than as a missing subscription.
+
+**Why the green gates did not catch it.**
+- PB-E2E-1 passes because the **Go** chain calls `TerminalWatch` directly. The Go core is fully
+  exercised; the app's use of it is not.
+- The instrumented `PbE2E2PairAndTypeTest` would exercise it, but it requires an emulator **and** a
+  session, and the smoke script stops at session creation (no CLI can create one). So it has never
+  run.
+- The screen-coverage artifact traces entry points, not reachability from them.
+
+**Consequence: PB-APP-3/4/5 are non-functional in the shipping app**, in the same way PB-APP-1/6 were
+before `App.Start` was found. A user pairs, sees a roster that never updates, and opens a terminal
+peek that is permanently empty.
+
+**The general lesson, which is now the most important thing this phase has produced.** Five separate
+instances, each found later than the last, each in code that was unit-tested and traced in a coverage
+artifact. **A gomobile facade makes "exists" and "is used" independent by construction** — the Go side
+compiles and tests green with no caller at all, because its callers are in another language the Go
+toolchain never sees. Every gate this phase built was one-sided until the S17 reachability walk, and
+that walk is still bounded (it cannot cross property initialisers). **The generalisable control is a
+bidirectional one: every bound verb must be either called from production Kotlin or explicitly listed
+as deliberately unbound, with the list checked.** Without it, the next verb added is uncalled by
+default and nothing says so.
