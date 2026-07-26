@@ -79,6 +79,23 @@ data class ConnectionBanner(
                 Remedy.RE_PAIR,
                 showsSpinner = false,
             )
+
+            // The transport policy refused the relay. Neither of the two below is a link
+            // that can come back, so neither may carry a spinner -- and they do not share a
+            // remedy, which is why they are two rows and not one.
+            ConnectionState.RELAY_UNTRUSTED -> state.banner(
+                "This phone will not connect to that relay: it is not presenting the identity " +
+                    "your machine published when you paired. Pair this phone again.",
+                Remedy.RE_PAIR,
+                showsSpinner = false,
+            )
+
+            ConnectionState.RELAY_INSECURE -> state.banner(
+                "Your machine is configured to use an unencrypted relay, which this phone " +
+                    "refuses. Fix the relay address on the machine, then pair this phone again.",
+                Remedy.RE_PAIR,
+                showsSpinner = false,
+            )
         }
 
         /**

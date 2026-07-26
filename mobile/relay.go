@@ -140,6 +140,29 @@ const (
 	// means the OWNER removed it -- and the machine-side registration is what the owner has to
 	// clear before a re-pair can succeed.
 	connRevoked = "revoked"
+
+	// connRelayUntrusted and connRelayInsecure are the TRANSPORT POLICY's two verdicts, and
+	// they are here for the fourth time this switch has had to learn the same lesson.
+	//
+	// relay.ErrPinMismatch, ErrPinRequired, ErrPinMalformed and ErrCleartextRefused matched
+	// none of the sentinels above, so they fell through the bare `continue` and the phone
+	// redialled every reconnectDelay behind "Lost the link to your machine; reconnecting."
+	// Not one of them is a link that can come back: the relay is presenting a key this phone
+	// did not pin, or none was ever pinned, or the machine named a cleartext relay. Waiting
+	// resolves none of it, and ConnectionUi.kt states the rule that breaks -- "a spinner is a
+	// promise that waiting is enough".
+	//
+	// They are TWO states and not one because the remedies differ. connRelayUntrusted is the
+	// phone's problem to fix by pairing again, which is the one channel that can deliver a
+	// current pin. connRelayInsecure is the MACHINE's configuration -- relay.json names a
+	// ws:// relay -- and pairing again changes nothing until the owner fixes it, so telling
+	// this user to re-pair first would send them round a loop.
+	//
+	// Both survive a retry inside the post-pairing window, exactly as connRevoked does: a
+	// pairing that has just completed may have delivered the very pin that makes this answer
+	// stale (rearmAfterPairing).
+	connRelayUntrusted = "relay_untrusted"
+	connRelayInsecure  = "relay_insecure"
 )
 
 func (a *App) setConn(state string) {
@@ -226,6 +249,27 @@ func (a *App) run(ctx context.Context) {
 				// PB-STATE-10: unless a pairing has just made this answer STALE. See
 				// rearmAfterPairing -- the state stays "revoked" either way, so nothing is
 				// hidden; only the retry survives, and only inside a bounded window.
+				if a.withinPairingGrace() {
+					continue
+				}
+				a.setClient(nil)
+				return
+			case errors.Is(err, relay.ErrPinMismatch),
+				errors.Is(err, relay.ErrPinRequired),
+				errors.Is(err, relay.ErrPinMalformed):
+				// The relay is not the one this phone pinned at pairing, or nothing was
+				// pinned and the platform has no trust roots to fall back to. Both are
+				// answered by pairing again, which is the only channel that carries a pin.
+				a.setConn(connRelayUntrusted)
+				if a.withinPairingGrace() {
+					continue
+				}
+				a.setClient(nil)
+				return
+			case errors.Is(err, relay.ErrCleartextRefused):
+				// The MACHINE named a cleartext relay. Nothing on the handset can fix it and
+				// re-pairing carries the same URL, so this says what is actually wrong.
+				a.setConn(connRelayInsecure)
 				if a.withinPairingGrace() {
 					continue
 				}

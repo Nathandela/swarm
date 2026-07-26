@@ -44,6 +44,10 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
+    "PB-SEC-2": "the per-use tier is unimplemented -- forOperation and the authorization "
+                "ledger have no production callers and there is no BiometricPrompt, so the "
+                "four per-use ops are gated by the same 60s timed window as input, which is "
+                "the downgrade the policy file exists to prevent (ADR-007 B51)",
     "PB-E2E-2": "the emulator smoke has never run -- its own evidence file disclaims it "
                 "and no log or screenshot exists; counted shipped only because evidence "
                 "is measured per SLICE, not per requirement (ADR-007 B38)",

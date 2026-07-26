@@ -2397,3 +2397,84 @@ confusion, decimal/hex/octal literals, IPv4-mapped IPv6, hostname resolution, re
 and whether `coder/websocket` replaces the caller's `CheckRedirect` (it chains it). No path to a
 non-loopback cleartext dial. **And the handset pin IS consulted at the dial site** — my brief's worry
 that B34's defect class had been reintroduced was unfounded.
+
+### B49 — every `device_revoke` is now MUTUAL ASSURED DESTRUCTION; B38 deleted B40's only recovery
+
+**The most consequential finding of round 2, and it is B25's lesson recurring verbatim.**
+
+The ban is enforced at **registration** and is **global**, not pair-scoped (`handleAuthInit`'s
+`isRevoked`). `authorizePair` is the **only** deleter of `bucketRevoked`, and only when the caller
+**is** the recorded banner. So lifting a phone-placed ban on the machine requires **the phone** to
+call `authorize_device` naming the machine — which was `mobile/relay.go`'s `onConnected`, and **B38
+deleted it**. It is now unproducible even if restored: verification demands a signature under the
+**machine's** private relay-auth key, which the phone has never held.
+
+Measured: legitimate consented pair; phone revokes machine; machine re-dial refused; the phone's own
+`authorize_device` naming the machine → `not authorized for route`. The two conditions are
+individually satisfiable and **jointly unsatisfiable**.
+
+**Before B38 this self-healed.** B25 records it in as many words — the phone authorized the machine on
+every reconnect, so an attacker-placed ban self-healed at the next connect, and a recovered handset
+returns on the same routing id. **That path is gone**, and the deletion's own note — *"What was
+silently depending on it: nothing that survives"* — **is false.** What depended on it was B40's remedy.
+
+**This is exactly B24 -> B25 again**: a narrowing of a permissive rule converted a second defect from
+self-correcting to permanent. B38 narrowed `authorize_device` and did the same thing to B40. **Second
+occurrence of the identical failure, eleven entries apart.**
+
+**The sentence that belongs in the design docs**: *because the ban is global, only the banner may lift
+it, and B38 removed the counterparty-side lift, **every `device_revoke` in this system is mutual
+assured destruction — whoever fires first permanently removes the other's relay identity, and no party
+can undo it.*** B40 hands a stolen phone the trigger against the machine; B46 hands an interceptor the
+trigger against the phone. **They are one defect with two entry points.**
+
+### B50 — B40's recorded remedy is FALSIFIED, and B47's is inseparable from B22
+
+**B40's "capability scope in the signed consent" cannot work.** `bucketPairs` is **symmetric by
+construction** — the only writers are `authorizePair` (two `Put`s) and `revokeAndPurge` (two
+`Delete`s), and **nothing anywhere writes one edge alone**. The phone's authority over the machine is
+`pairs[machine->phone]`, written by the **machine's own** call, carrying no consent. Scoping the
+phone's consent constrains only what the machine may do to the phone. **`isPaired`'s doc — "authority
+is asymmetric... different facts even when both hold" — is false in this implementation; they are the
+same fact, byte for byte.** Implemented as recorded, B40's fix **tests green and leaves the hole
+open**. The fix must scope the **pairer's own grant**, or `device_revoke` must stop reading
+`mayActOn`.
+
+**B47 is not independently fixable.** `authorizePair` restores access **and** lifts the banner's ban in
+one transaction, so the owner's legitimate re-pair of a recovered handset and the attacker's replay of
+stored bytes are **the same call with the same arguments**. Any remedy refusing a consent for a revoked
+pairing **also breaks B22 and re-bricks PB-STATE-10**. The one separator identified: a
+per-(pairer, device) **generation counter**, bumped at revoke and bound into `ConsentMessage` — correct,
+and it costs relay-store-loss recovery, since the relay is the only holder of the generation.
+**Whoever takes B47 must be told this before starting**, or it becomes the fourth falsified direction.
+
+**The first-use clause deletion is safe but ENTIRELY UNFENCED** — the clause was restored verbatim and
+the full relay suite stayed green. Of the remediation's claims, this is the one with no fence at all.
+
+**B38 did NOT shrink B39's reach, and the record implies it did.** `handleAuthorizeDevice` never checks
+`deviceRID != sc.rid`, so **a party can always consent to itself** — name your own key, sign with the
+key you hold. Measured: 50 self-consenting identities leave 50 durable pairs rows, 50 mailbox
+sub-buckets and 50 leaked rate entries after disconnect. B39's recorded reach cites B27's first-use
+clause; **B38 deleted that clause, so a reader concludes the reach shrank. It did not.**
+
+### B51 — the ninth uncalled-symbol instance: PB-SEC-2's per-use tier is unimplemented, and B44 made it bite
+
+`KeystoreSpecs.forOperation` — the **per-use** `CryptoObject` spec for revoke, kill-switch, launch and
+kill — is referenced **only from `src/test/`**. `AuthorizationLedger.beginPrompt/endPrompt/consume`
+have **no production callers**. There is **no `BiometricPrompt` at all**; androidx.biometric is not a
+dependency.
+
+**So those four operations are gated by exactly what `input` is gated by**: the content KEK's
+60-second **timed** window — the per-use-implemented-as-timed downgrade that `BiometricPolicy.kt`'s own
+header says the file exists to make impossible. PB-SEC-2's criterion is that *a test must fail if the
+implementation is an in-memory `authenticated = true` flag*; the only authorization record kept is an
+**in-memory map**. **PB-SEC-2 is marked NOT MET.**
+
+**B44 turned this from latent into live.** The content KEK carries no `AUTH_DEVICE_CREDENTIAL`
+anywhere in `src/main`, so a PIN/pattern/password unlock does **not** satisfy it. B44's new trigger
+drops the key on every screen-off, and the resume path asserts that "the Keystore-backed content KEK
+will answer" — **false after a credential unlock (mandatory post-reboot, after biometric idle timeout,
+after repeated failures, and always without an enrolled Class-3 biometric) or after 60s of idle.** On
+refusal there is **no in-app way to authenticate**. Before B44 this never bit, because the key stayed
+in Go memory for the process lifetime — which was B36's finding. Unverifiable in-repo by construction
+(B31), which makes it a blocker rather than a measured bug.

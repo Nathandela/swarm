@@ -513,13 +513,40 @@ enum class ConnectionState(val wire: String) {
      * on screen even though both say "pair again".
      */
     REVOKED("revoked"),
+
+    /**
+     * PERMANENT and TERMINAL. The relay presented a key this phone did not pin at pairing --
+     * or nothing was ever pinned and the platform has no usable trust roots (ADR-007 B34,
+     * residual 1.9).
+     *
+     * It is the transport POLICY refusing, not the network failing, and the difference is the
+     * whole point: before this state existed the dial switch fell through to a bare `continue`
+     * and the phone redialled every 250 ms behind a "reconnecting" spinner, against a
+     * certificate that was never going to start matching. The fourth instance of that defect
+     * in this one switch.
+     *
+     * The remedy is pairing again: pairing is the only channel that carries a relay pin.
+     */
+    RELAY_UNTRUSTED("relay_untrusted"),
+
+    /**
+     * PERMANENT and TERMINAL, and NOT the phone's to fix.
+     *
+     * The machine's relay.json names a cleartext `ws://` relay, which PB-NET-2 refuses outside
+     * a loopback carve-out. It shares RELAY_UNTRUSTED's shape and not its remedy: pairing
+     * again re-delivers the SAME URL, so a user told to re-pair would go round a loop. The
+     * owner has to fix the machine's configuration first.
+     */
+    RELAY_INSECURE("relay_insecure"),
     ;
 
     /** True only for the state that must not sit behind a spinner. */
     val needsBiometricPrompt: Boolean get() = this == REAUTH_REQUIRED
 
     /** True where the app must stop retrying and say so. */
-    val isTerminal: Boolean get() = this == REPAIR_REQUIRED || this == REVOKED
+    val isTerminal: Boolean
+        get() = this == REPAIR_REQUIRED || this == REVOKED ||
+            this == RELAY_UNTRUSTED || this == RELAY_INSECURE
 
     companion object {
         fun of(wire: String): ConnectionState =

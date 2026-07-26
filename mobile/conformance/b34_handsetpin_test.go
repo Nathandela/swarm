@@ -86,10 +86,49 @@ func TestPBOPS5_TheHandsetAppliesThePinItPinnedAtPairing(t *testing.T) {
 
 	// Long enough for several dial attempts at App.run's 250ms backoff.
 	time.Sleep(2 * time.Second)
-	if st, err := h.App.ConnectionState(); err == nil && st == "online" {
+	st, err := h.App.ConnectionState()
+	if err != nil {
+		t.Fatalf("ConnectionState: %v", err)
+	}
+	if st == "online" {
 		t.Fatalf("the phone came online against a relay that does not match the pin it pinned "+
 			"at pairing (state %q). A pin that is carried, persisted and never consulted is the "+
 			"defect ADR-007 B34 exists to record", st)
+	}
+	// AND IT SAYS SO. A pin mismatch is not a link that can come back, so reporting it as
+	// "reconnecting" is a spinner promising that waiting is enough -- the fourth instance of
+	// the defect App.run's own switch was written to stop.
+	if st != "relay_untrusted" {
+		t.Fatalf("ConnectionState = %q against a relay whose key the phone never pinned; want "+
+			"%q. %q leaves the user watching a spinner for a certificate that is never going to "+
+			"start matching", st, "relay_untrusted", st)
+	}
+}
+
+// TestPBAPP10_ACleartextRelayIsReportedAsTheMachinesMisconfiguration is the second of the two
+// transport-policy verdicts, and it is a DIFFERENT one on purpose: nothing on the handset can
+// fix a machine whose relay.json names ws://, and pairing again re-delivers the same URL, so a
+// user told to re-pair would go round a loop.
+func TestPBAPP10_ACleartextRelayIsReportedAsTheMachinesMisconfiguration(t *testing.T) {
+	h := newHarness(t)
+	if err := h.App.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// A NAME, not a loopback literal: the carve-out that lets every other test in this
+	// package use ws://127.0.0.1 resolves nothing, so this is refused exactly as a routable
+	// cleartext relay would be on a handset.
+	h.AppRelayURL = "ws://localhost:9/"
+	h.App = h.openApp()
+
+	time.Sleep(2 * time.Second)
+	st, err := h.App.ConnectionState()
+	if err != nil {
+		t.Fatalf("ConnectionState: %v", err)
+	}
+	if st != "relay_insecure" {
+		t.Fatalf("ConnectionState = %q against a cleartext relay; want %q. Reporting the "+
+			"machine's configuration as a lost link sends the user to wait for something no "+
+			"amount of waiting fixes", st, "relay_insecure")
 	}
 }
 
