@@ -105,8 +105,17 @@ type App struct {
 	// that must not queue behind a relay append.
 	bucketMu sync.Mutex
 
-	mu            sync.Mutex
-	closed        bool
+	// pairingWG counts the in-flight pairing handshakes started by startPairingJoin. It is
+	// NOT guarded by a.mu -- Close waits on it with the lock released, because a handshake
+	// winding down takes a.mu itself (pin -> rearmAfterPairing).
+	pairingWG sync.WaitGroup
+
+	mu     sync.Mutex
+	closed bool
+	// pairings are the live handshakes, so Close has something to cancel. A handshake's last
+	// act is a write into stateDir, so an App that could not reach them could not honestly
+	// report itself closed (see Close).
+	pairings      map[*Pairing]struct{}
 	drainTimer    *time.Timer
 	skewed        bool // whether the clock is currently out of budget, so only a CHANGE raises an event
 	sess          *session
@@ -481,15 +490,71 @@ func (a *App) Close() (err error) {
 	s := a.sess
 	a.sess = nil
 	a.closed = true
+	live := make([]*Pairing, 0, len(a.pairings))
+	for p := range a.pairings {
+		live = append(live, p)
+	}
 	a.mu.Unlock()
 
+	// AN IN-FLIGHT HANDSHAKE IS A WRITER ON stateDir, and Close used to leave it running: it
+	// joined the relay-drain session and nothing else. The handshake's last act is persist()
+	// -- PB-PAIR-4's record -- and on the success path pin() -> Core.Save, which rewrites the
+	// sealed state blob. So an App could report itself closed while a goroutine it no longer
+	// tracked went on rewriting the durable state the caller believed was released.
+	//
+	// ON A HANDSET THAT IS A TORN WRITE. Close is what the Android lifecycle calls before the
+	// process is taken away, so "still writing after Close" and "killed mid-write" name the
+	// same instant; the fact that Save is itself atomic only narrows the window to the app's
+	// own state, it does not close it. The suite saw the milder half of the same fact --
+	// t.TempDir's RemoveAll racing a file being recreated -- and that symptom is what
+	// TestPBPAIR5_CloseWaitsForTheHandshakeItTearsDown fences.
+	//
+	// Cancel first, then wait: cancelHandshake unblocks the SAS gate and the relay read, and
+	// each goroutine then runs finish() -- which settles the state and completes its last
+	// write -- BEFORE Wait returns. The wait is also why events.close() below is reachable
+	// safely: a handshake still running could otherwise publish into a closed dispatcher.
+	// abandon, not cancelHandshake: the teardown must not be recorded as the user cancelling,
+	// which would clear PB-PAIR-4's durable record of an attempt the machine may have
+	// committed (Pairing.abandon).
+	for _, p := range live {
+		p.abandon()
+	}
 	if s != nil {
 		s.cancel()
 		<-s.done
 	}
+	a.pairingWG.Wait()
 	a.suspendInput("the app closed")
 	a.events.close()
 	return nil
+}
+
+// startPairingJoin runs p's handshake on a goroutine the App OWNS, so Close can cancel it and
+// wait for it. It reports false when the app is already closed, in which case nothing is
+// started -- a handshake spawned after Close would be a writer nothing could ever join.
+func (a *App) startPairingJoin(p *Pairing, base context.Context) bool {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return false
+	}
+	if a.pairings == nil {
+		a.pairings = make(map[*Pairing]struct{})
+	}
+	a.pairings[p] = struct{}{}
+	a.pairingWG.Add(1)
+	a.mu.Unlock()
+
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			delete(a.pairings, p)
+			a.mu.Unlock()
+			a.pairingWG.Done()
+		}()
+		p.join(base)
+	}()
+	return true
 }
 
 // ConnectionState is offline / connecting / online / reconnecting (PB-APP-8).

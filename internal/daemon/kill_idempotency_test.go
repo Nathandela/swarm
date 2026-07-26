@@ -45,6 +45,13 @@ func TestDaemon_ClaimIdempotentOp_ReplayReturnsCachedOutcome(t *testing.T) {
 	if existed {
 		t.Fatalf("fresh op X claimed as existed=true; want a first-time claim (existed=false)")
 	}
+	// priorOK was DISCARDED here, which is why the compiler never noticed. A fresh claim has
+	// no prior outcome, so the only honest value is false: a true would be a cached verdict
+	// leaking onto an op that has not run, and the caller below decides whether to execute on
+	// exactly this pair.
+	if priorOK {
+		t.Fatalf("fresh op X claimed with priorOK=true; a first-time claim has no prior outcome")
+	}
 	if err := d.Kill(m.ID); err != nil {
 		t.Fatalf("Kill(%s): %v", m.ID, err)
 	}

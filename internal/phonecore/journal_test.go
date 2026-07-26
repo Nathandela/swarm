@@ -40,12 +40,18 @@ func TestPhoneCore_ReceivesGatewayJournalEndToEnd(t *testing.T) {
 	})
 
 	// The machine (gateway) forwards a roster snapshot + a live launched event.
-	sink.Snapshot([]protocol.JournalRecord{
+	if err := sink.Snapshot([]protocol.JournalRecord{
 		{Cursor: 10, SessionID: "m/s1", Type: "roster", Group: status.Group("working")},
 		{Cursor: 10, SessionID: "m/s2", Type: "roster", Group: status.Group("needs_input")},
-	}, 10)
-	sink.Event(protocol.JournalRecord{Cursor: 11, SessionID: "m/s3", Type: "launched"})
-	sink.Event(protocol.JournalRecord{Cursor: 12, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")})
+	}, 10); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := sink.Event(protocol.JournalRecord{Cursor: 11, SessionID: "m/s3", Type: "launched"}); err != nil {
+		t.Fatalf("Event(launched): %v", err)
+	}
+	if err := sink.Event(protocol.JournalRecord{Cursor: 12, SessionID: "m/s2", Type: "group_transition", Group: status.Group("idle")}); err != nil {
+		t.Fatalf("Event(group_transition): %v", err)
+	}
 	if err := sink.Err(); err != nil {
 		t.Fatalf("relay sink error: %v", err)
 	}
@@ -92,7 +98,11 @@ func TestPhoneCore_WrongKeyRejected(t *testing.T) {
 	}
 	box := &memMailbox{}
 	sink := remotegw.NewRelaySink(remotegw.RelayConfig{Appender: box, Target: "phone", EpochID: 1, Key: key})
-	sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "launched"})
+	// Checked: box.envs[0] below indexes an envelope this call is the only producer of, so a
+	// failed seal would surface as an index panic rather than as the seal failure it was.
+	if err := sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "launched"}); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
 
 	if _, _, err := OpenJournalEnvelope(wrong, box.envs[0]); err == nil {
 		t.Fatalf("envelope opened under the wrong content key; want rejection")

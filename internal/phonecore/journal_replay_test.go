@@ -68,8 +68,12 @@ func sealJournalStream(t *testing.T, key crypto.ContentKey, epoch uint32, sender
 	sink := remotegw.NewRelaySink(remotegw.RelayConfig{
 		Appender: box, Target: "phone", EpochID: epoch, Key: key, SenderKeyID: sender,
 	})
-	for _, rec := range recs {
-		sink.Event(rec)
+	for i, rec := range recs {
+		// Checked per record: callers index the returned slice positionally, so one silently
+		// dropped envelope shifts every later index and misattributes the failure.
+		if err := sink.Event(rec); err != nil {
+			t.Fatalf("sealing record %d: %v", i, err)
+		}
 	}
 	if err := sink.Err(); err != nil {
 		t.Fatalf("relay sink error sealing stream: %v", err)

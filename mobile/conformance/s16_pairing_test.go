@@ -34,6 +34,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,7 +111,11 @@ func s16MachinePairing(t *testing.T, relayURL string, machineSignPub ed25519.Pub
 	if err != nil {
 		t.Fatalf("machine DialRaw: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	// CloseNow, not Close: this is an ABORT of a fake machine at end of test. relay.Conn.Close
+	// cancels the connection's context and then attempts the websocket close handshake, which
+	// the cancelled reader can no longer complete -- so a polite Close here pays coder/
+	// websocket's full five-second handshake timeout, per subtest, for nothing.
+	t.Cleanup(func() { _ = conn.CloseNow() })
 
 	rz := &createdRendezvous{
 		RendezvousTransport: &relayRendezvous{conn: conn, label: hex.EncodeToString(p.RID[:])},
@@ -694,6 +699,63 @@ func s16AwaitState(t *testing.T, p *swarmmobile.Pairing, want string) {
 		"states must be its own value: collapsed into \"failed\" with prose beside it, the "+
 		"screen can only show the user an error string, which is the opaque error this "+
 		"requirement exists to remove", last, want)
+}
+
+// TestPBPAIR5_CloseWaitsForTheHandshakeItTearsDown.
+//
+// An in-flight pairing is a WRITER on the phone's state directory: its last act is
+// persist() -- the PB-PAIR-4 record -- and on the success path pin() -> Core.Save, which
+// rewrites the sealed state blob itself. That goroutine was owned by nothing. Close joined the
+// relay-drain session and returned, leaving the handshake running against durable state the
+// caller had just been told was released.
+//
+// ON A HANDSET THAT IS A TORN WRITE, not an inconvenience: Close is what Android's lifecycle
+// calls before the process goes away, so "still writing after Close" and "killed mid-write" are
+// the same instant. In the suite it showed up as the milder half of the same fact -- t.TempDir's
+// RemoveAll racing a file being recreated, reported as "directory not empty" against whichever
+// test happened to lose -- which is exactly the shape that trains a reader to re-run a red gate
+// instead of reading it.
+//
+// STATE IS THE OBSERVABLE, not a sleep. A live join() sits in `pairing` and leaves that value
+// only by running finish(), which is also the only thing that writes. So a terminal state after
+// Close IS the join, and `pairing` after Close IS the leak.
+func TestPBPAIR5_CloseWaitsForTheHandshakeItTearsDown(t *testing.T) {
+	_, relayURL := s16FreshRelay(t)
+	mSignPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("machine sign key: %v", err)
+	}
+	mp := s16MachinePairing(t, relayURL, mSignPub, testEpochID, true)
+	dir := t.TempDir()
+	app := s16UnpairedApp(t, dir, relayURL, newTestCustody(t))
+	p := s16BeginConfirmed(t, app, mp.QR)
+	// The handshake is now parked in its SAS gate: dialled, keyed, and holding the state
+	// directory open. This is the window Close has to survive.
+	s16AwaitSAS(t, p)
+
+	if err := app.Close(); err != nil {
+		t.Fatalf("App.Close: %v", err)
+	}
+
+	st, err := p.State()
+	if err != nil {
+		t.Fatalf("Pairing.State after Close: %v", err)
+	}
+	if st == "pairing" || st == "confirm_destination" {
+		t.Fatalf("App.Close returned with the pairing still in %q, so the handshake goroutine "+
+			"outlived it. It is still holding the state directory and its next act is a write "+
+			"into it -- after the app that owns it reported itself closed", st)
+	}
+
+	// The symptom, fenced directly: once Close has returned, the state directory is nobody's.
+	// This is the removal t.TempDir performs, done while the test can still attribute it.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("the state directory could not be removed after Close, so something is still "+
+			"writing into it: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the state directory came back after Close removed it (stat: %v)", err)
+	}
 }
 
 // ---- PB-PAIR-4 -----------------------------------------------------------------

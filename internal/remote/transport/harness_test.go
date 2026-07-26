@@ -404,7 +404,9 @@ func (h *hostileRelay) serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer ws.CloseNow()
+	// Nothing can act on this: it is the fake relay's own teardown, and CloseNow on a peer
+	// that has already gone away legitimately errors. Discarded deliberately, not by omission.
+	defer func() { _ = ws.CloseNow() }()
 	ws.SetReadLimit(relay.MaxFrame + 64)
 	ctx := r.Context()
 	for {

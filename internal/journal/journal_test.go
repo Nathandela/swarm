@@ -278,8 +278,9 @@ func TestJournal_CrashAfterAckSurvives(t *testing.T) {
 	if acked.Cursor == 0 {
 		t.Fatalf("Append returned cursor 0; a durable cursor must be assigned before ack")
 	}
-	// No Close: drop the handle as a SIGKILL would, without any extra flush.
-	j = nil
+	// No Close and no flush, which is what a SIGKILL leaves behind. There is nothing to do to
+	// the handle to express that -- assigning it nil was a no-op the compiler ignored -- the
+	// fact under test is simply that Close is never called on it.
 
 	j2 := openJournal(t, dir)
 	res, err := j2.ReadFrom(0)

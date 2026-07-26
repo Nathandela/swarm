@@ -219,6 +219,28 @@ func (c *Conn) WriteMsg(tag MsgType, payload []byte) error {
 // ReadMsg receives one raw framed message using the connection's own context.
 func (c *Conn) ReadMsg() (MsgType, []byte, error) { return c.readFrame(c.ctx) }
 
+// CloseNow severs the connection WITHOUT the websocket close handshake, for a caller
+// that is ABANDONING the exchange rather than finishing it.
+//
+// Close below cancels the connection's own context and then performs the polite close,
+// which waits up to five seconds for the peer's close frame -- and cannot observe one,
+// because cancelling the context has already stopped the reader. So an aborted
+// connection pays that timeout in full, every time. That was invisible while nothing
+// waited on the teardown; it is five seconds on the caller's shutdown path as soon as
+// something does.
+//
+// It shares Close's once, so whichever teardown runs first decides and the other is a
+// no-op: a graceful Close already in flight is not turned into an abort by a late
+// CloseNow, or the reverse.
+func (c *Conn) CloseNow() error {
+	c.closeOnce.Do(func() {
+		c.cancel()
+		c.closeErr = c.ws.CloseNow()
+		c.markDone()
+	})
+	return c.closeErr
+}
+
 // Close severs the connection. It is idempotent.
 func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {

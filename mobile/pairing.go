@@ -129,6 +129,12 @@ type Pairing struct {
 	joinOnce  sync.Once
 	cancel    context.CancelFunc
 
+	// abandoned records that App.Close tore this attempt down, and reached the transition it
+	// had got to when that happened. See abandon: a shutdown is not a resolution, so it must
+	// not clear PB-PAIR-4's durable record.
+	abandoned bool
+	reached   string
+
 	mu2  sync.Mutex // guards conn, which is written by ConfirmOrigin and read by Cancel
 	conn *relay.Conn
 
@@ -294,22 +300,43 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 	// treats it as terminal would report the pairing dead in the millisecond before the dial
 	// returns. The user has answered; the pairing is in progress from that instant.
 	p.setState(pairPairing)
-	p.joinOnce.Do(func() { go p.join() })
+	// The App owns the goroutine, so Close can tear it down and WAIT for it: the handshake's
+	// last act is a write into the phone's state directory, and Close must not return while
+	// one is outstanding (App.Close).
+	p.joinOnce.Do(func() {
+		// THE CANCEL FUNC IS INSTALLED BEFORE THE GOROUTINE STARTS. join() used to create it
+		// as its own first act, which left a window in which a concurrent cancelHandshake
+		// found p.cancel still nil, cancelled nothing, and returned -- and the handshake then
+		// ran to its 60 s pairing deadline with nobody able to reach it. That was invisible
+		// while Close did not wait; it is a 60 s hang on the caller's shutdown path now that
+		// it does, which is the same defect either way, only louder.
+		base, cancel := context.WithCancel(context.Background())
+		p.mu.Lock()
+		p.cancel = cancel
+		p.mu.Unlock()
+		if !p.app.startPairingJoin(p, base) {
+			// The app closed between the user's yes and the dial. Nothing was joined, and the
+			// attempt must not be left claiming to be in progress.
+			cancel()
+			p.setState(pairCancelled)
+		}
+	})
 	return nil
 }
 
-// join dials the confirmed destination and drives the device half of the handshake.
-func (p *Pairing) join() {
+// join dials the confirmed destination and drives the device half of the handshake. base
+// carries the cancellation ConfirmOrigin installed; the deadline below is layered on it.
+func (p *Pairing) join(base context.Context) {
+	// Releases the context and any dialled connection on EVERY exit path, so a handshake that
+	// ended on its own leaves nothing behind for Close to wait on.
+	defer p.cancelHandshake()
+
 	// The handshake's own deadline, so rendezvous_timeout is a state something can reach.
 	// Derived from the deadline declared at BeginPairing, never from the confirmation.
 	p.mu.Lock()
 	deadline, payload, app := p.deadline, p.payload, p.app
 	p.mu.Unlock()
 
-	base, cancel := context.WithCancel(context.Background())
-	p.mu.Lock()
-	p.cancel = cancel
-	p.mu.Unlock()
 	ctx, stop := context.WithDeadline(base, deadline)
 	defer stop()
 
@@ -421,7 +448,11 @@ func (p *Pairing) cancelHandshake() {
 	p.conn = nil
 	p.mu2.Unlock()
 	if conn != nil {
-		_ = conn.Close()
+		// CloseNow, not Close: this is the ABORT path, and Close's graceful handshake burns
+		// five seconds waiting for a close frame that a cancelled connection can never read
+		// (relay.Conn.CloseNow). App.Close waits for this, so that timeout would be five
+		// seconds of an Android lifecycle callback.
+		_ = conn.CloseNow()
 	}
 }
 
@@ -433,9 +464,28 @@ func (p *Pairing) setState(s string) {
 	p.persist(s)
 }
 
+// abandon tears the handshake down because the APP IS CLOSING, which is not the user
+// cancelling it, and the difference is durable.
+//
+// Cancel and RejectSAS RESOLVE an attempt -- the user has answered, so persist clears
+// PB-PAIR-4's record. A process going away has answered nothing: the machine's half of the
+// handshake may have committed, and the next launch must be able to say so rather than
+// offer a scanner that will fail-fast against a device the machine still has registered
+// (PB-STATE-10). So the state the handshake had REACHED is captured here and written in
+// place of the cancellation the teardown is about to produce.
+func (p *Pairing) abandon() {
+	p.mu.Lock()
+	p.abandoned, p.reached = true, p.state
+	p.mu.Unlock()
+	p.cancelHandshake()
+}
+
 func (p *Pairing) persistState() {
 	p.mu.Lock()
 	s := p.state
+	if p.abandoned {
+		s = p.reached // see abandon: a shutdown must not read as a resolution
+	}
 	p.mu.Unlock()
 	p.persist(s)
 }

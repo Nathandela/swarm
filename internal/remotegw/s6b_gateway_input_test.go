@@ -353,57 +353,49 @@ func TestS6B_GatewayCommandLoopWaitsInsteadOfPolling(t *testing.T) {
 // unwarmed statistic was the defect.
 func TestS6B_GatewayInputLatencyIsNotPollGated(t *testing.T) {
 	const (
-		warmup  = 4
-		samples = 20
-		bound   = 100 * time.Millisecond
+		bound = 100 * time.Millisecond
 		// A true 500 ms poll cannot hide under this even at its luckiest tail.
 		maxBound = 400 * time.Millisecond
+		// attempts is the load defence, and it is NOT a widened threshold: both bounds
+		// above are untouched and every attempt is judged against them.
+		//
+		// A wall-clock assertion measures the host as much as the code, and under a
+		// saturated `go test ./...` this one failed at a median of 141 ms while passing
+		// in isolation. That is a FALSE RED, which is worse here than a missing fence:
+		// it teaches the reader to re-run a red gate rather than read it, and every
+		// green claim in this phase rests on someone believing a red result.
+		//
+		// Re-measuring costs a genuine regression almost nothing, and that is arithmetic
+		// rather than hope. A 500 ms ticker delivers each sample uniformly over
+		// [0, 500) ms, so P(sample <= 100 ms) = 0.2, and the median of the 16 steady
+		// samples clears 100 ms only if at least 9 of them do:
+		// P(Binom(16, 0.2) >= 9) ~= 6e-4 per attempt, ~2e-3 across three. A poll-gated
+		// bridge still fails essentially every time; a host that is merely busy for a
+		// second gets another look.
+		attempts = 3
 	)
 
-	mb := s6bNewMailbox()
-	lease := s6bNewLease(samples)
-	b, statePath := s6bBridge(t, mb, lease)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	time.Sleep(100 * time.Millisecond) // let the loop park its first wait
-
-	var worst time.Duration
 	var lats []time.Duration
-	for i := 0; i < samples; i++ {
-		sent := time.Now()
-		mb.push(s6bInput(t, uint64(i+1), "m/s1", []byte(fmt.Sprintf("k%d", i))))
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			at, n := lease.lastAt()
-			if n == i+1 {
-				d := at.Sub(sent)
-				lats = append(lats, d)
-				if d > worst {
-					worst = d
-				}
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("input frame %d never reached the lease plane within 5s", i)
-			}
-			time.Sleep(time.Millisecond)
+	var median, steadyWorst time.Duration
+	var statePath string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		lats, statePath = s6bMeasureHopLatency(t)
+		median, steadyWorst = s6bMedianAndWorst(lats)
+		if median <= bound && steadyWorst <= maxBound {
+			break
+		}
+		if attempt < attempts {
+			t.Logf("attempt %d/%d: median %v, worst %v (all=%v) -- re-measuring; a poll-gated "+
+				"bridge fails every attempt, a loaded host does not",
+				attempt, attempts, median, steadyWorst, lats)
 		}
 	}
-	cancel()
-	<-done
 
-	steady := append([]time.Duration(nil), lats[warmup:]...)
-	sort.Slice(steady, func(i, j int) bool { return steady[i] < steady[j] })
-	median := steady[len(steady)/2]
-	steadyWorst := steady[len(steady)-1]
 	if median > bound {
-		t.Fatalf("gateway-hop input latency: median %v over %d steady-state samples (%d warm-up discarded), want <= %v (all=%v). §6.0 budgets p50 <= 150ms for the WHOLE phone->PTY path; a 500 ms command-IN poll spends up to 3.3x that on this hop alone (ADR-007:461: 'unusable for live typing')", median, len(steady), warmup, bound, lats)
+		t.Fatalf("gateway-hop input latency: median %v over the steady-state samples, in each of %d attempts, want <= %v (last=%v). §6.0 budgets p50 <= 150ms for the WHOLE phone->PTY path; a 500 ms command-IN poll spends up to 3.3x that on this hop alone (ADR-007:461: 'unusable for live typing')", median, attempts, bound, lats)
 	}
 	if steadyWorst > maxBound {
-		t.Fatalf("gateway-hop input latency: worst steady-state sample %v exceeds %v (all=%v) -- the median cleared but the tail did not, which is what a poll or a stuck regime looks like", steadyWorst, maxBound, lats)
+		t.Fatalf("gateway-hop input latency: worst steady-state sample %v exceeds %v (last=%v) -- the median cleared but the tail did not, which is what a poll or a stuck regime looks like", steadyWorst, maxBound, lats)
 	}
 
 	// §6.0's harness rule, asserted structurally: the measured path really did go
@@ -417,6 +409,59 @@ func TestS6B_GatewayInputLatencyIsNotPollGated(t *testing.T) {
 	if fi.Size() == 0 {
 		t.Fatal("the inbound checkpoint file is empty; the measured path did not persist through it (§6.0 file-backed InboundState rule)")
 	}
+}
+
+// s6bHopWarmup / s6bHopSamples shape ONE measurement. The warm-up rationale is on
+// TestS6B_GatewayInputLatencyIsNotPollGated above: the first reads of a burst are the
+// adaptive drain's regime probes, not its steady state.
+const (
+	s6bHopWarmup  = 4
+	s6bHopSamples = 20
+)
+
+// s6bMeasureHopLatency runs ONE measurement: a fresh bridge over a fresh mailbox, one
+// sealed input frame at a time, timed from the push to the lease plane's own stamp. It
+// returns every sample and the inbound-checkpoint path the run actually persisted through.
+func s6bMeasureHopLatency(t *testing.T) ([]time.Duration, string) {
+	t.Helper()
+	mb := s6bNewMailbox()
+	lease := s6bNewLease(s6bHopSamples)
+	b, statePath := s6bBridge(t, mb, lease)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	time.Sleep(100 * time.Millisecond) // let the loop park its first wait
+
+	lats := make([]time.Duration, 0, s6bHopSamples)
+	for i := 0; i < s6bHopSamples; i++ {
+		sent := time.Now()
+		mb.push(s6bInput(t, uint64(i+1), "m/s1", []byte(fmt.Sprintf("k%d", i))))
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			at, n := lease.lastAt()
+			if n == i+1 {
+				lats = append(lats, at.Sub(sent))
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("input frame %d never reached the lease plane within 5s", i)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	cancel()
+	<-done
+	return lats, statePath
+}
+
+// s6bMedianAndWorst reduces one measurement to the two statistics the bound is stated in,
+// over the steady-state samples only.
+func s6bMedianAndWorst(lats []time.Duration) (median, worst time.Duration) {
+	steady := append([]time.Duration(nil), lats[s6bHopWarmup:]...)
+	sort.Slice(steady, func(i, j int) bool { return steady[i] < steady[j] })
+	return steady[len(steady)/2], steady[len(steady)-1]
 }
 
 // TestS6B_GatewayDrainStaysInsideTheBudget is §6.0's "<=3 reads/s AND batched acks

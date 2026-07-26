@@ -217,7 +217,7 @@ func serveFakeTerminalDaemonThenEnd(t *testing.T, ln net.Listener, endpointID st
 	if err != nil || wire.WriteFrame(conn, wire.TControl, reply) != nil {
 		return
 	}
-	if _, body, err = wire.ReadFrame(conn); err != nil { // the terminal_subscribe frame
+	if _, _, err = wire.ReadFrame(conn); err != nil { // the terminal_subscribe frame, read and discarded
 		return
 	}
 	for i := range snaps {

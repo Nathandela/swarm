@@ -15,18 +15,72 @@ import (
 	"time"
 )
 
+// routingIDKATs pin RoutingID to fixed answers for fixed relay-auth pubkeys.
+//
+// WHY A KNOWN-ANSWER TEST AND NOT A DETERMINISM CHECK. This fence used to read
+//
+//	if RoutingID(pubA) != RoutingID(pubA) { t.Fatalf("RoutingID is not deterministic") }
+//
+// which compares a pure function's output to itself: the branch is unreachable,
+// so it asserted nothing and had been decorative since Phase 1. Determinism
+// WITHIN one build is a property of the language, not of this derivation.
+//
+// The property that matters is stability ACROSS BUILDS. A routing id is how a
+// paired handset addresses its machine, and it is derived on both sides from the
+// same pubkey rather than exchanged -- so a change to the salt, the info string,
+// the hash or the output length re-points every already-paired device at a
+// mailbox nobody writes to. Nothing errors: the phone authenticates fine, reads
+// an empty mailbox, and reports itself connected to a machine that has gone
+// silent. Only a pinned answer catches that before it ships.
+//
+// The vectors are the edges plus one ordinary key: an all-zero pubkey, an
+// all-0xff pubkey, and a fixed pattern. They are written as pubkey hex so the
+// derivation can be reproduced by hand from the source of the key alone.
+var routingIDKATs = []struct{ pubHex, want string }{
+	{
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"87c35f00062cfd5143ab04b0df39e3be",
+	},
+	{
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"d875d1a4cdae5b0344e2332d6a3e52b8",
+	},
+	{
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"223c3e746f6f290885d8b2e96e86af0e",
+	},
+}
+
+// TestRelay_RoutingIDIsPinnedAcrossBuilds is the cross-build stability fence
+// described on routingIDKATs.
+func TestRelay_RoutingIDIsPinnedAcrossBuilds(t *testing.T) {
+	for i, kat := range routingIDKATs {
+		pub, err := hex.DecodeString(kat.pubHex)
+		if err != nil {
+			t.Fatalf("KAT %d: bad pubkey hex: %v", i, err)
+		}
+		got := RoutingID(ed25519.PublicKey(pub))
+		if got != kat.want {
+			t.Errorf("KAT %d: RoutingID(%s) = %s, want %s. The routing-id derivation has "+
+				"CHANGED (salt, info, hash or output length). Every device already paired "+
+				"derives the old value and will address a mailbox this relay no longer "+
+				"routes -- silently, with no error on either side. If the change is "+
+				"deliberate it needs a migration and an ADR, not a new pinned value",
+				i, kat.pubHex, got, kat.want)
+		}
+	}
+}
+
 // TestRelay_MachineRegistrationAndRoutingProof asserts the routing id is an
-// opaque HKDF of the relay-auth pubkey (deterministic, collision-distinct, not
-// the raw key) and that authenticating binds the connection to it (proof of
-// control via the challenge).
+// opaque HKDF of the relay-auth pubkey (collision-distinct, not the raw key) and
+// that authenticating binds the connection to it (proof of control via the
+// challenge). Cross-build stability is pinned separately, by
+// TestRelay_RoutingIDIsPinnedAcrossBuilds.
 func TestRelay_MachineRegistrationAndRoutingProof(t *testing.T) {
 	pubA, privA := newRelayAuthKey(t)
 	pubB, _ := newRelayAuthKey(t)
 
-	// Deterministic + distinct + opaque (not the raw pubkey hex).
-	if RoutingID(pubA) != RoutingID(pubA) {
-		t.Fatalf("RoutingID is not deterministic")
-	}
+	// Distinct + opaque (not the raw pubkey hex).
 	if RoutingID(pubA) == RoutingID(pubB) {
 		t.Fatalf("RoutingID collides for distinct keys")
 	}

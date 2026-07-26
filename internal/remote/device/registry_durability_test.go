@@ -116,7 +116,13 @@ func TestRegistry_PersistPreRenameFailure_RollsBack(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatalf("chmod dir read-only: %v", err)
 	}
-	defer os.Chmod(dir, 0o700) // restore so t.TempDir cleanup can remove the dir
+	// Restore so t.TempDir cleanup can remove the dir. CHECKED: a failed restore leaves an
+	// unremovable directory behind and reports itself as an unrelated cleanup error later.
+	defer func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore dir mode: %v", err)
+		}
+	}()
 
 	second := fullRecord(t, 0xD2, CapReadOnly, 2)
 	if err := reg.Add(second); err == nil {
@@ -131,8 +137,12 @@ func TestRegistry_PersistPreRenameFailure_RollsBack(t *testing.T) {
 		t.Fatalf("in-memory Count = %d after a pre-rename failure, want 1 (rolled back)", got)
 	}
 
-	// Disk is untouched; a simulated restart still holds exactly the baseline roster.
-	os.Chmod(dir, 0o700)
+	// Disk is untouched; a simulated restart still holds exactly the baseline roster. The
+	// re-open is only a statement about durability if the directory is readable again, so a
+	// failed chmod is fatal rather than a reopen that fails for the wrong reason.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("restore dir mode before reopen: %v", err)
+	}
 	reloaded, err := Open(dir)
 	if err != nil {
 		t.Fatalf("reopen after pre-rename failure: %v", err)

@@ -53,7 +53,6 @@ package relay
 // the deterministic-outcome approach the R2 slice sanctions for the timer seam.
 
 import (
-	"context"
 	"crypto/ed25519"
 	"errors"
 	"testing"
@@ -331,15 +330,4 @@ func TestRelay_SweepLoopPresenceSilentPushNoManualCall(t *testing.T) {
 	if pushes[0].token != "apns-token-device" {
 		t.Fatalf("silent push aimed at %q, want the paired device token (CR-3)", pushes[0].token)
 	}
-}
-
-// interfaceGuards references the new contract symbols in a value context so the
-// compile-level RED points squarely at the missing surface (not only at deep call
-// sites), documenting the exact shapes the implementer must add. It is never run.
-func interfaceGuards(c *Client) {
-	_ = Quotas{}.MailboxMaxItems // int: per-mailbox depth cap (CR-4)
-	_ = Config{}.SweepInterval   // time.Duration: sweep-loop tick seam (CR-3)
-	// (*Client).MailboxReadPage(ctx, cursor, limit) ([]Item, bool, error) (CR-4)
-	items, hasMore, err := c.MailboxReadPage(context.Background(), 0, 0)
-	_, _, _ = items, hasMore, err
 }

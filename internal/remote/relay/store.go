@@ -213,17 +213,6 @@ func (s *store) purgeOlderThan(cutoffMillis int64) error {
 	})
 }
 
-// purgeMailbox drops every item for rid (device de-authorization, R-REL.13).
-func (s *store) purgeMailbox(rid string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		root := tx.Bucket(bucketItems)
-		if root.Bucket([]byte(rid)) == nil {
-			return nil
-		}
-		return root.DeleteBucket([]byte(rid))
-	})
-}
-
 // mailboxDepth reports how many items rid's mailbox currently holds, from every
 // sender (ops and revocation visibility: a purge has to drop to zero).
 func (s *store) mailboxDepth(rid string) int {
@@ -327,16 +316,6 @@ func (s *store) authorizePair(pairer, device string) error {
 			return nil // not banned, or banned by somebody else: the grant still stands.
 		}
 		return rb.Delete([]byte(device))
-	})
-}
-
-func (s *store) removePair(a, b string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		pb := tx.Bucket(bucketPairs)
-		if err := pb.Delete(pairKey(a, b)); err != nil {
-			return err
-		}
-		return pb.Delete(pairKey(b, a))
 	})
 }
 
