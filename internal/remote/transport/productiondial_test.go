@@ -186,6 +186,70 @@ func TestPBOPS5_OneParserOwnsRelayJSON(t *testing.T) {
 	}
 }
 
+// TestPBOPS5_OnlyRelayCfgDecodesThePin is the invariant one parser was for, applied one level
+// down -- and it exists because the file-level fence above did NOT catch the thing it was
+// written to prevent.
+//
+// TestPBOPS5_OneParserOwnsRelayJSON stops a second READER of relay.json. It says nothing about
+// a second DECODER of a field that reader hands out: internal/skeleton acquired its own
+// base64.StdEncoding.DecodeString of Config.SPKIPin, with no 32-byte length check, while the
+// file-level fence stayed green. Two decoders that disagree about what "malformed" means is
+// how a pin ends up carried and never consulted, which is the whole of ADR-007 B34.
+//
+// So the pin's base64 form is relaycfg's alone. Callers take the DECODED value through
+// Config.Pin or the whole policy through Config.Security, and reaching for the string field is
+// the fence's subject.
+//
+// A composite-literal key is deliberately NOT a violation: `relaycfg.Config{SPKIPin: v}` is how
+// `swarm remote init` WRITES the provisioning, and a write cannot disagree about decoding. Only
+// a selector expression -- someone reading the base64 back out to do something with it -- is
+// matched, which is what an ast.SelectorExpr gives for free.
+func TestPBOPS5_OnlyRelayCfgDecodesThePin(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	var readers []string
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "testdata", "node_modules", "relaycfg":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "SPKIPin" {
+				return true
+			}
+			rel, _ := filepath.Rel(root, path)
+			readers = append(readers, filepath.ToSlash(rel)+":"+
+				strconv.Itoa(fset.Position(sel.Pos()).Line))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tree: %v", err)
+	}
+	if len(readers) > 0 {
+		t.Fatalf("%d production site(s) read the pin's BASE64 form out of relaycfg.Config: %v.\n"+
+			"Take the decoded bytes from Config.Pin, or the whole policy from Config.Security. A "+
+			"second decoder is a second opinion about what a malformed pin is, and the one that "+
+			"grew here had no length check at all (ADR-007 B34).", len(readers), readers)
+	}
+}
+
 // relayLocalName returns the name the relay package is imported under in f, and whether
 // it is imported at all. The alias is resolved rather than assumed, so a file importing
 // it as `rly` is still checked.

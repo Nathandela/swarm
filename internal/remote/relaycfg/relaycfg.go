@@ -104,19 +104,37 @@ func Save(stateDir string, cfg Config) error {
 // cleartext cannot present one; admitting the dial anyway would leave a configured
 // security control doing nothing, which is the exact defect class B34 records.
 func (c Config) Security() (relay.Security, error) {
+	pin, err := c.Pin()
+	if err != nil {
+		return relay.Security{}, err
+	}
 	sec := relay.MachineSecurity()
-	// ABSENT is the empty string, which is what omitempty writes and what a Config
-	// literal carries. Anything else is a pin the operator SET, so a value that is
-	// present but unusable -- whitespace, a truncated digest, hex instead of base64 --
-	// fails closed rather than silently reverting to an unpinned machine.
+	sec.PinnedSPKISHA256 = pin
+	return sec, nil
+}
+
+// Pin decodes the configured SPKI pin, or returns nil when none is configured.
+//
+// IT IS THE ONLY DECODER OF THIS FIELD, and that is the invariant rather than a preference.
+// internal/skeleton grew a second base64 decode of Config.SPKIPin -- with no length check --
+// while every existing fence stayed green, and the pin it would have forwarded to a handset is
+// one no dial on this machine would have accepted. Two decoders are two opinions about what
+// "malformed" means, and the disagreement surfaces as a pin that is carried and never
+// consulted (ADR-007 B34). internal/remote/transport's TestPBOPS5_OnlyRelayCfgDecodesThePin
+// keeps it that way.
+//
+// ABSENT is the empty string, which is what omitempty writes and what a Config literal
+// carries. Anything else is a pin the operator SET, so a value that is present but unusable --
+// whitespace, a truncated digest, hex instead of base64 -- fails closed rather than silently
+// reverting to an unpinned machine.
+func (c Config) Pin() ([]byte, error) {
 	if c.SPKIPin == "" {
-		return sec, nil
+		return nil, nil
 	}
 	pin, err := base64.StdEncoding.DecodeString(strings.TrimSpace(c.SPKIPin))
 	if err != nil || len(pin) != sha256.Size {
-		return relay.Security{}, fmt.Errorf("%s: relay_spki_pin is not base64 of a 32-byte "+
+		return nil, fmt.Errorf("%s: relay_spki_pin is not base64 of a 32-byte "+
 			"SHA-256 digest (see the relay runbook, section 3): %w", FileName, relay.ErrPinMalformed)
 	}
-	sec.PinnedSPKISHA256 = pin
-	return sec, nil
+	return pin, nil
 }

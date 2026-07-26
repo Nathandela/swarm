@@ -1,11 +1,9 @@
 package skeleton
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
@@ -73,17 +71,16 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 	// The relay SPKI pin travels to the phone in msg2 and NOWHERE ELSE (ADR-007 B33/B34):
 	// the pairing QR has no room for it. OPTIONAL here -- a machine with no pin configured
 	// still pairs, and what an absent pin MEANS is decided at the phone's dial site.
-	if relayCfg.SPKIPin != "" {
-		// Decoded HERE rather than forwarded as text: relaycfg.Security() already rejects a
-		// malformed pin at assembly, so a phone can only ever receive one this machine itself
-		// would dial under. Forwarding the base64 would let the two ends disagree about what
-		// "malformed" means, which is how a pin ends up carried and never consulted.
-		pin, perr := base64.StdEncoding.DecodeString(strings.TrimSpace(relayCfg.SPKIPin))
-		if perr != nil {
-			return nil, fmt.Errorf("relay.json: relay_spki_pin is not base64: %w", perr)
-		}
-		cfg.RelaySPKIPin = pin
+	// Decoded by relaycfg and NOT here. This block used to run its own
+	// base64.StdEncoding.DecodeString with no 32-byte check, which is a second opinion about
+	// what a malformed pin is: it would have forwarded to a handset a pin that no dial on this
+	// machine would have accepted. It also ran BEFORE the RelayURL guard below, so the length
+	// check in Security() only covered it by accident of ordering.
+	pin, err := relayCfg.Pin()
+	if err != nil {
+		return nil, err
 	}
+	cfg.RelaySPKIPin = pin
 	if relayCfg.RelayURL != "" {
 		// The transport policy is resolved HERE rather than inside the closure, so a
 		// malformed pin aborts assembly like a corrupt identity does. Resolved at dial

@@ -2537,3 +2537,39 @@ an unswept `map[string]bool` and `rendezvous_create` has **no `requireAuth`**, s
 would let an unauthenticated stranger grow it without bound. **Approved: timestamp burned entries and
 sweep them, with retention longer than the announced QR window.** A fix that converts a hijack into a
 memory exhaustion is not a fix.
+
+### B53 — a machine enrolls a device whose operator REFUSED the SAS, and the deferral marker must carry no authority
+
+Two findings from the stood-down parallel implementation, separated here because neither is about the
+consent signature and both would otherwise be lost in a handover.
+
+**(a) At HEAD, a refused SAS still enrolls the device.** Nothing after msg3 tells the machine what the
+phone's operator decided: `enroll.Enroll` runs, `AddSole` commits, and **PB-STATE-10's single-device
+slot is consumed by a pairing the user explicitly refused.** The machine's own confirm was affirmative,
+so from its side the ceremony completed; the refusal happens on the other end and is never
+transmitted.
+
+This is **independent of the consent work** — it is a defect in what the ceremony reports, not in what
+it grants. Any four-message design closes it incidentally, which is precisely why it must be **fenced
+deliberately**: a defect closed as a side effect of another change is a defect that returns the moment
+that change is revised. Note the user-visible shape — the owner refuses a pairing, and the machine's
+one device slot is now occupied, so the *next* legitimate pairing is refused fail-fast until they
+notice and revoke something they never agreed to.
+
+**(b) The `ConsentDeferred` marker must convey NO authority whatsoever.** If the marker carries any
+grant — anything the relay or the machine would act on — then **it is itself a credential released
+before the SAS gate, and B46's argument restarts one level down.** The marker's entire content must be
+"a build that intends to grant a route once its operator confirms", distinguishable from "a build that
+grants none" and from nothing else.
+
+This is the caveat that makes B52's marker safe rather than a re-labelling of the hole it closes, and
+it was raised by the agent whose own design was superseded by it.
+
+**A note on the process, because it is mine.** I asked one agent to *re-judge* a decision while
+dispatching another to *build* it, and got two implementations of one protocol change in two
+worktrees. The duplication was not free, but it was not wasted either: each design found something the
+other did not — the measurement that the SAS **commits to** msg3's payload, the local-write deadlock
+that looks like a free fix, the receive-ordering that removes the partial-failure window, the
+empty-consent abort (measured as a 90-second package timeout when removed), and this caveat. **Both
+agents flagged their own weakened fences rather than letting me find them**, which is the only reason
+consolidating onto one branch without re-verifying the other was safe.
