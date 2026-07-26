@@ -326,6 +326,15 @@ class PhoneSurface(private val activity: AppCompatActivity, private val runtime:
     }
 
     private fun renderReady(startup: PhoneStartup.Ready) {
+        // PB-KEY-7's "require a fresh unwrap before restoring content", asked at the moment the
+        // screen comes back in front of someone -- which is the moment the device was unlocked to
+        // get here, and therefore the moment the Keystore-backed content KEK will answer.
+        //
+        // It is a REQUEST and its refusal is a state, not an error to swallow: a handset the user
+        // has not authenticated on refuses, and PB-APP-9's routed message is what says so. A
+        // phone whose content custody is live answers without consulting Keystore at all, so this
+        // costs nothing on every other redraw.
+        runtime.unlockContent()?.let { outcome.text = it.message }
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
         status.text = bridge.connectionBanner().text

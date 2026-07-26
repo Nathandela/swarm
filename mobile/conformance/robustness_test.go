@@ -324,8 +324,16 @@ func TestS7Residual_PersistedReconcileStillRefusesAForeignAuthority(t *testing.T
 
 // TestPBKEY7_PurgeKeysIsRecoverableNotABrick is the same question asked of the lock purge.
 // PB-KEY-7 requires lock to zeroize custody and drop every decrypted cache. If that state
-// cannot be restored by re-installing the tier key, the first screen lock bricks the app
-// until a re-pair -- fail-closed turning into PB-STATE-10's brick.
+// cannot be restored ON THE DEVICE, the first screen lock bricks the app until a re-pair --
+// fail-closed turning into PB-STATE-10's brick.
+//
+// THE RECOVERY IS App.UnlockContent, and after ADR-007 B35 it is the only one. This test used
+// to call InstallContentKey, which cannot be the recovery on a real handset: PB-KEY-10 moved
+// epoch-key delivery entirely into Go, so Kotlin has no source for those bytes and every
+// reference to the Kotlin-side epoch-key blob is under src/test/. UnlockContent re-opens the
+// sealed key the lock deliberately leaves at rest, through the Keystore-backed KEK -- which is
+// PB-KEY-7's own "require a fresh unwrap before restoring content" and is what makes the
+// recovery local, immediate, and independent of the machine.
 func TestPBKEY7_PurgeKeysIsRecoverableNotABrick(t *testing.T) {
 	h := newHarness(t)
 	h.PushReconcile()
@@ -343,12 +351,12 @@ func TestPBKEY7_PurgeKeysIsRecoverableNotABrick(t *testing.T) {
 			"biometric gate is not enough while the process still holds already-decrypted content")
 	}
 
-	if err := h.App.InstallContentKey(h.Keys.ContentKey[:]); err != nil {
+	if err := h.App.UnlockContent(); err != nil {
 		t.Fatalf("PB-KEY-7/PB-STATE-10: content operations cannot be restored after a lock purge "+
 			"(%v). The first screen lock would brick the app", err)
 	}
 	h.PushTerminal(testSession, []string{"AFTER-UNLOCK"}, 80, 24)
-	eventually(t, "content operations never resumed after re-installing the content key", func() bool {
+	eventually(t, "content operations never resumed after the fresh unwrap", func() bool {
 		snap, err := h.App.Peek(testSession)
 		return err == nil && strings.Contains(snap.Text, "AFTER-UNLOCK")
 	})

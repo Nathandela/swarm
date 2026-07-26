@@ -136,10 +136,14 @@ class KeyCustodySession(
     /**
      * PB-KEY-7. Every event in [InvalidationEvent] routes here.
      *
-     * BOTH tiers go, not just content, and that is not over-caution: `App.PurgeKeys` clears
-     * `st.Keys` wholesale, so after this call the Go core holds no wake key either
-     * (ADR-007 B17(b)). A session that went on believing the wake tier survived would produce
-     * a push path that works until the first screen lock and then goes quiet.
+     * ONLY THE CONTENT TIER GOES, and the opposite claim used to be written here on the strength
+     * of ADR-007 B17(b) -- "App.PurgeKeys clears st.Keys wholesale". B35 established that B17(b)
+     * is FALSE in both directions. `App.PurgeKeys` no longer touches the wake tier, because a
+     * high-priority FCM push is the sole background wake path and arrives with nobody there
+     * (B9/B16); and nothing could have put those bytes back anyway, since PB-KEY-10 moved epoch
+     * key delivery entirely into Go and every Kotlin reference to the epoch-key blob is under
+     * src/test/. A session that dropped `wakeInstalled` here would report a push path as
+     * unavailable that is in fact working.
      *
      * It is unconditional and idempotent: lock and background arrive together all the time,
      * and a purge that skipped because it thought nothing was installed would be a guard that
@@ -147,7 +151,6 @@ class KeyCustodySession(
      */
     fun invalidate(event: InvalidationEvent) {
         lastInvalidation = event
-        wakeInstalled = false
         contentInstalled = false
         core.purgeKeys()
     }
@@ -183,9 +186,10 @@ object PushWakePath {
      * Prepare custody for a push arriving on a locked handset. Must succeed with the CONTENT
      * tier refusing, or B16's sole background wake path is dead whenever it matters.
      *
-     * It re-installs unconditionally rather than checking `wakeAvailable()` first, because
-     * after a lock purge the CORE holds no wake key even though this object might believe it
-     * does -- and the whole point of the path is that it works with nobody there to prompt.
+     * It re-installs unconditionally rather than checking `wakeAvailable()` first, because this
+     * runs in a process that may have been started BY the push and may hold nothing at all. It
+     * is no longer because a lock purge took the wake key -- it does not (ADR-007 B35) -- and
+     * the unconditional shape is what makes those two situations the same code path.
      */
     fun prepare(session: KeyCustodySession) {
         for (tier in requiredTiers) {

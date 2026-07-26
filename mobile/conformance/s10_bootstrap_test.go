@@ -81,6 +81,13 @@ type s10Machine struct {
 	identity *crypto.Identity
 	keys     crypto.EpochKeys
 
+	// pairEpoch is the epoch this machine PUBLISHES in its pairing payload. It is a field
+	// rather than the constant because mobile.App.pin zeroes State.Keys when a pairing lands
+	// in a DIFFERENT epoch -- which is the one production path that leaves a phone genuinely
+	// keyless while its grant watermark stands, and therefore the only way to drive PB-KEY-3's
+	// terminal state now that a screen lock deliberately does not (ADR-007 B35).
+	pairEpoch uint32
+
 	// Filled in by Pair.
 	Outcome *pairing.MachineOutcome
 	Record  device.Record
@@ -94,7 +101,8 @@ type s10Machine struct {
 
 func newS10Machine(t *testing.T, ctx context.Context, relayURL string) *s10Machine {
 	t.Helper()
-	m := &s10Machine{t: t, ctx: ctx, relayURL: relayURL, recv: crypto.NewMailboxReceiver()}
+	m := &s10Machine{t: t, ctx: ctx, relayURL: relayURL, recv: crypto.NewMailboxReceiver(),
+		pairEpoch: s10BootstrapEpoch}
 
 	var err error
 	if m.signPub, m.signPriv, err = ed25519.GenerateKey(rand.Reader); err != nil {
@@ -150,7 +158,7 @@ func (m *s10Machine) pairWith(secret [32]byte, rid [16]byte) (qr string, sasSeen
 			RecipientPub:        m.identity.RecipientPublic(),
 			MachineSignPub:      m.signPub,
 			MachineEndpointID:   s10MachineEndpointID,
-			EpochID:             s10BootstrapEpoch,
+			EpochID:             m.pairEpoch,
 		},
 	})
 

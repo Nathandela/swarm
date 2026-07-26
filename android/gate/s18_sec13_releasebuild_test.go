@@ -214,6 +214,10 @@ func TestPBSEC13_NoDebugBackdoorGatesPrivilegedBehaviour(t *testing.T) {
 	privileged := []string{
 		"SendInput", "Paste", "Resize", "TakeControl", "Interrupt", "Kill", "Launch",
 		"InstallContentKey", "InstallWakeKey", "PurgeKeys", "RevokeThisDevice",
+		// UnlockContent is the fresh Keystore unwrap PB-KEY-7 requires before content operations
+		// resume. Behind a build flag it would be a debug build that restores content custody on
+		// terms a release build does not, which is the gate not being a gate.
+		"UnlockContent",
 	}
 
 	debugFlag := regexp.MustCompile(`BuildConfig\.DEBUG|isDebuggable\b|\bDEBUG_[A-Z_]+`)

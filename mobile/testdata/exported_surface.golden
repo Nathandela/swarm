@@ -124,6 +124,7 @@ method App.TakeControl(string) (*Op, error)
 method App.TerminalUnwatch(string) error
 method App.TerminalWatch(string) error
 method App.UndeliveredInputs() (*UndeliveredList, error)
+method App.UnlockContent() error
 method App.UnsubscribeJournal() error
 method JournalPage.At(int) (*JournalEntry, error)
 method JournalPage.Count() (int, error)

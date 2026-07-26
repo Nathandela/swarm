@@ -176,8 +176,13 @@ func TestS14A_R3_APurgeClearsMemoryEvenWhenTheDurableWriteFails(t *testing.T) {
 		t.Errorf("PB-KEY-7: the epoch CONTENT key is still live in State after a purge whose durable "+
 			"write failed (%v). The screen is locked and the process still holds the key", err)
 	}
-	if got := core.State().Keys.WakeKey; got != (crypto.WakeKey{}) {
-		t.Error("PB-KEY-7: the epoch WAKE key is still live in State after a purge whose durable write failed")
+	// The WAKE key is the control on the assertion above: it must SURVIVE, so a "purge" that
+	// simply zeroed State.Keys wholesale cannot pass this test. ADR-007 B9/B16 -- a push arrives
+	// with nobody there, and the handset holds no other source for those bytes (B35).
+	if got := core.State().Keys.WakeKey; got != keys.WakeKey {
+		t.Errorf("PB-KEY-7/B16: the lock purge cleared the epoch WAKE key. The push path is the only "+
+			"background wake there is and it runs with no user present to re-authorize.\n got %x\nwant %x",
+			got, keys.WakeKey)
 	}
 	if k, _, _, _, _ := core.Router().bound(); k != (crypto.ContentKey{}) {
 		t.Error("PB-KEY-7: MailboxRouter is still BOUND to the purged content key, so the phone keeps " +
@@ -253,26 +258,42 @@ func TestS14A_R3_AnEpochRotationDoesNotCarryTheOldEpochsSealedContentKey(t *test
 // B4: the purge must survive a writer holding a snapshot taken before it.
 // ---------------------------------------------------------------------------
 
-// TestS14A_R3_APrePurgeStateSnapshotCannotResurrectTheKeys.
+// TestS14A_R3_APrePurgeStateSnapshotCannotResurrectTheContentKeyOrTheCaches.
 //
-// fileStore.PurgeKeys drops the tier records "so nothing is left for a later Save to carry
-// back". That is true of the tier records and false of a State the CALLER is holding: round
-// 2's own fix made a real key always win, whatever the tier record says, so a snapshot taken
-// before the purge re-seals both keys straight over it.
+// fileStore.PurgeKeys drops what it destroyed "so nothing is left for a later Save to carry
+// back". That is true of the store's own records and false of a State the CALLER is holding:
+// round 2's own fix made a real key always win, whatever the tier record says, so a snapshot
+// taken before the purge re-installs the content key and the decrypted caches straight over it.
 //
 // Every mobile State()->Save() pair is a few statements, but PurgeKeys arrives from an
 // Android lifecycle callback on another thread, so the window is real. The purge must win.
 //
+// WHAT "WIN" MEANS CHANGED WITH ADR-007 B35/B36, in one direction only. The SEALED content key
+// at rest is now meant to survive a lock -- destroying it is a permanent brick, because
+// PB-KEY-10 delivers the epoch key inside Go and the grant watermark refuses a re-delivery as a
+// replay. What must not survive is the live key in this process's memory and the decrypted
+// caches, which is exactly what a stale writer would put back and what the screen lock exists
+// to remove. So the assertions are on those, plus the control that the recovery path still
+// works: the material is where a fresh Keystore unwrap can reach it and nowhere else.
+//
 // It must win WITHOUT bricking the Save: refusing every Save taken before the purge would
-// satisfy the first assertion while losing the coordinate the caller was actually writing,
-// so the second assertion pins that the rest of the Save still lands.
-func TestS14A_R3_APrePurgeStateSnapshotCannotResurrectTheKeys(t *testing.T) {
+// satisfy the assertions while losing the coordinate the caller was actually writing, so the
+// last one pins that the rest of the Save still lands.
+func TestS14A_R3_APrePurgeStateSnapshotCannotResurrectTheContentKeyOrTheCaches(t *testing.T) {
 	dir, wake, content, keys := s14aR2Sealed(t)
 	core := s14aR2Resume(t, dir, wake, content)
 
-	stale := core.State() // taken BEFORE the purge: it holds both epoch keys
-	if stale.Keys.ContentKey != keys.ContentKey {
-		t.Fatal("fixture: the snapshot does not hold the content key, so this test proves nothing")
+	seed := core.State()
+	seed.Sessions = []CachedSession{{SessionID: "m/s", Group: status.Group("active"), Present: true}}
+	seed.Snapshots = []Snapshot{{Session: "m/s", Lines: []string{"decrypted terminal content"}, Cols: 80, Rows: 24}}
+	if err := core.Save(seed); err != nil {
+		t.Fatalf("seeding the decrypted caches: %v", err)
+	}
+
+	stale := core.State() // taken BEFORE the purge: it holds the key AND the decrypted content
+	if stale.Keys.ContentKey != keys.ContentKey || len(stale.Snapshots) == 0 {
+		t.Fatal("fixture: the snapshot does not hold the content key and the decrypted caches, so this " +
+			"test proves nothing")
 	}
 	if err := core.PurgeKeys(); err != nil {
 		t.Fatalf("PurgeKeys: %v", err)
@@ -283,14 +304,27 @@ func TestS14A_R3_APrePurgeStateSnapshotCannotResurrectTheKeys(t *testing.T) {
 		t.Fatalf("Save from a pre-purge snapshot: %v", err)
 	}
 
-	again := s14aR2Resume(t, dir, wake, content)
-	if got := again.State().Keys.ContentKey; got != (crypto.ContentKey{}) {
-		t.Error("PB-KEY-7: a Save built from a State snapshot taken BEFORE the purge re-sealed the " +
-			"content key over it. The purge is durable only until the next writer that has not " +
-			"noticed it")
+	live := core.State()
+	if got := live.Keys.ContentKey; got != (crypto.ContentKey{}) {
+		t.Error("PB-KEY-7: a Save built from a State snapshot taken BEFORE the purge put the content " +
+			"key back into the live process. The lock is durable only until the next writer that has " +
+			"not noticed it, and the screen is locked")
 	}
-	if got := again.State().Keys.WakeKey; got != (crypto.WakeKey{}) {
-		t.Error("PB-KEY-7: a pre-purge snapshot re-sealed the WAKE key over the purge")
+	if len(live.Snapshots) != 0 || len(live.Sessions) != 0 {
+		t.Error("PB-KEY-7: a pre-purge snapshot put the decrypted session/snapshot caches back")
+	}
+	if k, _, _, _, _ := core.Router().bound(); k != (crypto.ContentKey{}) {
+		t.Error("PB-KEY-7: a pre-purge snapshot re-bound MailboxRouter to the content key the lock removed")
+	}
+
+	again := s14aR2Resume(t, dir, wake, content)
+	if len(again.State().Snapshots) != 0 || len(again.State().Sessions) != 0 {
+		t.Error("PB-KEY-7: a pre-purge snapshot re-sealed the decrypted caches over the purge, so they " +
+			"are recoverable through the seal after a restart")
+	}
+	if got := again.State().Keys.ContentKey; got != keys.ContentKey {
+		t.Errorf("PB-KEY-3: the stale Save destroyed the sealed content key at rest, which no on-device "+
+			"path can restore.\n got %x\nwant %x", got, keys.ContentKey)
 	}
 	if got := again.State().PushToken; got != "tok-after-purge" {
 		t.Errorf("the coordinate the caller was actually writing did not land (PushToken = %q). "+

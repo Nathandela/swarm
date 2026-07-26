@@ -175,13 +175,21 @@ func TestS14A_APurgeWithTheContentTierLockedReachesDisk(t *testing.T) {
 	content.openErr = nil
 	reopened := s14aR2Resume(t, dir, wake, content)
 	after := reopened.State()
-	if after.Keys.ContentKey == keys.ContentKey {
-		t.Errorf("PB-KEY-7: the purged content key is still recoverable through the seal after a restart. "+
-			"The purge was taken with the tier locked, so it was read as 'nothing to write' and the old "+
-			"sealed blob was carried through untouched.\n got %x", after.Keys.ContentKey)
+	// The two tier KEYS survive, and after the ADR-007 B35/B36 round that is the requirement
+	// rather than a leak. Destroying them is unimplementable: PB-KEY-10 delivers the epoch key
+	// as a machine-sealed grant inside Go, so the handset has no source for those bytes, and the
+	// grant watermark refuses the machine's re-appended frame as a replay -- the first screen
+	// lock would be a permanent brick. The blob is sealed under an auth-gated Keystore KEK, so
+	// destroying it defends only against an attacker who has already defeated Keystore and
+	// therefore holds device.key too. What the purge destroys is the DECRYPTED CACHES.
+	if after.Keys.ContentKey != keys.ContentKey {
+		t.Errorf("PB-KEY-7/PB-KEY-3: the purge destroyed the sealed content key at rest, so the phone "+
+			"cannot recover without a machine-side re-grant.\n got %x\nwant %x",
+			after.Keys.ContentKey, keys.ContentKey)
 	}
-	if after.Keys.WakeKey == keys.WakeKey {
-		t.Errorf("PB-KEY-7: the purged wake key survived the purge.\n got %x", after.Keys.WakeKey)
+	if after.Keys.WakeKey != keys.WakeKey {
+		t.Errorf("PB-KEY-7/B16: the purge destroyed the wake key, so the handset stops being wakeable "+
+			"at the first screen lock.\n got %x\nwant %x", after.Keys.WakeKey, keys.WakeKey)
 	}
 	if len(after.Snapshots) != 0 || len(after.Sessions) != 0 {
 		t.Errorf("PB-KEY-7: the purge left %d snapshots and %d sessions on disk. Zeroizing the keys while "+
