@@ -484,3 +484,44 @@ that walk is still bounded (it cannot cross property initialisers). **The genera
 bidirectional one: every bound verb must be either called from production Kotlin or explicitly listed
 as deliberately unbound, with the list checked.** Without it, the next verb added is uncalled by
 default and nothing says so.
+
+## 2.10 Corrections to §2.7, §2.8 and §3 — two of my own claims were wrong
+
+**§2.7, §2.8 and §3 are FIXED** (`0b8d73b`, `94f157f`, `083ec6e`). Three corrections stand with them.
+
+**(a) §2.8's severity claim was FALSE, and the truth is a sixth instance of the uncalled-symbol
+class.** I recorded that "on a handset whose Curve25519 probe answers ABSENT or UNKNOWN, the app will
+not provision at all". **`CustodyPlanner.forDevice` has no production caller** — verified: it appears
+only at its own declaration, and `PhoneRuntime.construct()` goes straight to
+`KeystoreCustodyBootstrap` without ever building a capability map.
+`KeyCustodyException.PlatformCapabilityMissing` is declared and routed and **never thrown**. So the
+shipped app never refuses over Curve25519, because the gate that would refuse is never invoked — and
+**physical-handset runbook step 2c is inert** and must be corrected before a device session.
+
+The fix is still right: it is what a wiring slice would turn on, and the planner is the intended gate.
+But this is arguably a **larger** finding than the defect it was dispatched to fix, and it is the
+same class again — the sixth.
+
+**(b) §3's "verified benign" was WRONG.** I recorded that revoking an unpaired id was harmless
+because the epoch does not rotate. `runRemoteRevoke` calls `purgeOutboundCustody` **unconditionally**
+once the daemon reports no error (`cmd/swarm/remote.go:540`, before the success message), so a
+mistyped id **also emptied the machine's outbound journal** — the undelivered frames queued for the
+handset that IS still paired. Not a no-op, and worse than the misleading output I filed it under. The
+refusal now lands before all three purge steps. (`stopGatewayIfQuiescent` and `purgeRelayState` were
+genuinely inert on that path.)
+
+**(c) The remote tier keeps the asymmetry deliberately.** A phone-sealed `device_revoke` naming an
+unknown id still returns OK, because over an at-least-once relay a retry of an already-successful
+revoke legitimately removes nothing, and that layer cannot distinguish the two. The owner-tier guard
+is what changed. Dropping the tier split fails a **pre-existing** fence
+(`internal/skeleton/s18_revokeverb_test.go:127`), which is independent confirmation the split is on
+the right axis.
+
+## 2.11 A gate that reads green when it did not run
+
+`android/app/libs/swarm.aar` is absent in a fresh worktree, so `./gradlew` fails at
+`:app:requireSwarmAar` — and a command whose output is piped through `tail` **swallows the nonzero
+exit**, so the run reads as green to anyone not checking the status. `./android/build-aar.sh` must be
+run first. Recorded because "the gate passed" and "the gate ran" are different claims, and this phase
+has now confused them twice: here, and with Gradle's cached `up-to-date` results reporting BUILD
+SUCCESSFUL while an earlier run's XML was read.
