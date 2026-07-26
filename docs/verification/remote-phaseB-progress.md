@@ -1209,3 +1209,33 @@ One older run (2026-07-25 21:19) shows `different_machine` failing in 1.03s with
 gate-hygiene work. Subsequent `-race` runs of `./mobile/...`, `./internal/remotegw/` and
 `./internal/phonecore/` were clean. Kept as its own entry rather than folded in: two failure modes
 under one name is how a real defect hides behind a known flake.
+
+### The exact lint invocation belongs in the runbook, not the tool name
+
+```
+~/go/bin/golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 ./...
+```
+
+Full path (not on PATH) **and both caps lifted**. The default `max-same-issues: 3` suppresses
+duplicates of an identical message, so the hidden count **scales with how many identical findings
+exist** — a tree with twenty unchecked `sink.Event` calls reports three. The failure mode is that the
+report looks complete and therefore does not prompt a second look. S20 owes this line verbatim in the
+operator runbook (PB-OPS-*).
+
+The tree's only two `nolint` directives are the paired `%s` leak-fence sites in
+`internal/remote/crypto` and `internal/remote/machineid`. Both state their reason **at the site** so
+a later sweep can re-check them rather than trust them; both should survive such a sweep.
+
+### The falsifiable link between the fourth flake and the lost update
+
+They are filed as separate items and share one diagnostic. `drainPhoneCommands` now logs the cursor
+and the open error, so:
+
+- if it logs **`stale seq`** at the moment `different_machine` fails, that is the link — the lost
+  update is the flake's cause and fixing it closes both;
+- if it logs **anything else**, the flake has a different cause and `Core.Save` still needs fixing on
+  its own merits.
+
+Recorded because it is a **pre-committed** discriminator: the prediction is written down before the
+evidence arrives, so whoever sees the next occurrence cannot fit the story to whichever answer turns
+up. That is the discipline that kept these two items from being merged into one on an unproven link.
