@@ -107,6 +107,30 @@ class MachinePaneTest {
 
 class LaunchScreenTest {
 
+    /**
+     * The two fields the machine has no default for, refused BEFORE anything is signed.
+     *
+     * The daemon refuses a launch without an agent and without a working directory, so a form
+     * that sent one anyway would burn a durable command seq and a signature on a request the
+     * phone could see was incomplete -- and would hand the user back a routed facade error about
+     * a field they simply left empty. The answer is the MODEL's, so the screen and [submit]
+     * cannot enforce different bars.
+     */
+    @Test
+    fun `a draft missing a required field is named rather than sent`() {
+        val screen = LaunchScreen()
+        assertNull(screen.missingField(LaunchDraft(agent = "claude", cwd = "/repo", prompt = "")))
+        assertTrue(
+            screen.missingField(LaunchDraft(agent = " ", cwd = "/repo", prompt = ""))!!
+                .isNotBlank(),
+        )
+        assertTrue(
+            screen.missingField(LaunchDraft(agent = "claude", cwd = "", prompt = ""))!!
+                .isNotBlank(),
+        )
+        assertNull("nothing is in flight after a refused draft", screen.inFlight)
+    }
+
     /** The v1 builder path: a spec goes out as one operation. */
     @Test
     fun `a submitted spec becomes one launch operation`() {

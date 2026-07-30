@@ -197,6 +197,23 @@ class LaunchScreen {
         private set
 
     /**
+     * The required field [draft] is missing, in the words a user reads, or null when it carries
+     * both. The daemon has no default for either -- it refuses a launch without an agent and
+     * without a working directory -- so a form that sent one anyway would be inventing a value
+     * nobody chose, which is the defect `leaseHeld = false` already cost this project once.
+     *
+     * IT IS ONE STATEMENT OF THE RULE AND IT IS WHY THIS IS PUBLIC. [submit] refuses on it and
+     * the screen asks on it, so a surface cannot enforce a different bar from the model's -- and
+     * a screen that discovered the refusal by catching submit's own exception would report a
+     * programming error to a user who simply left a field empty.
+     */
+    fun missingField(draft: LaunchDraft): String? = when {
+        draft.agent.isBlank() -> "Say which agent to start."
+        draft.cwd.isBlank() -> "Say which folder on your machine it starts in."
+        else -> null
+    }
+
+    /**
      * @param operationId the id the MACHINE will key the outcome by --
      *  `swarmmobile.Op.getOperationID()`, which `App.Launch` returns synchronously even for an
      *  operation it queued. The default exists so the screen's policy can be exercised without
@@ -207,8 +224,8 @@ class LaunchScreen {
         draft: LaunchDraft,
         operationId: String = UUID.randomUUID().toString(),
     ): LaunchOperation {
-        require(draft.agent.isNotBlank()) { "PB-APP-6: a launch needs an agent" }
-        require(draft.cwd.isNotBlank()) { "PB-APP-6: a launch needs a working directory" }
+        val missing = missingField(draft)
+        require(missing == null) { "PB-APP-6: $missing" }
         val op = LaunchOperation(action = ACTION_LAUNCH, operationId = operationId)
         inFlight = op
         return op

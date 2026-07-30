@@ -168,3 +168,38 @@ data class TerminalPeek(
             ""
         }
 }
+
+/**
+ * PB-INPUT-2's fact: whether the MACHINE has confirmed the control lease this phone asked for.
+ *
+ * IT IS DECIDED FROM THE TAKE_CONTROL OPERATION'S OWN OUTCOME, claimed by operation id, which is
+ * PB-SYNC-2's discipline and the only honest source a screen has. [TerminalPeek.leaseHeld] is a
+ * PARAMETER for exactly that reason -- `FacadeBridge.terminalPeek`'s own doc says the lease "is
+ * the outcome of this screen's own take_control operation ... reading it back from a snapshot
+ * would be guessing at a fact the reply already carries" -- and until this existed the surface
+ * passed the literal `false` in its place, so every session rendered as one the user did not
+ * hold while Send was enabled anyway (ADR-007 B83(3)).
+ *
+ * A SEVERANCE ANSWERS THE SAME QUESTION, and that is why asking the machine beats remembering
+ * the press. internal/remotegw/lease_sever.go seals the detach notice "tagged with the
+ * take_control's operation id so ReplyCache.TakeFor can attribute it", so the phone's durable
+ * outcome for that operation BECOMES the detach and the gate shuts again with no second fact to
+ * track. A daemon refusal of the take_control lands on the same id in the same way.
+ *
+ * THE CODE IS A WIRE OP HELD AS A LITERAL, for the reason [SwarmErrorTokens] is: the unit-test
+ * JVM does not load the AAR, so this side cannot read the Go constant. It names the constant it
+ * pins, and mobile/conformance is where the two are held equal.
+ *
+ * WHAT IT CANNOT SEE, recorded rather than assumed away: a lease that lapsed at its horizon with
+ * no notice yet delivered still reads as confirmed -- the horizon does not ride the outcome. The
+ * consequence is bounded, because `App.SendInput` gates on the core's own `Leases.Require`
+ * regardless: what the user gets is a keyboard open one redraw too long and then a routed
+ * refusal, not a keystroke silently dropped.
+ */
+object ControlLease {
+
+    /** protocol.OpLease -- the daemon's grant, which is what a take_control is answered with. */
+    private const val GRANTED = "lease"
+
+    fun confirmedBy(outcome: OperationOutcome): Boolean = outcome.code == GRANTED
+}

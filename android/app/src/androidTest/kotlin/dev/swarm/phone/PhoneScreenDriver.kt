@@ -78,6 +78,11 @@ object PhoneScreenDriver {
      * It is how "observes" is asserted without inventing a fact the test would have to be told.
      * `PhoneSurface.setActionsEnabled` raises the session controls only once the triage inbox
      * yielded a row, so an enabled Take control IS the phone having drawn the machine's roster.
+     *
+     * SEND LINE IS RAISED BY A DIFFERENT FACT and it is worth waiting on separately:
+     * `PhoneSurface.renderLease` enables it from `TerminalPeek.keyboardEnabled`, which is the
+     * lease the MACHINE confirmed and the link being up (PB-INPUT-2). So an enabled Send is the
+     * take_control having been answered, not the roster having a row.
      */
     fun ActivityScenario<PhoneActivity>.awaitPressable(label: String, why: String) {
         val deadline = SystemClock.uptimeMillis() + PATIENCE_MILLIS

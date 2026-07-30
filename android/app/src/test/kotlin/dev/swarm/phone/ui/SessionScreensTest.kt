@@ -178,3 +178,52 @@ class TerminalPeekTest {
         )
     }
 }
+
+/**
+ * PB-INPUT-2's lease, as a FACT rather than a literal (ADR-007 B83(3)).
+ *
+ * `PhoneSurface` passed `leaseHeld = false` into the peek and enabled Send from whether the
+ * triage inbox yielded a row, so the screen rendered every session as one the user did not hold
+ * while the keyboard was live over all of them. [ControlLease] is what it consults instead: the
+ * outcome of the take_control THIS screen issued, claimed by operation id.
+ *
+ * WHY THE CODES ARE ASSERTED AS STRINGS. The Kotlin side cannot read the Go constants -- the
+ * unit-test JVM does not load the AAR -- so the wire ops are literals here and in the model, and
+ * these cases are what pin the two together. `lease` is protocol.OpLease and `detach` is
+ * protocol.OpDetach; internal/remotegw/lease_sever.go seals the second under the SAME operation
+ * id as the take_control, which is why a severance answers this question at all.
+ */
+class ControlLeaseTest {
+
+    private fun outcome(code: String) =
+        OperationOutcome(operationId = "op-take-control-1", code = code, message = "")
+
+    @Test
+    fun `only the machine's grant confirms a lease`() {
+        assertTrue("protocol.OpLease IS the take_control reply", ControlLease.confirmedBy(outcome("lease")))
+    }
+
+    /**
+     * The unresolved case, and it is the one a literal got wrong in the opposite direction. An
+     * operation the machine has not answered carries an empty code, and PB-SYNC-2's rule is that
+     * an unresolved operation is neither a success nor a failure -- so the keyboard stays shut
+     * rather than opening on a grant nobody sent.
+     */
+    @Test
+    fun `an unanswered take control confirms nothing`() {
+        assertFalse(ControlLease.confirmedBy(outcome("")))
+    }
+
+    /**
+     * A severance shuts the gate again with no second fact to track. The detach notice is
+     * "tagged with the take_control's operation id so ReplyCache.TakeFor can attribute it", so
+     * the phone's durable outcome for that operation BECOMES the detach -- and a screen that had
+     * remembered the press instead would still be showing a lease that died.
+     */
+    @Test
+    fun `a severance or a refusal is not a lease`() {
+        assertFalse("protocol.OpDetach: the lease ended", ControlLease.confirmedBy(outcome("detach")))
+        assertFalse("the daemon refused the take_control", ControlLease.confirmedBy(outcome("not_authorized")))
+        assertFalse("and a kill switch refusal is not a grant", ControlLease.confirmedBy(outcome("kill_switch")))
+    }
+}

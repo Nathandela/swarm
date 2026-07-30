@@ -58,6 +58,15 @@ class PbE2E2ResumeTest {
             )
             app.press("Take control")
 
+            // PB-INPUT-2: the keyboard opens on the machine's confirmation, not on the press.
+            // After a force-stop this also asserts the re-lease absorbed the burned seq gap
+            // (PB-STATE-8): a take_control the daemon refused leaves this shut.
+            app.awaitPressable(
+                "Send line",
+                "the relaunched app never had its control lease confirmed, so the keyboard " +
+                    "stayed shut and there is nothing to type into",
+            )
+
             app.type("Type into the session you hold", "echo swarm-pb-e2e-2-after-force-stop")
             app.press("Send line")
 

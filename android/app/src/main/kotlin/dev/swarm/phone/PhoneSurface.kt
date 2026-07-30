@@ -28,9 +28,16 @@ import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
 import dev.swarm.phone.ui.CapabilityNotice
+import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
+import dev.swarm.phone.ui.LaunchDraft
+import dev.swarm.phone.ui.LaunchRendering
+import dev.swarm.phone.ui.LaunchResult
+import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.RoutedError
+import dev.swarm.phone.ui.TerminalPeek
 import swarmmobile.App
+import swarmmobile.LaunchSpec
 
 /**
  * Phase B slice S18 -- the views [PhoneActivity] hosts.
@@ -68,6 +75,16 @@ import swarmmobile.App
  * PB-PUSH-9's "deletion on ... disable" was a facade method with no caller for want of a screen
  * to put a switch on. The panels are hosted here rather than in Activities of their own, so the
  * app still has exactly ONE window and one exported component to reason about.
+ *
+ * THE SCOPE RULING ABOVE NO LONGER COVERS THE LAUNCH FORM, and the paragraph is amended rather
+ * than left standing, because android/unbound-verbs.tsv used to cite it BY NAME as the reason
+ * `App.Launch` was deliberately unbound. ADR-007 B80 is the record of what that costs: the
+ * ledger said the launch screen did not exist, the traceability table said PB-APP-6 was shipped,
+ * and nothing anywhere joined the two. Section 1's binding exit criterion is a phone that
+ * "pairs, observes, LAUNCHES, and types into a real session", so the fields and the control that
+ * start a session are below. What is still not here is a machine pane and a session picker: the
+ * peek and the session controls act on the first row of the triage inbox, and the launch form
+ * needs no picker because the session it starts does not exist yet.
  */
 class PhoneSurface(
     private val activity: AppCompatActivity,
@@ -114,15 +131,40 @@ class PhoneSurface(
     private val peek = label().apply { typeface = Typeface.MONOSPACE }
     private val outcome = label()
 
+    /**
+     * PB-INPUT-2's "VISIBLY confirmed", which is the requirement's own word and had no subject:
+     * the surface showed the same Take control button and the same live keyboard whether the
+     * machine had granted a lease or not, so a user could not tell until a keystroke vanished.
+     * The wording is chosen from [dev.swarm.phone.ui.TerminalPeek]'s verdict, never from the
+     * press.
+     */
+    private val lease = label()
+
+    /**
+     * The machine's answer to the launch this screen issued, on a line of its own.
+     *
+     * IT IS NOT [outcome]. That line is overwritten by every gated action, and a launch outcome
+     * arrives on a LATER draw -- the machine answers asynchronously and PB-SYNC-2 claims the
+     * answer by operation id -- so the two would erase each other.
+     */
+    private val launchStatus = label()
+
     private val pairing = PairingSurface(activity, runtime)
     private val settings = SettingsSurface(activity, runtime)
 
     /**
      * TIMED (requirements 6.0), so it goes through [timedButton]: 60 seconds, and a crossing
      * pauses and re-authorizes rather than continuing.
+     *
+     * IT REMEMBERS THE OPERATION IT ISSUED, which is what makes PB-INPUT-2's lease a fact rather
+     * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
+     * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
      */
     private val takeControl = timedButton("Take control", GatedOperation.TAKE_CONTROL) { app, session ->
-        app.takeControl(session)
+        app.takeControl(session).also { issued ->
+            leaseOp = issued.operationID
+            leaseSession = session
+        }
     }
 
     /**
@@ -138,10 +180,7 @@ class PhoneSurface(
      * without a confirmed lease, so this control sits below Take control and the refusal it
      * produces without one routes through PB-APP-9 like every other.
      */
-    private val typed = EditText(activity).apply {
-        hint = "Type into the session you hold"
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    private val typed = field("Type into the session you hold")
 
     /**
      * ONE CARRIAGE RETURN IS APPENDED, AND THAT IS WHAT "A LINE" MEANS AT A TERMINAL -- the key
@@ -168,6 +207,48 @@ class PhoneSurface(
     }
 
     /**
+     * PB-APP-6's two REQUIRED fields, and the third the spec carries.
+     *
+     * `LaunchScreen.submit` refuses a draft without a non-blank agent and a non-blank working
+     * directory, because the daemon has no default for either. A form without them could only
+     * launch by inventing values, which is a hardcoded launch spec shipped in production code --
+     * the same defect class `leaseHeld = false` was.
+     *
+     * THE PROMPT IS A FIELD RATHER THAN AN EMPTY STRING for the same reason. [LaunchDraft] models
+     * three fields; passing `""` for the third would be a literal standing in for something
+     * nobody was asked.
+     */
+    private val launchAgent = field("Which agent to start")
+
+    private val launchCwd = field("Working directory on your machine")
+
+    private val launchPrompt = field("First message for the agent, if any")
+
+    /**
+     * PER-USE (requirements 6.0), so it goes through [perUseButton] like kill and revoke, and
+     * android/gate/s20_pbsec2_peruse_test.go has carried `app.launch(` in its list since before
+     * this screen existed precisely so the gate became mandatory the day it landed. Starting work
+     * on someone's machine is one prompt away from a phone in a stranger's hand.
+     *
+     * THE VERB IS CALLED FROM THIS LAMBDA AND NOT FROM A HELPER, which is a constraint and not a
+     * style: that gate attributes a call site to the nearest enclosing member DECLARATION, so a
+     * launch issued inside a private function of its own would read as ungated. A local `val`
+     * here would do the same. Everything the call needs is therefore a parameter or a call.
+     *
+     * THE DRAFT IS REFUSED BEFORE IT IS SENT, by the model's own bar. A launch missing a required
+     * field is refused at the machine too, but only after burning a durable command seq and a
+     * signature on a request the phone could see was incomplete.
+     */
+    private val launch = perUseButton("Launch a session", GatedOperation.LAUNCH) { app, _ ->
+        draftOnScreen().let { draft ->
+            when (val missing = launchScreen.missingField(draft)) {
+                null -> launchScreen.submit(draft, app.launch(specOf(draft)).operationID)
+                else -> launchStatus.text = missing
+            }
+        }
+    }
+
+    /**
      * ADR-007 B44's missing exit, as a control.
      *
      * WHY IT HAS TO EXIST. B44 made a screen lock return the content tier to locked, and
@@ -189,8 +270,27 @@ class PhoneSurface(
         },
     )
 
+    /**
+     * PB-APP-6's screen model, which decided what a launch screen shows and was consulted by
+     * nothing. It holds the operation id the MACHINE keyed the launch by, so the answer is
+     * claimed by that id (PB-SYNC-2) rather than resolved by proximity.
+     */
+    private val launchScreen = LaunchScreen()
+
     /** The session the controls act on, chosen in [renderReady] and never from an Intent. */
     private var session: String = ""
+
+    /**
+     * The take_control this surface issued, and the session it was issued for.
+     *
+     * BOTH, because the target is re-derived from the triage inbox on every draw: a lease
+     * confirmed for the session that used to be first must not read as a lease on the one that
+     * is first now. An operation id with no session beside it is a lease attributed by
+     * proximity, which is the thing PB-SYNC-2 exists to forbid.
+     */
+    private var leaseOp: String = ""
+
+    private var leaseSession: String = ""
 
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
@@ -212,8 +312,9 @@ class PhoneSurface(
                 setPadding(PADDING, PADDING, PADDING, PADDING)
                 layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
                 for (child in listOf(
-                    status, notice, unlockContent, pairing.root, peekTitle, peek, takeControl,
-                    typed, send, kill, revoke, settings.root, outcome,
+                    status, notice, unlockContent, pairing.root, peekTitle, peek, lease,
+                    takeControl, typed, send, kill, launchAgent, launchCwd, launchPrompt,
+                    launch, launchStatus, revoke, settings.root, outcome,
                 )) {
                     addView(child)
                 }
@@ -230,7 +331,7 @@ class PhoneSurface(
      * than being remembered about.
      */
     val gatedActions: List<View> =
-        listOf(takeControl, send, kill, revoke, unlockContent) +
+        listOf(takeControl, send, kill, launch, revoke, unlockContent) +
             pairing.gatedActions + settings.gatedActions
 
     /**
@@ -415,6 +516,10 @@ class PhoneSurface(
         peek.text = ""
         session = ""
         setActionsEnabled(false)
+        renderLease(null)
+        // There is no phone to launch through either, and a live Launch control over one would
+        // prompt for a fingerprint to reach a facade that is not there.
+        launch.isEnabled = false
     }
 
     private fun renderReady(startup: PhoneStartup.Ready) {
@@ -453,19 +558,133 @@ class PhoneSurface(
         // still leaves a watch open on the machine.
         watch(startup.app, session)
 
+        // LAUNCH IS NOT A SESSION CONTROL, and this line is where that difference is stated: the
+        // session it starts does not exist yet, so an empty roster is exactly the state a user
+        // reaches for it in. Gating it on the roster would leave a freshly paired phone with no
+        // way to get its first session, which is section 1's "launches" with no subject again.
+        launch.isEnabled = true
+        renderLaunch(bridge)
+
         if (session.isEmpty()) {
             peekTitle.text = ""
             peek.text = ""
             setActionsEnabled(false)
+            renderLease(null)
             return
         }
-        // leaseHeld is false because this surface never takes a lease on its own. It is a
-        // PARAMETER on the bridge for exactly this reason: the lease is the outcome of a
-        // take_control reply, and reading it back off a snapshot would be a guess.
-        val view = bridge.terminalPeek(session, leaseHeld = false)
+        // PB-INPUT-2: the lease is what the MACHINE answered this screen's own take_control with,
+        // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
+        // every user they held nothing while Send stayed live from a different fact entirely.
+        val view = bridge.terminalPeek(session, leaseHeld = leaseConfirmedFor(session, bridge))
         peekTitle.text = view.sessionId
         peek.text = listOf(view.staleNotice, view.rendered).filter { it.isNotEmpty() }.joinToString("\n")
         setActionsEnabled(true)
+        renderLease(view)
+    }
+
+    /**
+     * PB-INPUT-2, drawn: the keyboard follows the model's verdict and the screen SAYS which of
+     * the two states the user is in.
+     *
+     * EVERY ONE OF THE THREE PROPERTIES IS THE MODEL'S. `keyboardEnabled` is `leaseHeld &&
+     * online`, and the second half is a separate clause -- a lease cannot be live while the link
+     * is down -- so a surface that enabled the keyboard from its own lease flag would satisfy the
+     * requirement's first clause and drop the second, silently, while the model that states it
+     * stayed green and unread. That is what this file did until now.
+     *
+     * @param view null when there is no session to hold a lease ON -- an unavailable phone or an
+     *  empty roster. The keyboard shuts and the screen says nothing about a lease rather than
+     *  asserting the absence of one, because with no session there is no question.
+     */
+    private fun renderLease(view: TerminalPeek?) {
+        if (view == null) {
+            lease.text = ""
+            takeControl.visibility = View.VISIBLE
+            send.isEnabled = false
+            typed.isEnabled = false
+            return
+        }
+        lease.text = if (view.showsRelease) LEASE_CONFIRMED else LEASE_NOT_CONFIRMED
+        // The control is offered exactly while it is the step to take. There is no Release beside
+        // it: `App.ReleaseControl` is still ledgered unbound in android/unbound-verbs.tsv, and a
+        // screen that hid the way in without offering a way out would be worse than one that
+        // never hid it.
+        takeControl.visibility = if (view.showsTakeControl) View.VISIBLE else View.GONE
+        send.isEnabled = view.keyboardEnabled
+        typed.isEnabled = view.keyboardEnabled
+    }
+
+    /**
+     * Whether the MACHINE has confirmed a control lease for [session].
+     *
+     * IT ASKS ABOUT ONE OPERATION -- the take_control this surface issued -- and refuses to
+     * answer about any other session, because an outcome attributed by proximity is the error
+     * PB-SYNC-2's operation ids exist to prevent. A phone that has taken control of nothing, or
+     * whose target moved to a different first row, holds no lease and says so.
+     */
+    private fun leaseConfirmedFor(session: String, bridge: FacadeBridge): Boolean {
+        if (leaseOp.isEmpty() || session != leaseSession) return false
+        return try {
+            ControlLease.confirmedBy(bridge.launchOutcome(leaseOp))
+        } catch (unreadable: Exception) {
+            // A facade that cannot answer has not confirmed anything, and fail-closed here is a
+            // shut keyboard rather than a keystroke sent against a lease nobody vouched for.
+            false
+        }
+    }
+
+    /**
+     * PB-APP-6's second clause: the machine's answer to the launch this screen issued, in the
+     * words the machine sent, because the user's next step depends on which refusal it was.
+     *
+     * It draws nothing until a launch has been issued. [LaunchScreen] holds the operation id and
+     * resolves an outcome for anybody else's operation as PENDING, so a screen that has launched
+     * nothing is never told something happened.
+     */
+    private fun renderLaunch(bridge: FacadeBridge) {
+        val issued = launchScreen.inFlight ?: return
+        val answer = try {
+            bridge.launchOutcome(issued.operationId)
+        } catch (unreadable: Exception) {
+            // Unresolved is the honest state, and the line already says so from the last draw.
+            return
+        }
+        launchStatus.text = launchNotice(launchScreen.resolve(answer))
+    }
+
+    /**
+     * The rendering in a sentence. The `when` is exhaustive so a result added later has to state
+     * its own wording rather than inheriting one, and `retryable` is the model's own distinction
+     * between a refusal that waiting fixes and one it does not.
+     */
+    private fun launchNotice(rendering: LaunchRendering): String = when (rendering.result) {
+        LaunchResult.PENDING -> LAUNCH_PENDING
+        LaunchResult.LAUNCHED -> LAUNCH_ACCEPTED
+        LaunchResult.REJECTED_BY_POLICY,
+        LaunchResult.REFUSED_TRANSIENTLY,
+        LaunchResult.REFUSED,
+        -> if (rendering.retryable) rendering.reason + LAUNCH_RETRYABLE else rendering.reason
+    }
+
+    /** What the user typed into the launch form, with nothing supplied on their behalf. */
+    private fun draftOnScreen() = LaunchDraft(
+        agent = launchAgent.text.toString().trim(),
+        cwd = launchCwd.text.toString().trim(),
+        prompt = launchPrompt.text.toString(),
+    )
+
+    /**
+     * The draft as the facade takes it.
+     *
+     * COLS AND ROWS ARE LEFT AT ZERO DELIBERATELY, and `swarmmobile.LaunchSpec`'s own doc is why:
+     * "the Android launch sheet has no terminal view to measure before the session exists, and a
+     * refused launch is a worse answer than a conventional grid the user can resize". The peek
+     * here is a monospace TextView as wide as the phone, which is not the new session's grid.
+     */
+    private fun specOf(draft: LaunchDraft) = LaunchSpec().apply {
+        agent = draft.agent
+        cwd = draft.cwd
+        prompt = draft.prompt
     }
 
     /**
@@ -489,6 +708,14 @@ class PhoneSurface(
         if (!unlockContent.isEnabled) outcome.text = ContentUnlockPolicy.adviceFor(availability)
     }
 
+    /**
+     * The controls that act on the CHOSEN SESSION, raised once the triage inbox yielded a row.
+     *
+     * The keyboard is not among them any more and that is PB-INPUT-2: a session on screen was
+     * never the condition for typing into it, a CONFIRMED LEASE is, and [renderLease] is where
+     * that is decided. Launch is not among them either -- it starts a session rather than acting
+     * on one.
+     */
     private fun setActionsEnabled(enabled: Boolean) {
         // Revoke stays live: it is the panic action, and a phone whose session list is empty
         // (or whose machine is unreachable) is exactly the state its owner may need it in.
@@ -496,10 +723,6 @@ class PhoneSurface(
         // deletes the token that would otherwise let a machine wake a disowned handset.
         takeControl.isEnabled = enabled
         kill.isEnabled = enabled
-        // The keyboard follows the same rule: with no session chosen there is nothing to type
-        // into, and a live field over an empty roster invites a user to type at nothing.
-        send.isEnabled = enabled
-        typed.isEnabled = enabled
     }
 
     /**
@@ -717,6 +940,16 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
+    /**
+     * A text field, by the words that say what belongs in it. The hint IS the label on this
+     * surface -- there are no XML layouts here -- so a field added without one is a box a user
+     * cannot identify, and android/app/src/test/.../PhoneLaunchSurfaceTest reads exactly these.
+     */
+    private fun field(hint: String) = EditText(activity).apply {
+        this.hint = hint
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
+
     private companion object {
 
         /**
@@ -734,6 +967,26 @@ class PhoneSurface(
         const val PAUSED_FOR_FRESHNESS =
             "It is over a minute since you unlocked, so this is paused rather than sent. Your " +
                 "session is still yours -- unlock to continue."
+
+        /**
+         * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because
+         * a shut keyboard with no reason beside it is the invisible suppression the requirement
+         * is against.
+         */
+        const val LEASE_CONFIRMED =
+            "Your machine has confirmed you have control of this session, so what you type is " +
+                "sent live."
+
+        const val LEASE_NOT_CONFIRMED =
+            "Your machine has not confirmed control of this session, so the keyboard stays shut " +
+                "-- anything typed would be dropped without a word. Take control first."
+
+        /** PB-SYNC-2: an unresolved launch is neither a success nor a failure. */
+        const val LAUNCH_PENDING = "Waiting for your machine to answer the launch."
+
+        const val LAUNCH_ACCEPTED = "Your machine started the session."
+
+        const val LAUNCH_RETRYABLE = " This one is worth trying again shortly."
 
         const val PADDING = 24
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
