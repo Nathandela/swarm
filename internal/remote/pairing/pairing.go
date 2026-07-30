@@ -468,9 +468,15 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// sent until the operator affirmatively allows. A decline / timeout / missing
 	// callback fails CLOSED: the device is told (a decline frame so it unblocks),
 	// the rendezvous is burned, and no outcome is returned.
+	// The gate runs on a context brought FORWARD by ackReserve, so however long the operator
+	// takes, the acceptance and its acknowledgement still fit inside the rendezvous the relay
+	// is timing (reserveAckWindow). An operator who overruns is declined here, cleanly, with
+	// nothing sent -- rather than at the ack, where the phone has already pinned.
 	allow, cErr := false, error(nil)
 	if p.Confirm != nil {
-		allow, cErr = p.Confirm(ctx, sas, devPayload.DeviceName)
+		gateCtx, cancelGate := reserveAckWindow(ctx)
+		allow, cErr = p.Confirm(gateCtx, sas, devPayload.DeviceName)
+		cancelGate()
 	}
 	if cErr != nil || !allow {
 		declineAndBurn(ctx, sess, rt, label)
@@ -634,6 +640,53 @@ const (
 	acceptCommitWindow = 2 * time.Second
 	acceptAckWindow    = 2 * time.Second
 )
+
+// ackReserve is the slice of the pairing window held back from the human SAS gate so the two
+// frames that FOLLOW the decision -- the acceptance, and the acknowledgement the machine now
+// waits for -- still fit inside the rendezvous.
+//
+// THE DETACHED acceptAckWindow ABOVE DOES NOT REACH THE RELAY, which is the whole reason this
+// exists. The acknowledgement arrives on a rendezvous_recv, and the relay cuts EVERY such park
+// at the connection's rendezvous deadline -- one RendezvousTTL from the moment the machine
+// joined, which was before the QR was drawn. RendezvousTTL and the announced pairing window are
+// the same 60 s (relay.DefaultConfig(), and internal/skeleton's pairWindow clamps to it), so the
+// acknowledgement's real window was min(acceptAckWindow, whatever the human left over). An
+// operator who compared six emoji carefully left nothing, and was punished for the care: phone
+// pinned, machine claiming nothing, and a re-pair whose cause nobody could name.
+//
+// So the machine reserves the post-decision legs out of its OWN budget rather than hoping the
+// human is quick. The human's window narrows by three seconds out of sixty; what it buys is that
+// the ceremony either completes or fails as a clean ErrConfirmTimeout -- a cause that already
+// has words and a remedy -- instead of ending in the one split the two operators cannot see.
+//
+// It is one second wider than acceptAckWindow because the reserve must also carry the ACCEPTANCE
+// out, not only the acknowledgement back.
+const ackReserve = acceptAckWindow + time.Second
+
+// reserveAckWindow derives the context the human SAS gate runs on: the caller's, brought forward
+// so the post-decision legs keep their room.
+//
+// The reserve is PROPORTIONAL rather than clamped off below some threshold. A guard that simply
+// skipped the reservation on a short window would be an off-switch that fires silently on exactly
+// the configurations nobody tests, which is the fence-shape this audit has now found six times.
+// A quarter is the most it will take from a window too small to spare the whole reserve, so a
+// small budget degrades smoothly instead of either starving the human or dropping the guarantee.
+// Production never reaches that arm: 60 s spares the full three seconds.
+//
+// A caller with no deadline at all (context.Background(), the shape internal/protocol/server.go
+// builds for a host that supplies its own) has nothing to reserve FROM and is passed through --
+// there is no relay deadline derived from a pairing window in that case either.
+func reserveAckWindow(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	reserve := min(ackReserve, time.Until(deadline)/4)
+	if reserve <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
 
 // ackLabel domain-separates the acknowledgement below from every other use of the channel
 // binding -- the SAS above all, which is derived from the same value.

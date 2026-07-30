@@ -145,6 +145,8 @@ func classifyPairFailure(err error) PairFailure {
 		return PairFailHeadless
 	case errors.Is(err, pairing.ErrNoConsent):
 		return PairFailNoConsent
+	case errors.Is(err, pairing.ErrAcceptUnacknowledged):
+		return PairFailAcceptUnacknowledged
 	default:
 		return PairFailInternal
 	}

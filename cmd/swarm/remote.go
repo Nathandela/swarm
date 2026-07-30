@@ -1005,8 +1005,17 @@ var pairFailureLines = map[protocol.PairFailure]string{
 		"confirmation has to happen at the machine itself.",
 	protocol.PairFailNoConsent: "remote pair: the phone never released its relay-route consent, so the pairing " +
 		"was abandoned and nothing was paired. Retry the scan from the phone.",
+	// The ONE cause where the two ends can disagree about what happened, so it is the one
+	// line that must contradict the handset out loud. The device pins on the acceptance it
+	// received; this machine deliberately claims nothing when that acceptance is never
+	// acknowledged (PB-PAIR-4), so the owner may be reading "paired" on a phone while
+	// standing at a terminal that enrolled no device. Naming the phone is the point: an
+	// owner who is not told will go hunting for a revoke, and there is nothing to revoke.
+	protocol.PairFailAcceptUnacknowledged: "remote pair: the phone never confirmed it received the " +
+		"acceptance, so this machine paired NOTHING -- even if the phone now shows it is paired. " +
+		"Nothing needs revoking and the slot is free. Run `swarm remote pair` again.",
 	protocol.PairFailInternal: "remote pair: pairing failed and the daemon did not report a cause; nothing was " +
-		"paired. The daemon log has the underlying error.",
+		"paired. Check the daemon log for the underlying error, then run `swarm remote pair` again.",
 }
 
 // reportPairFailure prints the terminal outcome for a pairing that enrolled nothing.
