@@ -114,8 +114,12 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remotegw.OpenRemoteCommand":        "as OpenCommandEnvelope; the guarded form below is what the bridge calls.",
 	"github.com/Nathandela/swarm/internal/remotegw.OpenRemoteCommandGuarded": "as OpenCommandEnvelope.",
 	"github.com/Nathandela/swarm/internal/remotegw.CommandBridge.PollOnce":   "single-step seam so a test can drive one poll instead of the Run loop.",
-	"github.com/Nathandela/swarm/internal/remotegw.CommandBridge.Err":        "last-error accessor for tests; Run surfaces the same error to its caller.",
-	"github.com/Nathandela/swarm/internal/remotegw.Service.Gateway":          "accessor exposing an assembled sub-component to tests.",
+	// CommandBridge.Err's row is GONE because the symbol is now REACHABLE: Service.Err joins
+	// it with RelaySink's and PushNotifier's, and cmd/swarm-remote's watchDegraded prints the
+	// result to the unit's log. Its old reason ("last-error accessor for tests; Run surfaces
+	// the same error to its caller") was the defect ADR-007 B114 recorded -- Run does NOT
+	// surface it, which is why a gateway dropping every keystroke was invisible.
+	"github.com/Nathandela/swarm/internal/remotegw.Service.Gateway": "accessor exposing an assembled sub-component to tests.",
 	"github.com/Nathandela/swarm/internal/remotegw.Service.CommandBridge":    "as Service.Gateway.",
 	"github.com/Nathandela/swarm/internal/remotegw.Service.PushNotifier":     "as Service.Gateway.",
 

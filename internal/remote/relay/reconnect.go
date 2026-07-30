@@ -83,7 +83,3 @@ func (b *ReconnectBackoff) Next() time.Duration {
 func (b *ReconnectBackoff) Reset() {
 	b.attempt = 0
 }
-
-// Attempt is how many delays have been drawn since the last Reset. It exists for the
-// tests that assert the SEQUENCE rather than a single delay.
-func (b *ReconnectBackoff) Attempt() int { return b.attempt }
