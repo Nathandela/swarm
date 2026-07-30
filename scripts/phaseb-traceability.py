@@ -61,6 +61,13 @@ NOT_MET = {
                 "ledger is honest; this table contradicted it. Section 1's binding exit "
                 "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
                 "(ADR-007 B80)",
+    "PB-SAS-4": "ADDED 2026-07-30 because it was MISSING (ADR-007 B86). The channel "
+                "binding does not attest the accept/decline exchange: msg4 rides outside "
+                "the SAS transcript, which is cryptographically sound but means the SAS "
+                "attests nothing about whether the two sides AGREED -- so PB-PAIR-4's "
+                "half-pair is invisible to both operators comparing emoji they have every "
+                "reason to trust. Not closable by tuning; it needs the acknowledged final "
+                "frame PB-PAIR-4 also requires",
     "PB-INPUT-2": "the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes "
                   "leaseHeld=false as a hardcoded literal, and its own comment says this "
                   "surface never takes a lease. Send is enabled whenever any session "

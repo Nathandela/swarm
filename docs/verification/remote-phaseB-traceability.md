@@ -20,10 +20,10 @@ against HEAD.
 
 | | count |
 |---|---|
-| Requirements | 143 |
+| Requirements | 144 |
 | Shipped (asserted by hand) | 134 |
 | Evidenced (measured on disk) | 134 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
+| **NOT MET (slice shipped, requirement invalidated later)** | **9** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -144,6 +144,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-SAS-1 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-SAS-4 | S8 | **NOT MET** | ADDED 2026-07-30 because it was MISSING (ADR-007 B86). The channel binding does not attest the accept/decline exchange: msg4 rides outside the SAS transcript, which is cryptographically sound but means the SAS attests nothing about whether the two sides AGREED -- so PB-PAIR-4's half-pair is invisible to both operators comparing emoji they have every reason to trust. Not closable by tuning; it needs the acknowledged final frame PB-PAIR-4 also requires |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
 | PB-SEC-2 | S14 | **NOT MET** | THREE halves open, not two (ADR-007 B83 adds the third): the 60s input/take-control freshness is never enforced while continuously foregrounded -- InputFreshness.decide has NO production caller and ContentLock installs no foreground timeout, so an unlocked foreground session keeps shell-input authority indefinitely. Plus: halves remain: same-operation supersession is inexpressible without a per-prompt token, and B61(3)'s Keystore entry is re-minted against a new biometric enrolment. Neither fix closes the other |
 | PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
