@@ -4303,3 +4303,72 @@ its unpaired precondition into `unknown`; the probe moved from a stranger to the
 device*, which is **strictly stronger** — with a stranger probing, "unknown" would have been
 satisfied by the authority rule alone and the test would have stopped saying anything about
 history.
+
+---
+
+### B79 — round 5's row audit: I overstated the crypto gap, and PB-NET-4's producer does not exist
+
+**B79(1) — CORRECTING MY OWN ROUND-5 BRIEF. The crypto is not "unaudited".** I told the committee
+no member has tested it and that it is therefore "unaudited, not sound". A reviewer checked and
+that overstates it. `internal/remote/crypto` carries real adversarial tests that pass under
+`-race`, verified by me by name: `TestRelay_CannotForgeEvent`, `TestEnvelope_TamperRejected`,
+`TestDeviceSig_ForgedRejected`, `TestDeviceSig_ReplayBoundToOperationIdAndExpiry`,
+`TestMailbox_ReplaySeqRejected`, `TestEnvelope_NonceUniqueAndXChaCha`,
+`TestLive_UnpinnedWithoutPSKRefused`, plus MITM/channel-binding and PSK-mismatch cases.
+
+**The accurate claim is narrower: the COMMITTEE has never independently fuzzed or mutated it.**
+That remains true and worth closing. But "unaudited" was wrong, and it is the same defect this
+record keeps naming — I wrote a claim about an artifact instead of opening it — two entries after
+recording residual 4.18 (*cite the entry, then open it*) about exactly this.
+
+The reviewer also read every non-test file looking for a forgery, reuse or ordering bug and found
+none. Two details worth keeping: `MailboxReceiver.Accept` checks staleness **before** the AEAD
+open, which is cheap-check-before-auth and **not** exploitable because `Seq` is AAD-covered so
+tampering fails downstream; and the identical-ciphertext-across-recipients fan-out property is real
+but **has no multi-recipient call site today**, consistent with single-device v1.
+
+**B79(2) — PB-NET-4 moves to NOT MET. An eleventh "called by nothing", and worse than its
+siblings.** `OpQueue.Enqueue` is called **only from its own test file** — not even from `phonesim`,
+unlike PB-INPUT-4's mechanism which at least has an integration-test caller. `Core.UnresolvedOps()`
+only *reads* `PendingOps` for display. So the requirement is not merely wrongly-bounded, as
+recorded: **the producer side of the mechanism does not exist in the call graph at all.** Count
+moves to **137 of 143**.
+
+**B79(3) — a near-miss refutation, recorded because the pattern is the lesson.** The reviewer
+nearly filed PB-KEY-10 as a twelfth instance: `phonecore.AcceptGrant` and `MailboxRouter.TakeGrant`
+do have zero non-test callers, and the grep looks identical to the real cases. **The production
+path is a sibling**: `AcceptCommitAt` detects a tagged bootstrap-grant frame *before* normal
+envelope parsing and routes to `acceptBootstrap` → `Core.installGrant`, which calls
+`crypto.GrantReceiver.Accept` directly — same verification, different composition, and
+`mobile/relay.go:544` calls it in production. **PB-KEY-10 is genuinely fixed and wired.**
+
+**A symbol with zero callers does not always mean the requirement is unmet — check for a sibling
+path before concluding it.** Recorded as residual 4.19, because this class has produced eleven true
+positives and one near-false one, and the false one would have been indistinguishable from the
+others at grep depth.
+
+**B79(4) — the staleness flag had a recall gap, and fixing it changed what the flag MEANS.** B67's
+flag matched three banner phrases *this orchestrator happened to have written*. Three further
+evidence files carry honest inline corrections in other words — `CORRECTION <date>`, `THIS FINDING
+IS CLOSED`, `FALSIFIED by ...` — none of which matched, and the 4000-byte window missed corrections
+written where the defect is discussed rather than at the top.
+
+Widened to the whole file and a broader marker set. **But that changes the claim, so the section is
+renamed**: it no longer says "declares itself superseded", it says "carries a dated correction,
+amendment or withdrawal", and the text now states that **most of these are the record working — a
+finding falsified, a fix closing an earlier note — and reading one as "this evidence is
+untrustworthy" would be the opposite of the truth.** Two files were genuinely overtaken and carry
+superseding banners; the rest are corrections. S0 is excluded because the ADR is nothing but dated
+amendments, so flagging it carries no information.
+
+**B79(5) — confirmations, verified rather than assumed.** PB-NET-2 is genuinely on the phone's
+path: every non-test dial site now uses the secure entry points and no production site uses the
+bare ones. B70's five relay fixes are present and match their commit. All 28 shipped slices have
+substantial evidence files (105–733 lines; six spot-read in full), no stubs. PB-E2E-5 is still
+`pending`, owned by an unshipped slice, not double-counted. **No fake biometrics, camera, FCM, Doze
+or attestation anywhere in the tree** — grepped across Go and Kotlin, zero hits outside test doubles
+that claim no hardware property.
+
+**Verdict: closed test YES on a private relay; production NO**, gated on B78's unresolved
+identity-cost root, PB-PAIR-4's protocol change, PB-SEC-2 pending the handset, PB-E2E-5 entirely,
+and the two "called by nothing" mechanisms being wired or re-scoped.

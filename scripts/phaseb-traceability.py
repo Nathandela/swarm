@@ -51,6 +51,12 @@ NOT_MET = {
                 "halves remain: same-operation supersession is inexpressible without a "
                 "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
                 "new biometric enrolment. Neither fix closes the other",
+    "PB-NET-4": "the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same "
+                "queue as unbuildable in two places, production constructs NewOpQueue(0) "
+                "-- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own "
+                "test, so the producer side does not exist in the call graph at all. "
+                "Deliberately left CONTESTED rather than resolved in the direction that "
+                "keeps the count high (ADR-007 B69(1), B79)",
     "PB-INPUT-4": "the retry mechanism has ZERO production callers: RetryFor "
                   "(transport/retry.go:49) and SendLive (session.go:358) are definitions "
                   "only, and commands call MailboxAppend directly. Found by the round-4 "
@@ -88,16 +94,42 @@ def evidence_path(slice_id):
 # dates against the slice's code would flag every evidence file on every unrelated commit, and a
 # signal that fires constantly is one nobody reads -- the failure mode this project already has
 # ten of.
-SUPERSEDED_MARKERS = ("SUPERSEDED IN PART", "PARTLY SUPERSEDED", "SUPERSEDED --")
+SUPERSEDED_MARKERS = (
+    "SUPERSEDED IN PART", "PARTLY SUPERSEDED", "SUPERSEDED --",
+    # ADR-007 B79. The first three were the banners this orchestrator happened to write.
+    # A round-5 reviewer found three evidence files carrying HONEST inline corrections in
+    # other words -- "CORRECTION <date>", "THIS FINDING IS CLOSED", "FALSIFIED by ..." --
+    # none of which matched, so the flag had a recall gap in exactly the direction that
+    # matters: it under-reports. The scan window was 4000 bytes for the same reason, and a
+    # correction written where the defect is discussed sits well past it.
+    "CORRECTION 20", "THIS FINDING IS CLOSED", "FALSIFIED BY", "FALSIFIED by",
+    "AMENDED 20", "WITHDRAWN 20",
+)
 
 
 def evidence_superseded(rel):
-    """True when the evidence file itself declares part of it no longer describes HEAD."""
-    if rel is None:
+    """True when the evidence file carries a dated correction, amendment or withdrawal.
+
+    ADR-007 B79. This flag was first written to catch the two files whose bodies had been
+    OVERTAKEN by a later decision, matching three banner phrases this orchestrator happened
+    to have used. A round-5 reviewer found three more files carrying honest inline
+    corrections in other words, none of which matched -- a recall gap in the direction that
+    matters, since the flag under-reported.
+
+    Widening it changes what it MEANS, and the section is renamed to match: it no longer
+    claims the file is stale, only that it contains something dated that a reader must see
+    before citing it. Most of these corrections are the record working -- a finding
+    falsified, a fix closing an earlier note -- and reading one as "this evidence is
+    untrustworthy" would be the opposite of the truth.
+
+    S0 is excluded: it is the ADR, which is nothing BUT dated amendments, so flagging it
+    carries no information.
+    """
+    if rel is None or rel.endswith("ADR-007-remote-access.md"):
         return False
     try:
         with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
-            head = fh.read(4000)
+            head = fh.read()   # whole file: a correction sits where the defect is discussed, not at the top
     except OSError:
         return False
     return any(m in head for m in SUPERSEDED_MARKERS)
@@ -159,10 +191,12 @@ def main():
         key=lambda x: (len(x), x),
     )
     if stale:
-        out("## Evidence files that declare themselves partly superseded\n\n")
-        out("These slices are shipped and their evidence file is on disk, so they count as\n")
-        out("*evidenced* above — but the file says part of it no longer describes HEAD. **Read the\n")
-        out("notice at the top of each before citing it.** See ADR-007 B67(1).\n\n")
+        out("## Evidence files carrying a dated correction, amendment or withdrawal\n\n")
+        out("These count as *evidenced* above and mostly ARE — the flag says the file contains a\n")
+        out("dated correction, not that it is untrustworthy. **Read the correction before citing\n")
+        out("the passage it touches.** Two of these (S17, S18) were genuinely overtaken by a later\n")
+        out("decision and carry a superseding banner; the rest carry honest inline corrections,\n")
+        out("which is the record working rather than failing. See ADR-007 B67(1) and B79.\n\n")
         for sl in stale:
             n = len(by_slice[sl])
             out("- **%s** — cited for %d requirement%s: %s\n"

@@ -21,20 +21,26 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 138 |
-| Evidenced (measured on disk) | 138 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
+| Shipped (asserted by hand) | 137 |
+| Evidenced (measured on disk) | 137 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
-## Evidence files that declare themselves partly superseded
+## Evidence files carrying a dated correction, amendment or withdrawal
 
-These slices are shipped and their evidence file is on disk, so they count as
-*evidenced* above — but the file says part of it no longer describes HEAD. **Read the
-notice at the top of each before citing it.** See ADR-007 B67(1).
+These count as *evidenced* above and mostly ARE — the flag says the file contains a
+dated correction, not that it is untrustworthy. **Read the correction before citing
+the passage it touches.** Two of these (S17, S18) were genuinely overtaken by a later
+decision and carry a superseding banner; the rest carry honest inline corrections,
+which is the record working rather than failing. See ADR-007 B67(1) and B79.
 
+- **S10** — cited for 10 requirements: PB-KEY-10, PB-KEY-3, PB-KEY-4, PB-SYNC-1, PB-SYNC-2, PB-SYNC-3, PB-SYNC-4, PB-SYNC-5, PB-SYNC-6, PB-SYNC-8
+- **S14** — cited for 8 requirements: PB-KEY-1, PB-KEY-2, PB-KEY-5, PB-KEY-6, PB-KEY-7, PB-KEY-8, PB-SEC-1, PB-SEC-2
 - **S17** — cited for 2 requirements: PB-PUSH-4, PB-PUSH-9
 - **S18** — cited for 10 requirements: PB-SEC-11, PB-SEC-12, PB-SEC-13, PB-SEC-14, PB-SEC-3, PB-SEC-4, PB-SEC-5, PB-SEC-6, PB-SEC-7, PB-SEC-8
+- **S20** — cited for 8 requirements: PB-DOC-2, PB-DOC-3, PB-DOC-4, PB-DOC-7, PB-OPS-1, PB-OPS-2, PB-OPS-3, PB-OPS-5
+- **S18b** — cited for 1 requirement: PB-STATE-10
 
 ## Every requirement
 
@@ -103,7 +109,7 @@ notice at the top of each before citing it.** See ADR-007 B67(1).
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-4 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-4 | S6 | **NOT MET** | the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same queue as unbuildable in two places, production constructs NewOpQueue(0) -- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own test, so the producer side does not exist in the call graph at all. Deliberately left CONTESTED rather than resolved in the direction that keeps the count high (ADR-007 B69(1), B79) |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
