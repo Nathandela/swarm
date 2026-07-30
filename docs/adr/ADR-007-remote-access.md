@@ -3693,3 +3693,114 @@ would.
 **Verdict: REVISE.** Closed test on an owner-operated relay is conditionally acceptable **only if
 the relay port is not exposed to the internet** — C1 alone lets any scanner brick it, and the
 recovery destroys the pairings the test exists to exercise.
+
+---
+
+### B71 — round 4's fence review: B64 is enforced on two legs of three, and the committee SPLITS on the root
+
+The fence reviewer worked in a full scratch copy and diffed every file it touched against HEAD.
+Its findings are marked RAN unless noted. **It also produced the round's most useful
+disagreement**, recorded in full below because a forced consensus here would be worse than the
+split.
+
+**B71(1) — HIGH for the closed test. B46 and B64 compose into a hard 60-second budget for the
+ENTIRE human ceremony, starting BEFORE the QR is drawn — and the machine is now STRICTER than the
+relay it was clamped to.**
+
+`cmd/swarm/remote.go:878` sends no TTL, so `pairWindow(0)` yields the 3-minute default, **clamped
+to the relay's 60 s `RendezvousTTL`**. B64 turned that into a hard `context.WithTimeout` on the
+handshake. **The clock starts at `pair_start` — before `PairView` returns and before the QR
+renders.** The phone's own 60 s TTL starts *after* the scan. Two clocks disagreeing by exactly the
+scan duration, and B64 made the earlier one binding.
+
+**The clamp's stated justification is FALSE for an in-flight ceremony.** `purgeExpiredRendezvous`
+runs only from `handleRendezvousCreate`; `handleRendezvousSend`/`Recv` never check age. Probe:
+create → claim → advance the injected clock by TTL+30 s → send and recv **both still succeed. The
+relay tolerates a slow human. Since B64 the machine does not.**
+
+The CLI's own expiry timer covers only up to `pair_pending`; after that it blocks on
+`readYesNo(stdin)` and `<-sess.Result()` with no deadline, so **SAS comparison plus two confirms
+silently inherit "60 s minus scan time", unannounced.** PB-PAIR-1 records the terminal QR ships at
+quiet zone 2, "the single riskiest number in the slice" — one re-scan can eat the budget.
+
+**And the failure is CAUSELESS.** `internal/protocol/server.go:2146-2153` discards `r.Err` and
+sends a nil `Pairing`; `PairingResult` carries no error field; the CLI prints `remote pair: pairing
+failed`. **Deadline, declined SAS, rotated epoch and a failed grant write are indistinguishable to
+the owner.** Nothing in the tree exercises the production window — the B64 fences use a 2-second
+TTL with an instantaneous synthetic phone.
+
+**This is the single most likely thing to fail a closed test**, and on a handset it reads as "the
+product is broken" with no diagnosis available.
+
+**B71(2) — MEDIUM, and it falsifies a sentence I wrote. B64 enforces the window on the TRANSPORT
+legs only.** `Machine.Pair` observes `pairCtx` only in its transport calls. The desktop SAS confirm
+is `mp.Confirm`, which the skeleton adapter calls **ignoring the ctx**
+(`internal/skeleton/pairing.go:206-208`), and the server's closure selects on a ctx with no
+deadline. Measured: device leg matches immediately, owner never answers the desktop prompt → no
+`pair_result` 8 s past expiry, then the retried `pair_start` refused *"pairing already in
+progress"*. **That is verbatim the chain B64's commit message says it closed.** B64's claim that
+"the pairing window is enforced" is true of **two legs out of three**, and I wrote it.
+
+**B71(3) — the vacuous-fence finding is worse than B69(3) recorded.** The reviewer did not swap
+`WithTimeout` for `WithCancel`; it **deleted the deadline outright** and ran
+`go build && go vet && go test ./... -count=1` — **the entire Go suite stayed green.** At HEAD,
+test 1 resolves in ~1.2 s against a 2 s window, so **the deadline is never reached even
+unmutated**: the tests never enter the regime they claim to test.
+
+**B71(4) — LOW, but it undermines a claimed gate.** `go test ./... -count=1` is not deterministic:
+a Phase A test failed in 1 of 2 full-package runs and passed 3/3 in isolation, both arms at the
+same sustained load. Phase A code, but the phase-close gate is claimed green and it flakes.
+
+**B71(5) — REFUTATIONS, several of which restore confidence rather than remove it.**
+- **B61's three guards are all REAL fences** — one mutation each, each killing named tests.
+- **B60(4)'s `isPairer` gate is a real fence**; reverting it to `mayActOn` fails two named tests.
+- **B63's ledger guard is a real fence** — reverting `endPrompt` fails 5 of 270 Kotlin tests.
+- **B61's refusing cap does NOT create a permanently un-pairable device** — driven end to end
+  through 65 authorizes, quota refusal, an accepted revoke and four re-pair cycles. The
+  B61-cap × B60(4)-gate composition one would expect **is not there.**
+- **B60(4) does not break PB-STATE-10**; `purgeRelayState` tolerates `ErrNotAuthorized`.
+- **B64's deadline does not leak the rendezvous connection.**
+- **PB-SEC-2(b) is TRUE AS WRITTEN BUT NEAR-UNEXPLOITABLE.** The same enrolment change that lets
+  the gate key be re-minted **also destroys the content KEK**, which the custody bootstrap refuses
+  to re-mint by explicit design, and every gated operation needs the content tier to seal its
+  command. So the attacker gets a green fingerprint prompt for an operation that then **fails
+  closed**. The residue is a UX ordering defect — a user asked for a fingerprint for something
+  already impossible — **not an authorization bypass.** The reviewer states plainly it did NOT run
+  this (no emulator) and asks that its read not be treated as certification. **Recommendation
+  accepted as a severity re-grade, not as closure**; PB-SEC-2 stays NOT MET, and this is precisely
+  what the deferred handset gate exists to settle.
+
+**B71(6) — THE COMMITTEE SPLITS ON THE ROOT, and the split is recorded rather than resolved.**
+
+The threat reviewer named the root as *a fresh routing id being free* and proposed a **cost on
+registration**. The fence reviewer **agrees on the root** — its own measurement is the cleanest
+evidence for it, 2000 authorizes from one connection leaving 6000 permanent rows with every
+per-identity bound respected throughout — and **rejects the remedy**, on three grounds:
+
+1. **It collides with the design's own anonymity requirement.** `handleRendezvousCreate` carries no
+   `requireAuth` BY DESIGN — a machine mints a rendezvous before anyone is authenticated — and the
+   machine dials naming no peer (B49). A registration gate either exempts those paths, leaving the
+   free-identity axis open at exactly the buckets pairing writes, or it breaks first boot.
+2. **It regresses confidentiality.** The relay is the DECLARED ADVERSARY. A registration ledger
+   keyed to a payment or an invite is a **linkable long-lived identity held by the adversary** — a
+   worse trade than the disk it saves. Proof-of-work avoids linkability, buys about one order of
+   magnitude against a GPU, and taxes the honest phone's battery in the one flow that must feel
+   instant.
+3. **It aims at the wrong quantity.** The scarce resource is **durable bytes, not identities.**
+
+Its counter-proposal: a **global cap per durable bucket**, fail-closed in the direction B61 already
+articulates correctly but applied only per-pair — *the relay refuses to GRANT new authority, never
+to WITHDRAW it* — plus connection-layer admission control, plus the rule that costs nothing and
+closes the largest hole: **a durable write should require a pre-existing durable relationship.**
+`token_register` and `authorize_device` both write permanent rows for a caller that has proven only
+key possession. Requiring the pairer to already hold a live consent, or the token's rid to be party
+to one, **converts "identities are free" into "relationships are not" — without the relay learning
+anything about who anybody is.**
+
+**Adopted position:** the global bucket cap and connection-rate admission control are production
+blockers; **registration cost is explicitly NOT adopted** — it is a design change nobody should
+make under audit pressure, and the anonymity objection is sound on this threat model's own terms.
+The pre-existing-relationship rule is the most promising single lever and is recorded for design,
+not implemented reactively.
+
+**Verdict: REVISE**, unanimously across all four members.
