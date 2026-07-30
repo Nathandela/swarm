@@ -59,12 +59,6 @@ NOT_MET = {
                 "implementation landed together, and the residuals record that S17/S18b "
                 "cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file "
                 "NAMES the requirement, not that RED-first happened (ADR-007 B83)",
-    "PB-NET-4": "the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same "
-                "queue as unbuildable in two places, production constructs NewOpQueue(0) "
-                "-- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own "
-                "test, so the producer side does not exist in the call graph at all. "
-                "Deliberately left CONTESTED rather than resolved in the direction that "
-                "keeps the count high (ADR-007 B69(1), B79)",
     "PB-INPUT-4": "the retry mechanism has ZERO production callers: RetryFor "
                   "(transport/retry.go:49) and SendLive (session.go:358) are definitions "
                   "only, and commands call MailboxAppend directly. Found by the round-4 "

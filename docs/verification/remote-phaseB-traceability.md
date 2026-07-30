@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 137 |
-| Evidenced (measured on disk) | 137 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
+| Shipped (asserted by hand) | 138 |
+| Evidenced (measured on disk) | 138 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -109,7 +109,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-4 | S6 | **NOT MET** | the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same queue as unbuildable in two places, production constructs NewOpQueue(0) -- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own test, so the producer side does not exist in the call graph at all. Deliberately left CONTESTED rather than resolved in the direction that keeps the count high (ADR-007 B69(1), B79) |
+| PB-NET-4 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |

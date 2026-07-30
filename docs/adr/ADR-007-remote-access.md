@@ -5038,3 +5038,38 @@ been changed by someone running it — once downgraded (here), once upgraded (th
 regeneration workflow turned out to *attach an exoneration* to a leak), and once refuted outright
 (a residual claiming every process death re-armed a fail-closed brick). **The provenance marks are
 earning their cost.**
+
+---
+
+### B90 — PB-NET-4 adjudicated: the specification contradicted itself for four days
+
+**Two rows in the same document disagreed, and each was individually defensible.** PB-NET-4
+required *"only high-level idempotent ops may queue, with a stated bound"*. §6.0 declared that same
+queue **WITHDRAWN as unbuildable**.
+
+**§6.0 is right, on concrete grounds rather than preference.** A queued op is a **pre-signed**
+`DeviceCommandAuth` stamped with `ExpiresAt = now + CommandTTLFor(action)` — one minute for an
+ordinary op. **So anything that sat in a queue long enough to need queueing would be expired when it
+left.** The queue is not merely unbuilt; it is unbuildable from the commands this system authors.
+
+**Production matches the withdrawal, not the requirement:** `NewOpQueue(0)` is unbounded and
+`Enqueue` has **zero production callers** — found by a round-5 reviewer, confirmed by a second on the
+STATE pass, and it is what forced this adjudication. A third row (PB-STATE-1) also rests a clause on
+the same dead mechanism (B84(1)).
+
+**Resolved by amending PB-NET-4 to drop the queue clause.** What remains required is the resilience
+half, which is implemented and fenced: reconnect, bounded backoff with a stated ceiling and jitter,
+re-auth after reconnect, and surfaced connection state.
+
+**Two things recorded rather than done, deliberately.** The dead `OpQueue` type is **left in place**:
+removing production code to close a requirement is a change that deserves its own slice, not a
+sweep made while adjudicating a document. And PB-STATE-1's clause on the same mechanism stays
+recorded rather than reclassified, because its criterion is literally met — the field round-trips —
+which is B84's finding and unchanged by this.
+
+**The lesson is the durable part. NOTHING CHECKS A SPECIFICATION AGAINST ITSELF.** Every instrument
+this audit developed compares an artifact against **code**: a requirement against its fence, a fence
+against its subject, an evidence file against its commit, a ledger against a call graph. **Two
+requirement rows disagreeing is invisible to all five**, and this one survived four days and two
+reviewers who each read one row and found it correct. **Residual 4.24:** *a requirement set is also
+an artifact, and consistency within it is unchecked.*
