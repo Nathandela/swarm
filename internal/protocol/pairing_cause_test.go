@@ -62,6 +62,11 @@ var pairFailureCases = []struct {
 	{"the QR had already been used once", pairing.ErrSecretConsumed, PairFailCodeSpent},
 	{"there is no local console to confirm at", pairing.ErrHeadlessRefused, PairFailHeadless},
 	{"the phone never released its relay-route consent", pairing.ErrNoConsent, PairFailNoConsent},
+	// PB-PAIR-4's own failure. It classified as PairFailInternal, so the owner was told the
+	// daemon reported no cause -- while the handset, which pins on the acceptance it did
+	// receive, may be showing "paired". The one orientation the desktop cannot infer was the
+	// one with no words for it.
+	{"the device never acknowledged the acceptance", pairing.ErrAcceptUnacknowledged, PairFailAcceptUnacknowledged},
 	{"the daemon failed for a reason it could not attribute", errors.New("some unclassified failure"), PairFailInternal},
 }
 

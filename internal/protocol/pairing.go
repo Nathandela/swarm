@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -73,6 +74,13 @@ const (
 	PairFailHeadless PairFailure = "headless"
 	// PairFailNoConsent is the device never releasing its relay-route consent (B38).
 	PairFailNoConsent PairFailure = "no_consent"
+	// PairFailAcceptUnacknowledged is the acceptance leaving this machine and the device
+	// never acknowledging it (PB-PAIR-4). It is the ONE cause whose orientation the owner
+	// cannot see from the desktop: the handset may well read "paired", because the device
+	// pins on the acceptance it received, while this machine deliberately claims NOTHING.
+	// It therefore needs its own cause and its own line -- classified as "internal" it
+	// produced a terminal saying no cause was reported next to a phone saying it worked.
+	PairFailAcceptUnacknowledged PairFailure = "accept_unacknowledged"
 	// PairFailInternal is a failure the daemon could not attribute. It is also what an
 	// unrecognised wire code normalises to, so it means "look at the daemon log", never
 	// "nothing went wrong".
@@ -85,7 +93,24 @@ var pairFailures = map[PairFailure]struct{}{
 	PairFailDeclined: {}, PairFailConfirmTimeout: {}, PairFailWindowClosed: {},
 	PairFailSessionClosed: {}, PairFailConnectionLost: {}, PairFailRateLimited: {},
 	PairFailCodeSpent: {}, PairFailHeadless: {}, PairFailNoConsent: {},
-	PairFailInternal: {},
+	PairFailAcceptUnacknowledged: {}, PairFailInternal: {},
+}
+
+// PairFailures returns the recognised cause vocabulary, sorted, so a presentation layer can
+// assert it renders EVERY cause rather than the ones its author happened to think of.
+//
+// It exists because the vocabulary and the operator-facing lines were two hand-maintained
+// lists with nothing tying them together: PB-PAIR-4's cause reached a terminal that had no
+// line for it and fell through to "the daemon did not report a cause", which is B71(1)'s
+// complaint verbatim, one cause later. A quantifier over this slice is what makes a new cause
+// fail loudly at the presentation layer instead of arriving silently as "internal".
+func PairFailures() []PairFailure {
+	out := make([]PairFailure, 0, len(pairFailures))
+	for f := range pairFailures {
+		out = append(out, f)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // classifyPairFailure maps a host's terminal error to the cause the owner is told.
