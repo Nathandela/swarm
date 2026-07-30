@@ -545,6 +545,29 @@ func (s *store) mayActOn(source, target string) bool {
 	return granted
 }
 
+// isPairer reports whether caller is the PAIRER of device — the party that carried
+// device's signed route consent to the relay and thereby created this pairing.
+//
+// IT IS THE ONLY ASYMMETRIC DURABLE FACT ABOUT A PAIRING, which is why device_revoke asks
+// its authority of this and not of bucketPairs (ADR-007 B60). authorizePair writes pairs in
+// BOTH directions and revokeAndPurge deletes both, so nothing there tells the two parties
+// apart — mayActOn answers true for a paired phone against its own machine. bucketConsents
+// is written on ONE key, consents[pairer|device] (authorizePair), and deleted on that one
+// key (revokeAndPurge); it has existed only since ADR-007 B52, which is why B50 concluded —
+// correctly at the time — that no orientation-aware remedy was available.
+//
+// Presence of the key is the whole question: the value is a ceremony id and
+// handleAuthorizeDevice refuses an empty one, so a row here is never a zero-length value
+// that a caller could confuse with absence.
+func (s *store) isPairer(caller, device string) bool {
+	held := false
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		held = tx.Bucket(bucketConsents).Get(pairKey(caller, device)) != nil
+		return nil
+	})
+	return held
+}
+
 // pairedPeers enumerates the routing ids rid has AUTHORIZED (used to fan a
 // machine-went-silent push out to a machine's devices). Now that the edge is
 // directed this is rid's own grants and nothing else — a stranger that authorized

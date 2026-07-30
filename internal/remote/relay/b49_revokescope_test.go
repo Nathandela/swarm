@@ -57,15 +57,50 @@ func authForPeer(pub, priv []byte, peer string) ClientAuth {
 // weaker test and leave the owner with a machine that can talk to nobody -- so the recovery
 // the owner actually performs (`swarm remote pair` against a replacement handset) is driven
 // end to end.
+//
+// THE SETUP WAS RESTATED WHEN ADR-007 B60(4) CLOSED, AND NO ASSERTION BELOW CHANGED. The
+// fixture used to be one line -- b25LegitPair, then the phone revokes the machine -- because
+// handleDeviceRevoke gated on store.mayActOn, which a legitimately paired phone satisfies
+// against its own machine. B60(4) showed that admitting that call was itself the defect: the
+// revoke landed in the orientation OPPOSITE the one bucketConsents stores the pairing in, so
+// it retired nothing and the machine's next deliverEpochGrant put the pairing back, without
+// limit. device_revoke now requires the caller to be the PAIRER, so the one-line fixture no
+// longer reaches a revoke at all and this test would have measured nothing.
+//
+// So the credential that admits the revoke is GRANTED OUTRIGHT, exactly as the harvested
+// consent is granted to the interceptor in the next test and for the same stated reason: what
+// is fenced here is what a revoke DESTROYS, never how the pairing that authorised it came to
+// exist. The phone is made the machine's pairer too, which puts a REAL ban on the machine
+// (revoked[machine|phone]) and so keeps every assertion below load-bearing -- a fixture whose
+// revoke was refused would leave no ban, and the machine's survival would be vacuous.
+//
+// That this pairing direction has no production producer today (only mobile/pairing.go signs
+// a route consent, and it names the MACHINE as pairer) is the point rather than an objection:
+// B49's property must hold for ANY admitted revoke fired at the machine, and this is the fence
+// that still catches it if a later change re-opens one -- which is what B60(4) was.
 func TestB49_APhoneRevokeDoesNotDestroyTheMachineRelayIdentity(t *testing.T) {
 	srv, _, _, clk := startTestRelay(t, nil)
 	machine, phone := b25LegitPair(t, srv, clk)
 
-	// The stolen handset fires. It is authorised to: the pairing is real and mayActOn reads
-	// the machine's own grant over its own route.
+	// The handset holds a consent under the machine's own relay-auth key, so it is the
+	// machine's pairer and device_revoke is open to it (ADR-007 B60(4)).
+	if err := phone.cl.AuthorizeDevice(testCtx(t), phone.pubOf(machine),
+		consentTo(machine.priv, phone.rid)); err != nil {
+		t.Fatalf("precondition: the granted consent did not make the handset the machine's "+
+			"pairer (%v); this test needs a revoke AT the machine reached, because what it "+
+			"measures is the machine surviving one", err)
+	}
+
+	// The stolen handset fires.
 	if err := phone.cl.DeviceRevoke(testCtx(t), machine.rid); err != nil {
-		t.Fatalf("precondition: the paired phone could not revoke the machine (%v); this test "+
+		t.Fatalf("precondition: the handset could not revoke the machine (%v); this test "+
 			"needs that path REACHED, because what it measures is the machine surviving it", err)
+	}
+	// NON-VACUITY. The ban this test is about must actually stand against the machine;
+	// without it the dial below proves nothing.
+	if !srv.st.revokedBy(machine.rid, phone.rid) {
+		t.Fatal("precondition: the handset's revoke was accepted but placed no ban on the " +
+			"machine, so the survival asserted below is vacuous")
 	}
 
 	// THE PROPERTY. The machine still exists at the relay.

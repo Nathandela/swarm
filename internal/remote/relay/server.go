@@ -1128,15 +1128,43 @@ func (sc *serverConn) handleDeviceRevoke(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	// The gravest of the three verbs behind this decision — it bans the target's
-	// registration and destroys its mailbox — and it takes the SAME authority
-	// (store.mayActOn) rather than a stricter one, deliberately. A stricter rule
-	// (full mutual pairing) would refuse the owner's own `swarm remote revoke`
-	// against a handset that paired and then died before ever connecting, which
-	// is precisely the stranded device PB-STATE-10 exists to recover from; that
-	// is measured by TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState and
+	// THE CALLER MUST BE THE PAIRER, not merely a party mayActOn admits, AND THAT IS
+	// ADR-007 B60(4). This is the gravest of the verbs behind an authority decision — it
+	// bans the target for this pair and destroys the frames the caller queued for it — and
+	// it used to take the same rule as an append (store.mayActOn), which reads the TARGET's
+	// grant over its own route. authorizePair writes BOTH directed edges from one ceremony,
+	// so a legitimately paired phone satisfies that rule against its own machine, and the
+	// phone's revoke was admitted.
+	//
+	// Admitting it was the defect, because the revoke then landed in the wrong orientation
+	// and could not be made durable. pairKey does not sort, so the live consent sits at
+	// consents[machine|phone] while revokeAndPurge(phone, machine) looks for it at
+	// consents[phone|machine]: it retired NOTHING and deleted both pairs edges anyway. The
+	// revoke reported success, and deliverEpochGrant's next re-presentation of the same
+	// stored bytes (cmd/swarm-remote, on EVERY gateway connect) found nothing retired to
+	// refuse and wrote the pairing straight back — repeatably, with the phone never asked.
+	// A revoke no number of repetitions makes stick is not a revoke.
+	//
+	// THE STRICTER RULE IS THE ONE PB-STATE-10 SURVIVES, and that was checked rather than
+	// assumed, because the note this replaces ruled out a stricter rule for a reason still
+	// true of a DIFFERENT one. Requiring full mutual pairing would indeed refuse the owner's
+	// own `swarm remote revoke` against a handset that paired and then died before ever
+	// connecting — the stranded device PB-STATE-10 exists to recover from. Requiring the
+	// caller to be the PAIRER does not: authorize_device precedes the device's first connect
+	// by design (the bootstrap append that delivers the ContentKey depends on it, cf.
+	// store.mayActOn), so the machine's consent row is already there when the device
+	// strands. Measured by TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState and
 	// mobile/conformance's grace-window test.
-	if !sc.s.st.mayActOn(sc.rid, req.Target) {
+	//
+	// AND IT COSTS NO WRITE, which is why it is taken over retiring the credential in both
+	// orientations inside revokeAndPurge. That remedy adds a second retiredKey Put to the
+	// very transaction ADR-007 B61 has just shown can abort on an oversized key, and
+	// deliverEpochGrant's failure is fatal and not quiescent (cmd/swarm-remote/main.go
+	// exits, ShouldRestart is true), so a contested revoke would become a gateway restart
+	// loop. Fenced by b60_revokeorientation_test.go, which pins the PROPERTY — a revoke is
+	// refused and severs nothing, or it is accepted and stays made — and admits either
+	// remedy.
+	if !sc.s.st.isPairer(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	forgotToken, err := sc.s.st.revokeAndPurge(sc.rid, req.Target)
