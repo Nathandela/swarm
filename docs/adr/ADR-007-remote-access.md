@@ -4723,3 +4723,84 @@ prose.** S1b's "CROSS-SLICE BRICK RISK" still reads as live — *"`service.go` s
 are literally met and whose load-bearing halves are live. **They are recorded rather than
 reclassified** — the same discipline as PB-NET-4 and the six contested PB-APP rows. The honest
 statement is that **134 is an upper bound with at least three more rows argued against it.**
+
+---
+
+### B85 — there are TWO seq buckets, not three; and the reply-stream clearing clause is unfenced
+
+**B85(1) — the three-bucket model describes something that does not exist.** PB-SYNC-1's text and
+the S10 evidence both name three seq buckets — shared journal+terminal, command-reply, grant. **The
+discriminating function has no third return and cannot acquire one from a bucket.** The grant is not
+a seq bucket at all: the bootstrap grant is raw plaintext with no envelope, deduped by a watermark;
+the rotation grant IS content-sealed and therefore rides **the shared machine-sender bucket**; and
+grant staleness is set and cleared by an install-time mechanism entirely outside the seq machinery.
+
+Consequence: **a gap that swallows a rotation grant stales journal and terminal while leaving grant
+healthy — the channel that lost data is not the one flagged.** Not a live hole (install-time
+detection catches it, and a rotation changes the epoch hence the bucket), but **it is why the
+three-bucket model must not be used to choose a discriminator. Third divergence between text and
+code this round.**
+
+**B85(2) — what a bucket collision costs, MEASURED rather than predicted.** A journal record sealed
+sender-zero at journal seq 40, into a reply bucket at high-water 2:
+
+| | before | after |
+|---|---|---|
+| reply high-water | 2 | **40** |
+| reply / journal / terminal stale | f / f / f | **t / f / f** |
+| durable sessions | 0 | **0 — content never folded** |
+| next genuine reply at seq 3 | — | **refused as stale, outcome not recorded** |
+
+Four distinct effects: the high-water is poisoned so every genuine reply below 40 is refused; the
+colliding frame's **content is silently dropped while the frame is still acked**; staleness is
+**mis-attributed**, so PB-SYNC-2's repair channels chase the wrong streams; and **the reply stream
+has no repair frame at all**, so nothing clears it.
+
+**Severity, stated plainly: command replies carry the lease confirmation, and PB-INPUT-2 forbids a
+keystroke without a confirmed lease generation — so a bucket collision costs TYPING for the life of
+the epoch**, recoverable only by changing the epoch. That is the answer to "how bad would a future
+collision be", and it is why B84(0) mattered.
+
+**The derived constraint on B81(1)'s remediation:** the direction tag must avoid **`SenderKeyID`**
+(B84) **and `EpochID`** — the bucket is `{Sender, Epoch}`, so a tag in the epoch **forks every bucket
+per direction and resets high-waters to zero: the same epoch-lifetime loss by a different road.**
+Safe ground is the AEAD-covered plaintext `kind` discriminator that already exists, or a header field
+outside `Bucket`.
+
+**B85(3) — THE FINDING: PB-SYNC-2/3's reply-stream clearing clause is UNFENCED. Fourteenth instance,
+and timely.** A clearing arm was added that makes an arriving command reply clear its own stream's
+staleness — **exactly what PB-SYNC-2 ("or the stream stays unresolved") and PB-SYNC-3 ("clears only
+after a successful reseed of that stream") forbid — and the entire phonecore suite stayed green,
+exit 0.**
+
+Production is correct today, verified on unmutated code: the stale flag survives a subsequent
+contiguous reply, **because the arm simply does not exist.** So it is a **missing fence, not a live
+defect** — and it is timely because the implementer fixing B81(1) **is editing this exact clearing
+logic with no fence standing between it and that defect.**
+
+**Why the existing fence misses it, which is the instructive part:** the test asserts the stale flag
+is true **immediately after the gapping frame**, at which point the clearing branch is *structurally
+unreachable* — the non-contiguous path takes the `if` and the clear sits in the `else if`. **No test
+in the tree drives a contiguous reply after a gap.** The fence asserts the flag is SET; it never
+asserts the flag STAYS set.
+
+**Severity amplifier, joining B84(2):** the two independent signals for "an op's verdict was lost"
+are the unresolved-op enumeration — **which B84 established is inert in production** — and this
+stale flag. **So the redundancy PB-SYNC-2 leans on is one unfenced flag, not two mechanisms.**
+
+**B85(4) — load-bearing or descriptive, answered.** The **two-bucket split is load-bearing**, killed
+by mutation in both directions: collapsing attribution fails two tests naming the sender-zero split,
+and under-attributing fails three including the process-death persistence test. **Journal versus
+terminal is load-bearing in the CLEARING direction only** — they are *always* staled together, so
+the hypothesis that they never separate on attribution is literally true, and the distinction earns
+its keep on repair (reseed clears journal, snapshot clears terminal). **The grant "bucket" is
+descriptive.**
+
+**B85(5) — five refutations, all fenced both ways:** per-bucket attribution, a journal reseed not
+clearing terminal staleness, no-optimistic-clearing, and the rollback authority being unable to
+rewind the send-seq. And the cross-bucket reseed fence is genuinely strong — it pins the reply
+high-water unmoved, the reply stream still stale, and the shared high-water at the reseed's own seq.
+**It is the test currently tripping on the in-flight direction work, and it is doing its job.**
+
+**Coverage, cumulative and honest: 14 of 143 rows deep-derived (9.8%), 18 covered (12.6%).** Neither
+finding here moves the count.
