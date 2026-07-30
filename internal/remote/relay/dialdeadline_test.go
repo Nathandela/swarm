@@ -3,13 +3,15 @@ package relay
 // FAILING-FIRST (TDD RED, GG-5) for the round-7 blocker at the ONE hop nothing bounds: the
 // DIAL. This file contains NO implementation.
 //
-// THE DEFECT. dialConn applies no deadline of its own, and BOTH shipped long-lived callers
-// hand it a cancellation-only context:
+// THE DEFECT. dialConn applies no deadline of its own, and ALL THREE shipped callers hand it a
+// cancellation-only context:
 //
 //	mobile/app.go        ctx, cancel := context.WithCancel(context.Background())  -> a.dial
 //	cmd/swarm-remote     signal.NotifyContext(context.Background(), SIGINT, ...)  -> run
+//	internal/skeleton    the pair_start handler's ctx (protocol/server.go's WithCancel of
+//	                     Background) -> relayRendezvousFactory -> DialRawSecure
 //
-// Neither carries a deadline, so a relay that accepts the TCP connection and then STALLS --
+// None carries a deadline, so a relay that accepts the TCP connection and then STALLS --
 // in the TLS handshake, before the HTTP response, halfway through the websocket upgrade --
 // parks its caller for as long as it cares to hold the socket. The adversary does nothing:
 // it accepts and goes quiet, which costs it one file descriptor.
@@ -20,20 +22,25 @@ package relay
 //     that would grow, jitter and eventually reach a working relay is never scheduled. The
 //     handset shows "connecting" forever. mobile/conformance/pbnet4_stalleddial_test.go is
 //     that half, over the real facade.
-//   - THE GATEWAY IS STUCK FOR THE LIFE OF THE PROCESS. cmd/swarm-remote/main.go dials ONCE
-//     at startup and has no redial loop, so a stalled dial is a gateway that never starts and
-//     never says why.
+//   - THE GATEWAY IS STUCK FOR THE LIFE OF THE PROCESS. cmd/swarm-remote/main.go starts by
+//     dialling, so a stalled dial is a sidecar that never starts and never says why.
+//   - THE PAIRING RENDEZVOUS BURNS THE OWNER CONNECTION'S PAIRING SLOT, and it is the worst of
+//     the three. The dial runs BEFORE pairing.go builds pairCtx, so ADR-007 B64's window is not
+//     yet in force; the slot is already claimed and only `result` or BeginPairing's error return
+//     frees it, a parked dial reaches neither, and there is no pair_cancel op.
+//     internal/skeleton/pbnet7_stalleddial_test.go is that half, at the daemon.
 //
 // THIS IS THE THIRD INSTANCE OF ONE SHAPE, and each fix bounded only what the last probe
 // happened to touch: B94 bounded the non-wait exchanges (DefaultCallTimeout), B115 bounded
 // MailboxWait at the gateway, and the dial -- which happens BEFORE either, and without which
 // neither bound is ever reached -- was never bounded at all.
 //
-// WHY THE BOUND BELONGS HERE AND NOT AT THE CALLERS. Two callers exist and both got it wrong
-// independently; a per-caller fix leaves the third caller to get it wrong a third time. Every
-// dial in the package funnels through dialConn, so that is the abstraction boundary and the
-// only place a bound is quantified over dials rather than over the callers somebody
-// remembered.
+// WHY THE BOUND BELONGS HERE AND NOT AT THE CALLERS. Three callers exist and all three got it
+// wrong independently -- and only two of them were known when this file was written. That is the
+// argument rather than a prediction about it: a per-caller fix would have gone to the set we
+// happened to know, and that set was wrong. Every dial in the package funnels through dialConn,
+// so that is the abstraction boundary and the only place a bound is quantified over dials rather
+// than over the callers somebody remembered.
 //
 // THE RED IS BEHAVIOURAL, NOT A COMPILE FAILURE. Everything below compiles against the tree as
 // it stands and fails by PARKING, which is the defect itself. The pin on the bound's numeric
@@ -175,9 +182,9 @@ func securityFor(url string) Security {
 
 // TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline is the fence.
 //
-// THE CONTEXT IS context.Background(), verbatim what both shipped callers supply: mobile's is
-// a WithCancel of it and the gateway's is a signal.NotifyContext of it, and neither adds a
-// deadline. A test that passed a deadline of its own would prove only that context deadlines
+// THE CONTEXT IS context.Background(), verbatim what all three shipped callers supply: mobile's
+// is a WithCancel of it, the gateway's is a signal.NotifyContext of it, the daemon's pair_start
+// handler builds a WithCancel of it, and not one adds a deadline. A test that passed a deadline of its own would prove only that context deadlines
 // work, which nobody doubted; the defect is that NOBODY DECLARES ONE.
 //
 // EACH STAGE IS ITS OWN SUBTEST because they fail in different code: the TLS handshake and the
@@ -214,10 +221,11 @@ func TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline(t *test
 			case got = <-done:
 			case <-time.After(dialStallBound):
 				t.Fatalf("DialSecure is STILL PARKED after %v against a peer that stalls at the "+
-					"%s, dialed with context.Background() -- verbatim the context both shipped "+
-					"callers supply (mobile/app.go's WithCancel, cmd/swarm-remote's "+
-					"NotifyContext). Nothing bounds the dial, so the phone never reaches "+
-					"App.run's reconnect schedule and the gateway never starts",
+					"%s, dialed with context.Background() -- verbatim the context all three "+
+					"shipped callers supply (mobile/app.go's WithCancel, cmd/swarm-remote's "+
+					"NotifyContext, the daemon pair_start handler's WithCancel). Nothing bounds "+
+					"the dial, so the phone never reaches App.run's reconnect schedule, the "+
+					"gateway never starts, and the pairing slot is never released",
 					dialStallBound, stage)
 			}
 			elapsed := time.Since(start)
@@ -276,8 +284,9 @@ func TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow(t *testing.T) {
 // TestDialDeadline_EveryExportedDialInheritsTheBound is the QUANTIFIER, which is the half
 // B115 left open at the sibling defect: "fixing the one instance does not close a quantifier".
 //
-// Two callers exist today and both got this wrong independently, so a bound that lives at the
-// callers is a bound a third caller does not inherit. This asserts the property over the DIAL
+// Three callers exist today and all three got this wrong independently, so a bound that lives at
+// the callers is a bound the next caller does not inherit -- and the third was found only after
+// two had been fixed. This asserts the property over the DIAL
 // SURFACE instead: every exported constructor in the package, driven against the same stalling
 // peer with context.Background(), must return. That is a behavioural fence, not a scan of call
 // sites -- ADR-007 B112 found a call-site scan passing while the very defect its error message

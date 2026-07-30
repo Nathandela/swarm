@@ -159,24 +159,39 @@ const DefaultCallTimeout = 10 * time.Second
 // after a WiFi -> cellular handoff presents identically, so this is benign as well as
 // adversarial.
 //
-// WHAT IT COSTS EACH SHIPPED CALLER, differently, and neither of them declares a deadline:
-// mobile/app.go passes context.WithCancel(context.Background()) and cmd/swarm-remote passes
-// signal.NotifyContext(context.Background(), ...). The PHONE never enters backoff, because
-// App.run's reconnect schedule runs BETWEEN dial attempts and a dial that never returns is a
-// dial that never fails. The GATEWAY dials once at startup with no redial loop, so it is stuck
-// for the life of the process.
+// WHAT IT COSTS EACH SHIPPED CALLER, differently, and NOT ONE OF THE THREE declares a deadline:
 //
-// THE BOUND IS HERE, at the one seam every dial passes, and not at the callers. Two callers
-// exist and both got it wrong independently, so a per-caller fix leaves the third caller to get
-// it wrong a third time -- which is the quantifier B115 left open at the sibling defect
-// ("fixing the one instance does not close a quantifier").
+//	THE PHONE never enters backoff. mobile/app.go passes context.WithCancel(context.Background()),
+//	and App.run's reconnect schedule runs BETWEEN dial attempts -- a dial that never returns is a
+//	dial that never fails, so PB-NET-4's backoff never runs once.
+//
+//	THE GATEWAY, cmd/swarm-remote, passes signal.NotifyContext(context.Background(), ...) and
+//	starts by dialling, so a stalled dial is a sidecar that never starts and never says why.
+//
+//	THE PAIRING RENDEZVOUS burns the owner connection's pairing SLOT. internal/skeleton's
+//	relayRendezvousFactory dials inside the closure BeginPairing calls, on the owner connection's
+//	lifetime context -- and BEFORE pairing.go builds pairCtx, so ADR-007 B64's window is not yet
+//	in force. The slot is already claimed and is released only by `result` or by BeginPairing's
+//	error return; a dial that never returns takes neither, there is no pair_cancel op, and
+//	dropping the owner connection is the only exit.
+//
+// THE BOUND IS HERE, at the one seam every dial passes, and not at the callers. THREE callers
+// exist and all three got it wrong independently -- and only two of them were known when this
+// was written, which is the argument rather than a prediction about it: a per-caller fix would
+// have been applied to the set we happened to know, and that set was wrong. It is also the
+// quantifier B115 left open at the sibling defect ("fixing the one instance does not close a
+// quantifier").
+//
+// AND THE THIRD SITE SHOWS WHY THE CALLER IS THE WRONG PLACE even when it is remembered. The ctx
+// relayRendezvousFactory receives has DUAL DUTY -- it bounds the dial AND owns the connection's
+// lifetime, via the `go func(){ <-ctx.Done(); _ = conn.Close() }()` watcher three lines down --
+// so a caller-side `defer cancel()` there closes the connection it just returned. Bounding at
+// this seam has no such hazard at any of the three.
 //
 // TEN SECONDS IS SECTION 6.0'S, REUSED RATHER THAN RE-DERIVED. The connect phase IS one
 // non-wait request/reply -- an HTTP GET carrying the upgrade, answered by a 101 -- and the
 // budget table binds "Non-wait request timeout | 10 s" to PB-NET-7. Minting a second, local
-// dial budget is what ADR-007 B99 refused, and the same reading is what mobile/relay.go's
-// App.dial uses at its own caller-side bound, so the two agree by construction rather than by
-// coincidence.
+// dial budget is what ADR-007 B99 refused.
 //
 // AND THE COMPOSITION LANDS EXACTLY ON THE RELAY'S OWN PRE-AUTH WINDOW, which is the
 // corroboration TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow pins. A whole dial

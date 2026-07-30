@@ -13,6 +13,7 @@ as adjudicated-at-the-boundary and names as this agent's to evidence.
 | `~/go/bin/golangci-lint run --max-same-issues=0 --max-issues-per-linter=0` | **0 findings** |
 | `go test -race ./internal/remote/relay/` | green, 90.1 s |
 | `go test ./mobile/conformance/` | green, 186.8 s |
+| `go test ./internal/skeleton/` | green (§5, mutation 4) |
 
 **Gated from an isolated `git archive` of the commit under test, not from the working tree.**
 Four other agents were editing this worktree while these ran, and `internal/remotegw` did not
@@ -28,17 +29,38 @@ for a missing redial loop; a connect-phase deadline cannot remove a loop.
 
 ## 1. The defect
 
-`dialConn` applied no deadline, and both shipped long-lived callers supplied cancellation-only
-contexts — `mobile/app.go`'s `context.WithCancel(context.Background())` and
-`cmd/swarm-remote`'s `signal.NotifyContext(context.Background(), ...)`. So a relay that accepts
-the TCP connection and then stalls parks its caller for as long as it holds the socket. It is
-the declared adversary and this costs it one file descriptor; a half-open TCP after a
-WiFi → cellular handoff presents identically, so it is reached benignly too.
+`dialConn` applied no deadline, and **all three** shipped callers supplied cancellation-only
+contexts. So a relay that accepts the TCP connection and then stalls parks its caller for as
+long as it holds the socket. It is the declared adversary and this costs it one file
+descriptor; a half-open TCP after a WiFi → cellular handoff presents identically, so it is
+reached benignly too.
 
-**The phone never enters backoff**, because `App.run`'s reconnect schedule runs BETWEEN dial
-attempts: a dial that never returns is a dial that never fails, so PB-NET-4's backoff — itself
-implemented, fenced and mutation-proven — never runs once. **The gateway is stuck for the life
-of the process**, dialling once at startup with no redial loop.
+| Caller | Context it dials with | What a stalled dial costs |
+|---|---|---|
+| `mobile/app.go` → `App.dial` | `context.WithCancel(context.Background())` | **Never enters backoff.** `App.run`'s reconnect schedule runs BETWEEN dial attempts, so a dial that never returns is a dial that never fails and PB-NET-4's backoff — itself implemented, fenced and mutation-proven — never runs once. |
+| `cmd/swarm-remote` → `run` | `signal.NotifyContext(context.Background(), …)` | A sidecar that never starts and never says why. |
+| `internal/skeleton` → `relayRendezvousFactory` | the pair_start handler's `context.WithCancel(context.Background())` (`internal/protocol/server.go`) | **Burns the owner connection's pairing SLOT.** |
+
+**The third caller is the worst of the three, and I did not know it existed** — it was found by
+the PB-NET-7 enumeration (`internal/verify/pbnet7_deadlines_test.go`) after the first two had
+been fixed. Its dial runs at `pairing.go`'s `cfg.NewRendezvous(ctx, id)`, **before**
+`pairCtx, cancelPair := context.WithTimeout(ctx, window)` — ADR-007 **B64**'s fix — so it sits
+inside the pairing slot and outside the window B64 exists to close. The slot is already claimed
+(`cc.pair = ps`) and is released on exactly two paths, `result` and `BeginPairing`'s error
+return; a parked dial reaches neither. B64's own comment states the price: *"every later
+pair_start on it is refused 'pairing already in progress'. There is no pair_cancel op; dropping
+the owner connection was the only exit."* **B64 fixed the handshake's missing clock; the dial
+that precedes the handshake is the one step of the ceremony B64 did not reach.**
+
+**Three callers, three independent failures to bound, and only two were known when the fix was
+written.** That is the argument for the boundary rather than a prediction about it: a per-caller
+fix would have gone to the set we happened to know, and that set was demonstrably wrong.
+
+**And the third site shows why the caller is the wrong place even when it is remembered.** The
+ctx `relayRendezvousFactory` receives has **dual duty** — it bounds the dial *and* owns the
+connection's lifetime, through the `go func(){ <-ctx.Done(); _ = conn.Close() }()` watcher three
+lines below the dial — so a caller-side `defer cancel()` there closes the connection it just
+returned. The boundary bound has no such hazard at any of the three sites.
 
 **Third instance of one shape.** B94 bounded the non-wait exchanges, B115 bounded `MailboxWait`
 at the gateway, and the dial — which happens BEFORE either, and without which neither bound is
@@ -149,6 +171,21 @@ bound wired    ok   mobile/conformance  11.6s
 bound unwired  --- FAIL: TestPBNET4_AStalledDialStillReachesTheReconnectSchedule (90.16s)
                    only 1 dial attempt(s) ... after 1m30s
 ```
+
+**Mutation 4 — the same unwiring, at the THIRD caller, measured at the daemon.**
+`internal/skeleton/pbnet7_stalleddial_test.go` drives two `pair_start`s over the owner-tier
+wire against a relay that accepts TCP and answers nothing, using the **real**
+`relayRendezvousFactory` under `relay.MachineSecurity()` — substituting an in-memory rendezvous
+would measure nothing, since the whole defect lives inside that closure:
+
+```
+bound wired    --- PASS (22.09s)   both pair_starts answered; the second was ACCEPTED
+bound unwired  --- FAIL (62.02s)   no answer to pair_start within 1m0s
+```
+
+The assertion is the **slot**, not the dial: the second `pair_start` on the same connection must
+not be refused *"pairing already in progress"*. A fence proving only "the dial returns" does not
+show that consequence, which is why it is asserted where an operator would see it.
 
 Every mutation was reverted in the same command and `internal/remote/relay/client.go`
 re-checksummed to `f431ecc…` afterwards.
