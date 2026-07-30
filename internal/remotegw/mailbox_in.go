@@ -78,22 +78,47 @@ func OpenMailboxFrameAt(recv *crypto.MailboxReceiver, key crypto.ContentKey, raw
 	if err != nil {
 		return MailboxFrame{}, err
 	}
+	// AUTHENTICATE FIRST, and only then judge the frame. crypto.OpenMailbox touches NO
+	// receiver, so everything between here and Accept below costs no seq and can refuse
+	// freely -- which is the whole point, since a refusal that has already advanced the
+	// high-water is not a refusal. A forgery is refused HERE, as a forgery, before any
+	// verdict about age or direction is reached; those verdicts are only meaningful about a
+	// frame the AEAD has vouched for.
+	//
+	// This open is what the direction tag costs: Accept below decrypts the same envelope a
+	// second time (MailboxReceiver exposes no pre-advance hook and crypto is FROZEN). One
+	// extra XChaCha20-Poly1305 open of a small frame, against §6.0's 150 ms typing budget.
+	plain, err := crypto.OpenMailbox(key, env)
+	if err != nil {
+		return MailboxFrame{}, err
+	}
 	// PB-GW-2's bounded-age backstop, applied BEFORE Accept so a refusal advances no
 	// high-water: otherwise one retained frame carrying an absurd seq would silence the
 	// real phone for good. The bound is ONE-SIDED -- IssuedAt is AAD-covered, so a relay
 	// can only make frames older, never newer, and bounding the future would refuse a
 	// live phone whose clock runs fast.
-	//
-	// A stale CLAIM is the untrusted relay's until the AEAD vouches for it, so refusing
-	// for age happens only after crypto.OpenMailbox authenticates the header -- a forgery
-	// is refused as a forgery. OpenMailbox does not touch the receiver, so this costs no
-	// seq. A fresh-looking claim needs no separate open: Accept below authenticates it,
-	// and a header a relay shifted forward fails the tag there.
 	if now.Sub(time.UnixMilli(env.Header.IssuedAt)) > InboundMaxAge {
-		if _, err := crypto.OpenMailbox(key, env); err != nil {
-			return MailboxFrame{}, err
-		}
 		return MailboxFrame{}, crypto.ErrStaleAge
+	}
+	// DIRECTION (direction.go), also before Accept. This is the relay re-serving a frame it
+	// observed on the machine -> phone leg onto this one: it authenticates under the shared
+	// content key and its plaintext then fails to route, but the receiver would already have
+	// advanced the phone's command high-water and every real command after it would be
+	// ErrStaleSeq.
+	//
+	// The rule is "an explicit kind that is not the phone's", and it is COMPLETE for the one
+	// bucket that can actually be poisoned. Only sender-zero frames share the phone's bucket,
+	// and the ONLY machine -> phone frames sealed sender-zero are command replies, which carry
+	// kind:"command_reply" (every other machine frame stamps the machine key id and therefore
+	// lands in a different bucket entirely). Stating it as "any foreign kind" rather than
+	// naming command_reply also covers a future machine kind that forgets to stamp the sender,
+	// without duplicating phonecore's kind constants across the package boundary.
+	//
+	// A kind-LESS plaintext is deliberately still accepted: that is the shape every hand-rolled
+	// fixture and every pre-tag phone seal produces, and it cannot be a reflected machine frame
+	// for the reason above.
+	if err := refuseForeignDirection(plain); err != nil {
+		return MailboxFrame{}, err
 	}
 	res, err := recv.Accept(key, env)
 	if err != nil {

@@ -1,7 +1,6 @@
 package phonecore
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -157,20 +156,7 @@ func SealInputResize(key crypto.ContentKey, epochID uint32, seq uint64, session 
 }
 
 func sealInputFrame(key crypto.ContentKey, epochID uint32, seq uint64, f InputFrame) ([]byte, error) {
-	plaintext, err := json.Marshal(f)
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
+	return sealPhoneFrame(key, epochID, seq, inputEnvelope{Kind: kindPhoneToMachine, InputFrame: f})
 }
 
 // issuedAt stamps a phone -> machine seal with the wall clock in unix millis (PB-GW-6).

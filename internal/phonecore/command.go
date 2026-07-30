@@ -95,24 +95,14 @@ func SignTakeControl(ks crypto.KeyStore, in TakeControlInput) (schema.DeviceComm
 // forwarded token, so a relay that alters it breaks the signature. TTLSeconds is not signed
 // (server-clamped). seq must be unique per epoch.
 func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, gateToken string, ttlSeconds int) ([]byte, error) {
-	plaintext, err := json.Marshal(schema.RemoteCommand{
-		DeviceCommandAuth: cmd,
-		GateToken:         gateToken,
-		TTLSeconds:        ttlSeconds,
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			GateToken:         gateToken,
+			TTLSeconds:        ttlSeconds,
+		},
 	})
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
 }
 
 // SealResyncEnvelope seals the journal_resync read command together with the phone's own
@@ -122,20 +112,10 @@ func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, 
 // content key the relay cannot forge, and a wrong cursor only changes how many events the
 // reseed carries. seq must be unique per epoch.
 func SealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64) ([]byte, error) {
-	plaintext, err := json.Marshal(schema.RemoteCommand{DeviceCommandAuth: cmd, ResyncCursor: from})
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind:          kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd, ResyncCursor: from},
+	})
 }
 
 // SealPushPrefsEnvelope seals the SIGNED push_prefs command together with its preference
@@ -148,20 +128,10 @@ func SealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd s
 // forge, and the gateway is itself the custodian that decides delivery. The SIGNATURE is this
 // verb's gate; the daemon's capability switch cannot refuse it.
 func SealPushPrefsEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, prefs schema.PushPrefs) ([]byte, error) {
-	plaintext, err := json.Marshal(schema.RemoteCommand{DeviceCommandAuth: cmd, PushPrefs: &prefs})
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind:          kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd, PushPrefs: &prefs},
+	})
 }
 
 // SealCommandEnvelope seals a signed command as a mailbox envelope under the epoch
@@ -170,20 +140,10 @@ func SealPushPrefsEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cm
 // the gateway opens the envelope; sealing adds confidentiality, not the command's
 // authenticity (which the signature already carries). seq must be unique per epoch.
 func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth) ([]byte, error) {
-	plaintext, err := json.Marshal(cmd)
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind:          kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd},
+	})
 }
 
 // SealLaunchEnvelope seals a signed launch command together with its LaunchReq spec
@@ -193,20 +153,10 @@ func SealCommandEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd 
 // the daemon recomputes from the forwarded spec, so a relay or gateway that alters
 // the spec breaks the signature. seq must be unique per epoch.
 func SealLaunchEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, launch *schema.LaunchReq) ([]byte, error) {
-	plaintext, err := json.Marshal(schema.RemoteCommand{DeviceCommandAuth: cmd, Launch: launch})
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealMailbox(key, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  epochID,
-		Seq:      seq,
-		IssuedAt: issuedAt(),
-	}, plaintext)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind:          kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd, Launch: launch},
+	})
 }
 
 // OpenControlReply opens a daemon reply Control the gateway sealed and returned via the

@@ -546,12 +546,35 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 	// A stale CLAIM belongs to the relay until the AEAD vouches for it, so the refusal
 	// happens only after crypto.OpenMailbox authenticates the header -- a forgery is refused
 	// as a forgery, not as stale. OpenMailbox does not touch the receiver, so this costs no
-	// seq; a fresh-looking claim needs no separate open, since Accept below authenticates it.
+	// seq, and everything between it and Accept below may refuse freely.
+	//
+	// The open is now UNCONDITIONAL rather than only on the stale branch, because the
+	// direction check below also needs the authenticated plaintext before the receiver moves.
+	// Accept then decrypts the same envelope a second time; MailboxReceiver exposes no
+	// pre-advance hook and crypto is FROZEN, so that second open is what the direction binding
+	// costs.
+	plain, err := crypto.OpenMailbox(key, env)
+	if err != nil {
+		return b, nil, inboundFrame{}, err
+	}
 	if now.Sub(time.UnixMilli(env.Header.IssuedAt)) > InboundMaxAge {
-		if _, err := crypto.OpenMailbox(key, env); err != nil {
-			return b, nil, inboundFrame{}, err
-		}
 		return b, nil, inboundFrame{}, crypto.ErrStaleAge
+	}
+	// DIRECTION (direction.go), and it must precede Accept for exactly the reason the age
+	// check does -- a refusal that has already advanced the high-water is not a refusal. This
+	// is the relay re-serving a command or keystroke it observed on the phone -> machine leg
+	// back at the phone: it authenticates under the shared content key, and a keystroke carries
+	// a seq thousands ahead of the reply stream (one Sequencer feeds commands and input), so
+	// letting the receiver see it silences every machine reply for the epoch. It is also FRESH
+	// by construction, so the age check above would never catch it.
+	//
+	// The tag is a POSITIVE match on this side: the phone's own seals are the only frames that
+	// carry it, so the rule is exact and no machine fixture is disturbed.
+	var dir struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(plain, &dir); err == nil && dir.Kind == kindPhoneToMachine {
+		return b, nil, inboundFrame{}, ErrWrongDirection
 	}
 	res, err := recv.Accept(key, env)
 	if err != nil {

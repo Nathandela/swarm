@@ -43,6 +43,13 @@ func OpenJournalEnvelope(key crypto.ContentKey, raw []byte) (schema.JournalRecor
 // untrusted relay stores the sealed envelopes and can replay, reorder, or drop them, so
 // every envelope is run through the receiver's per-(sender,epoch) seq guard before its
 // record is decoded.
+//
+// DIRECTION-BLIND, and it has NO production caller: MailboxRouter superseded it (its
+// kind-less branch decodes byte-identically, snapshot.go), and only MailboxRouter.open
+// checks the direction tag before Accept (direction.go). Accept here would take a frame the
+// phone itself sealed for the machine and let it advance the receiver -- the reflection the
+// tag exists to refuse. It stays for the tests that pin the journal decode; do not wire it
+// into a phone.
 type JournalReceiver struct {
 	key  crypto.ContentKey
 	recv *crypto.MailboxReceiver
