@@ -67,6 +67,38 @@ def evidence_path(slice_id):
     return rel if os.path.exists(os.path.join(ROOT, rel)) else None
 
 
+# ADR-007 B67(1). EXISTENCE IS NOT CURRENCY, and this report used to conflate them.
+#
+# `evidence_path` answers "is there a file", which the header sold as MEASURED and a reader
+# reasonably trusted. But an evidence file is a claim about the commit that produced it, and a
+# check that tests only for existence silently re-dates every claim inside it to now. Two files
+# were fossils before anyone noticed: S18's described the screenshot sink B65 deleted, and is
+# cited for all TEN of S18's requirements; S17's predated both the defect that made PB-PUSH-9
+# unmet and the fix that restored it.
+#
+# So a superseding banner is now MACHINE-VISIBLE rather than decoration. Marking a file stale
+# costs one line in the file and shows up here, which is the only way a reader of this table
+# learns that "evidenced" meant "evidenced against a different version".
+#
+# It is deliberately a marker scan and not a freshness heuristic. Comparing mtimes or commit
+# dates against the slice's code would flag every evidence file on every unrelated commit, and a
+# signal that fires constantly is one nobody reads -- the failure mode this project already has
+# ten of.
+SUPERSEDED_MARKERS = ("SUPERSEDED IN PART", "PARTLY SUPERSEDED", "SUPERSEDED --")
+
+
+def evidence_superseded(rel):
+    """True when the evidence file itself declares part of it no longer describes HEAD."""
+    if rel is None:
+        return False
+    try:
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+            head = fh.read(4000)
+    except OSError:
+        return False
+    return any(m in head for m in SUPERSEDED_MARKERS)
+
+
 def main():
     rows = []
     with open(MANIFEST, encoding="utf-8") as fh:
@@ -106,6 +138,10 @@ def main():
     out("that bookkeeping. *Evidenced* is MEASURED: the evidence file is on disk. A requirement\n")
     out("counted as shipped but not evidenced has no durable record an auditor can read, and the\n")
     out("gap between the two numbers is the honest size of what is asserted rather than shown.\n\n")
+    out("**AND *EVIDENCED* MEANS THE FILE EXISTS, NOT THAT IT IS CURRENT** (ADR-007 B67). An\n")
+    out("evidence file is a claim about the commit that produced it. Files that declare themselves\n")
+    out("partly superseded are listed below and their claims must be read against that notice, not\n")
+    out("against HEAD.\n\n")
     out("| | count |\n|---|---|\n")
     out("| Requirements | %d |\n" % len(rows))
     out("| Shipped (asserted by hand) | %d |\n" % n_shipped)
@@ -113,6 +149,21 @@ def main():
     out("| **NOT MET (slice shipped, requirement invalidated later)** | **%d** |\n" % n_not_met)
     out("| Remaining | %d |\n" % (len(rows) - n_shipped - n_not_met))
     out("| **Shipped with NO evidence file** | **%d** |\n\n" % n_no_evidence)
+
+    stale = sorted(
+        {sl for _, sl in rows if sl in shipped and evidence_superseded(evidence_path(sl))},
+        key=lambda x: (len(x), x),
+    )
+    if stale:
+        out("## Evidence files that declare themselves partly superseded\n\n")
+        out("These slices are shipped and their evidence file is on disk, so they count as\n")
+        out("*evidenced* above — but the file says part of it no longer describes HEAD. **Read the\n")
+        out("notice at the top of each before citing it.** See ADR-007 B67(1).\n\n")
+        for sl in stale:
+            n = len(by_slice[sl])
+            out("- **%s** — cited for %d requirement%s: %s\n"
+                % (sl, n, "" if n == 1 else "s", ", ".join(sorted(by_slice[sl]))))
+        out("\n")
 
     if no_evidence:
         out("## Shipped slices with no evidence file\n\n")

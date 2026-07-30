@@ -13,6 +13,11 @@ that bookkeeping. *Evidenced* is MEASURED: the evidence file is on disk. A requi
 counted as shipped but not evidenced has no durable record an auditor can read, and the
 gap between the two numbers is the honest size of what is asserted rather than shown.
 
+**AND *EVIDENCED* MEANS THE FILE EXISTS, NOT THAT IT IS CURRENT** (ADR-007 B67). An
+evidence file is a claim about the commit that produced it. Files that declare themselves
+partly superseded are listed below and their claims must be read against that notice, not
+against HEAD.
+
 | | count |
 |---|---|
 | Requirements | 143 |
@@ -21,6 +26,15 @@ gap between the two numbers is the honest size of what is asserted rather than s
 | **NOT MET (slice shipped, requirement invalidated later)** | **3** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
+
+## Evidence files that declare themselves partly superseded
+
+These slices are shipped and their evidence file is on disk, so they count as
+*evidenced* above — but the file says part of it no longer describes HEAD. **Read the
+notice at the top of each before citing it.** See ADR-007 B67(1).
+
+- **S17** — cited for 2 requirements: PB-PUSH-4, PB-PUSH-9
+- **S18** — cited for 10 requirements: PB-SEC-11, PB-SEC-12, PB-SEC-13, PB-SEC-14, PB-SEC-3, PB-SEC-4, PB-SEC-5, PB-SEC-6, PB-SEC-7, PB-SEC-8
 
 ## Every requirement
 
