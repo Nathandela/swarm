@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 140 |
-| Evidenced (measured on disk) | 140 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **2** |
+| Shipped (asserted by hand) | 141 |
+| Evidenced (measured on disk) | 141 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **1** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -86,7 +86,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-INPUT-1 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-2 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-3 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
-| PB-INPUT-4 | S11 | **NOT MET** | the retry mechanism has ZERO production callers: RetryFor (transport/retry.go:49) and SendLive (session.go:358) are definitions only, and commands call MailboxAppend directly. Found by the round-4 external reviewer, verified by grep (ADR-007 B69(1)) |
+| PB-INPUT-4 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-5 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-6 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-KEY-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |

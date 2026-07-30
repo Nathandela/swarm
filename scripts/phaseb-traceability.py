@@ -49,10 +49,6 @@ NOT_MET = {
                 "implementation landed together, and the residuals record that S17/S18b "
                 "cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file "
                 "NAMES the requirement, not that RED-first happened (ADR-007 B83)",
-    "PB-INPUT-4": "the retry mechanism has ZERO production callers: RetryFor "
-                  "(transport/retry.go:49) and SendLive (session.go:358) are definitions "
-                  "only, and commands call MailboxAppend directly. Found by the round-4 "
-                  "external reviewer, verified by grep (ADR-007 B69(1))",
 }
 
 

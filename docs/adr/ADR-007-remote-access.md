@@ -5108,3 +5108,42 @@ the manifest-to-§11 ownership join IS checked, and it worked on the first edit 
 Residual 4.24 stands as written for prose; this narrows it.
 
 **Count: 138 of 144, four NOT MET, two deferred to the handset gate.**
+
+---
+
+### B92 — PB-INPUT-4 adjudicated: the retry clause asks for what D7 forbids
+
+**Third requirement this session resolved by adjudication rather than code, and the third distinct
+shape.** B90 was a document contradicting itself. B91 was the system being right and a requirement
+asking for what it correctly refuses. **This one is a requirement asking for a mechanism another
+DECISION in the same record forbids.**
+
+PB-INPUT-4 demands *"retry policy keyed on stable server error codes, never blind resend."* **D7
+makes raw `input`/`resize` live-only** — never durably queued, never replayed, and on disconnect a
+keystroke resolves to an explicit *"delivery unknown / not sent."*
+
+**Production matches D7 exactly:** `mobile/commands.go` calls `MailboxAppend` once and returns its
+error. **It never resends.** So the clause that binds — *never blind resend* — is satisfied
+**absolutely, by never resending**, rather than by a policy that decides when to.
+
+`RetryFor` and `SendLive` exist with **zero production callers** — the round-4 external reviewer's
+finding, confirmed twice since. **They are dead code for a retry this family may not perform.**
+
+**Amended to withdraw the retry clause for input**, keeping the binding half and adding to the
+criterion that the input path performs **no resend at all** — which is a stronger statement than the
+policy test it replaces, and checkable.
+
+**The dead table is left in place, recorded as dead** — the same ruling B90 made for the op queue and
+for the same reason: **removing production code to close a requirement deserves its own slice, not a
+sweep made while adjudicating a document.**
+
+**A pattern worth naming, now that there are three.** All three adjudications resolved *against* the
+requirement and *in favour of* the system or an architectural decision — and in every case the
+system was already correct while the requirement was not. **That is the opposite of the failure mode
+this audit spent five rounds finding**, where a requirement read met while the system was wrong.
+**Both directions exist, and only one of them has an instrument.** Fourteen fences that could not
+fail were found by testing code against requirements; **nothing was looking for requirements that
+were wrong about correct code**, and all three surfaced only because a reviewer traced a symbol to
+zero callers and asked why.
+
+**Count: 141 of 144. One NOT MET — PB-E2E-3. Two deferred to the physical-handset gate.**
