@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 136 |
-| Evidenced (measured on disk) | 136 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
+| Shipped (asserted by hand) | 134 |
+| Evidenced (measured on disk) | 134 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -108,10 +108,10 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-LIFE-7 | S4b | shipped | `docs/verification/remote-phaseB-s4b-evidence.md` |
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-3 | S6 | **NOT MET** | UNFENCED, NOT DISPROVEN -- and the distinction is the point. Every fence for it lives in internal/remote/transport, which has no production caller: opaque_test.go taps the wire of the DEAD Session, and the structural arm reflects over transport's own types, saying nothing about relay.Client or mobile. The property itself (a sealed payload's plaintext never reaches the wire) appears TRUE of the shipped phone -- sendInputFrame seals before it appends and there is no raw-append path -- but that is read, not measured. The nearest live candidate fences transport POLICY (ws vs wss), not payload plaintext. Needs a wire tap over the SHIPPED path (ADR-007 B98) |
 | PB-NET-4 | S6 | **NOT MET** | marked met by MY OWN adjudication (B90), which asserted the resilience half is "implemented and fenced". Section 6.0's backoff numbers -- initial 500ms, factor 2, ceiling 30s, jitter +/-20% -- exist ONLY in internal/remote/transport, which has zero production callers. Shipped reconnects are fixed-delay with no growth, no ceiling and no jitter; setting the shipped delay to 3h leaves every fence passing (ADR-007 B94) |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
-| PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-6 | S6 | **NOT MET** | DECOMPOSES, and one clause has no live subject at all. Replay-refused-across-restart and durable-cursor-survives-restart do have live equivalents in phonecore (ErrStaleSeq, RelayCursor). But HOSTILE PAGINATION TERMINATES is fenced only by ErrStuckPage, which exists nowhere but the dead package; the shipped App.drain substitutes a weaker progress-conditioned throttle that is fenced as no termination property anywhere. Deleting the dead code without writing that fence converts a misaimed fence into no fence (ADR-007 B98) |
 | PB-NET-7 | S6 | **NOT MET** | CRITICAL, and it was marked met against code that does not run. relay.Client carries NO timeout and every shipped phone call passes context.Background(), so a silent relay -- the DECLARED ADVERSARY -- wedges the whole outbound plane behind a.bucketMu: keystrokes, take_control, launch and KILL, with the UI still reading online. Proven by probe (still blocked after 8s). Its fence exercises transport.Session, which has zero production callers. Also reachable BENIGNLY via a half-open TCP after a network handoff (ADR-007 B94) |
 | PB-OPS-1 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |

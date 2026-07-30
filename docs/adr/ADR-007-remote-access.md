@@ -5482,3 +5482,60 @@ updates the TSV and forgets the table now fails on push, by name.
 **What this does not fix.** Every other optional mode in this repository is now suspect by the same
 argument, and I have not swept for them. Recorded as **residual 4.26: enumerate every flag, strict
 mode and optional pass whose sole caller is its own test.**
+
+---
+
+## B98 — Deleting dead code would have un-fenced live code. The count is 134 of 144
+
+**2026-07-30.** I ordered the dead `internal/remote/transport` deleted, with a stop condition: halt
+if the deletion breaks a fence for a requirement currently marked met. **It fired**, and the reviewer
+stopped without changing a file. The stop condition was worth more than the deletion.
+
+**Two more requirements are fenced on dead code.** Verified here independently: `grep -rln
+"PB-NET-3\|PB-NET-6" --include=*_test.go` returns **nothing outside `internal/remote/transport`**.
+
+**And the distinction between them and `PB-NET-7` is load-bearing, so it is recorded rather than
+flattened.** PB-NET-7's property was **FALSE of shipped code** — genuinely, dangerously falsely met.
+PB-NET-3's property appears **TRUE** of the shipped phone and is simply **not measured anywhere**:
+`sendInputFrame` seals before it appends and there is no raw-append path. **Unfenced is not
+disproven**, and reporting the two as one status would overstate the risk of one and understate the
+other. PB-NET-3 is an evidence gap; PB-NET-7 is a live defect.
+
+`PB-NET-6` decomposes rather than falling whole: replay-refused-across-restart and durable-cursor-
+survive-restart have live equivalents in `phonecore`, but **hostile-pagination-terminates has no live
+subject at all** — `ErrStuckPage` exists nowhere but the dead package, and the shipped `App.drain`
+substitutes a weaker progress-conditioned throttle fenced as no termination property anywhere.
+
+**THE FINDING I DID NOT ANTICIPATE, and it inverts the class.** `relay/client.go:527` says of
+`relay.Dial`: *"NO production caller may reach it, which internal/remote/transport's
+`productiondial_test.go` enforces at the call site."* That file has **19 live references and zero
+dead ones**. It sits in the dead package and fences **live** code — and the relay's own doc comment
+names it as the enforcement.
+
+> **Deleting dead code would have silently removed a live control over a live invariant.** The B94
+> class running backwards: not a fence aimed at dead code, but a **live fence stored in a dead
+> building**. Four of the package's ten test files are like this — `tls_test.go`,
+> `productiondial_test.go`, `pin_renewal_test.go`, `pinningplatform_test.go` carry 0 dead references
+> and 9–19 live ones each.
+
+A wholesale `rm -r` would have passed every gate, deleted three false-MET fences, and quietly
+un-fenced `PB-NET-2` and the no-production-`Dial` invariant. **It is not a package delete; it is
+surgery** — the live fences share `harness_test.go` with the dead ones, so the helper file has to be
+split, not removed.
+
+**The join that produced the work list had ~14% precision** — 14 rows flagged, 2 confirmed. Recorded
+because B95 labelled that join *advisory* and this measures how advisory: **it is a search tool, and
+a row moved on it would have been a guess.** `PB-DOC-1` flagged only because its evidence *is* this
+ADR, which names every symbol in the tree.
+
+**Ordering, adopted.** Land the in-flight timeout fix first — it owns the very files the live fences
+point at. Then **re-point** PB-NET-2's four fences into `internal/remote/relay`, their real subject.
+Then **write the replacement fences over live code**, and if either cannot be written that is the
+finding. **Only then delete.** Deleting first would trade three false-MET rows for two-or-three newly
+unfenced ones, which is the ledger this audit keeps rediscovering.
+
+**Unverified and flagged as such: `PB-NET-5`.** Six `TestS6B_*` tests drive the dead `Session`,
+including the drain-budget arithmetic. It was never on the work list because the join never flagged
+it. **It may be a third stop condition; nobody has checked.**
+
+**Count: 134 of 144, 8 NOT MET, 2 hardware-deferred.**
