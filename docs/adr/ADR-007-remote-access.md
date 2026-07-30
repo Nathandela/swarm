@@ -6094,3 +6094,53 @@ scoping rule that outlives its reason reads as a property of the system.**
 a cursor it has already passed, and *batching is back **and survives one more strike*** so an
 implementation that forgets `idle = 0` cannot pass. Two agents, two types, the same insight
 independently, and it is the direct answer to the vacuous-rather-than-red trap.
+
+---
+
+## B109 — PB-NET-7's last clause, and why I am not closing the row myself
+
+**2026-07-30.** B105 recorded two clauses owed after the dead-package deletion and named a third as
+unchecked. All three are now settled.
+
+**`TestCallsAfterCloseFailCleanly` asserted two things, and only one was covered.** The typed-refusal
+half is `TestCallDeadline_ATornDownConnectionAlwaysReportsItself`, both arms. **The idempotency half
+was covered by nothing — while executing on every pass of the package.** `dialAuthed` registers
+`t.Cleanup(Close)` and the torn-down test closes explicitly, so a double `Close` has run on every
+green run for as long as both have existed.
+
+> **Residual 4.10 in its purest form: a shared fixture absorbing a property no test names.** It is
+> not that the behaviour was untested — it was *executed* constantly. Change either seam and the
+> coverage leaves **silently**, and nobody can tell it was ever there, because the thing that
+> exercised it was cleanup.
+
+**No RED, and the reason is worth keeping.** `Conn.Close` guards its body with `closeOnce` and caches
+`closeErr`; `markDone` has its **own** `doneOnce`. So dropping `closeOnce` does not panic — it lets a
+second `Close` re-run `ws.Close` and **overwrite the cached error with the second attempt's**:
+
+```
+Close() call 2 = failed to close WebSocket: use of closed network connection,
+want the same result as the first call (<nil>)
+```
+
+**Shutdown stops being a state and starts depending on how many times it was asked for.** Reverted;
+`client.go` byte-identical.
+
+## Every named clause is fenced. The row stays red, and that is a referral, not a verdict
+
+Bounded at the committee's 10 s, **pinned by a test that transcribes the value from section 6.0's
+table rather than reading the constant** — a pin that read the constant would have accepted the 5 s it
+replaced. Cancellation honoured on both the generic request and the dial. No goroutine leak across 12
+cycles. Calls after close refuse cleanly and `Close` is idempotent.
+
+**The residual: the row says "timeouts EVERYWHERE", and nothing enumerates the call paths.** The bound
+sits on `roundtrip`, which every non-wait call takes, and `MailboxWait` bypasses it by construction
+under the relay's own 25 s ceiling. **That is sound by argument and fenced by nothing** — residual
+4.23's exact shape, and this committee has refused that argument twice this round: once on the
+gateway's kind-less-accept rule, once on `PB-SAS-4`'s binding half.
+
+**I am referring it to round 7 rather than closing it.** Not because the argument is weak, but because
+**four of this round's nine false rows were closed by my own adjudications on partial reads**, and
+this is the fourth time in one day I have had to restate PB-NET-7's status after declaring it. The
+committee is the gate; a row I want closed is precisely the row I should not close alone.
+
+**The count stays 133 of 144.**
