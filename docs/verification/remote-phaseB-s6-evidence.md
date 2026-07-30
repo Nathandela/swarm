@@ -189,7 +189,24 @@ process.
 
 ### PB-NET-7 — hygiene
 
-`internal/remote/transport/hygiene_test.go`, one test per clause:
+**CORRECTION, 2026-07-30 (ADR-007 B105). Everything in the paragraph below cites a file that no
+longer exists.** `internal/remote/transport/hygiene_test.go` was deleted with its package (`b43b03f`)
+because nothing in production called any of it — **including these six tests, which is why this row
+was NOT MET while this evidence read complete.** The paragraph is kept, struck, because it is the
+clearest statement in this repository of what a complete fence over dead code looks like.
+
+**Live evidence as of `2ae1386`:** the 10 s budget and every-call-times-out clauses are
+`internal/remote/relay/calldeadline_test.go` and `calldeadline_boundary_test.go` (the budget pin
+transcribes 10 s from section 6.0's table, not from the constant); calls-after-close is
+`calldeadline_boundary_test.go`'s `ErrConnClosed` arms; cancellation on the **wait** path is
+`s6b_wait_test.go`; and the goroutine-leak assertion is `mobile/conformance/pbnet7_leak_test.go`,
+**now the only one in the remote stack.**
+
+**Still owed, and the reason this row stays NOT MET:** `TestContextCancellationIsHonoured` and
+`TestDialHonoursCallerContext` covered cancellation on the **generic request** and on the **dial**.
+Neither has a named live equivalent. **The deletion removed them and nothing replaced them.**
+
+~~Superseded:~~ `internal/remote/transport/hygiene_test.go`, one test per clause:
 `TestNonWaitRequestTimeoutIsTheCommitteeBudget` and `TestEveryCallTimesOutAgainstASilentRelay`
 (timeouts everywhere, at §6.0's 10 s), `TestContextCancellationIsHonoured` and
 `TestDialHonoursCallerContext` (cancellation honoured on both the request and the dial),

@@ -5889,3 +5889,46 @@ a poll — and measure when the phone can see it.
 immediately: a requirement is met when the property is demonstrated, not when it becomes
 demonstrable. **Writing a budget makes the fence writable. The fence still has to be written, and it
 still has to pass.**
+
+---
+
+## B105 — My stop condition guarded the wrong rows, and a near-miss saved two clauses
+
+**2026-07-30.** B98's deletion was authorised with a stop condition: *halt if the deletion breaks a
+fence for a requirement currently marked **met***. It fired twice and was worth more than the
+deletion both times. **It could not fire for `PB-NET-7`, because `PB-NET-7` was already NOT MET** —
+and that is precisely the row whose evidence matters most, because it is the row someone will come to
+fix.
+
+`b43b03f` deleted `hygiene_test.go` and `session.go`. That removed
+`TestNoGoroutineLeakAcrossConnectDisconnectCycles` — **the only goroutine-leak assertion in the remote
+stack** — and `transport.RequestTimeout`, **the only place section 6.0's 10 s existed anywhere in the
+tree.**
+
+**Both survived only by timing.** The port of the leak fence to the live path, and the adoption of
+10 s into `relay.DefaultCallTimeout`, were being written in the same hours. Had they landed a few
+hours later, **the cleanup would have removed a requirement's leak evidence and its budget in one
+commit, with nothing in the tree to notice.** The gates would have been green: nothing referenced
+either, which is the whole reason the package was deletable.
+
+> **The rule the stop condition should have carried:** guard the evidence of rows marked **NOT MET**
+> at least as carefully as rows marked met. A red row's fence is the specification of the fix. Delete
+> it and the next person cannot tell what "fixed" would mean — and the row stays red for a reason
+> nobody can reconstruct.
+
+**Two clauses did not survive, and are now recorded as owed rather than lost quietly.**
+`TestContextCancellationIsHonoured` and `TestDialHonoursCallerContext` covered cancellation on the
+generic request and on the dial. **Neither has a named live equivalent.** The surviving clauses do:
+the budget and every-call-times-out arms are live in `calldeadline_test.go` and its boundary file,
+calls-after-close is live via `ErrConnClosed`, cancellation on the **wait** path is live in
+`s6b_wait_test.go`, and the leak assertion is live and new.
+
+**`PB-NET-7` stays NOT MET**, and the reason has now changed three times in one day — first the
+absent bound, then the unreconciled 5 s and a leak assertion I wrongly called unwritten, now two
+cancellation clauses deleted with the dead package. **Each change was a correction of my own previous
+statement about the same row.**
+
+**The S6 evidence file has been corrected in place rather than rewritten.** Its old paragraph — six
+named tests, one per clause, all of them real, all of them over code nothing called — is kept struck,
+because it is the clearest single artifact in this repository of what a complete fence over dead code
+looks like. It read as the best-evidenced row in the file.
