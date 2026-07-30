@@ -21,6 +21,36 @@ import (
 // shortDeadline is a call bound small enough to make its effect (or absence) obvious.
 const shortDeadline = 200 * time.Millisecond
 
+// committeeNonWaitTimeout is §6.0's binding value for PB-NET-7's non-wait request timeout.
+// It is transcribed from the requirements table rather than read from the constant under
+// test, which is the whole point of a budget pin: a test that asserted the code equals
+// itself would have accepted every value the code ever held.
+const committeeNonWaitTimeout = 10 * time.Second
+
+// TestCallDeadline_TheNonWaitRequestTimeoutIsTheCommitteeBudget pins the VALUE, not just the
+// existence of a bound.
+//
+// §6.0's budget table is prefaced "Changing any value requires committee agreement, not
+// implementer discretion", and this constant shipped at 5 s -- a defensible number, chosen
+// locally, that left PB-NET-7 unmet because the requirement binds 10 s (ADR-007 B99). The 10 s
+// did exist in the tree, as transport.RequestTimeout, pinned by an equivalent test in
+// internal/remote/transport -- a package the shipped phone does not use. So the budget was
+// enforced exactly where it did not apply and unenforced where it did, and when that package
+// was deleted (B98) the pin went with it: this test is now the only one there is.
+//
+// It is cheap and it is the only thing standing between a budget and the next locally-reasoned
+// adjustment.
+func TestCallDeadline_TheNonWaitRequestTimeoutIsTheCommitteeBudget(t *testing.T) {
+	if DefaultCallTimeout != committeeNonWaitTimeout {
+		t.Fatalf("DefaultCallTimeout = %v, want %v (§6.0's non-wait request timeout, bound to "+
+			"PB-NET-7).\nThe budget table's preamble reserves this value to the committee. If a "+
+			"shorter bound is right -- and there is a real latency argument for one, since a "+
+			"keystroke queued behind a command waiting out this deadline pays it first -- the "+
+			"change belongs in the table, not here.",
+			DefaultCallTimeout, committeeNonWaitTimeout)
+	}
+}
+
 // TestCallDeadline_TheLongPollIsNotBoundedByIt is the requirement stated as a contrast: with
 // the SAME connection and the SAME deadline, an ordinary exchange is cut and the wait is not.
 //

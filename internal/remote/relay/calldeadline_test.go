@@ -37,10 +37,14 @@ import (
 )
 
 // silentRelayBound is how long a test waits for a call that must be bounded. It is
-// deliberately well above any bound the fix could reasonably pick and well below "forever":
-// a call still parked here is parked because nothing bounds it, not because the bound is
-// generous.
-const silentRelayBound = 10 * time.Second
+// deliberately well above the bound itself and well below "forever": a call still parked here
+// is parked because nothing bounds it, not because the bound is generous.
+//
+// It is a LITERAL rather than a multiple of DefaultCallTimeout, deliberately: this file is the
+// RED, and it has to compile and fail against a tree in which the fix does not exist. That is
+// also why it moved -- §6.0 binds the non-wait request timeout at 10 s, so a 10 s wait here
+// would be a coin flip against the very implementation it is meant to accept.
+const silentRelayBound = 25 * time.Second
 
 // silentRelay is a websocket proxy in front of the REAL relay that can be told to stop
 // answering. Silenced, it keeps the connection up and keeps consuming everything the client

@@ -129,12 +129,23 @@ type pumpedFrame struct {
 // caller; this fixes the client, so a call site nobody audited -- and every call site the
 // phone has, which all pass context.Background() -- inherits the bound rather than the wedge.
 //
-// FIVE SECONDS is the same number, and it is generous by two independent measures: PB-NET-5
-// budgets 150 ms p50 for a round trip, and the slowest thing the relay does inside one is
-// push_trigger's one-second verdict wait. It is also the phone's existing unit of patience
-// (App.awaitConn waits five seconds for a connection). Shorter would reconnect on a merely
-// slow link; longer is time a user spends watching a keyboard that does nothing.
-const DefaultCallTimeout = 5 * time.Second
+// TEN SECONDS IS §6.0'S, NOT THIS AUTHOR'S. The budget table binds "Non-wait request timeout |
+// 10 s" to PB-NET-7 under a preamble that reads "Changing any value requires committee
+// agreement, not implementer discretion"
+// (docs/specifications/remote-phaseB-requirements.md). This constant first shipped at five
+// seconds on latency grounds -- generous against PB-NET-5's 150 ms p50 and against
+// push_trigger's one-second verdict wait, and matching App.awaitConn's five-second patience.
+// Every word of that argument may still be true and none of it is this file's to make: a
+// budget an implementer may re-derive locally is not a budget, and the row was NOT MET while
+// the two disagreed (ADR-007 B99).
+//
+// The 10 s used to live only as transport.RequestTimeout, in a package the shipped phone does
+// not use -- so the value bound to a requirement existed exclusively in code nothing ran,
+// which is the same defect as the fence-guarding-a-dead-path this constant was written to
+// close. That package has since been deleted (B98), so this is now the ONLY place the budget
+// exists at all, and TestCallDeadline_TheNonWaitRequestTimeoutIsTheCommitteeBudget pins it
+// here, on the live path, so the next divergence is a failing test rather than a review round.
+const DefaultCallTimeout = 10 * time.Second
 
 // dialConn opens one websocket. hc is the dial client a security policy built
 // (nil for the policy-free paths, which take the websocket package's default).

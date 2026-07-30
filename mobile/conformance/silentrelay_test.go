@@ -35,13 +35,14 @@ import (
 )
 
 // silentBound is how long this test waits for a call that must be bounded. It is well above
-// any bound the fix could reasonably choose (the gateway's equivalent is five seconds) and
-// well below "forever": a call still parked here is parked because nothing bounds it.
+// the bound itself -- §6.0's 10 s non-wait request timeout, which relay.DefaultCallTimeout now
+// carries -- and well below "forever": a call still parked here is parked because nothing
+// bounds it.
 //
-// It is generous enough to absorb one round of queueing, which is a real cost of the fix
+// It is generous enough to absorb TWO of those deadlines, which is a real cost of the fix
 // rather than a flake allowance: a.bucketMu is a plain mutex, so a keystroke issued behind a
 // command that is itself waiting out its deadline pays that deadline first.
-const silentBound = 25 * time.Second
+const silentBound = 40 * time.Second
 
 // awaitWithin polls fn until it reports true, or fails after d. The harness's own eventually
 // is fixed at five seconds, which is shorter than the bound under test here.
