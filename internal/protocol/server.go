@@ -2142,12 +2142,21 @@ func (cc *clientConn) handlePairStart(c Control) {
 	}
 
 	// result pushes the terminal outcome (pair_result) and ends the pairing: success
-	// carries the device identity; failure carries no device (nil Pairing).
+	// carries the device identity; failure carries no device and the CAUSE.
+	//
+	// The cause is the whole of ADR-007 B71(1). This closure used to drop r.Err on the
+	// floor and push a nil Pairing, so a declined SAS, an expired window, a spent code and
+	// a relay-consent abandonment arrived at the owner's terminal as one identical "not
+	// paired" -- during the ceremony every tester performs first, with nothing to act on.
+	// What crosses is a code from PairFailure's closed vocabulary, never r.Err's text:
+	// this path parses attacker-influenced bytes, and a code carries none of them.
 	result := func(r PairResult) {
 		cc.clearPairing(ps)
-		var p *PairingControl
+		p := &PairingControl{}
 		if r.Err == nil {
-			p = &PairingControl{DeviceID: r.DeviceID, Name: r.Name, Capability: r.Capability}
+			p.DeviceID, p.Name, p.Capability = r.DeviceID, r.Name, r.Capability
+		} else {
+			p.Failure = string(classifyPairFailure(r.Err))
 		}
 		_ = cc.writeControl(Control{Op: OpPairResult, EndpointID: cc.endpointID, Pairing: p})
 	}

@@ -302,19 +302,36 @@ type PairingPending struct {
 // PairingResult is the terminal outcome of a pairing pushed by the daemon
 // (pair_result). Paired is the sole success signal; the identity fields are set only
 // when Paired. A declined SAS gate, a TTL/rendezvous failure, or a dropped connection
-// all yield Paired=false — fail closed, nothing enrolled.
+// all yield Paired=false — fail closed, nothing enrolled — and Failure says WHICH
+// (ADR-007 B71(1)): without it the owner cannot tell a gate they closed themselves from
+// a window that expired from a daemon that went away.
 type PairingResult struct {
 	Paired     bool
 	DeviceID   string
 	Name       string
 	Capability string
+	Failure    PairFailure // why nothing was enrolled; PairFailNone iff Paired
 }
 
 // pairingResultFromControl maps a pushed pair_result payload to a PairingResult. The
-// daemon sends a nil Pairing on failure and a populated one (with DeviceID) on success.
+// daemon sends a populated Pairing (with DeviceID) on success and one carrying only the
+// failure code otherwise.
+//
+// It NORMALISES the code: anything outside PairFailure's vocabulary — including a payload
+// from a daemon that learned a cause this client has not — becomes PairFailInternal. That
+// is what makes the closed set a guarantee rather than a convention, and it is why
+// cmd/swarm can print from a fixed table without ever rendering bytes off the wire.
 func pairingResultFromControl(p *PairingControl) PairingResult {
 	if p == nil || p.DeviceID == "" {
-		return PairingResult{Paired: false}
+		cause := PairFailInternal
+		if p != nil {
+			if f := PairFailure(p.Failure); f != PairFailNone {
+				if _, ok := pairFailures[f]; ok {
+					cause = f
+				}
+			}
+		}
+		return PairingResult{Paired: false, Failure: cause}
 	}
 	return PairingResult{Paired: true, DeviceID: p.DeviceID, Name: p.Name, Capability: p.Capability}
 }
@@ -403,7 +420,7 @@ func (s *PairingSession) Confirm(allow bool) error {
 // unblocks. Safe to call more than once and after a disconnect.
 func (s *PairingSession) Close() {
 	s.c.clearPairing(s)
-	s.deliverResult(PairingResult{Paired: false})
+	s.deliverResult(PairingResult{Paired: false, Failure: PairFailSessionClosed})
 }
 
 // deliverResult delivers the one terminal outcome and ends the session. It is
@@ -568,7 +585,7 @@ func (c *Client) closeReadLoop() {
 	c.pairing = nil
 	c.pairMu.Unlock()
 	if ps != nil {
-		ps.deliverResult(PairingResult{Paired: false})
+		ps.deliverResult(PairingResult{Paired: false, Failure: PairFailConnectionLost})
 	}
 	c.Close()
 }

@@ -951,11 +951,14 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// on a dropped session / Close.
 	res := <-sess.Result()
 	if !res.Paired {
+		// The operator's own answer is authoritative: if they denied, this is a decline
+		// whatever the daemon managed to attribute, and a decline is the SAS gate doing its
+		// job rather than a malfunction.
+		cause := res.Failure
 		if !allow {
-			fmt.Fprintln(stdout, "pairing declined")
-		} else {
-			fmt.Fprintln(stderr, "remote pair: pairing failed")
+			cause = protocol.PairFailDeclined
 		}
+		reportPairFailure(cause, stdout, stderr)
 		return 1
 	}
 	name := res.Name
@@ -975,6 +978,52 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// (cmd/swarm-remote's deliverEpochGrant) that makes the pairing usable at all.
 	ensureGatewayRunning("pair", stderr)
 	return 0
+}
+
+// pairFailureLines is what the operator is told for each cause (ADR-007 B71(1)). Every
+// line names WHAT happened and WHAT to do next, because the audience is someone standing
+// at a handset during a closed test with a phone that did not pair.
+//
+// The table is keyed on the protocol constants and renders NOTHING off the wire: the
+// pairing path parses attacker-influenced bytes, and protocol normalises any cause it
+// does not recognise to PairFailInternal, so an unknown code lands on the last row rather
+// than reaching a terminal.
+var pairFailureLines = map[protocol.PairFailure]string{
+	protocol.PairFailConfirmTimeout: "remote pair: nobody answered the confirmation prompt in time, so the pairing " +
+		"failed closed; nothing was paired. Run `swarm remote pair` again.",
+	protocol.PairFailWindowClosed: "remote pair: the pairing window closed before the handshake finished; the code " +
+		"is dead. Run `swarm remote pair` again for a fresh one.",
+	protocol.PairFailSessionClosed: "remote pair: the pairing session ended before the device finished; nothing " +
+		"was paired. Run `swarm remote pair` again.",
+	protocol.PairFailConnectionLost: "remote pair: lost the connection to the daemon mid-pairing; nothing was " +
+		"paired. Check the daemon is still running, then pair again.",
+	protocol.PairFailRateLimited: "remote pair: too many pairing attempts, so this one was refused; nothing was " +
+		"paired. Wait a little and run `swarm remote pair` again.",
+	protocol.PairFailCodeSpent: "remote pair: that pairing code had already been used once and each one is " +
+		"single-use; nothing was paired. Run `swarm remote pair` again for a fresh code.",
+	protocol.PairFailHeadless: "remote pair: this machine refuses to pair without a local console; the " +
+		"confirmation has to happen at the machine itself.",
+	protocol.PairFailNoConsent: "remote pair: the phone never released its relay-route consent, so the pairing " +
+		"was abandoned and nothing was paired. Retry the scan from the phone.",
+	protocol.PairFailInternal: "remote pair: pairing failed and the daemon did not report a cause; nothing was " +
+		"paired. The daemon log has the underlying error.",
+}
+
+// reportPairFailure prints the terminal outcome for a pairing that enrolled nothing.
+//
+// A DECLINE goes to stdout with the rest of the ceremony and carries no failure
+// vocabulary: the operator answering "no" at the SAS gate is the gate working, which is
+// the whole reason the gate exists. Everything else is a diagnostic and goes to stderr.
+func reportPairFailure(cause protocol.PairFailure, stdout, stderr io.Writer) {
+	if cause == protocol.PairFailDeclined {
+		fmt.Fprintln(stdout, "pairing declined")
+		return
+	}
+	line, ok := pairFailureLines[cause]
+	if !ok {
+		line = pairFailureLines[protocol.PairFailInternal]
+	}
+	fmt.Fprintln(stderr, line)
 }
 
 // ensureGatewayRunning activates this machine's gateway, for the verb that asked: the

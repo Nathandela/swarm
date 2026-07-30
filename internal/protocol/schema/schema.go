@@ -158,6 +158,12 @@ type PairingControl struct {
 	Allow        bool       `json:"allow,omitempty"`
 	DeviceID     string     `json:"device_id,omitempty"`
 	Name         string     `json:"name,omitempty"`
+	// Failure is why a pair_result enrolled nothing (ADR-007 B71(1)): one code from
+	// protocol.PairFailure's closed vocabulary, empty on success. It is a CODE and never
+	// the daemon's error text -- the pairing path parses attacker-influenced bytes, and
+	// the client normalises anything it does not recognise, so no wire-supplied string
+	// can reach the owner's terminal.
+	Failure string `json:"failure,omitempty"`
 }
 
 // LaunchReq is a client's request to launch a new session. Every field is

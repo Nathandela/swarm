@@ -59,6 +59,10 @@ type scriptedPairingHost struct {
 	pairedID   string
 	pairedName string
 
+	// failWith, when set, is the error the scripted host reports on a non-success. Nil
+	// (every pre-existing test) keeps the historical generic reason.
+	failWith error
+
 	events    chan persist.Meta
 	capSeen   chan string // req.Capability BeginPairing was called with (buffered cap 1)
 	confirmed chan bool   // the allow value confirm observed (buffered cap 1)
@@ -94,6 +98,15 @@ func (h *scriptedPairingHost) BeginPairing(_ context.Context, req protocol.PairS
 		select {
 		case h.confirmed <- ok:
 		default:
+		}
+		// failWith lets a test choose the exact cause the host reports (B71(1)'s
+		// cause-propagation tests). It wins over the operator's answer because the causes
+		// it stands for -- a rate limit, a spent code, a missing relay-route consent --
+		// really do fail the handshake whatever was answered at the SAS gate. Zero value
+		// (every pre-existing test) leaves the original scripting untouched.
+		if h.failWith != nil {
+			result(protocol.PairResult{Err: h.failWith})
+			return
 		}
 		if ok && err == nil {
 			result(protocol.PairResult{DeviceID: h.pairedID, Name: h.pairedName, Capability: req.Capability})
