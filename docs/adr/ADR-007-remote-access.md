@@ -4011,3 +4011,51 @@ with a comment recording that rewriting them that way would restore the blind sp
 them green — residual 4.15 defended against its own reintroduction.
 
 **Count returns to 138 of 143.**
+
+---
+
+### B74 — note inheritance closed, and the trade that justified it did not survive measurement
+
+Residual 4.16 is closed. Notes are now keyed on the **call** — file plus normalised call text —
+rather than on the file.
+
+**The churn argument that justified file-keying was weaker than its own justification claimed**,
+and the implementer measured it before designing rather than accepting it:
+
+1. **An edit ABOVE a call already fails the inventory test today**, because the row carries
+   `file:LINE`. So file-keying **never spared anyone that churn** — the regeneration and the
+   reviewer diff happen regardless. It spared them only rewriting the note *text*, which call-keying
+   spares equally, since text above a call does not change the call.
+2. **Re-wrapping a call changes nothing at all.** `wholeCall` normalises whitespace, so the call
+   text is **more stable than the line number already in the artifact.**
+
+So the only review event call-keying newly introduces is *changing what a call passes breaks its
+note* — **which is the event you want**, and it rides on a row diff that already existed. Net
+measurable new noise: none.
+
+**The end-to-end probe is the sharpest artifact of this round, and I reproduced it.** A new sink
+was added to an already-noted file, deliberately **BENIGN** (`Log.i(TAG, "push registration
+complete")`) so the content assertion cannot rescue it and the note mechanism is tested alone.
+
+- **File-keyed:** `-update-logscan` returns **`ok`** and writes into the certified artifact a note
+  about *Firebase token-fetch failures* attached to a *registration-complete* call. Absorbed
+  silently, signed off.
+- **Call-keyed:** the gate objects, **and `-update-logscan` refuses to rewrite the artifact** —
+  verified by comparing the file's hash, not by reading test output.
+
+**A second fence guards the converse rot.** A note matching no live call now fails. Without it,
+per-call keying degrades quietly: dead notes read as coverage, and a call reintroduced in that
+exact shape later would **arrive pre-approved by a review that never saw it**. It also stops the
+first fence being satisfied by making everything uncovered — an adversarial reading of its own fix.
+
+**The artifact is byte-identical again** (same sha256), because both recorded entries legitimately
+share a note whose sentence describes both arms. The mechanism changed; the recorded content did
+not. **PB-SEC-3's MET status rests on the same two-instrument agreement and needs no revisiting.**
+
+**Residual 4.17, left open and stated rather than fixed.** Per-call notes make coverage exact but
+verbose — every call needs its own entry. Two calls today, so it costs nothing. If the phone-side
+tree grows a file with many legitimate log calls, someone will be tempted to paste one note across
+all of them, **which satisfies the gate while defeating its purpose: the gate can check that a note
+EXISTS, never that a human read the call.** That is the irreducible limit of this mechanism and no
+keying scheme fixes it. The answer, if that day comes, is fewer log calls on the phone-side path —
+not a looser note rule.

@@ -150,6 +150,95 @@ func TestPBSEC3_TheArgumentCheckReadsWhatIsLoggedNotWhatIsWritten(t *testing.T) 
 // Rewriting any of them to call loggedData directly would restore the blind spot they exist to
 // fence while leaving them green.
 
+// ---------------------------------------------------------------------------
+// B73(2) / residual 4.16: A NEW CALL SITE MUST NOT ARRIVE ALREADY EXONERATED.
+// ---------------------------------------------------------------------------
+//
+// Reviewer notes used to be keyed by FILE, so every call in a noted file inherited that note --
+// including one added later, which nobody had reviewed. The probe that found B72 produced the
+// sharpest form of it: a call dumping the epoch content key was inventoried carrying the note
+// "No token value is in scope on either path", written about two entirely different calls. The
+// artifact did not merely fail to object; IT ATTACHED AN EXONERATION TO THE LEAK.
+//
+// That is the family this project keeps getting bitten by -- an evidence file describing a
+// deleted mechanism as live, an index reporting existence as currency -- and it is worse than a
+// missing note, because a missing note reads as work to do while a false note reads as done.
+//
+// The fail-open half is closed (B72), so a leak now fails the CONTENT assertion whatever its
+// note says. These two fences are about the artifact telling the truth to the human reading it.
+
+// TestPBSEC3_ANewCallInAnAlreadyNotedFileArrivesUnexonerated is the property, driven through BOTH
+// consumers of the note lookup.
+//
+// Testing the lookup alone would not fence this. The defect was never in the lookup -- it was in
+// what the lookup was KEYED ON, and both the unreviewed check and the artifact row consult it
+// independently. A fix applied to one and not the other leaves the artifact still lying, so this
+// asserts on both: the new call must be REPORTED unreviewed, and its row must not carry the
+// inherited text.
+func TestPBSEC3_ANewCallInAnAlreadyNotedFileArrivesUnexonerated(t *testing.T) {
+	if len(logSinkNotes) == 0 {
+		t.Fatal("PB-SEC-3/B73: the reviewer-note table is EMPTY, so nothing below is an " +
+			"assertion. A note table that emptied out is a scan or a table that stopped working")
+	}
+	noted := logSinkNotes[0]
+
+	// Probe D's shape exactly: a brand-new call, in a file that already carries a note, logging
+	// decrypted content and the epoch content tier key.
+	newcomer := logSink{
+		Area: "kotlin-app",
+		File: noted.File,
+		Line: 9999,
+		Call: `Log.w(TAG, "see https://swarm.dev/logging: $plaintext / $contentKey")`,
+	}
+
+	if got := unreviewedSinks([]logSink{newcomer}); len(got) != 1 {
+		t.Errorf("PB-SEC-3/B73: a NEW call site in an already-noted file was not reported as "+
+			"unreviewed (got %d finding(s), want 1). It inherited a note written about different "+
+			"calls, so `-update-logscan` would fold it into the artifact as reviewed material "+
+			"and the human reading the diff would see an exoneration nobody wrote for it.\n"+
+			"\tfile: %s\n\tcall: %s", len(got), newcomer.File, newcomer.Call)
+	}
+
+	if row := newcomer.row(); strings.Contains(row, noted.Note) {
+		t.Errorf("PB-SEC-3/B73: the ARTIFACT ROW for a new call site carries the note written "+
+			"about other calls in the same file. This is the recorded defect in its purest form: "+
+			"a false assurance printed beside a legitimate row is how a reviewer waves something "+
+			"through.\n\trow:      %s\n\tinherited: %s", row, noted.Note)
+	}
+}
+
+// TestPBSEC3_EveryReviewerNoteStillMatchesALiveCallSite is the converse direction, and it is what
+// stops the fix above from being satisfied by making everything uncovered.
+//
+// It also closes the note table's own version of the same rot. A note whose call no longer exists
+// is dead weight that a reader mistakes for coverage, and worse, it lies in wait: a call
+// re-introduced in that shape years later would match it and arrive pre-approved by a reviewer
+// who never saw it. Keying notes to calls only helps if the keys are kept live.
+func TestPBSEC3_EveryReviewerNoteStillMatchesALiveCallSite(t *testing.T) {
+	sinks := scanLogSinks(t)
+	if len(sinks) == 0 {
+		t.Fatal("PB-SEC-3/B73: the scan found zero sinks, so this assertion is vacuous")
+	}
+
+	live := make(map[string]bool, len(sinks))
+	for _, s := range sinks {
+		live[noteKey(s.File, s.Call)] = true
+	}
+
+	var stale []string
+	for _, n := range logSinkNotes {
+		if !live[noteKey(n.File, n.Call)] {
+			stale = append(stale, n.File+": "+n.Call)
+		}
+	}
+	if len(stale) > 0 {
+		t.Errorf("PB-SEC-3/B73: %d reviewer note(s) describe a call site that no longer exists. "+
+			"Delete them. A note nothing matches is coverage a reader thinks they have, and a "+
+			"call re-introduced in that exact shape later would inherit approval from a review "+
+			"that never examined it:\n\t%s", len(stale), strings.Join(stale, "\n\t"))
+	}
+}
+
 // TestPBSEC3_ASlashSlashInAStringLiteralDoesNotBlindTheScan is the fence for B72.
 //
 // The three shapes are ordered by how little an adversary is required. The last one needs none at

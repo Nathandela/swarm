@@ -114,28 +114,100 @@ type logSink struct {
 	Truncated bool
 }
 
-// logSinkNotes is the REVIEWER NOTE per phone-side source file: what its logging call sites
-// print, and why that is safe to put in a buffer `adb logcat` can read.
+// logSinkNote is the REVIEWER NOTE for ONE logging call site: what it prints, and why that is
+// safe to put in a buffer `adb logcat` can read.
 //
 // PB-SEC-3's criterion is "evidence artifact required, NOT reviewed", and the note is how the
 // artifact stops being a bare list. An inventory row on its own records that a sink exists; it
 // does not record that anyone looked at it, so a reader six months out cannot tell a reviewed
-// line from one that merely survived a regeneration. Keyed by FILE rather than by line, because
-// a line number churns on any edit above it and a note that churns is a note nobody rewrites.
+// line from one that merely survived a regeneration.
 //
-// A sink in a file with no entry here FAILS THE ARTIFACT TEST, in `-update-logscan` mode too.
-// That is deliberate and it is the whole mechanism: regenerating is the moment a human has to
-// justify the diff, so a new sink cannot be regenerated into a green without one.
-var logSinkNotes = map[string]string{
-	filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm", "phone", "push",
-		"PushTokens.kt"): "PB-PUSH-5's graceful-and-loud degradation, both arms: static prose " +
-		"plus the caught Throwable. No token value is in scope on either path -- getInstance() " +
-		"threw because this build configures no Firebase project, or the asynchronous fetch " +
-		"failed and produced none.",
+// KEYED ON THE CALL, NOT THE FILE, AND NOT THE LINE. (B73(2), residual 4.16.)
+//
+// It was keyed by FILE, on the stated grounds that a line number churns on any edit above it and
+// a note that churns is a note nobody rewrites. The churn half of that is true; the conclusion
+// did not follow, and file-keying bought a worse defect: EVERY call in a noted file inherited
+// that note, including a new one nobody had reviewed. B72's probe produced the sharpest form --
+// a call dumping the epoch content key inventoried under "No token value is in scope on either
+// path", a sentence written about two different calls. The artifact attached an exoneration to
+// the leak.
+//
+// The call TEXT is the stable key, and this was measured rather than assumed:
+//
+//   - An edit ABOVE a call already fails the artifact test today, because the row carries
+//     file:LINE. So file-keying never actually spared anyone that churn -- the regeneration and
+//     the reviewer diff happen regardless. It only spared them rewriting the note, which
+//     call-keying spares them too, since the call text is unchanged.
+//   - RE-WRAPPING a call changes nothing at all: wholeCall normalises whitespace, so the call
+//     text is MORE stable than the line number already in the artifact.
+//   - Changing what a call PASSES does break its note, and that is the point. Editing a log
+//     call's arguments is precisely the moment its safety note must be re-justified, and the row
+//     changes anyway, so this adds no review event that did not already exist.
+//
+// A sink with no entry here FAILS THE ARTIFACT TEST, in `-update-logscan` mode too. That is
+// deliberate and it is the whole mechanism: regenerating is the moment a human has to justify
+// the diff, so a new sink cannot be regenerated into a green without one.
+type logSinkNote struct {
+	File string // repo-relative, as the inventory records it
+	Call string // the normalised call text this note was written about
+	Note string
+}
+
+// The two arms carry the SAME note because one review covered both and it describes both. They
+// are listed separately because coverage is per call: adding a third call here must not inherit
+// what was written about these two.
+const pushTokensNote = "PB-PUSH-5's graceful-and-loud degradation, both arms: static prose " +
+	"plus the caught Throwable. No token value is in scope on either path -- getInstance() " +
+	"threw because this build configures no Firebase project, or the asynchronous fetch " +
+	"failed and produced none."
+
+var pushTokensPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
+	"phone", "push", "PushTokens.kt")
+
+var logSinkNotes = []logSinkNote{
+	{
+		File: pushTokensPath,
+		Call: `Log.w(TAG, "push token fetch failed; this launch registered no token and the " + ` +
+			`"phone will not receive background wakes until the next one", e)`,
+		Note: pushTokensNote,
+	},
+	{
+		File: pushTokensPath,
+		Call: `Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " + ` +
+			`"the phone works without push and will not receive background wakes", e)`,
+		Note: pushTokensNote,
+	},
+}
+
+// noteKey identifies the call a reviewer note covers.
+func noteKey(file, call string) string { return file + "\t" + call }
+
+// noteFor returns the reviewer note written about THIS call, or "" if nobody has written one.
+func noteFor(file, call string) string {
+	for _, n := range logSinkNotes {
+		if noteKey(n.File, n.Call) == noteKey(file, call) {
+			return n.Note
+		}
+	}
+	return ""
+}
+
+// unreviewedSinks reports the sinks no reviewer note covers, in the artifact's own terms. It is a
+// function rather than a loop inside the artifact test because the note lookup has TWO consumers
+// -- this check and the artifact row -- and a fix applied to one and not the other leaves the
+// artifact still carrying a note nobody wrote for the row beside it.
+func unreviewedSinks(sinks []logSink) []string {
+	var out []string
+	for _, s := range sinks {
+		if strings.TrimSpace(noteFor(s.File, s.Call)) == "" {
+			out = append(out, s.File+":"+itoa(s.Line)+": "+s.Call)
+		}
+	}
+	return out
 }
 
 func (s logSink) row() string {
-	return fmt.Sprintf("%s\t%s:%d\t%s\t%s", s.Area, s.File, s.Line, s.Call, logSinkNotes[s.File])
+	return fmt.Sprintf("%s\t%s:%d\t%s\t%s", s.Area, s.File, s.Line, s.Call, noteFor(s.File, s.Call))
 }
 
 func scanLogSinks(t *testing.T) []logSink {
@@ -423,18 +495,16 @@ func dangerousLogFindings(call string) []string {
 func TestPBSEC3_TheLogSinkInventoryIsAnArtifactAndIsCurrent(t *testing.T) {
 	sinks := scanLogSinks(t)
 
-	var unreviewed []string
-	for _, s := range sinks {
-		if strings.TrimSpace(logSinkNotes[s.File]) == "" {
-			unreviewed = append(unreviewed, s.File+":"+itoa(s.Line)+": "+s.Call)
-		}
-	}
+	unreviewed := unreviewedSinks(sinks)
 	if len(unreviewed) > 0 {
-		t.Fatalf("PB-SEC-3: %d phone-side log call site(s) sit in a file with no reviewer note. "+
-			"The criterion is \"evidence artifact required, NOT 'reviewed'\", and a row that "+
-			"records only that a sink EXISTS does not record that anyone looked at it. Add an "+
-			"entry to logSinkNotes saying what the file's calls print and why it is safe in a "+
-			"buffer `adb logcat` can read, THEN regenerate:\n\t%s",
+		t.Fatalf("PB-SEC-3: %d phone-side log call site(s) that NO REVIEWER NOTE COVERS. The "+
+			"criterion is \"evidence artifact required, NOT 'reviewed'\", and a row that records "+
+			"only that a sink EXISTS does not record that anyone looked at it. Add a logSinkNote "+
+			"whose Call is the call text below, saying what THIS call prints and why it is safe "+
+			"in a buffer `adb logcat` can read, THEN regenerate.\n\nNotes are keyed per CALL, not "+
+			"per file (B73(2)): a sibling call in the same file having a note does not review "+
+			"this one, and copying that note across without reading this call is precisely the "+
+			"false assurance the per-call keying exists to prevent:\n\t%s",
 			len(unreviewed), strings.Join(unreviewed, "\n\t"))
 	}
 
