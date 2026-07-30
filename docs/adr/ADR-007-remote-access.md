@@ -4426,3 +4426,94 @@ residual 4.19 applied correctly one round after it was written.
 READ-only**. STATE, SYNC, PUSH, TIME, LIFE, TOK, SAS, GW and most of SEC and KEY are untouched by
 any deep pass. Given the base rate — nearly every re-derived tranche has produced a finding — **the
 count should be assumed still wrong.**
+
+---
+
+### B81 — round 5's crypto attack: the primitive HOLDS; the callers do not
+
+Eighteen attacks written and **run** — not a reading. The five-round-old hole is closed, and the
+result is the one worth having: **an independent committee mutation pass could not get past the
+primitive.**
+
+**B81(0) — the null result, recorded as a finding.** Forgery: a ten-position mutation battery on a
+real mailbox frame — version, type, epoch, seq, both key ids, `issued_at`, nonce, ciphertext, tag —
+and **only `recipient_key_id` survives, exactly as `envelope.go:57-59` documents.** Nonce reuse:
+20,000 seals under one key with identical header and plaintext produced 20,000 distinct nonces and
+zero repeated ciphertext. PSK misuse: five malformed configs all refused by name. Channel binding:
+no binding before establishment, none after msg1, and `SAS(nil)`/`SAS([])` return `ErrEmptyBinding`
+— **a misordered caller gets a refusal, not a constant always-matching SAS.** A live two-leg XXpsk0
+through a tampering relay, with a plaintext-recovery scan over all 332 observed bytes, recovered
+nothing and leaked neither static. Grants: replay, relay-signed forgery, outer-coordinate
+promotion, coordinate-stripped signature and cross-device misdirection all refused. Epoch rotation
+replaces the key outright, so a stale-epoch frame cannot open, and the wake path checks the epoch
+**against durable state** rather than inferring it from a decrypt failure.
+
+**B81(1) — CRITICAL. The relay kills both control planes with bytes it only OBSERVED.**
+
+**Nothing in the mailbox AAD binds DIRECTION.** Both directions use the same `ContentKey` and both
+stamp `SenderKeyID = 0`, so `mailboxKey{sender, epoch}` is **the same bucket both ways**. The
+comment at `command_in.go:105` reasons carefully about separating the gateway's outbound KINDS and
+**never considers that the zero bucket is also the inbound bucket.** The AAD binds exactly what it
+claims; the caller assumed it bound something it never did.
+
+Measured on the live `CommandBridge.PollOnce`: the relay re-serves one frame captured from the
+other leg, the AEAD verifies (same key), the age check passes, `Accept` advances the high-water,
+and **everything after is `ErrStaleSeq`** — baseline 2 commands forwarded, then 0.
+
+The reflected frame IS rejected downstream, but `OpenMailboxFrame` **already advanced the
+receiver**: a correct inner check behind an outer scan that already committed. **The phone side is
+worse** — keystrokes share the command sequencer, so its outbound seq runs thousands ahead, and
+**reflecting ONE keystroke frame silences every machine reply** (measured, seq 4242 against reply
+seq 1).
+
+One packet, no key, no forgery, by the party the threat model declares hostile. **The fix is
+caller-side and small — one non-zero distinguishing byte per direction — with the frozen package
+untouched.** In progress.
+
+**B81(2) — HIGH. A relay bit-flip in the pairing decision frame is a DETERMINISTIC half-pair.**
+Measured: `machine=<nil>`, `device="decrypt decision: message authentication failed"` →
+`machineEnrolled=true, devicePinned=false`. This record says PB-PAIR-4 is "reachable from an
+ordinary clock, no attacker". **Stronger: the declared adversary chooses it deterministically,
+every attempt** — and the machine then refuses all further pairing, so recovery needs a desktop
+revoke. **Relay-triggered lockout.**
+
+**B81(3) — the pre-auth stale check is not exploitable, and it LEAKS.** Both halves proved rather
+than reasoned. Forged seq 2^63 and garbage at 2^62 both refused; a genuine frame still accepted
+after; a replay still stale. **The earlier reviewer's reasoning is right and the ordering is
+sound.** But the early return is **distinguishable**: keyless garbage probes return `ErrStaleSeq`
+below the high-water and an AEAD failure above it, and **the receiver's exact high-water was binary
+-searched in ~20 queries with no key.** It is observable *over the wire*, not just at the API,
+because `snapshot.go:730` **ACKs** an `ErrStaleSeq` frame (correct, for compaction) while the
+AEAD-failure arm does not. **Two individually-correct decisions composing** — the pattern, again.
+
+**B81(4) — the two-tier split leaks through the CLEARTEXT HEADER, not timing.** B20 zeroed
+`recipient_key_id` and `sender_key_id` precisely so the provider could not link wakes to one
+machine/device pair. **`epoch_id` sits in the same cleartext header at a fixed offset, is equally
+stable for the life of the epoch, and is SHARED with that pair's mailbox traffic — so the linkage
+B20 closed is reopened by the field beside it.** And the wake's seq is the durable lifetime-monotone
+counter in the clear: the provider reads **the exact number of wakes the machine has ever sent**,
+and **every `epoch_id` increment marks a device REVOKE.**
+
+**B81(5) — R-CRY.7 is VACUOUS in production, and should not be counted met.** Verified by me:
+`crypto.NewNoise` has exactly two production callers, both in `pairing.go`; **`LivePrologue` has
+zero; `Rekey()` is called only from inside the frozen package.** **There is no live Noise transport
+in this system** — live confidentiality is entirely the long-lived epoch content key, with **no
+forward secrecy and no ratchet.** R-CRY.7's rekey bound is "enforced, not advisory" over a session
+that does not exist, and if one ever did outlive the bound, `Encrypt` would return
+`ErrRekeyRequired` **forever**, because nothing calls `Rekey()`.
+
+**B81(6) — dormant, not wrong.** `sealDeterministic` has exactly one production caller — `seal`,
+with a fresh random nonce — and every other reference is in tests. The identical-ciphertext fan-out
+property is real and unreachable. **But if a multi-recipient site is ever added, B81(1)'s missing
+direction/recipient binding applies to it.**
+
+**Stated limits of this pass, in the reviewer's own terms:** no timing measurement and no
+constant-time analysis; the phone-side DURABLE poisoning is READ, not run; no Android/Kotlin/
+gomobile work; the SAS grind bound taken on trust; no fuzzing proper — the mutations are
+hand-chosen positions, not exhaustive.
+
+**Verdict: closed test on a private relay YES** — every finding here requires a hostile or
+malfunctioning relay, and on a relay the owner runs that adversary is absent by construction, with
+two conditions: **document that a corrupted final pairing frame from ANY cause needs a desktop
+revoke to recover**, and do not point that build at a relay the owner does not run. **Production
+NO, and B81(1) is the blocker.**
