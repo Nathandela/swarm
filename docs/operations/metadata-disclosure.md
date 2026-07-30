@@ -102,7 +102,7 @@ So the provider observes, per wake:
 |---|---|
 | **The device's FCM registration token** | A durable, device-specific identifier. Also held by the relay (§1a). |
 | **Timing** | Every wake, as delivered. Transitions are coalesced per session, so this is a lower bound on activity, not a transcript. |
-| **Size** | Constant 78 bytes, for this producer. See §2c: it is not the only producer. |
+| **Size** | Constant 78 bytes, and constant across every producer into the channel. See §2c, which also records the part of that separation size was not the whole of. |
 | **A cleartext monotonic wake counter** | `seq`, 8 bytes at a fixed offset in the cleartext header. See §2b. |
 | **A cleartext millisecond timestamp** | `issued_at`, the sending machine's clock. See §2b. |
 | **That the message is data-only and high priority** | Delivery-class metadata, not content. |
@@ -158,36 +158,55 @@ The requirements table already named "plus a monotonic seq" as part of the clear
 (`remote-phaseB-requirements.md`, PB-PUSH-3). **The requirement never claimed the counter was
 removed; this document is where it went unmentioned.**
 
-### 2c. There are TWO push producers, and they are separable by shape
+### 2c. There are THREE push producers; size is now constant across them, shape is not
 
-The 78-byte constant belongs to **one** of them.
+Size used to belong to **one** of them. This section records what that was, what closed it, and the
+part of it that is still open — the last being the point, because closing a disclosure on one
+channel while it survives on the next one over is how a green test comes to mean less than it reads.
 
-| Producer | Where | Payload |
-|---|---|---|
-| The gateway's wake | `handlePushTrigger`, carrying the sealed envelope | 78-byte ciphertext |
-| The relay's presence sweep | `SweepPresence`, when a machine goes silent past `PresenceTimeout` | **no envelope at all** |
-
-`SweepPresence` calls `deliverPush(..., PushPayload{Alert: GenericPushAlert})` with no `Ciphertext`
-set. `FCM.marshalMessage` base64-encodes that field either way, so the provider receives:
+**What it was.** Measured through the real marshaller:
 
     gateway wake  : 177 bytes   {"message":{...,"data":{"e":"<104 base64 chars>"},...}}
     presence sweep:  73 bytes   {"message":{...,"data":{"e":""},...}}
 
-**A 104-byte difference, distinguishable with no key.** The provider can therefore tell *"a session
-changed state"* from *"this machine went offline"* — a semantic distinction about the owner's
-infrastructure, read off the payload shape. Constant size was the property that made size a benign
-disclosure; across the two producers, size is not constant.
+`SweepPresence` called `deliverPush(..., PushPayload{Alert: GenericPushAlert})` with no `Ciphertext`
+set, and `push_trigger` applied no schema to the caller's `envelope`, so a third size was whatever
+that caller chose. **A 104-byte difference, distinguishable with no key**, shipping in normal
+operation: the provider could tell *"a session changed state"* from *"this machine went offline"* —
+a semantic fact about the owner's infrastructure, read off payload shape without touching crypto.
 
-**The existing fence cannot see this, structurally.**
-`TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize` lives in `internal/remotegw` and asserts
-over the gateway's own `Pusher`; it does not import `internal/remote/relay` and never observes the
-sweep. It is a correct assertion about the producer it watches, and it is the only producer it can
-watch. A fence covering both has to sit where they converge — the `PushSink` boundary
-(`internal/remote/push`), which is the first point that sees every message actually sent.
+**What closed it.** Every producer now puts `relay.PushEnvelopeSize` (78) bytes of ciphertext on the
+channel:
 
-**This is recorded as an open weakness, not a fixed one.** The sweep's shape is unchanged at the
-time of writing; closing it means giving the sweep the same constant-size envelope as the wake,
-which is relay work and is not done here.
+| Producer | Where | Payload |
+|---|---|---|
+| The gateway's wake | `handlePushTrigger`, carrying the sealed envelope | 78-byte sealed ciphertext |
+| The relay's presence sweep | `SweepPresence`, when a machine goes silent past `PresenceTimeout` | 78 random bytes it cannot seal |
+| Any other caller of `push_trigger` | `handlePushTrigger` | **refused** unless it is exactly 78 bytes |
+
+The relay **refuses** rather than pads, because it forwards the opaque envelope byte for byte and
+must keep doing so; a refused push puts nothing on the channel and so discloses nothing. The sweep
+is the one producer that cannot be given a real envelope: it is a liveness signal, the relay holds
+**no** key to seal one with (which is what the two-tier key split is for), and it carries no epoch
+coordinate that would go inside one.
+
+**The fence moved to the channel.** `TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize` lives
+in `internal/remotegw` and asserts over the gateway's own `Pusher` — a correct assertion about the
+only producer it can construct. The quantifier is now enforced where the property is stated:
+`internal/remote/relay/pbpush3_channel_test.go` drives all three producers through the real sender
+into a recording endpoint and compares **raw request bytes**, and
+`pbpush3_producers_test.go` pins that those three ARE the set, so a fourth producer fails by name.
+
+**Still open: the sweep is separable by SHAPE, just not by SIZE.** A genuine wake's envelope header
+is cleartext (§2b — version, type, epoch id, `seq`, `issued_at`, a trade the replay window rests
+on), so a provider that **parses** rather than measures still sees that a sweep's 78 bytes are not a
+well-formed wake. The random filler is chosen over a fixed one so that the separation is not also
+handed over as a constant byte pattern, but it does not make the two indistinguishable. Closing that
+needs either a key the relay must not hold, or dropping the sweep's push entirely — and the sweep's
+push is already refused at the receiver (`phonecore.AcceptWake` cannot authenticate it, so
+`SwarmMessagingService` renders nothing), so what it costs today is a wakeup and a provider-visible
+event with no user-visible result. **Both remedies are decisions above the relay seam and neither is
+taken here.**
 
 ### 2d. Nothing here has ever run against Google
 

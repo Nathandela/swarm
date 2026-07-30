@@ -306,7 +306,7 @@ func TestRelay_EveryOpRateLimited(t *testing.T) {
 			return discard(m.conn.roundtrip(testCtx(t), MsgMailboxAppend, map[string]any{"target": devRID, "envelope": env}))
 		}},
 		{"push_trigger", true, func(t *testing.T, m *Client, devRID string, sp sealParty, clk *fakeClock, seq uint64) error {
-			env := sp.sealMailbox(t, seq, []byte("wake"), clk)
+			env := sp.sealPush(t, seq, clk)
 			return discard(m.conn.control(testCtx(t), "push_trigger", map[string]any{"target": devRID, "envelope": env}))
 		}},
 	}

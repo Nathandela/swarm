@@ -140,7 +140,7 @@ func TestPBPUSH6_PushTokenSurvivesARelayRestart(t *testing.T) {
 
 	machine2 := dialAuthed(t, srv2.URL(), authFor(mPub, mPriv))
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	env := sp.sealMailbox(t, 1, []byte("wake"), clk)
+	env := sp.sealPush(t, 1, clk)
 	if err := machine2.PushTrigger(testCtx(t), devRID, env); err != nil {
 		t.Fatalf("PushTrigger after restart: %v", err)
 	}
@@ -203,10 +203,10 @@ func TestPBPUSH6_TokenDeleteAlsoSurvivesARestart(t *testing.T) {
 
 	machine2 := dialAuthed(t, srv2.URL(), authFor(mPub, mPriv))
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	if err := machine2.PushTrigger(testCtx(t), RoutingID(keepPub), sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine2.PushTrigger(testCtx(t), RoutingID(keepPub), sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger(kept) after restart: %v", err)
 	}
-	if err := machine2.PushTrigger(testCtx(t), RoutingID(delPub), sp.sealMailbox(t, 2, []byte("wake"), clk)); err != nil {
+	if err := machine2.PushTrigger(testCtx(t), RoutingID(delPub), sp.sealPush(t, 2, clk)); err != nil {
 		t.Fatalf("PushTrigger(deleted) after restart: %v", err)
 	}
 
@@ -267,12 +267,12 @@ func TestPBPUSH6_RevokedDeviceTokenIsNotResurrectedByARestart(t *testing.T) {
 
 	machine2 := dialAuthed(t, srv2.URL(), authFor(mPub, mPriv))
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	if err := machine2.PushTrigger(testCtx(t), RoutingID(livePub), sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine2.PushTrigger(testCtx(t), RoutingID(livePub), sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger(live) after restart: %v", err)
 	}
 	// A revoked routing id is no longer paired, so the trigger itself is refused; what
 	// matters is that no push reaches the revoked handset either way.
-	_ = machine2.PushTrigger(testCtx(t), RoutingID(revPub), sp.sealMailbox(t, 2, []byte("wake"), clk))
+	_ = machine2.PushTrigger(testCtx(t), RoutingID(revPub), sp.sealPush(t, 2, clk))
 
 	pushes := sink.all()
 	if len(pushes) != 1 {
@@ -362,7 +362,7 @@ func TestPBPUSH7_SecondTokenForOneRoutingIDReplacesTheFirst(t *testing.T) {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger: %v", err)
 	}
 
@@ -399,7 +399,7 @@ func TestPBPUSH2_UnregisteredSinkErrorPrunesTheStoredToken(t *testing.T) {
 	devRID := RoutingID(dPub)
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
 
-	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger(1): %v", err)
 	}
 	if got := len(unreg.all()); got != 1 {
@@ -408,7 +408,7 @@ func TestPBPUSH2_UnregisteredSinkErrorPrunesTheStoredToken(t *testing.T) {
 
 	// The token was rejected as unregistered, so the relay must have dropped it: a
 	// second trigger has nowhere to go.
-	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, 2, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, 2, clk)); err != nil {
 		t.Fatalf("PushTrigger(2): %v", err)
 	}
 	if got := len(unreg.all()); got != 1 {
@@ -444,7 +444,7 @@ func TestPBPUSH5_SinkFailureNeverFailsTheTrigger(t *testing.T) {
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
 
 	for i := 1; i <= 2; i++ {
-		if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, uint64(i), []byte("wake"), clk)); err != nil {
+		if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, uint64(i), clk)); err != nil {
 			t.Fatalf("PushTrigger(%d) returned %v: a provider outage must not fail the trigger", i, err)
 		}
 	}

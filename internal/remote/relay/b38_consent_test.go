@@ -132,7 +132,7 @@ func TestB38_ObserverOfThePubkeyCannotAppendOrPushToANeverPairedMachine(t *testi
 	if _, err := attacker.cl.MailboxAppend(testCtx(t), machineRID, sp.sealMailbox(t, 1, []byte("x"), clk)); !errors.Is(err, ErrNotAuthorized) {
 		t.Fatalf("ADR-007 B38: a stranger appended to a never-paired machine's mailbox: %v", err)
 	}
-	if err := attacker.cl.PushTrigger(testCtx(t), machineRID, []byte("wake")); !errors.Is(err, ErrNotAuthorized) {
+	if err := attacker.cl.PushTrigger(testCtx(t), machineRID, pushEnvelopeFixture()); !errors.Is(err, ErrNotAuthorized) {
 		t.Fatalf("ADR-007 B38: a stranger pushed to a never-paired machine: %v", err)
 	}
 }

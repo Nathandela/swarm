@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 )
 
@@ -9,6 +10,61 @@ import (
 // every push. It never carries a routing id, session id, or command text — the
 // real content is the opaque ciphertext the app decrypts on-device (R-REL.5).
 const GenericPushAlert = "You have a new secure message."
+
+// PushEnvelopeSize is the ONE ciphertext length the relay puts on the push channel.
+//
+// It is a SCHEMA, not a bound, and that distinction is the requirement. PB-PUSH-3 concedes
+// that the provider observes token, timing and SIZE — and a conceded disclosure is benign
+// only while it is CONSTANT. That property is quantified over the CHANNEL, so it is a promise
+// the RELAY keeps and not one the gateway can keep alone: every producer reaching the provider
+// must agree on one number, or the provider separates WHAT happened from THAT something
+// happened without touching crypto — the exact defeat the two-tier wake/content key split
+// exists to prevent (PB-KEY-2, ADR-007 B87, residual 4.23). A bound would not do it: the
+// disclosure is a DIFFERENCE, not a magnitude, so a cap leaves every shape below it separable.
+//
+// WHY THE RELAY REFUSES RATHER THAN PADS. It forwards the opaque envelope BYTE FOR BYTE and
+// has to keep doing so (TestPush_RelaySeesOnlyCiphertext): padding would make the relay a party
+// that edits ciphertext, and truncating would silently destroy a wake the phone then cannot
+// open — with the loss surfacing as an AEAD failure on the one background path the phone has.
+// Refusal is the only normalisation available to a party that holds no key, and a refused push
+// puts nothing on the channel and so discloses nothing.
+//
+// THE NUMBER is crypto's 62-byte cleartext envelope header plus a 16-byte AEAD tag over an
+// EMPTY plaintext — the same constant as remotegw.PushWakeEnvelopeSize, which is the
+// PRODUCER's side of it. This package cannot import remotegw (remotegw imports this one), so
+// the two are pinned to each other by test rather than by the compiler: the reachability arm of
+// TestPBPUSH3_AnUnschemadTriggerEnvelopeIsTheSameSizeOnTheChannel drives a
+// remotegw.PushWakeEnvelopeSize envelope through push_trigger and requires it DELIVERED, so a
+// relay that disagreed with the gateway would refuse every real wake and fail there.
+const PushEnvelopeSize = 78
+
+// silentWakeCover is the ciphertext the presence sweep carries.
+//
+// The sweep is a LIVENESS signal rather than a wake: it says "this machine's socket dropped",
+// it carries no epoch coordinate, and the relay holds NO key it could seal one with — the
+// two-tier design exists precisely so that it does not. There is therefore nothing to seal and
+// nothing to shorten; the only thing left to equalise is the number of bytes, and this is that
+// number of bytes. Before this the sweep sent NO ciphertext at all, which is a 104-byte
+// separation on the wire from a gateway wake, readable with no adversary and no key, shipping
+// in normal operation and meaning exactly "the machine went silent".
+//
+// THEY ARE RANDOM, and a fixed filler would have been the wrong answer for a reason a size
+// fence cannot see: the provider reads the payload, not merely its length, so a constant filler
+// separates the sweep from a wake on CONTENT the moment size stops separating them — the same
+// disclosure one layer down, with a green test over it.
+//
+// WHAT IT DOES NOT BUY, stated so nobody reads it as more. A genuine wake's envelope header is
+// CLEARTEXT — version, type, epoch id, seq and issued_at (ADR-007 B70-Q1/B77, a recorded trade
+// the replay window rests on) — so a provider that PARSES rather than measures can still tell a
+// wake from this. Closing that needs either a key the relay must not hold or dropping the
+// sweep's push entirely, and both are decisions above this seam.
+func silentWakeCover() []byte {
+	b := make([]byte, PushEnvelopeSize)
+	// crypto/rand.Read fills b entirely or crashes the program; it has returned no error to
+	// its caller since Go 1.24. A branch here would be a branch that cannot run.
+	_, _ = rand.Read(b)
+	return b
+}
 
 // PushPayload is the outer push the relay hands to the push sink: a generic
 // alert plus the opaque ciphertext envelope. The relay cannot read the

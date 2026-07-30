@@ -371,7 +371,7 @@ func TestB49_ARevokeSilencesThePhoneOnlyWhenItSeversItsLastRelationship(t *testi
 	if err := interceptor.cl.DeviceRevoke(testCtx(t), phone.rid); err != nil {
 		t.Fatalf("interceptor revokes the phone: %v", err)
 	}
-	if err := machine.cl.PushTrigger(testCtx(t), phone.rid, []byte("wake")); err != nil {
+	if err := machine.cl.PushTrigger(testCtx(t), phone.rid, pushEnvelopeFixture()); err != nil {
 		t.Fatalf("machine push after the interceptor's revoke: %v", err)
 	}
 	if got := len(apns.all()); got != 1 {

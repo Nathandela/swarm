@@ -173,10 +173,23 @@ func TestPBSEC2_AnEnrolmentChangeLeavesEveryGatedOperationFailingClosed(t *testi
 // also the thing that could hand a fresh process an unsealed identity if the fatal set were ever
 // widened wrongly, so the phone must come up and REFUSE rather than come up and work.
 //
-// THE MUTATION THAT MUST FAIL IT is the same memoization, plus its sibling: adding
-// `crypto.ErrKeyInvalidated` handling that regenerates device material instead of refusing --
-// which would silently change the device identity the daemon registry pins (R-DEV.1) and hand
-// the attacker a phone that signs.
+// NO SINGLE MUTATION FLIPS THIS TEST, and that was measured rather than assumed -- it is the
+// most useful thing the file has to say. The restart path needs the content tier in at least
+// three independent places, and relaxing them one at a time leaves the refusal standing:
+//
+//  1. `sealedKeyStore.contentStore` -- the command-signing seed. Making `SignCommand` fall back
+//     to the wake tier when content refuses flips the RUNNING-process test above, and this one
+//     still refuses.
+//  2. `fileStore.UnsealContent` -- the state's own content key. Relaxing that to carry on with a
+//     zero key, on top of (1), and this one still refuses.
+//  3. the `kept` content container beside it, which is where the refusal then comes from.
+//
+// So the fails-closed answer here is OVER-DETERMINED: an attacker who defeated the command
+// signature would still be stopped by state custody, and vice versa. What would flip it is a
+// change that stops treating the content tier as required at all -- which is exactly what
+// `KeystoreCustodyBootstrap.ensure` refuses to do one layer up, and what
+// `KeystorePerUseCiphers.cipherFor` DOES do for the gate entries. The asymmetry between those
+// two is ADR-007 B61(3), and this file is the measurement of what it is worth.
 func TestPBSEC2_AnEnrolmentChangeIsStillFailedClosedAfterARestart(t *testing.T) {
 	h := newHarness(t)
 	h.PushReconcile()

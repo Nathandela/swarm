@@ -1217,6 +1217,19 @@ func (sc *serverConn) handlePushTrigger(payload []byte) error {
 	if !sc.s.st.mayActOn(sc.rid, req.Target) {
 		return sc.replyErr(codeNotAuthorized)
 	}
+	// PB-PUSH-3's SCHEMA, applied by the only party that can apply it. This handler used to
+	// copy the caller's `envelope` field onto the channel unexamined, so the number of bytes
+	// the provider counts was chosen by whoever called push_trigger rather than by the wake
+	// format — and "size is constant" is a promise about the CHANNEL, which is the relay's to
+	// keep. See PushEnvelopeSize for why this is a refusal and not a pad.
+	//
+	// REFUSED BEFORE THE QUOTA, deliberately: a push that never reaches the channel must not
+	// spend the TARGET's wake budget either. The target is the victim of a malformed trigger,
+	// not its beneficiary, and charging it would hand a paired-but-hostile machine a way to
+	// silence a handset's real wakes with traffic the relay was always going to drop.
+	if len(req.Envelope) != PushEnvelopeSize {
+		return sc.replyErr(codeBadRequest)
+	}
 	sc.s.mu.Lock()
 	w := sc.s.pushRate[req.Target]
 	if w == nil {
@@ -1764,7 +1777,10 @@ func (s *Server) SweepPresence(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	for _, t := range targets {
-		s.deliverPush(t.rid, t.token, PushPayload{Alert: GenericPushAlert})
+		// SAME SHAPE ON THE WIRE AS A GATEWAY WAKE (PB-PUSH-3). The sweep cannot seal an
+		// envelope — see silentWakeCover — so what it equalises is the size, which is the
+		// property the provider is conceded.
+		s.deliverPush(t.rid, t.token, PushPayload{Alert: GenericPushAlert, Ciphertext: silentWakeCover()})
 	}
 }
 

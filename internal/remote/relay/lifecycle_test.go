@@ -164,7 +164,7 @@ func TestRelay_TokenRegisterRefreshDelete(t *testing.T) {
 	}
 	devRID := RoutingID(dPub)
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	wake := func(seq uint64) []byte { return sp.sealMailbox(t, seq, []byte("wake"), clk) }
+	wake := func(seq uint64) []byte { return sp.sealPush(t, seq, clk) }
 
 	// Register T1 -> push routes to T1.
 	if err := device.TokenRegister(testCtx(t), "token-1"); err != nil {

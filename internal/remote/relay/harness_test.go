@@ -246,3 +246,32 @@ func (p sealParty) sealMailbox(t *testing.T, seq uint64, plaintext []byte, clk *
 	}
 	return env.Marshal()
 }
+
+// pushEnvelopeFixture is an opaque envelope of the size the push channel admits, for tests
+// whose subject is ROUTING or AUTHORITY rather than the payload. It is deliberately not
+// sealed: the relay cannot read a push envelope either way, and PB-PUSH-3's schema is a
+// LENGTH. Using it keeps such a test failing for its own reason -- an authority test that
+// passed because the envelope was the wrong size would have stopped testing authority.
+func pushEnvelopeFixture() []byte { return make([]byte, PushEnvelopeSize) }
+
+// sealPush produces an envelope the PUSH channel admits: PB-PUSH-3's schema is exactly
+// PushEnvelopeSize bytes, which is a header over an EMPTY plaintext, because "the provider
+// observes size" is a benign disclosure only while size is constant (see PushEnvelopeSize).
+//
+// IT ASSERTS ITS OWN LENGTH rather than trusting the arithmetic. If the envelope format ever
+// grows a field, every push test in this package would otherwise start failing with
+// `bad_request` far from the cause; this way the fixture names it.
+//
+// A push fixture carries NO plaintext, and that is the schema rather than the fixture being
+// lazy: the push channel cannot represent session content at all now, so a test that wants a
+// sealed sentinel the relay must not read wants sealMailbox and the mailbox path.
+func (p sealParty) sealPush(t *testing.T, seq uint64, clk *fakeClock) []byte {
+	t.Helper()
+	env := p.sealMailbox(t, seq, nil, clk)
+	if len(env) != PushEnvelopeSize {
+		t.Fatalf("push fixture is %d bytes, but the relay's push schema admits exactly %d: "+
+			"the envelope format changed and PushEnvelopeSize no longer describes it",
+			len(env), PushEnvelopeSize)
+	}
+	return env
+}

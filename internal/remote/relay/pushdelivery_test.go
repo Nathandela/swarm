@@ -96,7 +96,7 @@ func TestPushDelivery_SlowProviderDoesNotHoldTheRequestLoop(t *testing.T) {
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
 
 	start := time.Now()
-	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger against a slow provider: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -146,7 +146,7 @@ func TestPushDelivery_UnregisteredVerdictAfterTheWaitStillPrunes(t *testing.T) {
 	devRID := RoutingID(dPub)
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
 
-	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger: %v", err)
 	}
 	// The caller is back before any verdict exists, so nothing can have been pruned yet.
@@ -164,7 +164,7 @@ func TestPushDelivery_UnregisteredVerdictAfterTheWaitStillPrunes(t *testing.T) {
 
 	// Behaviourally: the dead token is gone, so a later trigger reaches no sink at all.
 	before := sink.count()
-	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, 2, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, 2, clk)); err != nil {
 		t.Fatalf("PushTrigger(2): %v", err)
 	}
 	if got := sink.count(); got != before {
@@ -196,7 +196,7 @@ func TestPushDelivery_CloseJoinsInFlightDeliveries(t *testing.T) {
 		t.Fatalf("AuthorizeDevice: %v", err)
 	}
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
-	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), RoutingID(dPub), sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger: %v", err)
 	}
 	if got := sink.count(); got != 1 {
@@ -279,7 +279,7 @@ func TestPushDelivery_CallerWaitsForTheVerdictSoThePruneIsNotARace(t *testing.T)
 		t.Fatalf("token before the trigger = %q, want the registered one", got)
 	}
 
-	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealMailbox(t, 1, []byte("wake"), clk)); err != nil {
+	if err := machine.PushTrigger(testCtx(t), devRID, sp.sealPush(t, 1, clk)); err != nil {
 		t.Fatalf("PushTrigger: %v", err)
 	}
 	if got := srv.tokenFor(devRID); got != "" {

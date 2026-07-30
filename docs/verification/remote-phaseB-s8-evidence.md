@@ -193,3 +193,40 @@ The golden moved twice as **reviewed** changes: S12/S11 added input surfaces, S1
   real cause discarded. S9 gated its own new test; `conformance_test.go`'s `runMachinePairing` was
   deliberately left alone. Anyone who sees "never derived a SAS" should suspect this first.
 - **`go.mod` stays at 1.25.0**; the revert was refused, see ADR-008.
+
+---
+
+## PB-SAS-4 — added 2026-07-30, met by the same change that closed PB-PAIR-4
+
+**ADDED 2026-07-30 (ADR-007 B86) because it was MISSING.** Every count movement in five audit
+rounds had been a row that was WRONG; this was the first that was ABSENT. Nothing in the
+specification required the channel binding to attest the **accept/decline exchange** — so
+PB-SAS-1, -2 and -3 could all be perfectly met (no emoji table in Kotlin; a known-answer test over
+the binding; a compare-don't-type UI rule) while the operators' comparison said nothing whatever
+about whether the two sides had **agreed**. *The family named after the defence did not contain the
+requirement that would catch the defect.*
+
+**Met by commit `96b41ef`, which closed PB-PAIR-4 in the same change** — the committee's own
+finding that these were **one protocol change, not two**.
+
+**The mechanism.** The ceremony gained two frames. The device pins the machine on the acceptance
+and **acknowledges** it; the machine pins the device and records routing **only** on that
+acknowledgement. **The acknowledgement is keyed on the Noise CHANNEL BINDING — the same value the
+two operators compared.** So the machine now commits only on a frame that no party lacking that
+binding can produce, which is what makes the emoji comparison finally attest something about the
+accept/decline exchange rather than only about the handshake that preceded it.
+
+**What it does not claim.** The binding adds no secrecy here, and this is not two-generals solved:
+an acceptance that is sent and never acknowledged yields `ErrAcceptUnacknowledged` and **NO device
+claimed**. The property is that **doubt resolves toward claiming nothing**, which is the direction
+PB-PAIR-4 requires.
+
+**Evidence:**
+- `internal/remote/pairing/pbpair4_agreement_test.go` and
+  `internal/skeleton/pbpair4_lockout_test.go` — written RED by an independent author, committed
+  failing at `a8bdc31`, green at `96b41ef`.
+- **Mutation-verified independently:** pinning regardless of the acknowledgement fails the skeleton
+  lockout test while the pairing test still passes — correct isolation, each half fenced separately.
+- One existing security assertion was **restated and made stricter**, with its reasoning recorded in
+  `96b41ef`: it had demanded the machine "cleanly accept" a tampered decision while the device
+  failed closed, which **was the deterministic half-pair asserted as expected behaviour.**

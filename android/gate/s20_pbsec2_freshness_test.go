@@ -17,6 +17,29 @@ package gate
 // retains shell-input authority for as long as it stays in front of the user -- against a
 // requirement that bounds it at sixty seconds.
 //
+// THERE IS A SIBLING PATH AND IT COVERS ONE OF THE TWO OPERATIONS, checked rather than assumed,
+// because a fence written over a property that is live by another route is a false positive.
+//
+//   - take_control, kill, launch and revoke are SIGNED, and `phonecore.sealedKeyStore.contentStore`
+//     unseals the content tier PER OPERATION with nothing memoized -- verified by mutation: adding
+//     a memo changes behaviour, so HEAD has none. That unseal is a real Keystore round trip
+//     through a KEK carrying `setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG)`, so the
+//     PLATFORM refuses these past the window. The bound is real for them, and it is not
+//     `InputFreshness` that supplies it.
+//   - KEYSTROKES ARE NOT COVERED. `App.resolveSend` (mobile/commands.go) consults the content KEK
+//     only when the in-memory epoch content key is ZERO, which happens only after a purge; its own
+//     comment says so ("a phone that holds the key answers from memory and never reaches here").
+//     While the app stays foregrounded the key never leaves memory, so no Keystore round trip
+//     occurs and nothing is bounded.
+//
+// SO THE FENCE IS SCOPED TO WHAT IS ACTUALLY UNENFORCED: the typing path, and the RENEWAL clause
+// for both operations. Even where the platform does refuse, it refuses -- it does not pause a
+// running typing session and ask for a fingerprint, which is what the requirement specifies and
+// what `InputFreshness` exists to decide.
+//
+// Neither leg of the platform's own enforcement is proven anywhere in this repository: that a
+// timed Keystore key refuses past its window is PB-E2E-5, DEFERRED (ADR-007 B31).
+//
 // WHY THIS IS A SOURCE CHECK AND NOT A KOTLIN UNIT TEST, stated because the natural objection is
 // that a behavioural test would be better. There is no Kotlin runtime assertion that fails at
 // HEAD, and that is a fact about the defect rather than a shortcut:
@@ -36,9 +59,10 @@ package gate
 // s20_pbsec2_peruse_test.go gives: the defect is invisible from inside the module, because a
 // policy object with no caller compiles, tests and lints green forever.
 //
-// IT PRESCRIBES NO MECHANISM. Any production caller satisfies it -- a timer, a check at send
-// time, a lease-renewal step, a screen state. What it refuses is the present state, in which
-// there is none.
+// IT PRESCRIBES NO MECHANISM, and one placement. Any production caller satisfies the first
+// check -- a timer, a check at send time, a lease-renewal step, a screen state -- and the second
+// asks only that the verdict be named in the file that sends, for the reason stated on it. What
+// neither accepts is the present state, in which nothing anywhere asks.
 //
 // It reads checked-in source only: no Android SDK, no JDK, no Gradle, no emulator, no handset.
 // This file never skips.
@@ -176,9 +200,13 @@ func TestPBSEC2_TheInputPathNamesTheFreshnessWindow(t *testing.T) {
 		t.Errorf("PB-SEC-2: %d production file(s) send on the timed tier and name the freshness "+
 			"window NOWHERE:\n\t%s\n"+
 			"Requirements 6.0 bounds input and take_control at 60 seconds and requires a crossing "+
-			"to pause and re-authorize. On this path nothing asks: the send goes out on whatever "+
-			"authority the last unlock left behind, and while the app stays foregrounded there is "+
-			"no later event that takes it away",
+			"to pause and re-authorize. take_control is bounded by the platform anyway -- it is "+
+			"signed, and the signature unseals the content tier per operation through a KEK with a "+
+			"60-second window. KEYSTROKES ARE NOT: `App.resolveSend` consults that KEK only when "+
+			"the in-memory epoch content key is zero, which happens only after a purge, so a "+
+			"foregrounded session types on whatever authority the last unlock left behind and no "+
+			"later event takes it away. And on neither operation does anything PAUSE and "+
+			"re-authorize, which is the clause the requirement actually writes",
 			len(unguarded), strings.Join(unguarded, "\n\t"))
 	}
 }

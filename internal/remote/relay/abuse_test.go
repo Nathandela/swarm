@@ -66,12 +66,12 @@ func TestRelay_PushRateLimited(t *testing.T) {
 
 	sp := newSealParty(t, []byte("sender-pub-00000000000000000000x"), []byte("recip-pub-000000000000000000000x"))
 	for i := 0; i < 2; i++ {
-		env := sp.sealMailbox(t, uint64(i+1), []byte("wake"), clk)
+		env := sp.sealPush(t, uint64(i+1), clk)
 		if err := machine.PushTrigger(testCtx(t), devRID, env); err != nil {
 			t.Fatalf("PushTrigger #%d under rate: %v", i, err)
 		}
 	}
-	env := sp.sealMailbox(t, 99, []byte("over"), clk)
+	env := sp.sealPush(t, 99, clk)
 	if err := machine.PushTrigger(testCtx(t), devRID, env); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("PushTrigger over rate: got %v, want ErrQuotaExceeded", err)
 	}
