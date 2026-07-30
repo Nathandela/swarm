@@ -228,9 +228,15 @@ func TestInboundWait_ATimedOutWaitIsRecoverable(t *testing.T) {
 		}
 	}
 
-	// And it is OBSERVABLE. Err() is the only channel through which an operator learns that
-	// the machine is talking to a relay that answers nothing, so a recovered loop must not be
-	// a silent one.
+	// And it is RECORDED. Err() is the only channel this condition has, so a recovered loop
+	// must at least fill it -- a loop that retries forever and stores nothing is
+	// indistinguishable from a healthy idle one at every seam there is.
+	//
+	// It is deliberately NOT called "surfaced" (ADR-007 B114): nothing in production reads
+	// this bridge's Err, RelaySink's or PushNotifier's -- the tree has no non-test caller of
+	// any of the three -- so this asserts the error reaches the accessor, and asserts nothing
+	// about an operator seeing it. Naming that honestly is the point; a test that claimed the
+	// stronger property would be the observer-quantification error B114 records.
 	err := b.Err()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("CommandBridge.Err() = %v, want an error carrying context.DeadlineExceeded.\n"+

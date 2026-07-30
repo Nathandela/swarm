@@ -340,8 +340,14 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			if waitCtx.Err() != nil {
 				// Name the condition. relay.mailboxWait reports every context ending as
 				// "mailbox wait cancelled", which reads as an orderly shutdown; what this
-				// actually is, is the relay not answering, and Err() is the only place an
-				// operator can see it.
+				// actually is, is the relay not answering.
+				//
+				// RECORDED, NOT SURFACED, and the distinction is ADR-007 B114's. Err() is the
+				// only channel this condition has and NOTHING IN PRODUCTION READS IT -- not this
+				// bridge's Err, not RelaySink's, not PushNotifier's; the tree contains no
+				// non-test caller of any of the three. An operator therefore learns nothing
+				// today. That gap is older and wider than this bound, so it is named here rather
+				// than closed here: a stored error is not a reported one.
 				err = fmt.Errorf("relay answered no mailbox wait within %v: %w", b.waitTimeout(), err)
 			}
 			b.setErr(err)
