@@ -6542,3 +6542,47 @@ reproducible build — but a reader should know the criterion is conditional.
 **Count: 131 of 144.** Three rows moved on this pass, and **the tranche was chosen precisely because
 it was green and untouched.** Every tranche anyone has ever re-derived in this project has produced a
 finding; this is the seventh consecutive confirmation, on the surface nobody had entered.
+
+---
+
+## B117 — B113's lesson, applied by its recipient, found two live bypasses
+
+**2026-07-30.** Round 7's implementation closed with two commits worth recording for how they were
+produced rather than what they fixed.
+
+**`PB-SEC-2` — adjudicating the row's five clauses by mutating the production CONNECTION rather than
+the constants a test transcribes turned up two one-line edits that compile and survive EVERY Go and
+Kotlin test in the repository.**
+
+**Bypass 1: the button stops calling the gate.** `PhoneSurface.timedButton` no longer invokes the
+timed gate, so the keyboard reaches `App.sendInput` with **no freshness decision and no prompt** —
+and `TimedTierGateTest` keeps passing, because the gate class is still correct and is simply **no
+longer asked**.
+
+**And the same edit survives on the per-use tier.** Gutting `perUseButton` leaves
+`TestPBSEC2_EveryPerUseFacadeVerbIsReachedThroughThePerUseButton` green, because that check proves the
+verb is **DECLARED** through the factory and **never asks what the factory does**. **Revoke and kill
+then run on no authorization at all.**
+
+**Bypass 2: the observers are never installed.** `SwarmApplication.onCreate` stops calling
+`ContentLockTriggers.install`, so nothing registers the screen-off receiver — the invalidation
+triggers exist, are correct, and are never wired.
+
+> **Both are the defect one layer up from where every existing fence looks**, and they are exactly
+> the objection I raised against this agent's own previous commit: *a fence over `TimedTierGate` that
+> never observes `PhoneSurface` calling it.* **The agent took that objection, generalised it into a
+> mutation strategy, and used it to find two live bypasses in code it had itself just written.**
+
+That is B113 working as intended one step removed from where it was learned: B113 was about *my*
+accepting a constant-mutation as proof on `PB-NET-4`; here its recipient applied it to a different
+language, a different subsystem, and their own work.
+
+**`PB-PAIR-4`'s transition enumeration cross-checks itself against the requirement's own row.** A
+transition the row names with no test fails; a test for a transition the row does not name also fails.
+**Bidirectional, so the enumeration cannot silently drift from the text it claims to cover** — the
+fix-shape this project prescribes for a dropped quantifier, applied to the row that had one.
+
+**Neither row is marked met here.** Both are referred to the round-7 committee with the rest.
+Round 7's own dominant finding is that every row examined had more clauses than the defect reported
+against it, and **the two agents who closed these rows are the last people who should rule on whether
+they are now complete.**
