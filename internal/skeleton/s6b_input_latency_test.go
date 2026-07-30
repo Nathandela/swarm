@@ -35,11 +35,13 @@ package skeleton
 // TWO §6.0 HARNESS RULES ARE STRUCTURAL PRECONDITIONS, not comments, and they are
 // checked BEFORE any measurement:
 //
-//  1. The measured path must carry NO fixed command-IN poll cadence. Today
-//     ServiceConfig.PollInterval defaults to 500 ms (service.go:34, :85-87) and
-//     the phonesim harness tunes it to 20 ms — a test-only value that would make
-//     this harness certify a path production never runs. The precondition fails
-//     today: that is this file's RED.
+//  1. The measured path must carry NO fixed command-IN poll cadence. This was
+//     this file's RED: ServiceConfig.PollInterval then defaulted to 500 ms and the
+//     phonesim harness tuned it to 20 ms — a test-only value that would have made
+//     this harness certify a path production never runs. IT NOW PASSES, and by
+//     removal rather than by tuning: ServiceConfig carries no command-IN cadence at
+//     all (service.go:40-45 records the absence and why), and the command loop is
+//     driven by the relay's bounded server-side wait (command_loop.go:325).
 //  2. The gateway must use a REAL FILE-BACKED InboundState. §6.0: "The harness
 //     MUST use a real file-backed InboundState, not the in-memory default" — S2
 //     measured the per-keystroke fsync at 13-15 ms on an M1/APFS host, ~10% of the
