@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 142 |
-| Evidenced (measured on disk) | 142 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **0** |
+| Shipped (asserted by hand) | 139 |
+| Evidenced (measured on disk) | 139 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **3** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -72,7 +72,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-2 | S21 | pending | — |
-| PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-3 | S19 | **NOT MET** | DEFINED DOWN by my own restatement (B93). It claimed RED-first is evidenced by a committed failing state, and its three cited exemplars contain ZERO lines of actual failing output -- verified, grep returns 0 on all three. They carry PROSE NARRATING failures, which is exactly what the restatement claimed to replace. And 26 slices landed implementation and tests in one commit, not the 4 the row names (ADR-007 B94) |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
 | PB-GW-1 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
@@ -109,10 +109,10 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-NET-1 | S9 | shipped | `docs/verification/remote-phaseB-s9-evidence.md` |
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-4 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-4 | S6 | **NOT MET** | marked met by MY OWN adjudication (B90), which asserted the resilience half is "implemented and fenced". Section 6.0's backoff numbers -- initial 500ms, factor 2, ceiling 30s, jitter +/-20% -- exist ONLY in internal/remote/transport, which has zero production callers. Shipped reconnects are fixed-delay with no growth, no ceiling and no jitter; setting the shipped delay to 3h leaves every fence passing (ADR-007 B94) |
 | PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
 | PB-NET-6 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
-| PB-NET-7 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
+| PB-NET-7 | S6 | **NOT MET** | CRITICAL, and it was marked met against code that does not run. relay.Client carries NO timeout and every shipped phone call passes context.Background(), so a silent relay -- the DECLARED ADVERSARY -- wedges the whole outbound plane behind a.bucketMu: keystrokes, take_control, launch and KILL, with the UI still reading online. Proven by probe (still blocked after 8s). Its fence exercises transport.Session, which has zero production callers. Also reachable BENIGNLY via a half-open TCP after a network handoff (ADR-007 B94) |
 | PB-OPS-1 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-3 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |

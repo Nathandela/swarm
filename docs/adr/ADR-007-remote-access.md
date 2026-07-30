@@ -5195,3 +5195,92 @@ unambiguous about it:
 
 **142 of 144 is what the bookkeeping says. It is not the committee's verdict, and the two are
 different claims.**
+
+---
+
+### B94 — round 6: three requirements were falsely MET, and I wrote two of the falsehoods
+
+**The count is 139 of 144, not 142.** The reviewer assigned to attack my own adjudications found
+what nothing else in five rounds had, and the most valuable finding is a CRITICAL that was marked
+met against **code that does not run**.
+
+**B94(0) — THE FACT EVERYTHING TURNS ON.** Exactly one production package imports
+`internal/remote/transport`, using only two batching helpers. **`transport.Session` — Dial, SendOp,
+SendLive, the 64-slot queue, the backoff schedule, `RequestTimeout`, `ErrStuckPage` — is entirely
+dead.** `Enqueue` and `RetryFor` are not two stray symbols; **they are two visible corners of one
+dead subsystem that FOUR requirements are fenced against.**
+
+**B94(1) — CRITICAL. `PB-NET-7` is falsely MET, and the defect is benignly reachable.**
+
+`relay.Client` is `struct{ conn *Conn; rid string }` — **no timeout of any kind.** Every shipped
+phone call passes `context.Background()`: input and resize, every signed command including **kill**,
+resync, the inbound drain, presence and token registration. **Three of them hold `a.bucketMu`.**
+
+Proven by probe: a server that completes the handshake and then answers nothing leaves the caller
+**still blocked after 8 seconds.** The relay — the declared adversary — **wedges the phone's entire
+outbound plane by doing nothing.** No timeout, no error, no state change, and **the UI still reads
+`online`.** Recovery requires restarting the app.
+
+Its fence exercises `transport.Session`, which nothing calls. **The requirement was met against a
+dead object.**
+
+**And it is reachable with no adversary at all: a half-open TCP after a WiFi→cellular handoff
+presents identically. A tester will hit this.**
+
+**B94(2) — THE SIBLING CHECK IS THE MOST DAMNING PART, and I asked for it.** The gateway found this
+exact defect, named it **"Blocker 2"**, and bounded it at 5 seconds:
+
+> *"seal holds s.mu across the append… so an UNBOUNDED append against a hung relay would pin that
+> lock forever and wedge every producer AND Err()."*
+
+And `mobile/commands.go:400-401` holds its lock *"for the reason `remotegw.CommandBridge.sealReply`
+states for the gateway's reply bucket."* **The phone cites the gateway's rationale for the lock and
+does not inherit the bound that makes the lock safe.** The property was known, named and fixed —
+**asymmetrically.**
+
+**B94(3) — `PB-NET-4` is falsely MET BY MY OWN ADJUDICATION.** B90 asserted the resilience half is
+*"implemented and fenced."* **§6.0's numbers — initial 500 ms, factor 2, ceiling 30 s, jitter ±20% —
+exist in exactly one place: the dead transport.** Shipped reconnects are **fixed-delay, no growth,
+no ceiling, no jitter.** Setting the shipped delay to three hours leaves **every fence passing.**
+
+Operationally: 250 ms fixed is 240 dials/min against a 600/min quota, and **the comment beside it
+says the delay exists to avoid exhausting that quota.** Any non-terminal dial failure is a 4 Hz loop
+for the life of the process.
+
+**B94(4) — `PB-E2E-3` is DEFINED DOWN by my own restatement.** B93 claimed RED-first is evidenced by
+a committed failing state. **Verified by me: its three cited exemplars contain ZERO lines of actual
+failing output.** They carry **prose narrating failures** — precisely what the restatement claimed
+to replace. And the exception list is wrong by a factor of six: **26 slices landed implementation
+and tests in one commit, not four.** True compliance is **1 of 27**. Phase A followed the rule
+rigorously; Phase B abandoned it, and B93 rescued the row by naming the four instances someone had
+already written down.
+
+**B94(5) — the dead code is a TRAP, with a named mechanism.** `RetryFor`'s safety for input depends
+on a wrapper only the dead path applies. Point it at the shipped path and `ErrQuotaExceeded` — the
+*expected* failure under autorepeat — classifies **`RetryResend`, resending a keystroke: exactly
+what D7 forbids and what B92 certified impossible.** And `transport.Session` is a complete,
+documented, well-tested API whose **default disconnected behaviour is the queue B90 called
+unbuildable.** An implementer adopting it for the backoff gets that queue for free, silently.
+**`golangci-lint` cannot help — `unused` does not flag exported identifiers, so this class is
+invisible by construction, which is why five rounds missed it.**
+
+**B94(6) — B91 is over-broad, and skips an experiment its predecessor ordered.** B56 recorded a real
+measurement AND ruled that an emulator image with a hardware-backed keystore **"is to be CHECKED…
+Nobody has proven it impossible, and an unproven belief is exactly what this phase keeps finding
+underneath a stalled requirement."** **That experiment was never run** — one grep hit in 5,197
+lines, B56 itself. B91 upgraded an n=1 measurement into *"unsatisfiable BY CONSTRUCTION"*, a
+universal over all images, **substituted for the experiment.** Status is honest; justification
+exceeds evidence. Cost: **the app has zero executing instrumented tests, and its first real-device
+run will be the closed test.**
+
+**B94(7) — B92 is HONEST.** The reviewer tried hardest to break this one and could not: no resend
+exists on any path, and the withdrawn clause's *protection* survives — classification is by Go
+identity at construction sites, not relay-supplied text. **It removes what the requirement ASKS FOR,
+not what it PROTECTS**, and the criterion it substitutes is genuinely stronger.
+
+**B94(8) — the instrument this audit still lacks, stated by the reviewer.** B92 named one direction
+nothing looks for: *requirements that are wrong about correct code.* **Its mirror is worse:
+CORRECT CODE THAT NO REQUIREMENT IS ACTUALLY POINTED AT.** Four requirements were fenced against one
+dead object across five rounds, and every discovery was a human tracing a symbol by hand.
+**Residual 4.25: a test asserting every package named in an evidence file is reachable from a
+`main` would have caught all four at once, in about thirty lines.**
