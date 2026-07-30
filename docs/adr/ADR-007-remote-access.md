@@ -3947,3 +3947,67 @@ isolation by reading. The one real composition found is B46×B64 (B71(1)) — a 
 an OLD one, not two of today's four.
 
 **Verdict: REVISE**, now better supported. Four of four members agree.
+
+---
+
+### B73 — the log gate closed: two instruments agree, and the workflow was exonerating the leak
+
+**B73(1) — PB-SEC-3 returns to MET, on a stronger argument than regeneration.**
+
+The concern in B72 was that the evidence artifact was produced by a broken instrument, so the
+artifact certified the blindness. The implementer did **not** regenerate it. Instead:
+`docs/verification/s18-log-sinks.tsv` is **byte-identical** to the committed version (sha256
+verified both ways), and the inventory test **passes against that committed file with the FIXED
+scan and without `-update-logscan`**.
+
+**That is stronger than a regenerated artifact.** The two instruments — the blindable one and the
+one that cannot be blinded — **agree byte for byte on this tree.** The artifact never needed
+rewriting; it is now certified by a scan that works, rather than re-emitted by one.
+
+**The limit, stated precisely rather than rounded off:** the defect never corrupted the two rows
+that ARE recorded. It governed what the scan **would have caught on a future call site**, not what
+it did record. So *"the evidence artifact is untainted"* is provable; *"the instrument was sound
+when it was written"* is false and stays false.
+
+**B73(2) — the regeneration workflow did not merely fail to object. It ATTACHED AN EXONERATION.**
+
+Probe D is worse than B72 recorded. Reviewer notes are keyed **by file**, so when the planted leak
+added a row to `PushTokens.kt`, that row **inherited the file's existing note** — and the certified
+artifact then read *"No token value is in scope on either path"* **against a row dumping the epoch
+content key.** The documented workflow produced a green gate, a current artifact, and a written
+assurance that the leak was safe.
+
+**Residual 4.16: an evidence artifact keyed more coarsely than its subject can inherit an assurance
+written about something else.** The fail-open half is fixed, so a leak now fails on content
+regardless — but **the artifact can still carry a false note beside a legitimate new row.** That is
+a defect in the evidence, not the gate. Line-keyed notes churn, which is why they were file-keyed;
+the trade is recorded rather than reopened reactively.
+
+**B73(3) — the 12-line bound reproduced, AND had a shorter route needing no length at all.**
+
+A sensitive argument on line 13+ of a wrapped call was unexamined — same fail-open shape as the
+strip, one function over, and `-update-logscan` absorbed it. But the depth counter **is not
+literal-aware either**, so an unbalanced paren inside a string literal never closes the call:
+
+    android.util.Log.w("swarm", "could not seal :(", snapshotText)
+
+**A sad face in a log message was the whole of it.** Verified independently: this now fails the
+content assertion.
+
+Fixed rather than recorded. `wholeCall` reports whether it actually **closed** the call, and the
+content test **refuses a truncated call** instead of reading a prefix as if it were whole. The
+bound moved 12 → 40, which is safe **only because exceeding it now fails rather than passing
+quietly**, and the failure message says not to raise the bound to quieten it.
+
+**B73(4) — the strip's predicted cost did not exist, and the cost that does is pinned by a test.**
+A raw scan over all three phone-side roots yields **the same two rows** as the stripped scan, so
+"make it literal-aware" would have bought nothing while keeping a code-vs-prose discriminator that
+can be fooled in the fail-open direction. `TestPBSEC3_ACommentedOutLogCallIsInventoried` asserts a
+commented-out call **does** produce a row, so if a future reader finds that row unwanted, the test
+tells them the answer is a reviewer note and never a stripper.
+
+All four new tests drive `scanLogSinksIn` from a file on disk; none calls `loggedData` directly,
+with a comment recording that rewriting them that way would restore the blind spot while leaving
+them green — residual 4.15 defended against its own reintroduction.
+
+**Count returns to 138 of 143.**
