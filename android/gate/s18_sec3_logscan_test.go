@@ -236,8 +236,13 @@ func scanLogSinksIn(t *testing.T, roots map[string]string) []logSink {
 			// Test sources are excluded: a test that prints a sentinel is not the app logging
 			// one, and including them would make the inventory churn on every test edit --
 			// which is how an artifact stops being read.
+			// The directory match is RELATIVE TO THE REPO, not absolute: filepath.Walk yields
+			// root-joined paths, so an absolute match also tests every ANCESTOR directory and a
+			// checkout under any directory named "test" would exclude every source in the tree
+			// (ADR-007 B95). That direction fails closed here -- the zero-sinks fatal below
+			// catches an empty inventory -- but it fails for a reason that is not the code's.
 			if strings.HasSuffix(path, "_test.go") ||
-				strings.Contains(path, string(filepath.Separator)+"test"+string(filepath.Separator)) {
+				strings.Contains(mustRel(t, path), string(filepath.Separator)+"test"+string(filepath.Separator)) {
 				return nil
 			}
 			raw, rerr := os.ReadFile(path)

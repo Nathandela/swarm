@@ -162,7 +162,12 @@ func lockfilesUnder(t *testing.T, root string) []string {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if strings.Contains(path, string(filepath.Separator)+"build"+string(filepath.Separator)) {
+		// RELATIVE TO THE REPO, not absolute: filepath.Walk yields root-joined paths, so an
+		// absolute match also tests every ANCESTOR directory. A checkout living under any
+		// directory named "build" dropped the real android/app/gradle.lockfile and failed this
+		// requirement for a non-reason (ADR-007 B95). A fence that breaks on where the tree
+		// happens to sit is a fence someone deletes.
+		if strings.Contains(mustRel(t, path), string(filepath.Separator)+"build"+string(filepath.Separator)) {
 			return nil // Gradle's own output tree, not a tracked artifact
 		}
 		base := filepath.Base(path)
