@@ -6941,3 +6941,36 @@ the package stays green.
 declined to close this row on their own work, and the row's remaining clause — the dial fix itself —
 belongs to another agent. **The enumeration residual is closed with named, mutation-proven evidence;
 whether `PB-NET-7` is MET is the committee's.**
+
+## The ruling, and the distinction it turns on — "no bound is correct for all callers" is not "no bound"
+
+**Adjudicated 2026-07-31: the dial is bounded in `dialConn` (`b806444`), and the caller-side fixes
+written here stay reverted.** Recorded because the *reason* generalises and the reason this entry
+first gave does not go far enough.
+
+**The argument above was "three callers, three independent failures to bound."** True, and it is
+evidence rather than prediction — the third caller was one nobody knew existed until the enumeration
+walked for it. But it is an argument about *this* defect's blast radius, not about where bounds
+belong.
+
+**The distinction that decides it is CONTRACT versus OMISSION.** `MailboxWait` is unbounded at the
+client **deliberately**: `TestCallDeadline_TheLongPollIsNotBoundedByIt` pins that on purpose, because
+a long poll cut by the generic call timeout would turn `PB-NET-5`'s inbound seam into a timeout loop.
+**The obligation lands on its callers there because NO SINGLE BOUND IS CORRECT FOR ALL OF THEM.** The
+dial has no such contract — **nobody wants an unbounded dial** — so its missing bound was an
+omission, and an omission is fixed at the boundary where it cannot be re-omitted.
+
+> **B115's precedent was cited here for the dial and it does not reach.** B115 read a *contract* as
+> an obligation on callers and discharged it where the obligation landed. Reading an *omission* the
+> same way turns "some caller must choose" into "every caller must remember", which is the shape
+> that produced three independent failures in the first place.
+
+**And the composition worry that made this look like a choice was never real.** `context.WithTimeout`
+takes the EARLIER deadline, so a default ceiling in `dialConn` plus a caller that wants less is not
+two deadlines fighting — it is a ceiling and a tighter budget. **A caller that needs shorter still
+gets shorter, for free.** The two locations were never exclusive; only one of them is *required*.
+
+**Which the enumeration then had to survive, and did.** Layer 1 derives whether a dial bounds itself,
+so `b806444` moved the four `Dial*` functions from caller-bounded to client-bounded **with no edit to
+the fence**, and their call sites correctly stopped owing a deadline. Had this file transcribed the
+remedy its author preferred, it would now be red against the tree the committee ruled correct.
