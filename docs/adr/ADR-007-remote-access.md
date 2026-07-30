@@ -6748,3 +6748,90 @@ invalidation, or locked-device push.
 **Verdict: closed test NO until F1 is fixed** — explicitly contradicting the composition member's YES,
 **on evidence that member did not have.** F1's fix is dispatched: the phone already has the loop the
 gateway lacks.
+
+---
+
+## B121 — Staleness by silence: a specified budget, never built, and no row forbids the attack
+
+**2026-07-31.** The denominator member derived `PB-SYNC` (8 rows) and `PB-STATE` (10) — 18 of the ~90
+never-examined rows, 24 mutations. **15 of 18 came back genuinely clean**, so those families are in
+markedly better shape than `PB-BIND`. Three findings, and one is the class only threat-model derivation
+can reach.
+
+### M-1 — the cheapest attack in the system, and no requirement mentions it
+
+**Every staleness mechanism keys on a GAP**, and a gap is observable only when a *later* seq arrives —
+which an earlier round already measured and recorded: *"tail truncation is undetectable... neither end
+has anything to notice with."* So the declared adversary's cheapest move is not to forge, reorder or
+replay. **It is to stop delivering the newest frames and keep answering polls with an empty page.**
+
+Then no gap forms, so nothing is stale. The poll **succeeds**, so no connection-state machinery fires.
+And `Presence()` asks **the relay** for the machine's reachability — **the phone's only liveness signal
+about the machine comes from the party withholding the data.**
+
+**The phone renders arbitrarily old sessions and terminal grids as live, indefinitely, with
+`ConnectionState` reading `online`.** That is exactly what `PB-APP-8` forbids, and no row forbids it,
+because every row is written in terms of gaps.
+
+### T-2 — and the mechanism was specified two years of rounds ago and never built
+
+Section 6.0 carries this row:
+
+> `| Cached-state freshness before it is shown as stale | 5 min without a successful poll | PB-APP-8 |`
+
+**`grep` returns zero hits for it outside the requirements file**, verified here. `App.StreamState` →
+`streamStale` → `Core.StreamStale` → `staleStr`: **the staleness decision has NO CLOCK INPUT at any
+layer** — a pure function of gap flags. Confirmed independently: the only nearby constants are a
+15-minute lease TTL and the resync rate window.
+
+**Every input for the fix already exists.** `IssuedAt` is AAD-covered and carried on every inbound
+frame. Nothing consumes it for this.
+
+> **And the structural hole underneath it: `internal/verify` checks that every requirement ID appears
+> in the traceability index, and NOTHING checks section 6.0's budget table for an owner or a fence.**
+> So a binding number that is simply never implemented needs no committee agreement to ignore — the
+> exact opposite of what section 6.0 says about itself. A second instance was found in passing: the
+> drain-rate row's token bucket lives only in a package with zero production callers.
+
+### T-1 — the durable half of all three rollback authorities is unfenced
+
+`Core.Reconcile` persists four coordinates. **Deleting three and running `go test ./...` across the
+whole module produced ZERO failures.** The named authority tests never call `Reconcile` — they call
+`SeedFrom`, `SeedHighWater` and `NewGrantReceiverAt` **from the test body**, proving the primitives
+behave while unable to observe whether production connects the record to them. **B113 one level up: the
+test performs by hand the step it is meant to verify.** The one test that does drive `Reconcile` holds
+the durable property **incidentally**, because it accepts a live frame first and the ordinary receive
+path persists the high-water anyway. The discriminating probe — reconcile, then process death with **no
+intervening frame** — admits a **retained take_control reply**, the lease confirmation `PB-INPUT-2`
+forbids typing without.
+
+### S-1 — the journal repair channel has no production caller
+
+The only thing that clears journal staleness is a contiguous reseed; its only producer is
+`Gateway.Resync`; its only trigger is `ActionJournalResync`; its only author is `App.Resync` — **which
+has no production Kotlin caller**, ledgered deliberately as *"the action on the stale/repairing screen,
+which does not exist."* Probed: after one hole, journal stays stale through 20 journal records, 20
+terminal snapshots **and a full reconcile.** Terminal self-heals; **journal never does.** The trigger is
+ordinary rather than adversarial — a burned seq after any transport failure the relay may have
+committed.
+
+### The two missing requirements are the same failure at opposite ends of the wire
+
+B120's gateway never redials; **M-1 is why the user is never told.** Neither row exists. The member
+flagged the composition as INFERRED rather than claiming it.
+
+**And its closing observation, which I am adopting:**
+
+> The assignment was harder in a different place than framed. Mutating 18 rows was cheap and mechanical.
+> **What was expensive was the missing-requirement half, and the reason is structural: M-1 was found by
+> asking "what does the adversary do that raises no flag anywhere", not by reading any row, and nothing
+> in the derivation process pointed there.** The specification is unusually rigorous about clauses it
+> has written down and **has no instrument at all for mechanisms it never named.**
+
+**Recommendation adopted for round 9: an adversary-capability enumeration** — order, timing,
+withholding, retention, duplication, sizes, connection lifetime — **mapped against rows**, rather than
+more rows. Both missing requirements found this round came from that shape of question; neither came
+from re-deriving a row.
+
+**Row-level honesty:** `PB-STATE-10` was read and **not** mutated, and is counted **unexamined, not
+clean.**
