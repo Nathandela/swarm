@@ -127,6 +127,34 @@ func TestSilentRelay_TheOutboundPlaneIsNeverParkedForever(t *testing.T) {
 			silentBound)
 	}
 	requireOffline(t, h.App, "App.Paste", pasteErr)
+
+	// AND THE FAILURE IS RECORDED, not just returned. PB-INPUT-1 resolves input the phone
+	// accepted from the user and could not deliver as an explicit undelivered entry: a screen
+	// that opens after the failure must still be able to say what did not reach the machine.
+	led, lerr := h.App.UndeliveredInputs()
+	if lerr != nil {
+		t.Fatalf("UndeliveredInputs: %v", lerr)
+	}
+	n, lerr := led.Count()
+	if lerr != nil {
+		t.Fatalf("UndeliveredList.Count: %v", lerr)
+	}
+	if n == 0 {
+		t.Error("nothing on the undelivered ledger after a paste the relay never acknowledged; " +
+			"PB-INPUT-1 forbids resolving it as a silent drop")
+	}
+
+	// AND THE COMMAND IS NOT LEFT IN FLIGHT. A kill that never reached the machine must not
+	// raise PendingOpCount for the life of the process -- that hides every genuinely pending
+	// op behind one that can never resolve, which is the wedge moved into the op tracker.
+	pending, perr := h.App.PendingOpCount()
+	if perr != nil {
+		t.Fatalf("PendingOpCount: %v", perr)
+	}
+	if pending != 0 {
+		t.Errorf("PendingOpCount = %d after a kill whose append failed, want 0: an op issued for "+
+			"a frame that was never delivered can never be answered", pending)
+	}
 }
 
 // TestSilentRelay_TheConnectionStopsClaimingToBeOnline is the state half, and it is the one a
