@@ -23,8 +23,8 @@ against HEAD.
 | Requirements | 144 |
 | Shipped (asserted by hand) | 138 |
 | Evidenced (measured on disk) | 138 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
-| Remaining | 1 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
+| Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
 ## Evidence files carrying a dated correction, amendment or withdrawal
@@ -71,7 +71,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-DOC-5 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
-| PB-E2E-2 | S19 | **NOT MET** | UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any screen renders. PB-E2E-2 and PB-KEY-8 are in direct conflict; measured by running it (ADR-007 B56) |
+| PB-E2E-2 | S21 | pending | — |
 | PB-E2E-3 | S19 | **NOT MET** | THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first evidence per slice; S10 and S12's own evidence files admit tests and implementation landed together, and the residuals record that S17/S18b cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file NAMES the requirement, not that RED-first happened (ADR-007 B83) |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |

@@ -5073,3 +5073,38 @@ against its subject, an evidence file against its commit, a ledger against a cal
 requirement rows disagreeing is invisible to all five**, and this one survived four days and two
 reviewers who each read one row and found it correct. **Residual 4.24:** *a requirement set is also
 an artifact, and consistency within it is unchecked.*
+
+---
+
+### B91 — PB-E2E-2 re-scoped to physical hardware, where its evidence can actually come from
+
+**It is unsatisfiable on an emulator BY CONSTRUCTION, and that is correct behaviour rather than a
+gap.** The emulator keymaster reports `SECURITY_LEVEL_SOFTWARE`, and PB-KEY-8's hardware-downgrade
+refusal fails closed **before any screen renders** — so the app cannot start there at all. Measured
+by running it (B56), and **independently corroborated in round 5 by mutation**: disabling the
+secure-hardware refusal kills both floor tests, so **the refusal that blocks the emulator is real
+and correctly placed.**
+
+The two requirements were in direct conflict, and it resolves in **PB-KEY-8's favour without
+difficulty**: an app that silently accepted software-backed keys so that a smoke test could pass
+would be the worse outcome by a wide margin.
+
+**So the row moves to S21, the deferred physical-handset slice, and carries its deferral rather than
+a false NOT MET.** The smoke it describes — pair, observe, take control, type — is exactly what a
+handset run exercises. **It is NOT counted as met.** It is counted where its evidence will actually
+come from.
+
+**This is the second requirement this session whose status was wrong in a way no code change could
+fix**, and both were adjudications rather than defects: B90's contradiction between two rows of the
+same document, and this one's conflict between two rows that were each individually correct. **The
+difference matters — B90 was a document disagreeing with itself; this is the SYSTEM being right and
+a requirement asking for something the system correctly refuses.**
+
+**A cross-artifact check caught my own edit**, one paragraph after B90 recorded that nothing checks a
+specification against itself. Reassigning the manifest row left §11 still claiming the old owner, and
+`PB-DOC-7`'s checker refused the tree by name: *"S19 claims PB-E2E-2, which the manifest gives to
+S21."* **So the claim in B90 was too broad**: nothing checks requirement PROSE against itself, but
+the manifest-to-§11 ownership join IS checked, and it worked on the first edit that violated it.
+Residual 4.24 stands as written for prose; this narrows it.
+
+**Count: 138 of 144, four NOT MET, two deferred to the handset gate.**
