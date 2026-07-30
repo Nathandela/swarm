@@ -163,7 +163,8 @@ func TestInboundWait_CarriesItsOwnDeadline(t *testing.T) {
 			"(relay.TestCallDeadline_TheLongPollIsNotBoundedByIt), so this loop must BE a caller "+
 			"with a deadline.", specServerWaitCeiling)
 	}
-	if margin := first.deadline.Sub(first.issued); margin < specServerWaitCeiling {
+	margin := first.deadline.Sub(first.issued)
+	if margin < specServerWaitCeiling {
 		t.Fatalf("MailboxWait was issued with a %v deadline, which is INSIDE §6.0's %v "+
 			"server-side wait ceiling.\n"+
 			"A relay that honours the ceiling would then be cut off on every cycle and the "+
@@ -172,7 +173,31 @@ func TestInboundWait_CarriesItsOwnDeadline(t *testing.T) {
 			"there to end a wait the relay is NOT honouring, so it must sit above the ceiling, "+
 			"not under it.", margin, specServerWaitCeiling)
 	}
+
+	// AND the deadline production actually installed is the composed budget, measured off the
+	// loop rather than transcribed. Without this the range is one-sided: a bound of an hour
+	// clears the ceiling and is the original wedge in all but name, and a call site that ignored
+	// waitTimeout() in favour of a local literal would be observed by nothing.
+	//
+	// This asserts the CONNECTION between the constant and the loop, which is why it compares a
+	// measured value against defaultWaitTimeout rather than against a transcribed one -- moving
+	// the constant moves both sides and this test stays green ON PURPOSE. Whether the value is
+	// the right one is TheBoundIsComposedFromTheBudget's job, and splitting the two is ADR-007
+	// B113's instrument: a mutation that moves a constant every assertion transcribes proves the
+	// test reads the constant, never that production uses it.
+	if margin > defaultWaitTimeout || margin < defaultWaitTimeout-waitObservationSlack {
+		t.Fatalf("MailboxWait was issued with a %v deadline; the bridge's own bound is %v.\n"+
+			"The loop is not using defaultWaitTimeout -- a deadline from anywhere else is a "+
+			"budget nothing governs, and one large enough is the wedge again under another name.",
+			margin, defaultWaitTimeout)
+	}
 }
+
+// waitObservationSlack absorbs the gap between context.WithTimeout computing a deadline and the
+// mailbox timestamping the call it arrives on. That gap is a function call -- microseconds -- so
+// this is roughly six orders of magnitude of headroom against a loaded host, and still tight
+// enough to separate the composed budget from any other plausible value.
+const waitObservationSlack = 2 * time.Second
 
 // TestInboundWait_ATimedOutWaitIsRecoverable is the other half of the fix, and without it the
 // bound would only convert a silent wedge into a silent stop.
