@@ -6308,3 +6308,74 @@ precise failure mode B98 warned this row about.
 only. Machine→phone is asserted at the envelope handed to the appender, not at the wire, and **the
 journal direction has no named plaintext fence** — the adjudicator marked its belief that it shares
 the seal path as INFERRED, not verified.
+
+---
+
+## B113 — An eighth instrument: mutating a constant the test transcribes
+
+**2026-07-30.** `PB-NET-4`'s backoff was implemented, fenced, mutation-proven, and verified by me.
+**The fence does not observe production.**
+
+Independent adjudication replaced `App.run`'s `case <-time.After(rb.next()):` with the exact pre-fix
+line — a fixed `250 * time.Millisecond`, no growth, no ceiling, no jitter — leaving the constants and
+helpers untouched:
+
+```
+all four TestPBNET4_* ......... PASS
+whole `mobile` package ....... ok (16.8s)
+mobile/conformance ........... IDENTICAL failure set to baseline
+```
+
+Confirmed here: **every** test reference to the backoff constructs it itself —
+`newReconnectBackoff()`, `&reconnectBackoff{frac: ...}` — or calls the pure function directly.
+Nothing looks at `App.run`.
+
+**And the fix's own test file still carries the sentence that indicts it:** *"Setting that fixed delay
+to three hours left every PB-NET-4-named test passing, because nothing asserted the SHAPE of the
+delay."* Written to describe the defect being fixed. Still true afterwards.
+
+> **Instrument 8 — the mutation moves a constant the test transcribes.** It proves the test reads the
+> constant. It cannot prove **production** uses the constant, because the test never looks at
+> production. *Tell:* the mutation edits a value; every failing assertion names that value.
+> *Fix:* mutate the **connection**, not the **value** — revert the call site and require the fence to
+> fail there.
+
+**This is the eighth instrument and the first about MUTATION SELECTION rather than fence
+construction.** Every prior one asks whether a fence points at the right subject. This one asks
+whether the *mutation* does. **A mutation proof is only as good as the mutation**, and a mutation
+chosen from the same mental model that wrote the fence inherits its blind spot.
+
+**I accepted it.** I ran the 3-hour mutation, saw two tests fail, and called it proven — while spending
+the same round demanding mutation proofs from everyone else. The proof was real and it proved the
+wrong proposition.
+
+**Severity, stated fairly:** the wiring is correct today. `relay.go` constructs the backoff, calls
+`next()`, and `reset()`s after `setConn(connOnline)`. This is `PB-NET-3`'s shape — property TRUE,
+unmeasured — an evidence gap, not a live defect. **But it is the same gap B94 named, and closing it
+was the entire purpose of the commit.**
+
+## The other two clauses, and a correction found early that nobody generalised
+
+**Connection state surfaced — FENCED**, mutation-proven: deleting the `setConn(connReconnecting)`
+branch fails after 40s. Corroborated by four tests that each pin a *specific* non-spinner state, which
+is the stronger half — they forbid `reconnecting` where it would lie.
+
+**Input and resize never replayed — FENCED**, mutation-proven: removing `suspendInput` fails with
+*"a dropped transport must SEVER the lease"*.
+
+**And that file's header records why it exists.** The previous fence asserted on
+`transport.SendLive`, *"and `App.SendInput` never calls `SendLive`"* — **a B94-class correction, made
+in S11's first review round, BEFORE B94 was written.** Somebody found this exact class early, fixed
+the one instance in front of them, and **nobody generalised it.** Four requirements then spent five
+rounds fenced against the same dead package. The class was discovered, correctly diagnosed, and
+locally repaired at least three times before anyone named it.
+
+**Re-auth after reconnect — UNFENCED.** True by construction (`App.run` → `a.dial` → `DialSecure`,
+which always authenticates; no resume path exists) and named by nothing. The only `auth_init`
+assertions in the tree are the cleartext ones, whose property is the opposite direction. The deleted
+`TestReAuthenticatesAfterReconnect` lived in the dead package.
+
+**`PB-NET-4` stays NOT MET**, with the charge narrowed: the numbers are real and in a production
+package, and what remains is two evidence gaps of `PB-NET-3`'s shape. **One test against a flapping
+relay closes both** — assert the dial gaps grow within the jitter band, and that a second `auth_init`
+arrives on the reconnect. That is what the row's evidence column asked for all along.
