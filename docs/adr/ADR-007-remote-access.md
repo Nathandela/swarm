@@ -6192,3 +6192,40 @@ of them is the worst placed to make it.
 that would have deleted a fence; the other deleted its own duplicate rather than defend it. **The two
 most valuable commits of this round were a refusal and a restoration**, and neither was the work I
 asked for.
+
+---
+
+## B111 — Two correct de-duplications produced a hole. A duplicate is a nuisance; a gap is a defect
+
+**2026-07-30.** The third duplication was resolved twice, in opposite directions, by two parties each
+reading a true state — and the combination **deleted the property entirely.**
+
+```
+e1a2fee  Drop my repeated-Close case; 2727f0d landed it first     <- agent, believing mine survives
+9f1e503  delete my duplicate; the consolidation I approved was backwards  <- me, believing its survives
+```
+
+**Neither read was wrong when it was taken.** The agent searched, found my `TestCallDeadline_CloseIsIdempotent`, and trimmed its own repeated case as redundant. I compared both files, judged its version better on merit, and deleted mine. Two removals, back to back, each correct in isolation. **Afterwards nothing in the tree asserted that a second `Close` reports what the first did.**
+
+**And nothing reported it.** `go test ./...` stayed green, `-race` stayed green, lint stayed clean. **A duplicate is visible and annoying; a gap is invisible and green.** That asymmetry is the finding: de-duplication under concurrency is *more* dangerous than the duplication it removes, because the failure mode of over-removal is silence.
+
+**Restored and mutation-proven.** Removing `closeOnce` from `Conn.Close` — leaving `markDone`'s own `doneOnce`, so it does not panic:
+
+```
+--- FAIL: TestPBNET7_CloseIsIdempotent/Close_twice
+    Close() returned <nil> then failed to close WebSocket: use of closed network connection
+```
+
+**Only that subtest fails.** The mixed-order cases — `CloseNow` after `Close`, `Close` after `CloseNow`
+— pass straight through the mutation, which is the proof the hole was real rather than theoretical.
+Reverted; `client.go` byte-identical.
+
+> **The rule, in the words of the agent that diagnosed it: a search for prior coverage is only valid
+> for the instant it runs.** It proposed scope notes after the first duplication and then did not
+> apply one to its own next file, which is how this happened. **The note survives the race; the search
+> does not.** The surviving file now names itself sole owner of every teardown order and says not to
+> split it again.
+
+**Three duplications and one gap in a single round**, all the same shape: parallel agents converge on
+whatever gap the record most recently named. The record is a coordination signal, and pointing at an
+uncovered property makes several agents run at it at once.

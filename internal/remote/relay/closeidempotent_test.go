@@ -31,10 +31,34 @@ import (
 	"testing"
 )
 
-// TestPBNET7_CloseIsIdempotent pins the MIXED teardown order. Repeated Close is
-// calldeadline_boundary_test.go's; the two verbs share one sync.Once, so a change to either
-// can break the other and neither file's cases imply the other's.
+// TestPBNET7_CloseIsIdempotent owns EVERY teardown order, repeated and mixed.
+//
+// IT OWNS THE REPEATED CASE BECAUSE A MUTUAL DE-DUPLICATION DELETED IT. Two agents wrote this
+// fence hours apart; each then removed its own repeated-Close case, correctly observing that
+// the other file covered it, and the two removals landed back to back. Both reads were true
+// when taken. The result was a hole nothing reported -- go test stays green over a property
+// nobody asserts, which is why a DUPLICATE is a nuisance and a GAP is a defect (ADR-007 B111).
+//
+// This file is now the sole owner of Close idempotency in every order. Do not split it again.
 func TestPBNET7_CloseIsIdempotent(t *testing.T) {
+	// REPEATED CLOSE: the second call must report what the first did. Conn.Close guards its
+	// body with closeOnce and caches closeErr; markDone has its own doneOnce, so dropping
+	// closeOnce does not panic here -- it lets a second Close re-run ws.Close and overwrite the
+	// cached error. Shutdown would stop being a state and start depending on how many times it
+	// was asked for.
+	t.Run("Close twice", func(t *testing.T) {
+		srv, _, _, _ := startTestRelay(t, nil)
+		pub, priv := newRelayAuthKey(t)
+		c := dialAuthed(t, srv.URL(), authFor(pub, priv))
+
+		first := c.Close()
+		if second := c.Close(); first != second {
+			t.Errorf("Close() returned %v then %v; the second call must report the SAME outcome "+
+				"as the first, because a caller that closes a connection someone else already "+
+				"closed has no way to tell which call it is looking at", first, second)
+		}
+	})
+
 	t.Run("CloseNow after Close", func(t *testing.T) {
 		srv, _, _, _ := startTestRelay(t, nil)
 		pub, priv := newRelayAuthKey(t)
