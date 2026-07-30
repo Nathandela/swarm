@@ -4059,3 +4059,61 @@ all of them, **which satisfies the gate while defeating its purpose: the gate ca
 EXISTS, never that a human read the call.** That is the irreducible limit of this mechanism and no
 keying scheme fixes it. The answer, if that day comes, is fewer log calls on the phone-side path —
 not a looser note rule.
+
+---
+
+### B75 — a finding RETRACTED by its own author, and a rule I cited from memory that does not exist
+
+**B75(1) — the phone's "collapsed error class" finding is WITHDRAWN. It was wrong.**
+
+An implementer reported that `ErrClassPairingFailed` covers twelve distinct failure sites in
+`mobile/pairing.go`, so a phone UI cannot switch on the cause. It then investigated its own finding
+before acting on it and retracted it. **The retraction is worth more than the change would have
+been.**
+
+**The fine-grained channel already exists, is bound, and is called.** `Pairing.State()` exposes a
+thirteen-value machine with nine terminal values, wired to production Kotlin at
+`PairingSurface.kt:437` and deliberately absent from the unbound-verb ledger. `error_taxonomy.tsv`
+says so in the row for that very class: *"The pairing attempt's own terminal state is on the
+Pairing handle and is finer grained (PB-PAIR-5's five values); this is what a screen shows when the
+call itself failed."* Both examples used to justify the finding are already answered end to end —
+`expired` → `QR_EXPIRED`, `different_machine` → `DIFFERENT_MACHINE`, with arms for
+`sas_mismatch`, `rendezvous_timeout`, `refused_origin_mismatch` and `rate_limited` beside them.
+
+**The twelve sites are doing their documented job**, checked rather than counted: two are
+pre-handle, where no `Pairing` exists and the class is the only channel; six are wrong-time verb
+calls where `State()` is readable alongside; one settles `refused_origin_mismatch`; one settles
+`failed` and argues explicitly that a state earns its own value only when the user's next move
+differs; and one is `errLateCancel`, which B58 reasoned through and chose.
+
+**What the "fix" would have caused, which is the part to keep.** A second pairing-cause vocabulary
+shipped beside the fenced one, two Kotlin `when` blocks disagreeing about the same event, **and
+`android/gate/pairingstates_test.go` green throughout — because it compares the state alphabet, not
+the new one.** That is the `already_paired` drift *reintroduced by the fix for it*. The finding was
+filed from a grep of usage counts without reading what the class is for: twelve sites sharing a
+coarse class looked like a collapse, and it was a coarse class sitting correctly beside a fine one.
+
+**B75(2) — I cited a rule from memory and the rule does not say what I said.** Briefing that work I
+asserted B8 governs the error-class set and that "the matrix may only narrow". **B8 is about JNI
+key custody.** Its narrowing clause governs the per-ROLE KEY matrix — `{NoiseStatic, Recipient,
+CommandSign, RelayAuth}` × custody level, i.e. whether a private key's material lives in Go at all
+— and has nothing to say about the error taxonomy. What actually governs the class set is the
+exported-surface golden plus `error_taxonomy.tsv`'s bidirectional set-equality join with the Kotlin
+enum, enforced from three independent sides. Adding a class is **permitted** and expensive, not
+forbidden.
+
+**This is the failure mode this record keeps naming, produced while briefing against it.** B62(4)
+recorded that an impossibility proof is a claim with a timestamp and that three work directions
+died re-deriving one; B67(2) recorded the converse. **A rule recalled rather than re-read is the
+same defect at one remove**, and it would have sent an agent down a path justified by a constraint
+that does not exist. It was caught only because the agent read the entry instead of trusting the
+brief. Residual 4.18: *cite the entry, then open it — a rule quoted from memory is an unverified
+claim about a document that is right there.*
+
+**B75(3) — one real defect, found while retracting.** `mobile/screen_coverage.tsv:21` still names
+`already_paired`, the state PB-PAIR-5 **retired on 2026-07-25** and the exact dead branch
+`pairingstates_test.go` exists to prevent — and omits five terminal states that do exist. It
+survived because **nothing parses that column**: the coverage tests check the verb column and
+element uniqueness, never the note prose. Being corrected; the note column is deliberately NOT
+fenced, because the authoritative cross-language fence already reads the real sources and a second
+parser over prose would be satisfiable without being right.
