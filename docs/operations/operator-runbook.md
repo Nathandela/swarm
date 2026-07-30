@@ -67,6 +67,10 @@ The **gateway's** URL, not the phone's. Loopback cleartext, for the reason in th
 neither pin a self-signed certificate nor refuse a cleartext hop. The phone gets the
 `wss://<LAN-IP>:8443` address through the pairing QR.
 
+**`relay.json` is read once, at sidecar start.** `swarm-remote` redials the relay on ADR-007
+§6.0's backoff when the link drops (PB-NET-4) rather than exiting for the supervisor to restart
+it, so an edit here takes effect when you restart the unit — not on the next network blip.
+
 `swarm remote status` reports what it found:
 
 ```
