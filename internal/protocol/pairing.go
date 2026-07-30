@@ -3,7 +3,6 @@ package protocol
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 	"time"
 
@@ -87,15 +86,6 @@ const (
 	PairFailInternal PairFailure = "internal"
 )
 
-// pairFailures is the recognised vocabulary, and the ONLY thing a wire code may decode
-// to. Anything else is normalised to PairFailInternal.
-var pairFailures = map[PairFailure]struct{}{
-	PairFailDeclined: {}, PairFailConfirmTimeout: {}, PairFailWindowClosed: {},
-	PairFailSessionClosed: {}, PairFailConnectionLost: {}, PairFailRateLimited: {},
-	PairFailCodeSpent: {}, PairFailHeadless: {}, PairFailNoConsent: {},
-	PairFailAcceptUnacknowledged: {}, PairFailInternal: {},
-}
-
 // PairFailures returns the recognised cause vocabulary, sorted, so a presentation layer can
 // assert it renders EVERY cause rather than the ones its author happened to think of.
 //
@@ -104,14 +94,31 @@ var pairFailures = map[PairFailure]struct{}{
 // line for it and fell through to "the daemon did not report a cause", which is B71(1)'s
 // complaint verbatim, one cause later. A quantifier over this slice is what makes a new cause
 // fail loudly at the presentation layer instead of arriving silently as "internal".
+//
+// It is the DECLARATION and pairFailures below is derived from it, rather than the other way
+// round. Deriving the slice from the map would have left this function with no production
+// caller at all -- an exported symbol reachable only from a test, which is the unbound-verb
+// defect B80 recorded and B94 now fences. It caught this on its first run against this change.
+// PairFailNone is deliberately absent: it is the absence of a failure, not one of them.
 func PairFailures() []PairFailure {
-	out := make([]PairFailure, 0, len(pairFailures))
-	for f := range pairFailures {
-		out = append(out, f)
+	return []PairFailure{
+		PairFailAcceptUnacknowledged, PairFailCodeSpent, PairFailConfirmTimeout,
+		PairFailConnectionLost, PairFailDeclined, PairFailHeadless, PairFailInternal,
+		PairFailNoConsent, PairFailRateLimited, PairFailSessionClosed, PairFailWindowClosed,
 	}
-	slices.Sort(out)
-	return out
 }
+
+// pairFailures is the recognised vocabulary as a set, and the ONLY thing a wire code may
+// decode to. Anything else is normalised to PairFailInternal. It is DERIVED from
+// PairFailures() so the two cannot drift apart.
+var pairFailures = func() map[PairFailure]struct{} {
+	all := PairFailures()
+	m := make(map[PairFailure]struct{}, len(all))
+	for _, f := range all {
+		m[f] = struct{}{}
+	}
+	return m
+}()
 
 // classifyPairFailure maps a host's terminal error to the cause the owner is told.
 //
