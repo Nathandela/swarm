@@ -6835,3 +6835,109 @@ from re-deriving a row.
 
 **Row-level honesty:** `PB-STATE-10` was read and **not** mutated, and is counted **unexamined, not
 clean.**
+
+---
+
+## B122 — PB-NET-7's quantifier is enumerated, and the enumeration's first version could not catch the defect it was written for
+
+**2026-07-31.** `PB-NET-7`'s residual has survived three adjudications in one shape: the row says
+*"timeouts EVERYWHERE"* — quantified over call paths — every named clause is fenced, and **nothing
+enumerated the paths.** B109 named it and then discharged it with an argument that delegated the
+bound to the declared adversary; B112 measured that argument losing by 2.8x; B115 fixed the one
+instance and restated the residual unchanged. **Fixing an instance does not close a quantifier.**
+
+The enumeration is `internal/verify/pbnet7_deadlines_test.go`. Two layers, **no allowlist.**
+
+**LAYER 1 DERIVES THE PARTITION INSTEAD OF TRANSCRIBING IT.** An operation is *client-bounded* iff
+relay applies a deadline on its own path: either it reaches `roundtrip` with a `*Client` receiver —
+so the connection is guaranteed pumped and `Conn.bounded` is a real deadline rather than a
+pass-through — or it declares one itself. Everything else is *caller-bounded*. Four structural facts
+that rule rests on are asserted separately and each fails by name: `bounded` is
+`WithTimeout(ctx, c.callTimeout)` **guarded on `callTimeout <= 0`**; `roundtrip` calls it;
+`callTimeout` is assigned **once**, inside `dialConn`'s `if pumped`; and `Client` is constructed
+**once**, in `authenticate`, reached only from two pumped dials.
+
+> **`Conn.bounded` is excluded from the second clause, and that exclusion is the load-bearing
+> one.** The deadline it applies is CONDITIONAL on a field only the pumped dial sets. Crediting it
+> would mark every rendezvous op on a RAW connection as bounded — which is precisely the
+> over-approximation that made this quantifier unfenceable for seven rounds.
+
+**LAYER 2 IS THE ENUMERATION**: a typed SSA + RTA backward dataflow. For every production call into
+a caller-bounded operation it traces the context argument to its ORIGIN — through parameters, phis,
+closure free variables, address-taken locals and helpers that return a context — and requires
+`context.WithTimeout`/`WithDeadline`. Anything else fails **by name**, printing the chain. There is
+no ledger of exempt call sites: a ledger is a second copy of the call graph that rots (B111), and
+the rule decides every site without one.
+
+## The first version passed the mutation that restores B112's own CRITICAL
+
+Mutation A replaced `MailboxWait(waitCtx, ...)` with `MailboxWait(ctx, ...)` in the gateway's
+command-IN loop — **B112's CRITICAL, verbatim, at the line B115 fixed.** The fence passed.
+
+`internal/remotegw` reaches the relay through **its own `Mailbox` interface**, so the instruction is
+an invoke with **no static callee**, and a matcher keyed on `StaticCallee()` saw *nothing at all* —
+not a bounded call, not an unbounded one, no call. The walk reported 15 clean call sites and was
+blind to the only one anybody had ever found a defect at.
+
+> **Instrument 9 — the matcher cannot see the dispatch the defect travels on.** A fence that scans
+> call sites inherits the resolution power of whatever it scans with. Name scans miss interfaces;
+> static-callee scans miss interfaces; both report *fewer* sites rather than an error, so the
+> failure mode is **a smaller enumeration that looks complete.** *Tell:* the fence's own count is
+> plausible and the known-hard call site is absent from it. *Fix:* resolve dispatch (RTA), and add
+> an anti-vacuity guard on the **mechanism** — this file now fails if zero sites are reached through
+> an interface, which is the guard that would have caught it without the mutation.
+
+**It is B113's lesson one level up.** B113 said a mutation chosen from the same mental model as the
+fence inherits its blind spot. This says the same of the *matcher*: the enumeration and the mutation
+were both written by someone thinking in static calls, and only a mutation aimed at a **historical
+defect** — rather than at anything the author invented — broke the symmetry.
+
+**Mutation-proven, connection not value, each reverted with a matching checksum:** A above (after
+the fix, it fails naming `command_loop.go:333` and the five-hop chain out to
+`os/signal.NotifyContext` in `main`); a **new** unbounded call site added to `mobile/relay.go`
+(fails by name); and `callTimeout` hoisted out of `dialConn`'s pumped branch (FACT 3 fails by name).
+
+## Three live findings, and a convergence that tested the fence's neutrality
+
+The walk went red on first run with three call sites, all the DIAL, all confirmed by a probe against
+a peer that completes TCP and never answers the HTTP upgrade:
+
+```
+PROBE: DialSecure(context.Background()) STILL PARKED after 45s
+```
+
+`mobile/relay.go` (the phone's reconnect loop parks forever — a dial that never returns never enters
+backoff), `cmd/swarm-remote/main.go` (dials once, no redial), and
+`internal/skeleton/pairing_rendezvous.go` — the sharpest of the three, because it parks **before**
+`pairing.go` creates `pairCtx`, so **B64's window, which exists precisely because a pairing leg with
+no clock holds the connection's single pairing slot forever with no `pair_cancel` to release it, was
+not yet in force. The dial is the one step of the ceremony B64 did not reach.**
+
+**Another agent found the same defect independently and fixed it in a better place** — one bound in
+`dialConn`, at the seam every dial crosses, rather than three bounds at three callers. Their
+argument is the stronger one and it is this row's own: *two callers got it wrong independently, so a
+per-caller fix leaves the third caller to get it wrong a third time.* The caller-side fixes written
+here were **reverted rather than merged**, which is the third duplication this session avoided by
+looking before committing.
+
+> **And the convergence tested something the fence could not test about itself.** Layer 1 *derives*
+> whether a dial bounds itself rather than asserting the answer. When the fix landed inside
+> `dialConn`, the four `Dial*` functions moved from caller-bounded to client-bounded **with no edit
+> to the fence**, and their call sites correctly stopped owing a deadline. A fence that had
+> transcribed *"package-level dials are caller-bounded"* would have gone red against a correct
+> tree and demanded the world match its author's choice of fix location. **That is the difference
+> between a rule and a list, measured rather than argued.**
+
+**One precondition was owned by nobody and is now fenced.** Both fixes rest on a dial deadline not
+becoming the CONNECTION's deadline — a property of `coder/websocket` and `net/http`, not of this
+repository. A dependency bump that tied the upgraded connection to its request context would sever
+every client ten seconds after it connected, **silently, on the happy path, and nowhere in any test
+that dials with an undeadlined context.** `relay.TestPBNET7_ADialDeadlineDoesNotOutliveTheHandshake`
+passed on first write — said so rather than manufacturing a red (B101) — and is mutation-proven by
+deriving the `Conn`'s context from the dial's, which fails it with `ErrConnClosed` while the rest of
+the package stays green.
+
+**The verdict on the row is NOT taken here.** This entry's author built the fence, B109 and B115 both
+declined to close this row on their own work, and the row's remaining clause — the dial fix itself —
+belongs to another agent. **The enumeration residual is closed with named, mutation-proven evidence;
+whether `PB-NET-7` is MET is the committee's.**
