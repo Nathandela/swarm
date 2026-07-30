@@ -714,6 +714,18 @@ fragility but the absence of any policy. It is open, it needs an owner before an
 the relay is not the operator's own trusted host, and it is not a call-site change — carrying a pin
 to the handset needs a decision about the pairing QR's size budget (`MaxRelayURLLen = 39`).
 
+> **THIS FINDING IS CLOSED (added 2026-07-30, ADR-007 B75).** The three paragraphs above are a
+> correct record of what was true when this slice closed, and they are what drove B34/B37; they are
+> left unedited for that reason. **They are no longer true of the tree.** Every dial path now
+> carries a `relay.Security`: `cmd/swarm-remote/main.go` and `mobile/relay.go` use
+> `relay.DialSecure`, `mobile/pairing.go` uses `relay.DialRawSecure`, and no production call site
+> uses `relay.Dial` or `relay.DialRaw`. Read this passage as the finding, not as the current state;
+> `docs/operations/metadata-disclosure.md` §3 carries the current state.
+>
+> Recorded because the stale text had already propagated: metadata-disclosure.md §3 repeated it as
+> a live open finding long after it was fixed, which is how PB-OPS-3 came to be counted shipped
+> against a description of a system that no longer existed.
+
 Two further open items came out of writing the handset-gate runbook and are recorded as residuals
 §2.7 and §2.8: **`insideSecureHardware` is read back and never compared**, so a software-only KEK
 provisions cleanly with nothing objecting; and **provisioning refuses without two Keystore

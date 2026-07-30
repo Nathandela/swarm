@@ -1268,6 +1268,9 @@ version, type, epoch id, seq, **`RecipientKeyID` (8 bytes)**, **`SenderKeyID` (8
 `IssuedAt`. `handlePushTrigger` (`relay/server.go:930`) puts the whole marshalled envelope into the
 push payload. Reused verbatim, the provider additionally observes two **stable** endpoint
 identifiers — linking every wake to one machine/device pair for the life of the epoch — plus a
+[**B77: and the Decision below then addressed only the two fields it changed, leaving this third
+item named and unanswered. That "stops one bullet short" shape is why re-deriving the exposure
+found the counter and re-reading the record did not.**]
 monotonic wake counter. That is strictly more than the ADR claims, and D11 (metadata honesty)
 forbids claiming less exposure than exists.
 
@@ -1815,7 +1818,23 @@ its own named bucket rather than in the item log so an operator can audit every 
 one place. That is an **auditability** property, not a confidentiality one, and must not be cited as
 the latter.
 
-**The provider's view is now what PB-PUSH-3 claims, because B20 made it so**: key ids zeroed, a
+**AMENDED 2026-07-30 (B77): THIS SENTENCE CLAIMED LESS EXPOSURE THAN EXISTS, which is what D11
+forbids.** It omitted two things the provider does observe. **(1) A cleartext monotonic sequence
+counter** at bytes 6:14, plus an `issued_at` millisecond timestamp at 30:38 — both authenticated,
+neither encrypted, both readable with no key. **This is a deliberate trade and cannot be undone:**
+PB-PUSH-3's own tests require that counter strictly increasing and durable across a gateway
+restart, and its 10-minute replay window depends on it. A wake with no replay coordinate is a wake
+the relay can replay. **(2) The relay has a SECOND push producer.** Measured through the real
+marshaller: a gateway wake is 177 bytes on the wire and a presence-sweep push is 73 — **a 104-byte
+separation, keyless**, letting the provider distinguish *"a session changed state"* from *"this
+machine went offline"*. The size-is-benign rationale held only while size was constant, and from
+the provider's seat it is not. The fence pinning that claim lives in `internal/remotegw` and **does
+not import the relay package at all** — structurally blind, not merely narrow. The buildable fence
+sits at the `PushSink` boundary in `internal/remote/push`, where both producers converge; it is
+RED today and must land with the relay fix rather than pinning the current shapes, which would
+sanction the defect.
+
+**The provider's view, corrected**: key ids zeroed, a
 constant 78-byte payload, an empty plaintext. What an empty payload does **not** fix: a token plus
 wake timing is an **activity trace**. The content is hidden; the rhythm is not. D11's honesty rule
 requires saying so rather than resting on the payload being empty.
@@ -4160,3 +4179,51 @@ than from B58's answer to a different question.
 message — a later reader noticing the gap is looking at the row, not at history — so the row now
 names its own weakness and points at the authority: the const block, plus the one check in the tree
 that set-compares it against the Kotlin enum.
+
+---
+
+### B77 — the ADR claimed less exposure than exists, and the operator doc inherited it
+
+**B32's summary sentence and B20's Decision are amended in place**, above. The finding came from
+re-deriving what a provider observes rather than re-reading what the record says it observes, and
+that distinction is the entry.
+
+**Two corrections to how I briefed this.** I said the operator doc claims the wake "carries no
+information". That phrase attaches to the **Size** row, where it is defensible — a constant is
+information-free. **The actual defect is the OMISSION**: the row closed a table purporting to
+enumerate what the provider sees, followed by a "does not observe" list that reads as exhaustive.
+And I framed the counter as an unfixed leak. **It is load-bearing and cannot be removed** —
+PB-PUSH-3's own tests require it monotonic and durable, and the 10-minute replay window depends on
+it. Replay resistance bought with a cleartext counter is a **trade**, and recording it as a defect
+awaiting a fix would have sent someone to remove the thing holding the window up.
+
+**B20 stopped one bullet short, and B32 inherited it.** B20's own text names "plus a monotonic wake
+counter" among three leaks; its Decision then addresses only the two fields it changed. B32 then
+summarised the Decision rather than the finding, and the operator doc was derived from B32. **The
+requirements table had named the counter all along** — PB-PUSH-3 never claimed it was removed. So
+three artifacts drifted from one that was correct, in the direction of claiming less exposure.
+
+**The second producer is worse than "0 bytes".** Measured through the real marshaller: **177 bytes
+versus 73 — a 104-byte separation, keyless.** A semantic fact about the owner's infrastructure,
+read off payload shape without touching crypto.
+
+**PB-PUSH-3 — MET.** Every enforced property verified by keyless read: key ids zero, constant
+envelope, empty plaintext, replay coordinate present and durable. The counter is named in the
+requirement's own text. The two-producer gap is an honesty-scope question, not a wake-envelope one.
+
+**PB-OPS-3 — the doc fix alone did NOT clear it, and the implementer said so rather than claiming
+the win.** Its criterion is that the ADR section be consistent with PB-PUSH-3 and D11; B32 was the
+inconsistent artifact, and B32 itself ends *"the operator-facing form is metadata-disclosure.md;
+the two must not diverge"* — so correcting only the operator doc **created** the divergence. It is
+cleared by the amendments above, not by the doc edit.
+
+**A distinction worth keeping.** The same sentence about insecure dialling is **right in the S20
+evidence file and wrong in the operator doc**, because one is a dated record of what was true and
+the other claims to describe now. Only the second kind needs correcting; the evidence file gets a
+scoped banner and an unedited body (B66(3)). **A dated record is not stale merely because the world
+moved.**
+
+**Deliberately not landed: the both-producer fence.** Asserting that every push the provider
+receives has one shape is RED today, because the defect is real and its fix is relay work in
+another lane. The alternative — pinning the current two shapes — would make the defect look
+sanctioned. The location is written into the operator doc so it does not have to be rediscovered.
