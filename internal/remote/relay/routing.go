@@ -84,6 +84,23 @@ func AuthChallengeMessage(nonce []byte, routingID string) []byte {
 // the row count — see the argument there.
 const maxCeremonyIDLen = 128
 
+// maxRendezvousIDLen bounds the rendezvous label rendezvous_create may retain (round-4
+// threat review C2), on the same reasoning as maxCeremonyIDLen and at the same number —
+// which is not a coincidence: PRODUCTION SENDS THE SAME 32 BYTES. The ceremony id IS the
+// rendezvous id (see ConsentMessage), hex of the 16-byte QR field, and mobile/pairing.go
+// and internal/skeleton are the only producers.
+//
+// A create RETAINS its id twice — as a key in the rendezvous table while the slot lives,
+// and as a key in the burn set after it dies — and rendezvous_create carries no
+// requireAuth, so without a bound an unauthenticated caller chose how many bytes of
+// server memory one call cost, up to a frame. Bounding it makes that cost a constant the
+// relay picked, which is the whole of ADR-007 B61's rule.
+//
+// It is a LENGTH bound and not a FORMAT one for B61's reason: the relay forwards opaque
+// bytes between two parties and has no business demanding hex. Every rendezvous fixture in
+// this package names its id in prose.
+const maxRendezvousIDLen = 128
+
 // ConsentMessage is the canonical statement a party's relay-auth key signs to
 // grant granteeRoutingID authority over that party's own route: append to its
 // mailbox, wake it, and revoke it. It is ADR-007 B27's consent signature, which

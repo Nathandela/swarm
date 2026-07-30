@@ -292,6 +292,7 @@ func (s *Server) runSweeps() {
 		case <-ticker.C:
 			s.SweepPresence(s.baseCtx)
 			s.SweepRetention(s.baseCtx)
+			s.SweepRendezvous(s.baseCtx)
 		}
 	}
 }
@@ -388,6 +389,65 @@ type serverConn struct {
 
 	rdvID    string
 	rdvInbox chan []byte
+	// rdvDeadline is the instant this connection's rendezvous participation ends: one
+	// RendezvousTTL — a whole slot lifetime — from the moment it joined, which is a
+	// constant the relay picked either way (round-4 threat review C3). It bounds
+	// BOTH the park in rendezvous_recv and — for a connection that never authenticated —
+	// the reads in readFrame, so a rendezvous can no longer buy an unbounded socket.
+	//
+	// It is REAL wall-clock time, not the injected s.clk, for the same reason acceptedAt
+	// is: context deadlines and timers resolve against real time, and s.clk is a logical
+	// clock tests freeze and jump. The TTL DECISIONS about the slot itself (purge, claim)
+	// still read s.clk, so the two never disagree about whether a slot is alive — this one
+	// only decides when to stop waiting on a socket.
+	rdvDeadline time.Time
+}
+
+// attachRendezvousLocked binds sc to a rendezvous it has just created or claimed, giving
+// it a fresh inbox and the deadline its participation is bounded by. s.mu is held.
+func (sc *serverConn) attachRendezvousLocked(id string) {
+	sc.rdvID = id
+	sc.rdvInbox = make(chan []byte, 16)
+	sc.rdvDeadline = time.Time{}
+	if ttl := sc.s.cfg.RendezvousTTL; ttl > 0 {
+		sc.rdvDeadline = time.Now().Add(ttl)
+	}
+}
+
+// leaveRendezvousLocked detaches sc from the rendezvous it holds and BURNS that id if no
+// participant is left. s.mu is held. It is the one place a connection lets go of a slot,
+// and every path that takes a new one goes through it first (round-4 threat review C2).
+//
+// A CONNECTION PARTICIPATES IN AT MOST ONE RENDEZVOUS, and that is what was missing.
+// handleRendezvousCreate overwrote sc.rdvID/sc.rdvInbox in place while removeConn detached
+// only s.rendezvous[sc.rdvID] — the LAST id — so every earlier slot stayed occupied by a
+// connection that could no longer receive on it, and stayed occupied after that connection
+// disconnected. Measured: one unauthenticated connection took 64 of 64 slots, a legitimate
+// machine's rendezvous_create was refused quota_exceeded, and all 64 were still held after
+// the squatter went away. rendezvous_create needs no authentication.
+//
+// IT BURNS RATHER THAN MERELY FREEING, which is ADR-007 B47b and not a new rule: an id
+// whose live pairing ended is as dead as one that completed, because the QR naming it is
+// still on the owner's screen and a stranger re-creating the label receives the next phone
+// to scan it. The burn is a WINDOW, so the burn set stays bounded (see burnWindow).
+func (s *Server) leaveRendezvousLocked(sc *serverConn, now time.Time) {
+	id := sc.rdvID
+	if id == "" {
+		return
+	}
+	sc.rdvID = ""
+	sc.rdvInbox = nil
+	sc.rdvDeadline = time.Time{}
+	slot, ok := s.rendezvous[id]
+	// The slot may be gone (expired, completed) or may have been re-created by somebody
+	// else since; in neither case is this connection's departure an event for it.
+	if !ok || (slot.creator != sc && slot.claimer != sc) {
+		return
+	}
+	slot.detach(sc)
+	if slot.creator == nil && slot.claimer == nil {
+		s.burnRendezvous(id, now)
+	}
 }
 
 func (s *Server) serveConn(ws *websocket.Conn, remoteAddr string) {
@@ -466,11 +526,10 @@ func (s *Server) removeConn(sc *serverConn) {
 	if sc.rid != "" && !ridLive {
 		delete(s.opsRate, "rid:"+sc.rid)
 	}
-	if sc.rdvID != "" {
-		if slot, ok := s.rendezvous[sc.rdvID]; ok {
-			slot.detach(sc)
-		}
-	}
+	// The slot this connection held is released, and burned if nothing is left in it, so
+	// the rendezvous table does not stay occupied by a party that has gone away (round-4
+	// threat review C2).
+	s.leaveRendezvousLocked(sc, s.clk.Now())
 	// A dead connection's wait slot is freed here as well as by serveWait's own
 	// defer, so the slot is never held by a connection that no longer exists.
 	s.severWaitLocked(sc, waitCancelled)
@@ -486,18 +545,40 @@ func (s *Server) removeConn(sc *serverConn) {
 	}
 }
 
+// preAuthDeadline is when an UNAUTHENTICATED connection must be done by, and whether it
+// has such a bound at all. The fields it reads are only ever mutated in this connection's
+// own dispatch goroutine, so it is race-free without the lock.
+//
+// CR-1: a connection that has neither authenticated nor joined a rendezvous is bounded by
+// the CUMULATIVE time-to-authenticate, anchored at accept time — not by a fresh per-read
+// idle window, which a drip of harmless frames under HandshakeTimeout could reset forever
+// (CR-1 slice 2).
+//
+// AND A RENDEZVOUS CONNECTION IS BOUNDED BY ITS RENDEZVOUS (round-4 threat review C3).
+// Joining one used to waive the deadline outright, leaving an unauthenticated socket with
+// no deadline, no quota and no slot accounting — measured still live at 4x the handshake
+// deadline AND after its own slot had aged out. There is nothing an unauthenticated
+// connection can legitimately do past its slot's lifetime, so the waiver becomes an
+// EXTENSION with an end. An AUTHENTICATED connection may still idle indefinitely: that is
+// an established session, and every op it can issue is metered and authorized.
+func (sc *serverConn) preAuthDeadline() (time.Time, bool) {
+	if sc.authed {
+		return time.Time{}, false
+	}
+	if sc.rdvID != "" {
+		return sc.rdvDeadline, !sc.rdvDeadline.IsZero()
+	}
+	if to := sc.s.cfg.HandshakeTimeout; to > 0 {
+		return sc.acceptedAt.Add(to), true
+	}
+	return time.Time{}, false
+}
+
 func (sc *serverConn) readFrame() (MsgType, []byte, error) {
-	// CR-1: bound the CUMULATIVE time-to-authenticate on a connection that has
-	// neither authenticated nor joined a rendezvous, anchored at accept time —
-	// not a fresh per-read idle window, which a drip of harmless frames under
-	// HandshakeTimeout could otherwise reset forever (CR-1 slice 2). An
-	// established (authenticated or rendezvous) connection may idle indefinitely.
-	// These fields are only ever mutated in this connection's own dispatch
-	// goroutine, so reading them here without the lock is race-free.
 	ctx := sc.ctx
-	if to := sc.s.cfg.HandshakeTimeout; to > 0 && !sc.authed && sc.rdvID == "" {
+	if deadline, bounded := sc.preAuthDeadline(); bounded {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(sc.ctx, sc.acceptedAt.Add(to))
+		ctx, cancel = context.WithDeadline(sc.ctx, deadline)
 		defer cancel()
 	}
 	mt, data, err := sc.ws.Read(ctx)
@@ -1021,6 +1102,15 @@ func (sc *serverConn) handleTokenRegister(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	// THE TOKEN IS BOUNDED HERE, WHICH IS THE ONLY PLACE IT CAN BE (round-4 threat review
+	// C1). Everything downstream carries the label verbatim by design — the store writes it
+	// as a bbolt value, loadTokens reads every one of them back at construction, and the
+	// sink hands it to the provider untouched — so no later hop is the authority. See
+	// maxPushTokenLen for why the bound is on LENGTH, why it is set where it is, and what
+	// it deliberately does not bound.
+	if len(req.Token) > maxPushTokenLen {
+		return sc.replyErr(codeBadRequest)
+	}
 	// Durable BEFORE the cache (PB-PUSH-6): a persist failure must leave the relay
 	// reporting the failure rather than holding a token that vanishes on restart.
 	if err := sc.s.st.putToken(sc.rid, req.Token); err != nil {
@@ -1064,6 +1154,36 @@ func (sc *serverConn) handlePresence(payload []byte) error {
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
+	}
+	// THE CALLER MUST HAVE AUTHORITY OVER THE ROUTE IT IS ASKING ABOUT (round-4 threat
+	// review H1, first recorded in docs/verification/remote-phase1-relay-review.md).
+	//
+	// requireAuth above proves an identity and nothing more — relay auth is OPEN
+	// REGISTRATION — so this handler answered for ANY routing id anyone cared to name.
+	// Measured: an identity minted seconds earlier, paired with nobody, read "online" for a
+	// machine it has no edge to. Every other verb that touches somebody else's route goes
+	// through a store predicate — mailbox_append and push_trigger through mayActOn,
+	// device_revoke through isPairer — and presence went through nothing.
+	//
+	// IT IS THE SAME PREDICATE THE APPEND AND THE PUSH TAKE, deliberately, rather than a
+	// third rule: "may I act on this route" is the relay's one authority decision
+	// (store.mayActOn), and a liveness read of somebody's route is an act on it. It also
+	// costs the production caller nothing — mobile/app.go's Presence is the phone asking
+	// about its own PINNED machine, and authorizePair wrote that grant in both directions,
+	// so the paired phone satisfies mayActOn against its machine (checked, not assumed:
+	// it is the only production caller in the tree).
+	//
+	// A CALLER MAY ALWAYS ASK ABOUT ITSELF. That is nobody else's route, it is a fact the
+	// caller already holds by being connected, and B61's refusal of self-consent means a
+	// party can no longer manufacture the pairs[X\x00X] edge that would otherwise make
+	// mayActOn answer it.
+	//
+	// THE REFUSAL IS "unknown" RATHER THAN not_authorized because the oracle is TWO
+	// questions, not one: an unauthorized caller also learned whether a routing id exists
+	// at all (a never-seen id answered "unknown", a live one "online"). Answering unknown
+	// makes the two indistinguishable, and it is a state the client already handles.
+	if req.Target != sc.rid && !sc.s.st.mayActOn(sc.rid, req.Target) {
+		return sc.replyOK(PresenceInfo{State: PresenceUnknown})
 	}
 	return sc.replyOK(PresenceInfo{State: sc.s.presenceState(req.Target)})
 }
@@ -1336,6 +1456,13 @@ func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	// The id is retained — as a table key while the slot lives and as a burn-set key after
+	// it dies — and this is the only place a NEW one enters, so this is where its length is
+	// bounded (round-4 threat review C2). See maxRendezvousIDLen. Claim, send and complete
+	// only look ids UP, so they retain nothing an unbounded id could inflate.
+	if len(req.ID) > maxRendezvousIDLen {
+		return sc.replyErr(codeBadRequest)
+	}
 	now := sc.s.clk.Now()
 	sc.s.mu.Lock()
 	sc.s.purgeExpiredRendezvous(now)
@@ -1354,9 +1481,12 @@ func (sc *serverConn) handleRendezvousCreate(payload []byte) error {
 		sc.s.mu.Unlock()
 		return sc.replyErr(codeQuotaExceeded)
 	}
+	// C2: take the new slot only after letting go of the one this connection already held,
+	// so a connection can never hold two. It runs AFTER every refusal above, so a create
+	// that is going to be refused does not cost this connection the slot it has.
+	sc.s.leaveRendezvousLocked(sc, now)
 	sc.s.rendezvous[req.ID] = &rdvSlot{createdAt: now, creator: sc}
-	sc.rdvID = req.ID
-	sc.rdvInbox = make(chan []byte, 16)
+	sc.attachRendezvousLocked(req.ID)
 	sc.s.mu.Unlock()
 	return sc.replyOK(map[string]any{})
 }
@@ -1392,9 +1522,17 @@ func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
 	if slot.creator != nil && slot.claimer != nil {
 		return sc.replyErr(codeRendezvousFull)
 	}
+	// A participant re-claiming its own rendezvous changes nothing: taking the free seat
+	// would put ONE connection in both of them, and re-making the inbox would drop
+	// whatever the peer has already sent (round-4 threat review C2).
+	if slot.creator == sc || slot.claimer == sc {
+		return sc.replyOK(map[string]any{})
+	}
+	// C2: as in create — one rendezvous per connection, and the previous one is released
+	// (and burned if it is left empty) rather than silently orphaned.
+	sc.s.leaveRendezvousLocked(sc, now)
 	slot.claimer = sc
-	sc.rdvID = req.ID
-	sc.rdvInbox = make(chan []byte, 16)
+	sc.attachRendezvousLocked(req.ID)
 	return sc.replyOK(map[string]any{})
 }
 
@@ -1431,16 +1569,44 @@ func (sc *serverConn) handleRendezvousSend(payload []byte) error {
 	return sc.replyOK(map[string]any{})
 }
 
+// handleRendezvousRecv parks for the next frame from the other participant, BOUNDED by the
+// rendezvous the connection joined (round-4 threat review C3).
+//
+// The park is what needs the bound, not the socket: it happens inside dispatch, so no
+// deadline readFrame applies can ever reach it, and the pre-C3 handler had no meterOp and
+// no ceiling either. mailbox_wait is the shape this matches — it is metered exactly once
+// per call and answers cleanly at MaxServerWait rather than holding a socket until an
+// intermediary kills it (wait.go).
+//
+// The ceiling is the RENDEZVOUS's rather than one of its own, because there is nothing to
+// receive past it: the peer that could send is refused at claim, and the slot itself is
+// purged on the maintenance tick. And it is charged against rdvDeadline rather than against
+// preAuthDeadline so it binds a connection that AUTHENTICATED and then joined a rendezvous
+// too — an identity is free to mint, so a bound that only covers unauthenticated callers
+// is a bound an attacker steps around by minting one.
 func (sc *serverConn) handleRendezvousRecv(_ []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
 	sc.s.mu.Lock()
 	inbox := sc.rdvInbox
 	sc.s.mu.Unlock()
 	if inbox == nil {
 		return sc.replyErr(codeBadRequest)
 	}
+	var expired <-chan time.Time
+	if !sc.rdvDeadline.IsZero() {
+		t := time.NewTimer(time.Until(sc.rdvDeadline))
+		defer t.Stop()
+		expired = t.C
+	}
 	select {
 	case data := <-inbox:
 		return sc.replyOK(map[string]any{"data": data})
+	case <-expired:
+		// The same verdict the claimer gets past the TTL, and the truth the caller needs:
+		// this rendezvous is over, so the pairing failed rather than silently hanging.
+		return sc.replyErr(codeRendezvousTTL)
 	case <-sc.ctx.Done():
 		return sc.ctx.Err()
 	}
@@ -1546,15 +1712,54 @@ func (s *Server) SweepPresence(ctx context.Context) {
 		p.state = PresenceOffline
 		p.notified = true
 		for _, peer := range s.st.pairedPeers(rid) {
-			if tok := s.tokens[peer]; tok != "" {
-				targets = append(targets, pushTarget{rid: peer, token: tok})
+			tok := s.tokens[peer]
+			if tok == "" {
+				continue
 			}
+			// CHARGED AGAINST THE TARGET'S PUSH WINDOW, exactly as push_trigger is
+			// (round-4 threat review H2). This path used to call deliverPush directly while
+			// pushRate guarded only the handler, so the sweep's wakes were charged against
+			// nothing: measured at 12 delivered pushes from 12 presence flaps with
+			// PushPerMin=1.
+			//
+			// That matters because THE RELAY DECIDES when a machine's socket has dropped,
+			// and the relay is the declared adversary (ADR-007 D9). An unrated sweep is
+			// therefore a lever it can pull at will to drive high-priority wakes at the
+			// owner's handset — battery, notification churn, and the owner's own provider
+			// quota — while looking like nothing worse than an unreliable network. It is
+			// the SAME window as the trigger's on purpose: a device's wake budget is a
+			// property of the device, not of which relay code path spent it.
+			w := s.pushRate[peer]
+			if w == nil {
+				w = &rateWindow{}
+				s.pushRate[peer] = w
+			}
+			if !w.allow(now, s.cfg.Quotas.PushPerMin) {
+				continue
+			}
+			targets = append(targets, pushTarget{rid: peer, token: tok})
 		}
 	}
 	s.mu.Unlock()
 	for _, t := range targets {
 		s.deliverPush(t.rid, t.token, PushPayload{Alert: GenericPushAlert})
 	}
+}
+
+// SweepRendezvous expires aged rendezvous slots and collects burn windows that have
+// closed, on the maintenance tick (round-4 threat review C2).
+//
+// It exists because purgeExpiredRendezvous ran in exactly one place: inside
+// handleRendezvousCreate. A table filled by connections that then went quiet was therefore
+// reclaimed only when some stranger happened to call create — which is precisely the call
+// a full table refuses, so nothing reclaimed it at all and no phone on that relay could
+// pair. Every other retention rule the relay has (presence, mailbox) is already on this
+// tick; this one was the exception.
+func (s *Server) SweepRendezvous(_ context.Context) {
+	now := s.clk.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purgeExpiredRendezvous(now)
 }
 
 // SweepRetention purges mailbox items older than the retention cap even if never

@@ -74,8 +74,14 @@ func TestPresence_NoHistoryRetained(t *testing.T) {
 	machine := dialAuthed(t, srv.URL(), authFor(mPub, mPriv))
 	machineRID := RoutingID(mPub)
 
+	// The device is PAIRED to the machine because presence is an authority-gated read of
+	// somebody else's route (round-4 threat review H1): a stranger is answered "unknown"
+	// whatever the presence table holds, which would make the assertion below vacuous.
 	dPub, dPriv := newRelayAuthKey(t)
 	device := dialAuthed(t, srv.URL(), authFor(dPub, dPriv))
+	if err := machine.AuthorizeDevice(testCtx(t), ed25519.PublicKey(dPub), consentTo(dPriv, machine.RoutingID())); err != nil {
+		t.Fatalf("AuthorizeDevice: %v", err)
+	}
 	if p, err := device.Presence(testCtx(t), machineRID); err != nil || p.State != PresenceOnline {
 		t.Fatalf("presence online precondition: got %v err=%v", p.State, err)
 	}
@@ -95,8 +101,11 @@ func TestPresence_NoHistoryRetained(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv2.Close() })
 
-	probePub, probePriv := newRelayAuthKey(t)
-	probe := dialAuthed(t, srv2.URL(), authFor(probePub, probePriv))
+	// The probe is the SAME paired device, not a fresh identity, and that is what keeps the
+	// assertion about history: the pairing is durable and survives the restart, so this
+	// caller still has authority over the machine's route and "unknown" can only be the
+	// absent presence history. A stranger would read unknown either way.
+	probe := dialAuthed(t, srv2.URL(), authFor(dPub, dPriv))
 	if p, err := probe.Presence(testCtx(t), machineRID); err != nil || p.State != PresenceUnknown {
 		t.Fatalf("presence after restart: got %v err=%v, want PresenceUnknown (no history)", p.State, err)
 	}
