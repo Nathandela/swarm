@@ -2,11 +2,8 @@ package transport
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // §6.0's per-hop inbound drain budget, exported so the arithmetic is legible and
@@ -26,11 +23,9 @@ const (
 	MaxDrainAcksPerSec = 1
 )
 
-// followRetry is how long a live tail waits before retrying after a lost
 // connection or a failed wait. It deliberately does NOT go through
 // Options.Sleep: that seam exists so a test can collapse the reconnect backoff,
 // and collapsing a §6.0 rate budget would silently defeat it.
-const followRetry = 250 * time.Millisecond
 
 // regimeEvidence is how many CONSECUTIVE spaced reads must come back without a
 // batch before the drain concludes the spacing is unproductive and drops it. One
@@ -208,103 +203,15 @@ func (a *AckBatcher) Run(ctx context.Context) {
 	}
 }
 
-// Follow is the LIVE TAIL (PB-NET-5, ADR-007 B7): it parks a bounded server-side
-// wait on this session's own mailbox, hands every delivered item to fn unchanged,
-// batch-acks off the delivery path, and repeats until ctx is done, returning
-// ctx.Err().
-//
-// The wait is deliberately NOT bounded by Options.RequestTimeout. §6.0 sets the
-// non-wait request timeout at 10 s and the server-side wait ceiling at 25 s, so a
-// wait truncated at the request timeout would be re-issued 2.5x more often than
-// the protocol intends -- invisible in a latency test, fatal in the quota
-// arithmetic.
-//
-// Nothing here buffers or replays: items go to fn as they arrive and the
-// correlation state on the connection holds one wait, never a frame. Input stays
-// live-only (ADR-007 D7), and a keystroke refused during an outage is refused,
-// not held.
-//
-// Follow and Drain are two drains of ONE mailbox and ONE cursor, so they are
-// mutually exclusive on drainMu: a Drain issued while Follow is parked waits for
-// the current wait to return. A caller runs one or the other.
-func (s *Session) Follow(ctx context.Context, fn func(relay.Item) error) error {
-	acks := NewAckBatcher(func(actx context.Context, cursor uint64) error {
-		cli, err := s.live()
-		if err != nil {
-			return err
-		}
-		rctx, cancel := context.WithTimeout(actx, s.opts.RequestTimeout)
-		defer cancel()
-		return cli.MailboxAck(rctx, cursor)
-	})
-	actx, stopAcks := context.WithCancel(ctx)
-	acksDone := make(chan struct{})
-	go func() { defer close(acksDone); acks.Run(actx) }()
-	defer func() { stopAcks(); <-acksDone }()
-
-	pacer := NewDrainPacer()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		cli, err := s.live()
-		if err != nil {
-			if errors.Is(err, ErrClosed) {
-				return err
-			}
-			if err := sleepCtx(ctx, followRetry); err != nil {
-				return ctx.Err()
-			}
-			continue
-		}
-		if err := pacer.Pace(ctx); err != nil {
-			return ctx.Err()
-		}
-		n, err := s.followOnce(ctx, cli, fn, acks)
-		pacer.Observe(n)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err := sleepCtx(ctx, followRetry); err != nil {
-				return ctx.Err()
-			}
-		}
+// sleepCtx waits d, or returns early when ctx ends. It moved here from session.go when the
+// dead Session was deleted (ADR-007 B98): the pacer is the only remaining caller.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
-}
-
-// followOnce parks one wait and delivers whatever it returns.
-func (s *Session) followOnce(ctx context.Context, cli *relay.Client, fn func(relay.Item) error, acks *AckBatcher) (int, error) {
-	s.drainMu.Lock()
-	defer s.drainMu.Unlock()
-
-	from, err := s.opts.Store.Cursor()
-	if err != nil {
-		return 0, err
-	}
-	items, hasMore, err := cli.MailboxWait(ctx, from)
-	if err != nil {
-		return 0, err
-	}
-	high := from
-	for _, it := range items {
-		if it.Cursor > high {
-			high = it.Cursor
-		}
-	}
-	if hasMore && high <= from {
-		return 0, ErrStuckPage // a page that claims more without advancing is an infinite scan
-	}
-	for _, it := range items {
-		if err := fn(it); err != nil {
-			return len(items), err
-		}
-	}
-	if high > from {
-		if err := s.opts.Store.SetCursor(high); err != nil {
-			return len(items), err
-		}
-		acks.Record(high)
-	}
-	return len(items), nil
 }

@@ -1,28 +1,32 @@
-// Package transport is the resilient client-side relay session (PB-NET-2..7,
-// slice S6). It sits directly above internal/remote/relay's Client and below the
-// phone core: it owns dialing policy, reconnection, connection state, the bounded
-// idempotent-op queue, and the durable relay-cursor coordinate.
+// Package transport is what remains of slice S6's client-side relay session after
+// ADR-007 B98: the two INBOUND-DRAIN PACING primitives the gateway uses, and nothing
+// else.
 //
-// Two properties are structural, not incidental:
+//   - DrainPacer meters inbound reads at §6.0's MaxDrainReadsPerSec, in a batching
+//     regime that spaces reads so each one carries a batch.
+//   - AckBatcher acks the relay OFF the delivery path at MaxDrainAcksPerSec.
 //
-//   - It handles ONLY opaque sealed frames (PB-NET-3). No type in this package
-//     holds a content key, a wake key, or plaintext. Sealing and opening happen
-//     above it, in the core that owns key custody.
+// Both are constructed by internal/remotegw's command loop, which is the only caller.
 //
-//   - Raw input and resize are live-only (ADR-007 D7). They are never queued and
-//     never replayed; with no live authenticated connection they fail immediately
-//     with an explicit "delivery unknown / not sent" error. Only high-level
-//     idempotent ops may queue, bounded per the §6.0 budget, and a full queue is a
-//     clean refusal — never a silent drop.
+// WHAT USED TO BE HERE, AND WHY IT IS GONE. This package used to own a Session type
+// carrying dialing policy, reconnection with an exponential backoff schedule, a
+// connection-state machine, a bounded idempotent-op queue, a retry-policy table and a
+// durable relay cursor. None of it ever shipped: Session had ZERO production
+// constructions (ADR-007 B94), while the phone dialled internal/remote/relay directly
+// through mobile/relay.go. Four requirements were nonetheless fenced against it, so
+// PB-NET-4's backoff numbers and PB-NET-7's "every call times out" read as met while
+// being false of the handset. Keeping a well-documented, well-tested dead API beside a
+// live one is a trap for the next implementer -- adopting Session to get the backoff
+// would have silently brought back the op queue B90 established is unbuildable -- so it
+// was deleted rather than left with a note.
 //
-// The numeric budget this package implements is binding (remote-phaseB-requirements
-// §6.0): reconnect backoff initial 500 ms, factor 2, ceiling 30 s, jitter +/-20%;
-// non-wait request timeout 10 s; idempotent op queue 64 ops, reject-new, drained
-// at 8 ops/s so the reconnect drain is never one burst against the relay's
-// tumbling rate window.
+// The transport-SECURITY fences that used to live beside it (TLS policy, pin renewal,
+// platform pinning, the release-build probes, and the control that keeps relay.Dial free
+// of production callers) had relay's own exported surface as their subject and moved to
+// internal/remote/relay as package relay_test. They were never about Session.
 //
-// Both properties above are enforced by the SHAPE of the API rather than by a
-// policy flag: SendLive and SendOp are separate methods, so "input is never
-// queued" cannot be inverted by flipping a boolean, and Drain reads one bounded
-// page per call, so hostile pagination cannot wedge the transport.
+// The deleted design is recoverable from history and is worth reading before anyone
+// builds the phone-side low-latency tail PB-NET-5 still requires: Session.Follow was the
+// MailboxWait-based concurrent-dispatch mechanism, and the shipped phone has no
+// equivalent -- it polls at 500 ms (ADR-007 B100).
 package transport
