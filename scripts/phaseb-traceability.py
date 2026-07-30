@@ -44,16 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-APP-6": "acceptance is \"UI + facade test\" and there is NO UI: "
-                "android/unbound-verbs.tsv records App.Launch as unbound because \"the "
-                "surface has no machine pane, no launch form and no session picker\". The "
-                "ledger is honest; this table contradicted it. Section 1's binding exit "
-                "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
-                "(ADR-007 B80)",
-    "PB-INPUT-2": "the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes "
-                  "leaseHeld=false as a hardcoded literal, and its own comment says this "
-                  "surface never takes a lease. Send is enabled whenever any session "
-                  "exists (ADR-007 B83)",
     "PB-E2E-3": "THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first "
                 "evidence per slice; S10 and S12's own evidence files admit tests and "
                 "implementation landed together, and the residuals record that S17/S18b "

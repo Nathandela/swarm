@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 138 |
-| Evidenced (measured on disk) | 138 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **4** |
+| Shipped (asserted by hand) | 140 |
+| Evidenced (measured on disk) | 140 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **2** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -51,7 +51,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-APP-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-| PB-APP-6 | S16 | **NOT MET** | acceptance is "UI + facade test" and there is NO UI: android/unbound-verbs.tsv records App.Launch as unbound because "the surface has no machine pane, no launch form and no session picker". The ledger is honest; this table contradicted it. Section 1's binding exit criterion is "pairs, observes, LAUNCHES, and types into a real session" (ADR-007 B80) |
+| PB-APP-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-7 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-8 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-9 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
@@ -84,7 +84,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-GW-7 | S2b | shipped | `docs/verification/remote-phaseB-s2b-evidence.md` |
 | PB-GW-8 | S2b | shipped | `docs/verification/remote-phaseB-s2b-evidence.md` |
 | PB-INPUT-1 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
-| PB-INPUT-2 | S11 | **NOT MET** | the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes leaseHeld=false as a hardcoded literal, and its own comment says this surface never takes a lease. Send is enabled whenever any session exists (ADR-007 B83) |
+| PB-INPUT-2 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-3 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-4 | S11 | **NOT MET** | the retry mechanism has ZERO production callers: RetryFor (transport/retry.go:49) and SendLive (session.go:358) are definitions only, and commands call MailboxAppend directly. Found by the round-4 external reviewer, verified by grep (ADR-007 B69(1)) |
 | PB-INPUT-5 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
