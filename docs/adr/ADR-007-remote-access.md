@@ -4644,3 +4644,82 @@ is the right one.
 **Verdict: REVISE. Round 5 does not reach agreement, and the committee is now split on the closed
 test 3–1.** The dissent is on tree hygiene and FCM, both of which are answerable — which makes it
 the most actionable objection of the round rather than the most damning.
+
+---
+
+### B84 — STATE/SYNC deep pass: a third row on the dead queue, and the field collision confirmed from the requirements side
+
+**18 of 143 rows covered (11 deeply re-derived, 7 mechanical only, and the reviewer says which is
+which).** All 68 test names cited across five evidence files exist in the tree — **no fossil
+citations.** All five evidence-bearing packages green at pristine HEAD.
+
+**B84(0) — THE URGENT ONE, confirmed from the opposite direction.** PB-SYNC-1's three-bucket model
+rests on the command-reply bucket being identified by **`SenderKeyID = 0`** — the "deliberate
+sender-zero split", named in PB-SYNC-1's own text — and **PB-STATE-4(b) and the reconcile record's
+`reply_ceiling` key on the same discriminator.** So B81(1)'s remediation must not put its direction
+tag there: the reply bucket would stop being distinguishable from the shared journal/terminal
+bucket, and **a shared-bucket gap would stale the wrong channels.**
+
+**My brief told the implementer to use that field. That instruction is withdrawn.** The disclosure
+reasoning I gave was sound; the field choice was wrong, and I did not know three requirements keyed
+on it. Two reviewers reached this independently — one from failing tests, one from the requirements
+— which is the only reason it was caught before landing.
+
+**B84(1) — PB-STATE-1 rests one clause on the dead offline queue. A THIRD row on that mechanism,
+missed by the sweep that found the other two.** The requirement demands the core persist *"pending
+idempotent ops and their outcomes"*. `OpQueue.Enqueue` has **zero production callers**, `QueuedOp{}`
+is constructed nowhere outside tests, and **no code anywhere appends to `PendingOps`** — sibling path
+checked and absent. So `PendingOps` is always empty in production.
+
+**B42 swept this exact mechanism and enumerated PB-NET-4, PB-STATE-9, PB-KEY-7, PB-KEY-10 and
+PB-PAIR-5 — not PB-STATE-1**, and this record has no PB-STATE-1 entry at all. **A sweep for a dead
+mechanism missed one of its own dependents.**
+
+Honest bound, which the reviewer supplied rather than being asked for: the *"and their outcomes"*
+half **is** live, and the criterion (*"a test asserts each field survives a restart"*) is literally
+met because the field round-trips. **So this is a count-accuracy finding, not a live defect — the
+criterion is satisfiable while the clause is inert**, which is instrument 2 exactly.
+
+**B84(2) — PB-STATE-8's op-enumeration half is inert and its test hand-populates the queue**, setting
+a field production never writes. **Downgraded by a sibling path the reviewer found rather than
+assumed:** the load-bearing half — *"later state is not trusted after an operation gap"* — is live
+and independent via the reply bucket being marked stale, and the same test asserts that separately.
+**Production loses the ability to NAME which op is unresolved, not the conservatism.**
+
+**B84(3) — the fail-closed reconcile gate the evidence names has zero production callers, and
+production uses a different one.** Two evidence files name
+`phonecore.MailboxRouter.RequireReconciled()` as *"the fail-closed gate every MUTATING op passes
+through"*; at HEAD every occurrence outside its definition is a test or a comment. Production gates
+on `mobile.App.requireReconciled()`. **The property holds — verified end to end — but a reviewer
+walking row → evidence → symbol finds nothing, and there are now two independent implementations of
+one fail-closed rule with nothing enforcing agreement.** One designed disagreement: after a restart
+with durable adoption, mobile permits mutating ops while phonecore reports **every bucket stale**.
+Each errs safe in its own direction, but PB-STATE-4 specifies the two moving *together*.
+
+**B84(4) — the most alarming section of the most structurally load-bearing SYNC evidence is fossil
+prose.** S1b's "CROSS-SLICE BRICK RISK" still reads as live — *"`service.go` still constructs
+`RelaySink` with nil Authorities/Machine… the phone-side seams have zero production callers"* — and
+**both halves are wired at HEAD**, 273 commits later.
+
+**B84(5) — seven refutations, two of which are the round's best process artifacts.**
+- **R1, the headline that wasn't.** A recorded residual said reconcile adoption is not persisted, so
+  every phone process death re-arms a fail-closed refusal clearable only by a gateway reconnect the
+  phone cannot trigger — a routine brick on Android. **It is persisted**, written on adoption and
+  restored at launch. **The reviewer credits the sibling-path warning for saving it from filing this
+  as a brick**: the field is consumed in `mobile` and is invisible to a `phonecore` grep. Residual
+  4.19 paying for itself twice in one round.
+- **R5 is one of the strongest guards in the tree.** A fixture rule walks **every `_test.go` in the
+  module** by AST. The reviewer planted a violating record in a **different package** and it failed
+  naming the exact file and value. **It enforces a rule where it is not already obeyed**, which is
+  the entire point of a gate.
+- Also refuted: the reservation-ceiling hazard (both sides of the two-sided property hold; the
+  interface doc warns against a hazard its own restart semantics eliminate); the block-size mismatch
+  (a different coordinate the requirement does not govern); the "stated only" rate bound (actually
+  implemented, both halves); and PB-STATE-7's apparent under-coverage — **once the commit is one
+  transaction before the ack, the sequence structurally HAS only two boundaries, and both are
+  tested. The atomicity collapsed the boundary count.**
+
+**Not moved on this evidence:** PB-STATE-1 and PB-STATE-8 are count-accuracy findings whose criteria
+are literally met and whose load-bearing halves are live. **They are recorded rather than
+reclassified** — the same discipline as PB-NET-4 and the six contested PB-APP rows. The honest
+statement is that **134 is an upper bound with at least three more rows argued against it.**
