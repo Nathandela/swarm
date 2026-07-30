@@ -301,6 +301,76 @@ func retiredKey(pairer, device, ceremonyID string) []byte {
 // a wire code exists to carry it.
 var errConsentRetired = errors.New("relay: route consent ceremony retired")
 
+// errRetirementsFull is authorizePair's refusal once one pair has accumulated
+// maxRetiredPerPair tombstones. It is mapped to quota_exceeded at the handler.
+var errRetirementsFull = errors.New("relay: this pair has exhausted its retained ceremony retirements")
+
+// maxRetiredPerPair bounds the tombstones bucketRetired keeps for ONE pair (ADR-007 B61).
+//
+// WHY A BOUND AT ALL: every supersession of a pair writes one row here and NOTHING in this
+// package deletes from this bucket, so a single authenticated connection drove unbounded
+// durable growth by re-pairing two keypairs it minted itself — no victim, no stolen key,
+// no real pairing involved. bbolt never returns freed pages to the OS, so that growth is
+// unreclaimable for the life of the file.
+//
+// WHY IT REFUSES INSTEAD OF EVICTING, which is the whole difficulty. ADR-007 B47 requires
+// a retired ceremony to be refused FOREVER: that is the entire content of a durable revoke
+// against a grantee who still holds the signed bytes. Any sweep — oldest-first, by
+// timestamp, by key order — hands that grantee a laundering path: drive supersessions
+// until its retirement falls out of the bucket, then replay the credential the revoke left
+// behind and get its authority back. A bound and a forever-refusal are satisfiable
+// together only by a mechanism that FORGETS NOTHING, so this one stops accepting new
+// supersessions at the cap. Fenced by
+// TestB61_ARetiredCeremonyIsStillRefusedAfterTheBoundIsReached.
+//
+// THE CAP IS LOAD-BEARING ONLY IN COMPANY WITH maxCeremonyIDLen, AND THE NEXT READER WILL
+// NOT RECONSTRUCT THAT. This caps ROWS PER PAIR; it says nothing about what a row COSTS.
+// Before the id was bounded a single row could carry a 32000-byte ceremony id, so 64 of
+// them is ~2 MB for one pair and the attacker chose that number, not the relay — measured
+// at ~84 KB of unreclaimable relay.db per call. Conversely the length bound alone caps
+// only the row, leaving their number to the attacker. It is the PAIR of rules that makes
+// the durable footprint of one authorize_device a constant the relay picked (~200 bytes,
+// and nothing at all past the cap), which is what reduces this bucket's growth to the
+// op-rate limit that already governs every other write. Removing either one re-opens the
+// amplification.
+//
+// THE CAP DOES NOT APPLY TO revokeAndPurge, and that asymmetry is deliberate. A refusal
+// there would be the very defect this closes, only reached by a different road: a pair at
+// its cap would become unrevokable. Fail-closed means refusing to GRANT authority, never
+// refusing to withdraw it.
+//
+// SO THE HONEST BOUND IS maxRetiredPerPair PLUS ONE ROW PER REVOKE, NOT A FLAT 64, and
+// that is a consequence of the rule above rather than a leak in it. A revoke retires the
+// live consent and DELETES it, so the pair's next authorize sees no live consent to
+// supersede, takes no tombstone, and is accepted — measured: refusal at the 65th
+// authorize with 64 rows, then revoke -> 65 rows, then a re-pair accepted, then one
+// further row per revoke/re-pair cycle. Two things follow, and both are wanted. A capped
+// pair is NOT bricked: `swarm remote revoke` is its recovery, which is PB-STATE-10's "fail
+// closed must not mean bricked" answered by an act the owner already has. And a party that
+// wants another row must spend a revoke to get it — destroying its own pairing for ~200
+// bytes, at two metered ops per row. What this removes is the AMPLIFICATION, not every
+// byte: durable growth is back under the op-rate limit that already governs every other
+// write the relay accepts, instead of being a multiplier the caller chooses. Nothing
+// weaker preserves B47, because the only way to make the count flat is to forget a
+// retirement or to refuse a revoke.
+//
+// 64 IS A CEILING, NOT A BUDGET ANYONE SPENDS. A real pairing retires one ceremony per
+// re-pairing and a device is re-paired a handful of times in its life; PB-STATE-10
+// recovery is one such re-pairing.
+const maxRetiredPerPair = 64
+
+// countRetiredFor reports how many tombstones one pair holds, stopping as soon as the
+// answer can only be "at the cap" — the caller's question is never "how many" beyond that.
+func countRetiredFor(rb *bolt.Bucket, pairer, device string, stopAt int) int {
+	prefix := append(pairKey(pairer, device), 0)
+	n := 0
+	c := rb.Cursor()
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix) && n < stopAt; k, _ = c.Next() {
+		n++
+	}
+	return n
+}
+
 // authorizePair records BOTH directed authorizations of one consented pairing —
 // pairer grants device authority over the pairer's route, and device grants
 // pairer authority over the device's — AND lifts any ban standing against device,
@@ -387,6 +457,13 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 			return errConsentRetired
 		}
 		if live := cb.Get(key); live != nil && !bytes.Equal(live, []byte(ceremonyID)) {
+			// ADR-007 B61: the supersession is what GROWS the bucket, so the cap is charged
+			// here and refuses the new ceremony rather than dropping an old retirement. The
+			// retired check above has already run, so a tombstone this cap keeps is still
+			// refusing its own credential — the bound never costs a retirement (B47).
+			if countRetiredFor(rb2, pairer, device, maxRetiredPerPair) >= maxRetiredPerPair {
+				return errRetirementsFull
+			}
 			if err := rb2.Put(retiredKey(pairer, device, string(live)), []byte{1}); err != nil {
 				return err
 			}

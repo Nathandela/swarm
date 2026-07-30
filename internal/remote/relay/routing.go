@@ -54,6 +54,36 @@ func AuthChallengeMessage(nonce []byte, routingID string) []byte {
 	return b
 }
 
+// maxCeremonyIDLen bounds the ceremony id a consent may name (ADR-007 B61).
+//
+// PRODUCTION SENDS 32: hex of the 16-byte rendezvous id, and that is the ONLY producer
+// in the tree — mobile/pairing.go's Consent callback over pairing.QRPayload.RendezvousID
+// ([16]byte). 128 is four times that, so the rule leaves the real format room to change
+// shape without a second decision here.
+//
+// IT IS A LENGTH BOUND AND NOT A FORMAT BOUND ON PURPOSE. "exactly 32 hex chars" would
+// describe production exactly and still be wrong: the id is an opaque label to this
+// relay, TestB47_AnUnknownCeremonyIsAccepted deliberately presents one this relay has
+// never seen so that deliverEpochGrant survives a store rebuild, and every fixture in the
+// B47 suite names its ceremony in prose. A relay that demanded hex would refuse ids it
+// has no business having an opinion about.
+//
+// WHAT THE BOUND IS FOR IS NOT DISK. The id rides into bucketConsents as a bbolt VALUE,
+// which is unbounded, but retiredKey makes it part of a bbolt KEY — and bbolt refuses a
+// key over 32768 bytes. Since that only happens at supersession and at revoke, an
+// oversized id was ACCEPTED at pairing and then aborted the whole revokeAndPurge
+// transaction forever after: the pairs edges were never deleted, device_revoke and the
+// re-pair that would recover both failed, and the pairing became permanently unrevokable.
+// The device CHOOSES this id and signs it, and internal/remote/device/registry.go stores
+// it without a length check by explicit design ("the relay is the authority that verifies
+// it"), so the whole weight of that rule rests here. Bounding it well below bbolt's limit
+// means every key retiredKey can ever build is writable, which is what makes the owner's
+// revoke unconditional (ADR-007 B47/B49, PB-STATE-10).
+//
+// It also makes store.maxRetiredPerPair a real bound on the bucket rather than only on
+// the row count — see the argument there.
+const maxCeremonyIDLen = 128
+
 // ConsentMessage is the canonical statement a party's relay-auth key signs to
 // grant granteeRoutingID authority over that party's own route: append to its
 // mailbox, wake it, and revoke it. It is ADR-007 B27's consent signature, which

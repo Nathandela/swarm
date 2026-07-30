@@ -834,16 +834,50 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 	// credential, but it is not TRUSTED from there: the signature is verified OVER it, so a
 	// holder cannot relabel a retired consent into a live one. That is what lets the store
 	// retire an id and have the retirement mean something.
+	//
+	// AND THE ID IS BOUNDED HERE, WHICH IS THE ONLY PLACE IT CAN BE (ADR-007 B61). Being
+	// signed over makes an id unforgeable, not sane: the DEVICE chooses it, and a hostile
+	// device is exactly the threat B25/B38 exist for. Everything between the ceremony and
+	// this line carries the credential verbatim by design — internal/remote/device's
+	// registry says so outright — so no earlier hop is the authority. An id above bbolt's
+	// key limit is stored happily as a consent VALUE and then makes retiredKey unwritable,
+	// which aborts the owner's revoke transaction for good; see maxCeremonyIDLen.
 	ceremonyID, sig, perr := ParseConsent(req.ConsentSig)
-	if perr != nil || ceremonyID == "" || len(sig) != ed25519.SignatureSize ||
+	if perr != nil || ceremonyID == "" || len(ceremonyID) > maxCeremonyIDLen ||
+		len(sig) != ed25519.SignatureSize ||
 		!ed25519.Verify(ed25519.PublicKey(req.DevicePub), ConsentMessage(ceremonyID, sc.rid), sig) {
 		return sc.replyErr(codeNotAuthorized)
 	}
 	deviceRID := RoutingID(ed25519.PublicKey(req.DevicePub))
+	// A PARTY MAY NOT CONSENT TO ITSELF (ADR-007 B61). Every check above passes when the
+	// caller names its OWN pubkey — it holds the key, so it can sign anything that key is
+	// asked to sign — and what the signature then proves is vacuous: that the party holding
+	// a key made a statement about the party holding that key. A pairing has two parties by
+	// construction, so no ceremony this credential is supposed to carry the outcome of can
+	// produce a self-consent; it is reachable only by asking for it directly.
+	//
+	// The edge it would write is not inert. pairs[X\x00X] is indistinguishable from a real
+	// grant to every later reader, and grantsAnyone — which is how revokeAndPurge decides
+	// whether any relationship still remains that could wake a handset — then answers true
+	// for X forever. One self-consent by a phone therefore disables the push-token purge
+	// PB-PUSH-9 requires, for every subsequent revoke by ANY party, leaving precisely the
+	// "unreachable provider-visible identifier for a device its owner disowned" PB-PUSH-6
+	// names. B49's `if !grantsAnyone(pb, rid)` is right and is left alone: what was wrong is
+	// that a party could manufacture a relationship with itself, and grantsAnyone cannot
+	// tell that edge from a real one.
+	if deviceRID == sc.rid {
+		return sc.replyErr(codeNotAuthorized)
+	}
 	// ADR-007 B22: this also LIFTS a ban standing against deviceRID — but ONLY one
 	// sc.rid itself placed (B24). See store.authorizePair.
 	switch err := sc.s.st.authorizePair(sc.rid, deviceRID, ceremonyID); {
 	case err == nil:
+	case errors.Is(err, errRetirementsFull):
+		// ADR-007 B61's cap on retained retirements. quota_exceeded rather than
+		// consent_retired because the credential is fine and the remedy is NOT "pair the
+		// device again" — pairing again is the thing being refused. See
+		// store.maxRetiredPerPair for why this refuses instead of evicting.
+		return sc.replyErr(codeQuotaExceeded)
 	case errors.Is(err, errConsentRetired):
 		// Distinct from not_authorized on purpose: the credential is well-formed and
 		// genuinely signed by the named device, and the remedy is a new pairing rather
