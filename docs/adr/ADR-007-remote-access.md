@@ -6028,3 +6028,69 @@ room*.
 
 **GG-4 is green at `42129bb`.** That is the first time in this record it has been stated on a measured
 full suite rather than on targeted packages.
+
+---
+
+## B108 — PB-NET-5(b) is measured and met. And I asserted a tree state that was already stale
+
+**2026-07-30.**
+
+**The echo budget the owner set today is measured, and the shipped phone clears it.** Two runs,
+n=200, worst-case aligned:
+
+```
+run 1   p50=532.2ms  p95=585.9ms  p99=601.4ms  max=618.3ms
+run 2   p50=523.0ms  p95=580.5ms  p99=608.7ms  max=701.9ms
+budget                p95<=750ms   p99<=1000ms
+```
+
+**p95 clears by ~165 ms, p99 by ~395 ms.** The derivation behind B104 — a 500 ms poll wait plus one
+non-wait request — is what the wire actually does. Mutation-proven: widening `pollInterval` to 900 ms
+gives `p95 = 949.657ms, budget 750ms (over by 199.657ms)`.
+
+**Worst-case alignment is what makes it a fence.** A proxy signals when a `mailbox_read` passes toward
+the relay and each sample publishes immediately behind it, so every measurement waits a **full** poll
+interval. Random sampling would have reported the mean — about half an interval — and passed a budget
+the product could still miss.
+
+**`PB-NET-5` does NOT become met.** Clause (b) closes. Clause (a) and the across-both-hops **mechanism**
+clause are untouched: the phone still has neither concurrent dispatch nor a server-push frame, which
+is B100's finding and is not a latency question. **Measuring one clause of a three-clause row does not
+close the row** — the same distinction as B99.
+
+**And the probe that failed in B103 was a harness bug, settled before anything was built on it.** A
+two-arm diagnostic rather than tuning: every record was published at `Cursor: 0`, which sits below the
+phone's durable replay high-water and is **correctly refused as stale**. The replay guard working, not
+a delivery failure. The fence now carries a guard that distinguishes the two, because *"a sample that
+never becomes visible is not a latency result — it is a delivery failure, and it is worth more than
+the number this test was written to produce."*
+
+## The coordination failure, which is mine
+
+**Two agents wrote the same `AckBatcher` fence in the same hour**, covering three identical behaviours
+in `internal/remotegw/drainack_test.go` and `internal/remote/transport/pacer_test.go`. Exactly one
+behaviour — the idle-tick skip, without which an idle handset spends 60 relay ops a minute to say
+nothing — was covered by only one of them.
+
+**I caused it in a single message.** I lifted a constraint and asserted *"no agent has it open"* on
+the strength of a `git status` run minutes earlier. The peer's file was **untracked and being written
+as I typed the sentence.**
+
+> **The coordination state was stale in both directions at once.** One agent stopped for hours on a
+> constraint that was lifted the moment I looked at it, while a peer wrote the fence I had told that
+> agent nobody was writing. **Neither could see it from where they stood. I was the only party
+> positioned to see both, and I was the one who got it wrong.**
+
+The check costs one command — `git status` on the target directory **immediately** before assigning,
+not minutes before — and an untracked file is invisible to every other signal I was using. Adopted.
+
+**A constraint imposed for collision safety is indistinguishable, from inside, from the code being
+untestable.** `DrainPacer` was reported as *"structurally unfenceable from where a fence is allowed to
+live"* — true, and "allowed" was my instruction. The moment it lifted, the fence was forty lines. **A
+scoping rule that outlives its reason reads as a property of the system.**
+
+**The duplication cost almost nothing**, because both authors built the discriminator into the
+**fixture** rather than into an assertion — `1..50 then 7` so a batcher keeping the latest value acks
+a cursor it has already passed, and *batching is back **and survives one more strike*** so an
+implementation that forgets `idle = 0` cannot pass. Two agents, two types, the same insight
+independently, and it is the direct answer to the vacuous-rather-than-red trap.
