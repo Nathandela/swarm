@@ -5720,3 +5720,69 @@ there is a leak. Where a ported fence passes on first write, **the honest report
 plus a mutation proof that it can fail** — never a manufactured red. Fabricating a failing state to
 satisfy a process rule would be worse than the process gap it conceals, and `PB-E2E-3` is open in
 this record for the milder sin of narrating failures in prose.
+
+---
+
+## B102 — The brief I wrote was false, and a reviewer spent a round on a residual that does not exist
+
+**2026-07-30.** The fences member's round-6 report opens by refuting **my own brief**, and it is
+right.
+
+**The round-6 brief states:** *"The direction-binding CRITICAL closed... Fixed by retiring the shared
+sender-zero and giving each direction its own identity."* **The diff does the opposite.**
+`internal/phonecore/direction.go:57` says so in as many words: *"The header is UNTOUCHED beyond what
+it always carried: no SenderKeyID, no EpochID games."* The fix **adds a plaintext `kind` tag**; the
+sender-zero is still the live, claimed command-reply bucket.
+
+**I did not verify it. I copied it from the commit message.** The commit message overstates its own
+change, the brief inherited the overstatement, and four reviewers took the brief as the description
+of the tree. One of them derived a residual from it — "the retired zero is now an unclaimed value
+falling into the shared arm" — and spent effort on a hazard that **cannot exist because nothing was
+retired.**
+
+> **The instrument, and it is aimed at me.** A brief is evidence like any other artifact, and I wrote
+> this one from commit messages rather than from diffs. **A commit message is the author's claim
+> about a change; the diff is the change.** Every prior instrument in this record concerns fences
+> pointed at the wrong subject — this is the same error one level up, in the document that tells four
+> reviewers what the subject *is*.
+
+**Containment, checked rather than assumed:** the ADR derivation is correct (`ADR-007` reasons that
+the tag must avoid `SenderKeyID` precisely because the bucket is `{Sender, Epoch}`), and `grep`
+finds the false claim nowhere under `docs/verification/`. **It lived in a commit message and in my
+brief, and nowhere else.** Process finding, not a falsely-met requirement.
+
+## The findings, and what they change
+
+**The direction fix is real and properly fenced — 4/4 mutations RED 3/3.** Including the two that
+matter: moving each check *after* `Accept`. The fix rests on "a refusal that has already advanced the
+high-water is not a refusal", and both fences hold that ordering. **The "correct inner check behind a
+lossy outer scan" trap did not land.** After five rounds of fences that cannot fail, this one can.
+
+**CRITICAL — `PB-PUSH-3`'s enumeration does not catch a fourth producer.** The fence matches
+*syntax*: a `PushPayload` composite literal, or a call whose callee **identifier** is one of four
+names. A producer using `var p PushPayload` with field assignment (a `ValueSpec`) and an indirect
+call through a func value (a `SelectorExpr`) is invisible — wired into the real sweep tick it emits
+**131 body bytes against the canonical 191**, with all five tests green 3/3. **Residual 4.23's
+prescribed fix-shape re-enters one level up, at the enumeration.** The row is already NOT MET; what
+this changes is that the *remedy* is also false.
+
+**Two Android gates hold a token, not a property.** Renaming a lambda receiver `app`→`phone` and
+moving launch off the per-use tier leaves `android/gate` green 3/3 and Kotlin 282/0. Forcing the
+private helper `leaseConfirmedFor` to return `true` leaves everything green, because the gate rejects
+boolean **literals** at the call site and a helper returning a constant is not a literal —
+resurrecting the exact defect `bf73ddc` fixed, one indirection up, in the direction its own comment
+calls *"strictly worse than false"*. **Today's code is correct; the fences do not hold it.** Recorded
+as latent rather than as false rows, and the distinction is the same one B98 drew for PB-NET-3.
+
+**`PB-SAS-4`'s binding half is asserted by nothing.** Both mutations that break the declared
+mechanism — `recvAck` skipping the binding comparison, and keying `acceptAck` on a constant — stay
+green tree-wide. The *agreement* half is genuinely fenced (pinning-on-send and device-pins-without-ack
+both go RED 3/3); the *channel-binding* half, which is the entire argument, is not. Not exploitable
+today because Noise transport is direction-split.
+
+**And a correction to round 5's own record.** Round 5 wrote that *"two consecutive full-suite runs
+failed on DIFFERENT tests."* Measured this round: it is **one** load-sensitive latency test, the same
+one 3 of 5 times, passing 5/5 isolated. The suspicion that the direction fix caused it — it adds a
+second AEAD open per inbound frame against a 150 ms budget — was **discriminated by building HEAD
+minus that decrypt and sampling both arms**: it fails 1/2 there too. **A load artefact, and far more
+diagnosable than the record implied.**

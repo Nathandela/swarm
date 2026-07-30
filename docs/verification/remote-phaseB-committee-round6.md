@@ -1,8 +1,17 @@
 # Phase B audit committee — round 6
 
 **Convened** 2026-07-30 against the round-5-remediated tree. **Verdict: REVISE.**
-**Unanimous against a closed test in the form it was proposed. Unanimous that production is not
-ready.** Round 5 split 3–1 on the closed test; round 6 does not.
+**Split 2–1 against a closed test in the form proposed. Unanimous that production is not ready.**
+
+> **CORRECTION, filed after this document was first written.** The first version of this synthesis
+> recorded the fences member as having **returned nothing**, and declared the closed-test verdict
+> **unanimous**. Both statements were false when written. The report arrived after the synthesis and
+> is complete: eleven ranked findings, six refutations, every one marked RAN or READ. **Its verdict
+> is YES to a closed test after two small non-security fixes.** So there is no unanimity, the
+> blind-spot section below was wrong about its own coverage, and **a synthesis written before its
+> last member reported is a synthesis that invented a consensus.** Recorded rather than silently
+> rewritten, because the failure mode — declaring agreement from silence — is the one this committee
+> exists to prevent.
 
 ## Members and emphases
 
@@ -11,10 +20,18 @@ ready.** Round 5 split 3–1 on the closed test; round 6 does not.
 | **GPT-5.6 sol (codex)**, external | Open | Not a tester-distribution candidate; production no | Full report, every finding mutation-proven |
 | **Reachability / dead-code reviewer** | Requirements pointed at nothing | Closed test no; production no | Built the residual-4.25 instrument, then refuted its own specification |
 | **Timeout remediation** | The round's CRITICAL | — (implementer, not voter) | Fix landed with RED-first evidence |
-| **Compositions and fences** | New fences, composition | **NO REPORT** | Nothing returned; recorded as a hole, not as a clean bill |
+| **Compositions and fences** | New fences, composition | **Closed test YES after two fixes**; production not close | 11 ranked findings, 6 refutations, all RAN or READ |
 
-**The fourth member returned nothing, and this synthesis does not treat that as agreement.** Round 5's
-worst finding was two correct fixes composing; nobody covered that axis this round.
+**The fences member dissents on the closed test, and its dissent is the best-evidenced position in
+the round.** It mutated the direction-binding fix four ways and found all four fences genuinely RED
+3/3 — including the two that matter most, where the check is moved *after* `Accept`, since the whole
+fix rests on "a refusal that has already advanced the high-water is not a refusal." **The round's
+CRITICAL from round 5 is not merely closed but fenced on the property that matters**, which is rare
+in this record.
+
+Its two blocking items are **not security**: an owner told `"internal"` while the handset reads
+`paired`, and an ack leg cut short by the relay's rendezvous deadline after a slow SAS compare. Both
+hit real humans in week one; both are a few lines.
 
 ## The headline: the count fell from 142 to 133, and I authored most of the errors
 
@@ -100,8 +117,10 @@ deletion is deferred behind relocation and replacement fences.
 
 - **Coverage is 31 of 144 rows deep-derived (22%).** Every tranche anyone re-derives still produces a
   finding.
-- **No member covered compositions or new fences this round** — the axis that produced the worst
-  finding in three of the last four rounds.
+- ~~No member covered compositions or new fences this round.~~ **Wrong when written** — see the
+  correction at the head of this file. That axis was covered, and it produced the round's CRITICAL
+  (a fourth push producer the enumeration cannot see) plus two Android gates that hold a *token*
+  rather than a property.
 - **No Android or gomobile attack-surface work**, in any round, by any member. Now six rounds old.
 - **The denominator is still unproven.** Round 5 found a *missing* requirement; nothing this round
   looked for another, and re-deriving existing rows cannot find one.
@@ -111,7 +130,7 @@ deletion is deferred behind relocation and replacement fences.
 
 ## Verdict: REVISE
 
-**Closed test on a private, owner-operated relay: NO, unanimously**, in the form proposed. The
+**Closed test on a private, owner-operated relay: NO, 2–1**, in the form proposed. The
 critical wedge is closed, which was the first condition, but `PB-PAIR-4` (a pairing window that
 leaves the machine enrolled while the phone holds nothing), `PB-SEC-2` (a biometric prompt outside
 the ledger that can mint an authorization after invalidation) and the 500 ms echo path are all
