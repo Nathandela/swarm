@@ -4875,3 +4875,61 @@ symmetrically is rare enough in this codebase to be worth stating.**
 
 **Coverage: 19 of 143 deep-derived (13.3%), 26 covered (18.2%).** Unexercised in GW: the per-frame-class
 crash matrix and the seq-regressed-phone adversary — **not the coordinates.**
+
+---
+
+### B87 — the fifth instrument: the quantifier is dropped between the requirement and the fence
+
+**B87(1) — RESIDUAL 4.23, and the reviewer checked it was new before claiming it.** This record files
+the PB-PUSH-3 fence under residual 4.10 — *"when the failure I want to inject is reachable only
+through a seam the happy path also uses, the fence tests whichever comes first."* **That
+classification is wrong**, and the distinction is worth having:
+
+> **THE QUANTIFIER IS DROPPED BETWEEN THE REQUIREMENT AND THE FENCE.** When a requirement's subject
+> is an external observer or a channel — *"the provider observes"*, *"the relay sees"*, *"nothing on
+> disk contains"*, *"the user is shown"* — the property is quantified over **everything that reaches
+> that channel**. When the fence's subject is a **component**, every other producer into that channel
+> is unfenced **by construction**, and adding one later is invisible. **The requirement is right, the
+> fence is right about what it measures, and the system is wrong.**
+
+4.10 is about **ordering** through a shared seam. Here **nothing races and no seam is shared** — the
+fence's fixture simply *cannot construct* the other producers. It is not instrument 2 either: the
+criterion is correct and precise, even stating the byte count; **the gap is scope, not subject.** Nor
+instrument 4: nothing drifted, it was **under-quantified from birth**, and no amount of keeping
+fixtures current fixes it. Nor instrument 1: every producer has callers.
+
+**Its tell is mechanical, which is what makes it usable:** *compare the grammatical subject of the
+requirement with the grammatical subject of the test's fixture.* "The provider observes X" fenced by a
+harness that constructs one producer has dropped a *"for all"*.
+
+**And the fix shape is an ENUMERATION test, not a bigger assertion** — pin that the set of call sites
+feeding the channel is exactly the set the fence covers, so a third producer **fails the enumeration**
+rather than slipping past the invariant. That is the same move as the fixture guard that walks every
+test file in the module: **enforce the rule where it is not already obeyed**, applied to producers
+instead of fixtures.
+
+**B87(2) — PB-PUSH-3 moves to NOT MET.** Three producers, three shapes: 78 bytes for the gateway
+wake, **0 bytes** for the presence sweep — which sends no ciphertext at all and **ships in normal
+operation, meaning exactly "the machine went silent"** — and an unschema'd `push_trigger`. **It
+survived the B70 relay refactor**, moving from one line to another under an unrelated change, so it
+is live rather than a stale note. The row read `shipped` while this record already held its criterion
+false on the wire — the same shape as B84's PB-STATE-1 item: **a recorded defect that never reached
+the row.**
+
+**B87(3) — three refutations, one of which is the distinction I asked for.**
+- **PB-PUSH-8/10 are complete end to end**, every hop a production call site, from the Kotlin
+  settings surface through a signed action to a gateway that consults preferences **at the sender**,
+  which is exactly what the criterion demands. *"One of the cleanest chains I have traced in this
+  audit."*
+- **PB-PUSH-9 is unreachable by CONFIGURATION, not by wiring** — the precise distinction flagged
+  before the pass. The client is complete: initial token fetch, rotation callback, re-registration on
+  reconnect, and the messaging dependency declared. What is absent is the **plugin**, deliberately and
+  with a comment, which is the correct posture for a repository that must not carry a credentials
+  file. **A "zero production callers" reading here would have been a false positive** — the twelfth
+  such near-miss avoided by checking the sibling question first.
+- **PB-E2E-5's deferral is honest.** Every push test drives a fake endpoint; the two references to
+  Google's domain are an OAuth scope constant and an error string in a fixture. **Nothing in the tree
+  appears to cover real delivery, Doze, reboot or rotation.** I asked for this to be treated as a
+  finding if found; it was looked for and is not there.
+
+**Coverage: 23 of 143 deep (16.1%), 37 covered (25.9%).**

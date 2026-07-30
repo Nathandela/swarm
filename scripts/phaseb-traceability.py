@@ -61,6 +61,13 @@ NOT_MET = {
                 "ledger is honest; this table contradicted it. Section 1's binding exit "
                 "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
                 "(ADR-007 B80)",
+    "PB-PUSH-3": "the constant-size property is FALSE ON THE WIRE: three producers, "
+                 "three shapes -- 78 bytes (gateway wake), 0 bytes (the presence sweep "
+                 "sends no ciphertext at all, and it ships in normal operation meaning "
+                 "\"the machine went silent\"), and unschema'd push_trigger. The fence "
+                 "pins the GATEWAY's envelope and structurally cannot observe the other "
+                 "two. Survived the B70 refactor, so it is live rather than a stale note "
+                 "(ADR-007 B87)",
     "PB-SAS-4": "ADDED 2026-07-30 because it was MISSING (ADR-007 B86). The channel "
                 "binding does not attest the accept/decline exchange: msg4 rides outside "
                 "the SAS transcript, which is cryptographically sound but means the SAS "
