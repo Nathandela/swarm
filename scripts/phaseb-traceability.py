@@ -63,13 +63,6 @@ NOT_MET = {
                 "ledger is honest; this table contradicted it. Section 1's binding exit "
                 "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
                 "(ADR-007 B80)",
-    "PB-PUSH-3": "the constant-size property is FALSE ON THE WIRE: three producers, "
-                 "three shapes -- 78 bytes (gateway wake), 0 bytes (the presence sweep "
-                 "sends no ciphertext at all, and it ships in normal operation meaning "
-                 "\"the machine went silent\"), and unschema'd push_trigger. The fence "
-                 "pins the GATEWAY's envelope and structurally cannot observe the other "
-                 "two. Survived the B70 refactor, so it is live rather than a stale note "
-                 "(ADR-007 B87)",
     "PB-INPUT-2": "the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes "
                   "leaseHeld=false as a hardcoded literal, and its own comment says this "
                   "surface never takes a lease. Send is enabled whenever any session "

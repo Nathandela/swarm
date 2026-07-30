@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 135 |
-| Evidenced (measured on disk) | 135 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
+| Shipped (asserted by hand) | 136 |
+| Evidenced (measured on disk) | 136 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **7** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -128,7 +128,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-PUSH-0 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-1 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-2 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-3 | S12 | **NOT MET** | the constant-size property is FALSE ON THE WIRE: three producers, three shapes -- 78 bytes (gateway wake), 0 bytes (the presence sweep sends no ciphertext at all, and it ships in normal operation meaning "the machine went silent"), and unschema'd push_trigger. The fence pins the GATEWAY's envelope and structurally cannot observe the other two. Survived the B70 refactor, so it is live rather than a stale note (ADR-007 B87) |
+| PB-PUSH-3 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-4 | S17 | shipped | `docs/verification/remote-phaseB-s17-evidence.md` |
 | PB-PUSH-5 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-6 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
