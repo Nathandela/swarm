@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 134 |
-| Evidenced (measured on disk) | 134 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
+| Shipped (asserted by hand) | 133 |
+| Evidenced (measured on disk) | 133 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **9** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -110,7 +110,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-NET-2 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-NET-3 | S6 | **NOT MET** | UNFENCED, NOT DISPROVEN -- and the distinction is the point. Every fence for it lives in internal/remote/transport, which has no production caller: opaque_test.go taps the wire of the DEAD Session, and the structural arm reflects over transport's own types, saying nothing about relay.Client or mobile. The property itself (a sealed payload's plaintext never reaches the wire) appears TRUE of the shipped phone -- sendInputFrame seals before it appends and there is no raw-append path -- but that is read, not measured. The nearest live candidate fences transport POLICY (ws vs wss), not payload plaintext. Needs a wire tap over the SHIPPED path (ADR-007 B98) |
 | PB-NET-4 | S6 | **NOT MET** | marked met by MY OWN adjudication (B90), which asserted the resilience half is "implemented and fenced". Section 6.0's backoff numbers -- initial 500ms, factor 2, ceiling 30s, jitter +/-20% -- exist ONLY in internal/remote/transport, which has zero production callers. Shipped reconnects are fixed-delay with no growth, no ceiling and no jitter; setting the shipped delay to 3h leaves every fence passing (ADR-007 B94) |
-| PB-NET-5 | S6b | shipped | `docs/verification/remote-phaseB-s6b-evidence.md` |
+| PB-NET-5 | S6b | **NOT MET** | DECOMPOSES, and I refuted it wrongly once already (B98) by checking the numeric clause and not the quantifier. The criterion clause (p50 150ms phone Type -> PTY write) and the drop-the-gateway-poll clause ARE fenced on live code. But the requirement says BOTH HOPS, and the PHONE hop's fence is transport/s6b_input_test.go -- all six tests driving the dead Session.Follow, which is the only phone-side MailboxWait caller in the tree and has zero production callers. The shipped phone does not follow, it POLLS: mobile/app.go pollInterval = 500ms. So what shipped is a GATEWAY-SIDE-ONLY fix -- the exact mirror of the phone-side-only fix this requirement's own text warns would fake the criterion. UNFENCED, not disproven: the shipped poll plausibly avoids head-of-line blocking by a cruder mechanism, but nothing measures it, and the echo direction it gates is outside the numeric criterion by construction (ADR-007 B100) |
 | PB-NET-6 | S6 | **NOT MET** | DECOMPOSES, and one clause has no live subject at all. Replay-refused-across-restart and durable-cursor-survives-restart do have live equivalents in phonecore (ErrStaleSeq, RelayCursor). But HOSTILE PAGINATION TERMINATES is fenced only by ErrStuckPage, which exists nowhere but the dead package; the shipped App.drain substitutes a weaker progress-conditioned throttle that is fenced as no termination property anywhere. Deleting the dead code without writing that fence converts a misaimed fence into no fence (ADR-007 B98) |
 | PB-NET-7 | S6 | **NOT MET** | THE CRITICAL IS FIXED; THE REQUIREMENT IS STILL NOT MET, and those are different things (23d1dc1, RED at c2b7eb5). The wedge is closed: every exchange is bounded per CALL and a reached deadline surfaces as ErrClassOffline, so a silent relay no longer parks the outbound plane and ConnectionState stops reporting online. TWO CLAUSES REMAIN. (1) The budget table binds a NON-WAIT REQUEST TIMEOUT OF 10 s to this requirement and says changing a value needs committee agreement, not implementer discretion; the fix chose 5 s on latency grounds without reconciling. The 10 s exists ONLY in internal/remote/transport -- the dead package -- exactly as PB-NET-4's backoff numbers do. (2) The row's own evidence column asks for a GOROUTINE-LEAK ASSERTION over repeated Start/Stop, and there is no NumGoroutine or goleak anywhere in relay, mobile or remotegw. Caught while attempting to mark this row met (ADR-007 B99) |
 | PB-OPS-1 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |

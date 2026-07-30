@@ -5607,3 +5607,61 @@ in a fresh disguise, one round after I catalogued it.
 **`PB-NET-7` stays NOT MET. The count stays 134 of 144.** What changed is that the closed-test
 blocker is closed: a silent relay can no longer wedge the phone, which was the reviewer's first
 condition for testers touching this build.
+
+---
+
+## B100 — My PB-NET-5 refutation was wrong, by the instrument I catalogued
+
+**2026-07-30.** B98 recorded `PB-NET-5` as FENCED-ON-LIVE and its dead test file as *"deletable
+without loss."* **That is wrong, and it is wrong by instrument 5 — the quantifier dropped between the
+requirement and the check.**
+
+I verified that PB-NET-5's *numeric criterion* has live fences, which is true: `skeleton`'s
+`TestS6B_InputLatencyPhoneTypeToPTYWrite` measures p50/p95/p99 over a chain with no reference to the
+dead package. **The requirement's subject is not the criterion. It is "low-latency input across BOTH
+HOPS."** I checked one hop and reported on the requirement. **The grammatical subject of what I
+measured was narrower than the grammatical subject of the row** — which is the tell I wrote down in
+round 5 and did not apply to my own refutation one round later.
+
+**Clause by clause, verified here:**
+
+- **A, the numeric criterion** — FENCED-ON-LIVE. Caveat worth recording: the *phone* in that chain is
+  `phonesim`, a harness double; everything downstream of it is production code.
+- **B, drop the gateway's 500 ms command-IN poll** — FENCED-ON-LIVE, and genuinely gone.
+  `service.go:40-45` records the absence structurally, and the loop is driven by `MailboxWait`.
+- **C, the PHONE hop** — **FENCED-ON-DEAD.** All six tests in `transport/s6b_input_test.go` drive
+  `Session.Follow`, and `grep` confirms **`transport/follow.go` is the only phone-side `MailboxWait`
+  caller in the tree**, with zero production callers. The live `MailboxWait` caller is the *gateway*.
+
+**The shipped phone does not follow. It polls** — `mobile/app.go:35`, `pollInterval = 500 *
+time.Millisecond`.
+
+**So what shipped is a GATEWAY-SIDE-ONLY fix — and the requirement's own text warns against exactly
+its mirror image:** *"a phone-side-only fix passes v1's criterion while typing stays 500 ms-gated
+(fable F4)."* The row anticipated the wrong half, then the other half happened, and the criterion it
+built to catch the anticipated failure passed anyway — **because the criterion stops at the PTY
+write, and the 500 ms poll gates the return direction.**
+
+**The user-visible consequence, which no requirement measures:** typing is fast and measured; **seeing
+your own character echo back after an idle gap can wait up to half a second.** That is the first
+thing a tester will notice and there is no budget in section 6.0 for it.
+
+**Status: UNFENCED, not disproven** — the shipped poll plausibly avoids head-of-line blocking by a
+cruder mechanism than concurrent dispatch, since a short read holds `c.mu` only briefly. **That is
+inference from reading `App.drain` and `roundtrip`; nothing measures it**, and the reviewer flagged
+its own claim the same way rather than asserting it.
+
+**Two corrections to B98's step plan, both making the deletion harder:** the package is **separable by
+symbol, not by file** — `b47_consent_test.go` is a shared fixture with no `func Test` at all, and
+`releaseprobe_test.go` is live infrastructure proving three `PB-NET-2` properties by compiling a real
+non-test binary, and carrying a build-hygiene fix (its directory is *named* so `./...` ignores it,
+after a stale directory broke a concurrent build). **Six files to relocate, not four. Three
+replacement fences owed, not two.**
+
+**The third is the one that may not be writable honestly:** the shipped phone has no concurrent-
+dispatch mechanism to assert, so an honest fence may have to be a *latency* property on the echo path
+— which needs a budget section 6.0 does not state. **If it cannot be written, PB-NET-5 stays NOT MET
+on the evidence.** That is the correct outcome and better than aiming a weaker fence at a convenient
+subject.
+
+**Count: 133 of 144, 9 NOT MET, 2 hardware-deferred.**
