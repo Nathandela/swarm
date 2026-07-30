@@ -4227,3 +4227,79 @@ moved.**
 receives has one shape is RED today, because the defect is real and its fix is relay work in
 another lane. The alternative — pinning the current two shapes — would make the defect look
 sanctioned. The location is written into the operator doc so it does not have to be rediscovered.
+
+---
+
+### B78 — C1's aggregate bound does NOT exist, and the committee's counter-proposal is REFUTED by measurement
+
+**B78(1) — correcting my own commit message.** `8861488` says of the token defect that "both halves
+are fenced". **That overclaims.** The implementer stated the edge plainly and I committed before
+reading it:
+
+- **Per row: bounded.** Hydration is now ≤ rows × 4096, fenced on the *hydrated map* rather than on
+  disk. Measured before: 8 identities × 1 MiB hydrated 8,000,000 bytes from 8 rows.
+- **In aggregate: NOT bounded.** `loadTokens` is still unconditional and the ROW COUNT is one per
+  routing id, which is free. At the shipped `ConnPerMin=600`/source that is ≈**3.4 GB/day/source**,
+  all of it resident at every boot. **~500x better than the measured 1.5 TB/day, and not a bound.**
+  A long-running attack still reaches the OOM, three orders of magnitude slower.
+
+The fix removes **the multiplier the caller chose** and nothing else. Recorded as such.
+
+**B78(2) — the token bound rests on nothing upstream, which is worth knowing.** Google publishes
+**no maximum** for a registration token. The 4K figure that circulates is the *payload* limit, and
+an engineer in the same thread corrects it: the token's size "has no relation" to it. Observed
+tokens are 152–184 chars. So 4096 is *the largest number anyone has ever attached to the thing*,
+chosen because a wrongly-tight bound **silently kills push for a live handset until the user next
+opens the app** (PB-PUSH-6 with B16) — the failure nobody reports. It must also cover APNs, since
+`PushSink` is transport-neutral.
+
+**B78(3) — THE COMMITTEE'S ADOPTED-FOR-DESIGN COUNTER-PROPOSAL IS REFUTED, BY MEASUREMENT.**
+
+B71(6) recorded a split: registration cost was rejected, and the fence reviewer's alternative —
+**"a durable write should require a pre-existing durable relationship"** — was recorded as the most
+promising lever, on the reasoning that it converts *"identities are free"* into *"relationships are
+not"*.
+
+**It does not, and the implementer measured it rather than arguing it.** With the round-4 fixes in
+place: **50 relationships manufactured from 100 freshly minted identities, no victim and no stolen
+key**, `authorize_device` accepting every time — because the consent signature proves only that the
+*named device's key* signed, and the attacker holds both keys.
+
+    bucketPairs    = 100 rows      (2 per relationship)
+    bucketConsents =  50 rows      (1 per relationship)
+    bucketTokens   =  50 rows      (the precondition is satisfied)
+    relay.db       = +98,304 bytes (~1966 per relationship)
+
+Three durable rows per authorize — which is exactly the 2000-authorizes → 6000-rows figure the
+fence reviewer itself measured. **So the rule would not bound the tokens bucket: the attacker
+manufactures the qualifying relationship first, and the durable footprint per token row rises from
+1 row to 4 while the price rises only from 1 identity + 1 op to 2 identities + 2 ops.**
+
+**The rule binds only if the RELATIONSHIP is rooted in something unmintable, and today it is not.**
+B61 closed X↔X and left A↔B wide open. **That is the decision to take — not the write-gating.**
+Both remedies the committee debated are now measured as insufficient, and the split it recorded was
+between two options that share the same unexamined assumption.
+
+**B78(4) — residuals stated with numbers rather than left implicit.**
+- **C2 is bounded by an operator quota rather than by nothing:** live slots are ≤ live connections
+  holding one, so **16 sources × 64 connections can still fill the 1024 table** — against 2 sources
+  filling it *permanently* before. A per-source rendezvous cap was deliberately not added, because
+  with one slot per connection it is just a smaller `MaxConcurrentConnectionsPerSource`, and
+  choosing that number is a config decision.
+- **C3 is charged against the rendezvous deadline, not the pre-auth one, deliberately** — so a
+  connection that authenticates *and then* parks is bounded too. A bound covering only
+  unauthenticated callers is one an attacker steps around by minting an identity.
+- **H1 uses `mayActOn` rather than `isPaired`** (one authority decision rather than three; the
+  edges are written atomically so they are equivalent in every reachable state), and refuses with
+  `unknown` rather than `not_authorized` **because the oracle was two questions** — a
+  `not_authorized` reply would have left the existence half intact.
+
+**B78(5) — disclosed by the implementer, recorded rather than dressed up.** Two guards
+(`TestC2_AnOversizedRendezvousLabelIsRefusedBeforeItIsRetained`,
+`TestC3_ARendezvousRecvIsMetered`) were written **during the mutation pass**, when it noticed it had
+added two bounds with no fence — their failing-first evidence is the mutation that restores the
+pre-fix path. And `TestPresence_NoHistoryRetained` needed its fixture changed, because H1 turned
+its unpaired precondition into `unknown`; the probe moved from a stranger to the *same paired
+device*, which is **strictly stronger** — with a stranger probing, "unknown" would have been
+satisfied by the authority rule alone and the test would have stopped saying anything about
+history.
