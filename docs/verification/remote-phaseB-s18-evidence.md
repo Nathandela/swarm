@@ -1,5 +1,19 @@
 # S18 evidence — app security hardening (PB-SEC-3, 4, 5, 6, 7, 8, 11, 12, 13, 14)
 
+> **SUPERSEDED IN PART — READ THIS FIRST (added 2026-07-30).** Everything below about
+> `FLAG_SECURE` and `setRecentsScreenshotEnabled` describes the app **as it was when this slice
+> closed**, and is no longer true of the shipped app. ADR-007 **B65** withdrew PB-SEC-4 by owner
+> decision: the app now ALLOWS screenshots, screen recording and the recents thumbnail. Both APIs
+> are gone, `SecureWindow.protect()` was removed with them, and the gate that once required the
+> flag now **requires its absence** — reinstating it fails `android/gate/s18_sec4_windowsecurity_test.go`.
+>
+> This file is left otherwise unedited because it is signed-off evidence for a closed slice, and
+> rewriting history to match a later decision is how an evidence trail stops being one. Read the
+> `FLAG_SECURE` passages as a record of what was true then, not as a claim about now.
+>
+> **`filterTouchesWhenObscured` and PB-SEC-12 are UNAFFECTED** and everything this file says about
+> them still holds: the touch filter on the gated actions is untouched by B65.
+
 **Written by the GREEN implementer, 2026-07-26, from an uncommitted working tree.** Nothing here
 is staged or committed; every command below was run in
 `.claude/worktrees/remote-control-research`.

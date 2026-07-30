@@ -3321,3 +3321,61 @@ requires a gate asserting the guard is exactly `BuildConfig.DEBUG` to stop it ro
 ruling replaced a workaround with a decision. **Recorded because the workaround was already
 briefed and half-built when it was cancelled** — the tempting move under sprint pressure is the
 one that unblocks the immediate task without settling the question underneath it.
+
+---
+
+### B66 — B65's own gate was fail-OPEN, and one sentence of B65 was false
+
+Two corrections to B65, both found by the implementer that built it and both verified by hand
+against the committed artifact rather than argued.
+
+**B66(1) — inverting an assertion re-polarised a shared helper's known bug. New defect class.**
+
+B65's gate, as first committed, stripped Kotlin comments before scanning so it would tolerate the
+remaining prose mentions of the two APIs. `stripKotlinComments` is **not string-literal-aware**: a
+`//` inside a string literal blanks the rest of that line. So this line PASSED the gate while
+setting the flag:
+
+    val u = "http://e.invalid"; a.window.addFlags(...FLAG_SECURE)
+
+Measured against both versions: `ok` under the gate as committed, FAIL under the hardened one.
+
+**The composition is the finding, and it is a class not previously recorded here.** Under the
+ORIGINAL POSITIVE assertion — *a sink must exist* — the stripper's bug was **fail-SAFE**: hiding a
+real sink made the test demand one and fail. **Inverting the assertion re-polarised that same bug
+to fail-OPEN**, with no change to the helper and no change to any other gate that uses it. The
+stripper remains correct for every positive assertion in the tree, which is why it was not
+patched; the fix removed the NEED to strip, by scanning raw source so there is no code/comment
+discrimination left to defeat.
+
+**Generalisation, recorded as residual 4.11:** *a shared helper's known limitation is safe or
+unsafe according to the POLARITY of the assertion that uses it. Inverting an assertion silently
+re-polarises every helper it depends on, and the helper's own tests will not notice.*
+
+This also corrects a claim made in this session's review: the gate was verified by mutation and
+reported sound, on a mutation that reinstated the flag in the obvious way. That mutation was
+caught. The escape requires the literal and the flag on ONE line, and was not tested. **A single
+mutation proves a gate fires; it does not prove the gate cannot be evaded** — the two are
+different questions and only the first was asked.
+
+**B66(2) — B65's "keeps the bidirectional TSV join" was FALSE when written.**
+
+There was no bidirectional join at HEAD. The gate had one direction only — the two roles PB-SEC-4
+names must have rows — plus the sink count. The implementer built the missing direction (a row
+naming a screen the app no longer has now fails, mutation-proven) but could **not** honestly build
+the fully general converse, *any new screen with no row fails*: this module has no screen registry,
+`ui/` mixes screen models with row models, error routing and the facade bridge, and every naming
+rule tried is escapable by calling the next screen something else.
+
+**So B65's sentence is amended: the join is bidirectional FOR THE TWO NAMED SCREENS, not in
+general.** The limit is written into the gate file so the pair is not over-read. B65's
+mutation-proof sentence stands; only the join claim needed the qualifier.
+
+**B66(3) — `docs/verification/remote-phaseB-s18-evidence.md` was stale and is now marked.** It
+described `SecureWindow.kt` as "the one sink: `FLAG_SECURE` + `setRecentsScreenshotEnabled(false)`",
+asserted the window CARRIES the flag after `onCreate`, and recorded mutation evidence for a
+function B65 deleted. A superseding banner was added at the top; the body is left unedited,
+because it is signed-off evidence for a closed slice and rewriting history to match a later
+decision is how an evidence trail stops being one. This is the second instance of B62(3)'s shape —
+a record whose later parts falsify its earlier parts without amending them — and the first where
+the stale artifact was an EVIDENCE file rather than the ADR body.
