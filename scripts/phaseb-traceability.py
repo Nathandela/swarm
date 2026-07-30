@@ -51,10 +51,6 @@ NOT_MET = {
                 "halves remain: same-operation supersession is inexpressible without a "
                 "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
                 "new biometric enrolment. Neither fix closes the other",
-    "PB-PUSH-9": "\"deletion on revoke/disable\" is dead: one self-consent writes a "
-                 "self-edge, so grantsAnyone() is true forever and no revoke by any "
-                 "party ever drops that handset's push token again -- measured on a "
-                 "real relay (ADR-007 B61)",
     "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
                 "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
                 "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "
