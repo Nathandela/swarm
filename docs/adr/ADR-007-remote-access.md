@@ -4117,3 +4117,46 @@ survived because **nothing parses that column**: the coverage tests check the ve
 element uniqueness, never the note prose. Being corrected; the note column is deliberately NOT
 fenced, because the authoritative cross-language fence already reads the real sources and a second
 parser over prose would be satisfiable without being right.
+
+---
+
+### B76 — `errLateCancel` reclassified from accepted residual to open defect, on a durability asymmetry
+
+An implementer I asked to re-examine this **changed its answer**, and the argument holds. Verified
+by me at `mobile/pairing.go`:543 and :640.
+
+**B58 answered the wrong question, correctly.** It asked *"should a late cancel publish `cancelled`
+over landed effects?"* and answered no — that is precisely the half-paired state PB-PAIR-4 forbids.
+It did **not** ask *"should this outcome have a terminal value of its own?"*, and those are
+different questions.
+
+**The asymmetry.** The late-cancel path sets `p.state, p.err = pairPaired, errLateCancel` (:543).
+`persist()` **removes** the durable attempt record when the state is `pairPaired` or
+`pairCancelled` (:640). So **the pairing is durable by design while "the pairing completed before
+this was cancelled; use revoke to undo it" is an in-memory error return.**
+
+An Android SIGKILL between `Cancel()` returning and the user reading the screen — the exact class
+of event PB-PAIR-4 exists for, whose own rationale is that *"every transition of this handshake
+lived in a struct, a goroutine and a channel"* — leaves the next launch showing **a normally paired
+phone, with no trace that the user asked to cancel and none that they must revoke.**
+
+**By PB-PAIR-5's own stated rule this qualifies more clearly than most cases that were granted a
+value:** a state earns one when the user's NEXT MOVE differs, and revoke is a different move from
+retry. In the `RejectSAS` variant it is an urgent one — **the user has just declared a suspected
+interception and the device paired anyway.**
+
+The real mitigation is that the error returns synchronously from the verb the user pressed, so the
+common case is fine. But that is a mitigation for the happy path *of an error path*, which is not
+the case a persisted state machine is built for.
+
+**Not changed.** A third terminal value would satisfy both constraints at once — true, because the
+device *is* paired, while carrying the different next move — but it needs an ADR amendment, a
+Kotlin `PairingStep` arm and a gate fence. **Moved in the record from accepted residual to open
+defect, narrow window**, so the next person weighing it starts from the durability argument rather
+than from B58's answer to a different question.
+
+**Also in this entry: the coverage note that named a state retired five days earlier** is corrected
+(B75(3)). The fix puts the not-fencing reasoning **inside the note** rather than only in a commit
+message — a later reader noticing the gap is looking at the row, not at history — so the row now
+names its own weakness and points at the authority: the const block, plus the one check in the tree
+that set-compares it against the Kotlin enum.
