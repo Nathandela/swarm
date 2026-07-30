@@ -5932,3 +5932,52 @@ statement about the same row.**
 named tests, one per clause, all of them real, all of them over code nothing called — is kept struck,
 because it is the clearest single artifact in this repository of what a complete fence over dead code
 looks like. It read as the best-evidenced row in the file.
+
+---
+
+## B106 — GG-4 is not satisfiable on this host, and was not before any of this work
+
+**2026-07-30.** Implementation goal GG-4 requires `go build`, `go vet`, `golangci-lint` and
+**`go test ./...`** all green before any epic closes. **The fourth is not currently satisfiable on
+this machine, and the measurement that establishes it was taken in both arms.**
+
+Four full-suite runs at rest, alternating between HEAD and `40e2ac1` — the commit that **predates
+every line** of the transport surgery:
+
+| arm | failures |
+|---|---|
+| HEAD run 1 | `TestRunShim_...`, **`TestS6B_GatewayInputLatencyIsNotPollGated`** |
+| HEAD run 2 | **`TestS6B_...`**, `TestFirstPaintGate_RealDaemon_FiftySessions_P95` |
+| baseline run 1 | `TestLaunch_...`, `TestE2E_LiveShimKeystrokeEchoLatencyP95`, **`TestS6B_...`**, `TestFirstPaintGate_...` |
+| baseline run 2 | `TestRunShim_...`, `TestTUI_OpensAndRestoresOverPTY`, **`TestS6B_...`** |
+
+**The baseline failed more than the changed tree, in both runs** (4 and 3, against 2 and 2). The
+surgery did not cause this.
+
+**And one test is the constant: `TestS6B_GatewayInputLatencyIsNotPollGated` failed 4 of 4 across both
+arms.** Reproduced independently here at `median 120.8 ms` against a `100 ms` bound, with three agents
+on the host — and it already retries three times, with a comment stating the discriminator: *"a
+poll-gated bridge fails every attempt, a loaded host does not."* **Under this much load, all three
+attempts exceed, so its own discriminator saturates.**
+
+**The bound is self-imposed and tighter than the specification it cites.** Section 6.0 budgets
+**p50 <= 150 ms for the WHOLE phone -> PTY path**; this test asserts **<= 100 ms median on the gateway
+hop alone.** That is defensible as an engineering margin and it is **not** the spec's number, so a
+failure here is not by itself a section 6.0 violation.
+
+> **This corrects the record twice.** Round 5 called the non-determinism *"two consecutive full-suite
+> runs failed on DIFFERENT tests."* Round 6 measured it as **one** test, the same one, in 4 of 4 runs
+> — far more diagnosable than "flaky suite" implied. And round 6's own synthesis called the suite
+> *"not deterministically green under load"*, which is too kind: **it is deterministically RED on one
+> test whenever the host is busy.**
+
+**What this means for the goal.** No epic can close on GG-4 as written until either the host is
+quiesced for the gate run, or the latency budgets are made load-independent. **Picking a new budget is
+the same unstated-number decision that stopped fence 3**, so it is recorded here rather than taken.
+Two honest options, neither chosen: run the gate on a quiesced host and say so, or separate the
+latency assertions into a lane that is not part of `./...`.
+
+**A caveat on every gate report in this round, including mine.** Green results reported during round 6
+were on **targeted packages**, not the full suite, and were described as such each time. **No full
+`go test ./...` run in this round was green, in either arm.** That is a standing condition of the
+tree, not a consequence of any change in it.
