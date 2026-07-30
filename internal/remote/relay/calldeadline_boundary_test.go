@@ -233,3 +233,35 @@ func TestCallDeadline_ATimeoutIsNeverMistakenForARefusal(t *testing.T) {
 		}
 	}
 }
+
+// TestCallDeadline_CloseIsIdempotent is the second half of the deleted
+// TestCallsAfterCloseFailCleanly (ADR-007 B105). The first half -- every later call is a clean
+// typed refusal -- is TestCallDeadline_ATornDownConnectionAlwaysReportsItself above. This is
+// the half nothing named.
+//
+// IT WAS ALREADY EXERCISED, BY ACCIDENT, WHICH IS THE POINT. dialAuthed registers
+// t.Cleanup(Close), and the torn-down test above closes explicitly, so a double Close has run
+// on every pass of this package for as long as both have existed -- absorbed by a shared
+// fixture and asserted by nothing (residual 4.10). Change either seam and the coverage leaves
+// with it, silently, because no test names it.
+//
+// WHAT IDEMPOTENT MEANS FOR A FUNC RETURNING AN ERROR is that the second call reports what the
+// first did. Conn.Close guards its body with closeOnce and caches closeErr; markDone has its
+// own doneOnce, so dropping closeOnce does NOT panic -- it lets a second Close run ws.Close
+// again and overwrite the cached error with the second attempt's. Shutdown would stop being a
+// state and start depending on how many times it was asked for.
+func TestCallDeadline_CloseIsIdempotent(t *testing.T) {
+	srv, _, _, _ := startTestRelay(t, nil)
+	pub, priv := newRelayAuthKey(t)
+	machine := dialAuthed(t, srv.URL(), authFor(pub, priv))
+
+	first := machine.Close()
+	for i := 2; i <= 3; i++ {
+		if again := machine.Close(); !errors.Is(again, first) && again != first {
+			t.Errorf("Close() call %d = %v, want the same result as the first call (%v).\n"+
+				"Shutdown is a STATE, not an event: a caller that closes a connection someone "+
+				"else already closed must be told the same thing, not a fresh error from a "+
+				"second teardown attempt.", i, again, first)
+		}
+	}
+}
