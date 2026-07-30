@@ -5786,3 +5786,66 @@ one 3 of 5 times, passing 5/5 isolated. The suspicion that the direction fix cau
 second AEAD open per inbound frame against a 150 ms budget — was **discriminated by building HEAD
 minus that decrypt and sampling both arms**: it fails 1/2 there too. **A load artefact, and far more
 diagnosable than the record implied.**
+
+---
+
+## B103 — Explicit pathspecs on `git add` do not protect a concurrent agent. `git commit` does not ask
+
+**2026-07-30.** `facdc66` is titled *"my round-6 brief was false; correct the synthesis"* and contains
+**3,318 lines of production and test deletions** — `session.go`, `retry.go`, `store.go` and seven test
+files. None of it was mine. It was another agent's step-4 removal, **staged and awaiting its own
+commit.**
+
+**I did use explicit pathspecs.** `git add docs/adr/... docs/verification/...` staged exactly two
+files. Then `git commit -F <message>` **committed everything in the index**, including 3,318 lines
+another agent had staged seconds earlier.
+
+> **The rule I have given agents nine times is insufficient, and I am the one who proved it.**
+> "Never `git add -A`" protects the *index* from your own carelessness. It does nothing about a
+> **`git commit` that takes the index as it finds it.** The discipline has to reach the commit:
+> `git commit -- <pathspecs>`, or read `git diff --cached --stat` before every commit and refuse to
+> proceed on a file you did not stage.
+
+Nothing is lost and no history was rewritten. The damage is to the **record**: the B98 deletion is now
+split across `facdc66` and `b43b03f`, and **neither message alone accounts for it.** Anyone bisecting
+the removal of `session.go` lands on a commit about a synthesis correction. That is fossil evidence
+manufactured at the moment of writing — instrument 4, self-inflicted, in a commit whose own subject is
+a false claim I made about a diff I did not read.
+
+**Adopted going forward:** every commit in this worktree passes pathspecs, and the working rule is
+*stage nothing you are not about to commit, and commit nothing you did not just stage.*
+
+## And three results from the surgery, two of which refuse work I ordered
+
+**The hostile-pagination fence should NOT be written, and I was wrong to order it.**
+`relay.Client.MailboxRead` **discards `has_more`** entirely, so a relay claiming more items forever
+cannot mislead a phone that never reads the flag. `ErrStuckPage` existed because
+`transport.Session.Drain` *did* read it. **Writing the fence I asked for would have aimed a
+real-looking assertion at an attack the shipped code cannot suffer** — a fence that passes because
+the hazard is structurally absent, which is the fifteenth variant of the thing this audit exists to
+find. Re-deriving `PB-NET-6` clause by clause left exactly one genuinely unfenced item — concurrent
+drains — and that is what was fenced, mutation-proven both ways.
+
+**A third instance of B98's finding, caught in the act of acting on B98.** `s6b_input_test.go` was
+the **only** fence on section 6.0's drain budget (`MaxDrainReadsPerSec`, `MaxDrainAcksPerSec`), and
+those constants are **live** — they configure `NewDrainPacer`, which the gateway runs in production.
+Deleting the dead file wholesale would have deleted a fence over live code, for the third time in one
+operation. Rescued verbatim.
+
+**`PB-NET-5` fence 3: STOPPED, as pre-authorised, and this is the correct outcome.** All three
+formulations need a number section 6.0 does not state. A structural fence — "the phone never
+long-polls on the typing connection" — would pass, and would **dress the absence of the required
+mechanism up as compliance**: PB-NET-5 requires concurrent dispatch or a server-push frame and the
+shipped phone has neither. **`PB-NET-5` stays NOT MET.**
+
+**What is actually needed is a product decision, and it is recorded here as an open question rather
+than guessed at:** section 6.0 budgets `phone Type -> PTY write` and states **nothing** for the
+machine->phone leg. With `pollInterval = 500 ms`, an event published just after a poll waits up to
+half a second before the user sees their own character echo. **Whether that is acceptable is not an
+implementer's call.** An attempted measurement was deleted rather than reported, because the probe
+measured "the event never arrived" and not latency — the right instinct, and the 500 ms remains a
+stated constant rather than an end-to-end measurement.
+
+**Still unfenced, recorded rather than papered over:** `DrainPacer` and `AckBatcher` **behaviour**.
+Nothing in the tree constructs either and asserts what it does; `drainbudget_test.go` pins the numbers
+they are built *from*, not the pacing they produce. They are live gateway code.
