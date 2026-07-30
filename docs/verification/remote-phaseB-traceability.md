@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 141 |
-| Evidenced (measured on disk) | 141 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **1** |
+| Shipped (asserted by hand) | 142 |
+| Evidenced (measured on disk) | 142 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **0** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -72,7 +72,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-2 | S21 | pending | — |
-| PB-E2E-3 | S19 | **NOT MET** | THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first evidence per slice; S10 and S12's own evidence files admit tests and implementation landed together, and the residuals record that S17/S18b cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file NAMES the requirement, not that RED-first happened (ADR-007 B83) |
+| PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
 | PB-GW-1 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |

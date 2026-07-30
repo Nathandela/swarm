@@ -5147,3 +5147,51 @@ were wrong about correct code**, and all three surfaced only because a reviewer 
 zero callers and asked why.
 
 **Count: 141 of 144. One NOT MET — PB-E2E-3. Two deferred to the physical-handset gate.**
+
+---
+
+### B93 — PB-E2E-3 restated in a verifiable form, with its failures NAMED rather than waived
+
+**Zero NOT MET. 142 of 144, two deferred to the physical-handset gate.**
+
+This was the last row that was neither met nor hardware-gated, and it was the sharpest instance of
+the standing class in the whole audit: **the requirement policing the method was satisfied by a
+check that cannot see the method.** It asked for "RED-first evidence per slice"; its fence verifies
+an evidence file **names** a requirement. Two slices' own evidence files admit tests and
+implementation landed together, and the residuals already recorded two more as unable to satisfy
+GG-5 retroactively.
+
+**Restated to what is actually checkable: a COMMITTED failing state** — a RED commit carrying the
+failing output in its message, preceding the implementation commit for the same requirement. That
+is verifiable from history rather than asserted in prose, and **this session produced it as a matter
+of course**: `a8bdc31`, `1f0a409` and `f7aaab2`, each followed by its own GREEN commit.
+
+**Four slices are named as permanent exceptions rather than waived** — S10, S12, S17 and S18b.
+**They cannot be repaired retroactively, and pretending otherwise is precisely the defect this
+requirement exists to prevent.** They are exceptions, not passes, and they are written into the row
+where anyone reading it will see them.
+
+**And the fence that is owed is stated rather than implied.** No check is claimed over the
+commit-precedence rule yet. **An unbuilt check recorded as built is exactly how this row came to
+read met while two slices openly admitted otherwise** — so the gap is named in the requirement
+itself.
+
+**On the count reaching zero NOT MET.** That is not the same as done, and the record should be
+unambiguous about it:
+
+- **Two requirements are deferred to hardware** and cannot close without a handset run — one of
+  which a reviewer found **cannot run as documented**, because the module deliberately omits the
+  Firebase plugin.
+- **The denominator is known incomplete.** One row was found MISSING this round (B86); nothing
+  checks a requirement set for what it forgot to ask, and **re-deriving existing rows can never find
+  another.**
+- **Only 26 of 144 rows have been independently deep-derived.** Every tranche anyone re-derived
+  produced a finding.
+- **Three rows closed by adjudication**, all resolving against the requirement and in favour of code
+  that was already correct — and **nothing was looking for that direction**; all three surfaced only
+  because a reviewer traced a symbol to zero callers.
+- **Five committee rounds have all returned REVISE**, and the last was unanimous that production is
+  not ready.
+
+**142 of 144 is what the bookkeeping says. It is not the committee's verdict, and the two are
+different claims.**

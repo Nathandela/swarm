@@ -44,11 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-E2E-3": "THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first "
-                "evidence per slice; S10 and S12's own evidence files admit tests and "
-                "implementation landed together, and the residuals record that S17/S18b "
-                "cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file "
-                "NAMES the requirement, not that RED-first happened (ADR-007 B83)",
 }
 
 
