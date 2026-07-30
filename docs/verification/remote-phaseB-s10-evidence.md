@@ -7,6 +7,35 @@
 > **RECONSTRUCTED**, 2026-07-25, from the commits, their diffs and their tests. All 44 S10-owned
 > tests were re-run at HEAD.
 
+> **CORRECTED IN TWO PLACES — READ THIS FIRST (added 2026-07-30, ADR-007 B85).** The body is left
+> unedited: it was accurate against the code it was written for, and a dated record is not stale
+> merely because the world moved. Two things below are now wrong or incomplete.
+>
+> **1. "Three buckets" is two.** The body repeats PB-SYNC-1's count of three seq buckets (shared
+> journal+terminal, command-reply, grant). Derived from production: `streamsOf`
+> (`internal/phonecore/snapshot.go`) has exactly two arms and cannot acquire a third from a bucket.
+> **The grant is not a seq bucket.** The bootstrap grant is raw plaintext (`grantwire.BootstrapKind`)
+> that never becomes an envelope — no sender, no seq, no bucket; the rotation grant IS
+> content-key-sealed and rides the **shared** bucket. Grant staleness is set by `Core.MarkGrantLost`
+> (install-time replay detection) and cleared by `installGrant`, outside the seq machinery entirely.
+> So a gap swallowing a rotation grant stales journal and terminal and leaves grant **healthy** —
+> the channel that lost data is not the one flagged. That is **not** a live hole and must not be
+> "fixed" into one: a missed rotation is caught at install, and a rotation changes `EpochID` hence
+> the bucket, so the phone cannot open the new epoch at all and fails closed. The requirement text
+> now carries the corrected count and the reason it matters — a phantom bucket reads as a spare
+> discriminator value, and spending one costs the command-reply channel for an epoch.
+>
+> **2. PB-SYNC-2 and PB-SYNC-3 were fenced for two of four channels, not four.** The row below
+> cites `TestS10_AReplyGapLeavesTheOpUnresolved` and `TestS10_AJournalReseedDoesNotClearTerminal-
+> Staleness` for per-channel repair. Those are real (both mutation-proven in round 5), but neither
+> carries the clause "**nothing else clears that channel**". Two arms could be added to `repairedBy`
+> with the whole of `internal/phonecore` green: `kindCommandReply -> StreamReply` and
+> `"" -> StreamJournal`. The reason is structural — `commitReceive` sets the flags in the
+> `!contiguous` branch and clears them in the `else if`, so **the frame that opens a hole can never
+> be the frame that clears it**, and every test in this slice asserts the flag immediately after the
+> gapping frame. No test drove a **contiguous** frame after a gap. Both arms are now fenced by
+> `internal/phonecore/b85_replyclear_test.go`, each verified to fail alone under its own mutation.
+
 ## PB-KEY-10 is the one that mattered
 
 **The phone could never obtain an epoch key**, so every other requirement about sending, typing or
