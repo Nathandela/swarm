@@ -5539,3 +5539,20 @@ including the drain-budget arithmetic. It was never on the work list because the
 it. **It may be a third stop condition; nobody has checked.**
 
 **Count: 134 of 144, 8 NOT MET, 2 hardware-deferred.**
+
+**`PB-NET-5` settled the same day, and the flag does not hold — a refutation.** Checked here rather
+than round-tripped, by the method that produced the two findings above. **Nine test files cite it;
+exactly one is in the dead package.** More decisively, the requirement's stated criteria are input
+latency (p50 <= 150 ms / p95 <= 400 ms / p99 <= 800 ms) and append-while-a-wait-is-outstanding
+(<= 50 ms), and both are measured over **live** subjects: `skeleton/s6b_input_latency_test.go`
+measures section 6.0's percentiles end to end, and `relay/s6b_wait_test.go:220`
+(`TestS6B_AppendCompletesWhileAWaitIsOutstanding`) covers the (a) clause.
+
+The dead file's six tests — drain-budget arithmetic, follow truncation, goroutine leak — are
+properties of the **dead `Session` implementation**, not of the requirement. **`PB-NET-5` is
+FENCED-ON-LIVE and its dead file is deletable without loss.** It stays at 134 of 144.
+
+**Which is the useful shape of the negative result:** the same one-file-in-a-dead-package tell
+produced FENCED-ON-DEAD for PB-NET-3 and FENCED-ON-LIVE here. **The tell is not the file's location
+but whether the requirement's own criteria have a live subject** — and that is only visible by
+reading the criteria, which is why the join could not decide it either way.
