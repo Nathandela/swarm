@@ -5665,3 +5665,58 @@ on the evidence.** That is the correct outcome and better than aiming a weaker f
 subject.
 
 **Count: 133 of 144, 9 NOT MET, 2 hardware-deferred.**
+
+---
+
+## B101 — The test for the round's CRITICAL already existed, and passed, for five rounds
+
+**2026-07-30.** B99 said `PB-NET-7`'s goroutine-leak assertion "was never written" and that no
+`NumGoroutine` or `goleak` exists "anywhere in `relay`, `mobile` or `remotegw`." **The scoping was
+accurate and the conclusion was wrong.** It was written. It lives in
+`internal/remote/transport/hygiene_test.go`, which is a **complete** fence for this row:
+
+```
+TestNonWaitRequestTimeoutIsTheCommitteeBudget    <- pins RequestTimeout == 10s
+TestEveryCallTimesOutAgainstASilentRelay
+TestContextCancellationIsHonoured
+TestDialHonoursCallerContext
+TestCallsAfterCloseFailCleanly
+TestNoGoroutineLeakAcrossConnectDisconnectCycles <- 20 cycles, real runtime.NumGoroutine()
+```
+
+**Read the second line again.** `TestEveryCallTimesOutAgainstASilentRelay` — the exact property whose
+absence was this round's CRITICAL, the one an external reviewer and I independently "discovered", the
+one that took a RED whose test binary could not terminate — **was already written, already asserted,
+and already passing.** Against `transport.Session`, which no production code calls.
+
+> **Somebody anticipated this defect precisely, wrote the correct test for it, aimed it at the wrong
+> object, and the suite went green for five rounds while the shipped phone had the defect.** The
+> project did not lack the insight. It lacked any check that the insight was pointed at the code that
+> runs.
+
+That is the entire thesis of residuals 4.24 and 4.25 in one file, and it is a stronger statement of
+it than either residual managed. **A fence over dead code is not weak evidence — it is
+anti-evidence.** It consumes the attention that the missing fence would have attracted, and it
+answers the question "is this checked?" with a truthful yes.
+
+**It also makes the third clause of B99 sharper, not softer.** The row is not "partially unfenced".
+`internal/remote/transport` now holds the fences for **`PB-NET-3`, `PB-NET-4`, `PB-NET-5` clause C,
+`PB-NET-6` and `PB-NET-7`** — five requirements, one dead package. The `S6`/`S6b` family was
+effectively verified against a parallel implementation that was never wired up.
+
+**And it settles the 10 s question against my own fix.** `transport/session.go:27` reads
+`RequestTimeout = 10 * time.Second`, pinned by a test named for the committee budget. So §6.0's value
+was implemented *and* fenced — in the dead package — while the live client I bounded chose 5 s on
+latency grounds. **The conforming move is to adopt 10 s**, because the implementer is not the
+committee; the latency argument for 5 s belongs in a proposal to the committee, not in a constant.
+
+**Consequence, caught by the implementer rather than by me:** the committed RED at `c2b7eb5` uses a
+`silentRelayBound` of **10 s**, which at a 10 s default becomes a coin flip. Both bounds move
+together, and the wedge tests must be re-run against a reverted fix at the new value to confirm they
+still fail for the right reason.
+
+**A standing ruling on RED, recorded because it will recur.** A leak assertion has a RED only if
+there is a leak. Where a ported fence passes on first write, **the honest report is that it passed,
+plus a mutation proof that it can fail** — never a manufactured red. Fabricating a failing state to
+satisfy a process rule would be worse than the process gap it conceals, and `PB-E2E-3` is open in
+this record for the milder sin of narrating failures in prose.
