@@ -43,7 +43,7 @@ The daemon establishes remote origin **by construction, not by a self-declared c
 - A **dedicated remote-tier UDS** (`<stateDir>/remote.sock`, 0600), distinct from the owner-trusted main socket. Connections on it are unconditionally remote-tier; the gateway dials only it; a `remote-gateway` capability, if kept, is a non-trust feature flag, never the trust basis.
 - **Per-command device signatures**: every remote mutating op carries a detached Ed25519 signature (device command-signing key) over the canonical tuple `(action, machine=endpoint id, session, operation_id, expires_at, content_hash?)`; the daemon verifies it against the pinned device key and the device's capability grant **before** executing. A compromised relay cannot forge commands; only paired, unrevoked devices can issue them; no remote-class mutating op executes on any listener without a valid signature.
 
-**Threat-model scope (residual R1, the honest boundary).** A `0600` socket does not isolate two processes running as the same owner uid, and the gateway must run as the owner (it holds the machine identity key and reads the 0700 state dir), so SO_PEERCRED cannot distinguish a compromised gateway from the local TUI. Therefore the cryptographic containment boundary is the **untrusted relay** and the **semi-trusted phone**: a process compromised while running as the owner (the gateway included) already holds the machine identity key and can act as the owner directly, without the daemon — the same status as a compromised shell on a single-owner machine, and outside the cryptographic boundary by construction. Sidecar isolation (below) is a process boundary — the gateway is the only component parsing attacker-influenced relay bytes and does not share an address space with the PTY-owning daemon — and it is not a cryptographic barrier. **AMENDED 2026-07-30 (ADR-007 B41, restated B62(3), closed B68).** This sentence previously claimed "defense-in-depth" on daemon/PTY state. **B41 ruled that claim false and demanded it be made true or withdrawn**, because the generated systemd unit carried no `NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies` or `SystemCallFilter` — so there was no OS-level confinement to be in depth about, and the process boundary alone was doing all the work the sentence credited to isolation. B62(3) found the remediation still not carried out nineteen entries later, and a round-4 committee reviewer confirmed it again at HEAD. The claim is now scoped to what the process boundary actually buys; whatever OS-level confinement the unit carries is stated in B68 and in the unit template itself, so the two cannot drift apart again. This ADR adopts the scoped threat model for the personal-deployment default and records the stronger option (a dedicated non-owner service uid with its own key custody, or an OS sandbox/MAC profile denying the gateway the main-socket path) as an available hardening if multi-user isolation is later required. Revisiting ADR-004's deferred SO_PEERCRED question: it does not help here because both trusted and untrusted processes share the owner uid.
+**Threat-model scope (residual R1, the honest boundary).** A `0600` socket does not isolate two processes running as the same owner uid, and the gateway must run as the owner (it holds the machine identity key and reads the 0700 state dir), so SO_PEERCRED cannot distinguish a compromised gateway from the local TUI. Therefore the cryptographic containment boundary is the **untrusted relay** and the **semi-trusted phone**: a process compromised while running as the owner (the gateway included) already holds the machine identity key and can act as the owner directly, without the daemon — the same status as a compromised shell on a single-owner machine, and outside the cryptographic boundary by construction. Sidecar isolation (below) is a process boundary — the gateway is the only component parsing attacker-influenced relay bytes and does not share an address space with the PTY-owning daemon — and it is not a cryptographic barrier. **AMENDED 2026-07-30 (ADR-007 B41, restated B62(3), closed B68).** This sentence previously claimed "defense-in-depth" on daemon/PTY state. **B41 ruled that claim false and demanded it be made true or withdrawn**, because the generated systemd unit carried no `NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies` or `SystemCallFilter` — so there was no OS-level confinement to be in depth about, and the process boundary alone was doing all the work the sentence credited to isolation. B62(3) found the remediation still not carried out nineteen entries later, and a round-4 committee reviewer confirmed it again at HEAD. The claim is now scoped to what the process boundary actually buys. **B68 closed the code half and narrowed the claim again:** the unit now carries `NoNewPrivileges`, `RestrictAddressFamilies`, `RestrictNamespaces`, `SystemCallArchitectures` and `UMask`, so isolation genuinely limits **privilege escalation and network reach** — but it delivers **no filesystem confinement**, because a systemd USER unit cannot: the namespacing directives B41 demanded fail the unit at startup rather than constraining it. Four of the six B41 asked for were impossible in this deployment shape, which the finding did not know. This ADR adopts the scoped threat model for the personal-deployment default and records the stronger option (a dedicated non-owner service uid with its own key custody, or an OS sandbox/MAC profile denying the gateway the main-socket path) as an available hardening if multi-user isolation is later required. Revisiting ADR-004's deferred SO_PEERCRED question: it does not help here because both trusted and untrusted processes share the owner uid.
 
 ### D5. Gateway: supervised sidecar
 
@@ -3804,3 +3804,74 @@ The pre-existing-relationship rule is the most promising single lever and is rec
 not implemented reactively.
 
 **Verdict: REVISE**, unanimously across all four members.
+
+---
+
+### B68 — the sidecar hardening B41 demanded: five applied, four IMPOSSIBLE, one refused
+
+B41 demanded six systemd directives and B62(3) found the remediation still uncarried nineteen
+entries later. Carrying it out revealed that **the demand itself was partly wrong**.
+
+**Four of the six cannot be applied at all, and it is not a paths trade-off.** The gateway runs as
+a systemd USER unit (ADR-007 D5). systemd.exec(5) states verbatim that settings requiring
+filesystem namespacing — `ProtectSystem=`, `ProtectHome=`, `PrivateTmp=`, and with them
+`ReadWritePaths=`, the only thing that could have punched the state dir back out — are **not
+available in user services**, because the kernel functionality is privileged.
+
+So they do not brick the gateway by denying it its state dir, as I briefed. **They fail the unit at
+startup with `EXIT_NAMESPACE` (226) before `ExecStart` ever runs**, `Restart=on-failure` retries,
+and `StartLimitBurst` parks it in `StateFailed` — on every Linux install, wherever
+`SWARM_DAEMON_STATE` points. The escape hatch systemd names, `PrivateUsers=true`, needs
+unprivileged user namespaces (restricted on Debian historically and by Ubuntu 24.04's AppArmor
+policy) and would remap the uid the daemon's 0600 `remote.sock` is checked against. **Not taken.**
+
+**Applied — the whole of what a per-user manager can enforce.** `NoNewPrivileges=yes`,
+`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `RestrictNamespaces=yes`,
+`SystemCallArchitectures=native`, `UMask=0077`. One prctl and three seccomp filters. **Every one
+fails SOFT** — an errno the gateway sees — and none kills.
+
+Two are worth recording specifically:
+
+- **`AF_NETLINK` is load-bearing, not padding.** Release builds are `CGO_ENABLED=0` and use Go's
+  resolver, which needs no netlink — but `resolveGatewayBinary` explicitly supports a source-built
+  gateway, and glibc's `check_pf()` opens a netlink socket in the cgo resolver. Omit it and DNS
+  fails on exactly those hosts whose `nsswitch.conf` forces the cgo path: a resolver-dependent
+  outage reachable only in the field.
+- **`NoNewPrivileges=yes` is the kernel's precondition** for an unprivileged process to load any
+  seccomp filter at all, so the three filters below it depend on it. Stated rather than left to
+  systemd's inference.
+
+**`SystemCallFilter` is REFUSED, and this is a judgement rather than a limitation** — it would work
+here. On a denied call the default action terminates the process with `SIGSYS`;
+`SystemCallErrorNumber=` swaps that for an errno, which for a call the Go runtime makes internally
+(futex, mmap) is a runtime throw rather than a recovery. Both settings mean the process dies, and
+**the trigger is a Go toolchain upgrade, not any change in this repo.** Because the death is a
+failure exit, `Restart=on-failure` drives it into `StartLimitBurst` → `StateFailed`: **a silent,
+permanent remote-control outage.** Bought against a process that already runs with the owner's own
+authority and has no `User=` to escalate away from, that is a bad trade.
+`TestRenderSystemd_OmitsSystemCallFilter` fails if anyone adds it and tells them to open an ADR
+rather than edit the template.
+
+**The fences are real, mutation-proven one directive at a time**, including the case that matters
+most: `RestrictAddressFamilies=` with an **empty value**, which systemd reads as UNDOING all
+address-family restrictions — the setting that looks like hardening and permits everything. Also
+proven: dropping `AF_NETLINK`, widening with `AF_PACKET`, and adding any of the four impossible
+directives.
+
+**The derived-path assertion was substituted upward.** With no `ReadWritePaths=` to inspect, the
+test instead renders with three deliberately unrelated paths and walks **every directive value in
+every section**, asserting every absolute-path token is one of the four from the spec, that no
+value carries a `%` specifier (a specifier resolves against the manager's idea of the user, not
+against the spec), and that all four reach the unit. Stronger than what was asked: no future
+directive can hardcode a path or fake derivation.
+
+**A landmine left in place deliberately.** `TestUnits_CarryNoCredentials` matches
+`(?i)(...|private|...)` against every rendered line, so the directive NAME `PrivateTmp=yes` trips
+it as a credential. It cannot fire today because that directive is not applied, but it will
+ambush anyone who revisits this, and it means the rendered comment cannot name the omitted
+directives. **Recorded rather than fixed: narrowing a credential-detection regex to make room for
+a directive we are not applying is a change to a security check made under audit pressure**, which
+is the thing this round declined to do elsewhere (B71(6)). Residual 4.14.
+
+**D4/R1 is now amended to what the code supports**: sidecar isolation limits privilege escalation
+and network reach; it does **not** deliver filesystem confinement, which a user unit cannot.

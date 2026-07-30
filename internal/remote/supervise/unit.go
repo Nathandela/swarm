@@ -276,6 +276,68 @@ var launchdTemplate = template.Must(template.New("launchd").Funcs(template.FuncM
 // the launchd policy above: a clean exit is quiescence, never a restart. The start limit
 // sits in [Unit] because that is the section systemd reads it from -- the directives moved
 // there in v229, and in [Service] the throttle silently does nothing.
+//
+// CONFINEMENT (ADR-007 B41, restated by B62(3)). D4/R1 claims sidecar isolation limits the
+// blast radius on daemon/PTY state. What follows is what a per-user service manager can
+// actually deliver on that, and -- just as load-bearing -- what it cannot.
+//
+// The gateway dials the relay over TLS, CONNECTS to (never creates) the daemon's
+// remote.sock, reads and writes SWARM_DAEMON_STATE, and may append to LogPath. Each
+// directive below is justified against exactly that, and every one of them fails SOFT:
+// the gateway gets an errno, it is not killed.
+//
+//	NoNewPrivileges=yes         no setuid/setgid/fscaps escalation through execve. It is
+//	                            also the kernel's precondition for an unprivileged process
+//	                            to load a seccomp filter at all (seccomp(2): CAP_SYS_ADMIN
+//	                            or no_new_privs), so the three seccomp settings below rest
+//	                            on it. Stated explicitly rather than left to systemd's
+//	                            inference, because the dependency is not obvious.
+//	RestrictAddressFamilies=    the four families the gateway uses, and nothing else --
+//	                            AF_UNIX for remote.sock, AF_INET/AF_INET6 for the relay,
+//	                            AF_NETLINK because glibc's getaddrinfo opens one in
+//	                            check_pf(). Release builds are CGO_ENABLED=0 and use Go's
+//	                            own resolver, which needs no netlink; a source-built
+//	                            gateway (resolveGatewayBinary supports one) falls back to
+//	                            the cgo resolver wherever nsswitch.conf demands it, and
+//	                            name resolution that fails on only some hosts is precisely
+//	                            the production outage this block must not introduce. A
+//	                            denied socket() returns EAFNOSUPPORT. AF_PACKET and the
+//	                            rest of the exotica are gone.
+//	RestrictNamespaces=yes      the gateway creates no namespace, and unprivileged
+//	                            user-namespace creation is the standard escalation
+//	                            primitive left to a compromised unprivileged process.
+//	                            unshare/clone/setns with a CLONE_NEW* flag return EPERM;
+//	                            Go's clone() for thread creation sets no such flag.
+//	SystemCallArchitectures=    systemd.exec(5) recommends it for exactly the reason it is
+//	                            here: seccomp filters are per-ABI, so a secondary ABI would
+//	                            otherwise walk around RestrictAddressFamilies=.
+//	UMask=0077                  PB-LIFE-4. A user unit inherits the manager's 0022; the
+//	                            state dir is a 0700 tree and must stay one.
+//
+// NOT APPLIED, and not by oversight:
+//
+// ProtectSystem=, ProtectHome=, PrivateTmp= (and ReadWritePaths=, the only thing that
+// could have punched the state dir back out of them) do not work here. systemd.exec(5):
+// "some sandboxing functionality is generally not available in user services (i.e.
+// services run by the per-user service manager). Specifically, the various settings
+// requiring file system namespacing support (such as ProtectSystem=) are not available, as
+// the underlying kernel functionality is only accessible to privileged processes." The
+// failure is not a silent no-op -- the service exits EXIT_NAMESPACE (226) before it runs,
+// Restart=on-failure retries it, and StartLimitBurst parks the unit in StateFailed. The
+// owner's gateway simply never starts. The escape hatch systemd offers, PrivateUsers=true,
+// needs unprivileged user namespaces to be available (which Debian historically and Ubuntu
+// 24.04's AppArmor policy both restrict) and would remap the very UID the daemon's 0600
+// remote.sock is checked against. Neither is worth a gateway that will not start.
+//
+// SystemCallFilter= is a judgement rather than a limitation: it WOULD work in a user unit.
+// Its default action on a denied call is to kill the process with SIGSYS, and
+// SystemCallErrorNumber= only swaps that for an errno the Go runtime did not expect on a
+// call it makes internally. Either way the process dies on a syscall it never made before,
+// the trigger is a Go toolchain upgrade rather than any change in this repo, and because
+// the death is a failure exit the supervisor escalates it to StateFailed -- a permanent,
+// silent remote-control outage. Bought against a process that already runs with the
+// owner's own authority and has no User= to escalate away from, that is a bad trade.
+// Revisit it in an ADR, not by editing the template.
 var systemdTemplate = template.Must(template.New("systemd").Parse(
 	`# swarm remote gateway. Generated by ` + "`swarm remote init`" + `; edits are lost on the next run.
 #
@@ -302,6 +364,22 @@ Environment=SWARM_DAEMON_REMOTE_SOCK={{.RemoteSocket}}
 StandardOutput=append:{{.LogPath}}
 StandardError=append:{{.LogPath}}
 {{- end}}
+
+# Confinement (ADR-007 B41). One prctl and three seccomp filters -- all a per-user service
+# manager can enforce. Each fails by handing the gateway an errno, never by killing it.
+#
+# systemd's file-system sandbox is ABSENT ON PURPOSE. systemd.exec(5) states those settings
+# "are not available" to a per-user service manager: the kernel lets only a privileged
+# process build the mount namespace they need. Adding one here would not confine this
+# gateway, it would stop it from starting, and Restart= above would turn that into a
+# permanent restart loop. A syscall filter is left out on a separate judgement. Both
+# omissions are argued in full in internal/remote/supervise/unit.go -- read it before
+# "completing" this block.
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=default.target
