@@ -8,7 +8,11 @@ package relay
 //	"every later call is a clean typed refusal"  -> COVERED. calldeadline_test.go's
 //	    TestCallDeadline_ATornDownConnectionAlwaysReportsItself has both arms, mid-flight
 //	    and issued-after-close, each asserting ErrConnClosed. Not repeated here.
-//	"Close is idempotent"                        -> nothing asserted it. This file does.
+//	"Close is idempotent"                        -> SPLIT ACROSS TWO FILES, deliberately.
+//	    calldeadline_boundary_test.go's TestCallDeadline_CloseIsIdempotent (2727f0d) owns the
+//	    REPEATED-Close case and landed hours before this file. It is not repeated here. What
+//	    this file owns is the part that one does not reach: the MIXED teardown order, and a
+//	    Close over a socket that already died.
 //
 // IT IS TRUE BY CONSTRUCTION TODAY, which is exactly why it needs a fence rather than a
 // reading. Conn.Close and Conn.CloseNow share one sync.Once (client.go), so the second call is
@@ -27,23 +31,10 @@ import (
 	"testing"
 )
 
-// TestPBNET7_CloseIsIdempotent pins the property for both teardown verbs and for the mixed
-// order, since they share one sync.Once and a change to either can break the other.
+// TestPBNET7_CloseIsIdempotent pins the MIXED teardown order. Repeated Close is
+// calldeadline_boundary_test.go's; the two verbs share one sync.Once, so a change to either
+// can break the other and neither file's cases imply the other's.
 func TestPBNET7_CloseIsIdempotent(t *testing.T) {
-	t.Run("Close twice", func(t *testing.T) {
-		srv, _, _, _ := startTestRelay(t, nil)
-		pub, priv := newRelayAuthKey(t)
-		c := dialAuthed(t, srv.URL(), authFor(pub, priv))
-
-		first := c.Close()
-		second := c.Close() // must not panic on a closed channel or a re-closed socket
-		if first != second {
-			t.Errorf("Close() returned %v then %v; the second call must report the SAME outcome as "+
-				"the first, because a caller that closes twice has no way to tell which one it is "+
-				"looking at", first, second)
-		}
-	})
-
 	t.Run("CloseNow after Close", func(t *testing.T) {
 		srv, _, _, _ := startTestRelay(t, nil)
 		pub, priv := newRelayAuthKey(t)
