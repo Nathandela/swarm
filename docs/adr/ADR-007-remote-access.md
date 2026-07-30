@@ -5284,3 +5284,150 @@ CORRECT CODE THAT NO REQUIREMENT IS ACTUALLY POINTED AT.** Four requirements wer
 dead object across five rounds, and every discovery was a human tracing a symbol by hand.
 **Residual 4.25: a test asserting every package named in an evidence file is reachable from a
 `main` would have caught all four at once, in about thirty lines.**
+
+---
+
+## B95 — Residual 4.25 was wrong as written, and would have shipped a green fence over the open defect
+
+**2026-07-30.** Residual 4.24 named a class nothing looks for. Residual 4.25 proposed the
+instrument. **The instrument as I specified it passes on the very package that motivated it.**
+
+I wrote: *"a test asserting every package named in an evidence file is reachable from a `main`
+would have caught all four at once, in about thirty lines."* Measured, first thing, by the
+reviewer I handed it to:
+
+```
+$ go list -deps ./cmd/swarm-remote | grep -c internal/remote/transport
+1
+```
+
+`internal/remote/transport` **is** reachable from a `main` — `cmd/swarm-remote` imports it for
+`transport.NewAckBatcher` and `transport.NewDrainPacer` (`remotegw/command_loop.go:309,317`).
+Verified independently at this desk. The dead objects are `transport.Session` and `RetryFor`, which
+live in a package that is **partly alive**. **Package-level reachability cannot see a dead symbol in
+a live package** — and that is the actual shape of every one of the four requirements.
+
+Had this been implemented literally, it would have produced a **green fence over the open defect**:
+the fifteenth instance in this project of a fence that cannot fail, authored by me, in the same
+breath as naming the class. **Residual 4.25 is corrected here rather than deleted, because the error
+is the more useful artifact:** the instrument for a class can itself exhibit the class.
+
+**A second formulation was also rejected, with numbers.** "Every exported symbol is referenced from
+another package", by AST: **395 of 852 symbols flagged, a 46% false-positive rate.** A type that only
+ever flows through `:=` never appears qualified, so `remotegw.Service` and `remotegw.New` read dead.
+An allowlist of 395 rows is a second copy of the symbol table, and it rots.
+
+**What works is transitive reachability over a TYPED call graph (RTA)**, at **symbol** granularity —
+~470 lines, not 30, and `golang.org/x/tools` promoted from indirect to direct (`go.sum` unchanged).
+It separates precisely what reference counting cannot:
+
+```
+reachable=false  internal/remote/transport.Dial
+reachable=false  internal/remote/transport.RetryFor
+reachable=true   internal/remote/transport.NewAckBatcher   <- what the gateway actually uses
+reachable=true   internal/remote/transport.NewDrainPacer
+```
+
+**Four design points worth keeping:**
+
+1. **The root set is every `cmd` main plus every exported method of the `mobile` facade.** Omit the
+   facade and the entire phone core reads dead. This is asserted by a permanent soundness control,
+   not assumed.
+2. **The evidence join is symbol-level and backticked, and is labelled ADVISORY.** Joining on the
+   *package* returned 80-requirement lists — an architecture doc mentions every package in the tree
+   — and a reader handed 80 rows deletes the test.
+3. **The ledger is bidirectional.** An exemption that becomes reachable **fails and must be
+   deleted**, so a reachability computation that returns everything cannot pass quietly. Mutation-
+   proven: forcing "everything reachable" fires 47 of 52 rows as `STALE EXEMPTION`.
+4. **`transport` is deliberately NOT ledgered.** Writing those 16 rows is the exact move the
+   instrument exists to prevent. **It ships RED while B94's defect is open**, and goes green the day
+   the package is deleted or wired.
+
+**The bidirectional arm caught a real bug in the analysis on its first use.** `prog.MethodValue` over
+a pointer method set synthesizes a *wrapper* for a value-receiver method, so one source method yields
+two `*ssa.Function`s and RTA marks only the called one — **deduping on the pointer reported every
+value-receiver method as dead.** The arm that makes the fence fail in both directions is what found
+it.
+
+**What it cannot do, on the record.** **It would NOT have caught B90.** `phonecore.NewOpQueue` is
+called from `Core.New`, so it is reachable and this test is silent — even though everything the queue
+feeds is dead. **A live one-hop reference into a dead subgraph is the shape it cannot see.** It
+closes two of the three. RTA over-approximates interface dispatch (safe direction: it under-reports
+death). Reflection is invisible, which is why `fmt`/`json` method names are excluded **by rule**
+rather than by row — a rule states its own shape, while 30 rows teach a reader to add a 31st.
+
+**Three further dead exported symbols surfaced on its first run**, all verified by hand here:
+`protocol.Serve`, `protocol.ServeRemote`, `protocol.FromDaemon` have **zero non-test callers**;
+production uses `ServeRemoteWithID`, and `skeleton/api.go:40` documents itself as *"a leak-free,
+self-contained equivalent of protocol.FromDaemon."* Superseded, never removed. Separately
+`internal/remote/grant.ParseBootstrap` is a one-line forwarder reached only by `phonesim`;
+production calls `grantwire.ParseBootstrap` directly.
+
+**And a third instance of a fence that breaks on checkout path.**
+`s18_sec14_supplychain_test.go:165` filters `/build/` against the **absolute** path, so a checkout
+under any directory named `build` drops the real `android/app/gradle.lockfile` and the requirement
+fails for a non-reason. `s18_sec3_logscan_test.go:240` has the same shape with `/test/`. **Both fail
+closed** — the log scan has an explicit zero-sinks fatal — so neither is a fail-open hole; the cost
+is a fence that breaks on where the tree is checked out, and those get deleted. Fix is to match
+relative to `root`.
+
+---
+
+## B96 — Three more requirements were falsely marked shipped. The count is 136 of 144
+
+**2026-07-30.** The external reviewer's round-6 report, each finding carrying a mutation proof, each
+verified independently at this desk before being recorded here.
+
+**`PB-PAIR-4` — the acknowledgement attests the wrong thing.** The device sends its ack, then
+returns; `mobile/pairing.go` calls `app.pin` **afterwards**, and the machine enrolls on receipt of
+the ack. Process death or a pin failure — full disk, read-only directory, Keystore refusal — in that
+window leaves the **machine enrolled and remote control live while the phone holds no durable pin.**
+
+The send site's comment is the finding in miniature. It reasons carefully about a two-generals
+residual and concludes *"that residual is irreducible, and it is the harmless orientation:
+re-pairing needs nothing from the desktop."* **It enumerates the orientation where the phone pins and
+the machine claims nothing, and never considers the reverse.** The comment is not wrong about what it
+discusses; it is wrong about what it omits. Mutation: forcing `App.pin` to always error leaves
+**every** `PBPAIR4`-named test passing. The principal fence stops at `Machine.Pair` rather than at
+enrollment. **The ack must mean "the phone durably committed."**
+
+**`PB-PUSH-3` — the fence asserts SIZE, the requirement asks for a SCHEMA.** The presence sweep emits
+78 **random** bytes; the relay holds no key it could seal a real envelope with, by two-tier design. A
+provider that **parses** rather than measures still separates a sweep from a wake, because a genuine
+wake's envelope header is cleartext.
+
+**The project's own disclosure document already says so**, in as many words:
+
+> **Still open: the sweep is separable by SHAPE, just not by SIZE.** … Both remedies are decisions
+> above the relay seam and neither is taken here.
+
+**Two artifacts, both correct, contradicting each other** — the third instrument, and this time the
+prose was right and the requirement row was wrong. The row read shipped while the document that
+describes the same mechanism called it open. Mutation: a plaintext payload leaves every `PB-PUSH-3`
+test passing. **The reviewer's remedy is to delete the sweep's push entirely** — the receiver already
+refuses it (`phonecore.AcceptWake` cannot authenticate it), so today it buys a provider-visible event
+and a wakeup with **no user-visible result at all.**
+
+**`PB-SEC-2` — the fix landed at a call site, not at the class.** Per-prompt identity was applied to
+`PerUseGate`. `PhoneSurface.reauthorizeTimedTier` calls `confirmForContent` with **no ticket
+registered**; the ledger entry is created *inside* the callback by `grantTimedTier`. So an
+invalidation that clears the ledger **has nothing to clear for a prompt that is on screen**, and a
+queued late success mints a fresh authorization *after* invalidation. `promptForContent` has the same
+shape. Mutation: replacing the freshness decision with `if (true)` leaves both the Go gate and the
+Android unit suite green. **This is the stale-callback defect I recorded as closed** — closed at one
+of its sites.
+
+**A refutation, recorded because it corrects B94.** B94 says *every* shipped phone call passes
+`context.Background()`. Not so: the drain and ack calls use the generation context
+(`mobile/relay.go:512`). That context carries **no request deadline**, so PB-NET-7 stands unchanged —
+but the wording was too broad and is corrected here.
+
+**And a documentation inconsistency the authoritative artifact does not have.** The reviewer reports
+S21 omitting the re-scoped `PB-E2E-2` and S8 omitting `PB-SAS-4`. Both are true **of the human-
+readable rows only**; `check-phaseb-manifest.py` reports `manifest OK: every requirement owned
+exactly once`, because the TSV is complete. The readable rows are stale, `--strict-section11` would
+catch it, and it is not run by default.
+
+**Count: 136 of 144 shipped, 6 NOT MET, 2 hardware-deferred.** It has now moved fourteen times on
+evidence in six rounds, and **the last three movements were all downward and all found by someone
+other than the author of the row.**

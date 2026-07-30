@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 139 |
-| Evidenced (measured on disk) | 139 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **3** |
+| Shipped (asserted by hand) | 136 |
+| Evidenced (measured on disk) | 136 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -121,14 +121,14 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-PAIR-1 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PAIR-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-| PB-PAIR-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-4 | S16 | **NOT MET** | the acknowledgement means "the acceptance frame arrived", NOT "the phone durably committed". The device sends the ack in remote/pairing/pairing.go and only later does mobile/pairing.go call app.pin; the machine enrolls on the ack. Process death or a pin failure (full disk, read-only dir, Keystore refusal) in that window leaves the MACHINE ENROLLED and remote control live while the phone holds no durable pin. The send site's own comment enumerates the OPPOSITE residual (phone pins, machine claims nothing) and calls it harmless -- it never considers this orientation. Mutation: forcing App.pin to always error leaves every PBPAIR4-named test passing (ADR-007 B96) |
 | PB-PAIR-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-7 | S3 | shipped | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PUSH-0 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-1 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-2 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
-| PB-PUSH-3 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
+| PB-PUSH-3 | S12 | **NOT MET** | the fence asserts SIZE; the requirement asks for a SCHEMA. The presence sweep emits 78 RANDOM bytes, and the relay holds no key it could seal a real envelope with -- by two-tier design. A provider that PARSES rather than measures still separates a sweep from a wake, because a genuine wake's envelope header is cleartext. The project's OWN disclosure document says so in as many words -- 'Still open: the sweep is separable by SHAPE, just not by SIZE' -- while this row read shipped. Mutation: a plaintext payload leaves every PB-PUSH-3 test passing (ADR-007 B96) |
 | PB-PUSH-4 | S17 | shipped | `docs/verification/remote-phaseB-s17-evidence.md` |
 | PB-PUSH-5 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
 | PB-PUSH-6 | S12 | shipped | `docs/verification/remote-phaseB-s12-evidence.md` |
@@ -146,7 +146,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SAS-4 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-SEC-2 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
+| PB-SEC-2 | S14 | **NOT MET** | the per-prompt identity fix landed on PerUseGate and NOT on the timed tier, so the class was never closed. PhoneSurface.reauthorizeTimedTier shows confirmForContent with NO ticket registered; the ledger entry is created inside the callback by grantTimedTier. An invalidation that clears the ledger therefore has nothing to clear for a prompt that is ON SCREEN, and a queued late success mints a fresh authorization AFTER invalidation. promptForContent has the same shape. Mutation: replacing the freshness decision with `if (true)` leaves both the Go gate and the Android unit suite green (ADR-007 B96) |
 | PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-4 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-5 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
