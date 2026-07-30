@@ -157,6 +157,7 @@ type CommandBridge struct {
 	cursor  uint64
 	highest map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
 	pollErr error                    // first error the Run loop's polls hit (see Err)
+	replies uint64                   // waits the RELAY answered (see RelayReplies)
 }
 
 // NewCommandBridge returns a bridge over cfg, SEEDED from its durable inbound checkpoint
@@ -215,6 +216,21 @@ func (b *CommandBridge) Err() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pollErr
+}
+
+// RelayReplies counts the bounded waits the RELAY ANSWERED: not the waits issued, and not
+// the frames that came back in them. An idle but healthy link produces one per server-side
+// wait ceiling; a relay that completes the handshake and then goes quiet produces none,
+// however long its socket stays up.
+//
+// It is the gateway's evidence of PROGRESS, which is what the reconnect backoff resets on
+// (Service.Progressed). A count is deliberately cheaper than a timestamp: nothing here
+// needs to know WHEN the relay last answered, only whether this connection ever carried
+// anything, and a monotonic count cannot be confused by a clock.
+func (b *CommandBridge) RelayReplies() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.replies
 }
 
 // Cursor is the highest relay mailbox cursor the bridge has consumed (its durable
@@ -361,6 +377,11 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		// The relay ANSWERED. Recorded before the batch is handled, because what this
+		// counts is the link carrying traffic, not the gateway liking what arrived.
+		b.mu.Lock()
+		b.replies++
+		b.mu.Unlock()
 		_, maxCursor, errs := b.processBatch(ctx, items)
 		if maxCursor > 0 {
 			acks.Record(maxCursor)

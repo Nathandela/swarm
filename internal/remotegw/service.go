@@ -86,6 +86,26 @@ type ServiceConfig struct {
 // mailbox under the now-stale key (codex#1 / post-revocation confidentiality).
 var ErrDeviceRevoked = errors.New("remotegw: paired device revoked; gateway exiting")
 
+// ErrRelayGone is returned by Run when the relay connection it was given DIED. It is the
+// signal the process that owns the dial redials on (PB-NET-4).
+//
+// It has to be an identity distinct from ctx.Err(), because those are opposite
+// instructions: a cancelled context is the operator stopping the sidecar and must not be
+// redialled, while a dead link is an outage and must be.
+var ErrRelayGone = errors.New("remotegw: relay connection lost")
+
+// LinkWatcher is the relay client's LIVENESS seam: a channel closed when the connection
+// dies underneath its holder. *relay.Client satisfies it (its read pump closes Done when
+// the socket breaks), and it is the ONLY way to learn of a drop while idle -- a loop that
+// notices only when a request fails cannot see a link that dies with nothing outstanding.
+//
+// It is optional, like PushTriggerer: a Mailbox that cannot report liveness (every
+// unit-test fake) simply gets no observation. The production wiring is pinned at compile
+// time in cmd/swarm-remote.
+type LinkWatcher interface {
+	Done() <-chan struct{}
+}
+
 // Service is the supervised gateway runtime (R-GW.1): it composes the journal-OUT
 // bridge (Gateway.RunJournal delivering to a RelaySink that seals and appends to the
 // phone's mailbox) and the command-IN loop (CommandBridge polling the machine's
@@ -245,9 +265,47 @@ func (s *Service) CommandBridge() *CommandBridge { return s.bridge }
 // simply has nothing to say.
 func (s *Service) PushNotifier() *PushNotifier { return s.notifier }
 
+// Err is the runtime's DEGRADED STATE: the first error each of the three components that
+// store one has seen, joined, or nil when none has.
+//
+// IT EXISTS BECAUSE NOTHING READ ANY OF THEM. CommandBridge.Err, RelaySink.Err and
+// PushNotifier.Err each stash a first error precisely so a condition that must not fail a
+// record is still observable -- a state dir that fails every checkpoint persist and so
+// drops every keystroke, a relay that answers no mailbox wait, a wake path that has stopped
+// ringing the phone. The tree contained no non-test caller of any of the three
+// (ADR-007 B114), so all three were writes to a channel with no reader and an operator
+// learned nothing. This is the reader; cmd/swarm-remote prints it to the unit's log.
+//
+// It is deliberately a SNAPSHOT of first errors rather than a stream: each component's
+// stored error is the root cause it saw, not the latest symptom, and a gateway that has
+// recovered still owes the operator the reason it was degraded.
+func (s *Service) Err() error {
+	return errors.Join(s.bridge.Err(), s.sink.Err(), s.notifier.Err())
+}
+
+// Progressed reports whether traffic actually crossed the relay link during this runtime's
+// life: the command loop's bounded wait completed at least once, which takes an answer from
+// the relay and cannot be faked by a socket that is merely up.
+//
+// IT IS THE RECONNECT BACKOFF'S RESET CONDITION, and that is the whole reason it is not
+// simply "did the dial succeed". A relay that completes the websocket handshake and then
+// answers nothing keeps every connection alive while every call reaches its deadline; a
+// backoff reset by connection would turn that into a fixed-rate redial cycle an adversary
+// drives for free, with the relay never having to send a byte. Evidence of progress is the
+// property that costs the far end something.
+func (s *Service) Progressed() bool { return s.bridge.RelayReplies() > 0 }
+
 // Run drives both loops until ctx is cancelled, then returns ctx.Err(). The two
 // loops are independent: a failing journal connection (retried with ReconnectDelay)
 // does not stall the command loop, and vice versa.
+//
+// IT ALSO ENDS WHEN THE RELAY CONNECTION DIES, returning ErrRelayGone. The Service is
+// given ONE already-dialled Mailbox and cannot redial it; the process that owns the dial
+// can, and it can only act on a Run that returns. Before this, a link that dropped left
+// both loops running against a dead client forever -- the command loop retrying a wait
+// that could never answer, the journal loop happily reconnecting to the DAEMON and sealing
+// frames into an append that could never leave -- so the sidecar never exited, no
+// supervision policy ever fired, and remote control was over until a human intervened.
 func (s *Service) Run(ctx context.Context) error {
 	// Tear down every live lease conn AND every terminal peek on shutdown so no daemon
 	// connection (control gate or read-only tap) is left behind after the sidecar exits.
@@ -260,14 +318,18 @@ func (s *Service) Run(ctx context.Context) error {
 	// next start; it must not stop the bridge from running.
 	_ = s.sink.Replay()
 	// Derive a cancelable context so the journal loop can tear the WHOLE Service down (both
-	// loops) the moment it detects the paired device was revoked (codex#1).
+	// loops) the moment it detects the paired device was revoked (codex#1) -- and so the
+	// link watcher below can do the same the moment the relay connection dies. parent is
+	// kept because the two are opposite instructions to the caller: a cancelled parent must
+	// NOT be redialled, a dead link must.
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Parent the peek watchers to the Service ctx so a revoke (cancel below) stops every peek
 	// reconnecting IMMEDIATELY and structurally -- not incidentally via the kill switch, and not
 	// only when the deferred watchers.Close runs after wg.Wait returns (opus#2).
 	s.watchers.bindParent(ctx)
-	var revoked atomic.Bool
+	var revoked, linkGone atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -278,9 +340,32 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 	}()
 	go func() { defer wg.Done(); _ = s.bridge.Run(ctx) }()
+	// PB-NET-4: watch the RELAY connection itself. This is the only observer of a link that
+	// dies while nothing is outstanding, and it is in the WaitGroup rather than left to the
+	// deferred cancel so it is joined here rather than merely expected to end.
+	if w, ok := s.cfg.Relay.(LinkWatcher); ok {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+			case <-w.Done():
+				linkGone.Store(true)
+				cancel() // stop both loops: neither can do anything over a dead connection
+			}
+		}()
+	}
 	wg.Wait()
 	if revoked.Load() {
 		return ErrDeviceRevoked
+	}
+	// The parent is asked BEFORE the link, so a connection that dies as the sidecar is being
+	// stopped is reported as the shutdown it is and does not provoke a redial.
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if linkGone.Load() {
+		return ErrRelayGone
 	}
 	return ctx.Err()
 }
