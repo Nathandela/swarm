@@ -108,6 +108,10 @@ type logSink struct {
 	File string // repo-relative
 	Line int
 	Call string // the matched call plus the rest of its line, normalised
+	// Truncated records that wholeCall could NOT close this call's parentheses within its bound,
+	// so Call holds a PREFIX. It is not in the artifact row: it is a property of the scan, not of
+	// the call site, and it makes the argument check fail rather than read a partial call as whole.
+	Truncated bool
 }
 
 // logSinkNotes is the REVIEWER NOTE per phone-side source file: what its logging call sites
@@ -172,23 +176,25 @@ func scanLogSinksIn(t *testing.T, roots map[string]string) []logSink {
 			if isKt {
 				lang = "kotlin"
 			}
-			stripped := stripLineComments(string(raw), lang)
-			lines := strings.Split(stripped, "\n")
+			// RAW SOURCE, COMMENTS INCLUDED. See the note on wholeCall's neighbour below.
+			lines := strings.Split(string(raw), "\n")
 			for i, line := range lines {
 				for _, p := range logSinkPatterns {
 					if p.Lang != lang || !p.Re.MatchString(line) {
 						continue
 					}
+					// THE WHOLE CALL, not the matched line. This codebase wraps long
+					// argument lists, so a line-scoped capture sees `Log.w(TAG,` and
+					// nothing else -- and the argument-inspection test below would then be
+					// blind to every logged identifier that happened to sit on the
+					// continuation line. That is a guard defeated by pressing Enter.
+					call, complete := wholeCall(lines, i)
 					out = append(out, logSink{
-						Area: area,
-						File: mustRel(t, path),
-						Line: i + 1,
-						// THE WHOLE CALL, not the matched line. This codebase wraps long
-						// argument lists, so a line-scoped capture sees `Log.w(TAG,` and
-						// nothing else -- and the argument-inspection test below would then be
-						// blind to every logged identifier that happened to sit on the
-						// continuation line. That is a guard defeated by pressing Enter.
-						Call: wholeCall(lines, i),
+						Area:      area,
+						File:      mustRel(t, path),
+						Line:      i + 1,
+						Call:      call,
+						Truncated: !complete,
 					})
 					break
 				}
@@ -205,14 +211,30 @@ func scanLogSinksIn(t *testing.T, roots map[string]string) []logSink {
 	return out
 }
 
+// wholeCallMaxLines bounds the join. An unbounded walk would swallow the rest of the file on a
+// source whose parentheses never balance -- which is not hypothetical, since the depth count is
+// not literal-aware and a `:(` in a message is enough to unbalance it. The bound is generous
+// because EXCEEDING IT NOW FAILS THE GATE (see wholeCall), so it must clear real wrapped calls
+// comfortably; the longest in this tree is three lines.
+const wholeCallMaxLines = 40
+
 // wholeCall joins the matched line with its continuations until the call's parentheses balance,
-// so the inventory records every argument rather than only those that fit on one line. It gives
-// up after 12 lines: past that the construct is not a log call the argument check can reason
-// about, and an unbounded walk would swallow the rest of the file on an unbalanced source.
-func wholeCall(lines []string, start int) string {
+// so the inventory records every argument rather than only those that fit on one line. It reports
+// whether it actually CLOSED the call.
+//
+// THE SECOND RETURN VALUE IS THE SECURITY-RELEVANT PART, and B72 added it after a probe.
+//
+// The bound was always correct; returning the prefix as though it were the whole call was not.
+// A wrapped call whose sensitive argument sat past the bound was handed to the argument check
+// already truncated, and the check read what it was given and reported clean. That is the same
+// fail-open shape as the comment strip removed below -- a lossy producer feeding a correct
+// consumer -- and it is why the caller now marks such a sink and the argument check refuses it.
+// An un-examinable call must fail, not pass quietly.
+func wholeCall(lines []string, start int) (string, bool) {
 	depth := 0
+	complete := false
 	var parts []string
-	for i := start; i < len(lines) && i < start+12; i++ {
+	for i := start; i < len(lines) && i < start+wholeCallMaxLines; i++ {
 		parts = append(parts, strings.TrimSpace(lines[i]))
 		for _, c := range lines[i] {
 			switch c {
@@ -222,31 +244,43 @@ func wholeCall(lines []string, start int) string {
 				depth--
 			}
 		}
-		if depth <= 0 && i > start-1 {
+		if depth <= 0 {
+			complete = true
 			break
 		}
 	}
-	return strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
+	return strings.Join(strings.Fields(strings.Join(parts, " ")), " "), complete
 }
 
-// stripLineComments removes // comments so a commented-out log call is not inventoried, and so
-// a comment that happens to contain "log.Printf" does not become a finding.
-func stripLineComments(src, lang string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(src, "\n") {
-		if i := strings.Index(line, "//"); i >= 0 {
-			line = line[:i]
-		}
-		if lang == "kotlin" {
-			if i := strings.Index(line, "*"); i == 0 {
-				line = ""
-			}
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
+// ---------------------------------------------------------------------------
+// WHY THE SCAN READS RAW SOURCE, COMMENTS INCLUDED. (B72; ADR-007 B66 is the precedent.)
+// ---------------------------------------------------------------------------
+//
+// This scan used to strip `//` comments first, for two reasonable-sounding reasons: a
+// commented-out log call should not be inventoried, and a comment containing `log.Printf` should
+// not become a finding. The stripper was not string-literal-aware, so the `//` in an ordinary URL
+// blanked the rest of the line -- and under PB-SEC-3's assertion that is FAIL-OPEN. Measured, by
+// planting each shape in real production Kotlin and running this gate:
+//
+//	val doc = "https://swarm.dev/logging"; Log.w(TAG, plaintext + doc)
+//	    -> the line became `val doc = "https:` before any pattern applied. Not merely
+//	       un-flagged: never inventoried, so both PB-SEC-3 tests reported clean.
+//
+//	Log.w(TAG, "see https://swarm.dev/logging: $plaintext")
+//	    -> the pattern matched before the truncation point, so the row WAS inventoried and
+//	       looked reviewed, while the argument check was handed `Log.w(TAG, "see https:` and
+//	       never saw the plaintext. The bookkeeping half kept counting a row the content half
+//	       could no longer read. This one needs no adversary -- a doc link in a log message is
+//	       the whole of it -- and in a file that already carried a reviewer note the only
+//	       symptom was ROW CHURN, which `-update-logscan` is documented to absorb.
+//
+// So the strip is gone, and with it the entire "is this text code or prose" question, which is
+// the question a scanner can be made to answer wrongly. THE PRICE, paid deliberately: a
+// commented-out call and a comment naming a log API each become an inventory ROW. That is the
+// cheap direction -- an extra row lands in front of the reviewer-note step, which is a human
+// reading a diff, whereas a missed row is a leak with nothing downstream to catch it.
+//
+// Do not reinstate the strip to quieten the inventory. Write the note.
 
 // ---------------------------------------------------------------------------
 // What a call site LOGS, as against what it MENTIONS.
@@ -485,6 +519,25 @@ func TestPBSEC3_NoPhoneSideLogCallTakesSessionContentOrSecretMaterial(t *testing
 			"known to exist (android/.../push/PushTokens.kt logs that push is unavailable in " +
 			"this build), so this is a broken scan rather than a clean codebase -- and a broken " +
 			"scan is what makes the assertion below pass while saying nothing")
+	}
+
+	// A call the join could not close is a call this test CANNOT examine: what follows below
+	// would read a prefix and find nothing, which is the fail-open B72 removed one function
+	// over. Refuse it instead of reporting clean on it.
+	var unexaminable []string
+	for _, s := range sinks {
+		if s.Truncated {
+			unexaminable = append(unexaminable, s.File+":"+itoa(s.Line)+": "+s.Call)
+		}
+	}
+	if len(unexaminable) > 0 {
+		t.Errorf("PB-SEC-3: %d phone-side log call(s) could not be read in full -- wholeCall did "+
+			"not close the parentheses within %d lines, so the argument check below would be "+
+			"inspecting a PREFIX and would report clean whatever the later arguments hold. Either "+
+			"the call wraps past the bound, or a parenthesis inside a string literal unbalanced "+
+			"the count. Rewrite the call so it closes, or fix the join -- do NOT raise the bound "+
+			"to make this quiet:\n\t%s",
+			len(unexaminable), wholeCallMaxLines, strings.Join(unexaminable, "\n\t"))
 	}
 
 	var findings []string
