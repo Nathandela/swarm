@@ -1,23 +1,41 @@
 // PB-NET-4's reconnect backoff, observed against App.run itself (round-7 re-audit).
 //
-// THE GAP THIS CLOSES. mobile/pbnet4_backoff_test.go's four tests all construct a
-// *reconnectBackoff directly or call its pure functions -- newReconnectBackoff(),
-// &reconnectBackoff{...}, reconnectBackoffBase(n). None of them ever call App.run, so
-// reverting App.run's `case <-time.After(rb.next()):` to the pre-fix
-// `case <-time.After(250 * time.Millisecond):` -- touching nothing else -- leaves all four
-// green, the whole mobile package green, and conformance identical to baseline. The
-// adjudicator found this by making exactly that revert. This file drives the real facade
-// (NewApp + Start, exactly what PhoneRuntime does) against a relay it does not control the
-// timing of, and asserts on when connections actually arrive, so a revert of the WIRING
-// alone -- not just the constants -- is what it is written to catch.
+// THREE GAPS, ONE SPECIES: a property that is TRUE, measured by NOTHING that names it, and
+// none of the three a live defect.
 //
-// It also closes PB-NET-4's other unfenced clause: "re-auth after reconnect" was true only
-// by construction (App.dial always calls relay.DialSecure, which always authenticates, and
-// there is no resume path anywhere) and named by no test in the tree -- the only auth_init
-// assertions that exist are b37_cleartext_test.go's, whose property runs the other
-// direction (that NO auth_init crosses a cleartext hop). auth_init carries the phone's
-// relay-auth signature, so counting it per connection is a direct observation of
-// re-authentication, not an inference from the code that is supposed to cause it.
+//  1. Nothing ties App.run's delay to the backoff. mobile/pbnet4_backoff_test.go's four
+//     tests all construct a *reconnectBackoff directly or call its pure functions --
+//     newReconnectBackoff(), &reconnectBackoff{...}, reconnectBackoffBase(n). None of them
+//     ever call App.run, so reverting App.run's `case <-time.After(rb.next()):` to the
+//     pre-fix `case <-time.After(250 * time.Millisecond):` -- touching nothing else --
+//     leaves all four green, the whole mobile package green, and conformance identical to
+//     baseline. The adjudicator found this by making exactly that revert. This file drives
+//     the real facade (NewApp + Start, exactly what PhoneRuntime does) against a relay it
+//     does not control the timing of, and asserts on when connections actually arrive, so a
+//     revert of the WIRING alone -- not just the constants -- is what it is written to
+//     catch.
+//  2. Nothing names re-auth after reconnect: true only by construction (App.dial always
+//     calls relay.DialSecure, which always authenticates, and there is no resume path
+//     anywhere), asserted by no test in the tree -- the only auth_init assertions that
+//     exist are b37_cleartext_test.go's, whose property runs the other direction (that NO
+//     auth_init crosses a cleartext hop). auth_init carries the phone's relay-auth
+//     signature, so counting it per connection is a direct observation of
+//     re-authentication, not an inference from the code that is supposed to cause it.
+//  3. Nothing names the connection EVENT plane (ADR-007 B114). App.setConn does two things
+//     from one write: it updates a.connState (what ConnectionState() polls) and it emits a
+//     "connection" Event (the plane the Android UI actually subscribes to). Suppressing
+//     JUST the emit leaves ConnectionState() -- and therefore every state-polling fence,
+//     including this file's own first two phases before this gap was closed -- reading the
+//     truth while the UI is never told. Exactly one existing test would have caught it
+//     (s18b_gracewindow_test.go's grace-window fence, which holds the whole plane by
+//     accident through s18bConnLog), and that test's subject is a different requirement
+//     entirely. This file now asserts the event SEQUENCE too, reusing s18bConnLog rather
+//     than polling ConnectionState -- the same instrument, applied on purpose this time.
+//
+// The row's own evidence column asks for exactly this: "tests against a flapping relay
+// assert the retry ceiling, state transitions, re-auth, that no keystroke is ever
+// replayed." Retry ceiling by dial gaps (phase 1), state transitions by the event sequence
+// (all three phases), re-auth by the second auth_init (phase 2 vs phase 3).
 package conformance_test
 
 import (
@@ -33,7 +51,6 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
-	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
 
 // flapTap is a websocket proxy in front of the real relay, built on dialTap's shape
@@ -175,52 +192,33 @@ func awaitArrivals(t *testing.T, tap *flapTap, n int, within time.Duration) []ti
 	}
 }
 
-// awaitConnStateLeaves polls until App.ConnectionState reads something other than from.
-//
-// THIS IS THE HALF awaitConnState CANNOT DO, and phase 3 needs it: severing a connection
-// that was already reporting "online" and then immediately polling for "online" again would
-// pass on its very FIRST read, before the severance has had any chance to propagate --
-// proving nothing about a reconnect actually having happened. Confirming the state LEFT the
-// target first makes the later wait for it to RETURN a real observation of a round trip,
-// not a stale read of the state that was already true.
-func awaitConnStateLeaves(t *testing.T, app *swarmmobile.App, from string, within time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for {
-		got, err := app.ConnectionState()
-		if err != nil {
-			t.Fatalf("App.ConnectionState: %v", err)
-		}
-		if got != from {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("timed out after %s waiting for the connection state to leave %q", within, from)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 // TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff is PB-NET-4's fence over
 // App.run, not over the backoff type in isolation.
 //
-// THE SEQUENCE, one relay, three phases:
+// THREE OBSERVABLES, one relay, three phases -- see the package doc for why each is its own
+// instrument rather than a proxy for the others:
 //  1. The tap REFUSES every dial, before any websocket upgrade. Four attempts arrive; the
-//     three gaps between them must fall in section 6.0's stated bands (500ms, 1s, 2s, each
+//     three GAPS between them must fall in section 6.0's stated bands (500ms, 1s, 2s, each
 //     +/-20%) -- and because the bands do not overlap, three individually-correct gaps
 //     already prove growth without computing a ratio.
 //  2. The tap starts ALLOWING connections. The dial already in flight (on the backoff
-//     clock) reaches the real relay, the phone comes online, and exactly one auth_init has
+//     clock) reaches the real relay, the phone comes online, and exactly one AUTH_INIT has
 //     been observed -- the only way it could have, since App.dial always re-authenticates.
 //  3. The tap SEVERS that one live connection without refusing what follows. The phone
-//     must reconnect, send a SECOND auth_init, and do so on a gap close to the INITIAL
-//     500ms delay rather than a continuation of phase 1's growth -- which is what reset()
-//     (called in App.run right after setConn(connOnline)) exists for.
+//     must reconnect, send a SECOND auth_init, and do so on a gap smaller than phase 1's
+//     own third gap -- which is what reset() (called in App.run right after
+//     setConn(connOnline)) exists for.
+//
+// Threaded through all three: the connection EVENT SEQUENCE (s18bConnLog, shared with
+// s18b_gracewindow_test.go), asserted exactly at the end rather than merely "some events
+// arrived" -- a state-polling fence would not notice ADR-007 B114's defect (setConn's
+// emit suppressed while its state write stays correct), and a fence that only checked
+// presence would not notice a change that emitted the right states in the wrong order.
 //
 // No tight wall-clock upper bound is asserted anywhere below. Every wait uses a generous
-// deadline, and the one comparison that matters for reset() (phase 3's reconnect gap) is
-// checked RELATIVE to phase 1's own measured third gap, not against an absolute duration
-// this host's load could blow through under a slow run.
+// deadline, and the one duration comparison that matters for reset() (phase 3's reconnect
+// gap) is checked RELATIVE to phase 1's own measured third gap, not against an absolute
+// duration this host's load could blow through under a slow run.
 func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing.T) {
 	h := newHarness(t)
 	tap := newFlapTap(t, h.RelayURL)
@@ -232,7 +230,12 @@ func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing
 	h.AppRelayURL = tap.URL()
 	h.App = h.openApp()
 
-	// ---- phase 1: every dial refused, so the only observable is arrival timing --------
+	log := &s18bConnLog{}
+	if err := h.App.SetEventListener(log); err != nil {
+		t.Fatalf("SetEventListener: %v", err)
+	}
+
+	// ---- phase 1: every dial refused, so arrival timing is the retry-ceiling observable -
 	arrivals := awaitArrivals(t, tap, 4, 15*time.Second)
 	gaps := make([]time.Duration, 3)
 	for i := range gaps {
@@ -259,9 +262,12 @@ func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing
 
 	// ---- phase 2: allowed. Re-auth is the only way the pending dial reaches online. ----
 	tap.setRefuse(false)
-	if _, ok := awaitConnState(t, h.App, "online", 15*time.Second); !ok {
-		t.Fatalf("PB-NET-4: the phone never came online once the tap stopped refusing dials")
-	}
+	log.await(t, "PB-NET-4: the connection event plane never reported \"online\" once the tap "+
+		"stopped refusing dials. ConnectionState() is deliberately NOT polled here -- ADR-007 "+
+		"B114 found setConn's emit suppressed while its state write stayed correct, which a "+
+		"poll-based wait cannot see", func(s []string) bool {
+		return len(s) >= 3 && s[len(s)-1] == "online"
+	})
 	if n := tap.authCount(); n != 1 {
 		t.Fatalf("PB-NET-4: %d auth_init frame(s) observed on the first successful connection, "+
 			"want exactly 1", n)
@@ -269,15 +275,16 @@ func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing
 
 	// ---- phase 3: sever the live connection; the relay stays otherwise healthy. -------
 	severedAt := time.Now()
+	beforeSever := len(log.snapshot())
 	tap.sever()
-	// The state must be OBSERVED leaving "online" before waiting for it to return -- see
-	// awaitConnStateLeaves's own note. Without this, the wait below could pass on its first
-	// poll, against the connection severed() just tore down, before App.run had any chance
-	// to notice.
-	awaitConnStateLeaves(t, h.App, "online", 5*time.Second)
-	if _, ok := awaitConnState(t, h.App, "online", 15*time.Second); !ok {
-		t.Fatalf("PB-NET-4: the phone never reconnected after its one live connection was severed")
-	}
+	// The event log, not a state poll, is what proves a reconnect actually happened rather
+	// than a stale "online" read surviving the severance untouched: the predicate requires
+	// TWO NEW entries (a "reconnecting" the severance caused, then a fresh "online"), which
+	// a read that never left "online" could not satisfy.
+	log.await(t, "PB-NET-4: the phone never reconnected (event sequence) after its one live "+
+		"connection was severed", func(s []string) bool {
+		return len(s) >= beforeSever+2 && s[len(s)-1] == "online"
+	})
 	if n := tap.authCount(); n != 2 {
 		t.Errorf("PB-NET-4: %d auth_init frame(s) observed after the reconnect, want exactly 2 "+
 			"-- re-auth after reconnect must happen on EVERY reconnect, not just the first", n)
@@ -289,5 +296,16 @@ func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing
 			"than phase 1's own third gap (%v). reset() must return the backoff to its INITIAL "+
 			"delay after a successful connection; a backoff that kept growing across a healthy "+
 			"connection would be indistinguishable from one that never reset", reconnectGap, gaps[2])
+	}
+
+	// ---- the event SEQUENCE, asserted exactly (ADR-007 B114). -------------------------
+	got := log.snapshot()
+	want := []string{"connecting", "reconnecting", "online", "reconnecting", "online"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("PB-NET-4: the connection event sequence was %v, want exactly %v. Suppressing "+
+			"setConn's emit (ADR-007 B114) while leaving its state write correct produces an "+
+			"empty or truncated sequence here even though ConnectionState() would still read "+
+			"right -- which is the whole reason this is asserted on the event plane and not by "+
+			"polling", got, want)
 	}
 }
