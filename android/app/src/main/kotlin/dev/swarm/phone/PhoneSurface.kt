@@ -10,17 +10,13 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import dev.swarm.phone.keys.AuthorizationLedger
-import dev.swarm.phone.keys.BiometricPolicy
 import dev.swarm.phone.keys.BiometricPrompts
-import dev.swarm.phone.keys.GateResolution
 import dev.swarm.phone.keys.GatedOperation
-import dev.swarm.phone.keys.InputFreshness
-import dev.swarm.phone.keys.InputGateDecision
 import dev.swarm.phone.keys.InvalidationEvent
 import dev.swarm.phone.keys.PerUseGate
-import dev.swarm.phone.keys.PerUseRefusalReason
 import dev.swarm.phone.keys.PerUseRefusalText
-import dev.swarm.phone.keys.PromptOutcome
+import dev.swarm.phone.keys.TimedTierGate
+import dev.swarm.phone.keys.TimedTierNotice
 import dev.swarm.phone.runtime.ConnectivityPolicy
 import dev.swarm.phone.runtime.ContentUnlockPolicy
 import dev.swarm.phone.runtime.LifecycleConvergence
@@ -118,6 +114,19 @@ class PhoneSurface(
         ciphers = runtime.perUseCiphers(),
         ledger = ledger,
     )
+
+    /**
+     * PB-SEC-2's TIMED tier, and the reason this class no longer decides anything about
+     * freshness itself (ADR-007 B96).
+     *
+     * The renewal clause and the prompt lifecycle used to be private methods here, which is
+     * unreachable from any test this project can run: `androidTest` is out of reach (ADR-007 B56)
+     * and a Robolectric shadow standing in for a `BiometricPrompt` is forbidden. So the prompt
+     * went up with no ticket registered -- the ledger entry was minted inside the callback -- and
+     * a screen lock arriving while it was on screen had nothing to clear. [TimedTierGate] carries
+     * the decision and `TimedTierGateTest` drives it on a plain JVM.
+     */
+    private val timed = TimedTierGate(prompt = prompts, ledger = ledger)
 
     private val status = label(bold = true)
 
@@ -771,77 +780,36 @@ class PhoneSurface(
      *
      * NOTHING HERE CLAIMS THE PLATFORM'S HALF. That a timed Keystore key refuses past its window
      * is PB-E2E-5, DEFERRED (ADR-007 B31), and is established nowhere in this repository.
+     *
+     * THE DECISION IS NOT MADE HERE ANY MORE (ADR-007 B96). It was, and being a private method of
+     * a class no test on this tier can construct is why replacing it with `if (true)` left every
+     * check green. This forwards to [TimedTierGate] and chooses the wording; everything else is
+     * that class's, and `TimedTierGateTest` asserts it.
      */
-    private fun withFreshTimedAuthorization(operation: GatedOperation, act: () -> Unit) {
-        if (freshnessOf(operation) == InputGateDecision.PROCEED) {
-            act()
-            return
-        }
-        // PAUSED, which is neither of the two things 6.0 forbids. Not silently continued: the
-        // verb is not reached. Not silently dropped: what the user typed stays in the field, they
-        // are told why, and the action runs once the prompt below succeeds. And the LEASE IS NOT
-        // ENDED -- nothing on this path releases it, which is
-        // `InputFreshness.freshnessExpiryEndsLease` being false at the one place it could be
-        // contradicted.
-        outcome.text = PAUSED_FOR_FRESHNESS
-        reauthorizeTimedTier(act)
-    }
+    private fun withFreshTimedAuthorization(operation: GatedOperation, act: () -> Unit) =
+        timed.withFreshAuthorization(operation, onNotice = ::show, action = act)
 
     /**
-     * 6.0's verdict for [operation], from the moment the timed tier was last authorized.
+     * What [TimedTierGate] decided, in the words this screen already had.
      *
-     * NEVER AUTHORIZED IS ITS OWN BRANCH because [InputFreshness.decide] cannot say it from two
-     * longs: a missing grant is not an old one, and feeding it a zero would make the verdict a
-     * property of the epoch. It answers the same way regardless -- an operation the user has not
-     * authenticated for is one they are asked to authenticate for -- but it answers deliberately.
+     * THE GATE REPORTS THE FACT AND THIS PICKS THE SENTENCE, because the two wording tables live
+     * on opposite sides of the module: [ContentUnlockPolicy] is in `runtime`, which already
+     * depends on `keys`, so the gate cannot reach it without the two packages depending on each
+     * other. Neither table is copied here -- ADR-007 records what a second copy of a wording
+     * costs -- and both are the ones the per-use gate and the unlock control were already using,
+     * so a handset with nothing enrolled says one thing on this app rather than three.
      */
-    private fun freshnessOf(operation: GatedOperation): InputGateDecision {
-        val granted = ledger.grantedAt(operation) ?: return InputGateDecision.PAUSE_AND_REAUTHORIZE
-        return InputFreshness.decide(granted, System.currentTimeMillis())
-    }
-
-    /**
-     * The timed tier's prompt, and the action it was holding.
-     *
-     * IT IS THE CONTENT PROMPT AND NOT A SECOND ONE. The timed tier IS the content KEK's window
-     * (`BiometricPolicy.specFor`), so what re-opens it is a fresh authentication of the right
-     * class -- exactly what [BiometricPrompts.confirmForContent] asks for, and the reason that
-     * prompt carries no CryptoObject.
-     */
-    private fun reauthorizeTimedTier(act: () -> Unit) {
-        val availability = prompts.availability()
-        if (!ContentUnlockPolicy.canPrompt(availability)) {
-            outcome.text = ContentUnlockPolicy.adviceFor(availability)
-            return
-        }
-        prompts.confirmForContent { promptOutcome ->
-            if (BiometricPolicy.resolve(promptOutcome) != GateResolution.AUTHORIZED) {
-                outcome.text = PerUseRefusalText.messageFor(refusalFor(promptOutcome))
-                return@confirmForContent
-            }
-            grantTimedTier(System.currentTimeMillis())
-            act()
-        }
-    }
-
-    /**
-     * Record what the prompt just proved, for BOTH timed operations.
-     *
-     * BOTH, and it is declared rather than assumed: `BiometricPolicy.sharesAuthorizationWith`
-     * says the timed operations share an authorization, because they share one Keystore entry and
-     * one window by construction. A grant recorded against only the operation in hand would ask
-     * for a second fingerprint to type into the session the first one just took control of.
-     *
-     * IT GOES THROUGH beginPrompt/endPrompt rather than writing a grant directly, because that
-     * pair is the only way an authorization is made -- ADR-007 B63 spent a fix making the ledger
-     * refuse everything else -- and because it is a true statement: the prompt above is this
-     * tier's prompt. A begin the ledger refuses leaves the grant unmade and the user is asked
-     * again, which is the fail-closed direction.
-     */
-    private fun grantTimedTier(atMillis: Long) {
-        for (operation in TIMED_TIER) {
-            if (ledger.beginPrompt(operation) != GateResolution.PROMPT_STARTED) continue
-            ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis)
+    private fun show(notice: TimedTierNotice) {
+        outcome.text = when (notice) {
+            // PAUSED, which is neither of the two things 6.0 forbids. Not silently continued: the
+            // verb is not reached. Not silently dropped: what the user typed stays in the field,
+            // they are told why, and the action runs once the prompt succeeds. And the LEASE IS
+            // NOT ENDED -- nothing on this path releases it, which is
+            // `InputFreshness.freshnessExpiryEndsLease` being false at the one place it could be
+            // contradicted.
+            is TimedTierNotice.PausedForFreshness -> PAUSED_FOR_FRESHNESS
+            is TimedTierNotice.CannotPrompt -> ContentUnlockPolicy.adviceFor(notice.availability)
+            is TimedTierNotice.Refused -> PerUseRefusalText.messageFor(notice.reason)
         }
     }
 
@@ -887,36 +855,12 @@ class PhoneSurface(
      * .unlockContent] is asked again so that a refusal which survives the prompt is reported
      * rather than papered over.
      */
-    private fun promptForContent() {
-        val availability = prompts.availability()
-        if (!ContentUnlockPolicy.canPrompt(availability)) {
-            outcome.text = ContentUnlockPolicy.adviceFor(availability)
-            return
-        }
-        prompts.confirmForContent { promptOutcome ->
-            if (BiometricPolicy.resolve(promptOutcome) != GateResolution.AUTHORIZED) {
-                outcome.text = PerUseRefusalText.messageFor(refusalFor(promptOutcome))
-                return@confirmForContent
-            }
-            // The same authentication that re-opens the content tier re-opens 6.0's timed window:
-            // it is one window and one Keystore entry. Recording it here is what keeps the
-            // freshness check from asking for a second finger immediately after this one.
-            grantTimedTier(System.currentTimeMillis())
-            render()
-        }
-    }
-
-    /**
-     * A failed content prompt, in the per-use gate's own words. The two prompts fail for the same
-     * platform reasons and a second wording table would drift from this one on the first edit.
-     */
-    private fun refusalFor(promptOutcome: PromptOutcome): PerUseRefusalReason = when (promptOutcome) {
-        PromptOutcome.CANCELLED -> PerUseRefusalReason.CANCELLED
-        PromptOutcome.FAILED -> PerUseRefusalReason.FAILED
-        PromptOutcome.LOCKED_OUT -> PerUseRefusalReason.LOCKED_OUT
-        PromptOutcome.LOCKED_OUT_PERMANENT -> PerUseRefusalReason.LOCKED_OUT_PERMANENT
-        // Unreachable: SUCCEEDED resolves to AUTHORIZED and the caller returned above.
-        PromptOutcome.SUCCEEDED -> PerUseRefusalReason.KEY_NOT_RELEASED
+    private fun promptForContent() = timed.reauthorize(onNotice = ::show) {
+        // The same authentication that re-opens the content tier re-opens 6.0's timed window: it
+        // is one window and one Keystore entry, and the gate records that through the ledger's
+        // own sharing declaration, which is what keeps the freshness check from asking for a
+        // second finger immediately after this one.
+        render()
     }
 
     private fun invoke(verb: (App, String) -> Any?) {
@@ -951,13 +895,6 @@ class PhoneSurface(
     }
 
     private companion object {
-
-        /**
-         * Requirements 6.0's timed row, DERIVED from the policy rather than listed here. A
-         * restated list is a second copy of the tier assignment, and the two would disagree on
-         * the first operation anybody added.
-         */
-        val TIMED_TIER = GatedOperation.entries.filter { !BiometricPolicy.specFor(it).requiresCryptoObject }
 
         /**
          * What the user is told when the window has lapsed. It says the session is not lost,

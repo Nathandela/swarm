@@ -100,6 +100,47 @@ const ledgerRegistration = ".beginPrompt("
 // contentPromptDeclaredIn is.
 const ticketDeclaredIn = "BiometricPolicy.kt"
 
+// firstCallOf reports the byte offset of the first CALL of a Kotlin method in already
+// comment-stripped source, or -1. A call is an occurrence of the name that is neither a
+// DECLARATION (`fun name`) nor a LAMBDA LABEL (`return@name`, `break@name`).
+//
+// BOTH EXCLUSIONS ARE THINGS THAT ACTUALLY HAPPENED HERE. The first draft of the confinement
+// check treated any occurrence as a call, and reported the timed gate's own seam -- `interface
+// TimedTierPrompt { fun confirmForContent(...) }`, declared beside the gate exactly as
+// `PerUsePrompt` is declared beside `PerUseGate` -- as a call at byte 172, ahead of the
+// registration that really does precede the one call in the file. A check that cannot tell a
+// declaration from a call reports the file that DEFINES a seam as the file that USES it, which
+// would let the real caller sit anywhere.
+func firstCallOf(src, name string) int {
+	for at := 0; ; {
+		i := strings.Index(src[at:], name)
+		if i < 0 {
+			return -1
+		}
+		i += at
+		prefix := src[:i]
+		if !strings.HasSuffix(prefix, "fun ") && !strings.HasSuffix(prefix, "@") {
+			return i
+		}
+		at = i + len(name)
+	}
+}
+
+// callersOf returns the files whose CODE calls name, excluding the file with the given base name.
+func callersOf(code map[string]string, name, excludeBase string) []string {
+	var out []string
+	for f, src := range code {
+		if filepath.Base(f) == excludeBase {
+			continue
+		}
+		if firstCallOf(src, name) >= 0 {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // TestPBSEC2_TheContentPromptIsRegisteredBeforeItIsShown.
 //
 // THE MUTATION THAT MUST FAIL IT: moving the `confirmForContent` call back onto a screen, or
@@ -114,7 +155,7 @@ const ticketDeclaredIn = "BiometricPolicy.kt"
 func TestPBSEC2_TheContentPromptIsRegisteredBeforeItIsShown(t *testing.T) {
 	code := productionKotlinCode(t)
 
-	callers := filesNaming(code, contentPromptCall, contentPromptDeclaredIn)
+	callers := callersOf(code, contentPromptCall, contentPromptDeclaredIn)
 	if len(callers) == 0 {
 		t.Fatalf("PB-SEC-2: no production Kotlin outside %s calls %q, so this check has no "+
 			"subject. Either the content tier lost its way back in -- ADR-007 B44's missing exit, "+
@@ -160,8 +201,8 @@ func TestPBSEC2_TheContentPromptIsRegisteredBeforeItIsShown(t *testing.T) {
 		// (c) ORDER, as far as text can see it. See the doc comment: the proof is in
 		// TimedTierGateTest, and this only catches a registration that is not even written above
 		// the prompt it belongs to.
-		registration := strings.Index(src, ledgerRegistration)
-		shown := strings.Index(src, contentPromptCall)
+		registration := firstCallOf(src, ledgerRegistration)
+		shown := firstCallOf(src, contentPromptCall)
 		if registration < 0 {
 			t.Errorf("PB-SEC-2: %s shows the platform's content prompt and never calls %s\n"+
 				"The ticket must be handed to the ledger, not merely constructed: it is "+

@@ -75,15 +75,25 @@ import (
 )
 
 // freshnessSubjects are the production symbols that carry requirements 6.0's timed window. A
-// caller of EITHER satisfies the check: `decide` is the decision and `InputGateDecision` is what
-// it returns, and a fix that routes the verdict through its own type still names one of them.
+// caller of ANY satisfies the check: `decide` is the decision, `InputGateDecision` is what it
+// returns, and a fix that routes the verdict through its own type still names one of them.
 //
 // `freshnessExpiryEndsLease` is deliberately NOT here. It is a declaration that something must
 // NOT happen, so it has nothing to call it, and requiring a caller would demand a lease teardown
 // the requirement forbids.
+//
+// `TimedTierGate` JOINED THEM WHEN THE DECISION MOVED OFF THE SCREEN (ADR-007 B96). The verdict
+// used to be reached by a private method of `PhoneSurface`, which is Activity-hosted and so
+// unreachable from any test this project can run -- and B96's mutation, replacing that decision
+// with `if (true)`, therefore left everything green. It now lives in a plain class the JVM tier
+// drives (`TimedTierGateTest`), and the sending file names THAT. Naming the gate is not a
+// weakening of the second check below: `InputFreshness` in a file proves the file knows the
+// window exists, whereas the gate is the thing that ENFORCES it, so a file that names the gate is
+// routed through the decision rather than merely acquainted with it.
 var freshnessSubjects = []string{
 	"InputFreshness",
 	"InputGateDecision",
+	"TimedTierGate",
 }
 
 // freshnessDeclaredIn is the file that DECLARES the subjects above. It is excluded from the

@@ -240,15 +240,23 @@ class AuthorizationLedger {
      *
      * @param ticket the identity [beginPrompt] was given for the prompt this callback belongs to.
      *  Null means the caller has none to present, and is then discriminated by its operation
-     *  alone -- B63's fence and no more. The one production caller ([PerUseGate]) always presents
-     *  one; a new asynchronous caller that does not is trusting the operation to tell its prompt
-     *  apart from a second one for the same operation, which is precisely what it cannot do.
+     *  alone -- B63's fence and no more.
+     *
+     *  IT HAS NO DEFAULT, and that is ADR-007 B96's doing. It used to default to null, and the
+     *  timed tier's prompt path took that default: `PhoneSurface.grantTimedTier` recorded an
+     *  authorization from inside a `BiometricPrompt` callback it had never registered, and the
+     *  omission was invisible because omitting was the ordinary way to call this. Both production
+     *  gates ([PerUseGate], [TimedTierGate]) present a ticket. A null is now something a caller
+     *  has to WRITE, which is the whole point: it is only defensible when begin and end are
+     *  adjacent statements with nothing asynchronous between them, and a caller that writes it
+     *  from a callback is stating in the source that it cannot tell its own prompt apart from a
+     *  second one for the same operation.
      */
     fun endPrompt(
         operation: GatedOperation,
         outcome: PromptOutcome,
         atMillis: Long,
-        ticket: PromptTicket? = null,
+        ticket: PromptTicket?,
     ): GateResolution {
         val onScreen = inFlight
         if (onScreen == null || onScreen.operation != operation) return GateResolution.ABANDONED
@@ -257,6 +265,24 @@ class AuthorizationLedger {
         val resolution = BiometricPolicy.resolve(outcome)
         if (resolution == GateResolution.AUTHORIZED) {
             grantedAtMillis[operation] = atMillis
+            // AND EVERY OPERATION THAT SHARES THIS AUTHORIZATION, which is
+            // [BiometricPolicy.sharesAuthorizationWith]'s first production caller and the reason
+            // that declaration exists. The timed operations share one Keystore entry and one
+            // window by construction, so ONE prompt re-opens the window for both; a grant
+            // recorded against only the operation prompted for would ask for a second fingerprint
+            // to type into the session the first one just took control of. A per-use
+            // authorization shares with NOTHING, including itself, so this loop does nothing for
+            // one -- which is the tier separation holding, not an exception to it.
+            //
+            // ONLY ON SUCCESS. The failure branch below drops the operation prompted for and
+            // leaves the others alone: a cancelled prompt is not evidence that a sibling's own
+            // still-running window has lapsed, and dropping it would ask for a fingerprint the
+            // requirement does not.
+            for (other in GatedOperation.entries) {
+                if (other != operation && BiometricPolicy.sharesAuthorizationWith(operation, other)) {
+                    grantedAtMillis[other] = atMillis
+                }
+            }
         } else {
             grantedAtMillis.remove(operation)
         }

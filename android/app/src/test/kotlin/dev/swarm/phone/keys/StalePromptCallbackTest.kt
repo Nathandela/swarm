@@ -58,7 +58,7 @@ class StalePromptCallbackTest {
 
         ledger.invalidate(InvalidationEvent.DEVICE_LOCKED)
 
-        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
 
         assertFalse(
             "the lock returned the tier to LOCKED (ADR-007 B44) and the outstanding prompt's " +
@@ -83,7 +83,7 @@ class StalePromptCallbackTest {
                 ledger.beginPrompt(operation)
 
                 ledger.invalidate(event)
-                ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis = 0)
+                ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis = 0, ticket = null)
 
                 assertFalse(
                     "$event was survived by an outstanding $operation prompt",
@@ -105,7 +105,7 @@ class StalePromptCallbackTest {
     @Test
     fun a_callback_with_no_prompt_behind_it_authorizes_nothing() {
         val virgin = AuthorizationLedger()
-        virgin.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        virgin.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
         assertFalse(
             "a ledger that never prompted for REVOKE authorized it",
             virgin.authorized(GatedOperation.REVOKE, atMillis = 1_000),
@@ -116,7 +116,7 @@ class StalePromptCallbackTest {
         val busy = AuthorizationLedger()
         busy.beginPrompt(GatedOperation.KILL)
 
-        busy.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        busy.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
 
         assertFalse(
             "a callback for REVOKE authorized REVOKE while the prompt on screen was KILL's",
@@ -141,7 +141,7 @@ class StalePromptCallbackTest {
     fun a_late_duplicate_of_a_resolved_prompt_neither_authorizes_it_nor_disturbs_the_newer_one() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.KILL)
-        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.CANCELLED, atMillis = 1_000)
+        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.CANCELLED, atMillis = 1_000, ticket = null)
         assertFalse(
             "precondition: the cancel answered KILL",
             ledger.authorized(GatedOperation.KILL, atMillis = 1_000),
@@ -149,7 +149,7 @@ class StalePromptCallbackTest {
 
         ledger.beginPrompt(GatedOperation.REVOKE)
 
-        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.SUCCEEDED, atMillis = 2_000)
+        ledger.endPrompt(GatedOperation.KILL, PromptOutcome.SUCCEEDED, atMillis = 2_000, ticket = null)
 
         assertFalse(
             "a duplicate callback overturned the cancel the user already gave",
@@ -181,7 +181,7 @@ class StalePromptCallbackTest {
             assertEquals(
                 "$operation's own callback must still be honoured",
                 GateResolution.AUTHORIZED,
-                ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis = 1_000),
+                ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null),
             )
             assertTrue(ledger.authorized(operation, atMillis = 1_000))
             assertEquals(
@@ -195,7 +195,7 @@ class StalePromptCallbackTest {
         // the gate reports FAILED through the ledger rather than reaching into it.
         val refused = AuthorizationLedger()
         refused.beginPrompt(GatedOperation.REVOKE)
-        refused.endPrompt(GatedOperation.REVOKE, PromptOutcome.FAILED, atMillis = 1_000)
+        refused.endPrompt(GatedOperation.REVOKE, PromptOutcome.FAILED, atMillis = 1_000, ticket = null)
         assertEquals(
             "the gate is wedged: a Keystore refusal left the marker behind",
             GateResolution.PROMPT_STARTED,

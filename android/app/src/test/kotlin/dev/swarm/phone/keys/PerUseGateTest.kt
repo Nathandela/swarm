@@ -130,7 +130,7 @@ class PerUseGateTest {
     fun a_believed_authorization_does_not_run_the_action_when_the_platform_releases_no_key() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.REVOKE)
-        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
         assertTrue(
             "precondition: the app's own record says REVOKE is authorized",
             ledger.authorized(GatedOperation.REVOKE, atMillis = 1_000),
@@ -415,7 +415,7 @@ class PerUseGateTest {
     fun an_authorization_obtained_for_one_operation_does_not_run_another() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.REVOKE)
-        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
 
         val prompt = FakePrompt()
         val run = Run()

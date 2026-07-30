@@ -82,7 +82,7 @@ class ContentLockTest {
         val ledger = AuthorizationLedger()
         val (contentLock, _) = lock(ledger)
         ledger.beginPrompt(GatedOperation.INPUT)
-        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, 1_000)
+        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, 1_000, ticket = null)
         assertTrue(
             "fixture: the authorization was never granted, so the assertion below would pass vacuously",
             contentLock.authorized(GatedOperation.INPUT, 1_000),

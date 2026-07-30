@@ -124,7 +124,7 @@ class BiometricGateTest {
     fun a_consumed_per_use_authorization_does_not_authorize_a_second_use() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.REVOKE)
-        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000)
+        ledger.endPrompt(GatedOperation.REVOKE, PromptOutcome.SUCCEEDED, atMillis = 1_000, ticket = null)
 
         assertTrue(ledger.authorized(GatedOperation.REVOKE, atMillis = 1_000))
         ledger.consume(GatedOperation.REVOKE)
@@ -138,7 +138,7 @@ class BiometricGateTest {
     fun a_timed_authorization_expires_exactly_at_the_stated_window() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.INPUT)
-        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0)
+        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0, ticket = null)
 
         assertTrue(ledger.authorized(GatedOperation.INPUT, atMillis = 59_999))
         assertFalse(
@@ -176,7 +176,7 @@ class BiometricGateTest {
         for (outcome in PromptOutcome.entries.filter { it != PromptOutcome.SUCCEEDED }) {
             val ledger = AuthorizationLedger()
             ledger.beginPrompt(GatedOperation.KILL)
-            ledger.endPrompt(GatedOperation.KILL, outcome, atMillis = 1_000)
+            ledger.endPrompt(GatedOperation.KILL, outcome, atMillis = 1_000, ticket = null)
             assertFalse(
                 "$outcome left KILL authorized",
                 ledger.authorized(GatedOperation.KILL, atMillis = 1_000),
@@ -210,7 +210,7 @@ class BiometricGateTest {
         ledger.beginPrompt(GatedOperation.INPUT)
         ledger.beginPrompt(GatedOperation.REVOKE)
 
-        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0)
+        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0, ticket = null)
         assertTrue(ledger.authorized(GatedOperation.INPUT, atMillis = 0))
         assertNotEquals(
             "the gate is wedged: no prompt can be started again",
@@ -226,7 +226,7 @@ class BiometricGateTest {
         for (event in InvalidationEvent.entries) {
             val ledger = AuthorizationLedger()
             ledger.beginPrompt(GatedOperation.INPUT)
-            ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0)
+            ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0, ticket = null)
 
             ledger.invalidate(event)
 
@@ -299,7 +299,7 @@ class BiometricGateTest {
     fun a_successful_prompt_does_not_authorize_an_unwrap_the_platform_refuses() {
         val ledger = AuthorizationLedger()
         ledger.beginPrompt(GatedOperation.INPUT)
-        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0)
+        ledger.endPrompt(GatedOperation.INPUT, PromptOutcome.SUCCEEDED, atMillis = 0, ticket = null)
         assertTrue("precondition: the app believes it is authenticated", ledger.authorized(GatedOperation.INPUT, 0))
 
         val kek = FakeKeystoreKek(lockedTiers = setOf(KeyTier.CONTENT))

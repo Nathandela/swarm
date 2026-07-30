@@ -89,7 +89,7 @@ private fun availabilityOf(status: Int): PromptAvailability = when (status) {
  *  `dev.swarm.phone.PhoneSurface`, which is where every other facade-reaching control already
  *  lives, and not by the exported Activity itself (PB-SEC-11).
  */
-class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt {
+class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt, TimedTierPrompt {
 
     override fun availability(): PromptAvailability = deviceBiometricAvailability(activity)
 
@@ -146,8 +146,12 @@ class BiometricPrompts(private val activity: FragmentActivity) : PerUsePrompt {
      *
      * The caller retries `App.UnlockContent` on success. It is a retry and not an assumption:
      * the Keystore is still the gate, and it may still refuse.
+     *
+     * ITS ONE CALLER IS [TimedTierGate] (ADR-007 B96). It used to be reached from the screen
+     * directly, with no ticket registered, so the ledger held nothing for the whole time this
+     * prompt was on screen -- see that class for what a screen lock arriving in that window did.
      */
-    fun confirmForContent(onResult: (PromptOutcome) -> Unit) {
+    override fun confirmForContent(onResult: (PromptOutcome) -> Unit) {
         val prompt = BiometricPrompt(
             activity,
             activity.mainExecutor,
