@@ -203,8 +203,45 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		// server's confirm closure selects on the connection-derived ctx, so a disconnect
 		// makes this return (false, non-nil err) -> Machine.Pair declines and errors ->
 		// enroll/Add never run (fail closed).
-		Confirm: func(_ context.Context, sas [6]string, deviceName string) (bool, error) {
-			return confirm(sas[:], deviceName)
+		//
+		// IT ALSO OBSERVES THE PAIRING WINDOW, AND ONLY SINCE ADR-007 B69(3). The adapter
+		// used to take the ctx as `_`. Machine.Pair observes its ctx in transport calls
+		// only, so the window bounded Recv/Send/Complete and left the third leg -- the one
+		// with a human on the end -- unbounded: the closure below selects on the pairing
+		// session ctx, which internal/protocol/server.go builds as context.WithCancel(
+		// context.Background()) and which carries no deadline. An owner who walked away
+		// from the prompt reproduced B64's ENTIRE consequence chain, with a phone doing
+		// everything right: no pair_result ever, and every later pair_start on the
+		// connection refused "pairing already in progress".
+		//
+		// The prompt is CANCELLED rather than left standing with the slot released,
+		// because past the window an affirmative answer cannot be honoured by anything:
+		// the relay has purged the rendezvous at the slot TTL pairWindow clamps to, and
+		// the handset gave up at its own 60 s pairingTTL. Cancelling it is also what
+		// releases the slot -- clearPairing runs only from result, and result runs only
+		// when this handshake goroutine returns.
+		//
+		// The abandoned confirm goroutine is bounded by the result it produces, not
+		// leaked: Pair returns ErrConfirmTimeout -> result -> clearPairing -> the pairing
+		// session's cancel -> the blocked closure returns ctx.Err() into a buffered
+		// channel nobody reads. ErrConfirmTimeout rather than ctx.Err() because
+		// ConfirmFunc owns the confirm clock by contract, and the window IS that clock now.
+		Confirm: func(ctx context.Context, sas [6]string, deviceName string) (bool, error) {
+			type answer struct {
+				allow bool
+				err   error
+			}
+			answered := make(chan answer, 1)
+			go func() {
+				allow, err := confirm(sas[:], deviceName)
+				answered <- answer{allow, err}
+			}()
+			select {
+			case a := <-answered:
+				return a.allow, a.err
+			case <-ctx.Done():
+				return false, pairing.ErrConfirmTimeout
+			}
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            cfg.Hostname,

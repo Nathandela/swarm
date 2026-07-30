@@ -553,10 +553,45 @@ func recvConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTr
 	return sess.Decrypt(frame)
 }
 
+// acceptCommitWindow bounds the detached rendezvous burn in sendDecision below. Like
+// abortSendWindow it is a LIVENESS bound rather than a protocol timeout: one control
+// roundtrip on a socket that is already open needs milliseconds, and the only reason to
+// wait at all is a peer that is gone in a way the kernel has not noticed. It exists so
+// detaching from the pairing deadline cannot re-create B64 -- an unbounded park is the
+// defect that deadline was added to fix.
+const acceptCommitWindow = 2 * time.Second
+
 // sendDecision encrypts the machine's final accept/decline signal over the
 // established Noise transport and burns the rendezvous. It is authenticated (both
 // statics are pinned by now), so the device knows the decision came from the real
 // machine. The rendezvous is completed (burned) regardless of the decision.
+//
+// ONCE AN ACCEPTANCE HAS BEEN FORWARDED, THE BURN IS NO LONGER THE PAIRING DEADLINE'S TO
+// CANCEL (ADR-007 B69(2)). B64 put the whole handshake under one deadline, and this
+// function ran Send and Complete on it back to back while treating a Complete failure as
+// the decision's failure. A deadline landing between the two produced: phone holds
+// acceptance and pins, Complete fails, Pair returns no MachineOutcome, daemon enrolls
+// nothing -- the half-pair PB-PAIR-4 forbids, reachable with nothing but an ordinary clock
+// on a pairing near its advertised expiry.
+//
+// The remedy is the shape abortConsent already uses -- context.WithoutCancel plus a short
+// bound, so the ctx's values survive and only the cancellation is dropped -- but applied
+// CONDITIONALLY, which is the difference between the two sites. abortConsent detaches
+// unconditionally because it only ever runs on a ctx that is already dead. Here the
+// cancellation is CORRECT right up until the acceptance leaves: before that point a dead
+// ctx must fail the pairing closed, and it does so symmetrically -- no acceptance, no pin,
+// no enrollment. Detaching earlier would spend the deadline the daemon promised.
+//
+// Detaching works because the relay conn outlives this call: relayRendezvousFactory's
+// watcher closes it when the ctx passed to NewRendezvous is done, and that is the
+// CONNECTION ctx (internal/skeleton/pairing.go), not the pairing deadline derived from it.
+//
+// WHAT THIS DOES NOT COVER. It narrows the window; it does not eliminate the failure. If
+// Complete fails for a non-deadline reason -- the relay refuses, the socket is gone, the
+// bound above elapses -- the machine still reports failure against a phone that has
+// already pinned, and so does a deadline that lands mid-write inside Send after the bytes
+// reach the wire. That is B60(1), it REMAINS OPEN, and closing it needs a durable
+// prepare/commit protocol across the two legs rather than a wider context.
 func (m *Machine) sendDecision(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, label string, accept bool) error {
 	b := decisionDecline
 	if accept {
@@ -568,7 +603,14 @@ func (m *Machine) sendDecision(ctx context.Context, sess *crypto.NoiseSession, r
 		return err
 	}
 	sendErr := rt.Send(ctx, frame)
-	if err := rt.Complete(ctx, label); err != nil && sendErr == nil {
+
+	completeCtx := ctx
+	if accept && sendErr == nil {
+		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), acceptCommitWindow)
+		defer cancel()
+		completeCtx = detached
+	}
+	if err := rt.Complete(completeCtx, label); err != nil && sendErr == nil {
 		sendErr = err
 	}
 	return sendErr
