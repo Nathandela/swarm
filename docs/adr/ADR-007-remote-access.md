@@ -6438,3 +6438,42 @@ exactly.
 verdict, had it accepted and recorded, and then ran an extra mutation that made its own finding worse.
 **Nothing compelled that.** Two agents this round refused instructions from me that would have
 destroyed working code; this one refused its own conclusion.
+
+---
+
+## B115 — The machine-hop CRITICAL is closed, at the caller, without editing the contract
+
+**2026-07-30.** B112's critical is fixed at `c4cc8b8`. `internal/remotegw`'s command-IN loop now wraps
+each `MailboxWait` in `context.WithTimeout(ctx, b.waitTimeout())`, with a configurable
+`ServiceConfig.WaitTimeout` and a stated default.
+
+**The fix is at the caller, and the comment states why that is the only correct place:**
+
+> **IT MUST EXIST HERE BECAUSE THE ONLY OTHER PARTY THAT COULD END THE WAIT IS THE ADVERSARY.**
+> `relay.MailboxWait` is unbounded by contract — `TestCallDeadline_TheLongPollIsNotBoundedByIt` pins
+> that the long poll ends on the CALLER's deadline and not on the connection's exchange bound, because
+> a poll cut by the generic call timeout would turn PB-NET-5's low-latency inbound seam into a timeout
+> loop. **The corollary is that some caller must declare a deadline, and this loop was not one.**
+
+**The obvious fix was the wrong one and was refused.** Making `mailboxWait` use `DefaultCallTimeout`
+would have made the fence pass by breaking the contract that fence exists to state — modifying a test
+to make a fix work, which this project forbids. Instead the contract was read as an *obligation on
+callers* and discharged where the obligation lands.
+
+**Two follow-up commits are worth noting because of what prompted them.** `241973c` binds the observed
+deadline to the *budget* rather than to the ceiling — B113's lesson, applied by its author to their own
+work: a test that pins the ceiling would pass against a wrong budget. And `f7cb55e` changes a comment
+from *"surfaced"* to *"recorded"* about a timed-out wait — **B114's lesson, applied across rows.**
+"Surfaced" implies an observer; a state that is recorded and not emitted is not surfaced. **An agent
+read a finding about a different requirement and corrected its own prose to match.**
+
+**`PB-NET-7` stays NOT MET, and the reason returns to where B109 started.** The row says *"timeouts
+EVERYWHERE"* — quantified over call paths — and nothing enumerates them, so a **new** unbounded call
+site would be caught by nothing. **Fixing the one instance does not close a quantifier.** That is
+residual 4.23's shape, and this round has now found the identical gap at four separate rows:
+`PB-NET-5` (both hops), `PB-NET-6` (four clauses), `PB-NET-4` (three evidence gaps), and here.
+
+**Referred to the round-7 committee rather than adjudicated by me.** B109 named this residual and then
+discharged it with an argument that delegated the bound to the adversary; the correction cost a
+70-second probe. **Having been wrong about this exact residual once, in this exact row, I am not the
+party to rule on it a second time.**
