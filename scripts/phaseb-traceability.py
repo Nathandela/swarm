@@ -44,19 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-SEC-2": "TWO halves open. The enrolment-change half is SETTLED as fail-closed "
-                "by execution (ADR-007 B89): the same change destroys the content KEK, "
-                "which is refused re-mint, so the attacker gets a green prompt for an "
-                "operation that fails closed and STAYS failed across a restart -- a UX "
-                "ordering defect, not a bypass. Still open: same-operation supersession, "
-                "and the 60s "
-                "input/take-control freshness is never enforced while continuously "
-                "foregrounded -- InputFreshness.decide has NO production caller and "
-                "ContentLock installs no foreground timeout, so an unlocked foreground "
-                "session keeps shell-input authority indefinitely. Plus: "
-                "halves remain: same-operation supersession is inexpressible without a "
-                "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
-                "new biometric enrolment. Neither fix closes the other",
     "PB-APP-6": "acceptance is \"UI + facade test\" and there is NO UI: "
                 "android/unbound-verbs.tsv records App.Launch as unbound because \"the "
                 "surface has no machine pane, no launch form and no session picker\". The "
