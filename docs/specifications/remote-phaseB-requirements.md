@@ -324,6 +324,7 @@ committee agreement, not implementer discretion.
 |---|---|---|
 | Input latency, phone `Type` -> PTY write, local relay | p50 <= 150 ms, p95 <= 400 ms, p99 <= 800 ms, n >= 200 | PB-NET-5 |
 | Append latency while a wait is outstanding | <= 50 ms for the append call to complete | PB-NET-5(a) |
+| **Echo latency, machine -> phone visible, local relay** | poll wait <= 500 ms plus one non-wait request: **p95 <= 750 ms, p99 <= 1000 ms, n >= 200**. **Closed-test scope only** — set by the owner on 2026-07-30 (ADR-007 B104) after six rounds in which this leg had **no budget at all** and was therefore unfenceable by construction. Production is explicitly NOT covered by this row. | PB-NET-5(b) |
 | Server-side wait (long-poll) maximum | 25 s (under common 30-60 s idle-proxy timeouts) | PB-NET-5 |
 | Non-wait request timeout | 10 s | PB-NET-7 |
 | Reconnect backoff | initial 500 ms, factor 2, ceiling 30 s, jitter +/-20% | PB-NET-4 |

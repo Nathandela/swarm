@@ -5849,3 +5849,43 @@ stated constant rather than an end-to-end measurement.
 **Still unfenced, recorded rather than papered over:** `DrainPacer` and `AckBatcher` **behaviour**.
 Nothing in the tree constructs either and asserts what it does; `drainbudget_test.go` pins the numbers
 they are built *from*, not the pacing they produce. They are live gateway code.
+
+---
+
+## B104 — The machine->phone leg gets a budget, scoped to the closed test
+
+**2026-07-30. Decision by the owner**, recorded because section 6.0 states that changing a budget
+value *"requires committee agreement, not implementer discretion"* — and because the alternative was
+an implementer inventing a number, which two reviewers correctly refused to do.
+
+**The gap.** Section 6.0 has budgeted `phone Type -> PTY write` since round 1. It has **never** stated
+anything for the return direction. The shipped phone polls inbound at `pollInterval = 500 ms`
+(`mobile/app.go:35`), so an event published just after a poll waits up to half a second before the
+user sees their own character come back. **Six rounds of fences could not see this, because a
+property with no budget is unfenceable by construction** — and `PB-NET-5`'s numeric criterion stops
+at the PTY write, so it passed throughout.
+
+**The decision: up to 500 ms of echo latency is acceptable for the closed test.**
+
+**The row is written scoped, and the scope is load-bearing.** The question asked was about the closed
+test and the answer given was about the closed test. Recording it as a general budget would be
+inventing the production half of a decision nobody made — the same move as an implementer picking
+5 s over a specified 10 s (B99), one level up. **Production is explicitly not covered.**
+
+**The numbers, and how they were derived rather than chosen.** `p95 <= 750 ms, p99 <= 1000 ms,
+n >= 200`. The accepted 500 ms is the *poll wait*; the visible echo is that wait **plus one non-wait
+request**, so the budget is the accepted figure plus a round trip, at the same `n >= 200` sampling
+discipline section 6.0 already imposes on the outbound leg. **These are the derivation of an accepted
+bound, not a measurement** — nobody has measured this leg end to end, and the one attempt was deleted
+by its author because the probe measured "the event never arrived" instead of latency.
+
+**What this unblocks.** `PB-NET-5` clause C was stopped for exactly this reason: all three honest
+formulations needed a number that did not exist, and a structural fence would have dressed the
+absence of the required mechanism up as compliance. With a stated budget the clause is measurable,
+and the fence owed is an end-to-end one: publish machine-side at the worst moment — immediately after
+a poll — and measure when the phone can see it.
+
+**`PB-NET-5` does NOT become met by this entry**, and that distinction is B99's lesson applied
+immediately: a requirement is met when the property is demonstrated, not when it becomes
+demonstrable. **Writing a budget makes the fence writable. The fence still has to be written, and it
+still has to pass.**
