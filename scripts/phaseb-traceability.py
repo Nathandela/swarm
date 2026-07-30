@@ -51,6 +51,10 @@ NOT_MET = {
                 "halves remain: same-operation supersession is inexpressible without a "
                 "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
                 "new biometric enrolment. Neither fix closes the other",
+    "PB-INPUT-4": "the retry mechanism has ZERO production callers: RetryFor "
+                  "(transport/retry.go:49) and SendLive (session.go:358) are definitions "
+                  "only, and commands call MailboxAppend directly. Found by the round-4 "
+                  "external reviewer, verified by grep (ADR-007 B69(1))",
     "PB-E2E-2": "UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard "
                 "emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_"
                 "SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any "

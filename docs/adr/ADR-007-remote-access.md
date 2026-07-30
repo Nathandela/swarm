@@ -3482,3 +3482,83 @@ none of `NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `Restri
 or `SystemCallFilter`, and the Decision body's D4/R1 paragraph still asserts verbatim the
 defence-in-depth B62(3) ruled false and demanded withdrawn. Two entries have now recorded this and
 neither remediation was carried out. **It is a production blocker and is listed as one.**
+
+---
+
+### B69 — round 4's external review: the count is not supportable, and B64 made PB-PAIR-4 worse
+
+The external reviewer returned the most damaging report of the phase. Most of it lands on work
+done and **self-verified** in this same session. Findings I re-verified myself are marked.
+
+**B69(1) — 139 is not supportable. At most 136. [VERIFIED BY ME for two of three]**
+
+- **PB-INPUT-4 — NOT MET. Verified.** `RetryFor` (`internal/remote/transport/retry.go:49`) and
+  `SendLive` (`session.go:358`) have **zero production callers** — I grepped: the only hits are
+  the definitions themselves. Commands call `MailboxAppend` directly and return its error
+  (`mobile/commands.go:749`). Its own evidence file admits this. This is the standing class
+  "a symbol that exists, is unit-tested, is traced, and is called by nothing", now at its tenth
+  instance and the first found by an outside reviewer.
+- **PB-NET-4 — contested, and the spec contradicts itself. Verified in part.** Production
+  constructs `NewOpQueue(0)` — **unbounded** — at `internal/phonecore/core.go:115`, and there are
+  **zero production `Enqueue` callers**. The reviewer reads the active row at requirements:442 as
+  still demanding a bounded high-level op queue while the same document declares that queue
+  WITHDRAWN and unbuildable at line 332. **I have verified the code but not adjudicated the
+  requirement text**, and I will not resolve it by choosing the reading that keeps the count high.
+- **PB-NET-5 — unverified against its own criterion. Not re-checked by me.** It demands phone
+  `Type` → PTY latency over ≥200 samples; its evidence states the harness never enters
+  `mobile/commands.go` and measures phonecore → PTY. An evidence gap, not a demonstrated
+  regression.
+
+**B69(2) — B64 made PB-PAIR-4's half-pair NATURALLY REACHABLE. The fourth consecutive round in
+which a fix composed into something worse, and this time it is mine.**
+
+B64 put the whole machine handshake under one deadline. On success the machine sends acceptance
+and then calls `Complete` **on that same context**. If the deadline expires after `Send` forwards
+acceptance but before `Complete` succeeds: the phone receives acceptance and returns a pinnable
+outcome, `sendDecision` reports failure, and the machine enrolls nothing. Phone pinned, machine
+not enrolled — precisely the half-pair PB-PAIR-4 forbids.
+
+B60(1) recorded the post-accept problem when it required an injected filesystem error. **B64
+supplied an ordinary clock-bound trigger: pairing near its advertised expiry is now enough.** A
+fix for a hang created a routine path into a state a requirement forbids.
+
+**B69(3) — B64's deadline fence is VACUOUS. Verified by me. The eleventh of this class, and I
+declared it load-bearing in its own commit message.**
+
+Replacing `context.WithTimeout(ctx, window)` with `context.WithCancel(ctx)` — deleting the entire
+authoritative deadline, the primary half of the fix — leaves **both** B64 suites green:
+`./internal/skeleton -run '^TestB64_'` ok, `./internal/remote/pairing -run '^TestB64_'` ok.
+
+The courtesy abort resolves the scenario before the missing deadline can matter, so the tests
+measure the abort and nothing else. **B64's own commit message says "THE DEADLINE IS THE FENCE;
+THE ABORT IS A COURTESY"** — the tests prove the exact opposite of the sentence written to prevent
+this misreading. The abort fence IS real (the reviewer mutation-proved it independently).
+
+Residual 4.13: *when two mechanisms both resolve a scenario, the faster one silently absorbs the
+test, and the slower one — which may be the only one that holds under adversarial conditions — is
+unfenced. Stating in prose which is load-bearing does not make the test measure it.*
+
+**B69(4) — B61's retired-consent bound is PER-PAIR, not global. [reviewer RAN it]** One
+authenticated client minted 80 grantee keypairs and superseded each once: 80 durable rows against
+a per-pair cap of 64, no refusal. B61 removed per-pair amplification and left total durable growth
+unbounded, since relay registration is open and a client can keep changing grantee identity. Not a
+confidentiality break; a storage-exhaustion risk for a shared relay. **B61's commit claimed the
+bound was "a real bound on the bucket rather than only on the row count" — that is true per pair
+and false globally.**
+
+**B69(5) — PB-E2E-5 CANNOT RUN as documented. [reviewer READ]** The app module never applies
+`com.google.gms.google-services`, so `google-services.json` is ignored and no default `FirebaseApp`
+exists; the app catches the absence and continues tokenless. The handset runbook says only to
+obtain a project and drop the file in, which is insufficient — a build change or explicit runtime
+init is also required. The runbook is additionally stale: it claims transport security has no
+production caller (pairing now uses `PairingSecurity`, session dials `handsetSecurity`) and that
+token deletion on disable has no caller (`SettingsSurface.kt:207` now calls it). **The only
+deferred exit gate cannot be discharged by a runbook that is partly unrunnable.**
+
+**B69(6) — GG-4's race gate was never run at HEAD. Now run, and it is clean.** I reported "all
+gates green" without it. `go test -race ./internal/remote/... ./internal/skeleton/...
+./internal/phonecore/... ./mobile/... -count=1` passes with no findings. The gate is green; my
+claim that it had been checked was not.
+
+**Verdict: REVISE.** Round 4 does not reach agreement, and the disagreement is substantive rather
+than procedural.
