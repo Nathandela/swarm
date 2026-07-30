@@ -49,7 +49,11 @@ Ordered by how long they take.
 | 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below. | external hosting | 30 min |
-| 5 | **Four Phase B requirements are NOT MET**: `PB-SEC-2` (per-use biometric gate — a stale callback can resurrect authorization), `PB-PAIR-4` (a half-paired state is reachable), `PB-PUSH-9` (deletion on revoke is dead — see below), `PB-E2E-2`. Separately `PB-E2E-5` (real-hardware validation of biometrics, camera, FCM delivery, Doze, Keystore attestation) is **deferred and unvalidated**. | `docs/verification/remote-phaseB-residuals.md` | in progress |
+| 5 | **Five Phase B requirements are NOT MET**: `PB-SEC-2` (per-use biometric gate — a stale callback can resurrect authorization), `PB-PAIR-4` (a half-paired state is reachable), `PB-INPUT-4` (the retry mechanism has zero production callers), `PB-E2E-2`, plus `PB-NET-4`
+contested — the spec both demands and withdraws the same queue, and production ships an unbounded
+one nothing calls. **`PB-PAIR-4` is worse than first recorded: a half-pair is reachable in BOTH
+directions from an ordinary clock, with no attacker — pairing near the 60-second expiry is enough.
+Give your testers the recovery in writing, because it will happen.** Separately `PB-E2E-5` (real-hardware validation of biometrics, camera, FCM delivery, Doze, Keystore attestation) is **deferred and unvalidated**. | `docs/verification/remote-phaseB-residuals.md` | in progress |
 
 **On #5 and closed testing.** Closed testing is genuinely the right venue to burn down
 `PB-E2E-5` — it is the only way to get real handsets, real Doze, real FCM. That argues *for*
@@ -64,7 +68,33 @@ you are deferring:
 - **`PB-PUSH-9`** — revoking a phone no longer deletes its push token, in either the cache or on
   disk (ADR-007 B61(1)). Matters when you start revoking real devices.
 
-### One thing to fix even for a closed loop: the relay
+### DO NOT EXPOSE THE RELAY PORT TO THE INTERNET
+
+**This is the most important operational line in this document.** Measured by a round-4 threat
+reviewer, recorded as ADR-007 B70-C1.
+
+`token_register` accepts an attacker-chosen token with **no length check** — the only bound is the
+1 MiB frame limit. The per-identity rate limit does not bind, because minting a fresh identity is
+free and earns a fresh window. No pairing, no consent signature and no victim are required.
+
+- **~1.79 MiB of unreclaimable disk per call. ~1 GiB/min. ~1.5 TB/day from one IP.**
+- **Worse: the relay loads the entire token bucket into memory at startup**, deliberately
+  fail-closed. A filled store means the relay **OOMs on every boot** — a crash loop whose only
+  recovery is deleting `relay.db`, **which destroys every pairing edge, consent and token you
+  have.**
+
+Two more unauthenticated defects sit beside it (B70-C2, B70-C3): one connection can occupy the
+entire rendezvous table **and keeps the slots after disconnecting**, so two sources mean no phone
+can pair at all; and a connection parked mid-pairing has no deadline, no quota and no accounting.
+
+**Until these are fixed and fenced, run the relay bound to localhost or inside a private network
+(Tailscale, WireGuard, an SSH tunnel) reachable only by your testers' devices.** A port scanner
+finding it can brick the exact thing the closed test exists to exercise.
+
+Also worth doing while testing: **alarm on `relay.db` size.** Unexpected growth is the first
+symptom of every defect in this class, and there have been four.
+
+### The other relay items
 
 You will be **operating the relay** for the closed test, so this is your infrastructure, not a
 future concern. Two defects (ADR-007 B61(2), independently confirmed as B62(2)):
