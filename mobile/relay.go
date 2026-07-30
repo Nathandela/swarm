@@ -31,37 +31,41 @@ import (
 // from being redialled at a fixed high rate for the life of the process, and the jitter
 // keeps a fleet reconnecting after a relay restart from arriving as one herd. These are the
 // committee's approved numbers, not tuning knobs: a change here is a change to the budget.
-const (
-	reconnectInitialDelay = 500 * time.Millisecond
-	reconnectFactor       = 2
-	reconnectCeiling      = 30 * time.Second
-	reconnectJitter       = 0.20
-)
+//
+// THE NUMBERS THEMSELVES NOW LIVE IN internal/remote/relay AND THESE ARE DELEGATIONS. D9
+// binds the schedule to BOTH hops, and while it lived here as four unexported constants it
+// was in practice the PHONE's schedule: the gateway sidecar had no reconnect at all, and
+// when it got one there was nowhere to take these values from but a second copy. A budget
+// that exists twice is two budgets. The constants are GONE from this file rather than
+// aliased, so there is no second name anyone can edit and believe they changed the budget;
+// relay.ReconnectInitialDelay, ReconnectFactor, ReconnectCeiling and ReconnectJitter are
+// the whole of it, and pbnet4_backoff_test.go still asserts section 6.0's transcription
+// against literals through these two functions.
 
 // reconnectBackoffBase returns the un-jittered delay before dial attempt n, 1-based:
-// reconnectInitialDelay doubling on every failed attempt, never exceeding reconnectCeiling.
+// relay.ReconnectInitialDelay doubling on every failed attempt, never exceeding
+// relay.ReconnectCeiling.
 func reconnectBackoffBase(attempt int) time.Duration {
-	d := reconnectInitialDelay
-	for i := 1; i < attempt; i++ {
-		d *= reconnectFactor
-		if d >= reconnectCeiling {
-			return reconnectCeiling
-		}
-	}
-	return d
+	return relay.ReconnectBackoffBase(attempt)
 }
 
-// reconnectJittered spreads base by +/-reconnectJitter. frac is a value in [-1, 1] -- taken
-// as a parameter, rather than drawn here, so the spread itself is testable without a random
-// source.
+// reconnectJittered spreads base by +/-relay.ReconnectJitter. frac is a value in [-1, 1] --
+// taken as a parameter, rather than drawn here, so the spread itself is testable without a
+// random source.
 func reconnectJittered(base time.Duration, frac float64) time.Duration {
-	return base + time.Duration(frac*reconnectJitter*float64(base))
+	return relay.ReconnectJittered(base, frac)
 }
 
 // reconnectBackoff tracks consecutive failed dial attempts across one App.run generation and
 // computes each retry delay. It resets to the initial delay on every successful connection
 // (App.run calls reset after setConn(connOnline)), so a link that has been stable for a while
 // never carries a stale, grown-out backoff into its next outage.
+//
+// THE HANDSET RESETS ON CONNECTION AND THE GATEWAY DOES NOT, and that difference is
+// deliberate rather than drift. This side has a user watching a connection state, and a
+// phone coming back from a tunnel must not carry a grown-out delay into its next blip. The
+// sidecar has no such observer and faces the relay as the declared adversary, so it resets
+// only on evidence that traffic crossed the link (remotegw.Service.Progressed).
 type reconnectBackoff struct {
 	attempt int
 	frac    func() float64 // returns a value in [-1, 1]; overridden by tests
