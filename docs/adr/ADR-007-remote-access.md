@@ -6586,3 +6586,59 @@ fix-shape this project prescribes for a dropped quantifier, applied to the row t
 Round 7's own dominant finding is that every row examined had more clauses than the defect reported
 against it, and **the two agents who closed these rows are the last people who should rule on whether
 they are now complete.**
+
+---
+
+## B118 — Round 7's fences hold under independent mutation, and the composition I expected to break did not
+
+**2026-07-30.** The composition member's round-7 audit, run in a detached worktree with every mutation
+written from scratch rather than re-run from the authors' claimed proofs.
+
+**The strongest positive finding in seven rounds.** Two agents wrote `PB-PAIR-4` fences **23 minutes
+apart**, unable to see each other's work. Reverting the commit-before-ack ordering makes **both** go
+red — `ad9e570`'s own ordering fences AND `9f5938b`'s real-SIGKILL
+`ProcessDeathAtEveryNamedTransition/local_pin_commit`, which forks a genuine second process against a
+real relay. **They compose because the second discriminates on PROGRAM ORDER — commit precedes send —
+rather than on anything specific to the first one's code shape.**
+
+Three of the last four rounds had their worst finding be two correct fixes composing badly. **This is
+the pairing I would have bet on breaking, and it is the round's best result.**
+
+**No interaction between the gateway wait bound and the drain pacer or ack batcher**, verified by
+reading plus an independent mutation: the batcher runs on its own goroutine with its own ticker, and
+the pacer's spacing concerns read cadence, not wait duration.
+
+**Every round-7 fence held under independent reversion** — the backoff (both the wiring mutation and
+B114's emit-suppression), the two `PB-SEC-2` bypasses, `Close` idempotency, and the pairing ordering.
+
+**And one fence visibly learned from B113 without being caught at it.**
+`TestInboundWait_CarriesItsOwnDeadline` compares a **measured** deadline off a real running loop
+against the constant, while a separate test pins that constant against spec-transcribed values — and
+the file's own comment names the split as deliberate B113-avoidance. **A lesson recorded four hours
+earlier, applied unprompted by an author who was not its subject.**
+
+## The referred question, answered
+
+I referred `PB-NET-7`'s enumeration residual to the committee rather than ruling on it, having been
+wrong about it once. **The answer is that fixing the one instance is NOT enough for a row quantified
+"timeouts EVERYWHERE."**
+
+The member spot-checked the other candidates and found **no other live unbounded site** — pairing's
+five `rt.Recv(ctx)` calls all inherit bounded contexts, device-side via `pairingTTL` and machine-side
+via an explicit `context.WithTimeout`. **But `grep -rln PB-NET-7` turns up only per-call-site fences
+and no structural check**, so a call site added tomorrow is caught by nothing. Its recommendation —
+build the enumeration in `pbpair4_transitions_test.go`'s shape, **or accept a standing residual and
+say so in the traceability row rather than mark the row MET** — is adopted, and the enumeration is
+commissioned.
+
+**A stale comment, and it was already wrong before it went stale.**
+`s14_dialrefusal_test.go` justified its observation window by counting retries at *"reconnectDelay is
+250 ms"*. `PB-NET-4` made the number wrong — but **the comment was reasoning about the wrong thing
+beforehand**: the test's guarantee is that `App.run` **returns** on `ErrKeyInvalidated`, so the
+goroutine exits and no loop cadence matters at all. Corrected at `f330fa9`, with the reasoning
+recorded rather than the number patched.
+
+**Verdict: closed test YES; production NOT YET.** The first YES of round 7, and its stated ground is
+that the two CRITICALs closed this round were *"the kind that would have hurt a closed test's early
+testers."* Its production objection is specifically the quantifier: **met by instance, not by
+enumeration, which matters more against a hostile relay operator than a private one.**
