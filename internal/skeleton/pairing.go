@@ -219,8 +219,33 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 	}
 
 	now := a.now()
+
+	// ENFORCE the window this call is about to announce (ADR-007 B64). pairWindow used to
+	// be the ExpiresAt in the PairView and NOTHING else: the handshake ran on the
+	// connection-lifetime ctx (internal/protocol/server.go's context.WithCancel(
+	// context.Background())), which carries no deadline, so past the announced instant the
+	// goroutine below stayed parked in recvConsent indefinitely.
+	//
+	// That is not merely a slow pairing, because the goroutine is the only thing that ever
+	// calls result: no result means no clearPairing, so the connection's single pairing slot
+	// is held forever and every later pair_start on it is refused "pairing already in
+	// progress". There is no pair_cancel op; dropping the owner connection was the only exit.
+	//
+	// It is reached in the ORDINARY order of the ceremony, with no attacker: the owner
+	// answers the desktop prompt in front of them first, then turns to the phone, and from
+	// that moment anything ending the phone's leg leaves this side on a receive with no
+	// clock. The phone's abort frame is sent again now (pairing.abortConsent), but it cannot
+	// be the fence -- RejectSAS CloseNow()s the socket underneath it, and a phone that loses
+	// the network sends nothing at all.
+	//
+	// The bound is the DURATION rather than the expiresAt instant below so an injected
+	// a.now() cannot skew it: what is promised and what is enforced stay the same value.
+	window := pairWindow(time.Duration(req.TTLSeconds) * time.Second)
+	pairCtx, cancelPair := context.WithTimeout(ctx, window)
+
 	go func() {
-		outcome, err := pairing.NewMachine(mp).Pair(ctx, transport)
+		defer cancelPair()
+		outcome, err := pairing.NewMachine(mp).Pair(pairCtx, transport)
 		if err != nil {
 			result(protocol.PairResult{Err: err})
 			return
@@ -285,7 +310,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		result(res) // OUTSIDE lifecycleMu (round-5 finding 2): the owner-socket write cannot stall a revoke/pair
 	}()
 
-	expiresAt := now.Add(pairWindow(time.Duration(req.TTLSeconds) * time.Second))
+	expiresAt := now.Add(window)
 	return protocol.PairView{
 		QR:           qr,
 		RendezvousID: hex.EncodeToString(id[:]),

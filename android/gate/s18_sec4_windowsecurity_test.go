@@ -156,13 +156,27 @@ func TestPBSEC4_ThereIsStillAWindowThisDecisionIsAbout(t *testing.T) {
 // the failure names the file and the marker so the person who did it knows what tripped and
 // where to read why.
 //
-// COMMENTS ARE STRIPPED BEFORE THE SCAN, and that is deliberate rather than incidental: the
-// files that carry this decision have to be able to SAY what was removed. SecureWindow.kt and
-// PhoneActivity.kt both name FLAG_SECURE in prose to explain B65, and a gate that forbade the
-// characters would force the explanation out of the code it explains.
+// IT SCANS THE RAW SOURCE, COMMENTS INCLUDED, AND THAT IS THE POINT.
 //
-// TEST SOURCES ARE OUT OF SCOPE for the same reason, narrowly. PhoneActivityWindowTest asserts
-// the window does NOT carry FLAG_SECURE, which it cannot do without naming the constant, and
+// The obvious shape is to strip comments first, so the files carrying this decision can name
+// what was removed while explaining it. That shape was tried and REJECTED, because the
+// inversion changes which way the scanner's mistakes fall. stripKotlinComments (s16_wiring)
+// is not string-literal-aware: a `//` inside a string literal blanks the rest of that LINE.
+// Under the old POSITIVE assertion that bug was fail-safe -- hiding a real sink made the test
+// demand one and fail. Under this NEGATIVE one it is fail-open, and it is demonstrable:
+//
+//	val u = "http://x"; val f = WindowManager.LayoutParams.FLAG_SECURE
+//
+// is live code that a stripping scan does not see. So the strip is gone, and with it the whole
+// class of "is this text code or prose" mistakes; what is left is a scan that cannot pass by
+// being fooled. The price is that production Kotlin may not spell the two identifiers even in
+// prose, which SecureWindow.kt says in the place a reader will look and which costs nothing:
+// B65, android/window-security.tsv and this file all name them, so a grep still lands on the
+// explanation. A gate weakened to tolerate its own documentation would tolerate a real
+// reinstatement sitting next to some.
+//
+// TEST SOURCES ARE OUT OF SCOPE, narrowly and necessarily. PhoneActivityWindowTest asserts the
+// window does NOT carry FLAG_SECURE, which it cannot do without naming the constant, and
 // nothing under src/test ships.
 func TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock(t *testing.T) {
 	files := kotlinFiles(t, kotlinMainRoot(t))
@@ -173,7 +187,7 @@ func TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock(t *testing.T) {
 
 	var sites []string
 	for _, f := range files {
-		src := stripKotlinComments(readFileOrFail(t, f, "PB-SEC-4"))
+		src := readFileOrFail(t, f, "PB-SEC-4")
 		for _, m := range screenshotBlockMarkers {
 			if strings.Contains(src, m) {
 				sites = append(sites, mustRel(t, f)+" names "+m)
@@ -192,7 +206,11 @@ func TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock(t *testing.T) {
 			"that could already screenshot and stopped nothing else -- while blocking users of a "+
 			"developer tool from sharing terminal output. If the decision is being reversed, the "+
 			"ADR entry and %s are reversed with it and this test is inverted again; if it is not "+
-			"being reversed, this is the drift the inversion exists to catch",
+			"being reversed, this is the drift the inversion exists to catch.\n\nIF THIS IS A "+
+			"COMMENT rather than a call: production Kotlin may not spell these two identifiers "+
+			"at all, prose included. The scan deliberately does not strip comments -- a negative "+
+			"assertion that has to tell code from prose is one that passes when it guesses wrong "+
+			"-- so describe the API instead and let B65 carry the name",
 			len(sites), strings.Join(sites, "\n\t"), mustRel(t, windowPolicyPath(t)))
 	}
 }

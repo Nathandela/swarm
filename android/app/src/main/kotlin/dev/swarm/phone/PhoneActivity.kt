@@ -9,7 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
  * in order to have a subject at all.
  *
  * WHY IT EXISTS AND WHY HERE. The module declared no `<activity>` until this slice: S16 shipped
- * the screen MODELS (data classes and enums), so `FLAG_SECURE` had no Window and
+ * the screen MODELS (data classes and enums), so the secure-window flag had no Window and
  * `filterTouchesWhenObscured` had no View, and both halves of PB-SEC-4 and PB-SEC-12 clause 1
  * were unverifiable rather than unsatisfied. The ruling recorded on 2026-07-25 assigns the
  * Activity to S18 as a SCOPE call: S18 is the first slice blocked on it, no slice ever owned
@@ -43,7 +43,7 @@ class PhoneActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         // Nothing is set on the window. ADR-007 B65 withdrew PB-SEC-4: screenshots, screen
         // recording and the recents thumbnail are all allowed, and the gate that used to
-        // require FLAG_SECURE here now requires its absence.
+        // require the secure-window flag here now requires its absence. See [SecureWindow].
 
         // The ledger is the APPLICATION's, not one of this screen's. It is what every
         // InvalidationEvent clears, so a per-use prompt left in flight by a screen lock is

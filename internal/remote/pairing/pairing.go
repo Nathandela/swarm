@@ -49,6 +49,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
@@ -508,6 +509,39 @@ func sendConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTr
 	return rt.Send(ctx, frame)
 }
 
+// abortSendWindow bounds the detached abort send below. It is a LIVENESS bound, not a
+// protocol timeout: one small frame on a socket that is already open needs milliseconds,
+// and the only reason to wait at all is that the peer may be gone in a way the kernel has
+// not noticed yet, where a write buffers rather than failing. Past this the device stops
+// trying and returns its operator's answer, which is what they are waiting on.
+const abortSendWindow = 2 * time.Second
+
+// abortConsent sends the zero-length msg4 abort on a context DETACHED from the caller's
+// (ADR-007 B64).
+//
+// The frame exists to unpark a machine sitting in recvConsent, and on a shipped phone the
+// ONLY way this device reaches an abort is that very ctx being cancelled: mobile's
+// DeviceSAS closure returns nil or ctx.Err() and nothing else, RejectSAS and Cancel both
+// go through cancelHandshake(), and the 60 s pairingTTL is a deadline on the same ctx.
+// Sending on it therefore sent nothing — a relay Send passes the caller's ctx straight to
+// ws.Write, which fails outright once it is done — so the one frame that answers the
+// machine was the one frame that could never leave.
+//
+// WithoutCancel rather than Background: the values on the pairing ctx stay, only the
+// cancellation is dropped. And a TIMEOUT on top, because the usual reason that ctx is dead
+// is that the peer went away — against a socket whose peer is gone but whose FIN never
+// arrived, a write blocks until the send buffer fills, and an abort that hangs the phone
+// is no better than one that is never sent.
+//
+// Best-effort by construction: the machine's own deadline is the fence that does not
+// depend on this frame arriving, because on the reject path cancelHandshake() has already
+// CloseNow()'d the socket underneath us and no context can revive it.
+func abortConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport) {
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortSendWindow)
+	defer cancel()
+	_ = sendConsent(sendCtx, sess, rt, nil)
+}
+
 // recvConsent reads msg4 and opens it under the authenticated transport. A frame that
 // does not decrypt is an error; a frame that decrypts to nothing is the device's abort,
 // which the caller distinguishes by length.
@@ -662,7 +696,7 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// is minted once per install.
 	if p.DeviceSAS != nil {
 		if err := p.DeviceSAS(ctx, sas); err != nil {
-			_ = sendConsent(ctx, sess, rt, nil) // an ANSWERED refusal, not silence
+			abortConsent(ctx, sess, rt) // an ANSWERED refusal, not silence
 			return nil, err
 		}
 	}
@@ -673,7 +707,7 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// the device was configured for, which on a photographed QR is not the one on the wire.
 	consent, cErr := p.Consent(machPayload)
 	if cErr != nil || len(consent) == 0 {
-		_ = sendConsent(ctx, sess, rt, nil)
+		abortConsent(ctx, sess, rt)
 		if cErr != nil {
 			return nil, fmt.Errorf("pairing: sign relay-route consent: %w", cErr)
 		}
