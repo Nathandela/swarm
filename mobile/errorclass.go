@@ -295,7 +295,16 @@ func stampErrorClass(err error) error {
 	case errors.Is(err, relay.ErrQuotaExceeded):
 		return classed(ErrClassRateLimited, err)
 	case errors.Is(err, crypto.ErrStaleSeq), errors.Is(err, relay.ErrNotAuthorized),
-		errors.Is(err, relay.ErrDuplicateConnection):
+		errors.Is(err, relay.ErrDuplicateConnection),
+		errors.Is(err, relay.ErrTimeout), errors.Is(err, relay.ErrConnClosed):
+		// THE TWO ENDINGS OF ONE OUTAGE, and they must not reach different screens. A relay
+		// that answers nothing fails the call with relay.ErrTimeout (relay.DefaultCallTimeout);
+		// the same outage noticed a moment later, once the socket is torn down, fails it with
+		// relay.ErrConnClosed. Which one a given call gets is a race between its own deadline
+		// and the reconnect loop dropping the client. Neither is the app's fault and neither
+		// has a user action beyond waiting, so both are the transport class -- ErrClassInternal
+		// would tell a user with a bad link to file a bug report, and would do it
+		// intermittently.
 		return classed(ErrClassOffline, err)
 	}
 	return classed(ErrClassInternal, err)

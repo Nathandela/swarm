@@ -44,6 +44,28 @@ var (
 	ErrConsentRetired = errors.New("relay: this pairing's route consent has been retired; pair the device again")
 	// ErrConsentMalformed refuses a credential that is not a consent at all.
 	ErrConsentMalformed = errors.New("relay: malformed route consent")
+
+	// ErrTimeout reports an exchange that reached its deadline with no reply. It is
+	// the relay ANSWERING NOTHING -- distinct from every refusal above, which are
+	// answers -- and it is what a caller sees instead of parking forever when the
+	// relay completes the handshake and then goes quiet (DefaultCallTimeout).
+	//
+	// IT IS NOT A REFUSAL AND MUST NOT BE TREATED AS ONE. The relay writes its reply
+	// AFTER it stores the item, so a timed-out append may well have committed:
+	// remotegw.ClassifyAppend leaves it in AppendUnknown, where re-appending the
+	// IDENTICAL sealed envelope is the only safe retry.
+	ErrTimeout = errors.New("relay: the relay did not answer within the call deadline")
+
+	// ErrConnClosed reports a connection that died underneath a caller. The underlying
+	// network error is not propagated: every caller's response is the same (the
+	// connection is gone), and a resilient one reconnects.
+	//
+	// IT IS EXPORTED SO THE PHONE CAN CLASS IT (mobile/errorclass.go). It was reachable
+	// by any call racing a drop -- the ordinary end of a mobile outage -- and, being
+	// unexported, matched no arm of the phone's classifier and landed in the class whose
+	// remedy is "report a bug". It is the same user-visible condition as ErrTimeout and
+	// must not depend on which of the two won the race.
+	ErrConnClosed = errors.New("relay: connection closed")
 )
 
 // wire error codes. The client maps a received code back to the sentinel above.

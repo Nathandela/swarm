@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -92,6 +94,12 @@ type Conn struct {
 	waitID  uint64
 	waitCh  chan waitReplyBody
 
+	// callTimeout bounds ONE request/reply exchange (see roundtrip). Zero means
+	// unbounded and is deliberate on a raw connection: rendezvous_recv is a long
+	// poll for a human-paced ceremony, and the pairing caller declares its own
+	// deadline (mobile/pairing.go's pairingTTL).
+	callTimeout time.Duration
+
 	done      chan struct{}
 	doneOnce  sync.Once
 	closeOnce sync.Once
@@ -105,10 +113,28 @@ type pumpedFrame struct {
 	err     error
 }
 
-// errConnClosed reports a connection that died underneath a caller. The
-// underlying network error is not propagated: every caller's response is the
-// same (the connection is gone), and a resilient one reconnects.
-var errConnClosed = errors.New("relay: connection closed")
+// DefaultCallTimeout bounds one authenticated request/reply exchange.
+//
+// IT EXISTS BECAUSE SILENCE IS THE RELAY'S CHEAPEST ATTACK. The relay is the declared
+// adversary and it need not misbehave to wedge a client: it can complete the websocket
+// handshake, accept every frame, and reply to none. roundtrip holds c.mu across
+// write-then-read and readFrame waits on the socket, so ONE unanswered exchange used to park
+// every producer on the connection -- with no error, no state change and nothing to retry.
+// A half-open TCP after a WiFi -> cellular handoff presents identically, so this is reached
+// benignly as well as adversarially.
+//
+// THE SAME BOUND THE GATEWAY ALREADY APPLIES TO THIS CLIENT, and for the same argument:
+// remotegw's defaultAppendTimeout ("an UNBOUNDED append against a hung relay would pin that
+// lock forever and wedge every producer AND Err()", Blocker 2). What that fixed was one
+// caller; this fixes the client, so a call site nobody audited -- and every call site the
+// phone has, which all pass context.Background() -- inherits the bound rather than the wedge.
+//
+// FIVE SECONDS is the same number, and it is generous by two independent measures: PB-NET-5
+// budgets 150 ms p50 for a round trip, and the slowest thing the relay does inside one is
+// push_trigger's one-second verdict wait. It is also the phone's existing unit of patience
+// (App.awaitConn waits five seconds for a connection). Shorter would reconnect on a merely
+// slow link; longer is time a user spends watching a keyboard that does nothing.
+const DefaultCallTimeout = 5 * time.Second
 
 // dialConn opens one websocket. hc is the dial client a security policy built
 // (nil for the policy-free paths, which take the websocket package's default).
@@ -125,6 +151,12 @@ func dialConn(ctx context.Context, url string, hc *http.Client, pumped bool) (*C
 	cctx, cancel := context.WithCancel(context.Background())
 	c := &Conn{ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
 	if pumped {
+		// PUMPED IS THE AUTHENTICATED DIAL (Dial, DialSecure), and it is the whole of the
+		// bounded surface: every exchange on it is a short request/reply, and the one
+		// operation that legitimately parks -- MailboxWait -- does not go through roundtrip
+		// at all. A RAW connection is left unbounded because its rendezvous_recv is a
+		// deliberate long poll (see the callTimeout field).
+		c.callTimeout = DefaultCallTimeout
 		c.frames = make(chan pumpedFrame, 1)
 		go c.pump()
 	}
@@ -254,7 +286,7 @@ func (c *Conn) readFrame(ctx context.Context) (MsgType, []byte, error) {
 	case f := <-c.frames:
 		return f.tag, f.payload, f.err
 	case <-c.done:
-		return 0, nil, errConnClosed
+		return 0, nil, ErrConnClosed
 	case <-ctx.Done():
 		return 0, nil, ctx.Err()
 	}
@@ -303,6 +335,10 @@ func (c *Conn) Close() error {
 // roundtrip writes one request frame and reads exactly one reply, mapping an
 // r_error reply to its sentinel error.
 //
+// It runs under the connection's call deadline (DefaultCallTimeout on an
+// authenticated connection), so a relay that answers nothing fails the call
+// instead of parking it.
+//
 // A caller that abandons its reply (context deadline or cancellation) leaves the
 // exchange outstanding rather than tearing the connection down; the next caller
 // discards the replies owed to those abandoned requests before claiming its own,
@@ -312,16 +348,26 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 	if err != nil {
 		return nil, err
 	}
+	// THE DEADLINE IS TAKEN BEFORE THE EXCHANGE LOCK, and that ordering is the difference
+	// between bounding one call and bounding the plane. c.mu is held across write-then-read,
+	// so a caller queued behind one that is waiting out its own deadline would otherwise
+	// start its clock only once it acquired the lock -- and K queued callers would serialise
+	// into K deadlines. Bounded from issue, every caller returns within one deadline of when
+	// IT was issued, whatever is ahead of it: the caller that inherits an already-expired
+	// context fails at the write, before it can spend a frame on a relay that is not
+	// answering.
+	ctx, cancel := c.bounded(ctx)
+	defer cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.writeFrame(ctx, tag, body); err != nil {
-		return nil, err
+		return nil, c.callErr(err)
 	}
 	c.pending++
 	for {
 		rtag, payload, err := c.readFrame(ctx)
 		if err != nil {
-			return nil, err
+			return nil, c.callErr(err)
 		}
 		c.pending--
 		if c.pending > 0 {
@@ -332,6 +378,56 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 		}
 		return json.RawMessage(payload), nil
 	}
+}
+
+// bounded applies this connection's call deadline to ctx. A connection with no
+// deadline of its own (a raw one) returns ctx untouched, so its long poll stays a
+// long poll.
+//
+// The caller's own deadline still wins when it is EARLIER: context.WithTimeout
+// never extends an existing one, so a caller that wants a tighter bound has one
+// and a caller that passes context.Background() -- which is every phone call site
+// -- gets this.
+func (c *Conn) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.callTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.callTimeout)
+}
+
+// callErr names a failed exchange in terms a caller can route on.
+//
+// IT MUST BE RECOGNISABLE, not merely non-nil. The phone routes errors by Go identity
+// (mobile/errorclass.go) and shows the user the class it lands in; an identity nothing matches
+// falls into the class whose remedy is "report a bug", which is the wrong thing to tell
+// someone whose link is bad.
+//
+// ONE OUTAGE HAS THREE ENDINGS and a caller must not have to know which it got. A relay that
+// stops answering ends the call as this deadline (ErrTimeout); the reconnect that follows
+// closes the connection underneath any call still in flight, which surfaces either as
+// readFrame's ErrConnClosed or as a RAW socket error from the write ("use of closed network
+// connection"), depending on how far the teardown had got. The third was the one nobody had
+// seen: it is a foreign identity, so it matched no arm anywhere and was reported to the user
+// as an app bug -- intermittently, since which arm wins is a race. An exchange that failed
+// while its own connection was being torn down is the connection being gone, so it is named
+// that, matching what readFrame has always returned for the same condition.
+//
+// The wrapped chain keeps context.DeadlineExceeded reachable, so callers already testing for
+// it are unaffected. Cancellation is deliberately NOT rewritten: a caller that cancelled its
+// own call knows why, and calling that a timeout would report the app's own shutdown as a
+// network fault.
+func (c *Conn) callErr(err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrTimeout, err)
+	case c.ctx.Err() != nil, errors.Is(err, net.ErrClosed):
+		// The connection's own context is cancelled by Close/CloseNow BEFORE the socket is
+		// torn down, so it covers the whole teardown window rather than the instant after it.
+		// The underlying error is not propagated, for the reason ErrConnClosed states: every
+		// caller's response to it is the same.
+		return ErrConnClosed
+	}
+	return err
 }
 
 // control issues a generic MsgRelay control op with a JSON body.
@@ -631,7 +727,7 @@ func (c *Conn) mailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, er
 		c.cancelWait(id)
 		return nil, false, fmt.Errorf("relay: mailbox wait cancelled: %w", ctx.Err())
 	case <-c.done:
-		return nil, false, errConnClosed
+		return nil, false, ErrConnClosed
 	}
 }
 
