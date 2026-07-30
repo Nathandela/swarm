@@ -148,8 +148,14 @@ func TestS14_APermanentCustodyRefusalIsTerminalAndStopsRetrying(t *testing.T) {
 
 	// TERMINAL. Two observation windows rather than one: the first lets any dial already in
 	// flight when the state flipped finish, so this measures the loop's steady state and not a
-	// race. reconnectDelay is 250 ms, so a still-retrying loop makes about four attempts in the
-	// second window and the assertion is nowhere near its own tolerance.
+	// race.
+	//
+	// THE MARGIN DOES NOT REST ON THE RETRY CADENCE AT ALL, which is why this test survived
+	// PB-NET-4 replacing a fixed 250 ms delay with section 6.0's growing backoff (ADR-007 B118).
+	// The guarantee is that App.run RETURNS on ErrKeyInvalidated rather than continuing: the
+	// goroutine exits, so there is no loop left whose timing could matter. The old comment here
+	// counted retries in the window, which was already reasoning about the wrong thing before
+	// the cadence changed underneath it.
 	time.Sleep(300 * time.Millisecond)
 	before := h.Custody.Unwraps("wake")
 	time.Sleep(1 * time.Second)
