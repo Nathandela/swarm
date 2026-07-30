@@ -3562,3 +3562,134 @@ claim that it had been checked was not.
 
 **Verdict: REVISE.** Round 4 does not reach agreement, and the disagreement is substantive rather
 than procedural.
+
+---
+
+### B70 — round 4's threat review: three unauthenticated criticals, and the root under all of them
+
+The threat reviewer worked in a tar copy and left the repo unmodified. Everything below is marked
+RAN unless noted. It subtracts B66 and B69 rather than re-deriving them.
+
+**THE ROOT, stated once because the individual fixes keep re-encountering it:** C1, H1, M4 and
+B69(4) all rest on **a fresh routing id being free**. Registration is open and unmetered, so every
+per-identity bound is a bound on nothing. Fixing them one at a time treats symptoms; a cost on
+registration is the structural answer and is recorded here as a production requirement rather than
+attempted piecemeal.
+
+**B70-C1 — CRITICAL. `token_register` is an unbounded attacker-chosen durable write that bricks
+the relay AT BOOT.** No length or format check on `req.Token` (`server.go:1011-1033`); the only
+bound is `MaxFrame` = 1 MiB. `meterOp` keys by `"rid:"+rid`, so a fresh identity per call gets a
+fresh window and the op limit does not bind at all. Measured: 20 identities x 1,044,480-byte token
+took `relay.db` from 32,768 to 36,679,680 bytes — **~1.79 MiB/call, ~1 GiB/min, ~1.5 TB/day from
+one IP.** That is ~20x B61's declared ship blocker with a strictly *cheaper* precondition: no
+consent signature, no pairing, no victim.
+
+**The disk is the lesser half.** `loadTokens` hydrates the ENTIRE tokens bucket into a map at
+construction, deliberately fail-closed; a restart resident-loaded 19.9 MiB from 20 rows. Fill the
+store and **the relay OOMs on every start — a crash loop whose only recovery is deleting
+`relay.db`, which destroys every legitimate pairing edge, consent and token.** B61's own note that
+"the pair of rules makes the durable footprint a constant the relay picked" has no analogue in
+`bucketTokens`, one bucket away.
+
+**B70-C2 — CRITICAL. One unauthenticated connection permanently occupies the rendezvous table.**
+`handleRendezvousCreate` overwrites `sc.rdvID`/`sc.rdvInbox` without detaching the previous slot,
+and `removeConn` detaches only the LAST id. Measured: one connection took 64 of 64 slots, a
+legitimate `rendezvous_create` was refused `quota_exceeded`, and **after the squatter disconnected
+64/64 slots remained occupied.** `purgeExpiredRendezvous` runs only inside
+`handleRendezvousCreate`, never in `runSweeps`. At shipped defaults two sources saturate the table
+and **no phone on that relay can pair.** No authentication required.
+
+**B70-C3 — CRITICAL. A connection parked in `rendezvous_recv` is immortal.** `readFrame` waives
+the cumulative handshake deadline when `sc.rdvID != ""`, and `handleRendezvousRecv` has neither
+`meterOp` nor a ceiling. Measured: the parked connection outlived 4x the handshake deadline and
+survived its slot ageing out. `mailbox_wait` goes to real trouble to be bounded; this does not.
+
+**B70-H1 — HIGH. `handlePresence` has NO authority check, and this is a Phase-1 finding with a
+prescribed one-line fix that has survived four rounds.** Every other verb touching another's route
+goes through a store predicate — `mayActOn` for append and push, `isPairer` for revoke. Presence
+goes through nothing. Measured: an identity minted seconds earlier and paired with nobody read
+"online" for a machine it has no edge to, and a never-seen routing id read "unknown" — **an
+existence oracle as well as a liveness one.** `remote-phase1-relay-review.md:141` records it with
+the fix; ME-1 from the same list landed and this did not. A QR photographer who FAILED the SAS
+keeps the machine's relay-auth pubkey and polls the owner's laptop-awake schedule indefinitely.
+
+**B70-H2 — HIGH. `SweepPresence` pushes are charged against no rate window.** `pushRate` guards
+only `handlePushTrigger`. Measured with `PushPerMin=1`: 12 presence flaps produced 12 delivered
+pushes. **The relay decides when a machine's socket drops, so the relay can drive unbounded
+high-priority FCM wakes at the owner's handset** — battery, notification churn, the owner's FCM
+quota — while looking like nothing worse than an unreliable network. Not conceded anywhere.
+
+**B70-Q1 — what the relay learns, and one item defeats the two-tier design on SHAPE.**
+
+- **The wake carries a monotonic counter in cleartext.** `metadata-disclosure.md` §2 names three
+  leaks in the obvious implementation, records that B20 zeroed the key ids, and concludes "Size:
+  constant 78 bytes. Carries no information." **The counter was never fixed.** Measured with a
+  keyless reader: type, epoch, seq (1/2/7/4096) and `issued_at` all cleartext at fixed offsets. Two
+  wakes tell an observer exactly how many it missed. The document's own sentence identifies the
+  leak and the fix stopped one bullet short.
+- **The wake path distinguishes content-bearing from content-free BY SHAPE.** The relay has two
+  push producers. Measured into one sink: 78 bytes (gateway wake), **0 bytes (`SweepPresence`,
+  `server.go:1556` — no envelope at all)**, 4096 bytes (`push_trigger` applies no schema). The
+  0-byte push ships in normal operation and means one specific thing: *the machine went silent*.
+  **So the provider separates the two wake kinds without touching crypto — the exact defeat the
+  two-tier key design exists to prevent.** The fence pinning the claim
+  (`TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize`) pins the GATEWAY's envelope and
+  **structurally cannot observe the relay's other producer** — residual 4.10's class again.
+- **Size leaks plaintext length exactly.** No padding anywhere: envelope = plaintext + 78, always.
+  Conceded in §1, so a documented residual rather than a new hole — flagged because the brief's
+  "learns nothing useful" is a stronger claim than the project's own, and the project's is honest.
+- **The content path carries a second stable endpoint identifier.** `RecipientKeyID`/`SenderKeyID`
+  are zeroed only on the wake path; on the mailbox path both are cleartext. `KeyID` is SHA-256 of a
+  pinned X25519 key — stable for the pairing's life and **independent of the routing id**, so a
+  relay that rotated routing ids would still relink the same endpoints. Not in the §1 table.
+
+The reviewer found nothing letting the relay read plaintext or forge a command, and marks the
+confidentiality core **READ, not measured** — no forgery test was written.
+
+**B70-Q2 — silence-as-truth has more than two instances, and the deepest is structural.**
+
+- `handleRendezvousSend` lies on TWO triggers: the detached peer (B61(5)) **and a full 16-slot
+  inbox** — measured, 25 frames accepted with `replyOK`, 9 silently dropped. The second is
+  non-adversarial.
+- **PB-PAIR-4 fails in BOTH orientations from an ordinary clock.** B69(2) is phone-pinned /
+  machine-unenrolled. The mirror was measured: the phone's ctx expiring between `sendConsent` and
+  the decision `Recv` leaves **machine ENROLLED, phone UNPINNED**. The machine's single-device slot
+  is spent, the phone's retry is refused "a device is already paired", and recovery is desktop-only
+  — **a hostile relay forces it on every attempt, burning a manual revoke each time.** Structural
+  cause: **msg4 is the last frame either side sends, so the accept is unacknowledged by
+  construction.** No comment fixes this; it needs a fifth frame or deferred enrolment.
+- **Tail truncation is undetectable, and this is the deepest instance.** `MailboxReceiver.Accept`
+  sets `Gap` only when a LATER seq arrives (`envelope.go:266`). Measured: deliver 1,2,3 then stop —
+  `Gap=false` throughout and the receiver gets **no signal of any kind, ever.** Withholding 4..8 IS
+  caught, but only when 9 arrives. **So the relay can permanently censor the NEWEST commands or
+  events — a kill, a `take_control_end` — and neither end has anything to notice with.** There is
+  no signed high-water mark to compare against.
+
+**B70-R — refutations, which are as valuable as findings.**
+
+- **B62(5)'s shape does NOT reproduce on `device_revoke`.** The comment is still a caller-survey
+  argument, but the gate is now structural: a phone cannot become the machine's pairer without the
+  MACHINE's relay-auth signature over the consent, and every use of `RelayAuthSign` in the tree is
+  the connection challenge. A fourth verb of that shape was looked for and not found — presence
+  (H1) has **no** guard rather than a wrong one.
+- **B61's cap cannot be weaponised.** 200 stranger pairings left the victim's bucket untouched;
+  the pairer reached the cap at exactly 64, `device_revoke` at the cap succeeded, and the next
+  pairing was accepted. In the shipped flow the cap is unreachable at all, because a second pairing
+  is refused while a device is registered, so every re-pairing is revoke-first. **B69(4) is
+  confirmed as growth, refuted as a weapon.**
+- **msg4 outside the SAS transcript is SOUND** — the channel binding is byte-identical before and
+  after, captured at `establish()`. What it does mean is that **the SAS attests nothing about the
+  accept/decline exchange**, which is why the half-pair is invisible to both operators.
+
+**B70-M — doc defects in SHIPPED evidence.** §2's "carries no information" is false twice over and
+PB-PUSH-3 is counted shipped against it. §3 describes a system that no longer exists — it says the
+gateway and façade dial with the insecure entry points "recorded as an open finding", and all three
+are now `DialSecure`/`DialRawSecure`; PB-OPS-3 is shipped against that file and **two operator docs
+in the same directory now contradict each other on a security property.** `server.go:904-907` still
+describes `mayActOn` as having an "or has authorized nobody at all" clause that `store.go:531-538`
+argues at length was deleted so it "cannot come back to life silently" — the call site is where it
+would.
+
+**Verdict: REVISE.** Closed test on an owner-operated relay is conditionally acceptable **only if
+the relay port is not exposed to the internet** — C1 alone lets any scanner brick it, and the
+recovery destroys the pairings the test exists to exercise.
