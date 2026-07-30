@@ -6974,3 +6974,38 @@ gets shorter, for free.** The two locations were never exclusive; only one of th
 so `b806444` moved the four `Dial*` functions from caller-bounded to client-bounded **with no edit to
 the fence**, and their call sites correctly stopped owing a deadline. Had this file transcribed the
 remedy its author preferred, it would now be red against the tree the committee ruled correct.
+
+---
+
+## B123 — I deleted three NOT MET rows with a range edit and did not notice for an hour
+
+**2026-07-31.** B119 replaced three obsolete `NOT_MET` reasons. The helper replaced everything
+**between** a key and the next named key — and **the three `PB-BIND` rows B116 had inserted an hour
+earlier sat inside one of those ranges.** `PB-BIND-3`, `PB-BIND-4` and `PB-BIND-6` were silently
+deleted, and the count went from **131 to 134** while I reported 131 in the round-7 synthesis.
+
+**Nothing failed.** The script ran, the file regenerated, the manifest checker passed, and the summary
+table showed a different number than the document I had just published. **The generated artifact
+disagreed with the synthesis and neither one could tell.**
+
+Caught by looking at the count after an unrelated commit and not recognising it. **Restored, and the
+file reads 131 of 144, 11 NOT MET, as the synthesis says.**
+
+> **The mechanism is one I have already recorded against myself twice** — a regex over-match broke
+> this same script twice in an earlier round, and a bare `git commit` swept 3,318 lines of a peer's
+> staged deletion (B103). **All three are the same error: an edit whose extent is defined by
+> something other than what I intended to change.** A range between two anchors, a pattern that
+> matches more than it names, an index that takes whatever is staged.
+>
+> **The fix is the same in all three cases and I keep not applying it: bound the edit by what it is
+> for, and verify the extent after.** `git show --stat` after a commit. The key list after a dict
+> edit. I now run the first and did not run the second.
+
+**Why it survived an hour:** the round-7 synthesis states 131 as prose, and the generated file is the
+authority. **Nothing cross-checks a synthesis against the artifact it summarises** — the same class as
+B97's unarmed strict mode and B119's own fossil reasons, arriving a third time in the same session, in
+the artifact I use to report this project's state.
+
+**Recorded rather than quietly fixed** because the count is this audit's headline number, it was wrong
+in the optimistic direction, and it was wrong because of an editing accident rather than a judgement.
+**A count that moves without a finding behind it is the thing this entire record exists to prevent.**
