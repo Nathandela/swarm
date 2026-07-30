@@ -75,10 +75,10 @@ you are deferring:
   (`PB-PUSH-9` was on this list and is now MET again — refusing self-consent restored the
   push-token deletion that a self-edge had disabled.)
 
-### DO NOT EXPOSE THE RELAY PORT TO THE INTERNET
+### The relay: the boot-bricking defect is FIXED, but keep it private anyway
 
-**This is the most important operational line in this document.** Measured by a round-4 threat
-reviewer, recorded as ADR-007 B70-C1.
+**FIXED as of ADR-007 B70** (commit `8861488`), mutation-verified in both halves. What follows is
+what was wrong, and why the recommendation below still stands.
 
 `token_register` accepts an attacker-chosen token with **no length check** — the only bound is the
 1 MiB frame limit. The per-identity rate limit does not bind, because minting a fresh identity is
@@ -94,12 +94,21 @@ Two more unauthenticated defects sit beside it (B70-C2, B70-C3): one connection 
 entire rendezvous table **and keeps the slots after disconnecting**, so two sources mean no phone
 can pair at all; and a connection parked mid-pairing has no deadline, no quota and no accounting.
 
-**Until these are fixed and fenced, run the relay bound to localhost or inside a private network
-(Tailscale, WireGuard, an SSH tunnel) reachable only by your testers' devices.** A port scanner
-finding it can brick the exact thing the closed test exists to exercise.
+All five are now fixed and fenced: the token is length-bounded on **both** the write path and the
+boot path (a disk bound alone would have left the OOM), rendezvous slots are released on disconnect
+and reclaimed without needing a further create, a parked connection is bounded and metered,
+presence answers `unknown` to a stranger, and the presence sweep charges its pushes against the
+push window.
+
+**Run it on a private network anyway for the closed test** — localhost, Tailscale, WireGuard or an
+SSH tunnel. Not because of these five, but because of what the committee found underneath them:
+**every per-identity bound in the relay is a bound on nothing, since minting an identity is free.**
+One connection was measured leaving 6,000 permanent rows with every existing limit respected
+throughout. Global per-bucket caps and connection-rate admission control are recorded as production
+blockers and are **not** done.
 
 Also worth doing while testing: **alarm on `relay.db` size.** Unexpected growth is the first
-symptom of every defect in this class, and there have been four.
+symptom of every defect in this class, and there have been five.
 
 ### The other relay items — **FIXED (ADR-007 B61), with one caveat**
 
