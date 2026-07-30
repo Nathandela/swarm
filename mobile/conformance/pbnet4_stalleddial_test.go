@@ -27,18 +27,13 @@ package conformance_test
 // suppressed while its state write stayed correct, and a phone that recovers silently has
 // still told its user nothing.
 //
-// WHAT THIS FENCE DOES AND DOES NOT DISCRIMINATE, stated because two bounds now cover this
-// path and a reader is owed which one it is measuring. The property asserted is the
-// USER-VISIBLE one -- the handset retries and says so -- and it holds under WHICHEVER bound
-// fires first: App.dial's own caller-side context.WithTimeout, or relay.DefaultDialTimeout at
-// the dial boundary underneath it. Removing either one alone leaves this test green.
-//
-// That is not a gap in this file; it is the point of putting the bound at the boundary. A
-// caller-side deadline is a promise each caller has to remember to make -- and the two shipped
-// callers independently did not -- while the boundary bound is the one a caller that declares
-// nothing still inherits. The fence for the boundary itself is behavioural and lives where the
-// boundary does: internal/remote/relay/dialdeadline_test.go dials every exported constructor
-// with context.Background() and requires each to return.
+// WHAT THIS FENCE MEASURES, stated because it changed once. A caller-side bound was written at
+// App.dial during the same round and then REVERTED when the committee ruled the dial's missing
+// bound an OMISSION rather than a contract, fixable only at the boundary. While both existed
+// this test passed under either, and it says so here rather than leaving a reader to assume it
+// was always discriminating. App.dial now declares no deadline -- it hands relay.DialSecure the
+// generation's context, Start to Stop -- so what ends the dial below is relay.DefaultDialTimeout
+// inside dialConn, and unwiring that bound puts this test back to one arrival in 90 s.
 
 import (
 	"net/http"
