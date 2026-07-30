@@ -96,6 +96,15 @@ var errLateCancel = classed(ErrClassPairingFailed, errors.New(
 	"swarmmobile: the pairing completed before this was cancelled and the device is now paired; "+
 		"use revoke to undo it"))
 
+// errDifferentMachine is the durable commit REFUSING a machine this phone is not pinned to
+// (PB-PAIR-4). It travels as an error rather than as a state read off the outcome because the
+// refusal has to reach the wire: the commit runs before the acknowledgement, so returning it
+// here is what stops the frame the machine enrols on. finish maps it back to
+// pairDifferentMachine, which is the state the user's next move is keyed to.
+var errDifferentMachine = classed(ErrClassPairingFailed, errors.New(
+	"swarmmobile: this QR belongs to a machine other than the one this phone is paired to; "+
+		"nothing was pinned and the machine was not acknowledged"))
+
 // pairingTTL is how long the phone will wait on a rendezvous before declaring
 // rendezvous_timeout.
 //
@@ -434,6 +443,26 @@ func (p *Pairing) join(base context.Context) {
 		VerifyMachine: func(m pairing.MachinePayload) error {
 			return checkRelayPin(m.RelaySPKIPin, conn.PeerSPKI())
 		},
+		// PB-PAIR-4's DURABLE COMMIT, and the whole meaning of the acknowledgement this phone
+		// is about to send. It runs on the machine's authenticated acceptance and BEFORE that
+		// frame leaves, because the machine enrols on the frame: a phone that acknowledged
+		// first and wrote afterwards was attesting that the acceptance had ARRIVED, and a full
+		// disk, a read-only data directory, a Keystore refusal or an Android SIGKILL in the
+		// window that followed left the machine enrolled with remote control live while this
+		// phone held no pin at all -- the single-device slot spent, every further pairing
+		// refused, and a desktop revoke the only exit.
+		//
+		// THE DIFFERENT-MACHINE REFUSAL BELONGS HERE FOR THE SAME REASON, and it used to sit
+		// in finish() one frame too late. v1 is single-machine, so a QR from a machine other
+		// than the pinned one pins NOTHING -- but the acknowledgement had already gone out, so
+		// the machine on the other end enrolled a handset that had just refused it. The refusal
+		// has to reach the wire, and the only way it reaches the wire is by not acknowledging.
+		Commit: func(out *pairing.DeviceOutcome) error {
+			if app.differentMachine(out) {
+				return errDifferentMachine
+			}
+			return app.pin(out)
+		},
 		// The SAS gate: surfaced to the screen, then held until the operator has compared
 		// it against the machine's own display. Returning an error here fails the pairing
 		// CLOSED -- nothing is pinned.
@@ -460,26 +489,46 @@ func (p *Pairing) join(base context.Context) {
 // at the other end, a timeout is retried, an already-paired phone must be revoked first, and a
 // SAS mismatch is a suspected interception that must not be retried against the same attacker.
 func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Context) {
+	// LANDED IS DECIDED BEFORE ANYTHING ELSE, and it is a fact about the world rather than a
+	// choice this function makes. RunDevice commits durably before it acknowledges (PB-PAIR-4),
+	// so an outcome with no error is one whose durable effects are ALREADY on disk and whose
+	// machine has already been told. Nothing here can un-land it.
+	landed := err == nil && out != nil
+
 	p.mu.Lock()
 	// A state the USER already settled wins: RejectSAS and Cancel both tear the handshake
 	// down, so the error arriving here is the consequence of their answer, not a verdict of
 	// its own.
+	//
+	// UNLESS THE PAIRING LANDED, and PB-PAIR-4 is why: publishing `cancelled` over effects that
+	// are already durable, against a machine that is already enrolled, leaves the phone paired
+	// to a machine it believes it cancelled -- the half-paired state reached through the one
+	// verb that exists to prevent it. So the user's answer LOSES, and it loses VISIBLY:
+	// errLateCancel says the pairing completed and names the verb that undoes it. This is
+	// ADR-007 B58's ruling unchanged; what moved is where the write happens, so the guard that
+	// used to be re-asked after it is now asked once, here.
 	if p.state == pairCancelled || p.state == pairSASMismatch || p.state == pairOriginMismatch {
+		if landed {
+			p.state, p.err = pairPaired, errLateCancel
+		}
 		p.mu.Unlock()
 		p.persistState()
 		return
 	}
-	// next is DECIDED here and PUBLISHED after the durable write below, so no observer can
-	// read a terminal label while the effects it implies have not landed.
 	var next string
 	var failErr error
 	switch {
-	case err == nil && p.app.differentMachine(out):
-		// The handshake succeeded and authenticated a machine that is not the one this phone
-		// is pinned to. Nothing is pinned: the pairing the user had is left exactly as it was.
-		next = pairDifferentMachine
-	case err == nil:
+	case landed:
+		// The durable pin and the machine's enrolment both happened inside RunDevice, so no
+		// observer of this label can see a world where the effects have not landed (ADR-007
+		// B58) -- and there is no window left between the two in which they could disagree.
 		next = pairPaired
+	case errors.Is(err, errDifferentMachine):
+		// The handshake authenticated a machine that is not the one this phone is pinned to.
+		// The commit refused it, so nothing is pinned AND nothing was acknowledged: the pairing
+		// the user had is left exactly as it was, and the machine at the other end claims
+		// nothing either.
+		next = pairDifferentMachine
 	case errors.Is(err, pairing.ErrPairingDeclined):
 		next = pairDeclined
 	case errors.Is(err, pairing.ErrRateLimited):
@@ -494,59 +543,20 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	case ctx.Err() != nil:
 		next = pairCancelled
 	default:
+		// A REFUSED WRITE IS NOT A PAIRING (ADR-007 B60), and it arrives here as
+		// pairing.ErrNotCommitted: the machine said yes and this phone could not remember it.
+		// The state is pairFailed rather than a value of its own because PB-PAIR-5's rule is
+		// that a state earns its own value when the USER'S NEXT MOVE differs, and here it does
+		// not: try the pairing again. What differs is the reason, and that rides on the error.
+		//
+		// It also keeps PB-PAIR-4's recovery record: persist() clears the durable attempt only
+		// for pairPaired and pairCancelled, so a failed write leaves the next launch able to
+		// explain itself.
 		next, failErr = pairFailed, err
 	}
-	// THE OUTCOME IS DECIDED HERE AND PUBLISHED BELOW, after the durable write (ADR-007
-	// B58). It used to be assigned to p.state at the top of this switch and the label was
-	// therefore visible while pin() had not yet run -- and every observer reads `paired` as
-	// "the effects have landed". The transport loop was the observer that acted
-	// destructively on it (B57); the ordering is wrong regardless of who is watching.
-	//
-	// p.mu IS NOT HELD ACROSS pin(). pin() takes the core lock and the app lock, and holding
-	// a third across both would order this package's locks against phonecore's for no reason
-	// the property needs: publishing after the write is what the property asks for, not
-	// publishing under the same lock as the write.
-	settled := p.state
-	p.mu.Unlock()
-
-	// A REFUSED WRITE IS NOT A PAIRING (ADR-007 B60). pin() reports whether the machine
-	// coordinates actually landed, and a publication that cannot tell a successful write
-	// from a refused one is the same defect as publishing before the write -- one step
-	// deeper. The state that goes out is pairFailed rather than a value of its own because
-	// PB-PAIR-5's rule is that a state earns its own value when the USER'S NEXT MOVE
-	// differs, and here it does not: try the pairing again. What differs is the reason, and
-	// that rides on the error.
-	//
-	// It also keeps PB-PAIR-4's recovery record, and that is not incidental: persist()
-	// clears the durable attempt only for pairPaired and pairCancelled, so a failed write
-	// leaves the next launch able to explain itself. Publishing `paired` here would have
-	// erased the one record that survives the process.
-	if next == pairPaired && out != nil {
-		if perr := p.app.pin(out); perr != nil {
-			next, failErr = pairFailed, classed(ErrClassPairingFailed, perr)
-		}
-	}
-
-	// The settled-state guard, RE-ASKED after the write, because the write is a window the
-	// user can act inside. Its answer differs from the one at the top of this function and
-	// PB-PAIR-4 is why: a pairing whose effects have landed is COMPLETE, so a Cancel arriving
-	// now cannot un-land them, and publishing `cancelled` over them would leave the phone
-	// pinned to a machine it believes it cancelled -- the half-paired state that requirement
-	// forbids. So the user's answer LOSES here, and it loses VISIBLY: pairErrLateCancel says
-	// the pairing completed and names the verb that undoes it.
-	p.mu.Lock()
-	if p.state != settled {
-		// Someone settled it while the write was in flight. The user's answer loses ONLY if
-		// the write landed: with nothing pinned there is no completed pairing to be too late
-		// for, so a cancel that raced a REFUSED write stands exactly as it would have.
-		if next == pairPaired && out != nil {
-			p.state, p.err = pairPaired, errLateCancel
-		}
-	} else {
-		p.state = next
-		if failErr != nil {
-			p.err = failErr
-		}
+	p.state = next
+	if failErr != nil {
+		p.err = failErr
 	}
 	p.mu.Unlock()
 

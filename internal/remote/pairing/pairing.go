@@ -100,6 +100,14 @@ var (
 	// It is not the same failure as a decline. A decline is an answer; this is the absence
 	// of one, and the only honest thing either name can carry is that nothing was pinned.
 	ErrAcceptUnacknowledged = errors.New("pairing: the device never acknowledged the acceptance; no device claimed (PB-PAIR-4)")
+	// ErrNotCommitted is the device-side result when the acceptance ARRIVED and the device
+	// could not durably commit to it: DeviceParams.Commit refused. Nothing is acknowledged,
+	// so the machine claims nothing either and the two legs end the ceremony agreeing
+	// (PB-PAIR-4).
+	//
+	// It is distinct from ErrPairingDeclined for the same reason ErrAcceptUnacknowledged is:
+	// the machine said yes. What failed is this device's own ability to remember it.
+	ErrNotCommitted = errors.New("pairing: the device could not durably commit the acceptance; nothing acknowledged and nothing pinned (PB-PAIR-4)")
 )
 
 // RendezvousTransport is the pairing package's seam onto the relay rendezvous
@@ -173,6 +181,33 @@ type DeviceConsentFunc func(machine MachinePayload) ([]byte, error)
 // the relay's real certificate. That case belongs to the SAS gate and the deferred
 // consent (B52).
 type DeviceVerifyFunc func(machine MachinePayload) error
+
+// DeviceCommitFunc is the device's DURABLE COMMIT, and it is what the acknowledgement MEANS
+// (PB-PAIR-4). RunDevice invokes it exactly once, after the machine's acceptance has been
+// authenticated and BEFORE the acknowledgement is sent, with the outcome the device is about
+// to return. A non-nil error fails the pairing CLOSED: no acknowledgement leaves, so the
+// machine claims nothing.
+//
+// THE ORDERING IS THE REQUIREMENT, not an implementation detail. The machine no longer commits
+// on having sent its acceptance -- it waits to be told (ADR-007 B81(2)) and internal/skeleton
+// enrols on that acknowledgement -- so the machine's entire protection is what the frame
+// attests. Sent from a device that has not yet written anything, it attests only that a frame
+// arrived, and a full disk, a read-only data directory, a Keystore refusal or process death in
+// the window that follows leaves the MACHINE ENROLLED with remote control live while the phone
+// holds no durable pin, the single-device slot spent and a desktop revoke the only exit.
+//
+// It closes the orientation the send site below used to argue away rather than the one it
+// enumerated. Both remain possible -- this is still two generals -- but the residual now sits
+// entirely on the harmless side: a phone that has committed and whose acknowledgement is lost
+// leaves the machine claiming NOTHING, which spends no slot and is recovered by pairing again.
+//
+// A NIL FUNC IS A NO-OP, and that is the honest reading rather than a hole: it says this device
+// holds no durable state, so the commit is trivially complete before the acknowledgement leaves
+// and the frame's meaning is unchanged. The one device in this product that DOES hold durable
+// state is the phone, and mobile/pairing.go installs the pin here; that call site is fenced
+// end-to-end by mobile/conformance/pbpair4_durablecommit_test.go, which drives a real ceremony
+// with the phone's state directory unwritable and requires the machine to claim nothing.
+type DeviceCommitFunc func(outcome *DeviceOutcome) error
 
 // RateLimiter bounds pairing attempts on the gateway/machine side (R-PAIR.8; the
 // relay enforces its own independent limit). Allow returns false to refuse an
@@ -281,6 +316,7 @@ type DeviceParams struct {
 	DeviceSAS        DeviceSASFunc       // optional; surfaces the SAS before the decision (nil => no-op)
 	VerifyMachine    DeviceVerifyFunc    // optional; checks the authenticated msg2 payload (ADR-007 B48)
 	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg4
+	Commit           DeviceCommitFunc    // the durable commit the acknowledgement attests (PB-PAIR-4; nil => this device holds nothing durable)
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -956,28 +992,44 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 		return nil, ErrPairingDeclined
 	}
 
-	// ACKNOWLEDGE THE ACCEPTANCE BEFORE PINNING ON IT (PB-PAIR-4 / PB-SAS-4). The machine
-	// holds no device until this frame reaches it, so a phone that pins without sending one
-	// would leave the machine claiming a device the phone does not know about -- the
-	// orientation that spends the single-device slot and needs a desktop revoke.
-	//
-	// A FAILED SEND FAILS THE PAIRING CLOSED, and that is the cheap half of the two-generals
-	// split: where this device knows its acknowledgement did not leave, the machine will not
-	// have it either, so declining to pin is the two legs agreeing rather than a loss. Where
-	// the send REPORTS success and the frame is dropped anyway -- the relay does exactly that
-	// when the peer has detached or its inbox is full -- this phone pins and the machine
-	// claims nothing. That residual is irreducible, and it is the harmless orientation:
-	// re-pairing needs nothing from the desktop.
-	if err := sendAck(ctx, sess, rt); err != nil {
-		return nil, fmt.Errorf("pairing: acknowledge acceptance: %w", err)
-	}
-
-	// R-PAIR.7: pin the machine static + record its routing payload (incl. epoch).
-	return &DeviceOutcome{
+	// R-PAIR.7: the machine static + its routing payload (incl. epoch), which is what this
+	// device commits to below and returns.
+	out := &DeviceOutcome{
 		SAS:           sas,
 		MachineStatic: machineStatic,
 		Machine:       machPayload,
-	}, nil
+	}
+
+	// COMMIT DURABLY, THEN ACKNOWLEDGE (PB-PAIR-4). The order is the requirement: the machine
+	// enrols on the acknowledgement, so the frame has to attest a COMMIT and not the arrival of
+	// the acceptance. See DeviceCommitFunc for what the previous order left behind -- machine
+	// enrolled, remote control live, phone holding nothing -- and for why a nil Commit is a
+	// device with nothing durable to write rather than a hole.
+	//
+	// A REFUSED COMMIT FAILS THE PAIRING CLOSED WITH NOTHING SENT. That is the two legs
+	// agreeing: the machine is waiting to be told, is not told, and claims no device.
+	if p.Commit != nil {
+		if cErr := p.Commit(out); cErr != nil {
+			return nil, fmt.Errorf("%w: %w", ErrNotCommitted, cErr)
+		}
+	}
+
+	// ACKNOWLEDGE THE ACCEPTANCE (PB-PAIR-4 / PB-SAS-4). The machine holds no device until this
+	// frame reaches it, so a phone that committed without sending one would leave the machine
+	// claiming nothing while this device believes it is paired.
+	//
+	// A FAILED SEND STILL FAILS THE PAIRING CLOSED, and what that means has MOVED with the
+	// commit above rather than changed: where this device knows its acknowledgement did not
+	// leave, the machine will not have it either, so refusing to report a pairing is the two
+	// legs agreeing about the ceremony. What this device durably wrote a moment ago is the
+	// harmless residual -- it names a machine that claims nothing, spends no single-device
+	// slot, needs no revoke, and is overwritten by the re-pair the failure asks for. The same
+	// residual the send already had whenever it REPORTED success and the relay dropped the
+	// frame anyway, which it does when the peer has detached or its inbox is full.
+	if err := sendAck(ctx, sess, rt); err != nil {
+		return nil, fmt.Errorf("pairing: acknowledge acceptance: %w", err)
+	}
+	return out, nil
 }
 
 // decisionAccept / decisionDecline are the single-byte machine-side pairing

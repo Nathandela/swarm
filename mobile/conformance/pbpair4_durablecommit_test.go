@@ -178,9 +178,10 @@ func pbPair4AwaitPhoneFailed(t *testing.T, p *swarmmobile.Pairing) {
 		case "failed":
 			return
 		case "paired":
-			t.Fatalf("the phone reported `paired` with its state directory unwritable, so the " +
-				"durable pin this test must break SUCCEEDED. The injection did not land and " +
-				"every assertion in this test is vacuous.")
+			t.Fatalf("the phone reported `paired` with its state directory unwritable. Either " +
+				"the injection never reached the durable write -- in which case every assertion " +
+				"in this test is vacuous -- or a refused write was published as a completed " +
+				"pairing, which is the defect ADR-007 B60 closed.")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
