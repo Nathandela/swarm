@@ -56,13 +56,17 @@ import (
 // SEVER and later restore. It forwards bytes verbatim and decides nothing; cutting it models
 // the only thing the phone can actually observe about a gateway restart or a network
 // outage -- its own transport going away.
+//
+// It can also be SILENCED, which is the opposite failure and the harder one: the link stays
+// up, everything the phone sends is still accepted, and no reply ever comes back. See Silence.
 type cuttableRelay struct {
 	srv      *httptest.Server
 	upstream string
 
-	mu    sync.Mutex
-	cut   bool
-	conns []*websocket.Conn
+	mu     sync.Mutex
+	cut    bool
+	silent bool
+	conns  []*websocket.Conn
 }
 
 func newCuttableRelay(t *testing.T, upstream string) *cuttableRelay {
@@ -101,6 +105,11 @@ func newCuttableRelay(t *testing.T, upstream string) *cuttableRelay {
 				if err != nil {
 					return
 				}
+				// A SILENCED relay reads the reply and throws it away: the phone's socket is
+				// untouched, so there is nothing for it to observe (see Silence).
+				if cr.silenced() {
+					continue
+				}
 				if err := down.Write(ctx, mt, data); err != nil {
 					return
 				}
@@ -136,6 +145,25 @@ func (c *cuttableRelay) Cut() {
 	for _, conn := range conns {
 		_ = conn.CloseNow()
 	}
+}
+
+// Silence stops every reply reaching the phone, permanently, while leaving the connection UP
+// and still accepting everything the phone writes.
+//
+// It is NOT a weaker Cut, it is a different failure: a cut socket is an event the phone can
+// see (Conn.Done closes, the reconnect loop runs). A silent relay presents nothing to see --
+// which is exactly what the untrusted relay gets for free by doing nothing, and what a
+// half-open TCP after a WiFi -> cellular handoff looks like from the handset.
+func (c *cuttableRelay) Silence() {
+	c.mu.Lock()
+	c.silent = true
+	c.mu.Unlock()
+}
+
+func (c *cuttableRelay) silenced() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.silent
 }
 
 // Restore lets the phone reconnect.
