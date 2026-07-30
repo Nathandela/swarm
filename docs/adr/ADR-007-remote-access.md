@@ -4372,3 +4372,57 @@ that claim no hardware property.
 **Verdict: closed test YES on a private relay; production NO**, gated on B78's unresolved
 identity-cost root, PB-PAIR-4's protocol change, PB-SEC-2 pending the handset, PB-E2E-5 entirely,
 and the two "called by nothing" mechanisms being wired or re-scoped.
+
+---
+
+### B80 — the unbound-verb ledger was right and the traceability table contradicted it
+
+**Twelve of the 46 exported facade verbs have ZERO Kotlin callers** — `interrupt`, `resize`,
+`paste`, `presence`, `releaseControl`, `killSwitchEngaged`, `launch`, `resync`, `pendingOpCount`,
+`undeliveredInputs`, `clearUndeliveredInputs`, `isRunning`. Verified independently.
+
+**But the finding is not what it first looks like, and the difference matters: all twelve are
+already in `android/unbound-verbs.tsv`, each with a specific reason.** The ledger built after nine
+"called by nothing" defects is doing precisely its job. `App.Launch`'s row says *"MachineAndLaunch
+is the model, and the surface has no machine pane, no launch form and no session picker. Out of the
+scope ruling recorded in PhoneSurface's own header."* `App.Presence`'s row is a considered
+DECISION, not a gap — it is a blocking relay round-trip and the surface renders off an event
+stream, so calling it per redraw would issue an RPC per journal record.
+
+**The real defect is that two artifacts disagree.** The ledger says the launch surface does not
+exist. The traceability table said **PB-APP-6 is shipped**. Its acceptance criterion is *"UI +
+façade test"* — **a requirement whose acceptance names a UI cannot be met when the ledger records
+that no UI exists**, and S16's evidence claims "the façade half is `App.Launch`" as though testing
+each half in isolation settles a criterion about their join.
+
+**PB-APP-6 moves to NOT MET. 136 of 143.**
+
+**This bears on the binding exit criterion**, which is why it outranks a bookkeeping note: §1
+requires the system to demonstrate that a phone *"pairs, observes, **launches**, and types into a
+real session."* There is no path from a phone screen to launch today.
+
+**Why no gate caught it.** `PB-BIND-3`'s guards are bidirectional between `screen_coverage.tsv` and
+the **Go facade source** — they prove every screen element maps to an existing facade method and
+every method is traced, entirely inside the Go/TSV domain. **Nothing checks that Kotlin calls the
+method.** The unbound-verb ledger covers that seam, but nothing joins the ledger to the
+requirement's status, so a verb could be honestly recorded as unbound while its requirement read
+shipped. **Residual 4.20: two artifacts can both be correct and still contradict each other, and
+nothing in this project checks artifact against artifact.**
+
+**A near-miss on my side, recorded because it nearly cost a correct finding.** My first grep showed
+`launch` with 8 Kotlin call sites and I almost refuted the report. All eight are
+`ActivityScenario.launch(...)` — the Android test harness, not the facade. **The reviewer had
+guarded against exactly this by validating its method against known-wired verbs first; I did not,
+and my sloppier instrument produced the opposite answer.** Fifth time this round that checking
+beat asserting.
+
+**Also confirmed by the same reviewer, and it restores confidence:** PB-BIND-5's panic recovery
+looked thin at 2 raw `recover()` calls against ~90 entry points, and is genuinely satisfied — a
+shared `barrier(&err)` helper is installed as the first statement of every exported entry point,
+56 non-test call sites counted. It checked for the shared-helper pattern before filing, which is
+residual 4.19 applied correctly one round after it was written.
+
+**Coverage, stated honestly:** ~42 of 143 rows now independently re-derived; **~101 remain
+READ-only**. STATE, SYNC, PUSH, TIME, LIFE, TOK, SAS, GW and most of SEC and KEY are untouched by
+any deep pass. Given the base rate — nearly every re-derived tranche has produced a finding — **the
+count should be assumed still wrong.**

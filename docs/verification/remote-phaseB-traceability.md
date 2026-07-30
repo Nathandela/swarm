@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 137 |
-| Evidenced (measured on disk) | 137 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **5** |
+| Shipped (asserted by hand) | 136 |
+| Evidenced (measured on disk) | 136 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -51,7 +51,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-APP-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-4 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-5 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-| PB-APP-6 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-6 | S16 | **NOT MET** | acceptance is "UI + facade test" and there is NO UI: android/unbound-verbs.tsv records App.Launch as unbound because "the surface has no machine pane, no launch form and no session picker". The ledger is honest; this table contradicted it. Section 1's binding exit criterion is "pairs, observes, LAUNCHES, and types into a real session" (ADR-007 B80) |
 | PB-APP-7 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-8 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-9 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |

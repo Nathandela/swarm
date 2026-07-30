@@ -51,6 +51,12 @@ NOT_MET = {
                 "halves remain: same-operation supersession is inexpressible without a "
                 "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
                 "new biometric enrolment. Neither fix closes the other",
+    "PB-APP-6": "acceptance is \"UI + facade test\" and there is NO UI: "
+                "android/unbound-verbs.tsv records App.Launch as unbound because \"the "
+                "surface has no machine pane, no launch form and no session picker\". The "
+                "ledger is honest; this table contradicted it. Section 1's binding exit "
+                "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
+                "(ADR-007 B80)",
     "PB-NET-4": "the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same "
                 "queue as unbuildable in two places, production constructs NewOpQueue(0) "
                 "-- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own "
