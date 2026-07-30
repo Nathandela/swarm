@@ -4997,3 +4997,44 @@ sensitive.** Nobody had checked this before, in five rounds.
 the set of filenames that may appear under the phone's at-rest root**, so a fifth writer fails the
 enumeration instead of arriving silently. Not a seal — sealing a public URL and a ceremony label buys
 nothing. **It would have caught both of these on the day they landed.**
+
+---
+
+### B89 — PB-SEC-2's enrolment-change half is SETTLED: it fails closed, proven by running it
+
+B71(5) read this as *near-unexploitable* and **explicitly declined to certify it**, saying it had
+not run the code and asking not to be treated as certification. B83 carried it as one of three open
+halves. **It is now settled by execution rather than reading**, and the reviewer's read was right.
+
+**Two tests, both passing:** `TestPBSEC2_AnEnrolmentChangeLeavesEveryGatedOperationFailingClosed`
+and `TestPBSEC2_AnEnrolmentChangeIsStillFailedClosedAfterARestart`.
+
+**The mechanism, confirmed:** the same biometric enrolment change that lets the per-use gate key be
+dropped and re-minted **also destroys the content KEK**, which the custody bootstrap refuses to
+re-mint by design. Every gated operation needs the content tier to seal its command, so an attacker
+who enrols their own fingerprint gets a **green prompt for an operation that then fails closed** —
+and it stays failed closed **across a restart**, which is the case that would have made it a
+persistence bug rather than a transient one.
+
+**The tests are not vacuous, and the non-vacuity is the part worth recording.** A control arm proves
+a **healthy** phone succeeds at the same operations first, so the refusal is measuring the enrolment
+change rather than a broken fixture. And they assert more than refusal: **a phone that refused
+locally must also send NO command** — because a gate that refuses on screen while a command still
+reaches the machine is the real defect, and asserting only the refusal would have missed it.
+
+**So half (3) is a UX ordering defect, not an authorization bypass**: the user is asked for a
+fingerprint for something already impossible. **Re-graded, not closed** — PB-SEC-2 remains NOT MET
+on the two halves that are genuinely open:
+
+1. **Same-operation supersession** — two prompts for the same operation are indistinguishable at
+   `endPrompt`; RED is committed and failing, pinning the *property* (a callback resolves only
+   against the prompt that produced it) rather than a token design.
+2. **The 60-second foreground freshness has no production caller** — `InputFreshness.decide` is
+   unreached and no foreground timeout is installed, so an unlocked foreground session retains
+   shell-input authority indefinitely. RED committed and failing.
+
+**Process note.** This is the third time in this audit that a finding recorded from a code READ has
+been changed by someone running it — once downgraded (here), once upgraded (the log gate's
+regeneration workflow turned out to *attach an exoneration* to a leak), and once refuted outright
+(a residual claiming every process death re-armed a fail-closed brick). **The provenance marks are
+earning their cost.**
