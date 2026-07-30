@@ -146,36 +146,32 @@ func TestPBNET7_AStalledRendezvousDialDoesNotBurnThePairingSlot(t *testing.T) {
 	}
 
 	// ---- the second, on the SAME connection: the slot must be free ----------------------
+	//
+	// ONE read, not a loop: the first pair_start failed inside BeginPairing, before the
+	// handshake goroutine was ever launched, so no late pair_result can arrive to be skipped.
 	rc.write(start)
-	for i := 0; i < 8; i++ {
-		c, err := rc.readTry(stalledDialAnswerBound)
-		if err != nil {
-			t.Fatalf("no answer to the second pair_start within %v: %v",
-				stalledDialAnswerBound, err)
-		}
-		switch c.Op {
-		case protocol.OpPairStart:
-			if c.Pairing == nil || c.Pairing.QR == "" {
-				t.Fatalf("the second pair_start replied without a QR: %+v", c.Pairing)
-			}
-			return // the slot was released: the owner can pair again
-		case protocol.OpError:
-			if isPairingInProgress(c.Error) {
-				t.Fatalf("the second pair_start was REFUSED (%q).\n"+
-					"The connection's pairing slot is still held by the first pairing, whose "+
-					"rendezvous dial never returned, so BeginPairing never returned either and "+
-					"neither of clearPairing's two callers ran. There is no pair_cancel op: every "+
-					"later pair_start on this connection is refused the same way, and only "+
-					"dropping the owner connection escapes (ADR-007 B64)", c.Error)
-			}
-			// The second dial reaching the same silent relay and failing the same way is the
-			// SLOT being free, which is what this test is about.
-			return
-		default:
-			t.Fatalf("unexpected op %q while waiting for the second pair_start's answer", c.Op)
-		}
+	second, err := rc.readTry(stalledDialAnswerBound)
+	if err != nil {
+		t.Fatalf("no answer to the second pair_start within %v: %v", stalledDialAnswerBound, err)
 	}
-	t.Fatal("the second pair_start produced neither a reply nor a refusal within the frame budget")
+	switch {
+	case second.Op == protocol.OpPairStart:
+		if second.Pairing == nil || second.Pairing.QR == "" {
+			t.Fatalf("the second pair_start replied without a QR: %+v", second.Pairing)
+		}
+	case second.Op == protocol.OpError && isPairingInProgress(second.Error):
+		t.Fatalf("the second pair_start was REFUSED (%q).\n"+
+			"The connection's pairing slot is still held by the first pairing, whose rendezvous "+
+			"dial never returned, so BeginPairing never returned either and neither of "+
+			"clearPairing's two callers ran. There is no pair_cancel op: every later pair_start "+
+			"on this connection is refused the same way, and only dropping the owner connection "+
+			"escapes (ADR-007 B64)", second.Error)
+	case second.Op == protocol.OpError:
+		// The second dial reaching the same silent relay and failing the same way IS the slot
+		// being free -- it got as far as dialling, which a refused pair_start never does.
+	default:
+		t.Fatalf("unexpected op %q in answer to the second pair_start", second.Op)
+	}
 }
 
 // isPairingInProgress recognises the refusal the held-slot defect produces, so a test cannot
