@@ -1,67 +1,69 @@
 package gate
 
-// FAILING-FIRST (TDD RED, GG-5) tests for PB-SEC-4, slice S18:
+// PB-SEC-4, slice S18 -- INVERTED. The requirement as written was:
 //
 //	"FLAG_SECURE on pairing and terminal-peek screens; sensitive content excluded from recents."
-//	Criterion: "Window-configuration assertion."
+//
+// ADR-007 B65, ruled by the owner on 2026-07-26, WITHDREW it: the shipped app allows
+// screenshots and screen recording. This file no longer asserts the protection is applied. It
+// asserts the protection is ABSENT, and it is the same file rather than a deleted one.
 //
 // ============================================================================
-// READ THIS BEFORE READING THE ASSERTIONS: THERE IS NO WINDOW TO CONFIGURE.
+// WHY THIS FILE STILL EXISTS, WHICH IS THE WHOLE OF ITS VALUE.
 // ============================================================================
 //
-// android/app/src/main/AndroidManifest.xml declares an <application>, one <receiver> and one
-// <service>. It declares NO ACTIVITY. Every file under src/main/kotlin/.../ui/ is a pure
-// Kotlin model -- data classes, enums and functions returning them -- with no Activity, no
-// Compose setContent, no View and no Window anywhere in the module.
+// A requirement DELETED leaves nothing behind. A requirement INVERTED keeps the one property
+// the original actually bought -- that the app's screenshot posture is a DECISION and not
+// drift -- and points at the entry where the decision was made.
 //
-// So PB-SEC-4's criterion, "window-configuration assertion", HAS NO SUBJECT IN THIS TREE. That
-// is stated here, at the top of the file that owns the requirement, because the alternative is
-// the failure this slice was warned about twice over:
+// So the polarity is reversed and nothing else is. Reinstating FLAG_SECURE now FAILS, by name,
+// and that failure is how the next person to add it back -- for what will feel at the time like
+// an obvious security improvement -- is made to read ADR-007 B65 first. The argument they will
+// find there is that the flag is a compositor hint: not attested, no defence against a camera
+// pointed at the screen, and no defence against an accessibility service, which reads the
+// rendered screen regardless (android/input-path-limits.md, and PB-SEC-12's own gate says so
+// twice in prose). It stopped an app that could already screenshot and stopped nothing else,
+// while blocking users of a developer tool from sharing terminal output.
 //
-//   - a test that SKIPS when it finds no Activity reads as green, and an auditor concludes
-//     FLAG_SECURE is verified;
-//   - a test that iterates the (empty) set of Activities and asserts each one sets FLAG_SECURE
-//     PASSES, and is standing defect class (i) -- a guard that cannot fail -- and class (iii),
-//     a test passing because its subject does not exist.
+// WHAT THIS FILE DOES NOT TOUCH. PB-SEC-12 clause 1 -- filterTouchesWhenObscured on the
+// destructive and authorising controls -- is a different requirement against a different
+// attack, it has no screenshot clause, and B65 leaves it exactly as it was. Its gate is
+// android/gate/s18_sec12_uiredress_test.go.
 //
-// Both would be worse than a failure. So this file FAILS, loudly, and says what it is failing
-// about: not that FLAG_SECURE is set wrongly, but that the screens the requirement names do
-// not exist yet as windows, and nothing here can establish anything about their configuration.
-//
-// WHAT THE IMPLEMENTER CAN ACTUALLY DELIVER. Two coherent outcomes, and this file is written
-// so that either clears it:
-//
-//	(a) the Activity lands, applies FLAG_SECURE and the recents exclusion at a single named
-//	    sink, and the policy table below names every sensitive screen; or
-//	(b) the project records that PB-SEC-4 is BLOCKED on an Activity no slice has delivered,
-//	    in which case this test's failure is the record, and the slice owner decides whether
-//	    S18 grows an Activity or the requirement moves.
-//
-// It is (b) that must not be reached by accident, which is what the failure message is for.
-//
-// WHAT IS NOT CLAIMED. FLAG_SECURE is a platform hint that the compositor honours; it stops
-// screenshots, screen recording and the recents thumbnail. It does not stop a camera pointed
-// at the screen, and it is not attested. PB-E2E-5 stays deferred and nothing here touches it.
+// WHAT IS NOT CLAIMED. Nothing here is evidence about a physical handset; PB-E2E-5 stays
+// deferred. A source scan cannot prove the compositor's behaviour, which is why the RUNTIME
+// half lives in android/app/src/test/kotlin/dev/swarm/phone/PhoneActivityWindowTest.kt: that
+// one drives a real Activity and asserts the window does not carry the flag after onCreate,
+// which catches a flag set by some path this scan cannot see (a raw 0x2000, a theme attribute).
 
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
 
+// screenshotBlockMarkers are the two APIs B65 removed. FLAG_SECURE reaches the window through
+// addFlags/setFlags; setRecentsScreenshotEnabled is the API-33+ way to drop the recents
+// thumbnail without also blocking screenshots. Both are named, because B65 withdrew both and a
+// gate that caught only one would let the thumbnail decision be re-made in silence.
+var screenshotBlockMarkers = []string{"FLAG_SECURE", "setRecentsScreenshotEnabled"}
+
 // ---------------------------------------------------------------------------
-// The screen-protection policy artifact.
+// The screen-policy artifact.
 // ---------------------------------------------------------------------------
 
 // windowRow is one line of android/window-security.tsv:
 //
 //	screen <TAB> flag_secure <TAB> exclude_from_recents <TAB> why
 //
-// The table exists because PB-SEC-4 names two screens by role ("pairing and terminal-peek")
-// and the app has more than two; which of the others are sensitive is a decision, and a
-// decision with no artifact is one the next screen silently opts out of.
+// The table pre-dates B65 and survives it inverted. It exists because PB-SEC-4 named two
+// screens by role ("pairing and terminal-peek") and the app has more than two: which of the
+// others the decision covers is itself a decision, and a decision with no artifact is one the
+// next screen silently opts out of. Post-B65 it records what allowing screenshots EXPOSES,
+// screen by screen, which is where an argument to re-add the flag has to start.
 type windowRow struct {
 	Screen    string
 	FlagSec   string
@@ -79,9 +81,10 @@ func readWindowPolicy(t *testing.T) []windowRow {
 	path := windowPolicyPath(t)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("PB-SEC-4: %s does not exist, so there is no record of which screens are "+
-			"sensitive. The requirement names two by role (pairing, terminal peek) and the app "+
-			"has a dozen; the ones it does not name still show session content: %v",
+		t.Fatalf("PB-SEC-4: %s does not exist, so there is no record of what allowing "+
+			"screenshots exposes. ADR-007 B65 withdrew the requirement and INVERTED it rather "+
+			"than deleting it, and this table is half of that: deleting it would leave the "+
+			"decision with no artifact, which is the state the table was written to end: %v",
 			mustRel(t, path), err)
 	}
 	var rows []windowRow
@@ -112,48 +115,128 @@ func readWindowPolicy(t *testing.T) []windowRow {
 }
 
 // ---------------------------------------------------------------------------
-// PB-SEC-4: the honest precondition.
+// The honest precondition, inverted with the rest.
 // ---------------------------------------------------------------------------
 
-// TestPBSEC4_ThereIsAWindowToConfigure is the assertion this file exists to make first.
+// TestPBSEC4_ThereIsStillAWindowThisDecisionIsAbout.
 //
-// It is a FAILURE and not a t.Skip, and that choice is the whole point. A skip here would
-// leave a green suite in which "FLAG_SECURE on pairing and terminal-peek screens" appears
-// covered, on a module that cannot put a flag on a window because it has no window.
-func TestPBSEC4_ThereIsAWindowToConfigure(t *testing.T) {
+// Before S18 this test failed because the module declared no <activity>: there was no window to
+// put a flag on, and it said so as a loud failure rather than a skip, because a skip would have
+// left a green run in which "FLAG_SECURE on pairing and terminal-peek screens" read as covered.
+//
+// It is kept, inverted, for the mirror-image reason. Every assertion below is a NEGATIVE one --
+// no source names the markers, no row asks for the protection -- and negative assertions are
+// exactly the kind that pass loudest when their subject has been deleted. If the Activity goes,
+// "nothing sets FLAG_SECURE" becomes true because nothing sets anything, and this file would
+// certify a decision about a window that does not exist.
+func TestPBSEC4_ThereIsStillAWindowThisDecisionIsAbout(t *testing.T) {
 	activities := 0
 	for _, tag := range []string{"activity", "activity-alias"} {
 		activities += len(applicationElement(t, "PB-SEC-4").findAll(tag))
 	}
 	if activities == 0 {
-		t.Fatalf("PB-SEC-4 IS UNVERIFIABLE IN THIS TREE: %s declares no <activity>. There is no "+
-			"window, so there is nothing to set FLAG_SECURE on and nothing to exclude from "+
-			"recents, and the pairing and terminal-peek SCREENS the requirement names exist "+
-			"only as pure Kotlin models under src/main/kotlin/.../ui/ (data classes and enums, "+
-			"no Activity, no setContent, no View).\n\n"+
-			"This is reported as a FAILURE rather than a skip on purpose. A skip would leave a "+
-			"green run in which this requirement reads as covered; a loop over the empty set of "+
-			"Activities would PASS, which is a guard that cannot fail. Neither is an honest "+
-			"record of a requirement whose subject has not been built.\n\n"+
-			"Two outcomes clear this test: an Activity that applies the protections at the sink "+
-			"the tests below look for, or a recorded decision that PB-SEC-4 is blocked on an "+
-			"Activity no slice has delivered. The second is a scope call for the slice owner, "+
-			"not something to be reached by deleting this assertion",
+		t.Fatalf("PB-SEC-4/B65: %s declares no <activity>, so there is no window and the "+
+			"screenshot decision has no subject. Every other assertion in this file is a "+
+			"NEGATIVE one and all of them would now pass vacuously: nothing names FLAG_SECURE "+
+			"because nothing names anything. ADR-007 B65 is a decision about what the shipped "+
+			"app's window does; with no window there is nothing for it to be about",
 			mustRel(t, manifestPath(t)))
 	}
 }
 
 // ---------------------------------------------------------------------------
-// PB-SEC-4: the policy, which can be asserted today.
+// The inversion itself.
 // ---------------------------------------------------------------------------
 
-// TestPBSEC4_ThePolicyCoversTheTwoScreensTheRequirementNames.
+// TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock is the load-bearing assertion.
 //
-// This one does NOT depend on an Activity existing: it asserts the decision has been made and
-// written down, which is possible now and is the half that survives whichever way the scope
-// call above goes. The two roles the requirement names are matched by substring, so the table
-// may use whatever screen names the app actually has.
-func TestPBSEC4_ThePolicyCoversTheTwoScreensTheRequirementNames(t *testing.T) {
+// It is the exact inverse of the assertion this file used to make. The old one required at
+// least one production site naming FLAG_SECURE or setRecentsScreenshotEnabled, and at most one
+// sink; this one requires none. Adding either name back to production Kotlin fails here, and
+// the failure names the file and the marker so the person who did it knows what tripped and
+// where to read why.
+//
+// COMMENTS ARE STRIPPED BEFORE THE SCAN, and that is deliberate rather than incidental: the
+// files that carry this decision have to be able to SAY what was removed. SecureWindow.kt and
+// PhoneActivity.kt both name FLAG_SECURE in prose to explain B65, and a gate that forbade the
+// characters would force the explanation out of the code it explains.
+//
+// TEST SOURCES ARE OUT OF SCOPE for the same reason, narrowly. PhoneActivityWindowTest asserts
+// the window does NOT carry FLAG_SECURE, which it cannot do without naming the constant, and
+// nothing under src/test ships.
+func TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock(t *testing.T) {
+	files := kotlinFiles(t, kotlinMainRoot(t))
+	if len(files) == 0 {
+		t.Fatalf("PB-SEC-4/B65: no .kt file under %s, so a scan for FLAG_SECURE has nothing to "+
+			"scan and this assertion cannot fail", mustRel(t, kotlinMainRoot(t)))
+	}
+
+	var sites []string
+	for _, f := range files {
+		src := stripKotlinComments(readFileOrFail(t, f, "PB-SEC-4"))
+		for _, m := range screenshotBlockMarkers {
+			if strings.Contains(src, m) {
+				sites = append(sites, mustRel(t, f)+" names "+m)
+			}
+		}
+	}
+	sort.Strings(sites)
+
+	if len(sites) > 0 {
+		t.Errorf("PB-SEC-4/B65: production Kotlin reinstates the screenshot block at %d "+
+			"site(s):\n\t%s\n\nTHE SHIPPED APP ALLOWS SCREENSHOTS. This is a product decision "+
+			"the owner made on 2026-07-26 and it is recorded in docs/adr/ADR-007-remote-access.md "+
+			"under B65 -- READ IT BEFORE REMOVING THIS ASSERTION. Its short form: the flag is a "+
+			"compositor hint, it is not attested, it stops no camera pointed at the screen, and "+
+			"an accessibility service reads the rendered screen regardless, so it stopped an app "+
+			"that could already screenshot and stopped nothing else -- while blocking users of a "+
+			"developer tool from sharing terminal output. If the decision is being reversed, the "+
+			"ADR entry and %s are reversed with it and this test is inverted again; if it is not "+
+			"being reversed, this is the drift the inversion exists to catch",
+			len(sites), strings.Join(sites, "\n\t"), mustRel(t, windowPolicyPath(t)))
+	}
+}
+
+// TestPBSEC4_ThePolicyRecordsScreenshotsAreAllowedOnEveryScreen.
+//
+// The table's data must agree with the decision its prose argues for. An appendix that
+// contradicts the body is a recorded defect class in this project (ADR-007 B62(3)), and a table
+// reading `true` beside a sink that sets nothing is that defect in its purest form: it would
+// describe protection the app does not apply.
+func TestPBSEC4_ThePolicyRecordsScreenshotsAreAllowedOnEveryScreen(t *testing.T) {
+	rows := readWindowPolicy(t)
+	for _, r := range rows {
+		for _, col := range []struct{ name, value string }{
+			{"flag_secure", r.FlagSec},
+			{"exclude_from_recents", r.NoRecents},
+		} {
+			if col.value == "false" {
+				continue
+			}
+			t.Errorf("PB-SEC-4/B65: %s:%d marks the %s screen %s=%q, want \"false\". Nothing in "+
+				"the app sets either protection any more (ADR-007 B65), so a row asking for one "+
+				"describes a control that is not there. If this row is arguing for the flag to "+
+				"come back, that argument belongs in the ADR: reversing the decision means "+
+				"reversing B65, this column, and the source assertion above, together",
+				mustRel(t, windowPolicyPath(t)), r.Line, r.Screen, col.name, col.value)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The join, which keeps the table from rotting in either direction.
+// ---------------------------------------------------------------------------
+
+// TestPBSEC4_ThePolicyStillCoversTheTwoScreensTheRequirementNamed is the first direction: a
+// screen the requirement named, with no row, fails.
+//
+// It survives the withdrawal because those two screens are the two the decision COSTS
+// something on, and B65 answers them individually rather than overwriting them: the pairing
+// screen shows the SAS, and the peek shows content S15 seals at rest. A table that quietly lost
+// either row would have dropped the two arguments the decision had to answer.
+//
+// The roles are matched by substring so the table may use whatever screen names the app has.
+func TestPBSEC4_ThePolicyStillCoversTheTwoScreensTheRequirementNamed(t *testing.T) {
 	rows := readWindowPolicy(t)
 
 	needed := map[string][]string{
@@ -161,90 +244,108 @@ func TestPBSEC4_ThePolicyCoversTheTwoScreensTheRequirementNames(t *testing.T) {
 		"terminal peek": {"peek", "terminal"},
 	}
 	for role, needles := range needed {
-		var match *windowRow
+		found := false
 		for i := range rows {
 			lower := strings.ToLower(rows[i].Screen)
 			for _, n := range needles {
 				if strings.Contains(lower, n) {
-					match = &rows[i]
+					found = true
 					break
 				}
 			}
-			if match != nil {
+			if found {
 				break
 			}
 		}
-		if match == nil {
-			t.Errorf("PB-SEC-4: %s has no row for the %s screen, which the requirement names "+
-				"explicitly", mustRel(t, windowPolicyPath(t)), role)
-			continue
-		}
-		if match.FlagSec != "true" {
-			t.Errorf("PB-SEC-4: %s:%d marks the %s screen flag_secure=%q, want \"true\". The "+
-				"requirement names this screen: pairing shows the SAS and the destination "+
-				"origin, and the peek shows the session's terminal grid",
-				mustRel(t, windowPolicyPath(t)), match.Line, role, match.FlagSec)
-		}
-		if match.NoRecents != "true" {
-			t.Errorf("PB-SEC-4: %s:%d marks the %s screen exclude_from_recents=%q, want "+
-				"\"true\". The recents thumbnail is a screenshot the system takes when the app "+
-				"backgrounds, and it survives on disk",
-				mustRel(t, windowPolicyPath(t)), match.Line, role, match.NoRecents)
+		if !found {
+			t.Errorf("PB-SEC-4/B65: %s has no row for the %s screen. The withdrawn requirement "+
+				"named it explicitly, and it is one of the two rows that carried a SPECIFIC "+
+				"argument against allowing screenshots -- the SAS on the pairing screen, the "+
+				"terminal grid on the peek. B65 answers both rather than overwriting them, and "+
+				"dropping the row would drop the answer with the question",
+				mustRel(t, windowPolicyPath(t)), role)
 		}
 	}
 }
 
-// TestPBSEC4_ProtectedScreensResolveToOneSecureWindowSink.
-//
-// The flags must be applied in ONE place. Per-screen application is how one screen gets missed,
-// and the screen that gets missed is always the one added last -- with no test failing, because
-// a per-screen test enumerates the screens that exist.
-//
-// The sink is identified by what it does, not by what it is called: any production Kotlin that
-// names FLAG_SECURE (or setRecentsScreenshotEnabled, its modern companion). The assertion is
-// that there is exactly one such site, and that the policy table's protected screens outnumber
-// zero -- so a single sink cannot be a single sink that nothing routes to.
-func TestPBSEC4_ProtectedScreensResolveToOneSecureWindowSink(t *testing.T) {
-	rows := readWindowPolicy(t)
-	protected := 0
-	for _, r := range rows {
-		if r.FlagSec == "true" || r.NoRecents == "true" {
-			protected++
-		}
-	}
-	if protected == 0 {
-		t.Fatalf("PB-SEC-4: %s marks no screen as protected at all. A sink assertion over zero "+
-			"protected screens cannot fail", mustRel(t, windowPolicyPath(t)))
-	}
+// kotlinTypeDecl matches a top-level Kotlin type declaration's name.
+var kotlinTypeDecl = regexp.MustCompile(`(?m)^\s*(?:@\w+\s+)*(?:public\s+|internal\s+|private\s+|abstract\s+|open\s+|sealed\s+|data\s+|value\s+|annotation\s+)*(?:class|object|interface)\s+([A-Z]\w*)`)
 
-	// FLAG_SECURE reaches the window through addFlags/setFlags; setRecentsScreenshotEnabled is
-	// the API-33+ way to drop the thumbnail without also blocking screenshots. Both count.
-	markers := []string{"FLAG_SECURE", "setRecentsScreenshotEnabled"}
-	var sites []string
+// TestPBSEC4_EveryPolicyRowNamesAScreenTheAppStillHas is the second direction: a row for a
+// screen that no longer exists fails.
+//
+// WITHOUT IT THE TABLE ROTS SILENTLY. Post-inversion every other assertion here is negative --
+// no source names the markers, no row reads true -- and a row naming a screen that was deleted
+// satisfies all of them. The table would go on reciting the cost of a decision on screens the
+// app no longer has, which is the same defect as an appendix contradicting the body, arrived at
+// from the other side.
+//
+// The join is by NAME: a row's snake_case screen resolves to the PascalCase Kotlin declaration
+// it is named after (terminal_peek -> TerminalPeek, machine_pane -> MachinePane), matched as a
+// prefix so a screen may be declared as SettingsScreen or PairingFlow rather than as the bare
+// noun. Deleting or renaming the model fails the row.
+//
+// WHAT THIS DIRECTION DOES NOT CATCH, stated so the pair is not read as more than it is: the
+// converse general form -- a NEW screen that has no row -- is enforced above only for the two
+// screens the requirement named. Enforcing it for every screen would need a registry of the
+// app's screens, and this module has none: `ui/` holds screen models beside row models, error
+// routing and the facade bridge, with no mechanical line between them. Inventing one inside
+// this gate would produce a rule a new screen escapes by choosing a different name, which is
+// worse than the stated limit. The header of window-security.tsv carries the obligation in
+// prose: a later surface that wants different treatment has to argue for it in that file.
+func TestPBSEC4_EveryPolicyRowNamesAScreenTheAppStillHas(t *testing.T) {
+	rows := readWindowPolicy(t)
+
+	declared := map[string]string{} // type name -> file it is declared in
 	for _, f := range kotlinFiles(t, kotlinMainRoot(t)) {
 		src := stripKotlinComments(readFileOrFail(t, f, "PB-SEC-4"))
-		for _, m := range markers {
-			if strings.Contains(src, m) {
-				sites = append(sites, mustRel(t, f)+" ("+m+")")
+		for _, m := range kotlinTypeDecl.FindAllStringSubmatch(src, -1) {
+			if _, seen := declared[m[1]]; !seen {
+				declared[m[1]] = mustRel(t, f)
 			}
 		}
 	}
-	sort.Strings(sites)
+	if len(declared) == 0 {
+		t.Fatalf("PB-SEC-4/B65: no Kotlin type declaration found under %s, so every row would "+
+			"resolve to nothing and this join could only fail for the wrong reason",
+			mustRel(t, kotlinMainRoot(t)))
+	}
 
-	if len(sites) == 0 {
-		t.Errorf("PB-SEC-4: no file under %s names FLAG_SECURE or setRecentsScreenshotEnabled, "+
-			"so %d screen(s) the policy marks protected are protected by nothing. The screen "+
-			"content at stake is the SAS emoji and the destination origin on the pairing screen, "+
-			"and the rendered terminal grid on the peek -- both of which the recents thumbnail "+
-			"writes to disk when the app backgrounds",
-			mustRel(t, kotlinMainRoot(t)), protected)
-		return
+	for _, r := range rows {
+		want := pascalCase(r.Screen)
+		if want == "" {
+			t.Errorf("PB-SEC-4/B65: %s:%d has an empty screen name",
+				mustRel(t, windowPolicyPath(t)), r.Line)
+			continue
+		}
+		matched := false
+		for name := range declared {
+			if strings.HasPrefix(name, want) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("PB-SEC-4/B65: %s:%d names the screen %q, which resolves to no Kotlin "+
+				"declaration under %s (looked for a type whose name starts with %q). Either the "+
+				"screen was removed and the row is stale, or it was renamed and the row was not. "+
+				"A stale row satisfies every other assertion in this file -- they are all "+
+				"negative -- so this is the only thing standing between the table and a list of "+
+				"screens that do not exist",
+				mustRel(t, windowPolicyPath(t)), r.Line, r.Screen, mustRel(t, kotlinMainRoot(t)), want)
+		}
 	}
-	if len(sites) > 2 {
-		// >2 because one file may legitimately name both markers.
-		t.Errorf("PB-SEC-4: the window protections are applied at %d sites:\n\t%s\nOne sink, "+
-			"applied where screens are created, is what makes the NEXT screen protected by "+
-			"default. Per-screen application is how the last screen added gets missed with "+
-			"nothing failing", len(sites), strings.Join(sites, "\n\t"))
+}
+
+// pascalCase turns a snake_case screen name into the Kotlin type name it is named after.
+func pascalCase(s string) string {
+	var b strings.Builder
+	for _, part := range strings.Split(s, "_") {
+		if part == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(part[:1]))
+		b.WriteString(part[1:])
 	}
+	return b.String()
 }

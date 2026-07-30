@@ -1,39 +1,50 @@
-# PB-SEC-4 -- which screens are sensitive, and what protects them.
+# PB-SEC-4 -- WITHDRAWN AND INVERTED. The app allows screenshots; this is what that exposes.
 #
-# The requirement names two screens BY ROLE: "FLAG_SECURE on pairing and terminal-peek
-# screens; sensitive content excluded from recents." It names two and the app has more, so
-# which of the others are sensitive is a decision -- and a decision with no artifact is one the
-# next screen silently opts out of. This table is that record.
+# ADR-007 B65, ruled by the owner on 2026-07-26: the shipped app permits screenshots and screen
+# recording. FLAG_SECURE and setRecentsScreenshotEnabled(false) are gone from
+# dev.swarm.phone.SecureWindow, and every row below therefore reads false in both columns.
 #
-# THE PROTECTIONS ARE APPLIED AT ONE SINK, dev.swarm.phone.SecureWindow, called from
-# PhoneActivity.onCreate before the content view is set. Per-screen application is how the
-# screen added last gets missed with nothing failing, because a per-screen test can only
-# enumerate the screens that exist.
+# THE TABLE SURVIVES THE DECISION IT NO LONGER RECORDS THE OPPOSITE OF, and that is the point.
+# Deleting it would leave nothing behind; keeping it inverted keeps the one property the
+# original bought -- that this is a DECISION and not drift -- and keeps the record of what the
+# decision COSTS, screen by screen, where the next person to argue about it will look.
+# android/gate/s18_sec4_windowsecurity_test.go enforces both halves: no production Kotlin may
+# name FLAG_SECURE or setRecentsScreenshotEnabled, and every row here must read false.
+# Reinstating the flag fails that gate, which is how the next re-add -- for what will feel at
+# the time like an obvious security improvement -- is made to read B65 first.
+#
+# WHY, IN SHORT. The protection was a compositor HINT: not attested, no defence against a camera
+# pointed at the screen, and no defence against an accessibility service, which reads the
+# rendered screen regardless (android/input-path-limits.md). So it stopped an app that could
+# already screenshot and stopped nothing else. Against that it blocked users of a DEVELOPER TOOL
+# from sharing terminal output, which is an ordinary thing to want from this product.
 #
 # WHAT IS RENDERED TODAY AND WHAT IS NOT, stated plainly so this table is not read as a claim
 # about a finished app. S18 delivers a MINIMAL Activity (the amended PB-SEC-4 ruling), and
 # PhoneSurface renders two of the rows below: the pairing surface and the terminal peek, which
-# are the two the requirement names. The rest exist as S16 screen models with no view attached
+# are the two the requirement named. The rest exist as S16 screen models with no view attached
 # yet. They are listed because the decision is what this artifact records, and because they
-# inherit the protection by construction when they land: there is ONE window, and the sink is
-# on it. A later surface that needs different treatment has to argue for it in this file.
+# inherit it by construction when they land: there is ONE window and nothing is set on it. A
+# later surface that needs different treatment has to argue for it in this file -- and it now
+# has to argue against B65 rather than merely fill in a row.
 #
-# flag_secure          the compositor refuses screenshots and screen recording for the window,
-#                      and blanks it in the recents thumbnail.
-# exclude_from_recents setRecentsScreenshotEnabled(false): the API-33 way to drop the recents
-#                      thumbnail specifically. Stated separately from flag_secure so a later
-#                      screen that needs screenshots cannot silently reacquire the thumbnail.
+# flag_secure          false: the compositor is not asked to refuse screenshots or screen
+#                      recording for the window.
+# exclude_from_recents false: setRecentsScreenshotEnabled(false) is not called, so the system
+#                      writes the ordinary recents thumbnail when the app backgrounds. Stated
+#                      separately from flag_secure because they were separate decisions and are
+#                      separately re-addable; B65 withdrew both.
 #
-# WHAT IS NOT CLAIMED. Both are platform hints the system honours; neither is attested, neither
-# stops a camera pointed at the screen, and an accessibility service can still read the
-# rendered screen (android/input-path-limits.md records that limit). PB-E2E-5 is deferred and
-# nothing here is evidence about a physical handset.
+# WHAT DOES NOT CHANGE. Session content is still sealed at rest (S15) and still kept out of logs
+# (PB-SEC-3); gated controls still filter obscured touches (PB-SEC-12 clause 1, untouched by
+# B65). Those are the layers that survive device loss, which is the threat they were written
+# against. What a screenshot needs is an adversary already executing on the unlocked handset.
 #
 # Columns: screen <TAB> flag_secure <TAB> exclude_from_recents <TAB> why
-pairing	true	true	Named by the requirement. Shows the SAS emoji the person compares against their machine's screen and the destination origin they confirm before anything is joined. A screenshot of the SAS hands an interceptor the one value the comparison exists to protect; the recents thumbnail writes the same frame to disk when the app backgrounds mid-pairing, which is exactly when a user switches away to look at their machine.
-terminal_peek	true	true	Named by the requirement. Shows the daemon-rendered terminal grid: whatever the agent has printed, including anything the user typed at it. This is the session content PB-SEC-3 keeps out of logs and S15 sealed at rest, so leaving it screenshottable would defeat both one layer up.
-session_detail	true	true	Not named by the requirement, and sensitive anyway: it carries the same snapshot card as the peek plus the journal, which names sessions and their state. Distinguishing it from the peek would mean the same grid is protected on one screen and not the other.
-triage_inbox	true	true	The roster: session titles, groups and the one-line need summary. Individually less than a grid, collectively a map of what the owner is working on, and a title is often the most sensitive line on screen.
-machine_pane	true	true	Presence, the paired device, the activity log, and the two gated controls (revoke, kill switch state). The activity log is journal content under another name.
-settings	true	true	Push preferences and the handset's biometric-gate preference. Nothing here is session content; it is protected because it is hosted by the same window, and an exception would have to be argued rather than inherited.
-connection_banner	true	true	Not a screen but a surface on every one of them, listed so its coverage is recorded rather than assumed. It renders the connection state, which includes the terminal "revoked" and "repair required" verdicts.
+pairing	false	false	Named by the withdrawn requirement, and the row that carried the sharpest argument: it shows the SAS emoji the person compares against their machine's screen, so a screenshot of it hands an interceptor the one value the comparison exists to protect. ANSWERED, not overwritten: the SAS is live only for the seconds of a ceremony bounded at 60 s, the comparison is made against a screen the owner is looking at, and an attacker positioned to screenshot the handset mid-ceremony has already defeated the ceremony's premise. A narrowing of margin, recorded as such, not the removal of a control.
+terminal_peek	false	false	Named by the withdrawn requirement. Shows the daemon-rendered terminal grid: whatever the agent has printed, including anything the user typed at it. This is the session content PB-SEC-3 keeps out of logs and S15 seals at rest, and allowing screenshots does undo one layer of that ONE LEVEL UP. ANSWERED: the layers below are unchanged and they are the ones that survive device loss, which is the threat those requirements were written against; a screenshot needs an adversary already executing on the unlocked handset. It is also the screen the decision exists for -- sharing terminal output is what a developer tool is for.
+session_detail	false	false	Not named by the requirement. Carries the same snapshot card as the peek plus the journal, which names sessions and their state. It follows the peek for the same reason it always did: distinguishing them would mean the same grid behaves differently on two screens.
+triage_inbox	false	false	The roster: session titles, groups and the one-line need summary. Individually less than a grid, collectively a map of what the owner is working on, and a title is often the most sensitive line on screen. That is the cost of the decision on this screen, stated rather than dropped; it is accepted for the same reason as the peek, and a screenshot of it needs the same adversary.
+machine_pane	false	false	Presence, the paired device, the activity log, and the two gated controls (revoke, kill switch state). The activity log is journal content under another name. Its controls keep their own defence: filterTouchesWhenObscured is PB-SEC-12 clause 1 and B65 does not touch it.
+settings	false	false	Push preferences and the handset's biometric-gate preference. No session content. It was protected because it was hosted by the same window, and it is unprotected now for exactly the same reason: there is one window, and an exception would have to be argued rather than inherited.
+connection_banner	false	false	Not a screen but a surface on every one of them, listed so its coverage is recorded rather than assumed. It renders the connection state, including the terminal "revoked" and "repair required" verdicts. Nothing on it is secret from someone holding the unlocked handset, which is the only adversary a screenshot serves.

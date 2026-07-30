@@ -64,8 +64,8 @@ import swarmmobile.App
  * the scanner, the destination confirmation, the SAS display and its confirm control (all in
  * [PairingSurface]) and the keyboard (below). [SettingsSurface] came with them, because
  * PB-PUSH-9's "deletion on ... disable" was a facade method with no caller for want of a screen
- * to put a switch on. The panels are hosted here rather than in Activities of their own so that
- * [SecureWindow.protect]'s one window still covers every one of them.
+ * to put a switch on. The panels are hosted here rather than in Activities of their own, so the
+ * app still has exactly ONE window and one exported component to reason about.
  */
 class PhoneSurface(
     private val activity: AppCompatActivity,

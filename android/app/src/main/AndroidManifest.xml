@@ -54,10 +54,11 @@
         android:theme="@style/Theme.Swarm"
         android:usesCleartextTraffic="false">
 
-        <!-- PB-SEC-4 / PB-SEC-12 / PB-E2E-2. The app's one Activity: the window FLAG_SECURE is
-             set on and the View hierarchy the overlay filter applies to. Before it existed
-             both requirements had no subject, because S16 shipped screen models and a data
-             class has no window.
+        <!-- PB-SEC-12 / PB-E2E-2. The app's one Activity: the window every panel is hosted on
+             and the View hierarchy the overlay filter applies to. Before it existed both
+             requirements had no subject, because S16 shipped screen models and a data class
+             has no window. It carried PB-SEC-4 too until ADR-007 B65 withdrew that
+             requirement; nothing is set on the window now, and screenshots are allowed.
 
              exported="true" is FORCED by the LAUNCHER filter and is not a preference: the
              launcher is another process, and it cannot start a component this app keeps to

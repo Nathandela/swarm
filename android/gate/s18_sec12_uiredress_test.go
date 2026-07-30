@@ -219,9 +219,11 @@ func TestPBSEC12_ThePasteResidualIsRecorded(t *testing.T) {
 //
 // There is real content owed. A third-party IME receives every keystroke before this app does,
 // which means the take-control lease and the biometric gate protect the CHANNEL and not the
-// KEYBOARD; an accessibility service can read the rendered screen and synthesise taps, which
-// means FLAG_SECURE (PB-SEC-4) does not shut it out either. Both are user-installed and
-// user-enabled, so the app's honest posture is to say so, not to pretend otherwise.
+// KEYBOARD; an accessibility service can read the rendered screen and synthesise taps, and no
+// window flag ever shut it out -- that it did not was one of the reasons PB-SEC-4's FLAG_SECURE
+// was withdrawn (ADR-007 B65), and the limit is unchanged by the withdrawal. Both are
+// user-installed and user-enabled, so the app's honest posture is to say so, not to pretend
+// otherwise.
 func TestPBSEC12_TheIMEAndAccessibilityLimitsAreDocumented(t *testing.T) {
 	path := inputPathLimitsPath(t)
 	raw, err := os.ReadFile(path)
@@ -256,7 +258,8 @@ func TestPBSEC12_TheIMEAndAccessibilityLimitsAreDocumented(t *testing.T) {
 			"explicitly. What is owed is the limit itself: a third-party IME sees every "+
 			"keystroke before the app does, so the lease and the biometric gate protect the "+
 			"channel and not the keyboard; an accessibility service can read the rendered "+
-			"screen and synthesise taps, so PB-SEC-4's FLAG_SECURE does not exclude it either",
+			"screen and synthesise taps, which no window flag ever excluded -- and PB-SEC-4's "+
+			"FLAG_SECURE is gone entirely since ADR-007 B65",
 			mustRel(t, path), strings.Join(missing, ", "))
 	}
 }

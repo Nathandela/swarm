@@ -20,8 +20,11 @@ from inside itself; what it *can* close is asserted instead, and the assertions 
   `setPrimaryClip`, `getPrimaryClip`, `ClipData` or `CLIPBOARD_SERVICE`, and the Go gate fences
   their absence. The app therefore never puts session content on the clipboard and never reads
   it on its own initiative.
-- **Screen capture.** `FLAG_SECURE` and `setRecentsScreenshotEnabled(false)` on the one window,
-  recorded per screen in `android/window-security.tsv` (PB-SEC-4).
+- **Screen capture — NOT a control any more, and deliberately so.** `FLAG_SECURE` and
+  `setRecentsScreenshotEnabled(false)` were removed by ADR-007 B65: the shipped app allows
+  screenshots and screen recording. `android/window-security.tsv` records what that exposes,
+  screen by screen, and `android/gate/s18_sec4_windowsecurity_test.go` fails if either API
+  comes back.
 
 ## The paste path leaves bytes behind, and "no clipboard use" does not cover it
 
@@ -79,18 +82,20 @@ platform owns.
 
 Two specific limits follow:
 
-- **`FLAG_SECURE` does not exclude it.** The flag stops the compositor handing pixels to a
-  screenshot or a recorder; it does not remove the window from the accessibility node tree. So
-  the terminal grid and the pairing SAS are readable by an accessibility service even though
-  they are not screenshottable.
+- **`FLAG_SECURE` never excluded it, and it is gone now anyway.** The flag stopped the
+  compositor handing pixels to a screenshot or a recorder; it never removed the window from the
+  accessibility node tree, so the terminal grid and the pairing SAS were readable by an
+  accessibility service even while they were unscreenshottable. That it bought nothing here is
+  part of why ADR-007 B65 withdrew it.
 - **`filterTouchesWhenObscured` does not exclude it either.** That flag discards touches
   delivered while another *window* obscures the view. An injected gesture is not an obscured
   touch, so the tapjacking defence on the gated actions — take control, kill, revoke — does not
   stop an accessibility service pressing them.
 
 There is no API that lets an app opt out of accessibility, and there should not be: doing so
-would make the app unusable for the people the API exists for. `FLAG_SECURE` is the only lever
-in the area and it is already set for the screen-capture reason.
+would make the app unusable for the people the API exists for. `FLAG_SECURE` was the only lever
+anywhere near this area, it did not reach an accessibility service either, and it is no longer
+set at all (ADR-007 B65). So this limit stands on its own: nothing in the app addresses it.
 
 ## Scope
 

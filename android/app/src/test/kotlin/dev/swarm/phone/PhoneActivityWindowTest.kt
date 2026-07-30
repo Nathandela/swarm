@@ -8,28 +8,34 @@ import android.view.WindowManager
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Phase B slice S18 -- PB-SEC-4 and PB-SEC-12 clause 1, asserted against a REAL Activity.
+ * Phase B slice S18 -- PB-SEC-4 (INVERTED, see below), PB-SEC-11 and PB-SEC-12 clause 1,
+ * asserted against a REAL Activity.
  *
- * These two requirements had no subject until this slice: the module declared no `<activity>`,
- * so the secure-window flag had no Window and the touch filter had no View, and
+ * These requirements had no subject until this slice: the module declared no `<activity>`, so
+ * the window flag had no Window and the touch filter had no View, and
  * android/gate/s18_sec4_windowsecurity_test.go said so as a loud failure rather than a skip.
- * The Go gate asserts the SOURCE (one sink, a policy table naming every protected screen); this
- * file asserts the RUNTIME, which is the half a source scan cannot reach: that the flag is
- * actually on the window a user sees after onCreate, not merely written down somewhere.
+ * The Go gate asserts the SOURCE; this file asserts the RUNTIME, which is the half a source
+ * scan cannot reach: what is actually on the window a user sees after onCreate, rather than
+ * what is written down somewhere.
  *
- * WHAT IS NOT CLAIMED, and PB-E2E-5 stays deferred. FLAG_SECURE is honoured by the system
- * compositor, and Robolectric has no compositor: this asserts the app ASKED for it. Whether a
- * screenshot is actually refused, and whether the recents thumbnail is actually dropped, are
- * physical-handset facts. `setRecentsScreenshotEnabled` is likewise asserted at the source
- * level by the Go gate and not here, because a Robolectric shadow returning what the test told
- * it to is not evidence about a thumbnail on disk.
+ * PB-SEC-4 IS WITHDRAWN AND THIS FILE'S ASSERTION IS INVERTED WITH IT. ADR-007 B65, ruled by
+ * the owner on 2026-07-26: the shipped app allows screenshots and screen recording. So the
+ * assertion below runs in the negative -- the window must NOT carry FLAG_SECURE -- and it is
+ * the half the Go gate cannot cover: a source scan sees the constant's NAME, and this sees the
+ * bit, so a flag set as a raw 0x2000 or through a theme attribute fails here.
+ *
+ * WHAT IS NOT CLAIMED, and PB-E2E-5 stays deferred. Robolectric has no compositor: this asserts
+ * what the app asked the window for. Whether a screenshot is actually taken, and whether the
+ * recents thumbnail actually appears, are physical-handset facts.
+ * `setRecentsScreenshotEnabled` is asserted at the source level by the Go gate and not here,
+ * because a Robolectric shadow returning what the test told it to is not evidence about a
+ * thumbnail on disk.
  */
 @RunWith(RobolectricTestRunner::class)
 class PhoneActivityWindowTest {
@@ -37,16 +43,20 @@ class PhoneActivityWindowTest {
     // --- PB-SEC-4 -----------------------------------------------------------
 
     @Test
-    fun the_window_carries_flag_secure_after_oncreate() {
+    fun the_window_does_not_carry_flag_secure_after_oncreate() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val flags = activity.window.attributes.flags
-                assertNotEquals(
-                    "PB-SEC-4: the window does not carry FLAG_SECURE. The pairing screen shows " +
-                        "the SAS and the destination origin and the peek shows the session's " +
-                        "terminal grid; without the flag both are screenshottable, screen " +
-                        "recordable, and written to disk as the recents thumbnail when the app " +
-                        "backgrounds",
+                assertEquals(
+                    "PB-SEC-4/B65: the window carries FLAG_SECURE. THE SHIPPED APP ALLOWS " +
+                        "SCREENSHOTS -- a product decision the owner made on 2026-07-26, " +
+                        "recorded in docs/adr/ADR-007-remote-access.md under B65. Read it before " +
+                        "changing this assertion. The flag is a compositor hint: not attested, " +
+                        "no defence against a camera pointed at the screen, and none against an " +
+                        "accessibility service, which reads the rendered screen regardless -- " +
+                        "while it blocks users of a developer tool from sharing terminal output. " +
+                        "This runs in the negative on purpose, and it catches what the source " +
+                        "gate cannot: a flag set as a raw constant or through a theme",
                     0,
                     flags and WindowManager.LayoutParams.FLAG_SECURE,
                 )

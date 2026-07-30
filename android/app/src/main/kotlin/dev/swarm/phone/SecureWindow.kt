@@ -1,52 +1,37 @@
 package dev.swarm.phone
 
-import android.app.Activity
 import android.view.View
-import android.view.WindowManager
 
 /**
- * Phase B slice S18 -- PB-SEC-4 and PB-SEC-12 clause 1. THE ONE PLACE the window and touch
- * protections are applied.
+ * Phase B slice S18 -- PB-SEC-12 clause 1. THE ONE PLACE the tapjacking defence is applied.
  *
- * ONE SINK, NOT ONE CALL PER SCREEN. Per-screen application is how a screen gets missed, and
- * the screen that gets missed is always the one added last, with nothing failing: a per-screen
- * test can only enumerate the screens that exist. Applying the flags where the window is
- * created is what makes the NEXT screen protected by default.
- * android/gate/s18_sec4_windowsecurity_test.go asserts there is exactly one such site.
+ * THE SCREENSHOT BLOCK IS GONE, AND IT IS A DECISION RATHER THAN DRIFT (ADR-007 B65, ruled by
+ * the owner on 2026-07-26: the shipped app ALLOWS screenshots and screen recording). This
+ * object used to carry `protect()` -- FLAG_SECURE plus setRecentsScreenshotEnabled(false),
+ * applied from [PhoneActivity.onCreate] before the content view was set. Both are removed, and
+ * `protect()` was REMOVED WITH THEM rather than left empty: a function still called from
+ * onCreate, whose name claims a protection it no longer applies, is worse than no function.
  *
- * WHAT THE TWO WINDOW PROTECTIONS DO, and they are not the same protection.
+ * WHY, IN SHORT; THE FULL ARGUMENT IS IN B65. What the flag bought was already conceded in
+ * this file's own previous words -- it is a compositor hint, it is not attested, it stops no
+ * camera pointed at the screen, and an accessibility service reads the rendered screen
+ * regardless (android/input-path-limits.md records that limit). What it cost was that users of
+ * a DEVELOPER TOOL could not share terminal output, which is an ordinary thing to want from
+ * the product. android/window-security.tsv records screen by screen what the decision exposes,
+ * and answers the two rows that carried a specific argument rather than a generic one: the SAS
+ * on the pairing screen, and the terminal grid whose at-rest sealing this undoes one layer up.
  *
- *  - FLAG_SECURE tells the system compositor to refuse screenshots and screen recording for
- *    this window, and blanks it in the recents thumbnail.
- *  - setRecentsScreenshotEnabled(false) is the API-33 way to drop the thumbnail specifically.
- *    It is applied as well as, not instead of: it states the recents decision separately from
- *    the screenshot one, so a later screen that needs screenshots for some reason cannot
- *    silently reacquire the thumbnail by clearing a single flag.
+ * REINSTATING IT FAILS A GATE, DELIBERATELY. android/gate/s18_sec4_windowsecurity_test.go
+ * asserts that NO production Kotlin names FLAG_SECURE or setRecentsScreenshotEnabled, and
+ * PhoneActivityWindowTest asserts the window does not carry the flag after onCreate. A
+ * requirement deleted leaves nothing behind; a requirement inverted keeps the one property the
+ * original bought -- that this is a decision -- and makes the next person to add the flag back,
+ * for what will feel at the time like an obvious security improvement, read B65 first.
  *
- * android/window-security.tsv records WHICH screens are sensitive and why. The requirement
- * names two by role, pairing and terminal peek; the table is what stops the next screen
- * opting out by default.
- *
- * WHAT IS NOT CLAIMED. FLAG_SECURE is a platform hint the compositor honours. It does not stop
- * a camera pointed at the screen, it is not attested, and an accessibility service can still
- * read the rendered screen (android/input-path-limits.md records that limit). PB-E2E-5 stays
- * deferred: nothing here is evidence about a physical handset.
+ * WHAT REMAINS HERE IS A DIFFERENT PROTECTION AGAINST A DIFFERENT ATTACK. PB-SEC-12 clause 1 is
+ * tapjacking; it has no screenshot clause and B65 leaves it untouched.
  */
 object SecureWindow {
-
-    /**
-     * Apply the window protections. Called from [PhoneActivity.onCreate] BEFORE the content
-     * view is set: a window that is briefly unprotected is a window a screenshot can catch.
-     */
-    fun protect(activity: Activity) {
-        activity.window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE,
-        )
-        // API 33 is the app's minSdk (android/toolchain.env SWARM_ANDROID_MIN_SDK), so this
-        // needs no version guard.
-        activity.setRecentsScreenshotEnabled(false)
-    }
 
     /**
      * Mark a control as a GATED ACTION: one an overlay attack is worth mounting against.

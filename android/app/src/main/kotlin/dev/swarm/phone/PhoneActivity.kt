@@ -5,8 +5,8 @@ import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 
 /**
- * Phase B slice S18 -- the app's one Activity, and the window PB-SEC-4 needs in order to have a
- * subject at all.
+ * Phase B slice S18 -- the app's one Activity, and the View hierarchy PB-SEC-12 clause 1 needs
+ * in order to have a subject at all.
  *
  * WHY IT EXISTS AND WHY HERE. The module declared no `<activity>` until this slice: S16 shipped
  * the screen MODELS (data classes and enums), so `FLAG_SECURE` had no Window and
@@ -16,6 +16,11 @@ import androidx.appcompat.app.AppCompatActivity
  * it, and PB-E2E-2 independently requires one because an on-emulator smoke that pairs,
  * observes, takes control and types cannot run against data classes. The scope is bounded to
  * exactly that: enough Window and View to carry those assertions and S19's smoke.
+ *
+ * PB-SEC-4 HAS SINCE BEEN WITHDRAWN AND INVERTED (ADR-007 B65, 2026-07-26): the shipped app
+ * allows screenshots and screen recording, so `onCreate` sets nothing on the window and
+ * [SecureWindow] no longer has a `protect()` to call. The Activity's other two reasons for
+ * existing -- the touch filter's View hierarchy and PB-E2E-2's smoke -- are unaffected.
  *
  * THIS CLASS OWNS THE WINDOW AND NOTHING ELSE, and that is PB-SEC-11 rather than taste. It is
  * exported with a LAUNCHER filter -- the single most reachable surface an Android app has, and
@@ -36,9 +41,9 @@ class PhoneActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // BEFORE the content view. A window that is briefly unprotected is a window a
-        // screenshot, a screen recorder or the recents thumbnailer can catch.
-        SecureWindow.protect(this)
+        // Nothing is set on the window. ADR-007 B65 withdrew PB-SEC-4: screenshots, screen
+        // recording and the recents thumbnail are all allowed, and the gate that used to
+        // require FLAG_SECURE here now requires its absence.
 
         // The ledger is the APPLICATION's, not one of this screen's. It is what every
         // InvalidationEvent clears, so a per-use prompt left in flight by a screen lock is
