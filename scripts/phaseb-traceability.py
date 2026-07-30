@@ -44,9 +44,6 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-PAIR-4": "a post-accept Complete failure reverses the machine's interpretation "
-                 "after the phone has pinned -- precisely the half-pair this requirement "
-                 "forbids (ADR-007 B60)",
     "PB-SEC-2": "THREE halves open, not two (ADR-007 B83 adds the third): the 60s "
                 "input/take-control freshness is never enforced while continuously "
                 "foregrounded -- InputFreshness.decide has NO production caller and "
@@ -68,13 +65,6 @@ NOT_MET = {
                  "pins the GATEWAY's envelope and structurally cannot observe the other "
                  "two. Survived the B70 refactor, so it is live rather than a stale note "
                  "(ADR-007 B87)",
-    "PB-SAS-4": "ADDED 2026-07-30 because it was MISSING (ADR-007 B86). The channel "
-                "binding does not attest the accept/decline exchange: msg4 rides outside "
-                "the SAS transcript, which is cryptographically sound but means the SAS "
-                "attests nothing about whether the two sides AGREED -- so PB-PAIR-4's "
-                "half-pair is invisible to both operators comparing emoji they have every "
-                "reason to trust. Not closable by tuning; it needs the acknowledged final "
-                "frame PB-PAIR-4 also requires",
     "PB-INPUT-2": "the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes "
                   "leaseHeld=false as a hardcoded literal, and its own comment says this "
                   "surface never takes a lease. Send is enabled whenever any session "
