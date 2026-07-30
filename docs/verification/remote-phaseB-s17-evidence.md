@@ -1,5 +1,21 @@
 # S17 evidence — the phone's push client (PB-PUSH-4, PB-PUSH-9)
 
+> **PARTLY SUPERSEDED — READ THIS FIRST (added 2026-07-30).** This file predates both the defect
+> that made PB-PUSH-9 NOT MET and the fix that restored it, so it does not contain the evidence
+> that is load-bearing for the requirement's CURRENT status.
+>
+> ADR-007 **B61** found that a party could consent to ITSELF at the relay. One self-edge makes
+> `grantsAnyone()` permanently true, which disabled the push-token purge in `revokeAndPurge` for
+> **any** revoke by **any** party — so "deletion on revoke/disable" was dead while this file read
+> as proof that it worked. The fix refuses self-consent, and the test that demonstrates it is
+> `TestB61_TheOwnersRevokeForgetsThePushTokenDespiteASelfConsent` in
+> `internal/remote/relay/b61_selfconsent_test.go`, not anything below.
+>
+> The body is left unedited: it is signed-off evidence for a closed slice and accurate as of the
+> commit that produced it. Read it as a record of what was true then. See ADR-007 B67(1) for why
+> this class of staleness was invisible — the traceability index checks that an evidence file
+> EXISTS, never that it is current.
+
 **RECONSTRUCTED, not written by the implementer.** S17 shipped without an evidence file; its
 only durable record was a commit message. This file was written on 2026-07-26 at HEAD
 `21307d5`, from the commits and from running the tests. Every claim below was executed in this

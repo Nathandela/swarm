@@ -3379,3 +3379,106 @@ because it is signed-off evidence for a closed slice and rewriting history to ma
 decision is how an evidence trail stops being one. This is the second instance of B62(3)'s shape —
 a record whose later parts falsify its earlier parts without amending them — and the first where
 the stale artifact was an EVIDENCE file rather than the ADR body.
+
+---
+
+### B64 — the daemon parked forever on msg4, in the ordinary order of the ceremony
+
+**WRITTEN LATE, ON 2026-07-30, AND THE LATENESS IS ITSELF THE FIRST THING TO RECORD.** The fix
+shipped in `f8b8634` with only a commit message behind it, and the number B64 was assigned to an
+agent and used in file names and citations while no entry existed. A round-4 reviewer found the
+gap by grepping: the record ran `B63` straight to `B65`. This project's own convention is that a
+decision change requires an ADR, and the most severe non-adversarial defect of the phase had none
+— which is B62(3)'s shape again, one entry later, and this time the missing artifact was the
+entry itself.
+
+**The defect.** The machine parked forever on pairing msg4 **with no attacker and in the ordinary
+order of operations**. The owner scans the QR, the desktop shows the SAS, the owner answers the
+desktop prompt FIRST — it is the one in front of them — then turns to the phone. From that moment
+anything ending the phone's leg wedged the daemon.
+
+Two causes, neither wrong alone:
+
+1. **The pairing window was announced but never enforced.** `pairWindow` produced the `ExpiresAt`
+   in the `PairView` and nothing else; the handshake ran on the connection-lifetime ctx
+   (`internal/protocol/server.go`'s `context.WithCancel(context.Background())`), which carries no
+   deadline. Past the announced instant the goroutine stayed parked in `recvConsent` indefinitely.
+2. **The abort was sent on the context whose cancellation was the only way to reach it.**
+   `internal/remote/pairing/pairing.go:665` called `sendConsent(ctx, …)`, commented *"an ANSWERED
+   refusal, not silence"* — but mobile's `DeviceSAS` returns only `nil` or `ctx.Err()`, `RejectSAS`
+   and `Cancel` both go through `cancelHandshake()`, and the 60 s `pairingTTL` is a deadline on
+   that same ctx. So the frame that existed to unpark the machine was the one frame that never
+   left.
+
+**Why it was severe rather than merely slow.** The handshake goroutine is the only thing that ever
+calls `result`, so no result meant no `clearPairing`, so the connection's single pairing slot was
+held forever and **every later `pair_start` on that connection was refused "pairing already in
+progress"**. There is no `pair_cancel` op; dropping the owner connection was the only exit.
+
+**A composition, and B52 introduced the window it lives in.** Before B52 the machine's last receive
+was msg3, which PRECEDES the confirm — afterwards it only ever sent. B52 introduced the first
+machine-side receive with no clock and placed it after the point where the operator believes the
+pairing is done. B46, one entry earlier, had tightened the announced window to 60 s for a
+three-message handshake containing ONE human decision; B52 then put a SECOND human decision inside
+it and nothing re-derived the TTL (B62(8)).
+
+**Both fences for this were vacuous.** `b52_consent_release_test.go:223` passed
+`context.WithTimeout(context.Background(), 2*time.Second)` into `Pair` and took its green
+**entirely from a deadline the test injected and production never supplied** — changing that
+literal to ten minutes failed it by name. And `:173` drove a rejection shape the shipped phone
+cannot produce (a hand-made non-nil error on a live ctx). The clearest instance this project has
+produced of a test supplying the very safety property whose absence is the defect.
+
+**The fix.** The window is enforced as well as announced, bounded by the DURATION rather than the
+`expiresAt` instant so an injected clock cannot skew it — what is promised and what is enforced
+stay the same value. `abortConsent` detaches with `context.WithoutCancel` (not `Background`, so
+the ctx's values survive and only cancellation is dropped) under its own short timeout, because
+the usual reason that ctx is dead is that `RejectSAS` already `CloseNow()`'d the socket.
+
+**THE DEADLINE IS THE FENCE; THE ABORT IS A COURTESY.** Stated in the code so the courtesy is not
+mistaken for the mechanism: a phone that loses the network sends nothing at all, and the machine
+must still recover. A remedy resting on the abort would have been a fence that cannot fail for the
+most common failure it faces.
+
+---
+
+### B67 — round 4: evidence files are checked for EXISTENCE, never for CURRENCY
+
+The round-4 committee's bookkeeping reviewer found no eighth requirement of the familiar
+invalidated-by-another-fix shape. It found a different and arguably worse one.
+
+**B67(1) — "Evidenced (measured on disk)" does not mean current.** `scripts/phaseb-traceability.py`
+distinguishes *shipped* (asserted by hand) from *evidenced* (measured on disk) and says so
+prominently, so a reader trusts the second number. But `evidence_path()` checks only that the file
+EXISTS. Two requirements now have evidence artifacts that are fossils — true of an earlier commit,
+false of HEAD — and nothing catches it:
+
+- **PB-SEC-4** — `remote-phaseB-s18-evidence.md` described `SecureWindow.kt` as the sink for the
+  screenshot block and cited a mutation result for a test name that no longer exists. B65 deleted
+  both. That file is what the traceability table cites for **all ten** of S18's requirements.
+  Marked superseded in B66(3).
+- **PB-PUSH-9** — `remote-phaseB-s17-evidence.md` predates both the defect that made the
+  requirement NOT MET (B61's self-consent) and the fix that restored it. The test that is
+  load-bearing for its CURRENT status is not in the file that is supposed to prove it.
+
+**The generalisation, residual 4.12:** *an evidence file is a claim about a commit, and a
+traceability check that tests only for its existence silently re-dates every claim it contains to
+now.* The honesty machinery this project built to separate asserted from measured has a third
+category it did not name: **measured, but measured against the wrong version.**
+
+**B67(2) — an OPEN finding went moot and nobody recorded it.** B61(6) held that a phone-initiated
+`device_revoke` deletes both pairs edges and thereby defeats the owner's later CLI revoke through
+`purgeRelayState`'s swallowed `ErrNotAuthorized`. B60(4)'s `isPairer` gate means a phone can no
+longer reach that verb at all, so the precondition is gone. Verified by running the B60 suite.
+
+Recorded because the direction is the interesting one: this record has been repeatedly warned that
+a "this is closed" claim is a claim with a timestamp. **The converse is equally true and had not
+been stated — an OPEN finding can be silently closed by an unrelated fix, and a reader who trusts
+the open list will chase something that no longer exists.** Three work directions died this phase
+re-deriving a stale impossibility proof; the same cost is available in the other direction.
+
+**B67(3) — B62(3) confirmed still open at HEAD.** `internal/remote/supervise/unit.go` still has
+none of `NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies`
+or `SystemCallFilter`, and the Decision body's D4/R1 paragraph still asserts verbatim the
+defence-in-depth B62(3) ruled false and demanded withdrawn. Two entries have now recorded this and
+neither remediation was carried out. **It is a production blocker and is listed as one.**
