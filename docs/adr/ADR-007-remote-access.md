@@ -6229,3 +6229,82 @@ Reverted; `client.go` byte-identical.
 **Three duplications and one gap in a single round**, all the same shape: parallel agents converge on
 whatever gap the record most recently named. The record is a coordination signal, and pointing at an
 uncovered property makes several agents run at it at once.
+
+---
+
+## B112 — A new CRITICAL on the machine hop, and the reassurance that hid it was mine
+
+**2026-07-30.** Independent adjudication of four rows produced one row closed, one row's replacement
+fence shown vacuous, and **a live CRITICAL that B109 talked past.**
+
+### `PB-NET-7` — NOT MET, upgraded from an unfenced residual to a live defect
+
+B109 (mine) said the remaining residual was that *"timeouts EVERYWHERE"* is quantified over call paths
+nothing enumerates, and reassured itself that **"`MailboxWait` bypasses it by construction under the
+relay's own 25 s ceiling."**
+
+**That ceiling is enforced SERVER-SIDE, by the party this design names as the DECLARED ADVERSARY.**
+Probed against a relay that completes the handshake and answers nothing:
+
+```
+PROBE: MailboxWait(context.Background()) STILL PARKED after 70s
+       against a silent relay (server ceiling 25s)
+```
+
+**2.8x the ceiling.** Verified here independently: `mailboxWait` never calls `bounded()`; the gateway
+passes an undeadlined ctx; `cmd/swarm-remote` dials **once** and holds that client for the process
+lifetime with no redial loop; and the package contains **no `Ping` and no `SetReadDeadline`**, so
+`c.done` never closes against a silent-but-alive peer. Nothing watches `Client.Done()`.
+
+**The gateway's command-IN loop parks for the life of the process.** Keystrokes, `take_control` and
+**kill** stop being processed — no error, no state change, no reconnect — while the phone still reads
+`online`, because its appends succeed into the relay's store. **This is B94(1)'s CRITICAL on the
+machine hop**, reachable benignly by the same half-open TCP.
+
+> **I wrote the sentence that hid it.** B109 named the residual correctly, then discharged it with an
+> argument that delegates the bound to the adversary. **That is the exact error B94 recorded — relying
+> on the far end to end your call — restated by me one hop over, one day later, while quoting B94.**
+> Knowing the shape of a defect does not stop you writing it; it only lets you recognise it when
+> someone measures it.
+
+**And it settles the consistency question I posed, against my own framing.** I asked whether ruling
+this row red would be consistent with refusing two sound-by-derivation-but-unfenced arguments in round
+6. The question was moot: **this one is not sound. It was tested and it lost.** Red for a stronger
+reason than consistency.
+
+**Every other named clause is genuinely fenced**, each mutation-proven and reverted: the 10 s budget
+(→5 s fails, quoting section 6.0), cancellation on request (→ fails after 8.33 s), cancellation on
+dial (→ *"took 8.03s to honour a 300ms context"*), the leak assertion (36 live vs baseline 12), and
+`Close` idempotency — where B111's claim reproduced exactly, only the restored subtest and the
+socket-already-died case moving.
+
+### `PB-NET-6` — NOT MET. The replacement fence cannot fail on the defect it is named for
+
+`mobile/pbnet6_drainreaders_test.go` pins **call sites** by AST scan. Mutating `App.run` to launch two
+genuinely concurrent drains on one connection — **verbatim the defect the fence's own error message
+describes** — leaves it **passing**. The file admits it pins call sites rather than concurrency, so
+this is not a catch-out; it is the consequence.
+
+**And concurrent-drain is not a clause this requirement names.** The row names seq gating,
+replay/reorder/dup rejection, the mailbox cap, and hostile-pagination termination. B99's rule applies
+twice over: measuring one clause of a multi-clause row does not close it, and this is not even one of
+them.
+
+**The row is closer than that makes it sound.** All four named clauses have live subjects, including
+one already written: `conformance/drain_test.go`'s non-advancing-page test **is** hostile-pagination
+termination in its shipped form, asserting section 6.0's ≤3 reads/s over the real `App.drain` — and it
+is currently attributed to `PB-SYNC-6`. **Nobody has assembled that union under this row**, and none
+of the four has been mutated.
+
+### `PB-NET-3` — MET. 134 of 144
+
+Both halves mutation-proven on the shipped path: a second raw-plaintext append fails the base64 arm,
+and a `ContentKey` nested **two levels deep** is caught with its exact path reported, so the traversal
+is not a one-level field check. Three anti-vacuity guards are real, and **the machine actually opens
+the frame and reads the marker back — so "absent" cannot be satisfied by "never sent"**, which is the
+precise failure mode B98 warned this row about.
+
+**Residual recorded rather than waved through:** the wire-level assertion covers phone→machine input
+only. Machine→phone is asserted at the envelope handed to the appender, not at the wire, and **the
+journal direction has no named plaintext fence** — the adjudicator marked its belief that it shares
+the seal path as INFERRED, not verified.
