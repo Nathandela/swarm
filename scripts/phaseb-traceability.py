@@ -47,7 +47,11 @@ NOT_MET = {
     "PB-PAIR-4": "a post-accept Complete failure reverses the machine's interpretation "
                  "after the phone has pinned -- precisely the half-pair this requirement "
                  "forbids (ADR-007 B60)",
-    "PB-SEC-2": "the ledger's callback-identity hole is FIXED (ADR-007 B63), but two "
+    "PB-SEC-2": "THREE halves open, not two (ADR-007 B83 adds the third): the 60s "
+                "input/take-control freshness is never enforced while continuously "
+                "foregrounded -- InputFreshness.decide has NO production caller and "
+                "ContentLock installs no foreground timeout, so an unlocked foreground "
+                "session keeps shell-input authority indefinitely. Plus: "
                 "halves remain: same-operation supersession is inexpressible without a "
                 "per-prompt token, and B61(3)'s Keystore entry is re-minted against a "
                 "new biometric enrolment. Neither fix closes the other",
@@ -57,6 +61,15 @@ NOT_MET = {
                 "ledger is honest; this table contradicted it. Section 1's binding exit "
                 "criterion is \"pairs, observes, LAUNCHES, and types into a real session\" "
                 "(ADR-007 B80)",
+    "PB-INPUT-2": "the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes "
+                  "leaseHeld=false as a hardcoded literal, and its own comment says this "
+                  "surface never takes a lease. Send is enabled whenever any session "
+                  "exists (ADR-007 B83)",
+    "PB-E2E-3": "THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first "
+                "evidence per slice; S10 and S12's own evidence files admit tests and "
+                "implementation landed together, and the residuals record that S17/S18b "
+                "cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file "
+                "NAMES the requirement, not that RED-first happened (ADR-007 B83)",
     "PB-NET-4": "the spec DEMANDS a bounded idempotent op queue and WITHDRAWS the same "
                 "queue as unbuildable in two places, production constructs NewOpQueue(0) "
                 "-- unbounded -- and OpQueue.Enqueue has ZERO callers outside its own "

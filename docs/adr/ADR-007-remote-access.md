@@ -4576,3 +4576,71 @@ widened, because 60s IS the relay slot TTL.
 
 **Verdict: closed test YES; production NO**, gated on B78's free minting, B60(1)'s durable
 prepare/commit, and now B81(1)'s direction binding.
+
+---
+
+### B83 — round 5's external review DISSENTS on the closed test, and the TDD gate is itself unmet
+
+The external reviewer independently reproduced B81(1) and then diverged from the other three
+members on the question that matters to the owner. **The dissent is recorded, not smoothed.**
+
+**B83(1) — THE DISSENT. Three members said closed test YES; the external reviewer says the present
+checkout is "not yet a valid closed-test release candidate."** Its grounds are not a different view
+of the defects — it agrees on those — but of the **state of the tree**:
+
+- The direction-binding remediation is **uncommitted**, and *"uncommitted code is not shipped code."*
+- *"Because the tree then changed and remains dirty, there is no single exact source snapshot for
+  which all build/test/lint/race gates are presently evidenced."*
+- FCM cannot work from this build at all, so the closed test cannot exercise the feature it exists
+  for.
+
+**That objection is correct and it lands on me.** I have run gates repeatedly at moving HEADs with
+several agents' uncommitted work in the tree, and reported them green. Each run was honest about
+what it measured; **none of them was a release candidate**, and I did not say so. Residual 4.21:
+*a gate is evidence about a commit, and a gate run on a dirty tree is evidence about nothing that
+can be shipped.*
+
+**B83(2) — PB-E2E-3 IS ITSELF NOT MET. The gate that enforces TDD does not hold.** It requires
+RED-first evidence per slice. **S10's and S12's own evidence files admit tests and implementation
+landed together**; the residuals record that S17 and S18b cannot satisfy GG-5 retroactively; and
+S19's fence verifies that an evidence file **names** the requirement, not that RED-first happened.
+This is the sharpest instance of the standing class in the whole audit — **the requirement that
+polices the method is satisfied by a fence that cannot see whether the method was followed.**
+
+**B83(3) — PB-INPUT-2 is NOT MET, verified by me.** `PhoneSurface.kt:452` passes `leaseHeld = false`
+as a **hardcoded literal**, and its own comment says *"this surface never takes a lease on its own."*
+Meanwhile Send is enabled whenever any session exists. The requirement demands a **visibly
+confirmed** lease; the surface renders the opposite, always.
+
+**B83(4) — PB-SEC-2 has a THIRD open half, verified by me.** The 60-second input/take-control
+freshness **is never enforced while continuously foregrounded**: `InputFreshness.decide` has **zero
+production callers**, and `ContentLock` explicitly installs no foreground timeout. **So an unlocked
+foreground session retains shell-input authority indefinitely**, against a requirement that bounds
+it and requires pause/reauthorize. Additional to the prompt-identity and enrolment-change cases.
+
+**B83(5) — the count is challenged more broadly than I have moved it.** The reviewer argues
+PB-APP-2, -3, -4, -5, -7 and -8 also need reclassification, on the same logic that moved PB-APP-6:
+the requirements demand actual UI and the unbound-verb ledger records the missing Stop, release,
+presence, launch, journal and repair screens. **I have NOT moved those six**, because I verified two
+rows myself and will not move six on an argument I have not individually checked — the same
+discipline applied to PB-NET-4. **They are recorded as requiring adjudication, and the count of 134
+should be read as an upper bound.**
+
+**B83(6) — refutations from the same reviewer, which matter as much.** It mutated five critical
+crypto mechanisms independently — `SenderKeyID` AAD, random nonce generation, PSK use, route
+prologue, AEAD-open enforcement — and **every fence failed for the correct reason**; it found no
+primitive-level forgery, concluding the failure is *"at its callers' direction composition, not
+XChaCha/Noise itself."* It **withdrew** the B82 mutex finding as fixed, having run the regression.
+It confirmed PB-NET-5's benchmark passes comfortably (p50 31ms) while noting its evidence admits it
+bypasses the façade — a coverage gap, not a latency defect. And it confirmed **kill/revoke are no
+longer cosmetic biometric gates**: the production path carries a CryptoObject before invoking the
+action.
+
+**B83(7) — a framing requirement, and I accept it.** The relay-visible metadata and the absent live
+forward secrecy *"may be accepted residuals, but must not be described as unlinkability or forward
+secrecy."* That is precisely the standard this record has failed twice already (B77, B81(5)), and it
+is the right one.
+
+**Verdict: REVISE. Round 5 does not reach agreement, and the committee is now split on the closed
+test 3–1.** The dissent is on tree hygiene and FCM, both of which are answerable — which makes it
+the most actionable objection of the round rather than the most damning.

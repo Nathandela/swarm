@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 143 |
-| Shipped (asserted by hand) | 136 |
-| Evidenced (measured on disk) | 136 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **6** |
+| Shipped (asserted by hand) | 134 |
+| Evidenced (measured on disk) | 134 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
 | Remaining | 1 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -72,7 +72,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-DOC-7 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-2 | S19 | **NOT MET** | UNSATISFIABLE AS WRITTEN -- the app cannot start on a standard emulator, correctly: the emulator keymaster reports SECURITY_LEVEL_SOFTWARE and PB-KEY-8's downgrade refusal fails closed before any screen renders. PB-E2E-2 and PB-KEY-8 are in direct conflict; measured by running it (ADR-007 B56) |
-| PB-E2E-3 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
+| PB-E2E-3 | S19 | **NOT MET** | THE GATE THAT ENFORCES TDD IS ITSELF UNMET. It requires RED-first evidence per slice; S10 and S12's own evidence files admit tests and implementation landed together, and the residuals record that S17/S18b cannot satisfy GG-5 retroactively. S19's fence verifies an evidence file NAMES the requirement, not that RED-first happened (ADR-007 B83) |
 | PB-E2E-4 | S19 | shipped | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-5 | S21 | pending | — |
 | PB-GW-1 | S2 | shipped | `docs/verification/remote-phaseB-s2-evidence.md` |
@@ -84,7 +84,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-GW-7 | S2b | shipped | `docs/verification/remote-phaseB-s2b-evidence.md` |
 | PB-GW-8 | S2b | shipped | `docs/verification/remote-phaseB-s2b-evidence.md` |
 | PB-INPUT-1 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
-| PB-INPUT-2 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
+| PB-INPUT-2 | S11 | **NOT MET** | the lease is never VISIBLY CONFIRMED: PhoneSurface.kt:452 passes leaseHeld=false as a hardcoded literal, and its own comment says this surface never takes a lease. Send is enabled whenever any session exists (ADR-007 B83) |
 | PB-INPUT-3 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-INPUT-4 | S11 | **NOT MET** | the retry mechanism has ZERO production callers: RetryFor (transport/retry.go:49) and SendLive (session.go:358) are definitions only, and commands call MailboxAppend directly. Found by the round-4 external reviewer, verified by grep (ADR-007 B69(1)) |
 | PB-INPUT-5 | S11 | shipped | `docs/verification/remote-phaseB-s11-evidence.md` |
@@ -145,7 +145,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-SAS-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-3 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-SEC-1 | S14 | shipped | `docs/verification/remote-phaseB-s14-evidence.md` |
-| PB-SEC-2 | S14 | **NOT MET** | the ledger's callback-identity hole is FIXED (ADR-007 B63), but two halves remain: same-operation supersession is inexpressible without a per-prompt token, and B61(3)'s Keystore entry is re-minted against a new biometric enrolment. Neither fix closes the other |
+| PB-SEC-2 | S14 | **NOT MET** | THREE halves open, not two (ADR-007 B83 adds the third): the 60s input/take-control freshness is never enforced while continuously foregrounded -- InputFreshness.decide has NO production caller and ContentLock installs no foreground timeout, so an unlocked foreground session keeps shell-input authority indefinitely. Plus: halves remain: same-operation supersession is inexpressible without a per-prompt token, and B61(3)'s Keystore entry is re-minted against a new biometric enrolment. Neither fix closes the other |
 | PB-SEC-3 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-4 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-5 | S18 | shipped | `docs/verification/remote-phaseB-s18-evidence.md` |
