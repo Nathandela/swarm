@@ -147,6 +147,58 @@ type pumpedFrame struct {
 // here, on the live path, so the next divergence is a failing test rather than a review round.
 const DefaultCallTimeout = 10 * time.Second
 
+// DefaultDialTimeout bounds the CONNECT phase of every dial: the TCP handshake, the TLS
+// handshake, the HTTP response and the websocket upgrade -- every stage before the first
+// frame.
+//
+// IT EXISTS BECAUSE THE DIAL HAPPENS BEFORE EVERY OTHER BOUND. DefaultCallTimeout bounds an
+// exchange on an open connection and the gateway bounds its own MailboxWait, and NEITHER IS
+// EVER REACHED by a caller still inside the dial. A relay that accepts the TCP connection and
+// then stalls -- no ServerHello, no response head, a half-written 101 -- costs itself one file
+// descriptor and parks its caller for as long as it cares to hold the socket. A half-open TCP
+// after a WiFi -> cellular handoff presents identically, so this is benign as well as
+// adversarial.
+//
+// WHAT IT COSTS EACH SHIPPED CALLER, differently, and neither of them declares a deadline:
+// mobile/app.go passes context.WithCancel(context.Background()) and cmd/swarm-remote passes
+// signal.NotifyContext(context.Background(), ...). The PHONE never enters backoff, because
+// App.run's reconnect schedule runs BETWEEN dial attempts and a dial that never returns is a
+// dial that never fails. The GATEWAY dials once at startup with no redial loop, so it is stuck
+// for the life of the process.
+//
+// THE BOUND IS HERE, at the one seam every dial passes, and not at the callers. Two callers
+// exist and both got it wrong independently, so a per-caller fix leaves the third caller to get
+// it wrong a third time -- which is the quantifier B115 left open at the sibling defect
+// ("fixing the one instance does not close a quantifier").
+//
+// TEN SECONDS IS SECTION 6.0'S, REUSED RATHER THAN RE-DERIVED. The connect phase IS one
+// non-wait request/reply -- an HTTP GET carrying the upgrade, answered by a 101 -- and the
+// budget table binds "Non-wait request timeout | 10 s" to PB-NET-7. Minting a second, local
+// dial budget is what ADR-007 B99 refused, and the same reading is what mobile/relay.go's
+// App.dial uses at its own caller-side bound, so the two agree by construction rather than by
+// coincidence.
+//
+// AND THE COMPOSITION LANDS EXACTLY ON THE RELAY'S OWN PRE-AUTH WINDOW, which is the
+// corroboration TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow pins. A whole dial
+// is this connect phase plus two non-wait requests (auth_init, auth_resp, each bounded at the
+// same 10 s by DefaultCallTimeout) = 30 s; the relay bounds the SAME window from its own side
+// at Config.HandshakeTimeout -- 30 s, "CUMULATIVE time-to-authenticate, anchored at accept
+// time" (preAuthDeadline), one of the Phase A constants section 6.0's preamble names as the
+// values its table is chosen to be consistent with. Past that instant an honest peer has
+// already hung up.
+//
+// ONLY THAT NUMBER IS BORROWED FROM THE ADVERSARY, never its enforcement. B112 recorded that
+// exact error -- "MailboxWait bypasses it by construction under the relay's own 25 s ceiling",
+// measured 2.8x past that ceiling -- and the deadline below is declared and enforced on this
+// side, whatever the peer does.
+//
+// WHAT IS STILL THE COMMITTEE'S TO SAY, recorded rather than decided here: section 6.0 has no
+// row for a dial or a connect, so "the upgrade is one non-wait request" is a READING of an
+// existing row, not a row. It is the narrowest reading available -- it mints nothing and it
+// composes onto a constant already in the table -- but a committee that wanted a distinct dial
+// budget would be setting it, not confirming this.
+const DefaultDialTimeout = 10 * time.Second
+
 // dialConn opens one websocket. hc is the dial client a security policy built
 // (nil for the policy-free paths, which take the websocket package's default).
 func dialConn(ctx context.Context, url string, hc *http.Client, pumped bool) (*Conn, error) {
@@ -154,7 +206,17 @@ func dialConn(ctx context.Context, url string, hc *http.Client, pumped bool) (*C
 	if hc != nil {
 		opts = &websocket.DialOptions{HTTPClient: hc}
 	}
-	ws, _, err := websocket.Dial(ctx, url, opts)
+	// THE DEADLINE ENDS AT THE DIAL, not at the connection: cancelling it once the handshake
+	// has returned must not disturb the socket, and does not. A 101 leaves net/http holding
+	// errCallerOwnsConn and cancelling the request that produced it (transport.go), so the
+	// connection is the caller's; coder/websocket ships the same pattern for its own
+	// HTTPClient.Timeout handling (dial.go's cloneWithDefaults + deferred cancel).
+	//
+	// The connection's OWN context, below, is rooted at Background for the same reason: a
+	// connection must outlive the dial that opened it.
+	dctx, dcancel := context.WithTimeout(ctx, DefaultDialTimeout)
+	defer dcancel()
+	ws, _, err := websocket.Dial(dctx, url, opts)
 	if err != nil {
 		return nil, err
 	}

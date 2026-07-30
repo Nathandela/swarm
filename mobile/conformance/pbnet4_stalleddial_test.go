@@ -26,6 +26,19 @@ package conformance_test
 // connection event plane is asserted alongside it because ADR-007 B114 found setConn's emit
 // suppressed while its state write stayed correct, and a phone that recovers silently has
 // still told its user nothing.
+//
+// WHAT THIS FENCE DOES AND DOES NOT DISCRIMINATE, stated because two bounds now cover this
+// path and a reader is owed which one it is measuring. The property asserted is the
+// USER-VISIBLE one -- the handset retries and says so -- and it holds under WHICHEVER bound
+// fires first: App.dial's own caller-side context.WithTimeout, or relay.DefaultDialTimeout at
+// the dial boundary underneath it. Removing either one alone leaves this test green.
+//
+// That is not a gap in this file; it is the point of putting the bound at the boundary. A
+// caller-side deadline is a promise each caller has to remember to make -- and the two shipped
+// callers independently did not -- while the boundary bound is the one a caller that declares
+// nothing still inherits. The fence for the boundary itself is behavioural and lives where the
+// boundary does: internal/remote/relay/dialdeadline_test.go dials every exported constructor
+// with context.Background() and requires each to return.
 
 import (
 	"net/http"

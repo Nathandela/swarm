@@ -239,6 +239,40 @@ func TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline(t *test
 	}
 }
 
+// TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow corroborates the NUMBER, which is
+// section 6.0's own "Non-wait request timeout | 10 s" read onto the connect phase (the upgrade
+// is one non-wait request/reply). Nothing new is minted, which is what ADR-007 B99 requires;
+// this pins that the reading COMPOSES:
+//
+//	A whole dial is the connect phase plus two non-wait requests -- auth_init and auth_resp,
+//	each bounded at the same 10 s by DefaultCallTimeout.
+//
+//	The relay bounds the SAME window from its own side: preAuthDeadline (server.go) is the
+//	"CUMULATIVE time-to-authenticate, anchored at accept time", capped at
+//	Config.HandshakeTimeout -- 30 s, one of the Phase A constants section 6.0's preamble names
+//	as the values its table is chosen to be consistent with.
+//
+// The two meet exactly. Under the window an honest slow link fails a dial the request budget
+// permits; over it the client waits past the instant an honest peer stopped listening.
+//
+// THIS IS NOT A B113 CONSTANT-TRANSCRIPTION. It asserts a RELATION between three constants
+// rather than repeating a literal, so widening the dial bound to three hours fails here as
+// well as in the behavioural fences above -- and narrowing HandshakeTimeout without revisiting
+// the dial fails too, which is the coupling the derivation actually claims.
+func TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow(t *testing.T) {
+	authExchanges := 2 * DefaultCallTimeout
+	window := DefaultConfig().HandshakeTimeout
+
+	if DefaultDialTimeout+authExchanges != window {
+		t.Fatalf("the whole dial is bounded at %v (connect %v + two auth exchanges at %v each), "+
+			"but the relay's own pre-auth window is %v.\n"+
+			"Under it, an honest slow link fails a dial section 6.0's own request budget "+
+			"permits; over it, the client waits past the instant an honest peer stopped "+
+			"listening",
+			DefaultDialTimeout+authExchanges, DefaultDialTimeout, DefaultCallTimeout, window)
+	}
+}
+
 // TestDialDeadline_EveryExportedDialInheritsTheBound is the QUANTIFIER, which is the half
 // B115 left open at the sibling defect: "fixing the one instance does not close a quantifier".
 //
