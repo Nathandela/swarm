@@ -342,7 +342,7 @@ func (a *App) rearmAfterPairing() {
 // would clear it is the pairing already running. The window is real and it is the ORDINARY
 // path, not an edge: a handset pairing for the first time holds no relay pin, an unpinned dial
 // on a pinning-only platform is refused before a packet, and the transport loop is retrying
-// that refusal every reconnectDelay for the whole time the user is comparing SAS symbols.
+// that refusal on the reconnect backoff for the whole time the user is comparing SAS symbols.
 //
 // withinPairingGrace cannot serve here and that is why this exists. It is opened by
 // rearmAfterPairing, which runs at the END of pin() -- after the durable write -- so it is

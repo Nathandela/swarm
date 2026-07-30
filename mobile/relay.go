@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"time"
 
@@ -23,10 +24,63 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// reconnectDelay is the fixed backoff between relay dial attempts. A phone that
+// The reconnect backoff between relay dial attempts, PB-NET-4 / ADR-007 section 6.0's
+// numeric budget: initial delay, growth factor, ceiling and jitter fraction. A phone that
 // reconnects hard would exhaust the relay's per-target quota, which is shared with the
-// journal it is trying to receive.
-const reconnectDelay = 250 * time.Millisecond
+// journal it is trying to receive -- the exponential growth is what keeps a stuck relay
+// from being redialled at a fixed high rate for the life of the process, and the jitter
+// keeps a fleet reconnecting after a relay restart from arriving as one herd. These are the
+// committee's approved numbers, not tuning knobs: a change here is a change to the budget.
+const (
+	reconnectInitialDelay = 500 * time.Millisecond
+	reconnectFactor       = 2
+	reconnectCeiling      = 30 * time.Second
+	reconnectJitter       = 0.20
+)
+
+// reconnectBackoffBase returns the un-jittered delay before dial attempt n, 1-based:
+// reconnectInitialDelay doubling on every failed attempt, never exceeding reconnectCeiling.
+func reconnectBackoffBase(attempt int) time.Duration {
+	d := reconnectInitialDelay
+	for i := 1; i < attempt; i++ {
+		d *= reconnectFactor
+		if d >= reconnectCeiling {
+			return reconnectCeiling
+		}
+	}
+	return d
+}
+
+// reconnectJittered spreads base by +/-reconnectJitter. frac is a value in [-1, 1] -- taken
+// as a parameter, rather than drawn here, so the spread itself is testable without a random
+// source.
+func reconnectJittered(base time.Duration, frac float64) time.Duration {
+	return base + time.Duration(frac*reconnectJitter*float64(base))
+}
+
+// reconnectBackoff tracks consecutive failed dial attempts across one App.run generation and
+// computes each retry delay. It resets to the initial delay on every successful connection
+// (App.run calls reset after setConn(connOnline)), so a link that has been stable for a while
+// never carries a stale, grown-out backoff into its next outage.
+type reconnectBackoff struct {
+	attempt int
+	frac    func() float64 // returns a value in [-1, 1]; overridden by tests
+}
+
+func newReconnectBackoff() *reconnectBackoff {
+	return &reconnectBackoff{frac: func() float64 { return rand.Float64()*2 - 1 }}
+}
+
+// next returns the delay before the next dial attempt and advances the backoff state.
+func (b *reconnectBackoff) next() time.Duration {
+	b.attempt++
+	return reconnectJittered(reconnectBackoffBase(b.attempt), b.frac())
+}
+
+// reset returns the backoff to its initial state, as if no attempt had yet failed.
+func (b *reconnectBackoff) reset() {
+	b.attempt = 0
+}
 
 // relayAcker releases consumed relay mailbox items. It is injected into the core, which
 // must not import the relay client (PB-BIND-0 constrains its closure).
@@ -194,6 +248,7 @@ func (a *App) setClient(cl *relay.Client) {
 // run is one Start..Stop generation: dial, drain, reconnect until the context is done.
 func (a *App) run(ctx context.Context) {
 	first := true
+	rb := newReconnectBackoff()
 	for ctx.Err() == nil {
 		if first {
 			a.setConn(connConnecting)
@@ -217,7 +272,7 @@ func (a *App) run(ctx context.Context) {
 			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(reconnectDelay):
+			case <-time.After(rb.next()):
 			}
 			if ctx.Err() != nil {
 				break
@@ -294,6 +349,7 @@ func (a *App) run(ctx context.Context) {
 		}
 		a.setClient(cl)
 		a.setConn(connOnline)
+		rb.reset() // PB-NET-4: a successful connection un-does whatever backoff came before it
 		a.onConnected(ctx, cl)
 		a.drain(ctx, cl)
 		a.setClient(nil)
