@@ -13,7 +13,7 @@
 // breaks a DER pin. So the last test below is deliberately an assertion that the SPKI pin
 // FAILS: key reuse is a load-bearing operational requirement, not a footnote, and a runbook
 // that omits it leaves the operator to discover it at the first renewal.
-package transport_test
+package relay_test
 
 import (
 	"crypto/ecdsa"

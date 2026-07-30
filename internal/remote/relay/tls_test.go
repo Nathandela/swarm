@@ -12,7 +12,7 @@
 // The carve-out exists because the relay server is ws://-only today
 // (internal/remote/relay/server.go:228 sets "ws://"+addr), so an unconditional
 // cleartext ban makes PB-NET-1 and PB-E2E-1 unsatisfiable (fable F6).
-package transport_test
+package relay_test
 
 import (
 	"context"

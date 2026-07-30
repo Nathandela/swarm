@@ -1,4 +1,4 @@
-package transport_test
+package relay_test
 
 // Shared consent fixture (ADR-007 B47): a route consent is bound to the pairing ceremony
 // that produced it, so it is the ceremony-bound statement plus the ceremony id naming it,

@@ -7,7 +7,7 @@
 // source and never measured, which is the defect class this phase has spent itself finding.
 //
 // relay.WithTrustRootSource makes the branch reachable inside a test binary and nowhere else.
-package transport_test
+package relay_test
 
 import (
 	"errors"

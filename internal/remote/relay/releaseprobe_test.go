@@ -1,4 +1,4 @@
-package transport_test
+package relay_test
 
 // Three tests in this package prove a property by COMPILING A NON-TEST BINARY: that a
 // release build cannot enable the loopback cleartext carve-out, cannot widen the machine

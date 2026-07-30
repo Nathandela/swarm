@@ -28,6 +28,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -695,4 +696,18 @@ func assertNoLeak(t *testing.T, baseline int) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// e2eConsent is a TEMPORARY copy of the shared fixture that moved to
+// internal/remote/relay/b47_consent_test.go with the live transport-security fences
+// (ADR-007 B98). It is duplicated rather than imported because the two files are now in
+// different packages, and it exists only so the dead-side tests in this package keep
+// building until they are deleted. It goes away with them.
+func e2eConsent(priv ed25519.PrivateKey, granteeRID string) []byte {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("transport test: crypto/rand: " + err.Error())
+	}
+	id := hex.EncodeToString(b[:])
+	return relay.MarshalConsent(id, ed25519.Sign(priv, relay.ConsentMessage(id, granteeRID)))
 }

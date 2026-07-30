@@ -18,7 +18,7 @@
 //   - relay.MachineSecurity admits cleartext to a LOOPBACK IP LITERAL and to nothing
 //     else, in a release build as well as a test binary, because a connection that never
 //     leaves the host has no on-path position for an observer to occupy.
-package transport_test
+package relay_test
 
 import (
 	"errors"
