@@ -6642,3 +6642,109 @@ recorded rather than the number patched.
 that the two CRITICALs closed this round were *"the kind that would have hurt a closed test's early
 testers."* Its production objection is specifically the quantifier: **met by instance, not by
 enumeration, which matters more against a hostile relay operator than a private one.**
+
+---
+
+## B120 — The gateway never redials, and nothing can see that it is dead
+
+**2026-07-31.** The adversarial member wrote proxies and measured. Three findings, six null results, and
+the round's closed-test verdict reverses.
+
+### F1 — CRITICAL. No adversary required.
+
+`cmd/swarm-remote/main.go:61` dials the relay **once per process** — verified here, it is the only
+occurrence in the gateway. `Service.Run` has no relay reconnect; `runJournal` reconnects to the
+*daemon*. `relay.Client.Done()` exists precisely to notice a drop without issuing a request and has
+**zero production callers**. `Err()` has none either, and `command_loop.go:346` says so itself:
+*"NOTHING IN PRODUCTION READS IT — not this bridge's Err, not RelaySink's, not PushNotifier's; the
+tree contains no non-test caller of any of the three. An operator therefore learns nothing today."*
+**Units restart on exit. The zombie never exits.**
+
+Measured against a real relay, real `Service`, real client, with only a proxy cut:
+
+```
+premise: phone received 1 item(s) over the live link
+Service.Run was STILL RUNNING 8s after its only relay connection died, and nothing redialled
+post-cut: phone still sees 1 item(s) -- nothing delivered after the cut
+```
+
+**A desktop WiFi blip ends remote control until a human restarts the sidecar**, while the phone
+reconnects and reports `online`. Nothing appears in any log, for the reason the code already states.
+
+**F1b, the relay's cheap version.** `roundtrip`'s `pending` counter assumes an abandoned reply
+eventually arrives. The relay drops **exactly one** — no protocol violation the client can name — and
+`pending` never returns to zero. Every later call fails `ErrTimeout` in 10.002s, permanently, with the
+relay answering honestly afterwards. The composite is the finding: `mailbox_wait` is `wait_id`
+correlated and bypasses `roundtrip`, so **the gateway still RECEIVES keystrokes and can never SEND
+anything back** — journal, terminal, replies, acks — while the relay reports it online. **The phone
+recovers from this; the gateway does not. That asymmetry is the defect.**
+
+### F2 — HIGH. The wait path bypasses the pump's only backpressure.
+
+`c.frames` capacity 1 is the sole limit on what a relay can push into a client, and `MsgWaitReply`
+skips it **by design**. Idle client, no wait outstanding, wait ids matching nothing:
+
+| path | 6 s |
+|---|---|
+| ordinary frame | 61 frames / 3.49 MiB (plateaued) |
+| `MsgWaitReply` | 5555 frames / **318.09 MiB** (line rate) |
+
+Every frame unmarshalled and dropped. No bound, no error, no signal. **On cellular that is the
+owner's data plan and battery.**
+
+### F3 — HIGH. The stolen-handset revoke fails at the relay, silently, and the relay decides whether it does.
+
+`runRemoteRevoke` deletes the record carrying the routing id, then makes a **best-effort** relay purge,
+then prints `revoked device X` and returns 0 regardless. No pending-purge state exists — ADR-007:72's
+*"an offline-at-revoke machine defers the purge to reconnect"* **is not implemented.** Measured with
+the relay edge intact, the revoked handset **retained** mailbox drain, append into the owner's machine
+mailbox, push wake delivery, and a re-auth whose `Peer` query said it had **not** been revoked — so
+`PB-APP-10`'s re-pair prompt never fires and the thief's screen reads online.
+
+**`PB-SEC-7` is green and its device-loss test is genuinely strong — it fences the CONTROL plane
+only.** "Dead" is true of control, false of connectivity, push and mailbox. B61(6) named the exit-0
+swallow; B67(2) closed it as moot because a precondition was removed — **but that precondition
+belonged to only one of B61(6)'s two halves**, and the device-loss availability half was never
+separately tracked.
+
+### The dial critical, measured stage by stage — and narrowed
+
+```
+UNBOUNDED  TCP accept, no HTTP reply       STILL PARKED after 20s
+UNBOUNDED  upgrade response withheld       STILL PARKED after 20s
+BOUNDED    upgraded, auth_init unanswered  returned after 10.024s (ErrTimeout)
+```
+
+**The unbounded region is the transport handshake only.** Post-upgrade auth already carries
+`DefaultCallTimeout`, so the fix in flight is correctly placed and need not reach the auth exchange.
+Caveat recorded: `DialRaw`/`DialRawSecure` are **not pumped**, so `callTimeout` is 0 there — covered
+today by caller discipline rather than by the transport, **which is the shape that keeps failing.**
+
+### The observation that matters most, and it is about my own commissioned fix
+
+> **An enumeration of call sites would NOT have caught F1.** The unbounded thing there is not a call
+> missing a timeout — F1b's calls all return in exactly 10s as specified, and F1a's connection is not
+> in a call at all. **What is missing is a recovery mechanism that does not exist.** Enumerate the
+> call sites, but do not let the enumeration stand in for asking **which parties can observe a dead
+> link and which can act on it.** Today, on the machine, the answer is: neither.
+
+I commissioned the deadline enumeration off B118's recommendation and would have read a green
+enumeration as closing this class. **It would have closed the class I had been probing, not the class
+that was there.**
+
+### Null results, recorded so nobody repeats them
+
+Ordinary-frame flood **is** backpressured (plateaus at 61 frames). Post-upgrade auth **is** bounded.
+The relay **does** sever a revoked device's live socket — F3 is that it is never *invoked*. Empty-page
+spam does **not** spin the gateway (`DrainPacer`'s token bucket holds at 3 reads/s). `has_more` has no
+shipped consumer, consistent with `PB-NET-6`'s row. **`PB-KEY-5`'s tiering is correct in Go** — the
+forecast "stolen once-unlocked handset yields the content key" does **not** hold at that layer. The
+CLI's relay dial **is** bounded at 10s; only the phone and gateway dials were exposed.
+
+**The stolen-handset half is mostly HARDWARE-BLOCKED and was reported as such, per property**, with
+nothing written that pretends to cover real biometrics, Keystore attestation, re-enrollment
+invalidation, or locked-device push.
+
+**Verdict: closed test NO until F1 is fixed** — explicitly contradicting the composition member's YES,
+**on evidence that member did not have.** F1's fix is dispatched: the phone already has the loop the
+gateway lacks.
