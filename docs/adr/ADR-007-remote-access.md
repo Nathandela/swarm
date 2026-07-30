@@ -6477,3 +6477,68 @@ residual 4.23's shape, and this round has now found the identical gap at four se
 discharged it with an argument that delegated the bound to the adversary; the correction cost a
 70-second probe. **Having been wrong about this exact residual once, in this exact row, I am not the
 party to rule on it a second time.**
+
+---
+
+## B116 — The largest untouched surface: four findings in eight rows. 131 of 144
+
+**2026-07-30.** Six rounds, four members, and **no one had ever done any Android or gomobile
+attack-surface work.** The `PB-BIND` family — eight rows, all reading MET — was deep-derived for the
+first time. **Four findings, four clean, one caveat.** Every clean row was mutated, so a future reader
+can tell a clean family from an unexamined one.
+
+**The answer to the question asked first: B8's absolutes are NOT violated today.** No exported method
+returns `[]byte`; the only `[]byte` surface is `KeyCustody`'s two reverse-bound verbs, so the result is
+inbound; no exported struct field is `[]byte`; the matrix has not widened. **No CRITICAL.**
+
+**`PB-BIND-4` — the fence's subject is `KeyCustody`; B8's subject is THE BINDING.** A whole second
+reverse-bound key-crossing interface — the thing B8's *"crosses ONCE"* clause exists to forbid —
+passes both custody fences. `S14`'s count is literally `if owner == "KeyCustody"`, and PB-BIND-4's
+walk sees funcs and methods but **not interface methods, which its own comment states**. The gap those
+close is **direction**; the gap nobody closes is **count across types**. Only the golden catches it —
+and `contract_test.go` already argues, about a different case, that the golden is *"a review step
+someone can approve, not a rule that refuses."* **That argument applied consistently condemns this
+too.**
+
+**`PB-BIND-6` — "drop-oldest" is stated in three places and enforced by none.** Inverting the policy to
+drop-**newest**, keeping the constant, the counter and every word of the doc, leaves both fences
+passing. The source fence checks the constant and the prose; the runtime fence checks that the core
+did not stall and that *some* events dropped. **Nothing checks which.** Verified here: `events.go` does
+drop the head, so the implementation is correct — and **not cosmetic**, because under drop-newest a
+slow UI discards the *current* state and keeps the stale one, so the connection plane renders an old
+state and never converges. The budget chose the opposite on purpose.
+
+**`PB-BIND-3` — the test named "Every" enumerates nothing.**
+`TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend` is a hand-written linear script with **no
+reflective completeness check**. A facade method that never works — properly error-classed, traced in
+the coverage TSV, golden regenerated, a fully "reviewed" change — **passed both full suites**
+(`mobile` 16.1s, `conformance` 207.1s). Its structural half is genuinely strong and enforced
+bidirectionally, so a new method cannot go **untraced**; it can go **unexercised**. *And the first
+version of the probe WAS caught — by a test about error classes, catching a broken method
+incidentally.* Residual 4.10 again, surfacing while hunting something else.
+
+**Cross-cutting, latent — the Java namespace nothing models.** gomobile's `lowerFirst` lowercases the
+leading uppercase **run**, so `SAS` and `Sas` both bind to `sas()`. A deliberate collision passed
+`gobind` (168 elements, 0 bind-illegal), the `mobile` suite, and the golden. **The only fence that
+could see it does not run**: `TestPBBIND1_GomobileBindProducesAnAAR` **skips** without an Android
+SDK/NDK. PB-BIND-2's subject is Go bind-legality; PB-BIND-7's golden pins **Go** names; the app
+compiles against the **Java** namespace, whose collision rule nothing models. **0 collisions today** —
+only `ID` and `SAS` have multi-uppercase runs — and it breaks the AAR build loudly when it lands. ~15
+lines fixes it in the gate: apply `lowerFirst` to the golden and assert per-owner uniqueness.
+
+**Four rows clean and mutated:** `PB-BIND-0` (forbidden import fails, naming 32 of 59 packages — and
+a *second* allowlist guarding a no-longer-bound package correctly stayed green, so of two allowlists
+only one is on the right subject and it is the right one); `PB-BIND-2` (real `gobind`, 167/167 legal,
+with a real negative control that hard-refuses — non-vacuous **by measurement**); `PB-BIND-5` (removing
+the deferred barrier fails the source half while the runtime half passes, because the two are
+complementary rather than redundant, and the **total** half is the source one — the right way round);
+`PB-BIND-7` (tripped by every surface-changing mutation above).
+
+**Caveat recorded rather than resolved:** `PB-BIND-1`'s literal criterion is *"gomobile bind succeeds
+on the facade"*, and that test **skips** on any host without an Android SDK. **The row's own stated
+criterion does not execute in the normal gate.** Not called NOT MET — `PB-TOOL-2` owns the
+reproducible build — but a reader should know the criterion is conditional.
+
+**Count: 131 of 144.** Three rows moved on this pass, and **the tranche was chosen precisely because
+it was green and untouched.** Every tranche anyone has ever re-derived in this project has produced a
+finding; this is the seventh consecutive confirmation, on the surface nobody had entered.

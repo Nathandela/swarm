@@ -21,9 +21,9 @@ against HEAD.
 | | count |
 |---|---|
 | Requirements | 144 |
-| Shipped (asserted by hand) | 134 |
-| Evidenced (measured on disk) | 134 |
-| **NOT MET (slice shipped, requirement invalidated later)** | **8** |
+| Shipped (asserted by hand) | 131 |
+| Evidenced (measured on disk) | 131 |
+| **NOT MET (slice shipped, requirement invalidated later)** | **11** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
 
@@ -59,10 +59,10 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-BIND-0 | S1 | shipped | `docs/verification/remote-phaseB-s1-evidence.md` |
 | PB-BIND-1 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-BIND-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
-| PB-BIND-3 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
-| PB-BIND-4 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
+| PB-BIND-3 | S8 | **NOT MET** | THE TEST NAMED 'Every' ENUMERATES NOTHING. TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend is a hand-written linear script with no reflective completeness check -- its NAME asserts a quantifier its BODY never checks. A facade method that NEVER WORKS, properly error-classed and traced, passed BOTH full suites (mobile 16.1s, conformance 207.1s). The structural half is genuinely strong and bidirectional, so a new method cannot go UNTRACED -- it can go UNEXERCISED (ADR-007 B116) |
+| PB-BIND-4 | S8 | **NOT MET** | THE FENCE'S SUBJECT IS KeyCustody; B8'S SUBJECT IS THE BINDING. B8 says key material crosses the binding ONCE and inbound. Adding a SECOND reverse-bound key-crossing interface passes both custody fences -- S14's count is written `if owner == "KeyCustody"`, and PB-BIND-4's walk sees funcs and methods but not interface methods, which its own comment states. The gap they close is DIRECTION; the gap nobody closes is COUNT ACROSS TYPES. Only the golden catches it, and the golden is 'a review step someone can approve, not a rule that refuses' -- that project's own words, about this same file. NOT VIOLATED TODAY (ADR-007 B116) |
 | PB-BIND-5 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
-| PB-BIND-6 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
+| PB-BIND-6 | S8 | **NOT MET** | 'DROP-OLDEST' IS STATED IN THREE PLACES AND ENFORCED BY NONE. Section 6.0's budget row is '256 items, drop-oldest with a surfaced overflow signal'. Inverting the policy to drop-NEWEST -- same constant, same counter, same doc string -- leaves BOTH fences passing: the source fence checks the constant and the prose, the runtime fence checks that the core did not stall and that SOME events dropped. Nothing checks WHICH. Not cosmetic: under drop-newest a slow UI discards the CURRENT state and keeps the stale one, so the connection plane renders an old state and never converges. IMPLEMENTED CORRECTLY TODAY (events.go drops the head), unfenced against its own inversion (ADR-007 B116) |
 | PB-BIND-7 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-DOC-1 | S0 | shipped | `docs/adr/ADR-007-remote-access.md` |
 | PB-DOC-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
