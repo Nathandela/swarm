@@ -1502,37 +1502,59 @@ func (sc *serverConn) handleRendezvousClaim(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	now := sc.s.clk.Now()
-	sc.s.mu.Lock()
-	defer sc.s.mu.Unlock()
-	if sc.s.isBurned(req.ID, now) {
-		return sc.replyErr(codeRendezvousUsed)
+	// THE DECISION IS TAKEN UNDER THE LOCK; THE REPLY IS WRITTEN OUTSIDE IT (ADR-007 B82).
+	//
+	// This handler used to hold s.mu — with `defer sc.s.mu.Unlock()` — across its own
+	// `return sc.replyOK(...)`, so writeFrame's SOCKET WRITE ran under the one lock every op
+	// on every connection contends for (meterOp takes it at the top of each one, before the
+	// op's own auth). A claimer that stops draining its socket therefore froze the entire
+	// relay until writeFrame's 10-second ceiling expired — from an unauthenticated
+	// connection, because rendezvous_claim carries no requireAuth. Measured end to end by
+	// TestB82_AStalledClaimReplyDoesNotFreezeEveryOtherConnection: one held write, and an
+	// unrelated connection's rendezvous_create timed out.
+	//
+	// Create, send, recv and complete all unlock before they reply; claim was the one that
+	// did not, and the shape here — decide inside, answer outside — is what makes that
+	// uniform. The deferred unlock is KEPT, scoped to the closure, so no early return can
+	// leak the lock; what moves out is only the write. "" means admitted.
+	code := func() string {
+		sc.s.mu.Lock()
+		defer sc.s.mu.Unlock()
+		if sc.s.isBurned(req.ID, now) {
+			return codeRendezvousUsed
+		}
+		slot, ok := sc.s.rendezvous[req.ID]
+		if !ok {
+			return codeRendezvousTTL
+		}
+		if now.Sub(slot.createdAt) >= sc.s.cfg.RendezvousTTL {
+			// The claimer is told the truth it needs — the slot expired — and the id is spent
+			// on the way out. This is the SECOND site that drops a slot for age, and a fix
+			// applied only to purgeExpiredRendezvous would leave the very path the victim
+			// phone walks handing the label back to a stranger (ADR-007 B47b).
+			sc.s.burnRendezvous(req.ID, now)
+			return codeRendezvousTTL
+		}
+		if slot.creator != nil && slot.claimer != nil {
+			return codeRendezvousFull
+		}
+		// A participant re-claiming its own rendezvous changes nothing: taking the free seat
+		// would put ONE connection in both of them, and re-making the inbox would drop
+		// whatever the peer has already sent (round-4 threat review C2). It answers OK, the
+		// same bytes a fresh claim answers, which is why the two share the reply below.
+		if slot.creator == sc || slot.claimer == sc {
+			return ""
+		}
+		// C2: as in create — one rendezvous per connection, and the previous one is released
+		// (and burned if it is left empty) rather than silently orphaned.
+		sc.s.leaveRendezvousLocked(sc, now)
+		slot.claimer = sc
+		sc.attachRendezvousLocked(req.ID)
+		return ""
+	}()
+	if code != "" {
+		return sc.replyErr(code)
 	}
-	slot, ok := sc.s.rendezvous[req.ID]
-	if !ok {
-		return sc.replyErr(codeRendezvousTTL)
-	}
-	if now.Sub(slot.createdAt) >= sc.s.cfg.RendezvousTTL {
-		// The claimer is told the truth it needs — the slot expired — and the id is spent
-		// on the way out. This is the SECOND site that drops a slot for age, and a fix
-		// applied only to purgeExpiredRendezvous would leave the very path the victim
-		// phone walks handing the label back to a stranger (ADR-007 B47b).
-		sc.s.burnRendezvous(req.ID, now)
-		return sc.replyErr(codeRendezvousTTL)
-	}
-	if slot.creator != nil && slot.claimer != nil {
-		return sc.replyErr(codeRendezvousFull)
-	}
-	// A participant re-claiming its own rendezvous changes nothing: taking the free seat
-	// would put ONE connection in both of them, and re-making the inbox would drop
-	// whatever the peer has already sent (round-4 threat review C2).
-	if slot.creator == sc || slot.claimer == sc {
-		return sc.replyOK(map[string]any{})
-	}
-	// C2: as in create — one rendezvous per connection, and the previous one is released
-	// (and burned if it is left empty) rather than silently orphaned.
-	sc.s.leaveRendezvousLocked(sc, now)
-	slot.claimer = sc
-	sc.attachRendezvousLocked(req.ID)
 	return sc.replyOK(map[string]any{})
 }
 
