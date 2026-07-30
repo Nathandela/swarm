@@ -4933,3 +4933,67 @@ the row.**
   finding if found; it was looked for and is not there.
 
 **Coverage: 23 of 143 deep (16.1%), 37 covered (25.9%).**
+
+---
+
+### B88 — the instrument works: four writers, a fence that constructs two, and neither escape exploitable
+
+Residual 4.23 exercised on the device-loss properties, which are the highest-stakes candidates it
+named. **The gap is real and measurable. Neither instance is exploitable.** Both halves matter.
+
+**B88(1) — the enumeration.** Four production writers reach the phone's at-rest storage; the census
+fence constructs **two**:
+
+| writer | at-rest form | in the scan root? | constructed by the fence? |
+|---|---|---|---|
+| `phone-state.json` | sealed containers + a pinned cleartext list | yes | **yes** |
+| `device.key` | public keys cleartext, tiers **sealed** | yes | **yes** |
+| `pairing-attempt` | **plain write, cleartext** | yes | **NO** |
+| `relay-url` | **plain write, cleartext** | **NO — parent of the scan root** | NO |
+
+**The two escapes have different causes, and that is what makes this the instrument rather than an
+oversight.** The first is in package `mobile` while the census lives in `internal/phonecore` and
+builds a `phonecore.Core` — so it **structurally cannot construct that writer**, and the file simply
+is not on disk when the scan runs. The second is written **one directory above the scan root**, so
+driving the right writer would not have helped.
+
+**The read side is genuinely channel-quantified, and that deserves recording.** The scan walks
+*every regular file* under the directory, and its own comment reasons about the sibling-file
+evasion — *"a seal that moved the material into a sibling file would pass a per-file check while the
+material is just as reachable."* **They thought about this.** The quantifier was dropped **on the
+write side only**: the fence enumerates files exhaustively within a directory that one component
+populated. That is 4.23 precisely.
+
+**Sibling paths checked before filing, and the caution paid again.** Two module-wide fences exist but
+enumerate *different* sets — call sites of failable custody ops, and call sites of the cleartext
+sealer. **Both unfenced writers touch neither a sealer nor a custody op**; they are plain file
+writes, so both fences pass while blind to them.
+
+**B88(2) — unfenced, NOT exploitable, and the distinction is load-bearing.** The pairing-attempt file
+holds **one label from a closed set** — no key material, so PB-SEC-1 is **not violated**; no session
+content, no session name, no hostname. A thief learns *that a pairing attempt reached state X*. The
+relay URL is **public by design**: it travels in the pairing QR and is the one field a scanning phone
+must read in the clear. Both sit under the no-backup directory, **so PB-SEC-10's exclusion holds for
+them by placement rather than by luck.**
+
+**The exposure is the NEXT writer, not these two.** A future slice adding a file gets no census row —
+the completeness check is reflective over the state struct's *fields*, so a non-field file is never
+demanded — and no byte scan, because its writer is never driven. **That is exactly how these two
+arrived.**
+
+**B88(3) — PB-KEY-2's tier split HOLDS, for a stated reason rather than an assumed one.** The
+no-crossing property is fenced against the whole-directory byte scan, and the census pairs every
+sealed row with its positive half, with **reflective completeness both ways** — a new field with no
+row fails, and a row naming a dead field fails. And the two unfenced writers cannot break it
+**because they write no tiered material at all**: a ceremony label and a relay URL are assigned no
+tier, so there is nothing for them to misplace. **The tier split is not under-quantified; the
+directory inventory is.**
+
+**B88(4) — a second null result over device-loss properties.** Nothing a stolen handset yields here
+is key material or session content. **The mechanism is under-quantified; the contents are not
+sensitive.** Nobody had checked this before, in five rounds.
+
+**Remediation is one test with no production change**, in the shape the instrument prescribes: **pin
+the set of filenames that may appear under the phone's at-rest root**, so a fifth writer fails the
+enumeration instead of arriving silently. Not a seal — sealing a public URL and a ceremony label buys
+nothing. **It would have caught both of these on the day they landed.**
