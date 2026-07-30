@@ -5981,3 +5981,50 @@ latency assertions into a lane that is not part of `./...`.
 were on **targeted packages**, not the full suite, and were described as such each time. **No full
 `go test ./...` run in this round was green, in either arm.** That is a standing condition of the
 tree, not a consequence of any change in it.
+
+---
+
+## B107 — B106 was wrong. GG-4 holds, and I generalised a load observation into a property of the host
+
+**2026-07-30.** B106 stated that GG-4's `go test ./...` clause *"is not currently satisfiable on this
+machine, at HEAD or before it."* **Measured here, twice, and it is false.**
+
+```
+load averages: 3.28 6.75 10.39   go test ./... -count=1   EXIT=0
+load averages: 4.49 6.45 9.52    go test ./... -count=1   EXIT=0
+```
+
+Two consecutive green full suites. With `go build`, `go vet` and
+`golangci-lint --max-same-issues=0 --max-issues-per-linter=0` also clean at the same commit,
+**all four GG-4 gates hold.**
+
+**The error is the generalisation, not the data.** The four-run measurement B106 rests on is sound —
+alternating arms, baseline failing more than the changed tree — but every one of those runs was taken
+while **two or three other agents were executing full suites concurrently**, at load 10-15. The
+reviewer described its tree as "at rest", meaning *its own files were not being edited*; I read that
+as *the host was quiet*. **It was not, and I never checked.** I then reproduced the single latency
+test under that same load, watched it fail, and wrote the result down as a property of the machine.
+
+> **The distinguishing measurement was available the whole time and cost twenty minutes.** Run the
+> suite when nothing else is running. I did not, because the failure reproduced immediately under the
+> conditions I happened to be in, and a reproduction feels like a confirmation. **It confirms the
+> observation. It says nothing about the boundary of the claim.**
+
+**What survives.** Concurrent agent suites on one host make the §6.0 latency gates fail —
+`TestS6B_GatewayInputLatencyIsNotPollGated` reproducibly, others sporadically. That is a real and
+useful operational fact: **do not gate a release from a machine running parallel agents.** It is not
+a defect in the code, not a property of the host, and not a blocker on GG-4.
+
+**Also withdrawn:** B106's claim that *"no full `go test ./...` run in this round was green, in either
+arm."* A member reported two of three green at load 5-10 in the same window, which I then confirmed
+independently. The round's suite record is better than the round's synthesis says.
+
+**And the same correction applies twice over to the trajectory.** Round 5 called this "different tests
+each run"; B106 corrected that to "one test, deterministically"; **this corrects B106 to "one test,
+deterministically, only under concurrent-suite load."** Each step narrowed the claim, and each step
+was taken by someone measuring rather than reasoning. The row of corrections is the method working —
+but it is also three rounds of a claim about test flakiness that nobody had simply *run in a quiet
+room*.
+
+**GG-4 is green at `42129bb`.** That is the first time in this record it has been stated on a measured
+full suite rather than on targeted packages.
