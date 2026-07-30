@@ -221,9 +221,26 @@ func TestPairing_ForgedAcceptWithoutSecretFailsClosed(t *testing.T) {
 
 	t.Run("tampered_decision_frame", func(t *testing.T) {
 		mo, mErr, do, dErr := newRun(t, flipLast)
-		// The real machine affirmatively accepted...
-		if mErr != nil || mo == nil {
-			t.Fatalf("machine leg: mo=%v mErr=%v; want a clean accept", mo, mErr)
+		// RESTATED 2026-07-30 (ADR-007 B89) -- THE ASSERTION MOVED, THE PROPERTY DID NOT.
+		// This clause used to demand "a clean accept" from the machine while the device
+		// failed closed. That IS the deterministic half-pair PB-PAIR-4 forbids, and this
+		// test asserted it as the expected outcome: the machine committed to a device the
+		// tampering guaranteed had pinned nothing.
+		//
+		// The property under test is the DEVICE-side one asserted below -- a device fed a
+		// tampered decision cannot be tricked into accepting -- and it is untouched. This
+		// clause is its PRECONDITION: it exists to show the machine got as far as sending
+		// an acceptance, so that the device's refusal is measuring something.
+		//
+		// It is now STRICTER, not weaker. `mErr != nil` alone would pass on any earlier
+		// failure -- a handshake that never completed, a decline -- and the precondition
+		// would go vacuous. ErrAcceptUnacknowledged is reachable ONLY after the acceptance
+		// was sent and the acknowledgement never arrived, so it proves the same fact the
+		// old clause proved AND that the machine correctly claimed no device.
+		if !errors.Is(mErr, ErrAcceptUnacknowledged) || mo != nil {
+			t.Fatalf("machine leg: mo=%v mErr=%v; want ErrAcceptUnacknowledged and no outcome "+
+				"(the acceptance was sent, the tampered frame meant it was never acknowledged, "+
+				"so the machine must claim NO device)", mo, mErr)
 		}
 		// ...yet a device fed a tampered decision cannot be tricked into accepting.
 		if dErr == nil {

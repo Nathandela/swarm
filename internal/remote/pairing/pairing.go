@@ -12,9 +12,12 @@
 //	machine shows SAS + Allow? [y/N] (mandatory desktop confirm, fail-closed)
 //	device  shows SAS to its own operator (DeviceSAS gate, fail-closed)
 //	device  msg4 (transport frame)              // the relay-route consent, or an empty ABORT
-//	on affirmative confirm AND a non-empty msg4 ONLY: machine pins device static +
-//	records routing, sends its acceptance, burns the rendezvous; device pins machine
-//	static on that acceptance.
+//	machine msg5 (transport frame)              // the accept/decline decision
+//	device  msg6 (transport frame)              // acknowledgement of an ACCEPTANCE only
+//	on affirmative confirm AND a non-empty msg4 ONLY: the machine sends its acceptance;
+//	the device pins the machine static on that acceptance and acknowledges it; the
+//	machine pins the device static + records routing ONLY on that acknowledgement, and
+//	then burns the rendezvous.
 //
 // msg4 EXISTS BECAUSE THE SAS CANNOT PRECEDE msg3 (ADR-007 B52). Writing msg3 is what
 // creates the channel binding, so anything carried in msg3 is inside the transcript the
@@ -44,6 +47,8 @@ package pairing
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -88,6 +93,13 @@ var (
 	// phone's public key, and leaves the machine unable to deliver the epoch grant
 	// that makes the pairing usable at all (ADR-007 B27/B38).
 	ErrNoConsent = errors.New("pairing: device relay-route consent missing; pairing failed closed (ADR-007 B38)")
+	// ErrAcceptUnacknowledged is the machine-side result when the acceptance was sent and
+	// the device never acknowledged it: the machine cannot know its "yes" arrived, so it
+	// claims NO device (PB-PAIR-4, ADR-007 B81(2)).
+	//
+	// It is not the same failure as a decline. A decline is an answer; this is the absence
+	// of one, and the only honest thing either name can carry is that nothing was pinned.
+	ErrAcceptUnacknowledged = errors.New("pairing: the device never acknowledged the acceptance; no device claimed (PB-PAIR-4)")
 )
 
 // RendezvousTransport is the pairing package's seam onto the relay rendezvous
@@ -278,6 +290,22 @@ type MachineOutcome struct {
 	SAS          [6]string
 	DeviceStatic []byte // pinned device Noise-static public key
 	Device       DevicePayload
+	// RendezvousUnburned records a rendezvous burn that did not finish on a pairing that
+	// otherwise SUCCEEDED, and it is nil on every healthy pairing.
+	//
+	// IT IS A FIELD RATHER THAN AN ERROR BECAUSE A BURN THAT CANNOT FINISH IS HOUSEKEEPING,
+	// NOT CONSENT (ADR-007 B82(1)). The burn runs after the acceptance has been forwarded
+	// AND acknowledged, so folding its failure into the pairing's failure orphaned a phone
+	// this machine had already told yes, with every frame delivered intact and only a
+	// loaded or distant relay to blame.
+	//
+	// It is not nothing, which is why it is carried rather than dropped: an unburned
+	// rendezvous id survives until the relay purges it at its own TTL, and past that lapse
+	// the id can be re-created (ADR-007 B47b). The residual is BOUNDED by that TTL and by
+	// the pairing secret already being spent, so it cannot be replayed into a second
+	// handshake -- but it is a fact about relay state that this outcome is the only place
+	// that knows.
+	RendezvousUnburned error
 }
 
 // DeviceOutcome is the device's result on a completed pairing (R-PAIR.7): the
@@ -424,7 +452,7 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// unburned meanwhile. Found by TestB38_AMachineRefusesAMsg3WithNoConsentBeforeTheConfirm,
 	// which hung before this line existed.
 	if !devPayload.ConsentDeferred || len(devPayload.ConsentSig) != 0 {
-		_ = m.sendDecision(ctx, sess, rt, label, false)
+		declineAndBurn(ctx, sess, rt, label)
 		return nil, ErrNoConsent
 	}
 	deviceStatic := sess.PeerStatic()
@@ -445,7 +473,7 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		allow, cErr = p.Confirm(ctx, sas, devPayload.DeviceName)
 	}
 	if cErr != nil || !allow {
-		_ = m.sendDecision(ctx, sess, rt, label, false)
+		declineAndBurn(ctx, sess, rt, label)
 		switch {
 		case cErr != nil && errors.Is(cErr, ErrConfirmTimeout):
 			return nil, ErrConfirmTimeout
@@ -473,7 +501,7 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// the user declined.
 	consent, err := recvConsent(ctx, sess, rt)
 	if err != nil || len(consent) == 0 {
-		_ = m.sendDecision(ctx, sess, rt, label, false)
+		declineAndBurn(ctx, sess, rt, label)
 		if err != nil {
 			return nil, fmt.Errorf("pairing: recv relay-route consent: %w", err)
 		}
@@ -484,15 +512,50 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	}
 	devPayload.ConsentSig = consent
 
-	// Affirmative confirm (R-PAIR.7): send acceptance over the authenticated
-	// channel, pin the device static + record its routing, and burn the rendezvous.
-	if err := m.sendDecision(ctx, sess, rt, label, true); err != nil {
+	// Affirmative confirm (R-PAIR.7): send the acceptance over the authenticated channel.
+	// Up to this instant a dead ctx must fail the pairing CLOSED, and it does so
+	// symmetrically -- no acceptance, no pin, no enrollment.
+	if err := sendDecision(ctx, sess, rt, decisionAccept); err != nil {
+		_ = rt.Complete(ctx, label)
 		return nil, fmt.Errorf("pairing: send acceptance: %w", err)
 	}
+
+	// THE MACHINE USED TO COMMIT ON THE STRENGTH OF HAVING *SENT* THIS FRAME, AND NOTHING
+	// ACKNOWLEDGED IT (PB-PAIR-4 / PB-SAS-4; ADR-007 B81(2), B86(2)). "Sent" was therefore
+	// all it could ever know, and three ordinary things -- the handset's own 60 s TTL
+	// elapsing between msg4 and the answer, a relay flipping one bit, a relay accepting the
+	// frame and delivering nothing because the peer detached or its 16-slot inbox was full
+	// -- all ended the same way: machine enrolled, phone holding nothing, remote control on
+	// for a device that does not exist, the single-device slot spent, and every further
+	// pairing refused until someone found the device id and ran a desktop revoke. The relay
+	// is the declared adversary and chose that at will, so the revoke was a treadmill.
+	//
+	// So the machine waits to be told. The doubt does not disappear -- this is two generals,
+	// and the fifth frame only MOVES the residual -- but it moves it to the harmless side:
+	// an acknowledgement lost in transit leaves the phone pinned and this machine claiming
+	// NOTHING, which spends no slot, enables no kill switch, and is recovered by pairing
+	// again rather than by revoking.
+	//
+	// THE WAIT IS DETACHED, AND THAT IS THE SAME RULING AS B69(2), one frame later. Before
+	// the acceptance leaves, the pairing deadline is correct. Once it has left, the phone
+	// may pin at any moment, so cancelling the machine's chance to LEARN that re-creates
+	// precisely the half-pair B69(2) fixed -- phone pinned, machine enrolling nothing --
+	// from an ordinary clock. It is bounded for the reason B64 exists: an unbounded park is
+	// the defect, not the remedy.
+	ackCtx, cancelAck := context.WithTimeout(context.WithoutCancel(ctx), acceptAckWindow)
+	defer cancelAck()
+	if err := recvAck(ackCtx, sess, rt); err != nil {
+		_ = burnSlot(ctx, rt, label)
+		return nil, fmt.Errorf("%w (%v)", ErrAcceptUnacknowledged, err)
+	}
+
+	// Pin the device static + record its routing (R-PAIR.7), and burn the rendezvous. The
+	// burn's failure is NOT the pairing's failure: see MachineOutcome.RendezvousUnburned.
 	return &MachineOutcome{
-		SAS:          sas,
-		DeviceStatic: deviceStatic,
-		Device:       devPayload,
+		SAS:                sas,
+		DeviceStatic:       deviceStatic,
+		Device:             devPayload,
+		RendezvousUnburned: burnSlot(ctx, rt, label),
 	}, nil
 }
 
@@ -553,67 +616,128 @@ func recvConsent(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTr
 	return sess.Decrypt(frame)
 }
 
-// acceptCommitWindow bounds the detached rendezvous burn in sendDecision below. Like
-// abortSendWindow it is a LIVENESS bound rather than a protocol timeout: one control
-// roundtrip on a socket that is already open needs milliseconds, and the only reason to
-// wait at all is a peer that is gone in a way the kernel has not noticed. It exists so
-// detaching from the pairing deadline cannot re-create B64 -- an unbounded park is the
-// defect that deadline was added to fix.
-const acceptCommitWindow = 2 * time.Second
+// acceptCommitWindow bounds the detached rendezvous burn, and acceptAckWindow the detached
+// wait for the device's acknowledgement of an acceptance. Like abortSendWindow both are
+// LIVENESS bounds rather than protocol timeouts: one roundtrip on a socket that is already
+// open needs milliseconds, and the only reason to wait at all is a peer that is gone in a
+// way the kernel has not noticed. They exist so detaching from the pairing deadline cannot
+// re-create B64 -- an unbounded park is the defect that deadline was added to fix.
+//
+// THE COST OF acceptAckWindow BEING SHORT IS A RETRY, NOT A HALF-PAIR, which is the whole
+// difference from ADR-007 B82(1). B82(1) is the observation that a flat 2 s on the BURN
+// manufactures a half-pair on a loaded or distant relay; that is fixed below by the burn no
+// longer being able to fail the pairing at all. Here a relay too slow to carry the
+// acknowledgement inside the window leaves the machine claiming nothing while the phone
+// pinned -- a pairing the owner runs again, with the single-device slot free and no revoke
+// in the way.
+const (
+	acceptCommitWindow = 2 * time.Second
+	acceptAckWindow    = 2 * time.Second
+)
 
-// sendDecision encrypts the machine's final accept/decline signal over the
-// established Noise transport and burns the rendezvous. It is authenticated (both
-// statics are pinned by now), so the device knows the decision came from the real
-// machine. The rendezvous is completed (burned) regardless of the decision.
+// ackLabel domain-separates the acknowledgement below from every other use of the channel
+// binding -- the SAS above all, which is derived from the same value.
+const ackLabel = "swarm/pairing/decision-ack/v1"
+
+// acceptAck is what the device sends back for a decision it has received and acted on: a
+// domain-separated hash over the Noise CHANNEL BINDING and the decision byte.
 //
-// ONCE AN ACCEPTANCE HAS BEEN FORWARDED, THE BURN IS NO LONGER THE PAIRING DEADLINE'S TO
-// CANCEL (ADR-007 B69(2)). B64 put the whole handshake under one deadline, and this
-// function ran Send and Complete on it back to back while treating a Complete failure as
-// the decision's failure. A deadline landing between the two produced: phone holds
-// acceptance and pins, Complete fails, Pair returns no MachineOutcome, daemon enrolls
-// nothing -- the half-pair PB-PAIR-4 forbids, reachable with nothing but an ordinary clock
-// on a pairing near its advertised expiry.
+// IT IS KEYED ON THE CHANNEL BINDING BECAUSE THAT IS THE VALUE THE TWO OPERATORS COMPARED
+// (PB-SAS-4, ADR-007 B86(2)). Until this frame existed the SAS attested only the handshake
+// that PRECEDED the decision: msg4 and the acceptance ride outside the transcript, so six
+// matching emoji said nothing whatever about whether the two sides ended up agreeing, which
+// is exactly why a half-pair was invisible to both people looking straight at it. A machine
+// that commits only on a frame no party without this binding can produce makes the
+// comparison those operators performed reach the accept/decline exchange too.
 //
-// The remedy is the shape abortConsent already uses -- context.WithoutCancel plus a short
-// bound, so the ctx's values survive and only the cancellation is dropped -- but applied
-// CONDITIONALLY, which is the difference between the two sites. abortConsent detaches
-// unconditionally because it only ever runs on a ctx that is already dead. Here the
-// cancellation is CORRECT right up until the acceptance leaves: before that point a dead
-// ctx must fail the pairing closed, and it does so symmetrically -- no acceptance, no pin,
-// no enrollment. Detaching earlier would spend the deadline the daemon promised.
+// The frame already rides the Noise transport, so the relay can neither read nor forge it
+// and the binding adds no secrecy. What it adds is that the property is STATED: an
+// acknowledgement that echoed a byte would be satisfied by any frame the peer emitted,
+// including one from a session whose transcript diverged.
+func acceptAck(sess *crypto.NoiseSession, decision byte) []byte {
+	h := sha256.New()
+	h.Write([]byte(ackLabel))
+	h.Write(sess.ChannelBinding())
+	h.Write([]byte{decision})
+	return h.Sum(nil)
+}
+
+// sendDecision encrypts the machine's accept/decline signal over the established Noise
+// transport and sends it. It is authenticated (both statics are pinned by now), so the
+// device knows the decision came from the real machine.
 //
-// Detaching works because the relay conn outlives this call: relayRendezvousFactory's
-// watcher closes it when the ctx passed to NewRendezvous is done, and that is the
-// CONNECTION ctx (internal/skeleton/pairing.go), not the pairing deadline derived from it.
-//
-// WHAT THIS DOES NOT COVER. It narrows the window; it does not eliminate the failure. If
-// Complete fails for a non-deadline reason -- the relay refuses, the socket is gone, the
-// bound above elapses -- the machine still reports failure against a phone that has
-// already pinned, and so does a deadline that lands mid-write inside Send after the bytes
-// reach the wire. That is B60(1), it REMAINS OPEN, and closing it needs a durable
-// prepare/commit protocol across the two legs rather than a wider context.
-func (m *Machine) sendDecision(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, label string, accept bool) error {
-	b := decisionDecline
-	if accept {
-		b = decisionAccept
-	}
-	frame, err := sess.Encrypt([]byte{b})
+// IT NO LONGER BURNS THE RENDEZVOUS. Burning is housekeeping and is separated from the
+// decision precisely so it can never be mistaken for it (see burnSlot).
+func sendDecision(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, decision byte) error {
+	frame, err := sess.Encrypt([]byte{decision})
 	if err != nil {
-		_ = rt.Complete(ctx, label)
 		return err
 	}
-	sendErr := rt.Send(ctx, frame)
+	return rt.Send(ctx, frame)
+}
 
-	completeCtx := ctx
-	if accept && sendErr == nil {
-		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), acceptCommitWindow)
-		defer cancel()
-		completeCtx = detached
+// recvAck reads the device's acknowledgement of the acceptance and checks it against this
+// session's channel binding. A frame that does not decrypt, or that decrypts to anything
+// other than the expected value, is NOT an acknowledgement: the machine claims no device.
+func recvAck(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport) error {
+	frame, err := rt.Recv(ctx)
+	if err != nil {
+		return err
 	}
-	if err := rt.Complete(completeCtx, label); err != nil && sendErr == nil {
-		sendErr = err
+	got, err := sess.Decrypt(frame)
+	if err != nil {
+		return err
 	}
-	return sendErr
+	if subtle.ConstantTimeCompare(got, acceptAck(sess, decisionAccept)) != 1 {
+		return errors.New("acknowledgement does not match this session's channel binding")
+	}
+	return nil
+}
+
+// sendAck is the device half of the frame above: it acknowledges an acceptance it has
+// received and is about to pin on.
+func sendAck(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport) error {
+	frame, err := sess.Encrypt(acceptAck(sess, decisionAccept))
+	if err != nil {
+		return err
+	}
+	return rt.Send(ctx, frame)
+}
+
+// burnSlot completes (burns) the rendezvous after the acceptance has left, on a
+// context DETACHED from the caller's and bounded by acceptCommitWindow.
+//
+// IT RETURNS ITS ERROR RATHER THAN IMPOSING IT (ADR-007 B82(1)). sendDecision used to run
+// Send and Complete back to back and fold a Complete failure into the decision's failure,
+// so a burn that could not finish -- on a relay merely loaded or distant, AFTER the
+// acceptance had already been forwarded and every frame delivered intact -- orphaned a
+// phone this machine had already told yes. A burn that cannot finish is housekeeping, not
+// consent, and the caller records it as MachineOutcome.RendezvousUnburned.
+//
+// DETACHING IS B69(2)'s RULING and it is unchanged: past the commit point the pairing
+// deadline no longer gets to reverse what the two legs settled. It works because the relay
+// conn outlives this call -- relayRendezvousFactory's watcher closes it when the CONNECTION
+// ctx is done (internal/skeleton/pairing.go), not the pairing deadline derived from it.
+func burnSlot(ctx context.Context, rt RendezvousTransport, label string) error {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), acceptCommitWindow)
+	defer cancel()
+	return rt.Complete(detached, label)
+}
+
+// declineAndBurn answers the device with a decline and burns the rendezvous, both on the
+// caller's context and both best-effort: the pairing has already failed for a reason the
+// caller holds and returns.
+//
+// The device is ANSWERED rather than left in silence because it is parked on rt.Recv
+// waiting for this machine's decision, and a machine that walks away leaves it there until
+// its own deadline elapses -- reporting a timeout for what is actually a refusal, and
+// holding the rendezvous unburned meanwhile (ADR-007 B38).
+//
+// The caller's context is right here, unlike on the accept path: nothing has been committed
+// on either side, so a dead ctx costs only the courtesy frame.
+func declineAndBurn(ctx context.Context, sess *crypto.NoiseSession, rt RendezvousTransport, label string) {
+	_ = sendDecision(ctx, sess, rt, decisionDecline)
+	_ = rt.Complete(ctx, label)
 }
 
 // Listening reports whether a pairing listener is currently active. It is false
@@ -777,6 +901,22 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	}
 	if len(decision) != 1 || decision[0] != decisionAccept {
 		return nil, ErrPairingDeclined
+	}
+
+	// ACKNOWLEDGE THE ACCEPTANCE BEFORE PINNING ON IT (PB-PAIR-4 / PB-SAS-4). The machine
+	// holds no device until this frame reaches it, so a phone that pins without sending one
+	// would leave the machine claiming a device the phone does not know about -- the
+	// orientation that spends the single-device slot and needs a desktop revoke.
+	//
+	// A FAILED SEND FAILS THE PAIRING CLOSED, and that is the cheap half of the two-generals
+	// split: where this device knows its acknowledgement did not leave, the machine will not
+	// have it either, so declining to pin is the two legs agreeing rather than a loss. Where
+	// the send REPORTS success and the frame is dropped anyway -- the relay does exactly that
+	// when the peer has detached or its inbox is full -- this phone pins and the machine
+	// claims nothing. That residual is irreducible, and it is the harmless orientation:
+	// re-pairing needs nothing from the desktop.
+	if err := sendAck(ctx, sess, rt); err != nil {
+		return nil, fmt.Errorf("pairing: acknowledge acceptance: %w", err)
 	}
 
 	// R-PAIR.7: pin the machine static + record its routing payload (incl. epoch).
