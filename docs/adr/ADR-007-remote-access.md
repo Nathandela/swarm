@@ -4517,3 +4517,62 @@ malfunctioning relay, and on a relay the owner runs that adversary is absent by 
 two conditions: **document that a corrupted final pairing frame from ANY cause needs a desktop
 revoke to recover**, and do not point that build at a relay the owner does not run. **Production
 NO, and B81(1) is the blocker.**
+
+---
+
+### B82 — round 5's compose review: all thirteen round-4 fences are REAL
+
+**The headline is a refutation, and it is the most reassuring result of the audit.** Every one of
+round 4's thirteen production changes was reverted by hand in a scratch copy and the named test
+**failed for the right reason** — the token bound on *both* the disk and boot-OOM halves, the
+rendezvous id bound, both halves of the slot leak, the sweep wiring, the recv park deadline, the
+`readFrame` arm *independently*, the recv meter, the presence authority check, the sweep push
+charge, the accept-commit detach, the confirm adapter, and the pairing deadline.
+
+**The vacuous-fence replacement is verified end to end, which is the part that matters.** Under the
+deadline-deleted mutation, the OLD B64 suite **still passes** — still vacuous — while the two NEW
+B69 fences **fail**. **Round 4 genuinely replaced a fence that could not fail with one that does**,
+rather than adding a test beside it. That distinction has been asserted twice in this record and is
+now measured.
+
+**B82(1) — a residual the B69(2) fix created, narrow but real.** The accept-commit detach uses a
+flat 2-second window. **Pre-fix, the accept-path `Complete` ran on the pairing context with tens of
+seconds remaining; post-fix it runs on 2 seconds.** On a healthy relay that is one round-trip and
+irrelevant. **On a loaded or distant relay, `Complete` exceeding 2s manufactures the very half-pair
+the detach prevents** — the machine reports failure against a phone that already pinned. A clear
+win for the deadline-already-expired case, a narrow loss for the not-yet-expired-but-slow case.
+Production wants the durable prepare/commit B60(1) already names; on a fast local relay it never
+fires.
+
+**B82(2) — a pre-existing production stall vector, not a round-4 composition.**
+`handleRendezvousClaim` replies **while holding the global `s.mu`**: `defer sc.s.mu.Unlock()` with
+`return sc.replyOK(...)` inside, so `writeFrame`'s socket write (10s context) runs under the global
+mutex. **A slow or malicious claimer stalls every other connection's operations for up to 10
+seconds.** `handleRendezvousCreate` unlocks *before* replying — claim is the inconsistent one.
+Confirmed by `git show 8861488^` to predate the round-4 work, so it is not a composition, but it
+lives in the subsystem round 4 churned. Cheap fix: release before replying, matching create.
+
+**B82(3) — refutations, each attacked deliberately and each holding.**
+- **The `device_revoke` pairer gate loses no legitimate flow.** The owner's revoke still works
+  because the machine's consent row is written before the device's first connect by design, so the
+  gate holds even for a device that paired and died — **PB-STATE-10 recovery intact.**
+- **The retired-bucket cap cannot be weaponised.** Filling a victim's bucket needs signed consents
+  an attacker cannot forge; the cap refuses only SUPERSESSION; recovery is revoke-then-pair; and in
+  single-device v1 `authorizePair` never sees a live consent to supersede, **so the cap is
+  unreachable in the production flow.**
+- **Presence self-ask composes safely with B61.** `requireAuth` guarantees a non-empty caller, a
+  self-query returns state the caller already holds, and B61's self-consent refusal means
+  `mayActOn(X,X)` can never be manufactured true.
+- **The accept-commit detach neither leaks nor strands the connection.** The relay conn's watcher
+  is keyed on the CONNECTION context, not the pairing one, so it outlives the detached commit; the
+  per-confirm goroutine is bounded by the result it produces.
+
+**B82(4) — closed-test friction worth planning around, not a defect.** The 60-second window starts
+inside `BeginPairing`, **before the reply carrying the QR reaches the owner's terminal**, and must
+then cover display → pick up phone → open app → scan → compare a six-word SAS on two screens →
+confirm on *both*. The daemon window and relay slot expire ~10s before the phone's own TTL, which
+starts at the scan. **A slow-but-honest ceremony fails and must retry.** It cannot simply be
+widened, because 60s IS the relay slot TTL.
+
+**Verdict: closed test YES; production NO**, gated on B78's free minting, B60(1)'s durable
+prepare/commit, and now B81(1)'s direction binding.
