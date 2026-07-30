@@ -97,6 +97,13 @@ enum class PerUseRefusalReason {
     /** ERROR_LOCKOUT_PERMANENT: only a device credential clears it. */
     LOCKED_OUT_PERMANENT,
 
+    /**
+     * The prompt succeeded and the ledger refused its callback: it belongs to a prompt that is no
+     * longer the one on screen. Either an invalidation emptied the ledger under it (ADR-007 B63)
+     * or a second prompt superseded it ([PromptTicket]).
+     */
+    PROMPT_SUPERSEDED,
+
     /** Keystore would not produce a usable cipher, even after regenerating the entry. */
     KEY_UNAVAILABLE,
 
@@ -154,6 +161,7 @@ object PerUseRefusalText {
         // would not authorize anything here -- it would only clear the lockout, which locking and
         // unlocking the phone does too, without the app asking for the device secret.
         PerUseRefusalReason.LOCKED_OUT_PERMANENT -> PerUseRemedy.UNLOCK_WITH_DEVICE_CREDENTIAL
+        PerUseRefusalReason.PROMPT_SUPERSEDED -> PerUseRemedy.TRY_AGAIN
         PerUseRefusalReason.KEY_UNAVAILABLE -> PerUseRemedy.REPORT_BUG
         PerUseRefusalReason.KEY_NOT_RELEASED -> PerUseRemedy.TRY_AGAIN
     }
@@ -190,6 +198,10 @@ object PerUseRefusalText {
         PerUseRefusalReason.LOCKED_OUT_PERMANENT ->
             "The sensor is locked until you unlock the phone with its PIN, pattern or password. " +
                 "Do that, then try again."
+
+        PerUseRefusalReason.PROMPT_SUPERSEDED ->
+            "That unlock no longer applies -- the phone locked, or another request replaced it " +
+                "-- so nothing was done. Try again."
 
         PerUseRefusalReason.KEY_UNAVAILABLE ->
             "The phone could not prepare the key this action is protected by. The app is " +
@@ -280,7 +292,12 @@ class PerUseGate(
             return
         }
 
-        if (ledger.beginPrompt(operation) != GateResolution.PROMPT_STARTED) {
+        // THE IDENTITY OF THIS PROMPT, and it lives in this closure and nowhere else. Two
+        // authorize calls for the SAME operation are otherwise indistinguishable to the ledger
+        // (ADR-007 B63), so #1's late callback resolved against #2 -- a kill authorized by a
+        // finger the user gave for a different request, or for nobody's request at all.
+        val ticket = PromptTicket(operation)
+        if (ledger.beginPrompt(operation, ticket) != GateResolution.PROMPT_STARTED) {
             onRefused(PerUseRefusal(operation, PerUseRefusalReason.PROMPT_IN_FLIGHT))
             return
         }
@@ -291,7 +308,7 @@ class PerUseGate(
             // The in-flight marker is cleared through the ledger's own path rather than by
             // reaching into it: a gate that returned here without clearing would refuse every
             // later prompt as concurrent, which is the wedge `endPrompt` documents.
-            ledger.endPrompt(operation, PromptOutcome.FAILED, now())
+            ledger.endPrompt(operation, PromptOutcome.FAILED, now(), ticket)
             onRefused(
                 PerUseRefusal(
                     operation,
@@ -303,7 +320,7 @@ class PerUseGate(
         }
 
         prompt.show(operation, cipher) { outcome, released ->
-            if (ledger.endPrompt(operation, outcome, now()) != GateResolution.AUTHORIZED) {
+            if (ledger.endPrompt(operation, outcome, now(), ticket) != GateResolution.AUTHORIZED) {
                 onRefused(PerUseRefusal(operation, reasonFor(outcome)))
                 return@show
             }
@@ -347,8 +364,12 @@ class PerUseGate(
         PromptOutcome.FAILED -> PerUseRefusalReason.FAILED
         PromptOutcome.LOCKED_OUT -> PerUseRefusalReason.LOCKED_OUT
         PromptOutcome.LOCKED_OUT_PERMANENT -> PerUseRefusalReason.LOCKED_OUT_PERMANENT
-        // Unreachable: a SUCCEEDED outcome resolves to AUTHORIZED and the caller returned above.
-        PromptOutcome.SUCCEEDED -> PerUseRefusalReason.KEY_NOT_RELEASED
+        // REACHABLE, and the one row where the outcome does not name the refusal. A SUCCEEDED
+        // callback resolves to AUTHORIZED unless the LEDGER refused it, and it refuses exactly
+        // one thing: a callback that does not belong to the prompt on screen. It used to read
+        // KEY_NOT_RELEASED -- "the unlock was accepted but the key was not released" -- which
+        // tells the user the wrong story about a prompt that was superseded or invalidated.
+        PromptOutcome.SUCCEEDED -> PerUseRefusalReason.PROMPT_SUPERSEDED
     }
 
     private companion object {

@@ -167,6 +167,22 @@ object GateInvalidation {
 }
 
 /**
+ * The identity of ONE prompt, minted by whoever is about to show it and presented back when that
+ * prompt's callback lands.
+ *
+ * IT IS A PLAIN CLASS AND NOT A `data class`, and that is the entire mechanism: what is compared
+ * is the OBJECT. Two prompts for the same operation carry two tickets, and no FIELD on either
+ * could tell them apart -- which is exactly the hole ADR-007 B63 left open, where the only
+ * discriminator was the operation and both prompts named the same one.
+ *
+ * THE CALLER MINTS IT RATHER THAN READING IT BACK OFF THE LEDGER. A ticket the ledger handed out
+ * on request would be one a late callback could ask for too, and a ticket anybody can fetch says
+ * nothing about which prompt is presenting it. This one exists only in the closure of the call
+ * that showed the prompt, so holding it IS being that call.
+ */
+class PromptTicket(val operation: GatedOperation)
+
+/**
  * The runtime ledger. It is deliberately NOT a boolean: an authorization is per operation,
  * consumable, time-bounded and killed by an invalidation event.
  *
@@ -177,14 +193,23 @@ object GateInvalidation {
 class AuthorizationLedger {
 
     /** The one prompt BiometricPrompt may have on screen, or null. */
-    private var inFlight: GatedOperation? = null
+    private var inFlight: PromptTicket? = null
 
     /** Grant time per authorized operation. Absent means not authorized, at any time. */
     private val grantedAtMillis = mutableMapOf<GatedOperation, Long>()
 
-    fun beginPrompt(operation: GatedOperation): GateResolution {
+    /**
+     * @param ticket the identity of the prompt about to go on screen, presented back to
+     *  [endPrompt] by the callback that prompt produces. It DEFAULTS to a fresh one so a caller
+     *  that only drives this state machine need not mint one; a caller that intends to resolve
+     *  the prompt keeps what it passed here, because that is the only copy there is.
+     */
+    fun beginPrompt(
+        operation: GatedOperation,
+        ticket: PromptTicket = PromptTicket(operation),
+    ): GateResolution {
         if (inFlight != null) return GateResolution.REFUSED_PROMPT_IN_FLIGHT
-        inFlight = operation
+        inFlight = ticket
         return GateResolution.PROMPT_STARTED
     }
 
@@ -207,14 +232,27 @@ class AuthorizationLedger {
      * ABANDONED rather than a refusal that clears: the marker belongs to whatever prompt is
      * genuinely on screen, and a stale callback must not disturb it.
      *
-     * WHAT THIS DOES NOT CLOSE, stated so it is chosen rather than assumed: two prompts for the
-     * SAME operation are indistinguishable here, because the signature carries nothing that
-     * separates them. Superseding prompt #1 with prompt #2 for the same operation and then
-     * delivering #1's callback still resolves against #2. Closing that needs a per-prompt token
-     * issued by `beginPrompt` and presented back here.
+     * SAME-OPERATION SUPERSESSION IS WHAT [ticket] CLOSES, and it is the half B63 recorded as
+     * still open: two prompts for the SAME operation are indistinguishable by operation, because
+     * `inFlight.operation == operation` is true of BOTH of them. Prompt #1 for KILL outstanding,
+     * an invalidation, prompt #2 for KILL begun, then #1's late callback -- which used to resolve
+     * against #2. A ticket is the identity the operation cannot carry.
+     *
+     * @param ticket the identity [beginPrompt] was given for the prompt this callback belongs to.
+     *  Null means the caller has none to present, and is then discriminated by its operation
+     *  alone -- B63's fence and no more. The one production caller ([PerUseGate]) always presents
+     *  one; a new asynchronous caller that does not is trusting the operation to tell its prompt
+     *  apart from a second one for the same operation, which is precisely what it cannot do.
      */
-    fun endPrompt(operation: GatedOperation, outcome: PromptOutcome, atMillis: Long): GateResolution {
-        if (inFlight != operation) return GateResolution.ABANDONED
+    fun endPrompt(
+        operation: GatedOperation,
+        outcome: PromptOutcome,
+        atMillis: Long,
+        ticket: PromptTicket? = null,
+    ): GateResolution {
+        val onScreen = inFlight
+        if (onScreen == null || onScreen.operation != operation) return GateResolution.ABANDONED
+        if (ticket != null && ticket !== onScreen) return GateResolution.ABANDONED
         inFlight = null
         val resolution = BiometricPolicy.resolve(outcome)
         if (resolution == GateResolution.AUTHORIZED) {
@@ -239,6 +277,18 @@ class AuthorizationLedger {
         if (spec.requiresCryptoObject) return true
         return atMillis - granted < spec.timeoutSeconds * 1_000L
     }
+
+    /**
+     * When [operation] was last authorized, or null when it is not authorized at all -- never
+     * prompted for, spent, or cleared by an invalidation.
+     *
+     * IT IS NOT A SECOND [authorized]. That answers a boolean, having already applied the window
+     * itself. Requirements 6.0's renewal clause needs the DECISION -- proceed, or pause and
+     * re-authorize -- and that is [InputFreshness]'s to make. So the ledger supplies the fact it
+     * holds and the policy object supplies the verdict, which is the split every other decision
+     * in this file already uses.
+     */
+    fun grantedAt(operation: GatedOperation): Long? = grantedAtMillis[operation]
 
     /** Per-use authorizations are spent by the operation they authorized. */
     fun consume(operation: GatedOperation) {

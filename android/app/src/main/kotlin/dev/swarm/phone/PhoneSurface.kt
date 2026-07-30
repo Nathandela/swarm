@@ -14,6 +14,8 @@ import dev.swarm.phone.keys.BiometricPolicy
 import dev.swarm.phone.keys.BiometricPrompts
 import dev.swarm.phone.keys.GateResolution
 import dev.swarm.phone.keys.GatedOperation
+import dev.swarm.phone.keys.InputFreshness
+import dev.swarm.phone.keys.InputGateDecision
 import dev.swarm.phone.keys.InvalidationEvent
 import dev.swarm.phone.keys.PerUseGate
 import dev.swarm.phone.keys.PerUseRefusalReason
@@ -75,8 +77,13 @@ class PhoneSurface(
      * `SwarmApplication.contentLock`'s, which is the only one every [InvalidationEvent] reaches;
      * a default here would be a parameter somebody eventually leaves off (ADR-007 B18(c)), and
      * what they would get is a per-use gate no screen lock can clear.
+     *
+     * It is HELD rather than only passed on, because requirements 6.0's timed tier is decided
+     * from it too: the moment the tier was last authorized is a fact every [InvalidationEvent]
+     * must be able to destroy, and a timestamp kept in this class would survive a screen lock
+     * that emptied the ledger.
      */
-    ledger: AuthorizationLedger,
+    private val ledger: AuthorizationLedger,
 ) {
 
     /**
@@ -110,10 +117,16 @@ class PhoneSurface(
     private val pairing = PairingSurface(activity, runtime)
     private val settings = SettingsSurface(activity, runtime)
 
-    private val takeControl = gatedButton("Take control") { app, session -> app.takeControl(session) }
+    /**
+     * TIMED (requirements 6.0), so it goes through [timedButton]: 60 seconds, and a crossing
+     * pauses and re-authorizes rather than continuing.
+     */
+    private val takeControl = timedButton("Take control", GatedOperation.TAKE_CONTROL) { app, session ->
+        app.takeControl(session)
+    }
 
     /**
-     * PER-USE (requirements 6.0), so it goes through [perUse] and not through [gatedButton].
+     * PER-USE (requirements 6.0), so it goes through [perUse] and not through [timedButton].
      * Ending someone's session is one prompt away from a phone in a stranger's hand.
      */
     private val kill = perUseButton("Kill session", GatedOperation.KILL) { app, session ->
@@ -138,7 +151,7 @@ class PhoneSurface(
      * The bytes are UTF-8 and nothing on this side interprets them. There is no VT emulator on
      * the handset (ADR-007 D2): what goes out is what was typed.
      */
-    private val send = gatedButton("Send line") { app, session ->
+    private val send = timedButton("Send line", GatedOperation.INPUT) { app, session ->
         val line = typed.text.toString()
         app.sendInput(session, (line + "\r").toByteArray(Charsets.UTF_8))
         typed.text.clear()
@@ -490,21 +503,124 @@ class PhoneSurface(
     }
 
     /**
-     * A control that reaches a facade verb, with the overlay defence applied by construction
-     * rather than restated at each call site. Every one of these is destructive or authorising,
+     * A control for an operation requirements 6.0 puts in the TIMED tier -- input and
+     * take_control, at 60 seconds -- with the overlay defence applied by construction rather than
+     * restated at each call site. Every control on this surface is destructive or authorising,
      * which is exactly the set an overlay attack is worth mounting against.
      *
      * The verb's outcome goes on screen. A gated action that reports nothing is the failure
-     * PB-APP-9 exists to prevent: the user presses revoke, something refuses, and the screen
+     * PB-APP-9 exists to prevent: the user presses a control, something refuses, and the screen
      * looks identical either way.
+     *
+     * IT IS A SEPARATE FACTORY FROM [perUseButton] SO THE TIER IS VISIBLE AT THE CALL SITE, and
+     * it replaced a plain `gatedButton` that named no tier at all. 6.0 has two rows and this
+     * module now has two factories; a control that belongs to neither has to say which it is.
      */
-    private fun gatedButton(text: String, verb: (App, String) -> Any?): Button =
-        SecureWindow.gate(
-            Button(activity).apply {
-                this.text = text
-                setOnClickListener { invoke(verb) }
-            },
-        )
+    private fun timedButton(
+        text: String,
+        operation: GatedOperation,
+        verb: (App, String) -> Any?,
+    ): Button = SecureWindow.gate(
+        Button(activity).apply {
+            this.text = text
+            setOnClickListener { withFreshTimedAuthorization(operation) { invoke(verb) } }
+        },
+    )
+
+    /**
+     * Requirements 6.0's RENEWAL clause, which had no production caller at all (ADR-007 B83(4)):
+     * "a typing session crossing the 60 s freshness window must pause input and re-authorize, not
+     * silently continue or silently drop; the lease itself is not ended by freshness expiry".
+     *
+     * WHAT WAS ACTUALLY UNENFORCED, because the neighbouring path covers less than it looks like
+     * it does. take_control, kill, launch and revoke are signed, and signing unseals the content
+     * tier per operation through a KEK carrying `setUserAuthenticationParameters(60,
+     * AUTH_BIOMETRIC_STRONG)` -- so the PLATFORM refuses those past the window. KEYSTROKES ARE
+     * NOT COVERED BY THAT: `App.resolveSend` consults the content KEK only when the in-memory
+     * epoch content key is zero, which happens only after a purge, so a foregrounded app answers
+     * from memory and never makes the round trip. `ContentLock` installs no foreground timeout
+     * either, by its own admission and on its own merits. An unlocked, continuously foregrounded
+     * session therefore held shell-input authority for as long as it stayed in front of the user.
+     *
+     * AND WHERE THE PLATFORM DOES REFUSE, IT REFUSES. It does not pause a running typing session
+     * and ask for a fingerprint, which is the clause 6.0 actually writes and what [InputFreshness]
+     * exists to decide.
+     *
+     * NOTHING HERE CLAIMS THE PLATFORM'S HALF. That a timed Keystore key refuses past its window
+     * is PB-E2E-5, DEFERRED (ADR-007 B31), and is established nowhere in this repository.
+     */
+    private fun withFreshTimedAuthorization(operation: GatedOperation, act: () -> Unit) {
+        if (freshnessOf(operation) == InputGateDecision.PROCEED) {
+            act()
+            return
+        }
+        // PAUSED, which is neither of the two things 6.0 forbids. Not silently continued: the
+        // verb is not reached. Not silently dropped: what the user typed stays in the field, they
+        // are told why, and the action runs once the prompt below succeeds. And the LEASE IS NOT
+        // ENDED -- nothing on this path releases it, which is
+        // `InputFreshness.freshnessExpiryEndsLease` being false at the one place it could be
+        // contradicted.
+        outcome.text = PAUSED_FOR_FRESHNESS
+        reauthorizeTimedTier(act)
+    }
+
+    /**
+     * 6.0's verdict for [operation], from the moment the timed tier was last authorized.
+     *
+     * NEVER AUTHORIZED IS ITS OWN BRANCH because [InputFreshness.decide] cannot say it from two
+     * longs: a missing grant is not an old one, and feeding it a zero would make the verdict a
+     * property of the epoch. It answers the same way regardless -- an operation the user has not
+     * authenticated for is one they are asked to authenticate for -- but it answers deliberately.
+     */
+    private fun freshnessOf(operation: GatedOperation): InputGateDecision {
+        val granted = ledger.grantedAt(operation) ?: return InputGateDecision.PAUSE_AND_REAUTHORIZE
+        return InputFreshness.decide(granted, System.currentTimeMillis())
+    }
+
+    /**
+     * The timed tier's prompt, and the action it was holding.
+     *
+     * IT IS THE CONTENT PROMPT AND NOT A SECOND ONE. The timed tier IS the content KEK's window
+     * (`BiometricPolicy.specFor`), so what re-opens it is a fresh authentication of the right
+     * class -- exactly what [BiometricPrompts.confirmForContent] asks for, and the reason that
+     * prompt carries no CryptoObject.
+     */
+    private fun reauthorizeTimedTier(act: () -> Unit) {
+        val availability = prompts.availability()
+        if (!ContentUnlockPolicy.canPrompt(availability)) {
+            outcome.text = ContentUnlockPolicy.adviceFor(availability)
+            return
+        }
+        prompts.confirmForContent { promptOutcome ->
+            if (BiometricPolicy.resolve(promptOutcome) != GateResolution.AUTHORIZED) {
+                outcome.text = PerUseRefusalText.messageFor(refusalFor(promptOutcome))
+                return@confirmForContent
+            }
+            grantTimedTier(System.currentTimeMillis())
+            act()
+        }
+    }
+
+    /**
+     * Record what the prompt just proved, for BOTH timed operations.
+     *
+     * BOTH, and it is declared rather than assumed: `BiometricPolicy.sharesAuthorizationWith`
+     * says the timed operations share an authorization, because they share one Keystore entry and
+     * one window by construction. A grant recorded against only the operation in hand would ask
+     * for a second fingerprint to type into the session the first one just took control of.
+     *
+     * IT GOES THROUGH beginPrompt/endPrompt rather than writing a grant directly, because that
+     * pair is the only way an authorization is made -- ADR-007 B63 spent a fix making the ledger
+     * refuse everything else -- and because it is a true statement: the prompt above is this
+     * tier's prompt. A begin the ledger refuses leaves the grant unmade and the user is asked
+     * again, which is the fail-closed direction.
+     */
+    private fun grantTimedTier(atMillis: Long) {
+        for (operation in TIMED_TIER) {
+            if (ledger.beginPrompt(operation) != GateResolution.PROMPT_STARTED) continue
+            ledger.endPrompt(operation, PromptOutcome.SUCCEEDED, atMillis)
+        }
+    }
 
     /**
      * A control for an operation requirements 6.0 puts in the PER-USE tier: the verb runs only
@@ -559,6 +675,10 @@ class PhoneSurface(
                 outcome.text = PerUseRefusalText.messageFor(refusalFor(promptOutcome))
                 return@confirmForContent
             }
+            // The same authentication that re-opens the content tier re-opens 6.0's timed window:
+            // it is one window and one Keystore entry. Recording it here is what keeps the
+            // freshness check from asking for a second finger immediately after this one.
+            grantTimedTier(System.currentTimeMillis())
             render()
         }
     }
@@ -598,6 +718,23 @@ class PhoneSurface(
     }
 
     private companion object {
+
+        /**
+         * Requirements 6.0's timed row, DERIVED from the policy rather than listed here. A
+         * restated list is a second copy of the tier assignment, and the two would disagree on
+         * the first operation anybody added.
+         */
+        val TIMED_TIER = GatedOperation.entries.filter { !BiometricPolicy.specFor(it).requiresCryptoObject }
+
+        /**
+         * What the user is told when the window has lapsed. It says the session is not lost,
+         * because it is not: 6.0 ends the freshness, not the lease, and a message that read like
+         * a disconnection would send the user looking for a reconnect they do not need.
+         */
+        const val PAUSED_FOR_FRESHNESS =
+            "It is over a minute since you unlocked, so this is paused rather than sent. Your " +
+                "session is still yours -- unlock to continue."
+
         const val PADDING = 24
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
