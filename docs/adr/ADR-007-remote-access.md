@@ -6144,3 +6144,51 @@ this is the fourth time in one day I have had to restate PB-NET-7's status after
 committee is the gate; a row I want closed is precisely the row I should not close alone.
 
 **The count stays 133 of 144.**
+
+---
+
+## B110 — The third duplication was mine alone, and the consolidation I approved would have deleted the survivor
+
+**2026-07-30.** Two failures in one hour, both mine, both from acting on a tree state that had moved.
+
+**(1) I approved a consolidation that would have destroyed the better fence.** Two agents wrote
+overlapping `AckBatcher` tests; I approved keeping one file and folding the other's unique test into
+it. **The consolidation had already happened in the opposite direction** while my message was in
+flight, and executing mine would have moved a test into a file whose `AckBatcher` tests no longer
+existed, then deleted **the only `AckBatcher` fence in the tree.**
+
+**The direction that shipped is also the correct one, and it was established by measurement rather
+than seniority.** Under a last-wins mutation (`a.pending = cursor`):
+
+- the deleted trio's `CoalescesToTheHighestCursor` **passed** — its fixture records 1..20
+  monotonically, so highest and latest are the same value. **Its error string says "not the first or
+  the last recorded" and its fixture cannot tell those apart.**
+- the surviving test **failed**: `first ack carried cursor 7, want 50`.
+
+**The trio was the vacuous-rather-than-red shape on the exact behaviour it was named for**, and my
+approved consolidation would have kept it and deleted the only discriminator in the tree. *"The union
+loses nothing"* was true in the direction it went and false in the direction I approved.
+
+**(2) The third duplication had one author: me.** I assigned the `Close`-idempotency check and then
+wrote it myself while waiting. Both landed — `2727f0d` (mine) and `d8c7490`. **Mine is deleted here,
+on merit and not on authorship:** the survivor carries four cases where mine had one, covers the
+`Close`/`CloseNow` coupling through their shared `sync.Once`, cites a real call site for the abort
+leg, and includes the sequence a handset actually hits — the cell drops, the pump observes it, *then*
+the Android lifecycle calls `Close`, where a panic crosses JNI as a crash on the one path a user
+cannot retry. Its mutation is harder too: `panic: close of closed channel` against my changed return
+value.
+
+> **The generalisable rule, in the words of the agent that caught it: an approved instruction has a
+> shelf life measured in minutes on a tree this busy, and the DESTRUCTIVE instructions are exactly
+> the ones that must be re-validated at execution time rather than at approval time.** Read the
+> target's live state immediately before acting, not when the plan was made. It costs one command and
+> here it was the difference between a consolidation and a regression.
+
+**And the delegation rule I broke: do not do the work you have assigned.** Not because of the wasted
+effort — because two implementations of the same fence force a choice, and the person who wrote one
+of them is the worst placed to make it.
+
+**Both agents re-validated before acting and both were right to.** One refused an instruction from me
+that would have deleted a fence; the other deleted its own duplicate rather than defend it. **The two
+most valuable commits of this round were a refusal and a restoration**, and neither was the work I
+asked for.
