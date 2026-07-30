@@ -120,6 +120,11 @@ type CommandBridgeConfig struct {
 	// stale journal then never clears, because nothing else can clear it (PB-SYNC-3: only
 	// that channel's own repair does). Production always wires the gateway.
 	Resync JournalResyncer
+	// WaitTimeout is the per-MailboxWait upper bound Run applies (0 => defaultWaitTimeout),
+	// the inbound sibling of RelayConfig.AppendTimeout. Production takes the default; the
+	// field exists so a test can reach the timed-out path without sitting out the real
+	// budget, which is how the outbound half is already tested.
+	WaitTimeout time.Duration
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -286,8 +291,8 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 	return processed, maxCursor, errs
 }
 
-// Run drives the command-IN path off the relay's BOUNDED SERVER-SIDE WAIT until ctx is
-// cancelled, returning ctx.Err().
+// Run drives the command-IN path off the relay's server-side wait until ctx is cancelled,
+// returning ctx.Err(). Each wait is bounded HERE, by this loop, at defaultWaitTimeout.
 //
 // There is NO poll cadence, and dropping it is half of PB-NET-5, not a detail: the fixed
 // 500 ms command-IN poll this replaces is what ADR-007:461 calls "unusable for live
@@ -322,11 +327,22 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 		if err := pacer.Pace(ctx); err != nil {
 			return ctx.Err()
 		}
-		items, _, err := b.cfg.Mailbox.MailboxWait(ctx, b.Cursor())
+		// ONE deadline per wait, and it is cancelled rather than deferred: a defer in this
+		// loop would accumulate one live timer per cycle for the life of the bridge.
+		waitCtx, cancelWait := context.WithTimeout(ctx, b.waitTimeout())
+		items, _, err := b.cfg.Mailbox.MailboxWait(waitCtx, b.Cursor())
+		cancelWait()
 		pacer.Observe(len(items))
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if waitCtx.Err() != nil {
+				// Name the condition. relay.mailboxWait reports every context ending as
+				// "mailbox wait cancelled", which reads as an orderly shutdown; what this
+				// actually is, is the relay not answering, and Err() is the only place an
+				// operator can see it.
+				err = fmt.Errorf("relay answered no mailbox wait within %v: %w", b.waitTimeout(), err)
 			}
 			b.setErr(err)
 			// Back off, or a relay that refuses every wait becomes a spin loop.
@@ -352,6 +368,49 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 // commandRetryDelay bounds how fast the wait loop retries a failing relay. It is not a
 // poll cadence: it applies only after an error, and a healthy loop never reaches it.
 const commandRetryDelay = 250 * time.Millisecond
+
+// serverWaitCeiling is §6.0's "Server-side wait (long-poll) maximum | 25 s" (PB-NET-5),
+// transcribed because it is the number the gateway's own bound has to clear. It is the
+// RELAY's ceiling, which is exactly why it cannot be the gateway's bound.
+const serverWaitCeiling = 25 * time.Second
+
+// defaultWaitTimeout bounds ONE MailboxWait from the caller's side.
+//
+// IT MUST EXIST HERE BECAUSE THE ONLY OTHER PARTY THAT COULD END THE WAIT IS THE ADVERSARY.
+// relay.MailboxWait is unbounded by contract -- relay.TestCallDeadline_TheLongPollIsNotBoundedByIt
+// pins that the long poll ends on the CALLER's deadline and not on the connection's exchange
+// bound, because a poll cut by the generic call timeout would turn PB-NET-5's low-latency
+// inbound seam into a timeout loop. The corollary is that some caller must declare a deadline,
+// and this loop was not one: it handed MailboxWait the bridge's lifetime context, which
+// cmd/swarm-remote cancels only on a signal. Against a relay that completes the websocket
+// handshake and then answers nothing -- no ping and no read deadline on the client conn, so the
+// connection never even looks dead -- a wait was measured STILL PARKED AFTER 70 s, 2.8x the
+// ceiling it was assumed to inherit. What parks is the command-IN loop, so the machine stops
+// processing keystrokes, take_control and kill with no error and no state change, while the
+// phone's appends keep succeeding and the UI keeps reading online. ADR-007 B94(1)'s defect one
+// hop over, and reachable with no adversary at all: a half-open TCP after a WiFi -> cellular
+// handoff answers nothing in the same way.
+//
+// EVERY TERM IS §6.0'S, AND THAT IS DELIBERATE. B99's lesson is that a bound an implementer
+// re-derives locally is not a budget, so this value is composed rather than chosen: the relay's
+// own 25 s wait ceiling, plus PB-NET-7's 10 s non-wait request timeout for the two frames that
+// carry the wait out and its reply back. A relay that honours the ceiling is therefore NEVER cut
+// off early -- which is the property that keeps the seam a long poll -- and a relay that honours
+// nothing is ended one request budget later.
+//
+// A LATER BOUND IS ALSO WHY THIS IS NOT A RECONNECT. The loop treats the deadline as any other
+// wait error: it records it for Err() and issues the next wait after commandRetryDelay, so a
+// link that comes back resumes on the following cycle at the same cursor, with no torn-down
+// connection and no lost inbound state.
+const defaultWaitTimeout = serverWaitCeiling + relay.DefaultCallTimeout
+
+// waitTimeout is the configured per-wait bound, or defaultWaitTimeout.
+func (b *CommandBridge) waitTimeout() time.Duration {
+	if b.cfg.WaitTimeout > 0 {
+		return b.cfg.WaitTimeout
+	}
+	return defaultWaitTimeout
+}
 
 // setErr records the first poll error; later ones are dropped so Err() keeps pointing at
 // the root cause (RelaySink.setErrLocked's rule).

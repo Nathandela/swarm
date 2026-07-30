@@ -27,6 +27,8 @@ package remotegw
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +41,10 @@ import (
 // test. A test that read the code's own value would accept whatever the code happened to hold,
 // which is the failure the relay package's committeeNonWaitTimeout pin was written to avoid.
 const specServerWaitCeiling = 25 * time.Second
+
+// specNonWaitRequestTimeout is §6.0's "Non-wait request timeout | 10 s", bound to PB-NET-7 and
+// transcribed for the same reason.
+const specNonWaitRequestTimeout = 10 * time.Second
 
 // silentWaitCall is one observed MailboxWait: when it was issued, and the deadline (if any) the
 // caller declared on it.
@@ -165,5 +171,82 @@ func TestInboundWait_CarriesItsOwnDeadline(t *testing.T) {
 			"relay.TestCallDeadline_TheLongPollIsNotBoundedByIt exists to forbid. The bound is "+
 			"there to end a wait the relay is NOT honouring, so it must sit above the ceiling, "+
 			"not under it.", margin, specServerWaitCeiling)
+	}
+}
+
+// TestInboundWait_ATimedOutWaitIsRecoverable is the other half of the fix, and without it the
+// bound would only convert a silent wedge into a silent stop.
+//
+// A deadline that ended the loop would be no better than the wedge: the process holds ONE
+// relay.Client for its lifetime (cmd/swarm-remote dials once, with no redial loop), so a
+// command-IN loop that returned on the first unanswered wait would leave that process alive,
+// connected, and permanently deaf -- the same observable failure by a different route. The
+// timeout is therefore treated as any other wait error: recorded for Err(), backed off, and
+// followed by the next wait at the same cursor, so a link that comes back is picked up on the
+// following cycle with no reconnect and no lost inbound state.
+//
+// The relay here NEVER answers, so every wait this observes is one the bound ended.
+func TestInboundWait_ATimedOutWaitIsRecoverable(t *testing.T) {
+	mb := &silentWaitMailbox{}
+	b := NewCommandBridge(CommandBridgeConfig{Mailbox: mb, WaitTimeout: 50 * time.Millisecond})
+	stop := runBridge(t, b)
+	defer stop()
+
+	// Three waits, not two: the second could be a loop that unwinds one cycle late, the third
+	// cannot. The window is an observation window and not a rate assertion -- it is 200x the
+	// bound under test, so only a loop that has STOPPED can fail it.
+	calls := awaitWaits(t, mb, 3, 10*time.Second)
+	for i, c := range calls {
+		if !c.bounded {
+			t.Fatalf("wait %d carried no deadline; the loop recovered but the bound did not "+
+				"survive the retry path", i)
+		}
+	}
+
+	// And it is OBSERVABLE. Err() is the only channel through which an operator learns that
+	// the machine is talking to a relay that answers nothing, so a recovered loop must not be
+	// a silent one.
+	err := b.Err()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CommandBridge.Err() = %v, want an error carrying context.DeadlineExceeded.\n"+
+			"A loop that keeps retrying a relay that never answers, and reports nothing, is "+
+			"indistinguishable from a healthy idle loop.", err)
+	}
+	if bound := b.waitTimeout().String(); !strings.Contains(err.Error(), bound) {
+		t.Errorf("CommandBridge.Err() = %q, which does not name the bound (%s) that fired.\n"+
+			"relay.mailboxWait reports every context ending as \"mailbox wait cancelled\", which "+
+			"reads as an orderly shutdown; the loop wraps it precisely so the operator sees "+
+			"WHICH deadline elapsed and how long it was.", err, bound)
+	}
+}
+
+// TestInboundWait_TheBoundIsComposedFromTheBudget pins the VALUE, and pins it as a COMPOSITION.
+//
+// §6.0's table is prefaced "Changing any value requires committee agreement, not implementer
+// discretion", and PB-NET-7 was left unmet for a round precisely because an implementer picked a
+// defensible local number instead of the table's (ADR-007 B99). §6.0 binds no client-side wait
+// bound, so rather than invent one this constant is composed from two values it does bind: the
+// relay's own 25 s wait ceiling, plus PB-NET-7's 10 s request timeout for the frames that carry
+// the wait out and its reply back.
+//
+// Both terms are transcribed from the table here rather than read from the code, so the test
+// fails on a drift in EITHER: a re-tuned bound, or a serverWaitCeiling quietly re-pointed at
+// whatever a relay claims its ceiling is.
+func TestInboundWait_TheBoundIsComposedFromTheBudget(t *testing.T) {
+	if serverWaitCeiling != specServerWaitCeiling {
+		t.Errorf("serverWaitCeiling = %v, want §6.0's %v (\"Server-side wait (long-poll) "+
+			"maximum\", PB-NET-5). This is the RELAY's ceiling and the gateway's bound must "+
+			"clear it; taking it from anywhere but the table hands the adversary the number.",
+			serverWaitCeiling, specServerWaitCeiling)
+	}
+	want := specServerWaitCeiling + specNonWaitRequestTimeout
+	if defaultWaitTimeout != want {
+		t.Errorf("defaultWaitTimeout = %v, want %v (§6.0's %v wait ceiling + %v non-wait request "+
+			"timeout).\nUnder the ceiling, a relay that HONOURS its ceiling is cut off on every "+
+			"cycle and the inbound seam becomes a timeout loop. Far above it, the loop stays deaf "+
+			"for longer than it has to. If a different bound is right, the composition belongs in "+
+			"§6.0's table, not in a local re-derivation -- that is exactly what left PB-NET-7 "+
+			"unmet in round 6 (ADR-007 B99).",
+			defaultWaitTimeout, want, specServerWaitCeiling, specNonWaitRequestTimeout)
 	}
 }
