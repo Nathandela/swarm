@@ -62,10 +62,17 @@ mkdir -p "$SWARM_DAEMON_STATE/remote"
 printf '{"relay_url":"ws://127.0.0.1:9440"}\n' > "$SWARM_DAEMON_STATE/remote/relay.json"
 ```
 
-The **gateway's** URL, not the phone's. Loopback cleartext, for the reason in the relay runbook
-§0: `swarm-remote` dials with `relay.Dial` and applies no transport-security policy, so it can
-neither pin a self-signed certificate nor refuse a cleartext hop. The phone gets the
-`wss://<LAN-IP>:8443` address through the pairing QR.
+The **gateway's** URL, not the phone's. Loopback cleartext is safe here because the hop does not
+leave the machine. The phone gets the `wss://<LAN-IP>:8443` address through the pairing QR.
+
+**CORRECTED 2026-07-31 (ADR-007 B124).** This paragraph previously read that `swarm-remote` *"dials
+with `relay.Dial` and applies no transport-security policy, so it can neither pin a self-signed
+certificate nor refuse a cleartext hop."* **Both halves are false at HEAD, and the sentence argued
+against configuring a protection that works.** `run()` dials with `relay.DialSecure` under the
+configured `RelaySecurity`: ADR-007 B37 makes it **refuse `ws://` to anything but a loopback IP
+literal**, and B34 makes it **carry the operator's SPKI pin from `relay.json`**. Both are fenced —
+`TestPBOPS5_TheGatewayHonoursTheConfiguredPin` and
+`TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON`. **Configure the pin; it is enforced.**
 
 **`relay.json` is read once, at sidecar start.** `swarm-remote` redials the relay on ADR-007
 §6.0's backoff when the link drops (PB-NET-4) rather than exiting for the supervisor to restart
