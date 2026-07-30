@@ -6379,3 +6379,62 @@ assertions in the tree are the cleartext ones, whose property is the opposite di
 package, and what remains is two evidence gaps of `PB-NET-3`'s shape. **One test against a flapping
 relay closes both** — assert the dial gaps grow within the jitter band, and that a second `auth_init`
 arrives on the reconnect. That is what the row's evidence column asked for all along.
+
+---
+
+## B114 — "Surfaced" is quantified over observers. The fence had one of two
+
+**2026-07-30.** An addendum from the adjudicator **downgrading its own verdict**, unprompted, after my
+framing note made it run one more check. It is the most useful kind of report in this record.
+
+It had marked `PB-NET-4`'s *"connection state surfaced"* clause FENCED, having mutated away
+`App.run`'s `setConn(connReconnecting)` branch and watched the silent-relay test go red. **That tested
+the STATE. It did not test WHO IS TOLD.**
+
+`setConn` does two things from one write, confirmed here:
+
+```go
+a.connState = state                                      // polled by ConnectionState()
+a.events.emit(&Event{Kind: "connection", State: state})  // the plane the Android UI subscribes to
+```
+
+**The requirement says state is SURFACED — quantified over observers.** The fence had the poll.
+
+**Mutation: suppress the emit entirely**, so the shipped app is **never notified of any transport
+state change** while `ConnectionState()` keeps returning the truth:
+
+```
+mobile (unit) ......................................... ok, 13.7s
+TestSilentRelay_TheConnectionStopsClaimingToBeOnline .. GREEN
+every other named connection-state fence .............. GREEN
+mobile/conformance vs baseline ........................ ONE new failure
+    TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace
+```
+
+**The entire Android notification path for transport state is held by one test about the post-pairing
+grace window**, via a helper that records emitted states in order to assert a *different* property.
+Rewrite that one assertion and the plane goes unfenced, silently, with every gate green.
+
+> **Residual 4.10's third instance this round** — after a shared `t.Cleanup` fixture holding `Close`
+> idempotency (B109) and a mutual de-duplication deleting it (B111). **And it is `PB-NET-6`'s shape one
+> layer over:** the fence's grammatical subject was the *poll*; the requirement's subject is the
+> *observer*.
+
+**Corrected verdict: FENCED FOR THE POLL, INCIDENTALLY COVERED FOR THE EVENT PLANE.** One and a half
+clauses, not two. `PB-NET-4` was already NOT MET, so the verdict is unchanged and a **third** evidence
+gap joins the two recorded in B113:
+
+1. nothing ties `App.run`'s delay to the backoff;
+2. nothing names re-auth after reconnect;
+3. nothing **names** the connection event plane — one unrelated test holds it by accident.
+
+**All three are the same species** — property true, unmeasured or measured by something that does not
+name it — and **none is a live defect.** The flapping-relay test already commissioned for (1) and (2)
+absorbs (3) at no extra cost: it needs an observer anyway, so it asserts the **event sequence** rather
+than polling `ConnectionState`. One test, three gaps, and it matches the row's evidence column wording
+exactly.
+
+**What makes this entry worth its length is who wrote it.** The adjudicator had already delivered a
+verdict, had it accepted and recorded, and then ran an extra mutation that made its own finding worse.
+**Nothing compelled that.** Two agents this round refused instructions from me that would have
+destroyed working code; this one refused its own conclusion.
