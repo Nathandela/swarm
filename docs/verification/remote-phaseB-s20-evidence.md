@@ -15,6 +15,17 @@ PB-OPS-5.** Eight, all of which this file names.
 | `go test ./...` | **green** (§8). It was red at `60ed08d` on `TestPBDOC7_TheRepositoryPasses` — PB-DOC-7 finding a real §11 defect — and `e21c076` closed it. |
 | `check-phaseb-manifest.py`, default **and** `--strict-section11` | both exit 0 |
 
+**Correction, 2026-07-30 (ADR-007 B97).** The `--strict-section11` half of that row **stopped being
+true** shortly after it was written, and this file went on asserting it. `PB-SAS-4` was added to S8
+and `PB-E2E-2` re-scoped to S21; both updated the authoritative TSV and neither updated section 11's
+readable table, so strict mode began failing while the default mode — **the only one CI ran** — kept
+exiting 0. An external reviewer found it by hand in round 6.
+
+This is fossil evidence produced by an unarmed check: **a claim about a commit, left standing as a
+claim about HEAD, because nothing on push could contradict it.** Both rows are repaired and
+`--strict-section11` is now armed in CI, so this line is re-established on every push rather than
+asserted once.
+
 ---
 
 ## 1. What is tested and what is executed — the split, stated first

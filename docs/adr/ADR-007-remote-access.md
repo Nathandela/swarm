@@ -5431,3 +5431,54 @@ catch it, and it is not run by default.
 **Count: 136 of 144 shipped, 6 NOT MET, 2 hardware-deferred.** It has now moved fourteen times on
 evidence in six rounds, and **the last three movements were all downward and all found by someone
 other than the author of the row.**
+
+---
+
+## B97 — A seventh instrument: the fence is built, mutation-proven, and never armed
+
+**2026-07-30.** Chasing the external reviewer's lowest-ranked finding to ground produced the most
+mechanical defect of the round.
+
+**The finding as reported was half wrong.** It said the ownership manifest omits the re-scoped
+`PB-E2E-2` (S21) and `PB-SAS-4` (S8). The **authoritative** artifact has neither problem:
+`check-phaseb-manifest.py` reports *"manifest OK: every requirement owned exactly once"* against the
+TSV. What had drifted was **section 11's human-readable table** — which the checker only cross-checks
+for *contradictions* by default. Completeness lives behind `--strict-section11`.
+
+**And strict mode was never turned on.** `.github/workflows/ci.yml` ran:
+
+```yaml
+run: python3 scripts/check-phaseb-manifest.py     # no --strict-section11
+```
+
+while `internal/verify/phaseb_manifest_test.go:250` **mutation-proves that strict mode has teeth** —
+it stands up a tree with a section-11 row owning nothing and asserts strict rejects it *and names the
+omitted requirement*. **The mode is built. The mode is tested. Nothing runs the mode.**
+
+> **Instrument 7 — a fence that is built, mutation-proven, and not armed in the lane that runs.**
+> *Tell:* a capability flag, strict mode or optional pass whose only caller is its own test.
+> *Fix:* arm it where the lane runs; a test proving a mode works is not evidence the mode is used.
+
+**It is distinct from the six.** Instrument 1 is a symbol nothing calls. This is a symbol whose *only*
+caller is the test that proves it works — which reads exactly like coverage and is the opposite of
+it. Grepping for callers finds one and stops.
+
+**The rest of the shape is already catalogued, which is why this is worth recording rather than just
+fixing.** The step's own comment reads: *"ownership-in-prose failed three audit rounds running, and
+the checker existed for two more without anything running it on push."* **The fix for that failure
+reproduced the failure one level down** — the same shape as round 5's worst finding, a fix composing
+with the fix for it.
+
+And the S20 evidence file states *"`check-phaseb-manifest.py`, default **and** `--strict-section11` |
+both exit 0"* — **true on the commit where it was written**, and false from the moment `PB-SAS-4` was
+added and `PB-E2E-2` re-scoped, because nothing on push re-established it. **Fossil evidence
+(instrument 4), created by the absence of instrument 7.** The two compose: an unarmed check cannot
+keep its own evidence file honest.
+
+**Remediation.** The two readable rows now name their requirements; `--strict-section11` exits 0 and
+is **armed in CI**. The class closes mechanically rather than by prose: a future re-scope that
+updates the TSV and forgets the table now fails on push, by name.
+
+**What this does not fix.** Every other optional mode in this repository is now suspect by the same
+argument, and I have not swept for them. Recorded as **residual 4.26: enumerate every flag, strict
+mode and optional pass whose sole caller is its own test.**

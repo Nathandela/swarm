@@ -783,7 +783,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | **S6b Low-latency input path**: request-id correlation + concurrent dispatch, both hops (ADR B7) | PB-NET-5 | opus | S6 |
 | **S7 Durable phone state** (Go-side; the Android *sealing* parts are **S15**) | PB-STATE-1..5, 7, 8; **PB-GW-6** (the phone `IssuedAt` seal change PB-GW-2 depends on) | opus | S0, S1, **S2, S2b** (PB-STATE-4's rollback authorities *are* PB-GW-1's inbound high-water and PB-GW-8's outbound ceilings, so neither can ship after it), S1b |
 | **S7b Gateway age check** (split out: it depends on the phone seal change) | PB-GW-2 | opus | S2, S7 |
-| **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2** (sole owner; S19 contributes emulator evidence but does not own it) | opus | S6, S7 |
+| **S8 Façade + bind guard** | PB-BIND-1..7, PB-SAS-1, **PB-SAS-2** (sole owner; S19 contributes emulator evidence but does not own it), **PB-SAS-4** (added 2026-07-29 with PB-PAIR-4; one protocol change, not two) | opus | S6, S7 |
 | S9 Façade<->transport integration | PB-NET-1 | opus | S8 |
 | S10 Per-bucket resync + grant recovery | PB-SYNC-1..6, **PB-SYNC-8**, PB-KEY-3/4, **PB-KEY-10** | opus | S8, S9 |
 | S11 Input/lease semantics, coalescing, clock skew | PB-INPUT-1..6, PB-TIME-1..3 | opus | S8 |
@@ -808,7 +808,7 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 |---|---|---|---|
 | S19 E2E + emulator smoke | PB-E2E-1, PB-E2E-3, PB-E2E-4 (PB-E2E-2 re-scoped to S21 on 2026-07-30, ADR-007 B91: unsatisfiable on an emulator by construction) | opus | S4, S4b, S6b, S7b, S9, S10, S11, S15, S16, S17, S18, S18b |
 | S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3, **PB-OPS-5** *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
-| S21 Physical-handset gate (deferred; no device here) | PB-E2E-5 | — | S19 |
+| S21 Physical-handset gate (deferred; no device here) | PB-E2E-5, **PB-E2E-2** (re-scoped here on 2026-07-30, ADR-007 B91) | — | S19 |
 
 **Ownership is machine-checked, not prose.** The authoritative assignment lives in
 `docs/specifications/remote-phaseB-manifest.tsv` (one row per requirement, exactly one owning

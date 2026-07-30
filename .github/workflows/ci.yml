@@ -31,8 +31,15 @@ jobs:
       # readable table not contradicting either authoritative file. The requirement asks for
       # this "validated in CI" specifically: ownership-in-prose failed three audit rounds
       # running, and the checker existed for two more without anything running it on push.
+      # --strict-section11 IS ARMED HERE, and the reason is the paragraph above happening a
+      # second time one level down. Strict mode was built, and internal/verify's
+      # phaseb_manifest_test.go mutation-proves it has teeth -- then nothing ran it on push.
+      # So section 11's readable rows drifted for two days (S8 lost PB-SAS-4, S21 lost the
+      # re-scoped PB-E2E-2), an external reviewer found it by hand, and the S20 evidence file
+      # went on claiming "default AND --strict-section11: both exit 0" -- true when written.
+      # A mode nothing runs is not a check, however well it is tested (ADR-007 B97).
       - name: Phase B slice-ownership manifest (PB-DOC-7)
-        run: python3 scripts/check-phaseb-manifest.py
+        run: python3 scripts/check-phaseb-manifest.py --strict-section11
 
   lint:
     name: lint (golangci-lint)
