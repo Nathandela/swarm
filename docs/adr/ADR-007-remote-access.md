@@ -4804,3 +4804,74 @@ high-water unmoved, the reply stream still stale, and the shared high-water at t
 
 **Coverage, cumulative and honest: 14 of 143 rows deep-derived (9.8%), 18 covered (12.6%).** Neither
 finding here moves the count.
+
+---
+
+### B86 — a MISSING requirement, not an unmet one; and GW is clean
+
+**B86(1) — TWO OF MY STEERS WERE WRONG, and the second error produced the finding.**
+
+I told a reviewer that TOK governs "the push token whose length bound rests on nothing upstream".
+**PB-TOK-* is the Android design-token/theming family** — one JSON token source, the skin choice, the
+phosphor-green terminal, system `uiMode` following. The push token is PB-PUSH-6/7/9 and the relay's
+length bound. I conflated two unrelated families by their abbreviation and would have sent a deep
+pass at low-security theming.
+
+**And I called SAS "the entire MITM defence". It is not, and the gap that opens is the entry.**
+
+**B86(2) — THE FINDING: nothing in the specification makes the channel binding attest the
+accept/decline exchange. This is a MISSING requirement, not an unmet one.**
+
+The three SAS rows are narrower than the defence they are named for: SAS-1 asserts no emoji table in
+Kotlin (a source assertion), SAS-2 pins channel-binding → six emoji as a known-answer test, SAS-3
+requires the SAS be presented as compare-both-screens and never typed (a UI rule). **None of them
+reaches whether the binding covers the accept/decline exchange** — that is a crypto property, and
+the SAS family does not touch it.
+
+So B81's finding — that msg4 rides outside the SAS transcript, sound in itself, but **the SAS
+therefore attests nothing about the accept/decline exchange**, which is why the half-pair is
+invisible to both operators — **is real AND all three SAS rows could be perfectly met while it
+stands.**
+
+**This is instrument 2 at the FAMILY level, and it is a new shape for this audit: the family named
+after the defence does not contain the requirement that would catch the defect.** Every count
+movement so far has been a row that was wrong. **This is a row that is ABSENT** — which means the
+143 is not merely mis-scored in places, it is incomplete, and no amount of re-deriving existing rows
+finds that. Recorded as residual 4.22: *a complete-looking requirement set is still evidence about
+what someone thought to ask.*
+
+**B86(3) — PB-GW: NO FINDINGS. Stated explicitly, because a null result from four instruments is
+worth as much as a defect.** Four of eight rows deep-derived, one near-deep, three mechanical.
+
+**The forbidden remedy was not taken.** PB-GW-7 is unusual in naming a forbidden fix — *"a failed
+append never consumes a seq"* — which the reviewer correctly identified as the highest-yield shape
+available, since a spec saying "the naive fix is unsafe" is one an implementer plausibly took anyway.
+All three required properties are implemented: seq allocated inside the lock so allocation order
+equals append order; a pre-commit/delivery-unknown split that treats **exactly three** relay
+sentinels as refusals and **everything else** as unknown, with string-sniffing explicitly forbidden;
+and outbox-backed frames reserving the exact sealed bytes before the append, so a retry re-appends an
+identical envelope rather than a second different one at the same seq.
+
+**It verified the cross-component claim the whole thing rests on** — that those three sentinels are
+genuinely replied *before* the relay stores — by reading the relay's handlers, and confirmed the
+post-commit failure the spec warns about classifies as unknown and does not reuse.
+
+**The numeric half closes, including the case that would have broken it.** 125ms → 480 appends/min
+against a 600/min budget; the reviewer's concern was per-session windows multiplying that, and the
+coalescing sink uses **one shared slot** for journal and terminal combined, releasing oldest-first, so
+the budget is per-target and holds under multi-session peek. **Its own comment says keying by session
+"does not buy each session its own budget"** — the design anticipated the objection.
+
+**All four remaining GW rows refute their own requirement text**: the missing seeding seam now seeds
+*inside the constructor*, structurally unskippable, so there is no called-by-nothing surface; the
+age bound is exactly §6.0's value **and ordered correctly**, authenticating before the age check so a
+forgery is refused as a forgery and spends no seq; all six phone-side producers now stamp the
+timestamp the age check needs, making two rows load-bearing on each other; and the outbox is
+genuinely durable and opened from production.
+
+**One observation worth keeping:** the gateway's age check and the phone-side check implement the
+identical property with identical reasoning on both legs. **A symmetric property implemented
+symmetrically is rare enough in this codebase to be worth stating.**
+
+**Coverage: 19 of 143 deep-derived (13.3%), 26 covered (18.2%).** Unexercised in GW: the per-frame-class
+crash matrix and the seq-regressed-phone adversary — **not the coordinates.**
