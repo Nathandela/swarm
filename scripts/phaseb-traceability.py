@@ -44,14 +44,20 @@ SHIPPED = [
 # PB-KEY-7's recovery path was architected on. Nothing re-derived it, and it read as
 # shipped for the rest of the phase. See ADR-007 B35.
 NOT_MET = {
-    "PB-NET-7": "CRITICAL, and it was marked met against code that does not run. "
-                "relay.Client carries NO timeout and every shipped phone call passes "
-                "context.Background(), so a silent relay -- the DECLARED ADVERSARY -- "
-                "wedges the whole outbound plane behind a.bucketMu: keystrokes, "
-                "take_control, launch and KILL, with the UI still reading online. Proven "
-                "by probe (still blocked after 8s). Its fence exercises "
-                "transport.Session, which has zero production callers. Also reachable "
-                "BENIGNLY via a half-open TCP after a network handoff (ADR-007 B94)",
+    "PB-NET-7": "THE CRITICAL IS FIXED; THE REQUIREMENT IS STILL NOT MET, and those are "
+                "different things (23d1dc1, RED at c2b7eb5). The wedge is closed: every "
+                "exchange is bounded per CALL and a reached deadline surfaces as "
+                "ErrClassOffline, so a silent relay no longer parks the outbound plane and "
+                "ConnectionState stops reporting online. TWO CLAUSES REMAIN. (1) The "
+                "budget table binds a NON-WAIT REQUEST TIMEOUT OF 10 s to this "
+                "requirement and says changing a value needs committee agreement, not "
+                "implementer discretion; the fix chose 5 s on latency grounds without "
+                "reconciling. The 10 s exists ONLY in internal/remote/transport -- the "
+                "dead package -- exactly as PB-NET-4's backoff numbers do. (2) The row's "
+                "own evidence column asks for a GOROUTINE-LEAK ASSERTION over repeated "
+                "Start/Stop, and there is no NumGoroutine or goleak anywhere in relay, "
+                "mobile or remotegw. Caught while attempting to mark this row met "
+                "(ADR-007 B99)",
     "PB-NET-4": "marked met by MY OWN adjudication (B90), which asserted the resilience "
                 "half is \"implemented and fenced\". Section 6.0's backoff numbers -- "
                 "initial 500ms, factor 2, ceiling 30s, jitter +/-20% -- exist ONLY in "

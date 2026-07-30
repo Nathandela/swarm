@@ -5556,3 +5556,54 @@ FENCED-ON-LIVE and its dead file is deletable without loss.** It stays at 134 of
 produced FENCED-ON-DEAD for PB-NET-3 and FENCED-ON-LIVE here. **The tell is not the file's location
 but whether the requirement's own criteria have a live subject** — and that is only visible by
 reading the criteria, which is why the join could not decide it either way.
+
+---
+
+## B99 — Closing the critical is not meeting the requirement
+
+**2026-07-30.** `PB-NET-7`'s wedge is fixed and committed with the RED-first evidence this project
+requires: `c2b7eb5` carries the verbatim failing output, `23d1dc1` the bound. Every exchange is now
+bounded **per call**, from when the call is issued rather than once it holds `c.mu`, and a reached
+deadline surfaces as `ErrClassOffline` rather than as an identity the classifier cannot route.
+
+**The RED is worth keeping for what it shows.** The facade half did not merely fail — **the test
+binary could not terminate**, blowing through `go test`'s 300 s timeout and dumping the wedge as a
+stack: `App.Kill` -> `signedCommand` -> `sealSignedCommand` -> `MailboxAppend` -> `roundtrip` ->
+`readFrame`. The leaked goroutine still held `a.bucketMu`, so teardown could not complete either.
+That is the blocker in one trace: **`kill` is the verb a user reaches for when something is wrong,
+and it is the verb the adversary disables by doing nothing.** It was captured in a detached worktree
+with only the test files applied, so the failure is the absent bound and not a half-applied
+implementation.
+
+**And then I went to mark the row met, and it is not met.** Two clauses survive the fix:
+
+**(1) The timeout value contradicts a committee-governed budget.** Section 6.0 binds *"Non-wait
+request timeout | 10 s"* to `PB-NET-7`, under a preamble that reads **"Changing any value requires
+committee agreement, not implementer discretion."** The fix chose **5 s**, justified on latency
+grounds — PB-NET-5's 150 ms p50, `push_trigger`'s one-second verdict wait — and **never mentioned the
+10 s at all.** The reasoning may well be better than the budget; that is not the point. It is a
+budget change made by an implementer, which is the one thing the section forbids.
+
+**Worse, and exactly the shape this audit keeps finding:** `grep` puts the 10 s in
+`transport/doc.go:20`, `transport/follow.go:217` and `transport/session.go:26` — **only in the dead
+package.** The specified value was implemented solely in code with no production caller, *precisely
+as `PB-NET-4`'s backoff numbers were.* So this row was never satisfied by shipped code, before or
+after the fix; the fix merely replaced an absent bound with an unreconciled one.
+
+**(2) The row's own evidence column asks for something that does not exist.** It reads *"`-race` +
+goroutine-leak assertion over repeated Start/Stop."* There is **no `NumGoroutine` and no `goleak`
+anywhere** in `internal/remote/relay`, `mobile` or `internal/remotegw`. `-race` is run and clean; the
+leak assertion was never written.
+
+> **The lesson, and it is mine rather than a reviewer's:** I fixed the defect a reviewer named and
+> then reached to mark the requirement met, having checked the **defect** and not the **row**. The
+> requirement had three clauses and the CRITICAL was one of them. **"The bug is fixed" and "the
+> requirement is met" are different claims, and the second is the one the count reports.**
+
+Recorded rather than quietly corrected because the near-miss is the useful part: this is the same
+error as B90 and B93 — my own adjudications closing rows on partial reads — arriving a fourth time,
+in a fresh disguise, one round after I catalogued it.
+
+**`PB-NET-7` stays NOT MET. The count stays 134 of 144.** What changed is that the closed-test
+blocker is closed: a silent relay can no longer wedge the phone, which was the reviewer's first
+condition for testers touching this build.
