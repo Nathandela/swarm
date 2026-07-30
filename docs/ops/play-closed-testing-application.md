@@ -13,10 +13,13 @@ moved since this was written, it is marked **[VERIFY]** — the Console is autho
 None of these stop you filling in the forms. All of them stop you shipping a build testers can
 use.
 
-### Blocker 0 — the daemon hangs in the ordinary order of operations
+### Blocker 0 — the daemon pairing hang — **FIXED (ADR-007 B64)**
 
-**This is the one that matters, and it is not a security nicety.** Found and measured by the
-round-3 threat audit; recorded as ADR-007 B62(1).
+Recorded here because it is the defect that most shaped this sprint, and because its fence turned
+out to be vacuous, which is worth knowing if you are judging how much the green suite means.
+
+**The fix is in.** The pairing window is now enforced as well as announced. What follows describes
+what was wrong, not what ships.
 
 The owner scans the QR, the desktop shows the verification code, and the owner presses `y` on
 the desktop **first** — that prompt is the one in front of them. From that moment, anything
@@ -36,8 +39,10 @@ takes its green entirely from a safety property production never supplies — ch
 to ten minutes fails it by name. The other drives a rejection shape the shipped phone cannot
 produce.
 
-**Ship without this and the closed test teaches you nothing**, because pairing is the first
-thing every tester does and the natural button order breaks it.
+**Caveat that survives the fix (ADR-007 B69(3)):** the deadline half of it is UNFENCED. Deleting
+the deadline entirely leaves both test suites green, because a courtesy abort resolves the
+scenario first and absorbs the test. A replacement fence is in progress. Treat the pairing path as
+fixed-but-lightly-tested, not as proven.
 
 ### The rest
 
@@ -45,7 +50,7 @@ Ordered by how long they take.
 
 | # | Blocker | Where | Effort |
 |---|---|---|---|
-| 1 | **No launcher icon.** `AndroidManifest.xml` declares no `android:icon`, and `app/src/main/res` has no `mipmap` directories. The app installs with the default Android robot. | `android/app/src/main/res/` | 30 min |
+| 1 | ~~No launcher icon.~~ **DONE** — adaptive vector icon, verified in the built APK at every density. The 512x512 store icon and 1024x500 feature graphic are in `docs/ops/play-assets/`. | — | done |
 | 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below. | external hosting | 30 min |
@@ -65,8 +70,10 @@ you are deferring:
 - **`PB-SEC-2`** — the per-use biometric gate stands between a picked-up *unlocked* handset and
   typing into a shell on your laptop. It needs physical possession, so it is a real hole rather
   than an urgent one for twelve known testers. Land it if it is ready; do not hold the sprint.
-- **`PB-PUSH-9`** — revoking a phone no longer deletes its push token, in either the cache or on
-  disk (ADR-007 B61(1)). Matters when you start revoking real devices.
+- **`PB-INPUT-4`** — the retry policy for a failed send has **zero production callers**; commands
+  call the transport directly and surface its error. A send that fails is not retried by anything.
+  (`PB-PUSH-9` was on this list and is now MET again — refusing self-consent restored the
+  push-token deletion that a self-edge had disabled.)
 
 ### DO NOT EXPOSE THE RELAY PORT TO THE INTERNET
 
@@ -94,21 +101,15 @@ finding it can brick the exact thing the closed test exists to exercise.
 Also worth doing while testing: **alarm on `relay.db` size.** Unexpected growth is the first
 symptom of every defect in this class, and there have been four.
 
-### The other relay items
+### The other relay items — **FIXED (ADR-007 B61), with one caveat**
 
-You will be **operating the relay** for the closed test, so this is your infrastructure, not a
-future concern. Two defects (ADR-007 B61(2), independently confirmed as B62(2)):
+Self-consent is refused, the ceremony ID is length-bounded, and the retired-consents bucket is
+bounded. That closed a 72 GB/day disk drain **and** a defect where a device could make its own
+pairing *permanently unrevokable* by choosing an oversized ceremony ID.
 
-- The relay never checks that the device being authorized is not the caller, so **a party can
-  consent to itself**.
-- The retired-consents bucket is **never swept**, and the ceremony ID is never validated for
-  length or shape.
-
-Composed: no victim and no pairing needed. Measured at 400 calls with 32 KB IDs → 33.7 MB, linear,
-and the store never returns pages to the OS — roughly **72 GB/day of unreclaimable disk from a
-single source**. Your named testers will not trip it by accident; anyone who finds your relay
-can. The fix is a length check plus refusing self-consent, which is cheap enough to take before
-you expose a relay to the internet.
+**Caveat (ADR-007 B69(4)):** that bound is **per pair, not global**. Minting fresh identities is
+free, so total durable growth is still unbounded — which is the same root as the `token_register`
+defect above, and why the warning there stands regardless.
 
 **Also check before upload:** Play's minimum `targetSdk` for *new* apps rises every August.
 The app targets **35**. **[VERIFY]** in the Console whether 35 is still accepted for a new app
