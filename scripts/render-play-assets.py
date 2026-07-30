@@ -24,9 +24,16 @@ present on a stock macOS python3.
 
     python3 -m pip install pillow
 
-Menlo is used for the wordmark because internal/design/tokens.json's --p-mono names it
-explicitly ("ui-monospace, \"SF Mono\", Menlo, monospace") and it ships with macOS. On a host
-without it, set SWARM_ASSET_FONT to any monospace .ttf/.ttc.
+THE WORDMARK IS SET IN --p-font, NOT --p-mono, and the first attempt got that wrong. Menlo is
+monospace, so a narrow letter sits in a wide cell: measured, `r` carries a 21-unit left bearing
+inside its 72-unit advance while `a` ends 10 short of its own, putting 31 units of white
+between them against 7 between `w` and `a`. The advances are uniform -- it is not a fallback or
+a kerning fault -- but the INK is not, and the eye reads the result as a spacing defect between
+"swa" and "rm".
+
+--p-font ("-apple-system, BlinkMacSystemFont, \"SF Pro Text\", sans-serif") is the app's primary
+type and the right token for brand text; --p-mono is for terminal content, which a wordmark is
+not. On macOS those names resolve to SFNS.ttf. Set SWARM_ASSET_FONT to override.
 """
 import os
 import sys
@@ -110,9 +117,9 @@ def feature_graphic(path):
     draw = ImageDraw.Draw(img)
 
     wordmark = "swarm"
-    font_path = os.environ.get("SWARM_ASSET_FONT", "/System/Library/Fonts/Menlo.ttc")
+    font_path = os.environ.get("SWARM_ASSET_FONT", "/System/Library/Fonts/SFNS.ttf")
     if not os.path.exists(font_path):
-        sys.exit("no monospace font at %s; set SWARM_ASSET_FONT" % font_path)
+        sys.exit("no wordmark font at %s; set SWARM_ASSET_FONT" % font_path)
     font = ImageFont.truetype(font_path, int(120 * SS))
 
     left, top, right, bottom = draw.textbbox((0, 0), wordmark, font=font)
