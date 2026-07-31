@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**93 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**94 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -195,7 +195,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-SYNC-6 | S10 | shipped | **DERIVED** — Backfilled from B121. Two mutations: `App.resyncBudget` returns nil unconditionally -> caught; the drain loops on a non-empty page instead of on cursor progress -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-7 | S1b | shipped | not derived | `docs/verification/remote-phaseB-s1b-evidence.md` |
 | PB-SYNC-8 | S10 | shipped | **DERIVED** — Backfilled from B121: `SessionCache.reseed` made to merge instead of replace -- the exact PB-SYNC-8 defect -> 2 failures. | `docs/verification/remote-phaseB-s10-evidence.md` |
-| PB-TIME-1 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
+| PB-TIME-1 | S11 | shipped | **DERIVED** — `internal/skeleton/deviceauth.go`'s expiry guard neutered -- `if now.After(cmd.ExpiresAt)` replaced with `if false`, so no signed command ever expires -> **4 failures**: `TestPolicy_ExpiredCommandRejected` (the direct one), `TestPBPUSH8_ForgedOrExpiredPushPrefsIsRefused`, and both `TestB42PBNET4_*` tests, which depend on the 1-minute TTL being what makes a queued command undeliverable. Reverted in the same command; `deviceauth.go` sha256 `00d27a109d25...` identical before and after. | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-2 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-3 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TOK-1 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
