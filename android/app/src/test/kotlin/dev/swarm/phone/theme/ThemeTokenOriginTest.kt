@@ -61,6 +61,36 @@ class ThemeTokenOriginTest {
     )
 
     /**
+     * The positional check, as ONE function called by both the requirement and its control.
+     *
+     * THAT IS THE WHOLE REASON IT IS A FUNCTION. A negative control that rebuilds the comparison
+     * inline proves something about the copy and nothing about the assertion: rewrite the real
+     * loop as `assertEquals(originValue, originValue)` -- the self-comparison this project has
+     * already shipped once, in the constant this very test exists to fence -- and a control that
+     * does its own `filterIndexed` stays green while certifying a theme nobody checked. The
+     * control below feeds a transposed palette to THIS function and requires it to object.
+     *
+     * @return one line per themed attribute whose recorded colour is not the origin's value for
+     *  the resource that attribute binds to. Empty means the recorded palette IS the origin's,
+     *  attribute by attribute.
+     */
+    private fun positionalMismatches(recorded: List<Int>, origin: Map<String, Int>): List<String> =
+        ATTRIBUTE_RESOURCES.mapIndexedNotNull { i, resource ->
+            val want = origin[resource]
+                ?: return@mapIndexedNotNull "android:${ATTRIBUTE_NAMES[i]} binds $resource, " +
+                    "which the token join does not map at all, so entry $i has no origin"
+            val got = recorded.getOrNull(i)
+                ?: return@mapIndexedNotNull "EXPECTED_DARK_COLORS has no entry $i for " +
+                    "android:${ATTRIBUTE_NAMES[i]}"
+            if (want == got) {
+                null
+            } else {
+                "android:%s -> %s: origin 0x%08X, recorded 0x%08X"
+                    .format(ATTRIBUTE_NAMES[i], resource, want, got)
+            }
+        }
+
+    /**
      * The colours the theme records must BE the tokens, not merely resemble them.
      *
      * This is the assertion that fails today: --p-bg is #08090a and swarm_background is
@@ -85,23 +115,14 @@ class ThemeTokenOriginTest {
             ATTRIBUTE_RESOURCES.size,
             recorded.size,
         )
-        ATTRIBUTE_RESOURCES.forEachIndexed { i, resource ->
-            val originValue = expected[resource]
-            assertTrue(
-                "$resource is not in the token join at all, so entry $i of " +
-                    "EXPECTED_DARK_COLORS has no origin to be checked against",
-                originValue != null,
-            )
-            assertEquals(
-                "EXPECTED_DARK_COLORS[$i] is the value of android:%s and must be the origin's "
-                    .format(ATTRIBUTE_NAMES[i]) +
-                    "value for $resource. Containment alone does not catch this: with the " +
-                    "entries transposed every recorded colour is still SOME mapped token's " +
-                    "value, and the theme paints text in the background colour.",
-                originValue,
-                recorded[i],
-            )
-        }
+        assertEquals(
+            "the recorded palette does not correspond to the themed attributes position by " +
+                "position. Containment alone does not catch this: with two entries transposed " +
+                "every recorded colour is still SOME mapped token's value, and the theme paints " +
+                "text in the background colour.",
+            emptyList<String>(),
+            positionalMismatches(recorded, expected),
+        )
         recorded.forEach { colour ->
             assertTrue(
                 "SwarmTheme records 0x%08X, which is not the value of any mapped design token. "
@@ -118,31 +139,39 @@ class ThemeTokenOriginTest {
      * whose failure mode has never been demonstrated is the shape that let this codebase ship a
      * third divergent palette under a green test.
      *
-     * It applies the same check to a deliberately transposed list and requires it to find the
-     * mismatch. If this ever passes vacuously -- because two attribute resources resolved to the
-     * same colour, say -- the guard on the first line is what says so.
+     * It feeds a deliberately transposed palette to [positionalMismatches] -- the SAME function
+     * the requirement above calls, not a second copy of the comparison -- and requires it to
+     * object about both moved entries. A control over its own reimplementation would stay green
+     * through a self-comparison in the real assertion, which is the failure it exists to rule
+     * out.
      */
     @Test
     fun `the positional check can actually fail`() {
         val expected = DesignTokens.androidColors()
-        val correct = ATTRIBUTE_RESOURCES.map { expected[it] }
-        assertTrue(
-            "every themed attribute must resolve to a colour in the join, or the control " +
-                "below compares nulls and proves nothing",
-            correct.none { it == null },
+        val recorded = SwarmTheme.EXPECTED_DARK_COLORS.toList()
+
+        assertEquals(
+            "the control transposes the first two entries, so it needs both of them",
+            emptyList<String>(),
+            positionalMismatches(recorded, expected),
         )
         assertTrue(
-            "the first two themed attributes hold the same colour, so a transposition is " +
-                "undetectable and this control is vacuous",
-            correct[0] != correct[1],
+            "colorBackground and textColorPrimary hold the same colour, so a transposition is " +
+                "undetectable and this control would be vacuous",
+            recorded[0] != recorded[1],
         )
 
-        val transposed = listOf(correct[1], correct[0], correct[2])
-        val mismatches = ATTRIBUTE_RESOURCES.filterIndexed { i, r -> expected[r] != transposed[i] }
-        assertTrue(
-            "a transposed palette produced no mismatch, so the positional assertion above " +
-                "would certify a theme that paints text in the background colour",
-            mismatches.isNotEmpty(),
+        val transposed = recorded.toMutableList().apply {
+            this[0] = recorded[1]
+            this[1] = recorded[0]
+        }
+        assertEquals(
+            "transposing colorBackground and textColorPrimary produced ${
+                positionalMismatches(transposed, expected).size
+            } mismatch(es) rather than 2, so the positional assertion above would certify a " +
+                "theme that paints text in the background colour",
+            2,
+            positionalMismatches(transposed, expected).size,
         )
     }
 

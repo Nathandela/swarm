@@ -76,3 +76,22 @@ FAIL the frame constants resolve to the design's own frame
 
 ### restored
 230 tests, 0 failures, 0 errors
+
+================================================================
+ThemeTokenOriginTest's positional check (PB-TOK-1 / PB-TOK-5 seam, S22b scope addition).
+
+### T1. EXPECTED_DARK_COLORS entries 0 and 1 transposed in SwarmTheme.kt
+FAIL the recorded theme colours are the design tokens
+     the recorded palette does not correspond to the themed attributes position by position
+     android:colorBackground -> swarm_background: origin 0xFF08090A, recorded 0xFFF7F8F8
+FAIL the positional check can actually fail
+     (its own precondition -- it transposes the first two entries, so it needs both correct)
+Containment alone passes this mutation: both colours are still SOME mapped token's value,
+while the theme paints text in the background colour.
+
+### T2. positionalMismatches() neutered to return emptyList() always
+FAIL the positional check can actually fail
+This is the mutation the PREVIOUS control could not catch. It rebuilt the comparison inline
+with its own filterIndexed and never called the function the requirement rests on, so a
+comparison that had been normalised, short-circuited or reduced to a self-comparison stayed
+certified. Both paths now call one function.
