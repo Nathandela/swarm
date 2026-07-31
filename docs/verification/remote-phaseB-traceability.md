@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**107 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**108 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -87,7 +87,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-DOC-3 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-4 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-5 | S2 | shipped | not derived | `docs/verification/remote-phaseB-s2-evidence.md` |
-| PB-DOC-7 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-DOC-7 | S20 | shipped | **DERIVED** — `PB-APP-1` given a **second** owning slice in `remote-phaseB-manifest.tsv` (`S16` and `S11`), which is the duplicate-owner defect this row names -> `TestPBDOC7_TheRepositoryPasses` fails. Reverted; manifest sha256 `64abe39d6995...` identical. A duplicate was chosen over an unowned id deliberately: an unowned requirement is the obvious case and a checker that only counted rows would catch it, while a requirement owned **twice** still has an owner for every id and is the one a naive count misses. | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-E2E-1 | S19 | shipped | not derived | `docs/verification/remote-phaseB-s19-evidence.md` |
 | PB-E2E-2 | S21 | pending | not derived | — |
 | PB-E2E-3 | S19 | **NOT MET** | not derived | DEFINED DOWN by my own restatement (B93). It claimed RED-first is evidenced by a committed failing state, and its three cited exemplars contain ZERO lines of actual failing output -- verified, grep returns 0 on all three. They carry PROSE NARRATING failures, which is exactly what the restatement claimed to replace. And 26 slices landed implementation and tests in one commit, not the 4 the row names (ADR-007 B94) |
