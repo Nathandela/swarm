@@ -305,6 +305,31 @@ type Store interface {
 	// tier or a lapsed 60-second window, crypto.ErrKeyInvalidated for a destroyed KEK -- and
 	// nothing is adopted unless every container opened.
 	UnsealContent() error
+
+	// RewindRelayCursor resets State.RelayCursor to zero durably, so the next drain re-reads
+	// the mailbox from the beginning.
+	//
+	// IT IS A METHOD FOR THE SAME REASON PurgeKeys IS: custody cannot tell a rewind from an
+	// ordinary Save of a State whose cursor happens to be zero, because a phone that has
+	// never read anything holds zero too. mergeGuards raises RelayCursor monotonically -- it
+	// is grouped with the replay guards -- so a Save can never lower it, and that is
+	// deliberate: an ordinary writer arriving with a stale snapshot must not rewind the read
+	// position. This is the ONE act that may, and it says so at the seam rather than by
+	// slipping a zero past a merge rule.
+	//
+	// IT IS SAFE BECAUSE THE CURSOR IS NOT THE GUARD. The relay MINTS it (relay.Item.Cursor,
+	// "untrusted ordering") and it is only an optimisation -- do not re-read what has been
+	// read. What actually refuses a redelivered frame is the durable per-bucket seq
+	// high-water (State.Receive) plus the grant watermark, both authenticated and both
+	// untouched here, so re-reading the mailbox from zero replays nothing: every retained
+	// frame is refused with crypto.ErrStaleSeq. The work is bounded by the relay's own
+	// mailbox depth cap.
+	//
+	// IT IS THE ONLY RECOVERY FROM A POISONED CURSOR. A relay that rewrites one item's cursor
+	// past every real one ends all machine->phone delivery permanently, durably, with every
+	// indicator still reading live; before this seam the only way back was deleting the state
+	// directory and re-pairing (ADR-007 B126).
+	RewindRelayCursor() error
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +835,22 @@ func (s *fileStore) PurgeKeys() error {
 		wakeKey: wake.blob, contentKey: s.contentTier.blob,
 		wakeState: s.wakeState.blob, kept: s.kept.blob,
 	})
+}
+
+// RewindRelayCursor zeroes the durable relay read cursor. See the Store interface for why it
+// is a method rather than a Save, and why replaying the mailbox from zero is safe.
+//
+// The zero is written into s.st BEFORE the Save so mergeGuards has nothing higher to raise it
+// back to -- the merge compares against exactly this field. Routing the durable write through
+// Save rather than persisting here keeps every seal, every tier rule and
+// refuseUnreadableContentWrite on the path: a rewind is an ordinary write of one coordinate,
+// not a second way to reach the disk.
+func (s *fileStore) RewindRelayCursor() error {
+	s.mu.Lock()
+	s.st.RelayCursor = 0
+	st := s.st.clone()
+	s.mu.Unlock()
+	return s.Save(st)
 }
 
 // UnsealContent re-opens the content tier IN PLACE: PB-KEY-7's "require a fresh unwrap before

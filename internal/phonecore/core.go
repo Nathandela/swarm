@@ -261,6 +261,23 @@ func (c *Core) UnsealContent() error {
 	return nil
 }
 
+// RewindRelayCursor resets the relay read cursor to zero durably, so the next drain re-reads
+// the mailbox from the beginning. It is the ONLY recovery from a relay-poisoned cursor --
+// see the Store method for why the replay guards make it safe and what bounds the work.
+//
+// NO REBIND, unlike PurgeKeys and UnsealContent: nothing derived from durable state depends
+// on the read cursor. The drain reads it fresh on every pass (mobile.App.drain), and the
+// receiver, sequencer and router are keyed on the epoch material this does not touch.
+func (c *Core) RewindRelayCursor() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.store.RewindRelayCursor(); err != nil {
+		return err
+	}
+	c.st = c.store.Load().clone()
+	return nil
+}
+
 // persist writes st through custody and adopts whatever custody made of it (the file store
 // merges the replay guards monotonically). A failed write leaves the in-memory copy
 // untouched, so nothing is claimed that is not durable.

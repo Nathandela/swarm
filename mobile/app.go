@@ -989,6 +989,22 @@ func (a *App) Resync(stream string) (err error) {
 	if err = a.resyncBudget(stream, time.Now()); err != nil {
 		return err
 	}
+	// RESET THE READ POSITION, LOCALLY, BEFORE ANY ROUND TRIP. This verb used to mean "ask the
+	// machine for a reseed"; it now means "reset my read position AND ask for a reseed", and
+	// the local half has to come first because the reseed is delivered THROUGH the read
+	// position. A relay that rewrites one item's storage cursor past every real one ends all
+	// machine->phone delivery permanently and durably (ADR-007 B126), and a repair that only
+	// sent a request would be answered into the same hole -- which is measured: the poisoned
+	// phone's Resync returned nil and changed nothing.
+	//
+	// It rides EVERY admitted resync, not only the journal's, because the read cursor is the
+	// TRANSPORT's and all four channels share it -- a user whose terminal has gone silent must
+	// not have to guess which button repairs the connection. It is inside the budget for the
+	// same reason the rest of the verb is: the work is one re-drain of a depth-capped mailbox,
+	// and the seq high-water refuses every frame in it that was already applied.
+	if err = core.RewindRelayCursor(); err != nil {
+		return err
+	}
 	// ADMITTED, so the repair is in flight from this instant (PB-APP-8's fourth state). It is
 	// marked BEFORE the request is sealed rather than after: the seal can take a relay round
 	// trip, and a user who pressed a button and saw nothing change for a second is the exact
