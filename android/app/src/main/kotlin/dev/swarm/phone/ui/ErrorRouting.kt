@@ -20,16 +20,15 @@ import dev.swarm.phone.keys.GoCustodyFailure
 /**
  * The class tokens the facade stamps. Verbatim from mobile/error_taxonomy.tsv.
  *
- * THE TWO CUSTODY VERDICTS ARE NOT RE-SPELLED HERE. They are already owned by
- * [GoCustodyFailure], and mobile/s14_custody_test.go checks those literals against the Go
- * constants in the direction that matters -- Go is authoritative, Kotlin is checked against
- * it. A third copy of a discriminator string is a third thing to get wrong, and the failure is
- * silent: an unrecognised token falls through to [ErrorState.UNKNOWN], which for the PERMANENT
- * invalidation means the user is offered a prompt they can never satisfy (PB-KEY-6's recorded
- * defect).
+ * THE CUSTODY VERDICT IS NOT RE-SPELLED HERE. It is already owned by [GoCustodyFailure], and
+ * mobile/s14_custody_test.go checks that literal against the Go constant in the direction that
+ * matters -- Go is authoritative, Kotlin is checked against it. A third copy of a discriminator
+ * string is a third thing to get wrong, and the failure is silent: an unrecognised token falls
+ * through to [ErrorState.UNKNOWN], which for a PERMANENT invalidation means the user is told to
+ * try again forever (PB-KEY-6's recorded defect).
  *
- * The other fourteen are literals for the reason the two custody ones are: the unit-test JVM
- * does not load the AAR, so the constants cannot be read from it.
+ * The other fourteen are literals for the reason that one is: the unit-test JVM does not load
+ * the AAR, so the constants cannot be read from it.
  */
 object SwarmErrorTokens {
     const val UNKNOWN: String = "swarm/unknown"
@@ -44,7 +43,6 @@ object SwarmErrorTokens {
     const val SYNCING: String = "swarm/unreconciled"
     const val AWAITING_KEY: String = "swarm/awaiting-key"
     const val GRANT_LOST: String = "swarm/grant-lost"
-    const val REAUTH_REQUIRED: String = GoCustodyFailure.AUTH_REQUIRED_TOKEN
     const val REPAIR_REQUIRED: String = GoCustodyFailure.KEY_INVALIDATED_TOKEN
     const val REVOKED: String = "swarm/revoked"
     const val NEEDS_LEASE: String = "swarm/no-lease"
@@ -74,7 +72,6 @@ enum class ErrorState {
     SYNCING,
     AWAITING_KEY,
     GRANT_LOST,
-    REAUTH_REQUIRED,
     REPAIR_REQUIRED,
     REVOKED,
     NEEDS_LEASE,
@@ -85,12 +82,14 @@ enum class ErrorState {
 /**
  * What the user -- or the MACHINE -- has to do about it.
  *
- * PB-APP-10's three may never collapse into each other, and the reason is that two of them are
- * dead ends when misrouted. [AUTHENTICATE] is recoverable; [RE_PAIR] is permanent but the user
- * can carry it out; [MACHINE_REGRANT] is the one the user cannot perform from the handset at
- * all, and sending a grant-loss user to the pairing flow is a BRICK rather than a wording
- * mistake -- BeginPairing fail-fasts while this device is still registered (PB-STATE-10), so
- * the advice cannot be followed and the only exit is physical access to the machine.
+ * PB-APP-10 NARROWS FROM THREE REMEDIES TO TWO (ADR-007 B133). [AUTHENTICATE] is gone with its
+ * subject: there is no local authentication on this handset, so a remedy telling the user to
+ * perform one would be advice that cannot be carried out. The two that remain must still never
+ * collapse into each other -- [RE_PAIR] is permanent but the user CAN carry it out, while
+ * [MACHINE_REGRANT] is the one they cannot perform from the handset at all, and sending a
+ * grant-loss user to the pairing flow is a BRICK rather than a wording mistake: BeginPairing
+ * fail-fasts while this device is still registered (PB-STATE-10), so the advice cannot be
+ * followed and the only exit is physical access to the machine.
  *
  * [FIX_CLOCK] is not in the taxonomy: PB-TIME-1's verdict is a separate pull surface, not an
  * error class. It is here because it is the remedy a user is shown, and it must not be
@@ -105,7 +104,6 @@ enum class Remedy {
     PAIR,
     WAIT_FOR_MACHINE,
     MACHINE_REGRANT,
-    AUTHENTICATE,
     RE_PAIR,
 
     /**
@@ -213,10 +211,6 @@ object ErrorRouter {
             "This phone's key grant is gone, and only the machine can issue a new one. Go to " +
                 "your machine and grant this device access again; pairing again cannot work " +
                 "while the machine still has this device registered.",
-        ),
-        SwarmErrorTokens.REAUTH_REQUIRED to RoutedError(
-            ErrorState.REAUTH_REQUIRED, Remedy.AUTHENTICATE,
-            "Authenticate to carry on -- the key this needs sits behind your device unlock.",
         ),
         SwarmErrorTokens.REPAIR_REQUIRED to RoutedError(
             ErrorState.REPAIR_REQUIRED, Remedy.RE_PAIR,

@@ -17,8 +17,23 @@
 #
 # `sentinel` is the Go error IDENTITY the class classifies, or "-" for a class the facade
 # authors itself. `rendered_state` is a constant of dev.swarm.phone.ui.ErrorState.
-# `remedy` is what the user (or the machine) must do; the three of PB-APP-10 are
-# authenticate / re_pair / machine_regrant and they may never collapse.
+# `remedy` is what the user (or the machine) must do; the two of PB-APP-10 are
+# re_pair / machine_regrant and they may never collapse. There were THREE until ADR-007 B133:
+# `authenticate` left with its subject, because all phone-side user authentication is removed
+# and a remedy naming an act the product can no longer offer is advice nobody can carry out.
+# Its row -- ErrClassReauthRequired / REAUTH_REQUIRED, whose sentinel was
+# crypto.ErrKeyAuthRequired -- went in the same change as mobile/relay.go's connReauthRequired,
+# the Kotlin ConnectionState and ErrorState entries, and Remedy.AUTHENTICATE. crypto stays
+# FROZEN and still raises that sentinel; mobile/relay.go now lands it on connRepairRequired,
+# because a key demanding an authentication the product cannot perform is unusable and pairing
+# again re-provisions it without one.
+#
+# NOT YET DONE, RECORDED RATHER THAN LEFT TO BE DISCOVERED: mobile/errorclass.go still exports
+# ErrClassReauthRequired and still classifies crypto.ErrKeyAuthRequired and
+# phonecore.ErrContentTierLocked onto it, and mobile/testdata/exported_surface.golden still
+# lists the constant. Those are outside the ownership of the change that removed this row. Until
+# they follow, the Go facade can stamp a class this table has no row for, and the Kotlin router
+# answers UNKNOWN for it -- which is fail-safe and is still a gap.
 #
 #class_const	token	sentinel	rendered_state	remedy	requirement	note
 ErrClassUnknown	swarm/unknown	-	UNKNOWN	none	PB-APP-9	RESERVED. App.ErrorClass answers this for a message the facade did not produce, and for nothing else. It is what makes the exhaustiveness sweep a real assertion: a classifier that could not say "I do not know this" would satisfy every other check by answering one class for everything.
@@ -33,8 +48,7 @@ ErrClassDeviceUnsupported	swarm/device-unsupported	-	DEVICE_UNSUPPORTED	report_b
 ErrClassUnreconciled	swarm/unreconciled	phonecore.ErrUnreconciled	SYNCING	wait_for_machine	PB-SYNC-7,PB-APP-9	PB-SYNC-7's fail-closed refusal of mutating ops until the machine publishes its rollback authorities. Reads keep working throughout, so the screen shows a banner and not an error page.
 ErrClassAwaitingKey	swarm/awaiting-key	-	AWAITING_KEY	wait_for_machine	PB-KEY-10,PB-APP-9	No epoch content key, and the grant has NOT been proved lost. This is the ordinary first-launch window; rendering it as GRANT_LOST would send a healthy user to the machine for a key that is already on its way.
 ErrClassGrantLost	swarm/grant-lost	phonecore.ErrGrantLost	GRANT_LOST	machine_regrant	PB-KEY-3,PB-APP-10	The one remedy the USER cannot perform. It may never collapse into REPAIR_REQUIRED: BeginPairing fail-fasts while this device is registered (PB-STATE-10), so "pair again" is advice that cannot be carried out and the only exit left is physical access to the machine.
-ErrClassReauthRequired	swarm-custody/auth-required	crypto.ErrKeyAuthRequired	REAUTH_REQUIRED	authenticate	PB-KEY-6,PB-APP-10	RECOVERABLE. Prompt for the biometric; the operation is worth retrying afterwards. The token is the one Kotlin has matched on since S14 (GoCustodyFailure.AUTH_REQUIRED_TOKEN); it is deliberately not re-spelled.
-ErrClassRepairRequired	swarm-custody/key-invalidated	crypto.ErrKeyInvalidated	REPAIR_REQUIRED	re_pair	PB-KEY-6,PB-APP-10	PERMANENT. The Keystore key is destroyed and no prompt brings it back. Same token discipline as the row above; a drifted copy degrades this into a prompt the user can never satisfy.
+ErrClassRepairRequired	swarm-custody/key-invalidated	crypto.ErrKeyInvalidated	REPAIR_REQUIRED	re_pair	PB-KEY-6,PB-APP-10	PERMANENT. The Keystore key is destroyed and nothing on the device brings it back. The token is the one Kotlin has matched on since S14 (GoCustodyFailure.KEY_INVALIDATED_TOKEN) and is deliberately not re-spelled; a drifted copy falls through to UNKNOWN, which tells a user whose key is gone to try again forever. It absorbed crypto.ErrKeyAuthRequired's transport arm under ADR-007 B133 -- see the header.
 ErrClassRevoked	swarm/revoked	relay.ErrRevoked	REVOKED	re_pair	PB-APP-10,PB-SEC-7	The OWNER removed this device. It shares REPAIR_REQUIRED's remedy and not its cause, which is why it is a class of its own: the machine still holds a registration the owner must clear before a re-pair can succeed. Without this row a revoked phone redials every 250 ms behind a spinner forever.
 ErrClassNoLease	swarm/no-lease	phonecore.ErrNoLease	NEEDS_LEASE	take_control	PB-INPUT-2,PB-APP-3	The machine has not confirmed a control lease, so every keystroke -- and PB-APP-3's Stop -- is refused. The screen's remedy is to offer take-control; a retry is the one thing that cannot help.
 ErrClassRateLimited	swarm/rate-limited	-	RATE_LIMITED	wait_and_retry	PB-SYNC-6,PB-APP-8	A bound this phone enforces on itself (the section 6.0 resync budget) or the relay enforces on it. Retryable only after waiting: "asking harder" is exactly what the bound exists to stop.

@@ -169,17 +169,21 @@ func (a *App) awaitConn() (*relay.Client, error) {
 // The connection states App.ConnectionState reports, named once so the transport loop and
 // the Android side cannot disagree about a literal.
 //
-// The last two are PB-KEY-6's: a custody refusal is not a transport condition and must not be
-// reported as one. connReauthRequired means "prompt for the biometric and it will connect";
-// connRepairRequired means "the key is gone" and is TERMINAL -- the loop stops, because
-// retrying a destroyed key forever while showing a spinner is the failure this pair exists to
-// remove.
+// connRepairRequired is PB-KEY-6's: a custody refusal is not a transport condition and must not
+// be reported as one. It means "the key is gone" and is TERMINAL -- the loop stops, because
+// retrying a destroyed key forever while showing a spinner is the failure it exists to remove.
+//
+// THERE IS NO connReauthRequired (ADR-007 B133). It meant "prompt for the biometric and it will
+// connect", and there is no prompt left anywhere in the product to offer: all phone-side user
+// authentication is removed, so the state had lost its remedy and its producer at once. It was
+// deleted in the same change as the error_taxonomy.tsv row, the Kotlin ConnectionState and
+// ErrorState entries and Remedy.AUTHENTICATE, because a state surviving on one side of that
+// join is a screen nothing can ever reach.
 const (
 	connOffline        = "offline"
 	connConnecting     = "connecting"
 	connOnline         = "online"
 	connReconnecting   = "reconnecting"
-	connReauthRequired = "reauth_required"
 	connRepairRequired = "repair_required"
 
 	// connRevoked is PB-APP-10's seventh state and it is NOT a custody condition.
@@ -258,19 +262,18 @@ func (a *App) run(ctx context.Context) {
 			a.setConn(connConnecting)
 			first = false
 		} else {
-			// A custody refusal is NOT a transport problem, so it must not be overwritten
-			// by "reconnecting": the user has to be told that authenticating is what fixes
-			// this, and a spinner tells them the opposite. The state therefore persists
+			// A state that is NOT a recoverable link condition must not be overwritten by
+			// "reconnecting": a spinner promises that waiting is enough, and for every state
+			// held here waiting is exactly what does not help. The state therefore persists
 			// across the retry, and the next successful dial clears it by setting "online".
 			//
-			// connRevoked is held for the same reason, and it only ever survives a retry
-			// inside the post-pairing window rearmAfterPairing opens: hiding it behind a
-			// spinner there would put back exactly the loop PB-APP-10 forbids.
-			// The transport-policy verdicts join this list for the reason the two above are
-			// on it: they survive a retry only while a pairing is in flight (B58), and
-			// overwriting them with "reconnecting" there would put the spinner back over the
-			// one screen that says what is actually wrong.
-			if s := a.currentConn(); s != connReauthRequired && s != connRevoked &&
+			// connRevoked only ever survives a retry inside the post-pairing window
+			// rearmAfterPairing opens: hiding it behind a spinner there would put back exactly
+			// the loop PB-APP-10 forbids. The transport-policy verdicts are on this list for
+			// the same reason: they survive a retry only while a pairing is in flight (B58),
+			// and overwriting them with "reconnecting" there would put the spinner back over
+			// the one screen that says what is actually wrong.
+			if s := a.currentConn(); s != connRevoked &&
 				s != connRelayUntrusted && s != connRelayInsecure {
 				a.setConn(connReconnecting)
 			}
@@ -287,23 +290,27 @@ func (a *App) run(ctx context.Context) {
 			// PB-KEY-6, at the one production call site of relay.ClientAuth.Sign that can
 			// refuse. This error used to be discarded with a bare `continue`, which was
 			// unreachable while the app ran on the software keystore and went LIVE the
-			// moment PB-KEY-9's Keystore-backed KEK landed: a recoverable refusal became an
-			// endless "reconnecting" with no prompt, and a permanent one the same loop
-			// against a key that no longer exists.
+			// moment PB-KEY-9's Keystore-backed KEK landed: a destroyed key became an
+			// endless "reconnecting" loop against something that would never work again.
 			switch {
-			case errors.Is(err, crypto.ErrKeyInvalidated):
-				// PERMANENT and therefore TERMINAL. The relay-auth key is destroyed;
-				// nothing on-device recovers it and every retry is a round trip spent
-				// proving that again. Returning here rather than breaking is deliberate --
-				// break would fall through to setConn("offline") and erase the one state
-				// that tells the user to pair again.
+			case errors.Is(err, crypto.ErrKeyInvalidated),
+				errors.Is(err, crypto.ErrKeyAuthRequired):
+				// PERMANENT and therefore TERMINAL. The relay-auth key is destroyed or
+				// unusable; nothing on-device recovers it and every retry is a round trip
+				// spent proving that again. Returning here rather than breaking is
+				// deliberate -- break would fall through to setConn("offline") and erase
+				// the one state that tells the user to pair again.
+				//
+				// THE TWO SENTINELS SHARE AN ARM AFTER ADR-007 B133, and they did not
+				// before. ErrKeyAuthRequired used to set "reauth_required", which meant
+				// "prompt for the biometric and it will connect". There is no prompt left
+				// in the product, so the same refusal is now something the user can never
+				// satisfy on this handset -- which is what "permanent" means. Pairing again
+				// is a real fix and is what the state says: it re-provisions the key
+				// without the authenticator that is refusing.
 				a.setConn(connRepairRequired)
 				a.setClient(nil)
 				return
-			case errors.Is(err, crypto.ErrKeyAuthRequired):
-				// RECOVERABLE. Keep retrying -- the biometric may be satisfied at any
-				// moment, and the retry is what notices -- but say what is actually wrong.
-				a.setConn(connReauthRequired)
 			case errors.Is(err, relay.ErrRevoked):
 				// PB-APP-10. The THIRD identity this switch has to distinguish, and the one
 				// the fix for the first two left behind with an identical shape: a bare

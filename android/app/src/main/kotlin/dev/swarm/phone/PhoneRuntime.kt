@@ -2,7 +2,6 @@ package dev.swarm.phone
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import dev.swarm.phone.keys.AndroidKeyInfoReader
 import dev.swarm.phone.keys.AndroidKeystoreAlgorithms
 import dev.swarm.phone.keys.AndroidKeystoreProvisioner
@@ -14,18 +13,12 @@ import dev.swarm.phone.keys.DeviceCapabilities
 import dev.swarm.phone.keys.FileCustodyBacking
 import dev.swarm.phone.keys.GoCustodyFailure
 import dev.swarm.phone.keys.KeyCustodyException
-import dev.swarm.phone.keys.KeyRole
 import dev.swarm.phone.keys.KeyTier
 import dev.swarm.phone.keys.KeystoreCustodyBootstrap
 import dev.swarm.phone.keys.KeystoreKekProvider
 import dev.swarm.phone.keys.KeystoreKeyCustody
 import dev.swarm.phone.keys.PersistentCustodyBacking
-import dev.swarm.phone.keys.PlatformCapability
-import dev.swarm.phone.keys.Recovery
 import dev.swarm.phone.keys.SealedStore
-import dev.swarm.phone.keys.deviceBiometricAvailability
-import dev.swarm.phone.runtime.ContentProvisioning
-import dev.swarm.phone.runtime.ContentUnlockPolicy
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.SwarmErrorTokens
@@ -46,12 +39,12 @@ import java.io.File
  *
  * IT IS ITS OWN FILE AND NOT THE APPLICATION SUBCLASS. Construction reaches Keystore, the
  * filesystem and the native library, and every one of those can refuse; an `Application` that
- * did it in `onCreate` would turn a locked handset -- or a re-enrolled fingerprint -- into a
- * process that dies before any screen exists to say why.
+ * did it in `onCreate` would turn a handset whose Keystore refuses into a process that dies
+ * before any screen exists to say why.
  *
  * SO IT IS LAZY AND FAILABLE. [phone] answers a [PhoneStartup], never an exception, and only a
- * SUCCESS is remembered: a refusal is retried on the next call, because the commonest one is
- * "the user has not authenticated yet" and the whole remedy is that they then do.
+ * SUCCESS is remembered: a refusal is retried on the next call rather than latched, so a
+ * transient platform fault does not brick the process it happened in.
  */
 class PhoneRuntime(private val context: Context) {
 
@@ -151,15 +144,18 @@ class PhoneRuntime(private val context: Context) {
      *    level promises -- worth recording, and explicitly not worth refusing over.
      *  - REFUSED: DEVICE_UNSUPPORTED, whose remedy is REPORT_BUG and which offers no pairing
      *    (`PhoneStartupRoutingTest`). It is reachable only when this Keystore cannot produce an
-     *    AES key at all, or below API 30 -- and PB-RUN-1 pins minSdk to 33, so the second is
-     *    unreachable on any handset the app installs on. The first was already a phone that
-     *    could not start; what changes is that it now says which capability was missing instead
-     *    of surfacing a platform exception as INTERNAL.
+     *    AES key at all, which was already a phone that could not start; what changes is that it
+     *    now says which capability was missing instead of surfacing a platform exception as
+     *    INTERNAL.
+     *
+     * THE CONSUMED SET IS ONE ROW AFTER ADR-007 B133, and the API-level row that used to sit
+     * beside it (USER_AUTH_PER_USE) is gone with the authenticator it described. That row was
+     * never what refused the A26 -- B132's refusal was an ENROLMENT check further down this
+     * file, which is also gone.
      */
     private fun capabilityPlan(): CustodyPlan.Provisioned {
         val plan = CustodyPlanner.forDevice(
             DeviceCapabilities(
-                sdkInt = Build.VERSION.SDK_INT,
                 strongBox = strongBoxPreferred,
                 algorithms = AndroidKeystoreAlgorithms(),
             ).probe(),
@@ -172,45 +168,20 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
-     * PB-SEC-2's precondition, asked before anything tries to CREATE the content KEK.
-     *
-     * `DeviceCapabilities.probe` answers USER_AUTH_PER_USE from the API LEVEL, which is a fact
-     * about the platform and not about this handset -- so a user with a PIN and no fingerprint
-     * passed the capability plan and then hit `KeyGenerator.init` throwing
-     * `InvalidAlgorithmParameterException`, because the platform will not generate an
-     * `AUTH_BIOMETRIC_STRONG` key with nothing enrolled. That is not a [KeyCustodyException], so
-     * [routeStartupFailure] fell through to `SwarmErrorTokens.UNKNOWN`: "something failed in a way
-     * the app does not recognise", remedy NONE. An app that will not start, for a reason the user
-     * could have fixed in thirty seconds, with nothing telling them so.
-     *
-     * IT IS ADR-007 B59'S BILL. Refusing `AUTH_DEVICE_CREDENTIAL` is what makes an enrolled
-     * Class-3 biometric mandatory, so naming this refusal is part of that decision rather than a
-     * separate concern -- see [ContentUnlockPolicy.provisioningFor] for why each answer routes
-     * where it does, and why a transient answer proceeds instead of refusing.
+     * ADR-007 B132 AND B133, AND THE ONE THING THAT WAS DELETED HERE. This used to call
+     * `refuseAHandsetThatCannotHoldTheContentKek` first, which asked whether the handset had an
+     * enrolled Class-3 biometric and threw if it did not -- because the platform refuses to
+     * GENERATE an `AUTH_BIOMETRIC_STRONG` key with nothing enrolled. On the A26 (a PIN, no
+     * fingerprint) that made every screen in the app unreachable: `PhoneSurface` and
+     * `PairingSurface` are both downstream of [phone], so the user was shown six inoperable
+     * controls and NO route to pairing at all. The content KEK no longer asks for an
+     * authenticator, so there is nothing left to refuse over and the check is gone rather than
+     * relaxed.
      */
-    private fun refuseAHandsetThatCannotHoldTheContentKek() {
-        when (ContentUnlockPolicy.provisioningFor(deviceBiometricAvailability(context))) {
-            ContentProvisioning.PROCEED -> Unit
-            // REAUTHENTICATE, whose remedy is AUTHENTICATE -- the same remedy the unlock control
-            // keys on, so the user gets the control, it finds it cannot prompt, and it says to
-            // enrol. One mechanism reached by two roads rather than a second error class.
-            ContentProvisioning.NEEDS_ENROLMENT ->
-                throw KeyCustodyException.UserAuthenticationRequired(KeyTier.CONTENT)
-
-            // Nothing the user does to this handset helps, which is exactly what
-            // DEVICE_UNSUPPORTED means and what PlatformCapabilityMissing routes to.
-            ContentProvisioning.UNSUPPORTED -> throw KeyCustodyException.PlatformCapabilityMissing(
-                KeyRole.COMMAND_SIGN,
-                PlatformCapability.USER_AUTH_PER_USE,
-            )
-        }
-    }
-
     private fun construct(): App {
         val backing = FileCustodyBacking(custodyDir)
         val bootstrap = bootstrapOver(backing)
 
-        refuseAHandsetThatCannotHoldTheContentKek()
         refuseAnOrphanedStateDirectory(backing)
         for (tier in KeyTier.entries) bootstrap.ensure(tier)
 
@@ -230,20 +201,25 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
-     * PB-KEY-7's lock purge, reached from [dev.swarm.phone.runtime.ContentLock].
+     * PB-KEY-7's purge, whose TRIGGER moved (ADR-007 B133 decision 3).
      *
-     * IT NEVER CONSTRUCTS A PHONE. `ready` is only set once one was built, so a screen turning off
-     * on a handset whose app has not been opened does not reach Keystore, the filesystem or the
-     * native library on the way -- and there is nothing there to purge in the first place.
+     * It used to be a screen lock, observed process-wide by `ContentLock`. There is no lock event
+     * any more -- nothing on this handset is gated on a user authentication -- so the purge is
+     * now reached from REVOKE and UNPAIR, which is where the phone stops being entitled to the
+     * epoch keys at all. It is not recoverable without pairing again, and that is the point.
+     *
+     * IT NEVER CONSTRUCTS A PHONE. `ready` is only set once one was built, so a revoke on a
+     * handset whose app has not been opened does not reach Keystore, the filesystem or the native
+     * library on the way -- and there is nothing there to purge in the first place.
      *
      * THE ERROR IS SWALLOWED, and that is the honest handling rather than a shortcut. The memory
      * half of the purge is unconditional and has already happened when this returns; a failure
      * means only that the decrypted caches AT REST survived it, on a full disk or a data
-     * directory gone read-only. There is no user present at a screen lock and no screen left to
-     * report to, and the next successful lock finishes the job.
+     * directory gone read-only. The screen that issued the revoke has already reported the verb's
+     * own outcome, which is the fact the user acted on.
      */
     @Synchronized
-    fun lockContent() {
+    fun purgeKeys() {
         val live = ready ?: return
         try {
             live.app.purgeKeys()
@@ -253,12 +229,14 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
-     * PB-KEY-7's "require a fresh unwrap before restoring content", and PB-SEC-2's gate.
+     * PB-KEY-7's "require a fresh unwrap before restoring content".
      *
-     * It is a REQUEST, not a promise: the Keystore-backed content KEK answers only while the
-     * device has authenticated inside the window it was provisioned with, so this legitimately
-     * refuses on a locked handset. The refusal is routed like every other facade failure, by the
-     * caller that has a screen to put it on ([PhoneSurface]).
+     * WHAT IT ASKS IS KEY AVAILABILITY (ADR-007 B133 decision 2). It is a REQUEST, not a promise:
+     * the content KEK carries `setUserAuthenticationRequired(false)`, so it no longer refuses over
+     * a user who has not authenticated -- but it still refuses over a destroyed key, a missing
+     * Keystore entry or a platform fault, and each of those is something the user has to be told.
+     * The refusal is routed like every other facade failure, by the caller that has a screen to
+     * put it on ([PhoneSurface]).
      *
      * @return null when content custody is live, or the routed reason it is not.
      */
@@ -295,20 +273,6 @@ class PhoneRuntime(private val context: Context) {
         for (tier in KeyTier.entries) bootstrap.discard(tier)
         coreDir.deleteRecursively()
     }
-
-    /**
-     * PB-SEC-2's per-use gate keys, over the same provisioning path the tier KEKs take.
-     *
-     * IT IS ASKED FOR HERE AND NOT BUILT AT THE SCREEN, for the reason [strongBoxPreferred]
-     * exists: provisioning is one platform conversation, and a second construction of
-     * [CustodyProvisioning] beside a screen is a second place the read-back could be omitted.
-     * The gate entries themselves are provisioned lazily on first use -- they seal nothing, so
-     * there is no first-launch ordering to get right and nothing to lose by not having them.
-     */
-    fun perUseCiphers(): dev.swarm.phone.keys.PerUseCipherSource =
-        dev.swarm.phone.keys.KeystorePerUseCiphers(
-            CustodyProvisioning(AndroidKeystoreProvisioner(), AndroidKeyInfoReader()),
-        )
 
     private fun bootstrapOver(backing: PersistentCustodyBacking) = KeystoreCustodyBootstrap(
         backing = backing,
@@ -388,19 +352,6 @@ class PhoneRuntime(private val context: Context) {
  * of this file no test could reach -- and it shipped S16 as a two-arm `when` that folded FOUR
  * verdicts onto re-pair. Separating it is what makes the table assertable on a plain JVM.
  *
- * THE TWO ARMS THAT WERE WRONG, and they were wrong in the way this whole taxonomy exists to
- * prevent -- a remedy the user can perform that cannot help:
- *
- *  - [KeyCustodyException.KeystoreDowngrade] and [KeyCustodyException.PlatformCapabilityMissing]
- *    are PB-KEY-8's refusals: the handset is not capable of what the design requires. Routed to
- *    re-pair, the user gets re-pair -> re-provision the same key on the same platform -> the same
- *    refusal -> the same screen, which is the failure LOOP PB-APP-10 forbids, reached through
- *    the remedy. They render as DEVICE_UNSUPPORTED, whose remedy is not a user action at all.
- *  - [KeyCustodyException.Unexpected] is "anything else the platform threw" -- a `renameTo`
- *    failing on a full disk, say. Routed to re-pair it tells a user with a perfectly good key
- *    that it was destroyed and no authentication brings it back. It is a bug, so it renders as
- *    INTERNAL, the class that already means exactly that.
- *
  * What remains on re-pair is what re-pairing actually fixes: a key the platform invalidated, a
  * Keystore entry that is gone, and the state directory orphaned from its custody store (which
  * [refuseAnOrphanedStateDirectory] raises as the invalidation it is).
@@ -413,24 +364,38 @@ internal fun routeStartupFailure(failure: Throwable): RoutedError = when (failur
 /**
  * The custody half, split out only so the branch above needs no smart cast.
  *
- * TWO VERDICTS ARE ROUTED BY TYPE AND NOT BY RECOVERY, and that is the point rather than an
- * exception to it: [Recovery.REPAIR_DEVICE] is the answer for THREE different causes and only
- * one of them is the user's to fix. The rest go through [GoCustodyFailure.recoveryFor], which
- * is the shared, separately-tested policy, and the inner `when` carries no `else` -- a
- * [Recovery] value added later fails to compile here rather than falling into a bucket.
+ * IT IS ONE EXHAUSTIVE `when` OVER THE SIX VERDICTS, and it carries no `else` -- a verdict added
+ * later fails to compile here rather than falling into a bucket. It used to route four of them
+ * indirectly, through a `GoCustodyFailure.recoveryFor` whose middle answer was REAUTHENTICATE;
+ * ADR-007 B133 removed the state that answer named, so the indirection had one arm left and is
+ * gone with it.
  */
 private fun routeCustodyVerdict(failure: KeyCustodyException): RoutedError = when (failure) {
+    // A bug, not a state the user can act on. Telling them to re-pair would say a perfectly
+    // good key was destroyed.
     is KeyCustodyException.Unexpected -> ErrorRouter.route(SwarmErrorTokens.INTERNAL)
-    is KeyCustodyException.PlatformCapabilityMissing ->
-        ErrorRouter.route(SwarmErrorTokens.DEVICE_UNSUPPORTED)
 
-    else -> when (GoCustodyFailure.recoveryFor(failure)) {
-        Recovery.REAUTHENTICATE -> ErrorRouter.route(GoCustodyFailure.AUTH_REQUIRED_TOKEN)
-        // KeystoreDowngrade, and the only verdict that reaches it.
-        Recovery.REPROVISION_KEK -> ErrorRouter.route(SwarmErrorTokens.DEVICE_UNSUPPORTED)
-        // The key itself is gone, which IS something the user can act on.
-        Recovery.REPAIR_DEVICE -> ErrorRouter.route(GoCustodyFailure.KEY_INVALIDATED_TOKEN)
-    }
+    // PB-KEY-8's two refusals: the handset is not capable of what the design requires. Routed
+    // to re-pair, the user would get re-pair -> re-provision the same key on the same platform
+    // -> the same refusal, which is the failure LOOP PB-APP-10 forbids reached through the
+    // remedy. DEVICE_UNSUPPORTED's remedy is not a user action at all.
+    is KeyCustodyException.PlatformCapabilityMissing,
+    is KeyCustodyException.KeystoreDowngrade,
+    -> ErrorRouter.route(SwarmErrorTokens.DEVICE_UNSUPPORTED)
+
+    // THE KEY IS GONE, which IS something the user can act on.
+    //
+    // UserAuthenticationRequired shares this arm and NOT an authenticate one, because after
+    // ADR-007 B133 there is no authentication left for the user to perform. The one population
+    // that can still raise it is an install that was provisioned BEFORE this change and still
+    // holds an AUTH_BIOMETRIC_STRONG content KEK -- `KeystoreCustodyBootstrap.ensure` returns
+    // early when the alias exists, so the spec is not re-requested on upgrade. For that handset
+    // the key really is unusable and pairing again really is the fix: a re-pair discards the
+    // alias and the next provision writes one that asks for no authenticator.
+    is KeyCustodyException.UserAuthenticationRequired,
+    is KeyCustodyException.KeyPermanentlyInvalidated,
+    is KeyCustodyException.KeystoreKeyMissing,
+    -> ErrorRouter.route(GoCustodyFailure.KEY_INVALIDATED_TOKEN)
 }
 
 /**

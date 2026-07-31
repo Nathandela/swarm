@@ -10,7 +10,7 @@ import dev.swarm.phone.R
  * Phase B slice S17 -- PB-PUSH-4's platform half: what a wake puts on the lock screen.
  *
  * IT DECIDES NOTHING ABOUT THE WAKE. Whether the payload was genuine, whether it was new, and
- * whether the user has authenticated are all answered in the Go core -- only it holds the epoch
+ * whether the content key is held are all answered in the Go core -- only it holds the epoch
  * wake key and the persisted replay coordinate (PB-PUSH-3). This object is handed the two
  * primitives that come back from `App.handlePushWake` and renders them; it never reads the
  * payload, never reaches for a session and has nothing it could fetch.
@@ -22,9 +22,10 @@ import dev.swarm.phone.R
  * SECRET, NOT PRIVATE, ON BOTH THE CHANNEL AND THE NOTIFICATION. The requirement names the two
  * separately because they fail separately: the channel's value is what the user's system
  * settings show and what applies when a notification sets none, and the notification's is what
- * applies to that notification. VISIBILITY_PRIVATE would still put a redacted Swarm line on the
- * lock screen of a device its owner may not be holding; VISIBILITY_SECRET shows nothing until
- * the device is unlocked.
+ * applies to that notification. VISIBILITY_PRIVATE would still put a redacted Swarm line on a
+ * lock screen anyone walking past can read; VISIBILITY_SECRET shows nothing until the device is
+ * unlocked. It is KEPT under ADR-007 B133: the lock screen is a surface the phone's holder has
+ * not opened, so it is not the endpoint that entry declares trusted.
  */
 object WakeNotifications {
 
@@ -66,20 +67,19 @@ object WakeNotifications {
     }
 
     /**
-     * The notification for one authenticated wake.
+     * The notification for one verified wake.
      *
      * @param text the constant the Go core supplied (`swarmmobile.WakeNotificationText`).
-     * @param contentReady whether the CONTENT tier is open. It is a fact about custody and not
-     *  about any session: false on every wake that arrives with the screen locked, which is the
-     *  case the wake exists for.
+     * @param contentReady whether the phone HOLDS an epoch content key. It is a fact about KEY
+     *  AVAILABILITY and not about any session, and not about the user either (ADR-007 B133
+     *  decision 2): false on a phone awaiting its first grant, or on one whose keys a revoke
+     *  purged.
      *
-     * THERE IS NO ACTION ON IT, in either state. An action opens a screen, and this app declares
-     * no Activity yet (S16 shipped the screen MODELS), so one would be a button that does
-     * nothing; on a locked handset it would additionally be a tap that drives a decrypt the
-     * content tier is going to refuse. The authenticated variant differs by SAYING more, which is
-     * the only thing that can be said honestly -- there is no session content anywhere on this
-     * path to render, because the wake is a constant 78 bytes over an empty plaintext
-     * (ADR-007 B20) and fetching some is the defect PB-PUSH-4 exists to stop.
+     * THERE IS NO ACTION ON IT, in either state. An action opens a screen, and a tap that drove
+     * a content read from a process FCM woke is exactly the fetch PB-PUSH-4 exists to stop. The
+     * ready variant differs by SAYING more, which is the only thing that can be said honestly --
+     * there is no session content anywhere on this path to render, because the wake is a
+     * constant 78 bytes over an empty plaintext (ADR-007 B20).
      */
     fun build(context: Context, text: String, contentReady: Boolean): Notification =
         Notification.Builder(context, CHANNEL_ID)
@@ -91,9 +91,9 @@ object WakeNotifications {
             .build()
 
     /**
-     * The rendered line: the supplied constant, plus a second constant when the user has
-     * authenticated. Both are string resources with no arguments, so there is no interpolation
-     * site here for a session id to arrive at.
+     * The rendered line: the supplied constant, plus a second constant when the content key is
+     * held. Both are string resources with no arguments, so there is no interpolation site here
+     * for a session id to arrive at.
      */
     private fun bodyFor(context: Context, text: String, contentReady: Boolean): String =
         if (contentReady) text + " " + context.getString(R.string.wake_notification_open) else text

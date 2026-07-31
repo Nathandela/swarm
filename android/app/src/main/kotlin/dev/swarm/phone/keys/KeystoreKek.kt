@@ -21,8 +21,8 @@ import javax.crypto.spec.GCMParameterSpec
  * WHAT IS ASSERTED AND WHAT IS NOT, because this is the file most likely to be misread as
  * hardware coverage. The policy tests around this package cover which spec is REQUESTED, which
  * failures are DISTINGUISHED and what the code does with each. That the KEK is really in a TEE,
- * that a real biometric prompt gates the content tier, that StrongBox behaves as advertised:
- * PB-E2E-5, the physical-handset gate, DEFERRED. Nothing here may be read as covering it.
+ * or that StrongBox behaves as advertised: PB-E2E-5, the physical-handset gate, DEFERRED.
+ * Nothing here may be read as covering it.
  */
 
 /** The Keystore provider name. Named once; a typo here is a silent software key. */
@@ -61,13 +61,12 @@ internal object KeystoreEntries {
 }
 
 /**
- * PB-KEY-9's Android half: the authenticated Keystore AES KEK, one per tier (ADR-007 B8).
+ * PB-KEY-9's Android half: the Keystore AES KEK, one per tier (ADR-007 B8).
  *
- * IT HOLDS NO KEY IN A FIELD, and that is the property the content tier's gate rests on. The
- * `SecretKey` is fetched from Keystore for EVERY wrap and EVERY unwrap, so an auth-gated key
- * re-checks authorisation each time and a locked handset makes `unwrap` fail. A provider that
- * cached the handle -- or worse, the unwrapped bytes -- would keep decrypting content after the
- * screen locked (PB-KEY-7) while every restart-based test still passed.
+ * IT HOLDS NO KEY IN A FIELD. The `SecretKey` is fetched from Keystore for EVERY wrap and EVERY
+ * unwrap, so an entry the platform has destroyed or the app has discarded stops working at once.
+ * A provider that cached the handle -- or worse, the unwrapped bytes -- would keep decrypting
+ * content after PB-KEY-7's purge while every restart-based test still passed.
  *
  * EVERY PLATFORM FAILURE BECOMES A TYPED ONE, through [PlatformFailure] rather than through a
  * second mapping written here. Two copies of that table is two things to get wrong, and the way
@@ -146,8 +145,8 @@ class AndroidKeystoreProvisioner : KeystoreProvisioner {
  * [KeyInfoReader] over the real platform -- the read-back half of PB-KEY-8.
  *
  * It reports what the platform ACHIEVED, never what was asked for. A key whose KeyInfo is never
- * read is how a software fallback ships unnoticed: the request said per-use and auth-required,
- * the platform quietly gave neither, and every test above it still passes.
+ * read is how a software fallback ships unnoticed: the request said hardware, the platform
+ * quietly gave software, and every test above it still passes.
  */
 class AndroidKeyInfoReader : KeyInfoReader {
 

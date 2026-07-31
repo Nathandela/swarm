@@ -45,13 +45,10 @@ import swarmmobile.PushPreference
  * -- so a switch flipped while backgrounded (the normal state under ADR-007 B16) is delivered on
  * the next authenticated reconnect rather than lost. Nothing here retries anything.
  *
- * THE BIOMETRIC GATE IS NOT ON THIS PANEL. [SettingsScreen.biometricGate] is a handset-local
- * preference that rides no command, and this module has nowhere durable to keep one; rendering
- * a switch for it would show the user a setting whose value nobody chose and whose state does
- * not survive the process. `false` is passed below because it is the value that CLAIMS the
- * least -- `freshnessFor` then answers PER_USE for PB-SEC-2's per-use actions and NONE for the
- * windowed ones, so no windowed gate is asserted anywhere. PB-SEC-2's own requirement is
- * unaffected: that table is not a preference and no switch can relax it.
+ * THERE ARE TWO SWITCHES AND THERE IS NO THIRD (PB-APP-7, narrowed by ADR-007 B133). The screen
+ * used to model a biometric-gate preference alongside them, never rendered, passed as `false` at
+ * the one call site that read it. Its subject has left the product, so the field, its setter and
+ * the freshness table it fed are gone rather than left as a preference over nothing.
  */
 class SettingsSurface(
     private val activity: Activity,
@@ -63,8 +60,8 @@ class SettingsSurface(
     private val pending = label()
     private val outcome = label()
 
-    private val needsInput = gatedSwitch(PushToggle.FIRST)
-    private val finished = gatedSwitch(PushToggle.SECOND)
+    private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
+    private val finished = touchFilteredSwitch(PushToggle.SECOND)
 
     /**
      * What the screen last drew. Held so a switch press has something to derive the next value
@@ -90,7 +87,7 @@ class SettingsSurface(
     }
 
     /** PB-SEC-12 clause 1: a switch that stops notifications is worth an overlay. */
-    val gatedActions: List<View> = listOf(needsInput, finished)
+    val touchFilteredActions: List<View> = listOf(needsInput, finished)
 
     fun render() {
         when (val startup = runtime.phone()) {
@@ -113,10 +110,6 @@ class SettingsSurface(
      * it would clear [SettingsScreen.pendingSync] on the very next draw and show an unconfirmed
      * change as settled. The acknowledgement is a separate fact and it is claimed BY OPERATION
      * ID (PB-SYNC-2), never by proximity.
-     *
-     * @param biometricGate false, and deliberately: see the class comment. It is a PARAMETER on
-     *  the bridge rather than a default precisely so this decision sits at a call site someone
-     *  can read.
      */
     private fun read(app: App): SettingsScreen {
         val bridge = FacadeBridge(app)
@@ -124,7 +117,7 @@ class SettingsSurface(
         val base = if (held != null && held.pendingSync) {
             if (machineAnswered(bridge)) held.acknowledged() else held
         } else {
-            bridge.pushSettings(biometricGate = false)
+            bridge.pushSettings()
         }
         return base.withNotificationPermission(
             PermissionStateResolver.resolve(
@@ -212,7 +205,7 @@ class SettingsSurface(
         }
     }
 
-    private fun gatedSwitch(toggle: PushToggle): SwitchCompat = SecureWindow.gate(
+    private fun touchFilteredSwitch(toggle: PushToggle): SwitchCompat = SecureWindow.gate(
         SwitchCompat(activity).apply {
             text = when (toggle) {
                 PushToggle.FIRST -> "Tell me when an agent is waiting on me"

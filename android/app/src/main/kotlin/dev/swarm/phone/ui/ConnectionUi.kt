@@ -6,9 +6,9 @@ import dev.swarm.phone.keys.ConnectionState
  * Phase B slice S16 -- PB-APP-8 (connection and stale UX) and PB-APP-10's transport half.
  *
  * ONLINE IS THE ONLY QUIET STATE. Everything else is a condition the user is entitled to see,
- * and two of them are not network conditions at all: a custody refusal rendered as
- * "reconnecting" tells the user to wait for something only a biometric ends, which is the
- * defect S14 recorded.
+ * and several of them are not network conditions at all: a custody refusal or a revocation
+ * rendered as "reconnecting" tells the user to wait for something that waiting never ends,
+ * which is the defect S14 recorded.
  *
  * The state list is dev.swarm.phone.keys.ConnectionState rather than a second enum here.
  * That enum's `of` errors on a wire string it does not know, so the mapping is total in the
@@ -24,7 +24,7 @@ data class ConnectionBanner(
     /**
      * A spinner is a promise that waiting is enough. It is honest for exactly the states the
      * app is still retrying in, and dishonest for every state that ends only when the user
-     * acts -- which is why the two custody verdicts and a revocation never carry one.
+     * acts -- which is why the custody verdict and a revocation never carry one.
      */
     val showsSpinner: Boolean,
     /** The app has stopped retrying and must say so rather than looking busy forever. */
@@ -55,13 +55,6 @@ data class ConnectionBanner(
                 "Lost the link to your machine; reconnecting.",
                 Remedy.WAIT_FOR_CONNECTION,
                 showsSpinner = true,
-            )
-
-            ConnectionState.REAUTH_REQUIRED -> state.banner(
-                "Authenticate to reconnect -- the key that signs this phone in is behind your " +
-                    "device unlock.",
-                Remedy.AUTHENTICATE,
-                showsSpinner = false,
             )
 
             ConnectionState.REPAIR_REQUIRED -> state.banner(

@@ -1,6 +1,5 @@
 package dev.swarm.phone.keys
 
-import android.os.Build
 import java.security.KeyPairGenerator
 import java.security.NoSuchAlgorithmException
 import java.security.NoSuchProviderException
@@ -16,28 +15,33 @@ import javax.crypto.KeyGenerator
  * (residuals §2.10(a)). The planner was never the missing piece; the question was.
  *
  * WHAT IT IS ALLOWED TO REFUSE, because getting this wrong is the worst outcome in this class.
- * The consumed set is {KEYSTORE_AES_GCM, USER_AUTH_PER_USE} and nothing else -- the Curve25519
- * entries are canaries that are recorded and never fatal (residuals §2.8). So the probe below
- * is written to make a non-PRESENT answer for the two consumed capabilities MEAN something:
+ * The consumed set is {KEYSTORE_AES_GCM} and nothing else -- the Curve25519 entries are canaries
+ * that are recorded and never fatal (residuals §2.8). So the probe below is written to make a
+ * non-PRESENT answer for the one consumed capability MEAN something: KEYSTORE_AES_GCM asks the
+ * real provider for the real generator, and every custody blob in the design is wrapped under an
+ * AES-GCM Keystore KEK (ADR-007 B8) -- so a handset that answers non-PRESENT here could not have
+ * provisioned anyway. `KeystoreCustodyBootstrap.ensure` would have failed a few lines later with
+ * a platform exception routed as INTERNAL. The gate does not cost such a handset a working app;
+ * it replaces an opaque refusal with a named one.
  *
- *  - KEYSTORE_AES_GCM asks the real provider for the real generator. Every custody blob in the
- *    design is wrapped under an AES-GCM Keystore KEK (ADR-007 B8), so a handset that answers
- *    non-PRESENT here could not have provisioned anyway -- `KeystoreCustodyBootstrap.ensure`
- *    would have failed a few lines later with a platform exception routed as INTERNAL. The gate
- *    does not cost such a handset a working app; it replaces an opaque refusal with a named one.
- *  - USER_AUTH_PER_USE is an API-LEVEL fact, not an enrollment one, and the distinction is the
- *    whole safety argument. `setUserAuthenticationParameters(timeout, type)` -- the call that
- *    expresses per-use versus timed at all -- landed in API 30, and PB-RUN-1 pins minSdk above
- *    it. Probing the user's ENROLLED biometrics instead (BiometricManager) would refuse every
- *    handset with no fingerprint registered, which is an app that will not start for a reason
- *    the user could fix but is never told about.
+ * USER_AUTH_PER_USE WAS THE SECOND CONSUMED ROW AND IS GONE (ADR-007 B133). It probed an
+ * API-LEVEL fact -- `setUserAuthenticationParameters(timeout, type)` landed in API 30 -- and the
+ * design no longer makes that call anywhere, so the row could only ever refuse a handset over a
+ * capability nothing uses. It is NOT demoted to a canary: a canary records a Keystore behaving
+ * unlike its API level promises, and an API level is not something a Keystore can get wrong.
+ *
+ * B132 IS WHY THIS IS WORTH SPELLING OUT. The API-level probe was correct and was never the
+ * problem; what refused the A26 was `PhoneRuntime` asking BiometricManager about ENROLLED
+ * biometrics before provisioning, which is the check this file's own comment warned against
+ * writing. Both are gone. The warning is kept: probing enrollment here would refuse every
+ * handset with no fingerprint registered, which is an app that will not start for a reason the
+ * user could fix but is never told about.
  *
  * The split into [KeystoreAlgorithms] is the same one [KeyInfoReader] already uses: the
  * platform call is a thin adapter nothing on this machine can exercise, and the POLICY over its
  * answers is a plain object a JVM test drives.
  */
 class DeviceCapabilities(
-    private val sdkInt: Int,
     private val strongBox: Boolean,
     private val algorithms: KeystoreAlgorithms,
 ) {
@@ -50,7 +54,6 @@ class DeviceCapabilities(
      */
     fun probe(): Map<PlatformCapability, CapabilityState> = mapOf(
         PlatformCapability.KEYSTORE_AES_GCM to algorithms.secretKey(AES),
-        PlatformCapability.USER_AUTH_PER_USE to stateOf(sdkInt >= PER_USE_AUTH_API),
         PlatformCapability.STRONGBOX to stateOf(strongBox),
 
         // The canaries. Non-PRESENT here is recorded on the plan and refuses nothing: no matrix
@@ -67,9 +70,6 @@ class DeviceCapabilities(
         const val AES = "AES"
         const val XDH = "XDH"
         const val ED25519 = "Ed25519"
-
-        /** `setUserAuthenticationParameters(timeout, type)`, matching CustodyRow.requiresApi. */
-        const val PER_USE_AUTH_API = Build.VERSION_CODES.R
     }
 }
 

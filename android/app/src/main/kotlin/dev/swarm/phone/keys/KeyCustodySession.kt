@@ -10,10 +10,10 @@ package dev.swarm.phone.keys
  * PB-SEC-1: everything this holds is sealed under the Keystore KEK of its tier. `rawBytes` is
  * what a `run-as`/backup extraction would see, and the test asserts it is not the key.
  *
- * NOTHING IS MEMOIZED. `open` goes back to the KEK every time, deliberately: an auth-gated
- * key re-checks authorisation on every use, and a store that unwrapped once and cached would
- * keep serving the content key after the screen locked (PB-KEY-7) while every restart-based
- * test still passed. The cost is a Keystore round trip per read, which is the point.
+ * NOTHING IS MEMOIZED. `open` goes back to the KEK every time, deliberately: a store that
+ * unwrapped once and cached would keep serving the content key after PB-KEY-7's purge, while
+ * every restart-based test still passed. The cost is a Keystore round trip per read, which is
+ * the point.
  *
  * WHAT IT KEEPS IN MEMORY IS CIPHERTEXT. The blobs are read from [PersistentCustodyBacking]
  * once, at construction, and re-read only when the object is built again -- which on Android is
@@ -89,7 +89,7 @@ class SealedStore private constructor(
 
 /**
  * Owns the one inbound crossing over its whole lifetime: unwrap under the tier KEK, install
- * into the Go core, zeroize, and purge on lock.
+ * into the Go core, zeroize, and purge on revoke.
  *
  * IT HOLDS NO KEY MATERIAL IN A FIELD. Only two booleans recording what the Go core currently
  * has installed, which is why `LockPurgeTest.a_purge_leaves_no_key_material_live_in_the_
@@ -104,7 +104,6 @@ class KeyCustodySession(
 
     private var wakeInstalled = false
     private var contentInstalled = false
-    private var lastInvalidation: InvalidationEvent? = null
 
     /**
      * Unwrap the tier's epoch key and install it. The unwrapped array is zeroized before this
@@ -115,7 +114,9 @@ class KeyCustodySession(
      * would otherwise leave the plaintext live on the Java heap for the GC to get to
      * eventually, which is the same defect with a tidier diff.
      *
-     * @throws KeyCustodyException.UserAuthenticationRequired for CONTENT while locked.
+     * @throws KeyCustodyException when the tier's KEK will not answer -- a destroyed key, a
+     *  missing entry, or a platform fault. It is no longer a state a user can be in: the KEKs
+     *  ask for no authentication (ADR-007 B133).
      */
     fun installTier(tier: KeyTier) {
         val key = store.open(CustodyBlobs.tierKey(tier))
@@ -134,44 +135,50 @@ class KeyCustodySession(
     }
 
     /**
-     * PB-KEY-7. Every event in [InvalidationEvent] routes here.
+     * PB-KEY-7's purge, whose TRIGGER is now REVOKE or UNPAIR (ADR-007 B133 decision 3).
      *
-     * ONLY THE CONTENT TIER GOES, and the opposite claim used to be written here on the strength
-     * of ADR-007 B17(b) -- "App.PurgeKeys clears st.Keys wholesale". B35 established that B17(b)
-     * is FALSE in both directions. `App.PurgeKeys` no longer touches the wake tier, because a
-     * high-priority FCM push is the sole background wake path and arrives with nobody there
-     * (B9/B16); and nothing could have put those bytes back anyway, since PB-KEY-10 moved epoch
-     * key delivery entirely into Go and every Kotlin reference to the epoch-key blob is under
-     * src/test/. A session that dropped `wakeInstalled` here would report a push path as
-     * unavailable that is in fact working.
+     * It used to be `invalidate(event)`, taking one of five events -- a screen lock, a
+     * backgrounding, an enrollment change -- because the content tier was returned to locked
+     * whenever the user's authentication lapsed. There is no such event any more, and there is
+     * no `recovery()` beside this either: recovery meant "which of these is a fresh prompt
+     * away", and no prompt exists.
      *
-     * It is unconditional and idempotent: lock and background arrive together all the time,
-     * and a purge that skipped because it thought nothing was installed would be a guard that
-     * cannot fail.
+     * BOTH TIERS GO, which is the change of substance rather than of name. The old lock purge
+     * deliberately spared the wake tier (ADR-007 B35), because a high-priority FCM push is the
+     * sole background wake path and arrives on a locked handset with nobody there -- a screen
+     * lock is a state the phone comes BACK from. A revoke is not: the device's registration is
+     * gone, so a wake it could still answer would be a wake it has no business answering, and
+     * the honest state is holding neither key. It is not recoverable without pairing again.
+     *
+     * WHAT THIS OBJECT CAN DO IS DROP ITS OWN RECORD AND ASK THE CORE. Whether `App.PurgeKeys`
+     * clears the wake tier on the Go side is that verb's business and is asserted there; a
+     * session reporting a tier it no longer holds is the half this class owns.
+     *
+     * It is unconditional and idempotent: a purge that skipped because it thought nothing was
+     * installed would be a guard that cannot fail.
      */
-    fun invalidate(event: InvalidationEvent) {
-        lastInvalidation = event
+    fun purge() {
         contentInstalled = false
+        wakeInstalled = false
         core.purgeKeys()
     }
 
     fun contentAvailable(): Boolean = contentInstalled
 
     fun wakeAvailable(): Boolean = wakeInstalled
-
-    /**
-     * How content custody is recovered after the last invalidation, or null if none has
-     * happened. The event matters: four of the five are a fresh prompt away, and the fifth --
-     * a biometric enrollment change -- destroyed the content KEK, so prompting produces an
-     * authentication the user can satisfy that changes nothing.
-     */
-    fun recovery(): Recovery? = lastInvalidation?.let { GateInvalidation.recoveryFor(it) }
 }
 
 /**
  * ADR-007 B9/B16: FirebaseMessagingService runs IN the app process, so the split is not
  * enforced by isolation. This is the code-discipline half -- the push path declares the tiers
  * it may touch, and a test holds it to exactly one.
+ *
+ * IT IS NOW THE ONLY PHONE-SIDE ENFORCEMENT OF THE TIER BOUNDARY (ADR-007 B133). It used to sit
+ * behind the content KEK's auth gate, which refused the unwrap outright while the user was not
+ * authenticated; that gate is gone, so this declaration is what is left on this side. B133
+ * records the reduction and accepts it, because the property the split exists to buy -- that the
+ * CARRIER of the push cannot read session content -- is enforced at the sender (PB-PUSH-0), and
+ * the receiver-side half was always the weaker one on Android.
  */
 object PushWakePath {
 
@@ -183,13 +190,12 @@ object PushWakePath {
     val requiredTiers: Set<KeyTier> = setOf(KeyTier.WAKE)
 
     /**
-     * Prepare custody for a push arriving on a locked handset. Must succeed with the CONTENT
-     * tier refusing, or B16's sole background wake path is dead whenever it matters.
+     * Prepare custody for a push arriving on a locked handset. It touches the WAKE tier and no
+     * other, which is the discipline; a push path that reached for the content tier would be
+     * decrypting session content in a process FCM woke.
      *
      * It re-installs unconditionally rather than checking `wakeAvailable()` first, because this
-     * runs in a process that may have been started BY the push and may hold nothing at all. It
-     * is no longer because a lock purge took the wake key -- it does not (ADR-007 B35) -- and
-     * the unconditional shape is what makes those two situations the same code path.
+     * runs in a process that may have been started BY the push and may hold nothing at all.
      */
     fun prepare(session: KeyCustodySession) {
         for (tier in requiredTiers) {

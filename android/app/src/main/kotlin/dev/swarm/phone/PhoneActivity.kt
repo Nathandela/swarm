@@ -2,6 +2,7 @@ package dev.swarm.phone
 
 import android.os.Bundle
 import android.view.View
+import android.view.WindowInsets
 import androidx.appcompat.app.AppCompatActivity
 
 /**
@@ -44,20 +45,37 @@ class PhoneActivity : AppCompatActivity() {
         // Nothing is set on the window. ADR-007 B65 withdrew PB-SEC-4: screenshots, screen
         // recording and the recents thumbnail are all allowed, and the gate that used to
         // require the secure-window flag here now requires its absence. See [SecureWindow].
-
-        // The ledger is the APPLICATION's, not one of this screen's. It is what every
-        // InvalidationEvent clears, so a per-use prompt left in flight by a screen lock is
-        // cleared with everything else rather than wedging the gate for the life of the process.
-        val app = application as SwarmApplication
-        surface = PhoneSurface(this, app.phoneRuntime, app.contentLock.ledger)
+        surface = PhoneSurface(this, (application as SwarmApplication).phoneRuntime)
         setContentView(surface.root)
+        insetTheSystemBars()
+    }
+
+    /**
+     * ADR-007 B132: on a real handset the status bar sat on top of the first line of text.
+     *
+     * PB-RUN-1 pins targetSdk to 35, and from Android 15 the platform lays every app out
+     * edge-to-edge whether it asked to or not -- so a window that consumes no insets draws its
+     * top view underneath the status bar and its bottom view underneath the navigation bar.
+     * Nothing in this app is positioned; the whole content is one scrolling column, so padding
+     * the root by the system-bar insets is the entire fix.
+     *
+     * The insets are RETURNED rather than consumed: this Activity hosts one view, but a listener
+     * that swallowed them would silently stop any child that grows a listener later from seeing
+     * them, and the failure would be a layout bug nobody could trace back to here.
+     */
+    private fun insetTheSystemBars() {
+        surface.root.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
     }
 
     /**
      * Redraw on every resume rather than only on creation. The phone core is built lazily and
-     * FAILABLY (PhoneRuntime): the commonest refusal is "the user has not authenticated yet",
-     * and the whole remedy is that they then do -- which happens while this Activity is
-     * stopped, not while it is being created.
+     * FAILABLY (PhoneRuntime), and a refusal is not cached -- so a construction that failed
+     * while the screen was away is retried here rather than latched for the life of the process.
+     * It is also where a phone rebuilt after a completed pairing is first drawn.
      */
     override fun onResume() {
         super.onResume()
@@ -66,8 +84,7 @@ class PhoneActivity : AppCompatActivity() {
 
     /**
      * Give back what the surface holds while the screen is not in front of anyone -- the camera
-     * above all. A viewfinder left bound is a camera light left on, on a handset whose whole
-     * threat model is somebody else holding it.
+     * above all. A viewfinder left bound is a camera light left on.
      *
      * It reaches no facade verb, which is PB-SEC-11 rather than style: this class is exported
      * with a LAUNCHER filter, so any app on the device can start it.
@@ -81,6 +98,9 @@ class PhoneActivity : AppCompatActivity() {
      * The controls PB-SEC-12 clause 1 protects, for the assertion in
      * `PhoneActivityWindowTest`. Exposed by name because a test that went looking for "the
      * buttons" in a view hierarchy would keep passing after the last one was removed.
+     *
+     * It was `gatedActionViews`. The touch filter is what it always meant and is what survives
+     * ADR-007 B133; "gated" now names a protection this app no longer has.
      */
-    internal fun gatedActionViews(): List<View> = surface.gatedActions
+    internal fun touchFilteredViews(): List<View> = surface.touchFilteredActions
 }

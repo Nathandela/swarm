@@ -31,11 +31,10 @@ enum class PushCategory {
     FINISHED,
 }
 
-/** What survives a process death. Exactly the three values the screen renders. */
+/** What survives a process death. Exactly the two values the screen renders. */
 data class SettingsSnapshot(
     val alerts: Boolean,
     val mentions: Boolean,
-    val biometricGate: Boolean,
 )
 
 /**
@@ -51,8 +50,6 @@ data class SettingsScreen(
     val alerts: Boolean,
     /** `swarmmobile.PushPreference.Mentions` -- [PushCategory.FINISHED]. */
     val mentions: Boolean,
-    /** The 60-second window gate. Local to the handset; see [freshnessFor]. */
-    val biometricGate: Boolean,
     /** True while the machine has not acknowledged the last change. */
     val pendingSync: Boolean = false,
     /**
@@ -67,7 +64,7 @@ data class SettingsScreen(
         PushToggle.SECOND -> PushCategory.FINISHED
     }
 
-    fun snapshot(): SettingsSnapshot = SettingsSnapshot(alerts, mentions, biometricGate)
+    fun snapshot(): SettingsSnapshot = SettingsSnapshot(alerts, mentions)
 
     /**
      * A push preference is carried to the machine by a SIGNED push_prefs command whose version
@@ -79,12 +76,6 @@ data class SettingsScreen(
     fun setAlerts(value: Boolean): SettingsScreen = copy(alerts = value, pendingSync = true)
 
     fun setMentions(value: Boolean): SettingsScreen = copy(mentions = value, pendingSync = true)
-
-    /**
-     * The biometric gate does NOT mark the screen pending: it governs prompts on this handset
-     * and rides no command, so there is nothing for the machine to acknowledge.
-     */
-    fun setBiometricGate(value: Boolean): SettingsScreen = copy(biometricGate = value)
 
     fun acknowledged(): SettingsScreen = copy(pendingSync = false)
 
@@ -121,23 +112,10 @@ data class SettingsScreen(
         get() = notificationPermission == PermissionState.DENIED ||
             notificationPermission == PermissionState.PERMANENTLY_DENIED
 
-    /**
-     * THE GATE TOGGLE GOVERNS THE WINDOWED ACTIONS ONLY. It can never turn off the per-use gate
-     * on revoke, launch and kill: PB-SEC-2's table is not a preference, and a settings switch
-     * that relaxed it would be the in-memory `authenticated = true` the requirement says a test
-     * must fail on, reached by consent instead of by a bug.
-     */
-    fun freshnessFor(action: GatedAction): BiometricFreshness {
-        val required = GateFreshness.of(action)
-        if (required == BiometricFreshness.PER_USE) return BiometricFreshness.PER_USE
-        return if (biometricGate) required else BiometricFreshness.NONE
-    }
-
     companion object {
         fun restore(snapshot: SettingsSnapshot): SettingsScreen = SettingsScreen(
             alerts = snapshot.alerts,
             mentions = snapshot.mentions,
-            biometricGate = snapshot.biometricGate,
         )
     }
 }

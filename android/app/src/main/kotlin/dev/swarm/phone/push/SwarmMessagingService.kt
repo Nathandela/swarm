@@ -24,12 +24,11 @@ import dev.swarm.phone.SwarmApplication
  * -- and the relay handles every wake and can re-deliver one, which would be a button that puts
  * a notification on the owner's lock screen whenever it likes.
  *
- * AND IT FETCHES NOTHING. No content verb is reachable from [onMessageReceived], which is
- * PB-PUSH-4's real requirement rather than a property of the string it renders: the wake
- * arrives with no user present, so "renders a content-free notification unless the user has
- * authenticated" is satisfied by an app that reads the roster, is refused, and renders the
- * generic line anyway -- and that app decrypts session content the moment it runs on a handset
- * the user unlocked five minutes ago.
+ * AND IT FETCHES NOTHING. No content verb is reachable from [onMessageReceived], and that is
+ * PB-PUSH-4's real requirement rather than a property of the string it renders. It is also now
+ * the whole of the tier boundary on this side (ADR-007 B133): the content KEK's unwrap used to
+ * refuse while the user was not authenticated, and this file's discipline sat behind that
+ * refusal. It no longer does, so an app that reached for a session here would GET one.
  */
 class SwarmMessagingService : FirebaseMessagingService() {
 
@@ -58,7 +57,7 @@ class SwarmMessagingService : FirebaseMessagingService() {
     }
 
     /**
-     * Authenticate, then render exactly what the core allows.
+     * Verify in the core, then render exactly what it allows.
      *
      * A REFUSED WAKE RENDERS NOTHING, which is why the failure path returns rather than falling
      * through to a generic notification: an unparseable payload, a forgery, a replay and a wake
@@ -66,8 +65,8 @@ class SwarmMessagingService : FirebaseMessagingService() {
      * the user did not.
      *
      * A phone that cannot be built renders nothing either. There is no user present and no
-     * screen to report to, and the state is transient by construction -- the commonest cause is
-     * a custody refusal that the next authentication clears.
+     * screen to report to, so the alternative is a lock-screen line about a wake this app was
+     * never able to verify.
      */
     private fun renderWake(payload: String) {
         val startup = (application as SwarmApplication).phoneRuntime.phone()

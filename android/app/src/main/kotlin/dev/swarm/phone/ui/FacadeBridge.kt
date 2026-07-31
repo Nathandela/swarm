@@ -169,18 +169,12 @@ class FacadeBridge(private val app: App) {
         )
     }
 
-    /**
-     * PB-APP-7's screen.
-     *
-     * @param biometricGate the handset's own gate preference. It rides no command and the
-     *  machine has never heard of it, so it does not come from the facade.
-     */
-    fun pushSettings(biometricGate: Boolean): SettingsScreen {
+    /** PB-APP-7's screen: the two push preferences, and nothing this seam has to invent. */
+    fun pushSettings(): SettingsScreen {
         val preference = app.pushPreference()
         return SettingsScreen(
             alerts = preference.getAlerts(),
             mentions = preference.getMentions(),
-            biometricGate = biometricGate,
         )
     }
 

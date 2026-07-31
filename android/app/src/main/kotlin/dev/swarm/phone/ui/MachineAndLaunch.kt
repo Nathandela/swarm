@@ -5,105 +5,17 @@ import java.util.UUID
 /**
  * Phase B slice S16 -- PB-APP-5 (machine pane) and PB-APP-6 (launch).
  *
- * WHAT IS MODELLED IS THE POLICY, NOT A BIOMETRIC. PB-APP-5's criterion is "revoke + kill
- * switch gated per PB-SEC-2", and PB-SEC-2's own criterion is that a test must FAIL if the
- * implementation is an in-memory `authenticated = true` flag. So this file states which
- * freshness each action demands and scopes a grant to the action it was obtained for; whether
- * the platform enforces it is PB-E2E-5, which is deferred. Nothing here imports
- * androidx.biometric, and android/gate/s16_ui_test.go fences that.
- */
-
-/** The actions PB-SEC-2 puts behind the gate. */
-enum class GatedAction {
-    /** The phone's own panic action, and the only destructive one it owns outright. */
-    REVOKE_DEVICE,
-
-    /** Ends a session on the machine. */
-    KILL_SESSION,
-
-    /** Starts an agent on the machine, with whatever the spec says. */
-    LAUNCH,
-
-    /** Acquires the input lease. */
-    TAKE_CONTROL,
-
-    /** Every keystroke and paste while the lease is held. */
-    SEND_INPUT,
-}
-
-/** PB-SEC-2's freshness tiers. [NONE] is what a relaxed timed gate leaves. */
-enum class BiometricFreshness { NONE, WINDOW_60S, PER_USE }
-
-/**
- * PB-SEC-2's freshness table, transcribed from section 6.0: 60 s for input and take_control,
- * PER-USE for revoke, launch and kill.
+ * WHAT THIS FILE NO LONGER MODELS (ADR-007 B133). It carried PB-SEC-2's freshness table -- the
+ * set of gated actions, the two freshness tiers, the events that invalidated an outstanding
+ * authentication, and a grant scoped to the action it was obtained for. PB-SEC-2 is VOID: the
+ * trust boundary is the wire, and there is no local authentication on this handset for a table
+ * to describe. The types are deleted rather than left answering NONE for everything, because a
+ * freshness model that always says "none" reads as coverage.
  *
- * A per-use requirement is what a CryptoObject-bound Keystore key enforces, and the reason it
- * cannot be a boolean is PB-SEC-2's last clause -- "no reuse of one authentication for a
- * different action". A flag set by one prompt authorises everything after it.
- *
- * The kill switch has no entry because the phone cannot set it: protocol/server.go
- * handleRemoteSetControl refuses the remote tier before consulting its backend, so an action
- * here would be a gate on a call that does not exist (PB-SEC-6, and see [MachinePane]).
+ * PB-APP-5's own criterion narrows with it. "Revoke + kill switch gated per PB-SEC-2" loses its
+ * second half; what survives is that the phone SHOWS the kill switch and can never set it, which
+ * is a daemon-side refusal and is unaffected -- see [MachinePane].
  */
-object GateFreshness {
-    fun of(action: GatedAction): BiometricFreshness = when (action) {
-        GatedAction.REVOKE_DEVICE, GatedAction.KILL_SESSION, GatedAction.LAUNCH ->
-            BiometricFreshness.PER_USE
-
-        GatedAction.TAKE_CONTROL, GatedAction.SEND_INPUT ->
-            BiometricFreshness.WINDOW_60S
-    }
-}
-
-/**
- * The three events PB-SEC-2 says invalidate an outstanding authentication. Process death is the
- * fourth and needs no entry: it takes the grant with it, and PB-KEY-7's purge is what makes it
- * real on the Go side.
- */
-enum class GateEvent { BACKGROUNDED, SCREEN_LOCKED, BIOMETRIC_ENROLLMENT_CHANGED }
-
-/**
- * One authentication, SCOPED TO THE ACTION IT WAS OBTAINED FOR.
- *
- * The scoping is the whole content of the type. An implementation holding a single
- * `authenticated = true` passes every positive case and fails the negative one PB-SEC-2 names:
- * an authentication satisfied for take_control must not authorise a device revocation.
- */
-data class AuthGrant(
-    val action: GatedAction,
-    val atMillis: Long,
-) {
-    /**
-     * A per-use action is NEVER covered by an earlier grant, however fresh -- that is what
-     * per-use means, and it is why the check consults [GateFreshness] rather than only the
-     * clock.
-     */
-    fun authorises(action: GatedAction, nowMillis: Long): Boolean {
-        if (action != this.action) return false
-        if (GateFreshness.of(action) != BiometricFreshness.WINDOW_60S) return false
-        val elapsed = nowMillis - atMillis
-        return elapsed >= 0 && elapsed < WINDOW_MILLIS
-    }
-
-    /**
-     * The grant that survives the event, which is none of them.
-     *
-     * The `when` is exhaustive rather than a blanket null so that an event added later has to
-     * state its own verdict here instead of inheriting an invalidation nobody decided.
-     */
-    fun afterEvent(event: GateEvent): AuthGrant? = when (event) {
-        GateEvent.BACKGROUNDED,
-        GateEvent.SCREEN_LOCKED,
-        GateEvent.BIOMETRIC_ENROLLMENT_CHANGED,
-        -> null
-    }
-
-    companion object {
-        /** Section 6.0's window. Strictly within: a grant at the boundary has expired. */
-        const val WINDOW_MILLIS: Long = 60_000
-    }
-}
 
 /**
  * PB-APP-5's machine pane: presence, the paired device, the activity log and the kill switch.

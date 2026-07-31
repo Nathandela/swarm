@@ -10,10 +10,16 @@ package dev.swarm.phone.keys
  * WHAT THE JVM AND ROBOLECTRIC TESTS AROUND THIS FILE COVER, stated once here because the
  * distinction is load-bearing everywhere below: they cover POLICY -- which tier a role is in,
  * which spec is REQUESTED of the platform, which failures are distinguished, what the code
- * does with each. They cover no hardware property whatsoever. That a real biometric prompt
- * gates the content KEK, that the key is really in a TEE or in StrongBox, that a real FCM
- * push arrives under Doze -- all of it is PB-E2E-5, the physical-handset gate, which is
- * DEFERRED and is not claimed anywhere in this slice.
+ * does with each. They cover no hardware property whatsoever. That the key is really in a TEE
+ * or in StrongBox, that a real FCM push arrives under Doze -- all of it is PB-E2E-5, the
+ * physical-handset gate, which is DEFERRED and is not claimed anywhere in this slice.
+ *
+ * NOTHING HERE IS GATED ON A USER AUTHENTICATION ANY MORE (ADR-007 B133). The trust boundary is
+ * the WIRE, so the tier KEKs ask for no authenticator. What is KEPT, and is easy to delete by
+ * mistake while reading the above, is the SEALING: hardware backing, the StrongBox preference
+ * and non-exportability all defend offline extraction of the app's data directory by someone
+ * who has the bytes and not the running device -- an attacker the new boundary does not trust
+ * either. The cost of keeping it is one flag.
  */
 
 /**
@@ -25,9 +31,15 @@ package dev.swarm.phone.keys
 enum class KeyRole { NOISE_STATIC, RECIPIENT, COMMAND_SIGN, RELAY_AUTH }
 
 /**
- * ADR-007 D2's two epoch keys. WAKE is content-free and available after first unlock so a
- * push can wake a locked handset; CONTENT is user-authentication-gated and opens session
- * content. Conflating them is the defect PB-KEY-2 exists to prevent.
+ * ADR-007 D2's two epoch keys. WAKE is content-free so a push can wake a locked handset;
+ * CONTENT opens session content. Conflating them is the defect PB-KEY-2 exists to prevent.
+ *
+ * THE SPLIT'S RATIONALE IS TRANSPORT, NOT THE DEVICE HOLDER (ADR-007 A15 as amended by B133).
+ * It was argued from a stolen phone, and that argument is retired. What requires two keys is
+ * that the push payload passes through FCM, WHICH READS IT: the wake key must be readable by a
+ * path Google's carrier can observe, and the content key must not be derivable from it. That is
+ * a property of the wire, it is enforced at the SENDER (PB-PUSH-0, in the gateway), and it is
+ * untouched by anything removed from the phone.
  */
 enum class KeyTier { WAKE, CONTENT }
 
@@ -91,9 +103,11 @@ object KeyCustodyMatrix {
             tier = KeyTier.CONTENT,
             backing = KeyBacking.KEYSTORE_WRAPPED,
             algorithm = KeyAlgorithm.X25519,
-            // setUserAuthenticationParameters(timeout, type) -- the call that expresses
-            // per-use versus timed at all -- landed in API 30. Below it the content KEK
-            // cannot state its own freshness tier, so the row is not achievable.
+            // 30 was the level `setUserAuthenticationParameters` landed at, and that call is
+            // gone (ADR-007 B133). The floor is NOT lowered to match: raising the set of
+            // handsets a row claims to be achievable on is a widening, which B8 forbids the
+            // matrix -- and PB-RUN-1 pins minSdk to 33 above it either way, so the number
+            // decides nothing on any handset the app installs on.
             requiresApi = 30,
             boundary = CustodyBoundary.GO_CORE,
             rationale = "The Noise handshake's DH runs in the Go core, so the private scalar " +
@@ -109,8 +123,8 @@ object KeyCustodyMatrix {
             requiresApi = 30,
             boundary = CustodyBoundary.GO_CORE,
             rationale = "OpenSealedBox recovers BOTH epoch keys from a grant " +
-                "(internal/remote/crypto/keystore.go), so an after-first-unlock recipient key " +
-                "IS a content key. Content tier, sealed under the user-authentication-gated KEK.",
+                "(internal/remote/crypto/keystore.go), so a recipient key IS a content key. " +
+                "Content tier, sealed at rest under the content KEK.",
             residual = null,
         ),
         KeyRole.COMMAND_SIGN to CustodyRow(
@@ -121,8 +135,8 @@ object KeyCustodyMatrix {
             requiresApi = 30,
             boundary = CustodyBoundary.GO_CORE,
             rationale = "The daemon registry pins the device id to this public key (R-DEV.1) " +
-                "and the Go core signs every command with it. Content tier: a stolen " +
-                "after-first-unlock handset must not be able to sign a launch or a kill.",
+                "and the Go core signs every command with it. Content tier: the seed that can " +
+                "sign a launch or a kill must not be readable from an extracted data directory.",
             residual = null,
         ),
         KeyRole.RELAY_AUTH to CustodyRow(
@@ -134,11 +148,10 @@ object KeyCustodyMatrix {
             requiresApi = 23,
             boundary = CustodyBoundary.GO_CORE,
             rationale = "Background reconnect must work on a LOCKED handset (ADR-007 B9/B16), " +
-                "so this seed is wake tier. Its KEK is a Keystore AES key that is deliberately " +
-                "NOT user-authentication-gated and NOT invalidated by an enrollment change -- " +
-                "gating it would kill the sole background wake path in exactly the state that " +
-                "path exists for. The tier split, not the KEK's own gate, is what keeps this " +
-                "key from reaching content material.",
+                "so this seed is wake tier. Its KEK is a Keystore AES key that is NOT " +
+                "invalidated by an enrollment change: destroying it would kill the sole " +
+                "background wake path in exactly the state that path exists for. The tier " +
+                "split is what keeps this key from reaching content material.",
             residual = null,
         ),
     )
@@ -155,13 +168,20 @@ object KeyTierPolicy {
     fun tierOf(role: KeyRole): KeyTier = KeyCustodyMatrix.row(role).tier
 
     /**
-     * PB-KEY-2 requires this be stated. It is KEYSTORE_AUTH_GATING and not OS_PROCESS_ISOLATION
-     * because FirebaseMessagingService runs IN the app process (ADR-007 B9): the iOS argument,
-     * which leans on the Notification Service Extension being a separate process, does not
-     * transfer. What separates the tiers here is that the content KEK's unwrap REFUSES while
-     * the user is not authenticated, plus the code discipline PushWakePath enforces.
+     * PB-KEY-2 requires this be stated, and ADR-007 B133 NARROWED the answer.
+     *
+     * It was KEYSTORE_AUTH_GATING: the content KEK's unwrap refused while the user was not
+     * authenticated, and [PushWakePath]'s code discipline sat behind it. The KEK no longer asks
+     * for an authenticator, so what is left on the PHONE side is the code discipline alone.
+     * That is a real reduction and it is recorded rather than glossed.
+     *
+     * IT IS SMALL FOR ONE REASON. The property the split exists to buy is that the CARRIER of
+     * the push cannot read session content, and that is enforced at the SENDER -- the gateway
+     * holds the wake key only (PB-PUSH-0). The receiver-side half was always the weaker one on
+     * Android, because FirebaseMessagingService runs IN the app process (ADR-007 B9) rather
+     * than in an iOS-style Notification Service Extension.
      */
-    val enforcement: EnforcementMechanism = EnforcementMechanism.KEYSTORE_AUTH_GATING
+    val enforcement: EnforcementMechanism = EnforcementMechanism.CODE_DISCIPLINE
 }
 
 /**
@@ -169,7 +189,7 @@ object KeyTierPolicy {
  * Notification Service Extension being a separate process; on Android
  * FirebaseMessagingService runs IN the app process, so that argument does not transfer.
  */
-enum class EnforcementMechanism { OS_PROCESS_ISOLATION, KEYSTORE_AUTH_GATING }
+enum class EnforcementMechanism { OS_PROCESS_ISOLATION, CODE_DISCIPLINE }
 
 /** PB-KEY-5: the sealed grant blob opens BOTH tiers, so its fate must be stated. */
 enum class GrantRetention { DISCARDED_AFTER_OPEN, RETAINED_UNDER_CONTENT_TIER }
@@ -187,32 +207,15 @@ object SealedGrantPolicy {
 }
 
 /**
- * Keystore alias per tier. Distinct aliases are what makes the tiers separately gated: two
- * tiers under one alias is one tier with two names, because whatever authorizes the unwrap
- * authorizes both.
+ * Keystore alias per tier. Distinct aliases are what keeps the tiers separately addressable:
+ * two tiers under one alias is one tier with two names, so a purge, a discard or an
+ * invalidation of either would take both.
  */
 object KeystoreAliases {
     fun forTier(tier: KeyTier): String = when (tier) {
         KeyTier.WAKE -> "dev.swarm.phone.kek.wake"
         KeyTier.CONTENT -> "dev.swarm.phone.kek.content"
     }
-
-    /**
-     * Per-use operations get one entry EACH (PB-SEC-2: "no reuse of one authentication for a
-     * different action"). A shared entry with a zero timeout still lets one CryptoObject
-     * authorization be pointed at whichever operation the caller picks.
-     *
-     * The TIMED operations deliberately share ONE entry, because that is what
-     * `BiometricPolicy.sharesAuthorizationWith` declares of them. Giving them separate
-     * aliases would make the declaration false in the other direction: two keys means two
-     * windows and two prompts, and a typing session would re-prompt on every take_control.
-     */
-    fun forOperation(operation: GatedOperation): String =
-        if (BiometricPolicy.specFor(operation).requiresCryptoObject) {
-            "dev.swarm.phone.gate.peruse." + operation.name.lowercase()
-        } else {
-            "dev.swarm.phone.gate.timed"
-        }
 }
 
 /** Blob names in the sealed store. Naming, not a decision -- stated so tests and the
@@ -323,9 +326,9 @@ object AtRestInventory {
         AtRestRecord(
             AtRestArtifact.EPOCH_CONTENT_KEY, KeyTier.CONTENT, CustodyLocation.GO_STATE_DIR,
             sealedByKeystore = true,
-            note = "phone-state.json's content key, sealed under the content KEK. One file cannot " +
-                "be gated two ways, so the two tiers are sealed SEPARATELY inside it -- a single " +
-                "seal over the whole blob would collapse PB-KEY-2's split at rest.",
+            note = "phone-state.json's content key, sealed under the content KEK. The two tiers " +
+                "are sealed SEPARATELY inside it -- a single seal over the whole blob would " +
+                "collapse PB-KEY-2's split at rest, leaving one key whose holder has both.",
         ),
         AtRestRecord(
             AtRestArtifact.STATE_KEK_WAKE, KeyTier.WAKE, CustodyLocation.KOTLIN_SEALED_STORE,
@@ -338,9 +341,9 @@ object AtRestInventory {
             AtRestArtifact.STATE_KEK_CONTENT, KeyTier.CONTENT, CustodyLocation.KOTLIN_SEALED_STORE,
             sealedByKeystore = true,
             note = "the data key the Go core seals its CONTENT tier with, held wrapped under the " +
-                "user-authentication-gated Keystore KEK. THIS unwrap refusing is the gate: it is " +
-                "what makes a locked handset unable to open device.key's content half, and it is " +
-                "why the Go core fetches it per operation and never memoizes it.",
+                "content Keystore KEK. The KEK is hardware-backed and non-exportable, which is " +
+                "what makes an extracted copy of the app's data directory unopenable off the " +
+                "device; it asks for no user authentication (ADR-007 B133).",
         ),
     ).associateBy { it.artifact }
 
@@ -360,7 +363,15 @@ object AtRestInventory {
 sealed class KeyCustodyException(message: String) : Exception(message) {
 
     /**
-     * The platform refused because the user is not authenticated (or the window lapsed).
+     * The platform refused for want of a user authentication.
+     *
+     * NOTHING THIS BUILD PROVISIONS CAN RAISE IT (ADR-007 B133): the tier KEKs are generated
+     * with `setUserAuthenticationRequired(false)`. It is kept for the population that CAN --
+     * an install provisioned before that change, whose content KEK still carries
+     * `AUTH_BIOMETRIC_STRONG` and which `KeystoreCustodyBootstrap.ensure` does not re-spec
+     * because the alias already exists. `PhoneRuntime` routes it to the permanent verdict,
+     * because a re-pair discards the alias and the next provision writes one that asks for
+     * no authenticator -- and there is no prompt anywhere in the app to satisfy the old one.
      *
      * ITS MESSAGE CARRIES THE VERDICT TOKEN, and that is load-bearing rather than cosmetic.
      * When this is thrown out of a `swarmmobile.KeyCustody` method, gomobile flattens it into
@@ -376,12 +387,11 @@ sealed class KeyCustodyException(message: String) : Exception(message) {
         )
 
     /**
-     * Permanent. A biometric enrollment change destroys the key; re-authenticating cannot
-     * recover it. PB-SEC-2 requires this be handled distinctly.
+     * Permanent. The Keystore key is destroyed and nothing on the device brings it back.
      *
-     * Same token discipline as above, and the consequence of getting it wrong is worse in this
-     * direction: a permanent invalidation that classified as recoverable produces a prompt the
-     * user can satisfy and that changes nothing, forever.
+     * Same token discipline as above. It is what `phonecore.openSealedDeviceKeys` reads to tell
+     * a per-operation refusal from a blob it can never open, so a drifted copy of the token
+     * turns a re-pairable handset into an app that will not start.
      */
     class KeyPermanentlyInvalidated(val tier: KeyTier) :
         KeyCustodyException(
@@ -420,11 +430,18 @@ sealed class KeyCustodyException(message: String) : Exception(message) {
 /**
  * `crypto.ErrKeyAuthRequired` and `crypto.ErrKeyInvalidated` survive every Go hop distinctly
  * -- and then hit gomobile, which flattens every Go error into a Java exception carrying
- * only a MESSAGE. PB-KEY-6 wants the UI to act differently on each: one is a re-prompt, the
- * other means the key is gone and the device must re-pair. So the facade stamps each refusal
- * with a stable token before it crosses (`swarmmobile.KeyCustodyAuthRequired` /
- * `KeyCustodyKeyInvalidated`, applied centrally in the panic barrier every entry point
- * already installs, so no verb can forget) and this maps the token back onto a type.
+ * only a MESSAGE. PB-KEY-6 wants each to arrive as itself rather than as an opaque refusal, so
+ * the facade stamps each with a stable token before it crosses
+ * (`swarmmobile.KeyCustodyAuthRequired` / `KeyCustodyKeyInvalidated`, applied centrally in the
+ * panic barrier every entry point already installs, so no verb can forget) and this maps the
+ * token back onto a type.
+ *
+ * BOTH TOKENS SURVIVE ADR-007 B133 even though the two verdicts now route to the same screen.
+ * `internal/remote/crypto` is FROZEN and still raises both sentinels, and
+ * `phonecore.openSealedDeviceKeys` refuses a Resume outright for any content-tier error that is
+ * neither of them -- so dropping a token here would turn a legible refusal into an app that
+ * cannot start. The classification is a WIRE property; what changed is only what the UI does
+ * with the answer.
  *
  * The tokens are read from the BOUND CONSTANTS rather than copied. A second copy of a
  * discriminator string is a second thing to get wrong, and the failure would be silent: an
@@ -458,30 +475,21 @@ object GoCustodyFailure {
             else -> null
         }
     }
-
-    /**
-     * What the UI must do about it. The two answers differ in the one way that matters: a
-     * recoverable refusal is worth prompting for, and a permanent one must NOT be, or the
-     * user gets a prompt they can satisfy that changes nothing.
-     */
-    fun recoveryFor(failure: KeyCustodyException): Recovery = when (failure) {
-        is KeyCustodyException.UserAuthenticationRequired -> Recovery.REAUTHENTICATE
-        is KeyCustodyException.KeyPermanentlyInvalidated -> Recovery.REPAIR_DEVICE
-        is KeyCustodyException.KeystoreKeyMissing -> Recovery.REPAIR_DEVICE
-        is KeyCustodyException.KeystoreDowngrade -> Recovery.REPROVISION_KEK
-        is KeyCustodyException.PlatformCapabilityMissing -> Recovery.REPAIR_DEVICE
-        is KeyCustodyException.Unexpected -> Recovery.REPAIR_DEVICE
-    }
 }
 
 /**
- * The transport-level states PB-KEY-6's two sentinels must reach the user as.
+ * The transport-level states a dial failure must reach the user as.
  *
  * `mobile/relay.go` used to discard its dial error with a bare `continue`, which was
  * unreachable while the shipped app ran on the software keystore and went LIVE the moment
- * the Keystore-backed KEK landed. Left alone, a recoverable refusal is an endless
- * "reconnecting" with no prompt, and a permanent one is the same loop against a key that no
- * longer exists.
+ * the Keystore-backed KEK landed: a destroyed key became an endless "reconnecting" loop
+ * against something that was never going to start working.
+ *
+ * THERE IS NO `reauth_required` ROW ANY MORE (ADR-007 B133). It meant "prompt for the biometric
+ * and it will connect", and there is no prompt anywhere in this app to offer -- so the state
+ * had lost its producer AND its remedy at once. It was removed atomically with
+ * `mobile/relay.go`'s `connReauthRequired`, the taxonomy row and `Remedy.AUTHENTICATE`,
+ * because a state kept on one side of that join is a screen nothing can ever reach.
  *
  * The strings are the ones `App.ConnectionState` reports, so the mapping is total in the
  * direction the UI reads it.
@@ -491,9 +499,6 @@ enum class ConnectionState(val wire: String) {
     CONNECTING("connecting"),
     ONLINE("online"),
     RECONNECTING("reconnecting"),
-
-    /** RECOVERABLE. Prompt for the biometric; the connection resumes once it succeeds. */
-    REAUTH_REQUIRED("reauth_required"),
 
     /** PERMANENT and TERMINAL. The relay-auth key is gone; nothing on-device recovers it. */
     REPAIR_REQUIRED("repair_required"),
@@ -540,9 +545,6 @@ enum class ConnectionState(val wire: String) {
     RELAY_INSECURE("relay_insecure"),
     ;
 
-    /** True only for the state that must not sit behind a spinner. */
-    val needsBiometricPrompt: Boolean get() = this == REAUTH_REQUIRED
-
     /** True where the app must stop retrying and say so. */
     val isTerminal: Boolean
         get() = this == REPAIR_REQUIRED || this == REVOKED ||
@@ -560,8 +562,9 @@ enum class ConnectionState(val wire: String) {
 // ---------------------------------------------------------------------------
 
 /**
- * The authenticated Keystore AES KEK, one per tier (ADR-007 B8). Unwrapping the CONTENT tier
- * fails while the device is locked -- that failure IS the gate, not a boolean beside it.
+ * The Keystore AES KEK, one per tier (ADR-007 B8). It is hardware-backed and non-exportable;
+ * it asks for no user authentication (B133). What it defends is the app's data directory
+ * copied OFF the device -- an attacker holding the bytes and not the running handset.
  */
 interface KekProvider {
     fun wrap(tier: KeyTier, plaintext: ByteArray): ByteArray
@@ -584,6 +587,6 @@ interface CoreKeyCustody {
 
     fun installContentKey(key: ByteArray)
 
-    /** PB-KEY-7's lock purge. */
+    /** PB-KEY-7's purge. Its trigger is revoke/unpair (ADR-007 B133); there is no lock event. */
     fun purgeKeys()
 }

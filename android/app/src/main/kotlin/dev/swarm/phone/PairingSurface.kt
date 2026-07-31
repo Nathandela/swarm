@@ -59,11 +59,27 @@ import swarmmobile.Pairing
  * man-in-the-middle and recording it as "I changed my mind" invites the user to try again
  * against the same attacker.
  *
+ * AND IT IS NOW THE ONLY HUMAN-IN-THE-LOOP SECURITY STEP IN THE PRODUCT (ADR-007 B133). Until
+ * that entry a person passed two checkpoints: this comparison at pairing, and a biometric at
+ * every privileged action afterwards. The second is gone, so this one is load-bearing alone --
+ * it is what defeats a relay MITM and there is nothing behind it. It must therefore get HARDER
+ * to skip, never easier: no auto-confirm, no timeout that accepts, no "looks close enough"
+ * affordance, and no path that reaches PAIRED without a human having answered these two
+ * buttons. A change that shortens this step is a change to the security posture of the whole
+ * product and needs an ADR entry of its own.
+ *
+ * THIS PANEL MUST BE REACHABLE ON AN UNPAIRED HANDSET, which B132 found it was not. Every draw
+ * is downstream of [PhoneRuntime.phone], and the runtime used to refuse construction outright on
+ * a handset with no enrolled Class-3 biometric -- so [renderUnavailable] hid every control here
+ * and the app offered no way to pair at all. The refusal is gone with the gate that needed it;
+ * this comment records the coupling so the next person to add a startup precondition knows it
+ * takes the pairing flow down with it.
+ *
  * IT IS NOT THE ACTIVITY. [PhoneActivity] is exported with a LAUNCHER filter, so PB-SEC-11 keeps
  * every facade verb one call away from it, behind a control a person pressed.
  *
- * PB-E2E-5 STAYS DEFERRED. Nothing here is evidence about a physical handset: no real camera, no
- * biometric, no attested key. An emulator is not a handset.
+ * PB-E2E-5 STAYS DEFERRED. Nothing here is evidence about a physical handset: no real camera and
+ * no attested key. An emulator is not a handset.
  */
 class PairingSurface(
     private val activity: AppCompatActivity,
@@ -88,7 +104,7 @@ class PairingSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, SCANNER_HEIGHT)
     }
 
-    private val startScan = gatedButton("Scan the code on your machine") { beginScanning() }
+    private val startScan = touchFilteredButton("Scan the code on your machine") { beginScanning() }
 
     /**
      * PB-PAIR-2's fallback, and it takes the SAME payload the QR carries -- never a relay URL
@@ -101,24 +117,24 @@ class PairingSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    private val useTypedPayload = gatedButton("Use this code") {
+    private val useTypedPayload = touchFilteredButton("Use this code") {
         acceptScannedPayload(typedPayload.text.toString().trim())
     }
 
-    private val openSystemSettings = gatedButton("Open this app's settings") {
+    private val openSystemSettings = touchFilteredButton("Open this app's settings") {
         activity.startActivity(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                 .setData(Uri.fromParts("package", activity.packageName, null)),
         )
     }
 
-    private val confirmDestination = gatedButton("Join this destination") { confirmTheShownOrigin() }
+    private val confirmDestination = touchFilteredButton("Join this destination") { confirmTheShownOrigin() }
 
-    private val stopPairing = gatedButton("Stop pairing") { cancelAttempt() }
+    private val stopPairing = touchFilteredButton("Stop pairing") { cancelAttempt() }
 
-    private val codesMatch = gatedButton("They match") { answerSas(SasAnswer.MATCHES) }
+    private val codesMatch = touchFilteredButton("They match") { answerSas(SasAnswer.MATCHES) }
 
-    private val codesDoNotMatch = gatedButton("They do not match") {
+    private val codesDoNotMatch = touchFilteredButton("They do not match") {
         answerSas(SasAnswer.DOES_NOT_MATCH)
     }
 
@@ -153,7 +169,7 @@ class PairingSurface(
     }
 
     /** PB-SEC-12 clause 1: every control here authorises something. */
-    val gatedActions: List<View> = listOf(
+    val touchFilteredActions: List<View> = listOf(
         startScan, useTypedPayload, openSystemSettings, confirmDestination,
         codesMatch, codesDoNotMatch, stopPairing,
     )
@@ -554,7 +570,16 @@ class PairingSurface(
         view.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
-    private fun gatedButton(text: String, onPress: () -> Unit): Button =
+    /**
+     * A control, with PB-SEC-12 clause 1's touch filter applied by construction.
+     *
+     * IT WAS `gatedButton`, AND THE NAME WAS THE ONLY THING THAT CHANGED (ADR-007 B133). There
+     * was never a biometric behind these: [SecureWindow.gate] sets `filterTouchesWhenObscured`,
+     * which discards a tap that arrived while another window covered the view. That defence
+     * SURVIVES the de-auth and matters more than before, so what the rename removes is a word
+     * that would have read as a checkpoint this screen no longer has.
+     */
+    private fun touchFilteredButton(text: String, onPress: () -> Unit): Button =
         SecureWindow.gate(
             Button(activity).apply {
                 this.text = text

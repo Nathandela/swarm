@@ -4,26 +4,34 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 
 /**
- * PB-KEY-8 and the requesting half of PB-SEC-2.
+ * PB-KEY-8: what this handset must be able to do, what is REQUESTED of its Keystore, and what
+ * is checked on the way back.
  *
  * What is testable here and what is NOT, stated up front because §10's honesty clause makes
  * the difference load-bearing:
  *
- *  - TESTABLE (Robolectric): that the code REQUESTS the right KeyGenParameterSpec -- auth
- *    required, per-use vs timed, invalidate-on-enrollment, StrongBox preference and its
- *    fallback -- and that it VERIFIES what it got back and fails closed on a downgrade.
- *  - NOT TESTABLE HERE: that the achieved key is really hardware-backed, that a real
- *    biometric prompt gates it, or that StrongBox behaves as advertised. Those are
- *    PB-E2E-5, the deferred physical-handset gate. Nothing in this file may be read as
- *    covering them.
+ *  - TESTABLE (Robolectric): that the code REQUESTS the right KeyGenParameterSpec -- no
+ *    authenticator, no invalidate-on-enrollment, StrongBox preference and its fallback -- and
+ *    that it VERIFIES what it got back and fails closed on a downgrade.
+ *  - NOT TESTABLE HERE: that the achieved key is really hardware-backed, or that StrongBox
+ *    behaves as advertised. Those are PB-E2E-5, the deferred physical-handset gate. Nothing in
+ *    this file may be read as covering them.
+ *
+ * PB-SEC-2 IS VOID (ADR-007 B133) and this file no longer requests anything on its behalf.
  */
 
-/** What a handset must be able to do for a role. */
+/**
+ * What a handset must be able to do for a role.
+ *
+ * `USER_AUTH_PER_USE` left this enum with PB-SEC-2 (ADR-007 B133). Dropping an authenticator
+ * from PB-KEY-8's matrix is a NARROWING, which B8 permits; the entry is removed rather than
+ * left unconsumed, because a capability nothing asks for is a refusal waiting to be re-armed
+ * by whoever next reads the list as a to-do.
+ */
 enum class PlatformCapability {
     KEYSTORE_X25519,
     KEYSTORE_ED25519,
     KEYSTORE_AES_GCM,
-    USER_AUTH_PER_USE,
     STRONGBOX,
 }
 
@@ -68,6 +76,12 @@ object CustodyPlanner {
      * PB-KEY-8's "defined refusal" can name a role rather than shrug. Non-PRESENT on any of
      * them is a refusal, and UNKNOWN fails closed exactly as ABSENT does.
      *
+     * THE SET IS NOW ONE ROW (ADR-007 B133). USER_AUTH_PER_USE was the second, and the handset
+     * B132 met is the reason its removal matters rather than being bookkeeping: the design no
+     * longer asks Keystore for an authenticator anywhere, so refusing a phone over one would be
+     * an app that will not start for a capability nothing uses -- residuals §2.8, which is what
+     * moved the Curve25519 entries to [canaries] for exactly the same reason.
+     *
      * WHY THE CURVE25519 ENTRIES ARE GONE (residuals §2.8). KEYSTORE_X25519 and
      * KEYSTORE_ED25519 used to be here, and refusing over them refused a handset over
      * something the design never asks for: ADR-007 B17(a) makes every row KEYSTORE_WRAPPED,
@@ -87,7 +101,6 @@ object CustodyPlanner {
      */
     private val required = linkedMapOf(
         PlatformCapability.KEYSTORE_AES_GCM to KeyRole.RELAY_AUTH,
-        PlatformCapability.USER_AUTH_PER_USE to KeyRole.COMMAND_SIGN,
     )
 
     /**
@@ -205,6 +218,11 @@ enum class KeystoreSecurityLevel {
  */
 data class KeyInfoRecord(
     val securityLevel: KeystoreSecurityLevel,
+    /**
+     * Requested as FALSE (ADR-007 B133) and still read back, because the comparison's direction
+     * inverted rather than losing its point: what must not happen now is the platform silently
+     * ADDING an authenticator to a key nothing in this app can ever satisfy.
+     */
     val userAuthenticationRequired: Boolean,
     val userAuthenticationValidityDurationSeconds: Int,
     val invalidatedByBiometricEnrollment: Boolean,
@@ -258,40 +276,18 @@ class CustodyProvisioning(
     }
 
     /**
-     * PB-SEC-2's per-use gate key for [operation] -- the second caller of the read-back, and the
-     * one ADR-007 B51 found missing entirely.
+     * The achieved parameters against the requested ones.
      *
-     * IT IS NOT STRONGBOX-BACKED, and that is a decision rather than an omission. This key seals
-     * NOTHING: it exists only so a `BiometricPrompt.CryptoObject` has something the platform will
-     * refuse to operate without a fresh Class-3 biometric. StrongBox has a small, shared key slot
-     * budget and its own unavailable-fallback path, and spending four slots on tokens that
-     * protect no data would take them from the tier KEKs that do. The TEE-backed floor below is
-     * the property that matters here, and it is checked exactly as it is for a KEK.
-     *
-     * THE READ-BACK IS THE POINT ON THIS PATH MORE THAN ON THE OTHER. B51's whole finding is a
-     * per-use tier silently behaving as a timed one; `userAuthenticationValidityDurationSeconds`
-     * is the platform's own answer to that question, and comparing it against the requested 0 is
-     * what makes "the platform gave us a windowed key instead" a refusal rather than a surprise.
-     */
-    fun provisionGate(operation: GatedOperation): ProvisionedKey {
-        require(BiometricPolicy.specFor(operation).requiresCryptoObject) {
-            "$operation is a timed tier; its authorization is the shared window key, not a " +
-                "per-use gate entry"
-        }
-        val spec = KeystoreSpecs.forOperation(operation, strongBox = false)
-        provisioner.generate(spec)
-        return readBack(spec)
-    }
-
-    /**
-     * The achieved parameters against the requested ones. Shared by both provisioning paths, so
-     * a downgrade the tier KEKs refuse is a downgrade the gate keys refuse too -- two copies of
-     * this table would be two things to get wrong, and the way it goes wrong is silent.
+     * IT IS STILL A SEPARATE FUNCTION FROM [provision] although only one path reaches it now.
+     * `provisionGate` -- PB-SEC-2's per-use CryptoObject entries -- was the second caller and
+     * left with the requirement (ADR-007 B133). The split stays because the read-back is the
+     * thing this class exists for, and a table inlined into its one caller is a table the next
+     * provisioning path can be written without.
      */
     private fun readBack(generated: KeyGenParameterSpec): ProvisionedKey {
         // GENERATE, THEN READ BACK. A key whose KeyInfo is never read is how a software
-        // fallback ships unnoticed: the request said per-use and auth-required, the platform
-        // quietly gave neither, and every test above this line still passes.
+        // fallback ships unnoticed: the request said hardware, the platform quietly gave
+        // software, and every test above this line still passes.
         //
         // What the read-back can and cannot see, said plainly: it compares the ACHIEVED
         // parameters against the ones REQUESTED, and -- for the one parameter that has no
@@ -337,8 +333,11 @@ class CustodyProvisioning(
             // declining to name a level -- provisions and is recorded, because refusing an
             // answer that denied nothing turns this fix into residuals §2.8: an app that
             // will not start. What the user sees on a denial is DEVICE_UNSUPPORTED
-            // (KeystoreDowngrade -> Recovery.REPROVISION_KEK in PhoneRuntime's table), which
-            // is the honest verdict: nothing the user does to this handset fixes it.
+            // (KeystoreDowngrade -> DEVICE_UNSUPPORTED in PhoneRuntime's table), which
+            // is the honest verdict: nothing the user does to this handset fixes it. It is the
+            // AT-REST floor and is explicitly KEPT by ADR-007 B133 -- non-exportability defends
+            // an extracted data directory, which is a wire-side concern and not a holder-side
+            // one.
             //
             // FOR THIS TO BE WRONG a handset we intend to support would have to report
             // SECURITY_LEVEL_SOFTWARE for a plain AES-256/GCM Keystore key at the pinned
@@ -388,52 +387,39 @@ object KeystoreSpecs {
     /**
      * The per-tier AES KEK of ADR-007 B8.
      *
-     * The CONTENT KEK is the gate. Without `setUserAuthenticationRequired(true)` every other
-     * assertion in this slice is theatre: the unwrap would succeed on a locked handset and
-     * PB-KEY-2's split would be enforced by nothing at all.
+     * NEITHER TIER ASKS FOR AN AUTHENTICATOR (ADR-007 B133). The CONTENT KEK used to carry
+     * `setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG)` and was the gate: the unwrap
+     * refused unless the user had passed a Class-3 biometric inside the window. The trust
+     * boundary is now the WIRE, the phone endpoint is trusted the way the Mac's owner-uid user
+     * always has been, and the flag is the whole cost of that decision.
      *
-     * The WAKE KEK is the opposite by design, and both flags matter. Requiring authentication
-     * makes push useless in exactly the state it exists for; and
-     * `setUnlockedDeviceRequired(true)` -- which looks like prudence -- kills it just as dead,
-     * because it demands the device be unlocked NOW, which a push on a locked handset never
-     * is. It is left at its default of false rather than set, so nothing has to be un-set later.
+     * WHAT IS DELIBERATELY UNCHANGED, because a strict reading of "remove the gate" would take
+     * it too. The key is still generated INSIDE Keystore, still hardware-backed, still
+     * non-exportable, and StrongBox is still preferred with a fallback ([aesGcm] carries all of
+     * it and [CustodyProvisioning.readBack] refuses a key the platform says is in software).
+     * None of that is about the person holding the handset: it is what makes a copy of the app's
+     * data directory -- taken by backup, by `run-as`, or off a disk -- unopenable anywhere else.
+     * B133 keeps it explicitly.
+     *
+     * BOTH FLAGS BELOW ARE SET RATHER THAN INHERITED. `setInvalidatedByBiometricEnrollment`
+     * defaults to TRUE, and leaving it there would let a re-enrolled fingerprint destroy a KEK
+     * that no longer has anything to do with fingerprints: the content tier would become
+     * unopenable, and the wake tier would lose background wakes with no error anywhere,
+     * recoverable in both cases only by re-pairing.
+     *
+     * `setUnlockedDeviceRequired` is NOT set, and that has always been deliberate for the wake
+     * tier: it looks like prudence and demands the device be unlocked NOW, which a push on a
+     * locked handset never is. It is left at its default of false rather than set, so nothing
+     * has to be un-set later.
+     *
+     * THE TIERS ARE STILL TWO KEYS. They share a spec and not an alias, which is what keeps a
+     * purge, a discard or a platform invalidation of one from taking the other -- see
+     * [KeystoreAliases].
      */
-    fun kek(tier: KeyTier, strongBox: Boolean): KeyGenParameterSpec {
-        val builder = aesGcm(KeystoreAliases.forTier(tier), strongBox)
-        return when (tier) {
-            KeyTier.CONTENT -> builder
-                .setUserAuthenticationRequired(true)
-                .setUserAuthenticationParameters(
-                    BiometricPolicy.TIMED_WINDOW_SECONDS,
-                    KeyProperties.AUTH_BIOMETRIC_STRONG,
-                )
-                .setInvalidatedByBiometricEnrollment(true)
-                .build()
-
-            KeyTier.WAKE -> builder
-                .setUserAuthenticationRequired(false)
-                // Explicit, not inherited: the Builder defaults this to TRUE, so a re-enrolled
-                // fingerprint would destroy the wake KEK and the user would lose background
-                // wakes with no error anywhere, recoverable only by re-pairing.
-                .setInvalidatedByBiometricEnrollment(false)
-                .build()
-        }
-    }
-
-    /**
-     * The spec for a key that authorizes [operation]. Per-use operations differ from timed
-     * ones by more than an integer -- see AuthorizationSpec.requiresCryptoObject -- and the
-     * difference is carried HERE by the alias: per-use gets one entry each, so a single
-     * CryptoObject authorization cannot be pointed at whichever operation the caller picks.
-     */
-    fun forOperation(operation: GatedOperation, strongBox: Boolean): KeyGenParameterSpec =
-        aesGcm(KeystoreAliases.forOperation(operation), strongBox)
-            .setUserAuthenticationRequired(true)
-            .setUserAuthenticationParameters(
-                BiometricPolicy.specFor(operation).timeoutSeconds,
-                KeyProperties.AUTH_BIOMETRIC_STRONG,
-            )
-            .setInvalidatedByBiometricEnrollment(true)
+    fun kek(tier: KeyTier, strongBox: Boolean): KeyGenParameterSpec =
+        aesGcm(KeystoreAliases.forTier(tier), strongBox)
+            .setUserAuthenticationRequired(false)
+            .setInvalidatedByBiometricEnrollment(false)
             .build()
 }
 
@@ -454,6 +440,11 @@ object PlatformFailure {
         is android.security.keystore.KeyPermanentlyInvalidatedException ->
             KeyCustodyException.KeyPermanentlyInvalidated(tier)
 
+        // KEPT although nothing this build provisions can raise it (ADR-007 B133). An install
+        // made before that change still holds an AUTH_BIOMETRIC_STRONG content KEK, and the
+        // alternative to naming that refusal is [KeyCustodyException.Unexpected] -- which
+        // `phonecore.openSealedDeviceKeys` treats as a Resume it must refuse outright, turning
+        // an upgraded handset into an app that will not start with nothing on screen saying why.
         is android.security.keystore.UserNotAuthenticatedException ->
             KeyCustodyException.UserAuthenticationRequired(tier)
 

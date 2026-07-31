@@ -2,8 +2,6 @@ package dev.swarm.phone
 
 import android.app.Application
 import dev.swarm.phone.push.PushTokens
-import dev.swarm.phone.runtime.ContentLock
-import dev.swarm.phone.runtime.ContentLockTriggers
 import dev.swarm.phone.theme.SwarmTheme
 
 /**
@@ -19,33 +17,21 @@ class SwarmApplication : Application() {
      *
      * `by lazy` constructs the RUNTIME, which touches nothing; the phone itself is built by
      * `PhoneRuntime.phone()`, which reaches Keystore, the filesystem and the native library and
-     * answers a `PhoneStartup` instead of throwing. Doing that work here would make a locked
-     * handset, or a re-enrolled fingerprint, a process that dies before any screen exists to
-     * report it -- and PB-APP-9's whole point is that a failure reaches the user.
+     * answers a `PhoneStartup` instead of throwing. Doing that work here would make a handset
+     * whose Keystore refuses a process that dies before any screen exists to report it -- and
+     * PB-APP-9's whole point is that a failure reaches the user.
      */
     val phoneRuntime: PhoneRuntime by lazy { PhoneRuntime(this) }
-
-    /**
-     * PB-KEY-7's lock purge and PB-SEC-2's invalidation clause, as a process-wide observer.
-     *
-     * IT IS OWNED HERE AND NOWHERE ELSE, and that is the resolution of the conflict ADR-007 B36
-     * recorded. The obvious home is `PhoneActivity.onPause`, and it is the wrong one: that
-     * Activity is exported with a LAUNCHER filter, and PB-SEC-11 forbids a component a
-     * third-party app can start from acting on the session. An Application subclass is not a
-     * component -- no intent filter, no allowlist row, unreachable from outside the process --
-     * so the two requirements stop pulling against each other.
-     *
-     * `by lazy` on [contentLock] would be wrong: the observers have to be REGISTERED, and one
-     * registered on first use is one that was not listening for the lock before it.
-     */
-    val contentLock: ContentLock by lazy { ContentLock({ phoneRuntime.lockContent() }) }
 
     override fun onCreate() {
         super.onCreate()
         SwarmTheme.applyDefaultNightMode()
-        // Before anything else can put a screen up: a lock that starts observing after the first
-        // Activity is a lock that missed the first backgrounding.
-        ContentLockTriggers(contentLock).install(this)
+        // NOTHING OBSERVES THE SCREEN LOCK ANY MORE (ADR-007 B133). This used to install
+        // `ContentLockTriggers` here, so that a lock or a backgrounding purged the content tier
+        // and the user re-authenticated on the way back. The trust boundary is now the WIRE, and
+        // PB-KEY-7's purge survives with a different trigger: revoke and unpair, which is where
+        // `PhoneRuntime.purgeKeys` is reached from.
+        //
         // PB-PUSH-9's "initial getToken", which is listed FIRST and separately from onNewToken
         // for a reason: the callback fires only on ROTATION, so an app that implements it alone
         // never registers on a fresh install -- and a fresh install is a phone that has just been
