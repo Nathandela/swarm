@@ -133,3 +133,13 @@ be rescued by the fixture that hid it".
   has already shipped with unit coverage and no end-to-end coverage. **That list is what S19 must
   actually demonstrate**, and it is why an exit demonstration driven through phonesim would be worth
   very little.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row per
+requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made to fail,
+in the same row.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-NET-1 | DERIVED | The façade-to-core seam cut: `a.core.Router().AcceptCommit(raw, cursor)` in `mobile/relay.go` replaced with a stub returning `(true, nil)`, so the real `relay.Client` no longer drives the core with any inbound frame -> **4 conformance failures**, including `TestB42_ThePhoneDoesNotReadOnlineWhileDiscardingItsInboundPlane` (named for exactly this), `TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend`, `TestS8Trap_LaunchContentHashMatchesTheCanonicalEncoding` and `TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned`. Reverted; `relay.go` sha256 `4c6db6a40898...` identical. **Worth recording: the `mobile` unit package passes under that mutation (`ok 13.724s`)** — this row is fenced only at the conformance layer, which is the right layer for an integration requirement but means a unit-only gate run would not see it. |
