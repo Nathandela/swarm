@@ -742,3 +742,13 @@ Two further open items came out of writing the handset-gate runbook and are reco
 provisions cleanly with nothing objecting; and **provisioning refuses without two Keystore
 capabilities no matrix row consumes**, which is the most likely way the deferred gate fails on first
 contact with hardware.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row per
+requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made to fail,
+in the same row.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-OPS-5 | DERIVED | The operator's pin discarded at the seam that reads it — `relaySecurity, err := relayCfg.Security()` in `cmd/swarm-remote/config.go` replaced with a zero `relay.Security{}`, so `relay.json`'s SPKI pin never reaches `DialSecure` -> `TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON` fails. Reverted; `config.go` sha256 `c4691cadde8f...` identical. **The mutation was placed deliberately at the RESOLUTION seam rather than at the pin value:** a fence that only compared a configured pin against a presented certificate would still pass while the config was silently dropped, which is the shape that would leave an operator believing a pin was in force. It does not pass. Related: ADR-007 B124 corrected an operator-runbook paragraph that told readers this gateway *"can neither pin a self-signed certificate nor refuse a cleartext hop"* — false at HEAD, and it argued against configuring the very pin this row fences. |
