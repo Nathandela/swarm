@@ -22,6 +22,35 @@ whatever else the document says around it.
 > requirements, ratified by B31). The audit may find every other requirement met and must still
 > record Phase B as provisional. This gate is not assignable to an agent.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — the gate has NARROWED, and this document is not yet
+> rewritten against the post-removal code.** All phone-side user authentication was removed from
+> the product: no biometric, PIN, per-use gate, timed gate or content lock exists any more.
+> "Real biometrics" leaves this gate's scope because the feature left the product; **real camera
+> (§5), real FCM (§6), real Doze (§6d) and hardware Keystore attestation (§2b) stay deferred and
+> stay in the gate.** Until the revision lands, read the steps with these corrections:
+>
+> - **§4 (Real biometrics) is VOID in full.** There is no prompt, no per-use tier, no timed
+>   window, no `REAUTH_REQUIRED`, and no enrollment invalidation of the content KEK.
+> - **The alias table in §2 and the result sheets in §9 shrink.** The `gate.timed` and
+>   `gate.peruse.*` aliases are deleted with the gates. The content KEK is provisioned with
+>   `setUserAuthenticationRequired(false)` — not user-auth-gated, not invalidated by enrollment
+>   change — and hardware backing is retained, which stays the thing to measure.
+> - **§3c's expected refusal has no producer.** A locked-device unwrap of the content KEK is no
+>   longer expected to refuse; record what the device reports, but a success there is the new
+>   design, not the gate failing to exist.
+> - **§1a/§1b preconditions shrink.** No biometric enrollment is required and §1b's second slot
+>   existed only for §4d, which is void. A screen lock is still wanted: §6e's lock-screen
+>   notification checks survive, because FCM still reads payloads and the lock screen still
+>   exists.
+> - **§2c/§9's `USER_AUTH_PER_USE` row is narrowed away by PB-KEY-8**; whether the capability
+>   remains probed at all is settled by the code pass, so re-check §2c against the shipped
+>   matrix before running it.
+> - **§7a's timed-window clause is void.** What, if anything, severs a lease on backgrounding is
+>   an open behaviour decision recorded in B133 — re-check before running §7.
+>
+> The `[UNRUN]` discipline is unchanged: every tag stays until its step is performed on
+> hardware, against the revised form of this document.
+
 ---
 
 ## 0. Why "it worked" is the wrong thing to record

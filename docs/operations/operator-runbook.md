@@ -30,7 +30,8 @@ export PATH="$BIN:$PATH"
 ```
 
 **`swarm-remote` must be on `PATH` before you run `swarm remote init`.** It is the gateway
-sidecar, and `init` installs the supervision unit that starts it. Without it on `PATH`:
+sidecar, and `init` installs the supervision unit that will start it once a device is paired —
+not before. Without it on `PATH`:
 
 ```
 $ swarm remote init
@@ -52,6 +53,25 @@ $ find "$SWARM_DAEMON_STATE" -type f
 .../remote/machine.key
 .../remote/units/com.swarm.remote.plist      # launchd on darwin
 ```
+
+**CORRECTED 2026-07-31 (ADR-007 B132).** This section previously said `init` "installs the
+supervision unit that starts it", and §3's pair step read as though the gateway were already
+running. It is not: **the gateway starts only after a device is paired.** With zero paired
+devices `swarm-remote` exits immediately, cleanly and by design — observed on real hardware
+during the B132 bring-up:
+
+```
+swarm-remote: no paired device to serve (0 paired, want exactly 1): supervise: nothing to serve; gateway quiescent
+```
+
+That exit is status 0 on purpose, and the unit's restart policy (launchd `KeepAlive
+{SuccessfulExit: false}`, i.e. restart on failure only) deliberately leaves a clean exit alone,
+so after `init` the correct state is *installed and quiescent*. There is no step where you start
+the gateway yourself: a successful `swarm remote pair` activates it (§3). One recovery to know:
+if the gateway is down while a device IS paired — a transient `launchctl` refusal at pair time,
+an upgrade from a build that installed no unit — re-run `swarm remote init`. It is idempotent
+and converges the unit on the state the paired-device count implies; `swarm remote pair` cannot
+do it, because pairing is refused while a device is paired.
 
 ## 2. Point the machine at the relay
 
@@ -98,8 +118,13 @@ swarm remote pair
 
 prints the pairing QR and waits for the handset to scan it and complete the SAS comparison.
 
+The SAS comparison is the only human step, and since ADR-007 B133 it is the only human-in-the-loop
+security step in the product: pairing requires no biometric, no PIN and no unlock gesture on the
+handset. Compare all six emoji — there is no longer anything behind this checkpoint.
+
 **NOT EXECUTED HERE — this step needs a handset, and PB-E2E-5 (physical handset) is deferred.**
-There is no phone and no camera in this project. What *is* executed, on every run of the suite, is
+No real pairing has ever completed in this project: a real handset has reached the app (ADR-007
+B131/B132), but not through this step. What *is* executed, on every run of the suite, is
 the whole flow against the real daemon, the real relay and the mobile façade:
 
 ```bash
@@ -111,10 +136,28 @@ go test -run '^TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke$' -count=1 -v .
 ```
 
 That covers pair → observe → launch → take control → type → revoke. It does **not** cover a camera
-decoding a QR, real biometrics, real FCM delivery, Doze, or hardware-backed Keystore. An emulator
-is not a handset and this is not one either.
+decoding a QR, real FCM delivery, Doze, or hardware-backed Keystore. An emulator is not a handset
+and this is not one either.
 
-After a successful pairing, `swarm remote devices` lists the device and `swarm remote status`
+**AMENDED 2026-07-31 (ADR-007 B133).** Two prior statements are corrected above rather than
+silently rewritten. First, this section read "there is no phone and no camera in this project";
+a real handset has since reached the app (B131/B132) without completing a pairing, so the step
+still needs a handset and stays NOT EXECUTED. Second, the not-covered list above included "real
+biometrics". All phone-side user authentication has been removed from the product, so PB-E2E-5
+has NARROWED: real biometrics left its scope because the feature left the product — real camera,
+real FCM, real Doze and hardware Keystore attestation stay deferred and stay in the gate
+(`docs/operations/physical-handset-gate.md`).
+
+> **Samsung handsets: Auto Blocker blocks `adb` entirely (observed on a Galaxy A26, Android 16 —
+> ADR-007 B132).** With Auto Blocker on, both USB debugging and wireless debugging are blocked:
+> `adb` cannot see the device at all, and the USB-debugging toggle in developer options is
+> unavailable. Any step that reaches the handset through `adb` — installing a test build,
+> `adb reverse` for pairing without a shared LAN, logcat — hits this first, and any Samsung
+> tester will meet it. Remedy: Settings > Security and privacy > Auto Blocker, then turn off
+> either the master toggle or just the USB-cable sub-setting.
+
+After a successful pairing, the gateway is activated — it was quiescent until now (§1), and no
+second command is needed — `swarm remote devices` lists the device and `swarm remote status`
 reports remote control ON.
 
 ## 4. Kill switch
@@ -132,6 +175,15 @@ epoch rotation and of the device registry. That independence matters — a revok
 (rotate fails, or the registry write fails before the rename) can leave the device live and
 un-severed, and `swarm remote off` still cuts it off. **If a revoke reports an error, run
 `swarm remote off` immediately and sort the revoke out afterwards.**
+
+**AMENDED 2026-07-31 (ADR-007 B133).** The trust boundary is now the wire between the phone and
+this machine, and all phone-side user authentication has been removed: no biometric, PIN or
+prompt stands between whoever holds the unlocked phone and take-control, type, kill or launch.
+The accepted residual risk is that **a stolen unlocked phone gives its holder full control of
+agents that edit code on this machine, and the only surviving mitigation is `swarm remote off`
+and `swarm remote revoke`, issued from this machine.** These commands were the outer of two
+layers; they are now the only layer, and they are load-bearing in a way they were not. If there
+is any doubt about where the phone is, run `swarm remote off` first and investigate second.
 
 ## 5. Revoke, and device loss
 
