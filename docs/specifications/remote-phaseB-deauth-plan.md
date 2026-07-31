@@ -67,6 +67,21 @@ make code pass (CLAUDE.md, implementation-goals GG-5).
    - `PB-E2E-5` → **NARROWS legitimately**. "Real biometrics" leaves scope because the *feature* leaves
      the product. Real camera, real FCM, real Doze, hardware Keystore attestation **stay deferred.**
      This is removal-by-feature-deletion, not reclassification by fiat.
+   - `PB-PUSH-4` → **NARROWS.** Verified text: "renders a **content-free** notification *unless the
+     user has authenticated*; it never decrypts session content with a locked device." The italicised
+     clause loses its producer. **Content-free rendering itself is KEPT** — FCM reads payloads and the
+     lock screen still exists.
+   - `PB-KEY-5` → **UNAFFECTED.** *(Correcting a misattribution: PB-KEY-5 is "custody tier per role,
+     not one undifferentiated core key" — role separation across `NoiseStatic`, `OpenSealedBox`,
+     `SignCommand`, `SignRelayAuth`. It has nothing to do with authentication and survives whole.)*
+
+   > **Where the "after-first-unlock attacker reaches no content key" claim actually lives.** It is
+   > **PB-KEY-2's dying clause**, not PB-KEY-5. And it is **FALSIFIED, not narrowed**: with
+   > `setUserAuthenticationRequired(false)` the content key becomes reachable after first unlock, so
+   > the claim is **false by design** rather than reduced. `PerRoleCustodyTest.kt`'s two attacker
+   > tests fence *that*, which is why they cannot be repaired — only removed or re-premised. A
+   > narrowed requirement keeps a true residue; this one does not. Do not reword it into something
+   > true.
    - `PB-SEC-1`, `PB-STATE-6`, `PB-KEY-6`, `PB-KEY-9` → **UNAFFECTED.**
 5. **`scripts/phaseb-traceability.py`** — move voided IDs to `NOT_MET`, adjust the denominator, drop
    stale `## Derivation` rows. **This script has been broken twice by careless range edits that
@@ -141,23 +156,67 @@ The property still matters; its expected outcome inverts.
   than two gated call sites exist). That floor breaks loudly when the gate goes. Expect it.
 - `PhoneSurfaceControlsTest.kt` (3), `keys/LockPurgeTest.kt` — purge trigger moves lock → revoke.
 
-### Needs inspection before classifying (not yet verified)
+### Residual set — CLASSIFIED
 
-`keys/GoCustodyFailureTest.kt`, `keys/KeyCustodyMatrixTest.kt`, `keys/KeystoreHardwareFloorTest.kt`,
-`keys/FailableCustodyTest.kt`, `keys/CustodyPersistenceTest.kt`, `keys/PerRoleCustodyTest.kt`,
-`keys/DeviceCapabilitiesTest.kt`, `keys/CustodyFixtures.kt`, `ui/ConnectionAndErrorTest.kt`,
-`push/WakeNotificationTest.kt`, `PhoneActivityWindowTest.kt`,
-`android/gate/pbapp11_freshness_test.go`, `android/gate/s16_ui_test.go`,
-`android/gate/s16_wiring_test.go`, `internal/phonecore/contentlock_test.go`.
+| File | Verdict | Note |
+|---|---|---|
+| `keys/GoCustodyFailureTest.kt` | REWRITE | Compile break: `Recovery`/`recoveryFor`, `needsBiometricPrompt`. Keep two-token classification + B8 bound-interface test. |
+| `keys/KeyCustodyMatrixTest.kt` | REWRITE | `matrixConsumes` calls deleted `BiometricPolicy.specFor`. Consumed set shrinks to `{KEYSTORE_AES_GCM}`. |
+| `keys/KeystoreHardwareFloorTest.kt` | REWRITE (one test) | Floor is a KEPT at-rest concern. `the_floor_does_not_replace_the_requested_versus_achieved_comparison` goes RED because the spec will now *request* `false` — swap the downgrade axis. |
+| `keys/FailableCustodyTest.kt` | REWRITE | Compile break on `GateInvalidation`. Keep typed-invalidation, failed-unwrap-installs-nothing, wake-tier independence. |
+| `keys/CustodyPersistenceTest.kt` | REWRITE (light) | Persistence and destroyed-KEK-is-permanent KEPT (PB-KEY-9). |
+| `keys/PerRoleCustodyTest.kt` | REWRITE | Its headline criterion is **FALSIFIED, not narrowed** (see PB-KEY-5). Role-set/tier-assignment KEPT. |
+| `keys/DeviceCapabilitiesTest.kt` | REWRITE | Breaks compile if `USER_AUTH_PER_USE` leaves the enum; **vacuous if it stays**. |
+| `keys/CustodyFixtures.kt` | REWRITE (light) | **Highest-leverage line in the set** — see below. |
+| `ui/ConnectionAndErrorTest.kt` | REWRITE | `REAUTH_REQUIRED` assertions lose their producer; revoked/staleness/clock survive load-bearing. |
+| `push/WakeNotificationTest.kt` | REWRITE (narrow) | `VISIBILITY_SECRET`, no-leak, no-interpolation KEPT — the lock screen still exists and FCM still reads payloads. |
+| `PhoneActivityWindowTest.kt` | REWRITE (rename-level) | PB-SEC-12 tapjacking filtering **SURVIVES and matters more** on un-gated revoke/take-control. Re-anchor, do not delete. |
+| `android/gate/pbapp11_freshness_test.go` | **UNAFFECTED** | Confirmed zero biometric content; it is pure staleness-by-silence, and self-guarding. |
+| `android/gate/s16_ui_test.go` | UNAFFECTED (reword) | Its set-equality check is the **anti-vacuity enforcer** — see below. |
+| `android/gate/s16_wiring_test.go` | UNAFFECTED (reword) | Only a `t.Errorf` string mentions the gate. |
+| `internal/phonecore/contentlock_test.go` | REWRITE | Biggest behavioural decision in the set. Both `TestPBSEC2_*` DELETE. |
 
-`PB-APP-11` is **state** freshness (staleness-by-silence — a wire concern) and survives; confirm its
-fence does not lean on *biometric* freshness.
+> **`CustodyFixtures.kt:52` defaults `lockedTiers = setOf(KeyTier.CONTENT)` — a state production can
+> no longer enter, and it is what keeps four of the vacuous tests below green. Flip it to
+> `emptySet` early; several false greens collapse on their own.**
 
 ### The dangerous class: VACUOUS-GREEN
 
-Any test that still compiles and passes after the gate is removed **but now fences nothing**. A
-vacuous green test reads as coverage. Every surviving test in the lists above must be checked by
-mutation — break the thing it claims to fence and confirm it fails (ADR-007 B129).
+Still compiles, still passes, **fences nothing**. A green test reads as coverage.
+
+1. **`internal/phonecore/contentlock_test.go` — the whole file. Worst case in the repo.** Pure Go over
+   fake sealers, and `crypto.ErrKeyAuthRequired` still exists because **crypto is FROZEN** — so it
+   stays green while fencing a screen-lock event that exists nowhere and asserting a **VOIDed**
+   requirement.
+2. `PerRoleCustodyTest.kt` — the two after-first-unlock attacker tests. **These read as the phase's
+   central security claim** and would pass against the fake's lock.
+3. `CustodyPersistenceTest.kt` — locked-tier-recoverable, and "still asks the KEK on every open".
+4. `FailableCustodyTest.kt` — every `lockedTiers` case, if fixed only enough to compile.
+5. `GoCustodyFailureTest.kt` — `AUTH_REQUIRED`-token classification, if minimally patched.
+6. `ConnectionAndErrorTest.kt` — `REAUTH_REQUIRED` assertions if the taxonomy row is kept "for safety".
+7. `WakeNotificationTest.kt` — the `contentReady=false` trio if production hardwires `true`.
+8. `DeviceCapabilitiesTest.kt` — the `USER_AUTH_PER_USE` test if the enum entry survives.
+
+Every survivor must be mutation-checked: break what it claims to fence, confirm it fails (B129) —
+**then revert the mutation** (B132).
+
+### `REAUTH_REQUIRED` must be removed atomically
+
+It appears in `error_taxonomy.tsv`, `mobile/relay.go:182` (`connReauthRequired`), the Kotlin
+`ConnectionState`/`ErrorState` enums, and `Remedy.AUTHENTICATE` (`ErrorRouting.kt:99`). **All in one
+change**, or `s16_ui_test.go`'s set-equality forces keeping a producer-less state. `mobile/conformance/
+s16_errorstates_test.go` ("every row reachable") is coupled and was outside the classification pass.
+
+## Design decisions OWED — do not let these be resolved silently
+
+Each is a behaviour change wearing a comment change's clothes.
+
+1. **What severs a lease on backgrounding**, now that biometric-freshness expiry is gone
+   (`internal/phonecore/lease.go:52,198`).
+2. **What sets `contentReady = false`**, now that "unless the user has authenticated" has no producer.
+3. **On revoke/unpair**: is the wake tier purged too? Is the content tier recoverable without a
+   re-grant? Are watermarks and the op-queue carried across? `PB-KEY-7`'s `PurgeKeys` mechanism
+   survives; only its trigger moves — but these three expectations need re-deciding, not renaming.
 
 > **B129 made mutation mandatory and never said to revert it.** A `&& false` from an earlier
 > derivation escaped into a shipped binary (ADR-007 B132). **Revert every mutation; verify `git
