@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**102 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**103 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -138,7 +138,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-OPS-4 | S4 | shipped | not derived | `docs/verification/remote-phaseB-s4-evidence.md` |
 | PB-OPS-5 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-PAIR-1 | S3 | shipped | not derived | `docs/verification/remote-phaseB-s3-evidence.md` |
-| PB-PAIR-2 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-PAIR-2 | S16 | shipped | **DERIVED** — `PermissionGate.degradedCapability` mutated so a **DENIED** camera permission names no degraded capability (the `PERMANENTLY_DENIED` arm left intact, so only one of the two denial paths breaks) -> **two Kotlin tests fail**: `PermissionGateTest > every_non_granted_state_names_a_degraded_capability` and `PairingPermissionTest > both denial paths offer manual entry`. Reverted; `PermissionGate.kt` sha256 `220e27a4b185...` identical. **The second failure is the row's own clause** — the manual-entry fallback is fenced against *both* denial paths, not just the permanent one, which is the distinction a user who taps "deny" once rather than "never ask again" actually lives in. | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-3 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-PAIR-4 | S16 | **NOT MET** | not derived | REASON REPLACED 2026-07-31; the half-pair defect is CLOSED and the pre-fix text is fossil. The phone commits durably BEFORE it acknowledges, the machine enrols only on that acknowledgement, and the persisted write fsyncs the file, renames, and fsyncs the directory. Two fences by two agents 23 minutes apart both go RED on the reverted ordering, one by SIGKILLing a genuine second process. WHAT REMAINS: the row requires process death AT EVERY named transition, and the enumeration declares Noise msg2 'unreachable' -- the kill test logs that and RETURNS WITHOUT KILLING ANYTHING. The enumeration passes, proving only that the no-op row is named. Either kill in that window or amend the criterion to state the bounding-state equivalence explicitly (ADR-007 B117) |
 | PB-PAIR-5 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
