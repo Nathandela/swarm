@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**103 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**104 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -198,7 +198,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-TIME-1 | S11 | shipped | **DERIVED** — `internal/skeleton/deviceauth.go`'s expiry guard neutered -- `if now.After(cmd.ExpiresAt)` replaced with `if false`, so no signed command ever expires -> **4 failures**: `TestPolicy_ExpiredCommandRejected` (the direct one), `TestPBPUSH8_ForgedOrExpiredPushPrefsIsRefused`, and both `TestB42PBNET4_*` tests, which depend on the 1-minute TTL being what makes a queued command undeliverable. Reverted in the same command; `deviceauth.go` sha256 `00d27a109d25...` identical before and after. | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-2 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-3 | S11 | shipped | **DERIVED** — `SkewMonitor.Check()` made to `return nil` instead of `m.lastErr`, so skew is never reported -> `TestS11Skew_CheckMirrorsTheLastMeasurement` and `TestS11Skew_OfflineIsNotSkewed` fail. Reverted; `skew.go` sha256 `ae73040c063f...` identical. **THE FINDING: `mobile` passes under that mutation.** `Check()` is called in production at `mobile/relay.go:726` and `Sent()` at `mobile/commands.go:735`, but nothing fences that the PHONE ACTS on the verdict -- the fence's subject is the monitor, the requirement's subject is a detection protocol the phone participates in. Same dropped-quantifier shape found at six other rows. | `docs/verification/remote-phaseB-s11-evidence.md` |
-| PB-TOK-1 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-TOK-1 | S16 | shipped | **DERIVED** — A single colour in `android/app/src/main/res/values/colors.xml` diverged from the token source -- `#FF0809` -> `#DEADBE` -> `TestPBTOK1_TheAndroidThemeColoursAreTheDesignTokens` fails. Reverted; `colors.xml` sha256 `8c20184e7a44...` identical. The fence compares the shipped Android resource against `internal/design/tokens.json`, so one value drifting apart is caught rather than only a wholesale replacement. | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-TOK-2 | S5 | shipped | not derived | `docs/verification/remote-phaseB-s5-evidence.md` |
 | PB-TOK-3 | S5 | shipped | not derived | `docs/verification/remote-phaseB-s5-evidence.md` |
 | PB-TOK-4 | S13 | shipped | not derived | `docs/verification/remote-phaseB-s13-evidence.md` |
