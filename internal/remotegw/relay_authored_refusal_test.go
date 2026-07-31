@@ -279,3 +279,173 @@ func TestRelaySink_ASeqIsReissuedWhenTheFrameNeverLeftTheProcess(t *testing.T) {
 		}
 	}
 }
+
+// relayChoice is what the relay elects to do with one append it has been handed. Every one of
+// these is available to it at every append: the bytes are in its hands before it writes a
+// reply, and it authors the read as well.
+type relayChoice int
+
+const (
+	storeAndAck        relayChoice = iota // the honest success
+	honestRefusal                         // refused before the store, exactly as handleMailboxAppend does
+	theLie                                // STORED, then answered with a refusal sentinel, then served
+	theLieThenWithhold                    // STORED, then denied, and never revealed on the read
+)
+
+func (c relayChoice) String() string {
+	switch c {
+	case honestRefusal:
+		return "honest refusal (stores nothing)"
+	case theLie:
+		return "stores it, denies it, serves it"
+	case theLieThenWithhold:
+		return "stores it, denies it, hides it"
+	}
+	return "stores it and acks"
+}
+
+// choiceAppender applies one nominated choice to one nominated append and is honest for the
+// rest. `served` is what the relay is WILLING to reveal on a mailbox read, which is the only
+// thing the phone can ever see -- so a frame the relay stored but withholds counts as lost,
+// exactly as it would in production.
+type choiceAppender struct {
+	choice   relayChoice
+	choiceOn int // 1-based
+
+	mu     sync.Mutex
+	calls  int
+	served [][]byte
+}
+
+func (a *choiceAppender) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls++
+	c := storeAndAck
+	if a.calls == a.choiceOn {
+		c = a.choice
+	}
+	switch c {
+	case honestRefusal, theLieThenWithhold:
+		// Nothing the phone can ever read. Whether the relay kept a private copy (the lie) or
+		// truly stored nothing (the honest refusal) is INDISTINGUISHABLE from outside, which
+		// is the whole reason its reply cannot be evidence.
+		return 0, relay.ErrQuotaExceeded
+	case theLie:
+		a.served = append(a.served, append([]byte(nil), env...))
+		return 0, relay.ErrQuotaExceeded
+	default:
+		a.served = append(a.served, append([]byte(nil), env...))
+		return uint64(len(a.served)), nil
+	}
+}
+
+func (a *choiceAppender) revealed() [][]byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([][]byte(nil), a.served...)
+}
+
+// TestRelaySink_TheRelayCannotCauseLOSSWithoutCausingAGAP is the fence for the defect's
+// TEETH, and it is a stronger statement than "no seq is reissued".
+//
+// Losing a cursor==0 frame is survivable: PB-SYNC-1 marks the shared bucket stale off the
+// gap bit and the phone resyncs. What is NOT survivable is losing one SILENTLY, and that is
+// what the reissued seq bought the relay: the loser was stale-dropped at a seq its rival had
+// already consumed, so crypto.MailboxReceiver computed gap := seen && seq > hi+1 over an
+// UNBROKEN run and reported nothing. Every staleness mechanism downstream is driven off that
+// one bit (phonecore commitReceive -> markStale -> StreamState, pinned by
+// TestS10_ASharedBucketGapStalesJournalAndTerminal), so a false gap bit silences all of them
+// at once while the phone is actively receiving.
+//
+// THE INVARIANT, over every choice the relay has at an append:
+//
+//	frames the gateway sealed but the phone never accepted  >  0   =>   a GAP is reported
+//
+// A fix that merely loses the frame more safely would satisfy the seq-collision fence above
+// and still fail here.
+//
+// MEASURED UNDER MUTATION, and it corrects how the reuse was described for seven rounds: with
+// the reuse reinstated this fails on the HONEST-REFUSAL arm too (sealed=3 accepted=2
+// gapReported=false). The reuse never preserved the refused frame's content -- it renumbered
+// the NEXT frame into the hole. So the old behaviour was not "a gap avoided for free"; it was
+// a loss that happened either way, reported in one case and silent in the other.
+//
+// One honest qualification, so this is not read as more than it is: on the TERMINAL arm the
+// next snapshot supersedes the lost one, so the user's grid is current and the practical harm
+// of that single loss is small. It is in the fence anyway because the held seq is handed to
+// whatever frame comes next OF ANY KIND -- journal records, roster records, reconcile records
+// and reseeds all share this seq space -- so the mechanism is never confined to the stream
+// that triggered it. The RESEED arm is where the teeth are: it is the only journal repair
+// channel, and a silently dropped repair is one the phone believes it received.
+func TestRelaySink_TheRelayCannotCauseLOSSWithoutCausingAGAP(t *testing.T) {
+	key := inboundKey(41)
+	sender := [8]byte{'m', 'a', 'c', 'h', 'i', 'n', 'e', '1'}
+
+	for _, choice := range []relayChoice{honestRefusal, theLie, theLieThenWithhold} {
+		for _, path := range []struct {
+			name string
+			emit func(s *RelaySink, n int, label string) error
+		}{
+			{"terminal snapshot", func(s *RelaySink, _ int, label string) error {
+				return s.Terminal("m/s1", []string{label}, 80, 24)
+			}},
+			// The reseed is the ONLY journal repair channel: a silent loss here is a repair the
+			// phone believes it received.
+			{"journal reseed", func(s *RelaySink, n int, label string) error {
+				return s.Reseed(protocol.JournalReseed{
+					Roster: []protocol.JournalRecord{{SessionID: "m/" + label, Type: "launched"}},
+					Cursor: uint64(n),
+				})
+			}},
+		} {
+			t.Run(path.name+"/"+choice.String(), func(t *testing.T) {
+				app := &choiceAppender{choice: choice, choiceOn: 2}
+				sink := NewRelaySink(RelayConfig{
+					Appender: app, Target: "phone", Machine: "m", EpochID: 9, Key: key,
+					SenderKeyID: sender,
+				})
+
+				const sealed = 3
+				for n := 1; n <= sealed; n++ {
+					err := path.emit(sink, n, [sealed]string{"one", "two", "three"}[n-1])
+					if n != 2 && err != nil {
+						t.Fatalf("frame %d: %v", n, err)
+					}
+				}
+
+				recv := crypto.NewMailboxReceiver()
+				accepted, gapReported := 0, false
+				for i, raw := range app.revealed() {
+					env, err := crypto.ParseEnvelope(raw)
+					if err != nil {
+						t.Fatalf("revealed envelope %d does not parse: %v", i, err)
+					}
+					res, err := recv.Accept(key, env)
+					if err != nil {
+						t.Logf("  the phone refused revealed envelope %d (seq %d): %v", i+1, env.Header.Seq, err)
+						continue
+					}
+					if res.Gap {
+						gapReported = true
+					}
+					accepted++
+				}
+
+				lost := sealed - accepted
+				t.Logf("relay choice %q: sealed=%d accepted=%d lost=%d gapReported=%v",
+					choice, sealed, accepted, lost, gapReported)
+				if lost > 0 && !gapReported {
+					t.Errorf("SILENT LOSS: %d of %d sealed frames never reached the phone and NO GAP was "+
+						"reported. The relay chose %q, and nothing downstream can mark the bucket stale off "+
+						"a gap bit that was never set -- the watched grid pins arbitrarily far behind while "+
+						"StreamState still reads live (ADR-007 B125 F-2, B121)", lost, sealed, choice)
+				}
+				if lost == 0 && gapReported {
+					t.Errorf("a gap was reported though every sealed frame arrived: a spurious gap costs a " +
+						"conservative resync of BOTH journal and terminal against PB-SYNC-6's budget")
+				}
+			})
+		}
+	}
+}

@@ -7284,6 +7284,23 @@ and the adversary-relay saving is **unbounded silent loss with every indicator g
 trade is not close, and it needed no new number: **nothing here is a §6.0 quantity nobody has
 decided.**
 
+**A correction to how the reuse was described, found by mutating onto it.** The framing
+above — and the s2b evidence, and this test suite's own comments for seven rounds — treated
+the reuse as *avoiding* a gap. It did not. **The refused frame's content was lost either
+way**; the reuse simply renumbered the NEXT frame into the hole so the phone was never told.
+`TestRelaySink_TheRelayCannotCauseLOSSWithoutCausingAGAP` fails under mutation on the
+**honest-refusal** arm as well as the adversarial ones — `sealed=3 accepted=2
+gapReported=false` against a relay doing nothing wrong at all. So burning does not introduce
+a loss the system was previously spared: **it makes an existing loss visible.** The resync is
+the phone finally learning about something it was always suffering, which makes the budget
+question above weaker than stated, not stronger.
+
+*Qualification, so this is not read as more than it is:* on the terminal path the next
+snapshot supersedes the lost one, so that single loss costs the user little. It matters
+because the held seq went to whatever frame came next **of any kind** — the shared seq space
+carries journal records, roster records, reconcile records and reseeds — so the damage was
+never confined to the stream that triggered it.
+
 ### What was deleted, and the instrument that required it
 
 `ClassifyAppend` and `AppendOutcome` had exactly one production consumer — the unsound branch —
