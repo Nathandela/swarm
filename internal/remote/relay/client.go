@@ -754,7 +754,46 @@ func (c *Client) MailboxReadPage(ctx context.Context, cursor uint64, limit int) 
 	if err := json.Unmarshal(resp, &r); err != nil {
 		return nil, false, err
 	}
+	if err := checkPageOrder(cursor, r.Items); err != nil {
+		return nil, false, err
+	}
 	return r.Items, r.HasMore, nil
+}
+
+// errMailboxPageOrder is a page that breaks the relay's OWN read contract.
+var errMailboxPageOrder = errors.New("relay: mailbox page cursors do not advance")
+
+// checkPageOrder is the only thing a consumer can check about a value the RELAY MINTS.
+//
+// Item.Cursor is the relay's own coordinate -- its doc says so, and says "untrusted
+// ordering" -- and both consumers adopt the highest one in a page as a DURABLE resume point.
+// Nothing authenticates it, so its VALUE cannot be verified. What CAN be checked is that a
+// page obeys the contract the relay states for its own store (store.readItemsPage): items
+// whose storage cursor is STRICTLY greater than the requested cursor, in ASCENDING order. A
+// page that repeats one value across its items, or hands back an item the caller already
+// asked to skip past, is not a storage cursor -- it is a rewrite, and adopting it ends
+// delivery permanently at whichever end read it.
+//
+// THIS IS HALF A FENCE AND THE OTHER HALF IS MISSING. A page of ONE item satisfies every
+// clause here whatever cursor it carries, so a relay that rewrites a single delivered item's
+// cursor is not caught. Catching that needs a bound on how far a cursor may advance per page,
+// and every candidate bound is a number no requirement states: cursors are minted densely
+// (store.appendItem) so a per-page delta bound would be exact, except that RetentionCap
+// purges open legitimate holes whose size is governed by relay-side config the protocol does
+// not carry. It is recorded as a residual rather than invented here.
+//
+// The page is REFUSED whole rather than truncated. A relay that serves such a page is either
+// broken or hostile, and in both cases the honest outcome is a loud error the caller retries,
+// not a partial page whose remainder is silently trusted.
+func checkPageOrder(after uint64, items []Item) error {
+	prev := after
+	for i, it := range items {
+		if it.Cursor <= prev {
+			return fmt.Errorf("%w: item %d carries cursor %d, not past %d", errMailboxPageOrder, i, it.Cursor, prev)
+		}
+		prev = it.Cursor
+	}
+	return nil
 }
 
 // MailboxWait blocks SERVER-side until at least one item past cursor exists in
@@ -805,6 +844,10 @@ func (c *Conn) mailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, er
 	case r := <-ch:
 		if r.Code != "" {
 			return nil, false, errForCode(r.Code)
+		}
+		// The wait carries the same page shape as a read, so it carries the same contract.
+		if err := checkPageOrder(cursor, r.Items); err != nil {
+			return nil, false, err
 		}
 		return r.Items, r.HasMore, nil
 	case <-ctx.Done():
