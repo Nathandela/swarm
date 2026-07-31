@@ -7611,3 +7611,49 @@ it could not tell whether anything beyond the import failed once the AAR was reb
 run a gomobile cross-compile on a host several agents were working on. Both calls were right: the
 question was real, and it needed a quiet host to answer. **Three blockers remain, none of them
 Android.**
+
+---
+
+## B131 — First bring-up: a QR rendered from a real machine identity, and three blockers no audit found
+
+**2026-07-31.** The owner redirected from derivation to hardware bring-up, asking whether the audit was
+over-polishing. **It was, for that purpose, and one hour of trying to run the thing produced findings
+the derivation grind could not.**
+
+**A real QR rendered on a real terminal, from a real machine identity, for the first time in this
+project.** `swarm remote init` provisioned `noiseStatic`, `recipient`, `grantSign`, `relayAuth`,
+`routing` and epoch 1/1; `swarm remote pair` opened a rendezvous against a live relay and drew the
+symbol **on a light quiet-zone background** — which is `PB-PAIR-1`'s actual requirement, satisfied
+visibly rather than by a fence.
+
+**Three blockers, none of which any requirement derivation would have surfaced:**
+
+**1. The phone refuses a cleartext relay on a LAN IP — by design, and correctly.** B37/`PB-NET-2`
+permits `ws://` only to a **loopback IP literal**. So a first bring-up cannot point the handset at
+`ws://<LAN-IP>:8443`; the honest path is `adb reverse tcp:8443 tcp:8443`, which makes the phone's own
+`127.0.0.1` the relay and satisfies the policy rather than bypassing it. **The fence that blocks this
+is one derived today**, firing in three places.
+
+**2. The daemon's serve path does not default its own socket, lock or log.** The *client* path
+defaults all three under `StateDir` (`cmd/swarm/main.go`); the *serve* path reads
+`SWARM_DAEMON_SOCK`/`_LOCK`/`_LOG` **raw, with no fallback**, so setting only `SWARM_DAEMON_STATE`
+yields `serve: listen unix : bind: invalid argument`. **An isolated daemon needs all four.** This is a
+real asymmetry, and it is the difference between "run a second daemon beside your live one" being a
+one-liner and being a twenty-minute trace.
+
+**3. An installed daemon predating the remote protocol fails opaquely.** `/usr/local/bin/swarm` 0.6.0
+answers `pair_start` with `unknown op`. A developer with an older daemon on `PATH` gets no hint that
+the *daemon* rather than the CLI is stale.
+
+**And a stale comment worth fixing:** `internal/skeleton/pairing.go:55` calls `swarm remote init` **"a
+LATER slice"**. It exists and works. That comment sent me looking for a missing command.
+
+**Recorded operational fact:** the machine under test was supervising **149 live shim processes**, so
+the live daemon was never restarted. Isolation was achieved with a separate state dir, socket, lock
+and log — verified before and after that the 149 were untouched.
+
+**What this says about the audit.** The count stood at 110 of 146 derived when this began. **None of
+the three blockers above corresponds to a requirement**, met or unmet — they are configuration
+asymmetries, a policy interacting with a test topology, and a stale binary. **The derivation backlog
+measures whether fences hold; it does not measure whether the system can be stood up.** Both matter,
+and only one of them had been getting attention.
