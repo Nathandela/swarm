@@ -207,6 +207,29 @@ It appears in `error_taxonomy.tsv`, `mobile/relay.go:182` (`connReauthRequired`)
 change**, or `s16_ui_test.go`'s set-equality forces keeping a producer-less state. `mobile/conformance/
 s16_errorstates_test.go` ("every row reachable") is coupled and was outside the classification pass.
 
+## Follow-up: `androidx.biometric` still ships, justified by a VOID requirement
+
+`android/app/build.gradle.kts:303` still declares `androidx.biometric:biometric:1.1.0`, justified at
+`:277-300` entirely by **PB-SEC-2 (now VOID)**. `android/dependency-inventory.tsv:37` carries the same
+stale justification. **No Kotlin file imports it** — `TestB133_TheAppImportsNothingFromAndroidxBiometric`
+in `android/gate/s16_ui_test.go` fences that, so it cannot return by accident.
+
+**Attempted and deliberately backed out.** Removing the line breaks the build twice over: the
+dependency lock state (`Did not resolve 'androidx.biometric:biometric:1.1.0' which is part of the
+dependency lock state`), and then, under `--write-locks`, **dependency verification fails for 21
+artifacts**. `build.gradle.kts:133-137` prescribes the real procedure and says why it is not automatic:
+
+```
+./gradlew :app:dependencies --write-locks
+./gradlew --write-verification-metadata sha256 help
+```
+> "and REVIEW THE DIFF. The regeneration step is the point at which a changed artifact has to be
+> justified by a person."
+
+Regenerating checksum verification is a **PB-SEC-14 supply-chain action requiring human review**, not
+cleanup collateral. It is its own slice. Removing the dependency *pays* PB-SEC-14 by shrinking the
+closure — worth doing, deliberately, with the diff reviewed.
+
 ## Design decisions OWED — do not let these be resolved silently
 
 Each is a behaviour change wearing a comment change's clothes.

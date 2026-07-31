@@ -7,11 +7,13 @@ package gate
 // be a recorded decision rather than whatever someone added to a Gradle file.
 //
 // THE PHYSICAL-HANDSET GATE STAYS DEFERRED. Nothing in this file, and nothing in the Kotlin
-// tests it guards, claims coverage of a real biometric, a real camera, real FCM delivery,
-// real Doze, or hardware Keystore attestation. Those are PB-E2E-5 and PB-E2E-5 is deferred
-// under section 13. Robolectric and JVM tests model POLICY -- which state a screen renders
-// given an input -- and the last check in this file exists to keep it that way, because a UI
-// test that appears to prove a biometric prompt gated something is worse than no test at all.
+// tests it guards, claims coverage of a real camera, real FCM delivery, real Doze, or
+// hardware Keystore attestation. Those are PB-E2E-5 and PB-E2E-5 is deferred under section
+// 13. (Real biometrics left that list with their feature: ADR-007 B133 removed all phone-side
+// user authentication, so the app now imports nothing from androidx.biometric at all -- fenced
+// below.) Robolectric and JVM tests model POLICY -- which state a screen renders given an
+// input -- and the hardware-API check in this file exists to keep it that way, because a UI
+// test that appears to prove a hardware behaviour is worse than no test at all.
 
 import (
 	"os"
@@ -283,6 +285,9 @@ func TestPBPAIR3_TheScannerChoiceIsRecordedInTheADR(t *testing.T) {
 // establish. A JVM or Robolectric test that imported one would be asserting against a shadow
 // and reporting it as coverage.
 var hardwareAPIs = []string{
+	// androidx.biometric is a harder case than the rest: since ADR-007 B133 its feature does
+	// not exist, so it is forbidden EVERYWHERE, not just here -- see
+	// TestB133_TheAppImportsNothingFromAndroidxBiometric.
 	"androidx.biometric",
 	"android.hardware.camera2",
 	"androidx.camera",
@@ -305,15 +310,16 @@ const s16UIPackage = "dev/swarm/phone/ui"
 // the defect. It becomes load-bearing the moment S16 GREEN writes a screen.
 // TestS16_NoUnitTestClaimsAPhysicalHandsetProperty keeps the deferral honest.
 //
-// PB-E2E-5 -- real biometrics, a real camera, real FCM delivery, real Doze, hardware Keystore
-// attestation -- is deferred under section 13 and may NOT be reclassified as an accepted
-// limit by a test that appears to cover it. The failure mode is specific and this project has
-// hit its shape six times: a fence that guards a path production does not take. A Robolectric
-// test that drives a shadowed BiometricPrompt to "succeeded" and asserts a screen unlocked
-// has proved that the SHADOW returns what it was told to, and an auditor reading the test
-// name reads it as proof the gate works.
+// PB-E2E-5 -- a real camera, real FCM delivery, real Doze, hardware Keystore attestation --
+// is deferred under section 13 and may NOT be reclassified as an accepted limit by a test
+// that appears to cover it. (Real biometrics were on this list until ADR-007 B133 removed
+// the feature they belonged to.) The failure mode is specific and this project has hit its
+// shape six times: a fence that guards a path production does not take. A Robolectric test
+// that drives a shadowed camera capture or FCM delivery to "succeeded" has proved that the
+// SHADOW returns what it was told to, and an auditor reading the test name reads it as
+// coverage of the hardware.
 //
-// Policy tests are the right thing and are unaffected: dev.swarm.phone.keys.BiometricPolicy
+// Policy tests are the right thing and are unaffected: dev.swarm.phone.runtime.FcmPriorityPolicy
 // is a pure function of stated inputs and its test imports none of these.
 func TestS16_NoUnitTestClaimsAPhysicalHandsetProperty(t *testing.T) {
 	var hits []string
@@ -329,10 +335,40 @@ func TestS16_NoUnitTestClaimsAPhysicalHandsetProperty(t *testing.T) {
 		t.Errorf("PB-E2E-5: unit tests import platform APIs whose behaviour only a physical "+
 			"handset can establish:\n\t%s\n"+
 			"On the JVM these resolve to Robolectric shadows, so the test asserts that a shadow "+
-			"returned what the test told it to and records it as coverage of a biometric, a "+
-			"camera or an FCM delivery. PB-E2E-5 is deferred and must stay deferred; model the "+
+			"returned what the test told it to and records it as coverage of a camera or an "+
+			"FCM delivery. PB-E2E-5 is deferred and must stay deferred; model the "+
 			"POLICY (which state is rendered for which input) and leave the hardware to the "+
 			"physical gate.", strings.Join(hits, "\n\t"))
+	}
+}
+
+// TestB133_TheAppImportsNothingFromAndroidxBiometric is PB-SEC-2's confinement fence,
+// inverted and widened, and it is the STRONGER form: ADR-007 B133 removed all phone-side user
+// authentication with the code deleted, because a disabled gate that still compiles is a gate
+// someone re-enables by accident. An `import androidx.biometric` anywhere in the app module --
+// production or test, any package -- is that accident's first line, so the fence covers both
+// source sets rather than the one package the old confinement check pointed at.
+func TestB133_TheAppImportsNothingFromAndroidxBiometric(t *testing.T) {
+	var scanned int
+	var hits []string
+	for _, root := range []string{kotlinMainRoot(t), kotlinTestRoot(t)} {
+		for _, f := range kotlinFiles(t, root) {
+			scanned++
+			if strings.Contains(readFileOrFail(t, f, "ADR-007 B133"), "import androidx.biometric") {
+				hits = append(hits, mustRel(t, f))
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Fatalf("ADR-007 B133: no Kotlin files found under either source set; this fence is " +
+			"scanning nothing and its green would be vacuous")
+	}
+	if len(hits) > 0 {
+		t.Errorf("ADR-007 B133: %d file(s) import androidx.biometric:\n\t%s\n"+
+			"All phone-side user authentication was REMOVED from the product, code deleted. "+
+			"Nothing may import this API: a biometric prompt reappearing changes the security "+
+			"posture of the whole product and needs its own ADR entry before any code",
+			len(hits), strings.Join(hits, "\n\t"))
 	}
 }
 

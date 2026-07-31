@@ -24,8 +24,8 @@ package gate
 // failure shape as the fresh-install defect found earlier in this phase, which lost the entire
 // durable state on the first restart.
 //
-// WHAT IS NOT CLAIMED HERE. None of this establishes that the KEK is in a TEE or that a real
-// biometric gates it -- that is PB-E2E-5 and it stays deferred. These are existence checks on
+// WHAT IS NOT CLAIMED HERE. None of this establishes that the KEK is in a TEE or that
+// StrongBox behaves as advertised -- that is PB-E2E-5 and it stays deferred. These are existence checks on
 // the PRODUCTION PATH: whether the app has any code at all to create a phone and to keep a key
 // across a restart. They are deliberately weak checks of a strong property, and they fire on
 // the one case that matters, which is zero.
@@ -260,7 +260,7 @@ func TestS16_TheAppConstructsThePhone(t *testing.T) {
 // TestS16_TheKeystoreProviderLivesBesideItsPolicy is a placement check, and it is here because
 // the alternative placement is the one that silently reintroduces the defect.
 //
-// dev.swarm.phone.keys already holds the POLICY (BiometricPolicy, Provisioning, Custody) and
+// dev.swarm.phone.keys already holds the POLICY (Provisioning, Custody) and
 // its tests. A provider written somewhere else -- an Activity, an Application subclass -- is
 // one the policy tests do not see, and the first thing it will do is hold the KEK in a field.
 func TestS16_TheKeystoreProviderLivesBesideItsPolicy(t *testing.T) {
@@ -280,6 +280,7 @@ func TestS16_TheKeystoreProviderLivesBesideItsPolicy(t *testing.T) {
 		"the sealed blobs must sit beside the policy that governs them -- a provider written "+
 		"into an Activity or the Application subclass is one none of the PB-KEY-2/PB-KEY-7/"+
 		"PB-KEY-8 tests can see, and the first thing an unwatched provider does is cache the "+
-		"KEK in a field, which is exactly what makes the content tier's biometric gate cosmetic",
+		"KEK in a field, which quietly replaces Keystore sealing at rest with a copy in "+
+		"process memory",
 		mustRel(t, keysDir))
 }

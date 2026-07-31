@@ -197,3 +197,87 @@ func goListDeps(t *testing.T, root, pkg string) []string {
 // search for both the raw bytes and this form, so a JSON blob cannot hide a key behind its
 // own encoding.
 func base64Std(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// ---------------------------------------------------------------------------
+// Reading Kotlin as CODE and not as prose.
+// ---------------------------------------------------------------------------
+
+// kotlinCodeOnly strips `//` line comments and `/* */` block comments, leaving string literals
+// intact.
+//
+// IT EXISTS BECAUSE A FENCE IN THIS PACKAGE WAS ONCE DEFEATED BY ITS OWN DOCUMENTATION. The
+// reachability checks in s20_pbsec2_peruse_test.go (deleted with their subject under ADR-007
+// B133) asked whether a symbol was REFERENCED from production Kotlin -- and wrongly reported
+// two symbols REACHED, because a KDoc comment elsewhere in the module named them in a
+// sentence. A fence that a comment can satisfy is a fence that the next person to write a
+// thorough comment turns off, silently, and that is the same failure class the fence is
+// pointed at: something that reads as coverage and is not.
+//
+// The scan is a small state machine rather than a regexp because the two hazards pull opposite
+// ways: `//` inside a string literal is code, and a quote inside a comment is prose. Getting
+// either wrong changes what the check can see.
+func kotlinCodeOnly(src string) string {
+	var out strings.Builder
+	out.Grow(len(src))
+	const (
+		code = iota
+		lineComment
+		blockComment
+		str
+		charLit
+	)
+	state := code
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		next := byte(0)
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		switch state {
+		case code:
+			switch {
+			case c == '/' && next == '/':
+				state = lineComment
+				i++
+			case c == '/' && next == '*':
+				state = blockComment
+				i++
+			case c == '"':
+				state = str
+				out.WriteByte(c)
+			case c == '\'':
+				state = charLit
+				out.WriteByte(c)
+			default:
+				out.WriteByte(c)
+			}
+		case lineComment:
+			if c == '\n' {
+				state = code
+				out.WriteByte(c)
+			}
+		case blockComment:
+			if c == '*' && next == '/' {
+				state = code
+				i++
+			} else if c == '\n' {
+				// Kept so reported line numbers and the shape of the file survive.
+				out.WriteByte(c)
+			}
+		case str, charLit:
+			out.WriteByte(c)
+			// A backslash escapes whatever follows, including the closing quote.
+			if c == '\\' {
+				if i+1 < len(src) {
+					out.WriteByte(next)
+					i++
+				}
+				continue
+			}
+			if (state == str && c == '"') || (state == charLit && c == '\'') {
+				state = code
+			}
+		}
+	}
+	return out.String()
+}
