@@ -27,6 +27,7 @@ package gate
 // property rather than a habit.
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -207,7 +208,7 @@ func s22bDesignTypeScale(t *testing.T) map[string]s22bTypeSpec {
 			continue
 		}
 		spec, err := s22bReadTypeSpec(sel, rule, tokens)
-		if err == os.ErrNotExist {
+		if errors.Is(err, os.ErrNotExist) {
 			continue // declares no size of its own: a container, not a text style
 		}
 		if err != nil {
@@ -437,11 +438,12 @@ func TestPBDS3_TheSubstitutionIsTheOneTheADRRecords(t *testing.T) {
 		filepath.Join(repoRoot(t), filepath.FromSlash("docs/adr/ADR-007-remote-access.md")),
 		"PB-DS-3")
 
-	entry := adr[strings.Index(adr, "## B134."):]
-	if !strings.Contains(adr, "## B134.") {
+	start := strings.Index(adr, "## B134.")
+	if start < 0 {
 		t.Fatalf("PB-DS-3: ADR-007 has no B134 entry; the font decision has no record and the " +
 			"substitution table in this file would be a choice made in a test")
 	}
+	entry := adr[start:]
 	for token, family := range s22bFontSubstitution {
 		if !strings.Contains(entry, "`"+family+"`") {
 			t.Errorf("PB-DS-3: ADR-007 B134 does not record %q as the substitute for %s. The "+
@@ -457,23 +459,41 @@ func TestPBDS3_TheSubstitutionIsTheOneTheADRRecords(t *testing.T) {
 
 // TestPBDS3_NoFontIsBundled is the other half of the decision, and the only half with a
 // mechanical form: "zero bundled assets".
+//
+// IT SCANS res/ AND assets/ WHOLE rather than res/font/ alone, and that is the difference
+// between this assertion and a vacuous one. `res/font/` does not exist, so a scan pointed at it
+// walks nothing, finds nothing, and is green -- and would be equally green if the walk were
+// broken, if the extension list were empty, or if a font were sitting one directory away. Walking
+// the trees that DO have files gives the check a population to be right about, and the file count
+// below is asserted so an empty walk reports itself.
 func TestPBDS3_NoFontIsBundled(t *testing.T) {
 	roots := []string{
-		filepath.Join(appModule(t), "src", "main", "res", "font"),
+		filepath.Join(appModule(t), "src", "main", "res"),
 		filepath.Join(appModule(t), "src", "main", "assets"),
 	}
+	// A binary face anywhere, or ANYTHING under res/font/ -- that directory exists for exactly
+	// one purpose, so an XML family definition in it counts as a bundled font while the identical
+	// extension under res/values/ does not.
+	binary := map[string]bool{".ttf": true, ".otf": true, ".ttc": true, ".woff": true, ".woff2": true}
+	fontDir := string(filepath.Separator) + "font" + string(filepath.Separator)
+
 	var found []string
+	walked := 0
 	for _, root := range roots {
 		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info == nil || info.IsDir() {
-				return nil //nolint:nilerr // a missing directory IS the passing state
+				return nil //nolint:nilerr // a missing assets/ IS part of the passing state
 			}
-			switch strings.ToLower(filepath.Ext(path)) {
-			case ".ttf", ".otf", ".ttc", ".woff", ".woff2", ".xml":
+			walked++
+			if binary[strings.ToLower(filepath.Ext(path))] || strings.Contains(path, fontDir) {
 				found = append(found, mustRel(t, path))
 			}
 			return nil
 		})
+	}
+	if walked == 0 {
+		t.Fatalf("PB-DS-3: walked no files under %s; a clean report would mean nothing",
+			mustRel(t, roots[0]))
 	}
 	sort.Strings(found)
 	if len(found) > 0 {
@@ -482,6 +502,7 @@ func TestPBDS3_NoFontIsBundled(t *testing.T) {
 			"the box-drawing residual, and taking it is a decision that belongs in ADR-007 B134 "+
 			"rather than in a resource directory.", strings.Join(found, "\n\t"))
 	}
+	t.Logf("PB-DS-3: %d files under res/ and assets/, %d of them fonts", walked, len(found))
 }
 
 // TestPBDS3_EveryMonoRuleBecomesAMonoStyle is the criterion's exact words -- "a gate asserts the

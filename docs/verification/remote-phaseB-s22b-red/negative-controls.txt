@@ -56,3 +56,23 @@ Each block restores the file before the next. Final line proves the tree is gree
 
 ### restored
 ok  	github.com/Nathandela/swarm/android/gate	0.893s
+
+================================================================
+Robolectric half. The Go gate compares FILES; these prove the other chain -- stage the
+artifact, let aapt compile the resource, let Android merge the table, resolve it at runtime --
+fails when the resource and the design disagree. Run together, both mutations applied at once.
+
+### K1. type.xml Label.Tab textSize 9.5sp -> 10sp
+FAIL the frame constants resolve to the design's own frame
+FAIL every text style resolves to its design rule
+     java.lang.AssertionError: TextAppearance.Swarm.Label.Tab (origin `.ptabs div`) textSize
+     expected:<9.5> but was:<10.0>
+
+### K2. dimens.xml swarm_screen_bottom 76dp -> 78dp
+FAIL the frame constants resolve to the design's own frame
+     java.lang.AssertionError: R.dimen.swarm_screen_bottom did not resolve to the design's own
+     value. The frame is the one part of the layout the scale does not govern -- 54/76/74 are
+     not on a 2dp grid -- so it is the part most likely to be retyped from prose.
+
+### restored
+230 tests, 0 failures, 0 errors
