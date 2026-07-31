@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -310,8 +311,38 @@ func TestCommandBridge_InboundHighWaterKeyedPerEpoch(t *testing.T) {
 	b3 := NewCommandBridge(CommandBridgeConfig{
 		Mailbox: rl, Forwarder: fwd3, Key: key8, EpochID: 8, ReplyTarget: "phone", Inbound: st,
 	})
-	if _, err := b3.PollOnce(context.Background()); err != nil {
-		t.Fatalf("post-rotation PollOnce: %v", err)
+	// THE RETAINED EPOCH-7 FRAMES ARE STILL THERE, and this poll must SAY SO.
+	//
+	// This relay never purges (that is what retainingRelay is for), and the epoch-7 poll above
+	// refused its three frames -- so their cursors were never consumed and they are served
+	// again here, now undecryptable under key8. The bridge used to swallow them: it took the
+	// batch maximum cursor from every item BEFORE handle(), which stepped past them silently
+	// and is exactly the defect that let SIX BYTES of relay-authored garbage move the durable
+	// resume point. The poll therefore reports what it could not open, forwards the epoch-8
+	// command anyway, and lands the resume point on the item it actually handled.
+	//
+	// The refusal is asserted by SHAPE, not identity: the failure is the AEAD's own
+	// ("chacha20poly1305: message authentication failed") and carries no sentinel this package
+	// may match on -- internal/remote/crypto is frozen.
+	_, err = b3.PollOnce(context.Background())
+	if err == nil {
+		t.Fatalf("post-rotation PollOnce reported no error: the three retained epoch-7 frames " +
+			"cannot open under the epoch-8 key and must be surfaced, not stepped over")
+	}
+	for _, cursor := range []string{"cursor 4", "cursor 5", "cursor 6"} {
+		if !strings.Contains(err.Error(), cursor) {
+			t.Fatalf("post-rotation PollOnce error %q does not name %s: every retained frame the "+
+				"bridge could not open must appear in the aggregate", err, cursor)
+		}
+	}
+	if strings.Contains(err.Error(), "cursor 10") {
+		t.Fatalf("post-rotation PollOnce error %q names cursor 10, the epoch-8 command it "+
+			"forwarded successfully", err)
+	}
+	if got := b3.Cursor(); got != 10 {
+		t.Fatalf("post-rotation Cursor() = %d, want 10: the resume point is the highest item the "+
+			"bridge HANDLED, so the unopenable frames are stepped over by the one that opened -- "+
+			"never adopted from an item that failed", got)
 	}
 	if len(fwd3.seen) != 1 || fwd3.seen[0].OperationID != "op-e8-1" {
 		t.Fatalf("post-rotation forwarded %+v, want exactly [op-e8-1]: the persisted high-water must be "+
