@@ -107,6 +107,19 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // with the design source.
     from(rootProject.layout.projectDirectory.file("design-tokens.tsv"))
     from(rootProject.layout.projectDirectory.dir("..").file("internal/design/tokens.json"))
+    // PB-DS-1..4 (S22b): the design ARTIFACT and the style-to-selector join, for the same
+    // reason and by the same arrangement. tokens.json pins 31 tokens; it carries no spacing,
+    // no text size and no line height, so the origin for the spacing and typography scales is
+    // the artifact tokens.json itself names as its "source". Staging it lets the Robolectric
+    // assertions compute their expected values from the DESIGN -- a test that recorded 27sp
+    // because type.xml says 27sp would certify that the app renders whatever type.xml says,
+    // which is precisely how colors.xml drifted to a third palette with its own test green.
+    //
+    // type.xml is staged beside it because the join lives in that file, as a machine-read
+    // `<!-- origin: ... -->` comment above each style. Reading the same file aapt compiles
+    // means the text half and the resolved half cannot be checking two different mappings.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/research/remote-control-design-directions.html"))
+    from(layout.projectDirectory.file("src/main/res/values/type.xml"))
     into(policyTestResourceDir)
 }
 

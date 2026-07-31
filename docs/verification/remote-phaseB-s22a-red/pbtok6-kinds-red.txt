@@ -1,0 +1,56 @@
+PB-TOK-6 RED, STAGE 1 of 2 -- the origin states no kinds.
+Command: go test ./internal/design/... -run TestPBTOK6
+Date: 2026-07-31T21:43:51Z  HEAD: 9b90704
+
+TestPBTOK6_TheKindCheckCanActuallyFail is absent from the output because it PASSES: it is
+the negative control for the classifier, in the style of TestPBTOK1_TheComparisonCanActuallyFail,
+so it is green now and stays green. Stage 2 below records the mislabelling branch firing.
+
+--- FAIL: TestPBTOK6_EveryTokenDeclaresAKindAndTheKindMatchesTheValue (0.01s)
+    tokens_test.go:301: PB-TOK-6: tokens.json declares no "kinds" object. Every reader today infers a token's kind from the shape of its value, which files rgba(8,9,10,0.88) under "not a colour" and cannot tell 0.05 from 650. The origin must say what a token IS.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/design	0.669s
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-6 RED, STAGE 2 of 2 -- the kind assertions discriminating, with values.
+Command: go test ./internal/design/... -run TestPBTOK6, over a tokens.json in which two
+kinds have been mutated (--p-dot-r dimen -> effect, --p-hero color -> font) and then
+reverted. Recorded because stage 1 only proves the "kinds" object was absent; it does not
+prove any of the three branches below can fire.
+Date: 2026-07-31T21:44:25Z
+
+--- FAIL: TestPBTOK6_EveryTokenDeclaresAKindAndTheKindMatchesTheValue (0.01s)
+    tokens_test.go:350: PB-TOK-6: token --p-dot-r = "4px" is typed "effect" but its value is a valid dimen. "effect" is the kind with no converter; a token parked there because a converter was inconvenient is exactly the silent skip PB-TOK-6 removes.
+    tokens_test.go:357: PB-TOK-6: token --p-hero = "#53ce7c" is typed "font", but that value has the shape of color. The declared kind and the value disagree, so whichever converter runs will produce a resource nobody designed.
+    tokens_test.go:365: PB-TOK-6/PB-TOK-5: 15 tokens are typed "color"; the Substrate skin declares 16. PB-TOK-5's whole scope is those 16 reaching the app, so a different count means either a colour has been retyped or the skin changed without a spec change.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/design	0.492s
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-6 RED, the GATE half -- "a token whose kind has no converter fails rather than
+being skipped", and the join-vs-origin kind disagreement, both firing.
+Command: go test ./android/gate/ -run 'TestPBTOK1_TheAndroidTheme|TestPBTOK6'
+over a design-tokens.tsv with two rows appended (since reverted):
+
+    p-card-fx  swarm_card_fx  effect   <- a real token, typed honestly, whose kind has no
+                                          converter. The requirement says this FAILS.
+    p-hair     swarm_hairline dimen    <- the join disagreeing with the origin, which is the
+                                          case the old value-sniffing gate had no way to
+                                          notice at all.
+Date: 2026-07-31T21:59:42Z
+
+--- FAIL: TestPBTOK1_TheAndroidThemeColoursAreTheDesignTokens (0.01s)
+    s16_tokens_test.go:343: PB-TOK-6: design-tokens.tsv:50 maps --p-card-fx, whose kind "effect" has no converter in this gate.
+        The old behaviour here was to refuse any token without an ARGB form, which is why 15 of 31 tokens could never ship. The replacement is not to skip them: a kind reaching a res/values file needs a converter that produces an exact value or names its substitute, and "effect" has neither yet. Converters exist for: color, dimen.
+    s16_tokens_test.go:333: design-tokens.tsv:51: the join calls --p-hair a "dimen" and internal/design/tokens.json calls it a "color". The origin is upstream, so this row would convert the token with the wrong converter and land a resource that looks right and is not.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.749s
+FAIL
+
+go test exit status: 1

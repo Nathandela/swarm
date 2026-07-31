@@ -11,10 +11,44 @@
       enforces it in both directions: a divergent value fails, and a colour resource with no
       row fails too, because that is how "single origin" decays into "origin plus a few extras".
 
+      PB-TOK-5 (S22a): all sixteen colours, not three. The three that were here shipped through
+      a join built for the whole palette; the other thirteen (every surface, every hairline,
+      every status colour) had no Android representation at all, so no screen could consume
+      them and the fence around them was green because there was nothing to disagree with.
+
       Do not edit a value here. Edit internal/design/tokens.json, which is itself drift-guarded
       against the design source (PB-TOK-2), and the gate will require this file to follow.
+
+      Do not add a colour here either. A <color> with no row in android/design-tokens.tsv fails
+      the gate by design. If a screen needs a colour this file does not have, it is either a
+      token (add it to the origin) or a DERIVATION of one (internal/design/derive.go, PB-TOK-7),
+      never a literal typed at the point of use.
+
+      Each row is annotated with the token it is, so this file can be read without the join open
+      beside it. The join is still the authority; these are annotations, not a second copy.
+      The tokens' real names carry a leading double hyphen (they are CSS custom properties);
+      it is elided in the annotations because XML forbids that sequence inside a comment.
     -->
-    <color name="swarm_background">#FF08090A</color>
-    <color name="swarm_text_primary">#FFF7F8F8</color>
-    <color name="swarm_text_secondary">#FF8A8F98</color>
+    <color name="swarm_background">#FF08090A</color>        <!-- p-bg -->
+    <color name="swarm_surface_card">#FF0F1011</color>      <!-- p-card -->
+    <color name="swarm_surface_elevated">#FF141516</color>  <!-- p-elev -->
+    <color name="swarm_surface_well">#FF060708</color>      <!-- p-well -->
+    <color name="swarm_hairline">#FF23252A</color>          <!-- p-hair -->
+    <color name="swarm_text_primary">#FFF7F8F8</color>      <!-- p-ink -->
+    <color name="swarm_text_secondary">#FF8A8F98</color>    <!-- p-ink2 -->
+    <color name="swarm_text_tertiary">#FF62666D</color>     <!-- p-ink3 -->
+    <color name="swarm_hero">#FF53CE7C</color>              <!-- p-hero -->
+    <color name="swarm_hero_ink">#FF06150C</color>          <!-- p-hero-ink -->
+    <color name="swarm_state_attention">#FFF1A10D</color>   <!-- p-att -->
+    <color name="swarm_state_working">#FF00C2D7</color>     <!-- p-work -->
+    <color name="swarm_state_ok">#FF4CC38A</color>          <!-- p-ok -->
+    <color name="swarm_state_error">#FFFF6369</color>       <!-- p-err -->
+    <!--
+      swarm_cta_background / swarm_cta_ink hold the same bytes as swarm_hero / swarm_hero_ink
+      TODAY. They are separate resources on purpose: p-cta-bg and p-cta-ink are distinct tokens
+      that happen to be value-aliases, and collapsing them here would make breaking the alias a
+      refactor of every CTA instead of a one-line edit to the origin.
+    -->
+    <color name="swarm_cta_background">#FF53CE7C</color>    <!-- p-cta-bg -->
+    <color name="swarm_cta_ink">#FF06150C</color>           <!-- p-cta-ink -->
 </resources>

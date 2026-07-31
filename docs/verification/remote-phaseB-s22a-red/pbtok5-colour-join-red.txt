@@ -1,0 +1,45 @@
+PB-TOK-5 / PB-TOK-6 (gate half) RED -- the widened, kind-dispatching gate against the
+3-row join and the 3-colour colors.xml that exist today.
+Command: go test ./android/gate/ -run TestPBTOK
+Date: 2026-07-31T21:47:41Z  HEAD: 9b90704
+
+Read the first three lines carefully: the join has only THREE columns, so the gate reads
+the note column where the kind column should be and reports the note as the declared kind.
+That is the correct failure -- the table has no kind column at all yet.
+
+TestPBTOK6_AKindWithNoConverterFailsTheGate, TestPBTOK1_TheComparisonCanActuallyFail and
+TestPBTOK6_TheDimenConverterCanActuallyFail are absent from the output because they PASS:
+they are the negative controls, green now and green after, in the style the file already
+established. Their job is to fail if the comparators are ever weakened.
+
+--- FAIL: TestPBTOK1_TheAndroidThemeColoursAreTheDesignTokens (0.01s)
+    s16_tokens_test.go:318: design-tokens.tsv:21: the join calls --p-bg a "The window background. This is the value that was wrong: colors.xml declared #FF101114 against the origin's #08090a and called it a placeholder." and internal/design/tokens.json calls it a "color". The origin is upstream, so this row would convert the token with the wrong converter and land a resource that looks right and is not.
+    s16_tokens_test.go:318: design-tokens.tsv:22: the join calls --p-ink a "Primary text. Also previously divergent (#FFE6E8EB against #f7f8f8)." and internal/design/tokens.json calls it a "color". The origin is upstream, so this row would convert the token with the wrong converter and land a resource that looks right and is not.
+    s16_tokens_test.go:318: design-tokens.tsv:23: the join calls --p-ink2 a "Secondary text: labels, timestamps, the need summary under a session row." and internal/design/tokens.json calls it a "color". The origin is upstream, so this row would convert the token with the wrong converter and land a resource that looks right and is not.
+    s16_tokens_test.go:388: PB-TOK-1: 3 <color> resource(s) in colors.xml have no row in design-tokens.tsv and therefore no origin:
+        	swarm_background
+        	swarm_text_primary
+        	swarm_text_secondary
+--- FAIL: TestPBTOK5_EveryColourTokenReachesTheApp (0.00s)
+    s16_tokens_test.go:436: PB-TOK-5: 13 of 16 colour tokens have no row in design-tokens.tsv, so they have no Android representation at all:
+        	--p-att = #f1a10d
+        	--p-card = #0f1011
+        	--p-cta-bg = #53ce7c
+        	--p-cta-ink = #06150c
+        	--p-elev = #141516
+        	--p-err = #ff6369
+        	--p-hair = #23252a
+        	--p-hero = #53ce7c
+        	--p-hero-ink = #06150c
+        	--p-ink3 = #62666d
+        	--p-ok = #4cc38a
+        	--p-well = #060708
+        	--p-work = #00c2d7
+        The join is correct and under-fed. A token pinned against the design source that no screen can consume is a token that has not shipped, and the fence around it is green because there is nothing on the other side to disagree with.
+    s16_tokens_test.go:457: PB-TOK-5: --p-cta-bg has no row, and it holds the same value as --p-hero today. The mapping must still name it separately: a future skin can break the alias, and a join that deduplicated by value would not notice.
+    s16_tokens_test.go:457: PB-TOK-5: --p-cta-ink has no row, and it holds the same value as --p-hero-ink today. The mapping must still name it separately: a future skin can break the alias, and a join that deduplicated by value would not notice.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.728s
+FAIL
+
+go test exit status: 1

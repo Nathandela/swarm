@@ -1,0 +1,52 @@
+=== RUN   TestPBDS1_TheSpacingScaleIsDeclared
+    s22b_spacing_test.go:152: PB-DS-1: android/app/src/main/res/values/dimens.xml does not exist. The requirement's criterion is that this file carries the declared spacing scale (2/4/6/8/10/12/14/16/18 dp plus 24dp), the three frame constants and PB-DS-4's four radii. Today the app's entire spatial output is `setPadding(24)` in raw PIXELS, which renders at 8dp on a 3x handset.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/dimens.xml: no such file or directory
+--- FAIL: TestPBDS1_TheSpacingScaleIsDeclared (0.01s)
+=== RUN   TestPBDS1_TheFrameConstantsAreTheDesignsOwn
+    s22b_spacing_test.go:208: PB-DS-1: android/app/src/main/res/values/dimens.xml does not exist. The requirement's criterion is that this file carries the declared spacing scale (2/4/6/8/10/12/14/16/18 dp plus 24dp), the three frame constants and PB-DS-4's four radii. Today the app's entire spatial output is `setPadding(24)` in raw PIXELS, which renders at 8dp on a 3x handset.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/dimens.xml: no such file or directory
+--- FAIL: TestPBDS1_TheFrameConstantsAreTheDesignsOwn (0.00s)
+=== RUN   TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale
+    s22b_spacing_test.go:334: PB-DS-1 drift ledger over 14 distinct Substrate spacing values, worst 1dp:
+        	5->4 (-1)
+        	7->8 (+1)
+        	9->8 (-1)
+        	11->10 (-1)
+        	13->12 (-1)
+        	15->14 (-1)
+--- PASS: TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale (0.00s)
+=== RUN   TestPBDS1_TheAbsorptionLedgerCanActuallyFail
+--- PASS: TestPBDS1_TheAbsorptionLedgerCanActuallyFail (0.00s)
+=== RUN   TestPBDS1_NoRawPixelPaddingSurvives
+    s22b_spacing_test.go:408: PB-DS-1: android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt declares `const val PADDING` as a bare number. A layout dimension written as an Int is in PIXELS, and pixels are not a unit any design states: the constant this replaces rendered at 8dp on a 3x handset and at 24dp on a 1x one. Every spacing value comes from res/values/dimens.xml.
+--- FAIL: TestPBDS1_NoRawPixelPaddingSurvives (0.02s)
+=== RUN   TestPBDS4_TheRadiiAreTheRadiusTokens
+    s22b_spacing_test.go:450: PB-DS-1: android/app/src/main/res/values/dimens.xml does not exist. The requirement's criterion is that this file carries the declared spacing scale (2/4/6/8/10/12/14/16/18 dp plus 24dp), the three frame constants and PB-DS-4's four radii. Today the app's entire spatial output is `setPadding(24)` in raw PIXELS, which renders at 8dp on a 3x handset.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/dimens.xml: no such file or directory
+--- FAIL: TestPBDS4_TheRadiiAreTheRadiusTokens (0.00s)
+=== RUN   TestPBDS4_TheDotRadiusTokenIsNotTranscribedAsARadius
+    s22b_spacing_test.go:540: PB-DS-4: --p-dot-r = 4px on a 7x7px box; 2r = 8 >= 7, so the corner is clamped and the dot is a full circle. The literal 4 is unreachable.
+    s22b_spacing_test.go:546: PB-DS-1: android/app/src/main/res/values/dimens.xml does not exist. The requirement's criterion is that this file carries the declared spacing scale (2/4/6/8/10/12/14/16/18 dp plus 24dp), the three frame constants and PB-DS-4's four radii. Today the app's entire spatial output is `setPadding(24)` in raw PIXELS, which renders at 8dp on a 3x handset.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/dimens.xml: no such file or directory
+--- FAIL: TestPBDS4_TheDotRadiusTokenIsNotTranscribedAsARadius (0.00s)
+=== RUN   TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally
+    s22b_type_test.go:233: PB-DS-2: android/app/src/main/res/values/type.xml does not exist. The criterion is that it defines TextAppearance.Swarm.* for all 18 product text styles, each carrying size, weight, tracking, family and line-height -- rather than six attributes re-specified per call site. The app expresses zero of them today.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/type.xml: no such file or directory
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.00s)
+=== RUN   TestPBDS2_NoTextStyleCarriesAColour
+    s22b_type_test.go:387: PB-DS-2: android/app/src/main/res/values/type.xml does not exist. The criterion is that it defines TextAppearance.Swarm.* for all 18 product text styles, each carrying size, weight, tracking, family and line-height -- rather than six attributes re-specified per call site. The app expresses zero of them today.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/type.xml: no such file or directory
+--- FAIL: TestPBDS2_NoTextStyleCarriesAColour (0.00s)
+=== RUN   TestPBDS2_TheDocChromeExclusionIsStillTrue
+--- PASS: TestPBDS2_TheDocChromeExclusionIsStillTrue (0.00s)
+=== RUN   TestPBDS3_TheSubstitutionIsTheOneTheADRRecords
+--- PASS: TestPBDS3_TheSubstitutionIsTheOneTheADRRecords (0.01s)
+=== RUN   TestPBDS3_NoFontIsBundled
+--- PASS: TestPBDS3_NoFontIsBundled (0.00s)
+=== RUN   TestPBDS3_EveryMonoRuleBecomesAMonoStyle
+    s22b_type_test.go:495: PB-DS-2: android/app/src/main/res/values/type.xml does not exist. The criterion is that it defines TextAppearance.Swarm.* for all 18 product text styles, each carrying size, weight, tracking, family and line-height -- rather than six attributes re-specified per call site. The app expresses zero of them today.
+        	open /Users/Nathan/Code/swarm/android/app/src/main/res/values/type.xml: no such file or directory
+--- FAIL: TestPBDS3_EveryMonoRuleBecomesAMonoStyle (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.775s
+FAIL

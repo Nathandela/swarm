@@ -1,0 +1,93 @@
+PB-TOK-7 RED, STAGE 1 of 2 -- the state of the world before any implementation.
+Command: go test ./internal/design/... -run TestPBTOK7
+Date: 2026-07-31T21:40:26Z  HEAD: 9b90704
+
+There is no blend function in the repository, so the package does not build. Stage 2 below
+records the assertions FAILING WITH VALUES against a first implementation, because a build
+error proves only that a symbol is absent, not that any assertion can discriminate.
+
+# github.com/Nathandela/swarm/internal/design [github.com/Nathandela/swarm/internal/design.test]
+internal/design/derive_test.go:82:23: undefined: Derivation
+internal/design/derive_test.go:83:20: undefined: Derivations
+internal/design/derive_test.go:113:17: undefined: ParseColor
+internal/design/derive_test.go:117:13: undefined: RGBA
+internal/design/derive_test.go:118:17: undefined: Transparent
+internal/design/derive_test.go:120:12: undefined: RGBA
+internal/design/derive_test.go:122:18: undefined: ParseColor
+internal/design/derive_test.go:127:12: undefined: RGBA
+internal/design/derive_test.go:153:11: undefined: RGBA
+internal/design/derive_test.go:239:16: undefined: RGBA
+internal/design/derive_test.go:153:11: too many errors
+FAIL	github.com/Nathandela/swarm/internal/design [build failed]
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-7 RED, STAGE 2 of 2 -- the assertions failing WITH VALUES.
+Command: go test ./internal/design/... -run TestPBTOK7
+Date: 2026-07-31T21:42:13Z
+
+internal/design/derive.go now exists and Mix interpolates UN-PREMULTIPLIED -- the
+plausible-looking first implementation, and the one the requirement warns about. It gets
+the opaque-over-opaque case right (attention-row-border passes) and every mix with
+transparent wrong, because it blends toward transparent's nominal black instead of
+scaling alpha. This is recorded so the evidence shows the assertions discriminating
+between two implementations, not merely reporting an absent symbol.
+
+--- FAIL: TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens (0.01s)
+    --- FAIL: TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens/deny-fill (0.00s)
+        derive_test.go:106: PB-TOK-7: deny-fill resolves to #21210D0E, the design artifact renders #21FF6369.
+            	color-mix(in srgb, --p-err 13%, transparent) over the tokens in tokens.json
+        derive_test.go:135: PB-TOK-7: deny-fill: Mix produced #21210D0E, the longhand CSS arithmetic produces #21FF6369. Two implementations of one rule disagree, so at least one of them is wrong and the artifact's #21FF6369 cannot be trusted to come from the tokens.
+    --- FAIL: TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens/needs-input-dot-glow (0.00s)
+        derive_test.go:106: PB-TOK-7: needs-input-dot-glow resolves to #B3A97109, the design artifact renders #B3F1A10D.
+            	color-mix(in srgb, --p-att 70%, transparent) over the tokens in tokens.json
+        derive_test.go:135: PB-TOK-7: needs-input-dot-glow: Mix produced #B3A97109, the longhand CSS arithmetic produces #B3F1A10D. Two implementations of one rule disagree, so at least one of them is wrong and the artifact's #B3F1A10D cannot be trusted to come from the tokens.
+    --- FAIL: TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens/working-dot-glow (0.00s)
+        derive_test.go:106: PB-TOK-7: working-dot-glow resolves to #8C006B76, the design artifact renders #8C00C2D7.
+            	color-mix(in srgb, --p-work 55%, transparent) over the tokens in tokens.json
+        derive_test.go:135: PB-TOK-7: working-dot-glow: Mix produced #8C006B76, the longhand CSS arithmetic produces #8C00C2D7. Two implementations of one rule disagree, so at least one of them is wrong and the artifact's #8C00C2D7 cannot be trusted to come from the tokens.
+--- FAIL: TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha (0.00s)
+    derive_test.go:177: PB-TOK-7: 50% white over transparent produced RGB (128,128,128), want (255,255,255). CSS interpolates color-mix in PREMULTIPLIED space: transparent contributes no colour, only alpha. An implementation that blends toward transparent's nominal black darkens every glow and tint in the design and still looks like a plausible colour.
+--- FAIL: TestPBTOK7_ChangingABaseTokenMovesTheDerivedValue (0.00s)
+    derive_test.go:279: PB-TOK-7: deny-fill stayed #21210D0E after --p-err moved from #ff6369 to #FF6368. The derived value does not depend on the token it claims to be derived from, so it is a hard-coded colour with a function wrapped round it.
+    derive_test.go:279: PB-TOK-7: working-dot-glow stayed #8C006B76 after --p-work moved from #00c2d7 to #00C2D6. The derived value does not depend on the token it claims to be derived from, so it is a hard-coded colour with a function wrapped round it.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/design	0.643s
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-7 RED, the Android half -- the literal scan firing end to end.
+Command: go test ./android/gate/ -run 'TestPBTOK7|TestPBTOK1_TheAndroidTheme'
+Date: 2026-07-31T21:53:52Z
+
+TestPBTOK7_NoShippedLiteralIsADerivationsOutput passes over the tree as it stands, because
+nothing in the app is styled at all yet -- there is nothing to have transcribed. A fence that
+is green on an empty subject proves nothing, so it is recorded here firing against a
+deliberately injected transcription (since reverted): one extra row in colors.xml,
+
+    <color name="swarm_attention_row_border">#6D5220</color>
+
+which is the obvious thing to write after reading the resolved hex in the requirements.
+PB-TOK-1 also fires here, because a <color> resource with no row has no origin either. That
+is a coincidence of the injection site, NOT coverage: PB-TOK-1 sees this one only because it
+landed as a named <color>. The same literal in a drawable or in Kotlin is invisible to the
+PB-TOK-1 join -- #6D5220 is not any token's value, so no row would ever have named it -- and
+the PB-TOK-7 scan is the only thing that reaches it.
+
+--- FAIL: TestPBTOK1_TheAndroidThemeColoursAreTheDesignTokens (0.02s)
+    s16_tokens_test.go:388: PB-TOK-1: 1 <color> resource(s) in colors.xml have no row in design-tokens.tsv and therefore no origin:
+        	swarm_attention_row_border
+--- FAIL: TestPBTOK7_NoShippedLiteralIsADerivationsOutput (0.03s)
+    s22_derived_test.go:150: PB-TOK-7: android/app/src/main/res/values/colors.xml:52 carries the literal #6D5220, which is the output of the derivation "attention-row-border" -- color-mix(in srgb, --p-att 36%, --p-hair).
+        	Site in the design: .prow.attention border-color -- the NeedsInput row's warmed hairline
+        A derived colour is a FUNCTION of a token, so transcribing its resolved value pins today's answer to a question the origin is still allowed to change: edit internal/design/tokens.json and this literal keeps rendering the old design, silently, with every existing fence green. PB-TOK-1's join cannot see it either -- #6D5220 is not any token's value, so no row would ever have named it.
+        Compute it instead: internal/design.Derivations() resolves it from the staged tokens.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.793s
+FAIL
+
+go test exit status: 1

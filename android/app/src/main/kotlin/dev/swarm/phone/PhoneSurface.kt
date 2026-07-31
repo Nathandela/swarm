@@ -262,7 +262,12 @@ class PhoneSurface(
         addView(
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(PADDING, PADDING, PADDING, PADDING)
+                // PB-DS-1. This was `setPadding(PADDING, ...)` with `PADDING = 24` -- raw PIXELS,
+                // which is ~8dp on a 3x handset, and it was the ENTIRE spatial output of the app.
+                // The scale in res/values/dimens.xml is the only place a spacing value comes from
+                // now; 24dp is its top step.
+                val pad = resources.getDimensionPixelSize(R.dimen.swarm_space_24)
+                setPadding(pad, pad, pad, pad)
                 layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
                 for (child in listOf(
                     status, notice, pairing.root, peekTitle, peek, lease,
@@ -740,7 +745,6 @@ class PhoneSurface(
 
         const val LAUNCH_RETRYABLE = " This one is worth trying again shortly."
 
-        const val PADDING = 24
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
     }

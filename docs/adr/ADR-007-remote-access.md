@@ -7970,11 +7970,27 @@ form. Decision: `sans-serif` and `monospace`, zero bundled assets. `--p-display-
 because `android:textFontWeight` resolves against the platform's variable Roboto at API 33, which
 `minSdk` guarantees.
 
-**Recorded residual:** Android's `monospace` is Droid Sans Mono, which does not cover U+2500–257F. A
-terminal peek carrying box-drawing from an agent TUI may render tofu. The upgrade path is bundling
-JetBrains Mono and it is deliberately not taken now — PB-DS-3 requires a test that renders a
-box-drawing string through the chosen family, so the residual is *observed* rather than assumed, and
-the decision to bundle is made against evidence.
+**Recorded residual — CORRECTED 2026-08-01 by the test that PB-DS-3 required.** This entry originally
+predicted that Android's `monospace` would render U+2500–257F as tofu. **That prediction is wrong, and
+the truth is worse.** `MonoBoxDrawingTest` measures what actually happens: every box-drawing character
+resolves through **font fallback** to a glyph in another family at a **different advance width** —
+0.71em against the monospace family's own 0.60em. The frame is drawn. It is 18% wider per character
+than the text it frames, so the rules and the content beneath them do not line up.
+
+A missing glyph would have been obvious to anyone who looked at the screen once. **A frame that is
+silently 18% off is the failure that ships.** The test also records why `Paint.hasGlyph` is not the
+measurement: it consults the whole fallback chain rather than the named family, returns true for every
+one of these characters, and a test built on it would be green while certifying the opposite of the
+truth.
+
+This is exactly why the requirement asked for a rendered string rather than a paragraph, and it is the
+second time in this ADR that a confidently-written residual turned out to describe a mechanism nobody
+had measured. **The upgrade path — bundling a mono with U+2500–257F coverage, e.g. JetBrains Mono
+under OFL-1.1 — is now evidence-backed rather than speculative, and the condition B134 set for taking
+it ("until the peek is seen to need it") is met.** It is not taken in S22 because the peek's screen is
+S24's and the decision carries a real asset-weight cost that belongs with whoever owns that screen.
+The evidence's own limit is stated in the test: it measures AOSP's font configuration, which is what a
+stock handset ships, not a survey of every OEM's customisation.
 
 ### 3. No decorative animation
 

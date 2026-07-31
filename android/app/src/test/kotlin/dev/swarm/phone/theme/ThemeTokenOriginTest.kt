@@ -30,6 +30,37 @@ import org.junit.Test
 class ThemeTokenOriginTest {
 
     /**
+     * The colour resources the three themed attributes bind to, in the order
+     * ThemeNightModeTest.themedAttributes resolves them: colorBackground, textColorPrimary,
+     * textColorSecondary.
+     *
+     * WHY THIS LIST REPLACED A SIZE EQUALITY. Until PB-TOK-5 the assertion here compared
+     * EXPECTED_DARK_COLORS.size against the size of the WHOLE token join, which was true only
+     * while the join happened to hold three rows. It is a coincidence, not an invariant:
+     * EXPECTED_DARK_COLORS is one entry per themed ATTRIBUTE, and the join is every colour the
+     * app owns. Widening the join to sixteen colours made the coincidence fail and would have
+     * read as a defect in the widening.
+     *
+     * Positional correspondence is strictly stronger than what it replaced. The containment
+     * loop below only says each recorded colour is SOME mapped token's value, so transposing
+     * background and text-primary passes it while the theme paints text in the background
+     * colour. Pinning each attribute to its own resource catches that, and it survives the join
+     * growing to sixteen or a hundred and sixteen.
+     */
+    private val ATTRIBUTE_RESOURCES = listOf(
+        "swarm_background",
+        "swarm_text_primary",
+        "swarm_text_secondary",
+    )
+
+    /** Attribute names, for the failure message only. Same order as [ATTRIBUTE_RESOURCES]. */
+    private val ATTRIBUTE_NAMES = listOf(
+        "colorBackground",
+        "textColorPrimary",
+        "textColorSecondary",
+    )
+
+    /**
      * The colours the theme records must BE the tokens, not merely resemble them.
      *
      * This is the assertion that fails today: --p-bg is #08090a and swarm_background is
@@ -48,13 +79,29 @@ class ThemeTokenOriginTest {
         val fromOrigin = expected.values.toList()
 
         assertEquals(
-            "SwarmTheme records ${recorded.size} colours and the origin maps ${fromOrigin.size}. " +
-                "The theme's recorded palette must come FROM the origin -- derived at test time " +
-                "from the staged tokens.json -- rather than being a third hand-copied list " +
-                "beside colors.xml and the JSON.",
-            fromOrigin.size,
+            "SwarmTheme records ${recorded.size} colours but the theme binds " +
+                "${ATTRIBUTE_RESOURCES.size} attributes. EXPECTED_DARK_COLORS is the list " +
+                "ThemeNightModeTest resolves, one entry per themed attribute, in that order.",
+            ATTRIBUTE_RESOURCES.size,
             recorded.size,
         )
+        ATTRIBUTE_RESOURCES.forEachIndexed { i, resource ->
+            val originValue = expected[resource]
+            assertTrue(
+                "$resource is not in the token join at all, so entry $i of " +
+                    "EXPECTED_DARK_COLORS has no origin to be checked against",
+                originValue != null,
+            )
+            assertEquals(
+                "EXPECTED_DARK_COLORS[$i] is the value of android:%s and must be the origin's "
+                    .format(ATTRIBUTE_NAMES[i]) +
+                    "value for $resource. Containment alone does not catch this: with the " +
+                    "entries transposed every recorded colour is still SOME mapped token's " +
+                    "value, and the theme paints text in the background colour.",
+                originValue,
+                recorded[i],
+            )
+        }
         recorded.forEach { colour ->
             assertTrue(
                 "SwarmTheme records 0x%08X, which is not the value of any mapped design token. "
@@ -64,6 +111,39 @@ class ThemeTokenOriginTest {
                 fromOrigin.contains(colour),
             )
         }
+    }
+
+    /**
+     * The negative control for the positional assertion, required by PB-DS-10: an assertion
+     * whose failure mode has never been demonstrated is the shape that let this codebase ship a
+     * third divergent palette under a green test.
+     *
+     * It applies the same check to a deliberately transposed list and requires it to find the
+     * mismatch. If this ever passes vacuously -- because two attribute resources resolved to the
+     * same colour, say -- the guard on the first line is what says so.
+     */
+    @Test
+    fun `the positional check can actually fail`() {
+        val expected = DesignTokens.androidColors()
+        val correct = ATTRIBUTE_RESOURCES.map { expected[it] }
+        assertTrue(
+            "every themed attribute must resolve to a colour in the join, or the control " +
+                "below compares nulls and proves nothing",
+            correct.none { it == null },
+        )
+        assertTrue(
+            "the first two themed attributes hold the same colour, so a transposition is " +
+                "undetectable and this control is vacuous",
+            correct[0] != correct[1],
+        )
+
+        val transposed = listOf(correct[1], correct[0], correct[2])
+        val mismatches = ATTRIBUTE_RESOURCES.filterIndexed { i, r -> expected[r] != transposed[i] }
+        assertTrue(
+            "a transposed palette produced no mismatch, so the positional assertion above " +
+                "would certify a theme that paints text in the background colour",
+            mismatches.isNotEmpty(),
+        )
     }
 
     /**

@@ -1,0 +1,37 @@
+# PB-TOK-8: the JOIN between swarm's four display Groups and the design tokens that colour them.
+#
+# internal/status.Group is the server-derived display state. It is derived ONCE, in Go, from the
+# three orthogonal status dimensions (system-spec.md, "Session status model"); the phone renders
+# it verbatim and never re-derives it. This table says which design token each Group IS, and
+# android/gate/s22_grouptokens_test.go joins it in both directions -- against the real constants
+# PARSED out of internal/status, and onward through android/design-tokens.tsv to the <color>
+# resource the app paints with.
+#
+# WHY THIS TABLE EXISTS AT ALL. ReadyForReview is a first-class Group with NO SUBSTRATE TOKEN.
+# The retired iOS mock painted it #bf5af2; the directions artifact's own rationale retires
+# purple; and the artifact's demo phone quietly renders only "Needs you / Working / Done", so the
+# one screen that would have exposed the gap omits the section instead. An implementer reaching
+# that row has to invent a colour, and an invented colour enters the product without passing
+# through the origin -- PB-TOK-1's defect arriving from a direction PB-TOK-1 cannot see.
+#
+# THE DECISION -- ADR-007 B134, decision 1. Rebind rather than add a 32nd token:
+#
+#   NeedsInput -> --p-att    Working -> --p-work    ReadyForReview -> --p-ok    Completed -> --p-ink3
+#
+# Substrate's demo labelled the GREEN dot "Done". This moves green to ReadyForReview and gives
+# Completed the recessive grey. That is what swarm's own TUI identity already does
+# (docs/design/ui-preview.html: review green, completed grey) and what a triage surface needs --
+# finished work should recede, not hold the most saturated colour on screen. Zero new tokens,
+# four distinct hues.
+#
+# The two Group columns are BOTH checked against internal/status: the constant must exist and its
+# wire value must match. A Group with no row fails, and a token bound to two Groups fails, so a
+# fifth Group cannot be added to the status model without this table being updated with it.
+#
+# Columns: group_const <TAB> group_value <TAB> token <TAB> note
+#
+#group_const	group_value	token	note
+GroupNeedsInput	needs_input	--p-att	The one state that is blocked on the human. Also the .prow.attention rail and, mixed at 36% over --p-hair, that row's warmed border (internal/design/derive.go).
+GroupWorking	working	--p-work	Agent is computing. Substrate's working affordance is static -- a 0 0 9px glow at 55% and the workbar gradient, no pulse (ADR-007 B134 decision 3).
+GroupReadyForReview	ready_for_review	--p-ok	THE REBINDING. Green means "there is something for you to look at", not "finished". Substrate never coloured this Group at all; see the ADR entry above before changing it back.
+GroupCompleted	completed	--p-ink3	THE OTHER HALF OF THE REBINDING. The recessive tertiary ink, the same value the offline machine dot uses. Done work recedes.

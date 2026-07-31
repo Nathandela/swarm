@@ -874,8 +874,8 @@ graph below is an acyclic DAG: Go-only work first, Android work second, integrat
 | S20 Docs / ADR / ops runbooks | PB-DOC-2, 3, 4, 7 (PB-DOC-6 withdrawn); PB-OPS-1..3, **PB-OPS-5** *(PB-DOC-1 is owned by S0 and PB-DOC-5 by S2 — not duplicated here)* | fable, opus review | S19 |
 | S21 Physical-handset gate (deferred; no device here) | PB-E2E-5, **PB-E2E-2** (re-scoped here on 2026-07-30, ADR-007 B91) | — | S19 |
 | S22 Design system foundation | PB-TOK-5, PB-TOK-6, PB-TOK-7, PB-TOK-8, PB-DS-1, PB-DS-2, PB-DS-3, PB-DS-4, PB-DS-5 | opus, sonnet review | S13, S16 |
-| S23 Component kit | PB-DS-6, PB-DS-7, PB-DS-8, PB-DS-10, PB-DS-11 | opus, sonnet review | S22 |
-| S24 Screen recomposition | PB-DS-9, PB-DS-12 | sonnet, opus review | S23, S16 |
+| S23 Component kit | PB-DS-6, PB-DS-7, PB-DS-8, PB-DS-10 | opus, sonnet review | S22 |
+| S24 Screen recomposition | PB-DS-9, **PB-DS-11** *(reassigned S23 -> S24 on 2026-08-01: the requirement forbids allowlisting existing violations, and every existing violation lives in the three surface files S24 rewrites. Owned by S23 it was satisfiable only by the allowlist its own text prohibits.)*, PB-DS-12 | sonnet, opus review | S23, S16 |
 
 **Ownership is machine-checked, not prose.** The authoritative assignment lives in
 `docs/specifications/remote-phaseB-manifest.tsv` (one row per requirement, exactly one owning

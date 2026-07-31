@@ -11,13 +11,39 @@
 # android/connectivity-policy.tsv and android/fcm-priority.tsv already use, and for the same
 # reason S13 gave: one artifact both a Go gate and a Kotlin test read.
 #
-# ONLY COLOUR TOKENS MAY APPEAR. tokens.json also carries font stacks, radii, weights and a
-# gradient; none of those has an ARGB form, and the gate refuses a row naming one rather than
-# inventing a conversion.
+# PB-TOK-5 (S22a): ALL SIXTEEN COLOURS, not three. The join was correct and under-fed -- it ran
+# --p-bg, --p-ink and --p-ink2 through a fence built for the whole palette, so thirteen colours
+# stayed pinned against a design source no screen could consume, and the fence was green the
+# entire time because there was nothing on the other side to disagree with.
 #
-# Columns: token <TAB> android_color <TAB> note
+# PB-TOK-6 (S22a): THE KIND COLUMN. The gate used to sniff the value -- anything starting with #
+# was a colour, everything else had "no ARGB form" and was refused. That is wrong about
+# --p-tabbg (rgba(8,9,10,0.88) IS a colour), cannot tell --p-grain (0.05) from --p-display-wt
+# (650), and has no expectation to violate when a token changes kind. The kind here must equal
+# the kind internal/design/tokens.json declares; the origin is upstream and wins. A kind with no
+# converter in the gate FAILS rather than being skipped, which is what stops the other fifteen
+# tokens from being permanently unshippable.
 #
-#token	android_color	note
---p-bg	swarm_background	The window background. This is the value that was wrong: colors.xml declared #FF101114 against the origin's #08090a and called it a placeholder.
---p-ink	swarm_text_primary	Primary text. Also previously divergent (#FFE6E8EB against #f7f8f8).
---p-ink2	swarm_text_secondary	Secondary text: labels, timestamps, the need summary under a session row.
+# The five `dimen` tokens (--p-card-r, --p-sheet-r, --p-btn-r, --p-chip-r, --p-dot-r) belong in
+# this table too, against values/dimens.xml. They are PB-DS's to add with that file; the gate
+# already carries their converter and will scan dimens.xml the moment it exists.
+#
+# Columns: token <TAB> android_resource <TAB> kind <TAB> note
+#
+#token	android_resource	kind	note
+--p-bg	swarm_background	color	The window background. This is the value that was wrong: colors.xml declared #FF101114 against the origin's #08090a and called it a placeholder.
+--p-card	swarm_surface_card	color	Card fill: session row, filter chip, agent message bubble, tool card.
+--p-elev	swarm_surface_elevated	color	One ladder step up from card, and the only step there is. Substrate bans drop shadows, so elevation is expressed as a lighter surface (ADR-007 B134 decision 4).
+--p-well	swarm_surface_well	color	Recessed: the command well in the approval sheet, and the terminal peek's ground.
+--p-hair	swarm_hairline	color	Every 1px border, the tab bar's top rule, the tool card's header divider.
+--p-ink	swarm_text_primary	color	Primary text. Also previously divergent (#FFE6E8EB against #f7f8f8).
+--p-ink2	swarm_text_secondary	color	Secondary text: labels, timestamps, the need summary under a session row.
+--p-ink3	swarm_text_tertiary	color	Tertiary: section labels, agent name, sheet context line, inactive tab. Also the Completed group (PB-TOK-8) and, per inventory G2, the offline machine dot.
+--p-hero	swarm_hero	color	Brand and live: the LIVE counter, selected chip, active tab, user message bubble, terminal peek foreground.
+--p-hero-ink	swarm_hero_ink	color	Ink on hero fills. Near-black green, not a neutral.
+--p-att	swarm_state_attention	color	Attention. Bound to status.Group NeedsInput (PB-TOK-8) and to the expiry countdown.
+--p-work	swarm_state_working	color	Bound to status.Group Working (PB-TOK-8). Also the workbar gradient's opaque stop.
+--p-ok	swarm_state_ok	color	Bound to status.Group ReadyForReview (PB-TOK-8, ADR-007 B134 decision 1 -- green moves to review, NOT to done). Also diff additions and the chip presence dot.
+--p-err	swarm_state_error	color	Error and deny. Also diff deletions and the composer's stop button.
+--p-cta-bg	swarm_cta_background	color	CTA fill. Value-aliases --p-hero TODAY and keeps its own row and its own resource on purpose: a future skin can break the alias, and a join that deduplicated by value would not notice it had.
+--p-cta-ink	swarm_cta_ink	color	CTA ink. Value-aliases --p-hero-ink, same reasoning as the row above.
