@@ -310,3 +310,16 @@ sidecar and a reconnect delivers it.
 - The schema version could be reverted with everything green. It is now tied to the durable field set
   by a pinned byte-literal per version. That fence fired on its very next integration, catching a
   version bump with no pinned literal.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row
+per requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made
+to fail, in the same row. Every mutation was applied to a production file in a detached worktree
+and reverted.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-KEY-3 | DERIVED | `Core.installGrant` no longer executing `delete(st.StaleStreams, StreamGrant)` — the terminal state becomes LATCHED rather than recoverable -> caught by `TestS10_ARegrantRecoversAGrantLossDevice` (*"the grant channel is still reported lost after a re-grant landed"*) and by `TestS10_R8_APurgedKeyAndAReplayedSidecarIsTheTerminalState`. The mutation is on the ONE line that recovers the state, not on a fixture |
+| PB-KEY-4 | DERIVED | `rec.GrantedEpoch = id.EpochID()` deleted from the re-grant path in `internal/skeleton/api.go` -> caught by `TestS10_ARegrantConvergesTheDeviceOntoTheCurrentEpoch` at BOTH of its assertions: the record still names the old epoch, and the device is unpaired after the daemon restart that follows a successful re-grant. That second assertion is the requirement's own criterion |
+| PB-KEY-10 | DERIVED | `MailboxRouter.acceptBootstrap` no longer calling `core.installGrant` — the exact pre-fix "route+expose only" state the requirement was written about -> caught by all three `mobile/conformance` PB-KEY-10 tests (the epoch key never arrives, the relay cursor never advances past the bootstrap frame, the grant does not survive the first process death) and by nine `internal/phonecore` tests. The end-to-end trio fails without any test calling `Install*Key`, which is the criterion |

@@ -360,3 +360,27 @@ Re-verified independently on a clean tree at `010876a` before push.
   was briefed as "reproduces at HEAD". A pristine-clone baseline showed the **full suite green** at
   HEAD; it fails only under concurrent agent load, a condition the orchestration itself creates. The
   wrong version risked an agent dismissing a real latency regression as pre-existing.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row
+per requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made
+to fail, in the same row. `internal/remote/crypto` was not touched.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-KEY-9 | DERIVED | the seam's fail-closed default, mutated at BOTH of its production sites at once — `openKeyStore` and `OpenStore` substituting an inline identity `Sealer` instead of returning `ErrNoSealer` -> caught by `TestS14A_NoSealerIsNotSilentlyCleartext`. Failability half: `sealedKeyStore.SignCommand` memoizing the unsealed tier -> caught; `OpenSealedBox` swallowing the refusal -> caught by `TestS14A_LockedContentTierRefusesEverySigningPath`. Sealing half: `sealDeviceKeys` bypassing `content.Seal` / `wake.Seal` -> both caught by the `android/gate` PB-SEC-1 pair reading the bytes on disk |
+
+### The one-site mutation, and why the row is still DERIVED
+
+Substituting the identity sealer at **`openKeyStore` alone** — leaving `OpenStore`'s check in
+place — survives `internal/phonecore`, `android/gate` and `mobile` except for one test:
+`TestS14A_TheCleartextSealerHasNoCallSitesLeft`, which is a **text scan for the identifier
+`InsecureCleartextSealer`**. Spell the same behaviour with a different type name and that fence is
+blind, and the behavioural test (`TestS14A_NoSealerIsNotSilentlyCleartext`) does not fire because
+`OpenStore` still refuses first and returns the named error the test accepts.
+
+Both sites removed together does fail the behavioural test, which is what the row's verdict rests
+on. Recorded because the shape is the same as S18's FINDING E: two layers enforce one property,
+the outer one is what every test observes, and the inner one is fenced by its own name rather
+than by its behaviour.

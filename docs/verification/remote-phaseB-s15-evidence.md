@@ -135,3 +135,13 @@ Re-verified independently before commit.
   sealed container. That follows directly from amendment (3) and matches how the session and snapshot
   caches already behave. Note the separately recorded finding that the queue has **no production
   writer at all**, so this is moot until that is decided.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row
+per requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made
+to fail, in the same row.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-SEC-10 | DERIVED | four mutations of the shipped platform artifacts, all caught. `android:allowBackup="false"` -> `"true"` in `AndroidManifest.xml` -> caught (cloud half). The `android:dataExtractionRules` attribute deleted -> caught by three assertions (device-to-device half). `<device-transfer>` deleted from `res/xml/data_extraction_rules.xml` -> caught. `<cloud-backup>` deleted -> caught. The manifest and the rules file are what Android reads, so these are mutations of the control rather than of a table describing it |
