@@ -295,3 +295,13 @@ unused). Both were orphaned at **`26a47a4`, Phase A**, well before this slice �
    biometrics, camera, FCM delivery, Doze or hardware attestation. The Kotlin routing fence is a
    plain-JVM test over a routing table and touches no Keystore, Context or hardware — and it was
    not run here in any case.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row per
+requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made to fail,
+in the same row.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-STATE-10 | DERIVED | The already-paired refusal stripped of its recovery guidance — `cmd/swarm/remote.go`'s `"to unregister one: swarm remote revoke <device-id>"` replaced with a bare `"pairing refused"` -> `TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold` fails. Reverted; `remote.go` sha256 `69ad91bca874...` identical. **The fence's subject is the right one:** it does not check that the refusal *has* text, it checks that the chain an operator can follow is **closed under what they were actually told** — so removing the one sentence that names the next command breaks it, which is exactly the bricked-owner scenario this row exists for. An earlier pass recorded this row READ-not-mutated and counted it unexamined; it is now measured. |

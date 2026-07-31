@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**104 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**105 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -186,7 +186,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-STATE-7 | S7 | shipped | **DERIVED** — Backfilled from B121. Two mutations: ack before the commit -> 4 failures; commit the guard without the content -> 3 failures. | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-8 | S7 | shipped | **DERIVED** — Backfilled from B121: the gap flag made to owe nothing after a restart -> 2 failures. | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-9 | S15 | shipped | **DERIVED** — Backfilled from B121: the decrypted session cache moved into the WAKE tier -> 2 failures, including the KEK-isolation half. Measured from the bytes on disk. | `docs/verification/remote-phaseB-s15-evidence.md` |
-| PB-STATE-10 | S18b | shipped | not derived | `docs/verification/remote-phaseB-s18b-evidence.md` |
+| PB-STATE-10 | S18b | shipped | **DERIVED** — The already-paired refusal stripped of its recovery guidance — `cmd/swarm/remote.go`'s `"to unregister one: swarm remote revoke <device-id>"` replaced with a bare `"pairing refused"` -> `TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold` fails. Reverted; `remote.go` sha256 `69ad91bca874...` identical. **The fence's subject is the right one:** it does not check that the refusal *has* text, it checks that the chain an operator can follow is **closed under what they were actually told** — so removing the one sentence that names the next command breaks it, which is exactly the bricked-owner scenario this row exists for. An earlier pass recorded this row READ-not-mutated and counted it unexamined; it is now measured. | `docs/verification/remote-phaseB-s18b-evidence.md` |
 | PB-SYNC-1 | S10 | shipped | **DERIVED** — Backfilled from ADR-007 B121 (round-7 derivation, run then, written in prose). Two mutations: `streamsOf` drops `StreamTerminal` from the shared bucket -> 4 failures; `repairedBy` lets a command reply clear `StreamReply` -> `TestB85_AContiguousReplyDoesNotClearTheReplyStream` fails. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-3 | S10 | shipped | **DERIVED** — Backfilled from B121: `commitReceive`'s contiguity branch made to clear the channel regardless of contiguity -- the optimistic clear this row forbids -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
