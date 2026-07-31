@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**108 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**109 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -83,7 +83,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-BIND-6 | S8 | **NOT MET** | not derived | 'DROP-OLDEST' IS STATED IN THREE PLACES AND ENFORCED BY NONE. Section 6.0 budgets '256 items, drop-oldest with a surfaced overflow signal'. Inverting to drop-NEWEST -- same constant, same counter, same doc string -- leaves BOTH fences passing: one checks the constant and the prose, the other checks that the core did not stall and that SOME events dropped. Nothing checks WHICH. Not cosmetic: under drop-newest a slow UI discards the CURRENT state and keeps the stale one, so the connection plane never converges. IMPLEMENTED CORRECTLY TODAY, unfenced against its own inversion (ADR-007 B116) |
 | PB-BIND-7 | S8 | shipped | **DERIVED** — Tripped by **every** surface-changing mutation in the round-7 pass, including a `Sas()`/`SAS()` Java-namespace collision. Sensitive; its limit is that it pins **Go** names, not the Java namespace the app compiles against. | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-DOC-1 | S0 | shipped | not derived | `docs/adr/ADR-007-remote-access.md` |
-| PB-DOC-2 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
+| PB-DOC-2 | S20 | shipped | **DERIVED** — A single row — `PB-APP-1` — deleted from the generated traceability index -> `TestPBDOC2_EveryActiveRequirementIsInTheTraceabilityIndex` fails. Reverted; index sha256 `693d217ee330...` identical. One row was removed rather than the file emptied, for the same reason PB-DOC-7 was mutated with a duplicate rather than an omission: a check that only asserted the index is non-empty, or that its row count is plausible, would survive losing one requirement. **Recorded limit:** this fences that every active id APPEARS. It says nothing about whether the row's contents are true, which is the gap B129's derivation column was built to close and which this row does not cover. | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-3 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-4 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-DOC-5 | S2 | shipped | not derived | `docs/verification/remote-phaseB-s2-evidence.md` |
