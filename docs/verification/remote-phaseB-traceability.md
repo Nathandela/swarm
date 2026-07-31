@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**77 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**89 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -177,24 +177,24 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-SEC-12 | S18 | shipped | **DERIVED** — `SecureWindow.gate` changed to set `filterTouchesWhenObscured = false` — the identifier stays, so the Go text scan SURVIVES — caught by the Kotlin `PhoneSurfaceControlsTest.every_button_and_switch_on_screen_filters_obscured_touches` walking the real View hierarchy. **FINDING F below**: removing every `SecureWindow.gate(...)` CALL SITE while leaving the object intact survives the entire Go gate | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-13 | S18 | shipped | **DERIVED** — release `isDebuggable = false` -> `true` -> caught; `isProfileable = true` added to the release block -> caught; `android:debuggable="true"` hardcoded on `<application>` -> caught; `if (BuildConfig.DEBUG) { b.takeControl(1L) }` added to production Kotlin -> caught | `docs/verification/remote-phaseB-s18-evidence.md` |
 | PB-SEC-14 | S18 | shipped | **DERIVED** — the `dependencyLocking { lockAllConfigurations() }` block deleted -> caught; `<verify-metadata>true</verify-metadata>` -> `false` -> caught; EVERY `<sha256>` stripped from one component (`androidx.activity:activity`) -> caught as *"1 of 459 pinned components carry no sha256/sha512"*; `SWARM_ANDROID_NDK` floated to `27` -> caught; `SWARM_GOMOBILE_VERSION` -> `latest` -> caught | `docs/verification/remote-phaseB-s18-evidence.md` |
-| PB-STATE-1 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-2 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-3 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-1 | S7 | shipped | **DERIVED** — Backfilled from ADR-007 B121 (round-7 derivation, run then, written in prose). `PushPreference.Version` dropped on persist -- the nested field the reflective fixture leaves at zero -> caught by a dedicated existing test. Residual: the completeness check is one level deep. | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-2 | S7 | shipped | **DERIVED** — Backfilled from B121: `Sequencer.bind` made to resume at 0 -> `TestProcessDeath_TypingLaunchAndKillSurviveAKillWhileAReplayDoesNot` fails. | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-3 | S7 | shipped | **DERIVED** — Backfilled from B121: same mutation, wider blast -- `bind` resumes at 0 -> 7 failures across 4 files. Production calls `NextInput`/`NextCommand`, not the in-memory `Next`. | `docs/verification/remote-phaseB-s7-evidence.md` |
 | PB-STATE-4 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-5 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-6 | S15 | shipped | not derived | `docs/verification/remote-phaseB-s15-evidence.md` |
-| PB-STATE-7 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-8 | S7 | shipped | not derived | `docs/verification/remote-phaseB-s7-evidence.md` |
-| PB-STATE-9 | S15 | shipped | not derived | `docs/verification/remote-phaseB-s15-evidence.md` |
+| PB-STATE-5 | S7 | shipped | **DERIVED** — Backfilled from B121: the schema version guard made to fail OPEN on an unknown future version -> caught. | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-6 | S15 | shipped | **DERIVED** — Backfilled from ADR-007 B121. Two mutations, both halves separately fenced: `allowBackup=true` -> 2 failures; `dataExtractionRules` dropped -> 3 failures. Subject is the shipped manifest. | `docs/verification/remote-phaseB-s15-evidence.md` |
+| PB-STATE-7 | S7 | shipped | **DERIVED** — Backfilled from B121. Two mutations: ack before the commit -> 4 failures; commit the guard without the content -> 3 failures. | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-8 | S7 | shipped | **DERIVED** — Backfilled from B121: the gap flag made to owe nothing after a restart -> 2 failures. | `docs/verification/remote-phaseB-s7-evidence.md` |
+| PB-STATE-9 | S15 | shipped | **DERIVED** — Backfilled from B121: the decrypted session cache moved into the WAKE tier -> 2 failures, including the KEK-isolation half. Measured from the bytes on disk. | `docs/verification/remote-phaseB-s15-evidence.md` |
 | PB-STATE-10 | S18b | shipped | not derived | `docs/verification/remote-phaseB-s18b-evidence.md` |
-| PB-SYNC-1 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
+| PB-SYNC-1 | S10 | shipped | **DERIVED** — Backfilled from ADR-007 B121 (round-7 derivation, run then, written in prose). Two mutations: `streamsOf` drops `StreamTerminal` from the shared bucket -> 4 failures; `repairedBy` lets a command reply clear `StreamReply` -> `TestB85_AContiguousReplyDoesNotClearTheReplyStream` fails. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
-| PB-SYNC-3 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
+| PB-SYNC-3 | S10 | shipped | **DERIVED** — Backfilled from B121: `commitReceive`'s contiguity branch made to clear the channel regardless of contiguity -- the optimistic clear this row forbids -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-4 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-5 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
-| PB-SYNC-6 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
+| PB-SYNC-6 | S10 | shipped | **DERIVED** — Backfilled from B121. Two mutations: `App.resyncBudget` returns nil unconditionally -> caught; the drain loops on a non-empty page instead of on cursor progress -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-7 | S1b | shipped | not derived | `docs/verification/remote-phaseB-s1b-evidence.md` |
-| PB-SYNC-8 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
+| PB-SYNC-8 | S10 | shipped | **DERIVED** — Backfilled from B121: `SessionCache.reseed` made to merge instead of replace -- the exact PB-SYNC-8 defect -> 2 failures. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-TIME-1 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-2 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |
 | PB-TIME-3 | S11 | shipped | not derived | `docs/verification/remote-phaseB-s11-evidence.md` |

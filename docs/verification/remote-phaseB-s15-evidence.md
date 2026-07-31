@@ -145,3 +145,5 @@ to fail, in the same row.
 | Requirement | Verdict | The mutation, and its result |
 |---|---|---|
 | PB-SEC-10 | DERIVED | four mutations of the shipped platform artifacts, all caught. `android:allowBackup="false"` -> `"true"` in `AndroidManifest.xml` -> caught (cloud half). The `android:dataExtractionRules` attribute deleted -> caught by three assertions (device-to-device half). `<device-transfer>` deleted from `res/xml/data_extraction_rules.xml` -> caught. `<cloud-backup>` deleted -> caught. The manifest and the rules file are what Android reads, so these are mutations of the control rather than of a table describing it |
+| PB-STATE-6 | DERIVED | Backfilled from ADR-007 B121. Two mutations, both halves separately fenced: `allowBackup=true` -> 2 failures; `dataExtractionRules` dropped -> 3 failures. Subject is the shipped manifest. |
+| PB-STATE-9 | DERIVED | Backfilled from B121: the decrypted session cache moved into the WAKE tier -> 2 failures, including the KEK-isolation half. Measured from the bytes on disk. |

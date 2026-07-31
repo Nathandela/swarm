@@ -237,6 +237,13 @@ covers only PB-GW-6; S7's other rows (PB-STATE-*) are not derived here.
 | Requirement | Verdict | The mutation, and its result |
 |---|---|---|
 | PB-GW-6 | DERIVED | `IssuedAt: issuedAt()` in `sealPhoneFrame` (`internal/phonecore/direction.go:67`) replaced with `IssuedAt: 0` — the original ~56-year-old-frame defect — -> 7 tests fail in `internal/phonecore`, including both of the row's own (`TestPhoneSeals_StampANonZeroIssuedAt`, `..._PassTheBoundedAgeCheckThatWouldRejectTodaysFrames`). **But see FINDING F below: two further mutations show the row's OWN fence covers 5 of the 7 producers, and the two it misses are caught only incidentally, by another requirement's end-to-end tests** |
+| PB-STATE-1 | DERIVED | Backfilled from ADR-007 B121 (round-7 derivation, run then, written in prose). `PushPreference.Version` dropped on persist -- the nested field the reflective fixture leaves at zero -> caught by a dedicated existing test. Residual: the completeness check is one level deep. |
+| PB-STATE-2 | DERIVED | Backfilled from B121: `Sequencer.bind` made to resume at 0 -> `TestProcessDeath_TypingLaunchAndKillSurviveAKillWhileAReplayDoesNot` fails. |
+| PB-STATE-3 | DERIVED | Backfilled from B121: same mutation, wider blast -- `bind` resumes at 0 -> 7 failures across 4 files. Production calls `NextInput`/`NextCommand`, not the in-memory `Next`. |
+| PB-STATE-4 | NOT DERIVED | Round-7 FINDING T-1, open: three of `Core.Reconcile`'s four persisted coordinates deleted -> ZERO failures across the whole module. The named authority tests never call `Reconcile`; they call the primitives from the test body. The one test that does drive it holds the property incidentally, via a live frame the ordinary receive path persists anyway. |
+| PB-STATE-5 | DERIVED | Backfilled from B121: the schema version guard made to fail OPEN on an unknown future version -> caught. |
+| PB-STATE-7 | DERIVED | Backfilled from B121. Two mutations: ack before the commit -> 4 failures; commit the guard without the content -> 3 failures. |
+| PB-STATE-8 | DERIVED | Backfilled from B121: the gap flag made to owe nothing after a restart -> 2 failures. |
 
 ## FINDING F — PB-GW-6's fence enumerates five producers; there are seven
 
