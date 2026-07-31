@@ -134,12 +134,15 @@ type CommandBridgeConfig struct {
 // seals the daemon's reply back to the phone's mailbox. It complements RelaySink's
 // journal-OUT with the command-IN direction.
 //
-// The read cursor advances past every item it reads -- INCLUDING a malformed or
-// unforwardable one -- so a poisoned envelope can neither wedge the loop nor be
-// retried forever; per-item failures are aggregated into the returned error while
-// the good items still process. Both the read cursor and the per-(sender,epoch) replay
-// high-water are DURABLE (PB-GW-1, see the Inbound seam), so a restart resumes where the
-// previous run stopped and refuses anything the relay retained beyond it. The daemon's own
+// The read cursor advances ONLY through items the bridge actually HANDLED (see
+// processBatch): the relay mints relay.Item.Cursor and nothing authenticates it, so a
+// cursor read off an item that could not be opened is a value the bridge has no evidence
+// for. A malformed item is still stepped over by the next one that opens, so a poisoned
+// envelope can neither wedge the loop nor be retried forever; per-item failures are
+// aggregated into the returned error while the good items still process. Both the read
+// cursor and the per-(sender,epoch) replay high-water are DURABLE (PB-GW-1, see the Inbound
+// seam), so a restart resumes where the previous run stopped and refuses anything the relay
+// retained beyond it. The daemon's own
 // two-phase idempotency (D6) covers only the one bounded re-delivery a crash between a
 // daemon forward and its persist can produce (see handle).
 type CommandBridge struct {
@@ -277,34 +280,49 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 }
 
 // processBatch handles one batch of mailbox items and returns how many forwarded
-// successfully, the highest cursor consumed (0 when the batch was empty), and the
+// successfully, the highest cursor CONSUMED (0 when the batch consumed none), and the
 // per-item failures. It is shared by the wait-driven Run and by PollOnce, which
 // differ only in how the batch was fetched and where the ack goes.
+//
+// THE CURSOR IS NOT READ OFF THE ITEMS HERE, and that is the fence.
+// This used to take the batch maximum from every item BEFORE handle(), so a relay -- which
+// MINTS relay.Item.Cursor and is the declared adversary -- needed no key at all: six bytes of
+// garbage beside a cursor of its choosing moved the durable resume point past every real
+// command, and the ack that followed ordered the relay to compact away the backlog it had
+// just made undeliverable. The resume point now moves ONLY through consume, i.e. only for an
+// item the bridge actually opened and handled, so an item that fails to open contributes
+// nothing at all.
+//
+// The no-wedge property that motivated the old rule survives, because the advance is a
+// MAXIMUM over handled items rather than a contiguous prefix: an item that can never open
+// (garbage, or a frame sealed under a superseded epoch) is stepped over by the next item that
+// does, and only one sitting at the mailbox TAIL is re-read -- the same bounded cost the
+// phone's drain already accepts for the same reason, paced by transport.DrainPacer.
+//
+// What this does NOT fence is the VALUE a HANDLED item carries: that is the relay's own
+// coordinate and nothing authenticates it, so a relay that rewrites the cursor of a genuine
+// phone-sealed frame still moves the resume point. Bounding that needs a limit on how far a
+// cursor may move per page, which no requirement states; it is recorded as a residual rather than invented here.
 func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (int, uint64, []error) {
 	processed := 0
 	var errs []error
-	var maxCursor uint64
+	before := b.Cursor()
 	for _, it := range items {
-		if it.Cursor > maxCursor {
-			maxCursor = it.Cursor
-		}
 		if err := b.handle(ctx, it); err != nil {
 			errs = append(errs, fmt.Errorf("cursor %d: %w", it.Cursor, err))
 			continue
 		}
 		processed++
 	}
-	// Advance past every item read, so a poisoned envelope is not retried forever, and
-	// persist that advance so a restart does not re-read it either. Only the READ CURSOR
-	// moves here: the per-stream replay high-water is advanced by consume, per frame, in
-	// the order its action class requires.
-	if maxCursor > 0 {
-		b.SetCursor(maxCursor)
-		if err := b.saveCheckpoint(); err != nil {
-			errs = append(errs, fmt.Errorf("persist cursor %d: %w", maxCursor, err))
-		}
+	// consume already committed each handled item's cursor durably, in the order that
+	// item's action class requires. Nothing is persisted here: a batch that handled nothing
+	// has nothing to record, and re-saving an unchanged checkpoint would cost one bolt
+	// fsync per empty poll on the keystroke path.
+	consumed := b.Cursor()
+	if consumed <= before {
+		return processed, 0, errs
 	}
-	return processed, maxCursor, errs
+	return processed, consumed, errs
 }
 
 // Run drives the command-IN path off the relay's server-side wait until ctx is cancelled,

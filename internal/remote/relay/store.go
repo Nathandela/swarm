@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"math"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -175,6 +176,14 @@ func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudg
 			return nil
 		}
 		c := mb.Cursor()
+		// afterCursor is UNTRUSTED INPUT: it is whatever the reader asked to resume from,
+		// and `afterCursor + 1` wraps at MaxUint64. Unfenced, the one value that means
+		// "past every item this mailbox can ever hold" scanned from key 0 and the relay
+		// re-served the ENTIRE mailbox on every read from it. Nothing can be strictly
+		// greater than MaxUint64, so the page is empty.
+		if afterCursor == math.MaxUint64 {
+			return nil
+		}
 		start := u64(afterCursor + 1)
 		used := 0
 		for k, v := c.Seek(start); k != nil; k, v = c.Next() {
