@@ -18,7 +18,19 @@ ADR-007 D2/D3/D4 and plan amendments D.0-A5/A10/A14/A15.
   the AAD (identical-ciphertext fan-out, A5), authenticated `issued_at`, per-epoch authenticated seq
   with replay/reorder/gap detection and a `SeedHighWater` snapshot-cursor seed. Two epoch keys per
   epoch — a wake key (NSE-readable, type-0x02 only) and a content key (biometric-gated, type-0x01
-  only), non-interchangeable typed keys (A15/F10). EpochGrant is sealed to the recipient key with the
+  only), non-interchangeable typed keys (A15/F10).
+
+  > **AMENDED 2026-07-31 (ADR-007 B133) — the SPLIT is kept in full; the word "biometric-gated" is
+  > deleted and the split's rationale is rewritten from stolen-device to transport-only.** All
+  > phone-side user authentication is removed, so the content key is not gated on any
+  > authenticator. **The two-tier split survives whole**, and B133 states why in one line: the wake
+  > key is content-free **because FCM reads push payloads**. Google is on the wire, and the split is
+  > what keeps the wire's carrier from reading session content — enforced at the **sender**, in the
+  > gateway, where the push path holds the wake key only. Nothing removed from the phone touches it.
+  > The typed non-interchangeability (A15/F10), the 62-byte header, the AAD layout and every other
+  > property in this bullet are unchanged; `internal/remote/crypto` is FROZEN.
+
+  EpochGrant is sealed to the recipient key with the
   coordinates authenticated inside + an Ed25519 machine signature + a restart-seedable per-device
   replay tracker.
 - SAS: HKDF-SHA256 over the Noise channel binding into a fixed 64-emoji table (mirror byte-identical

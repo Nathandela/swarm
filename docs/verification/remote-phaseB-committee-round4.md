@@ -63,6 +63,14 @@ which is refused re-mint by design, so the attacker gets a green prompt for an o
 **fails closed** — a UX ordering defect, not a bypass. Accepted as a **severity re-grade, not a
 closure**; the reviewer explicitly did not run it and asked not to be treated as certification.
 
+> **AMENDED 2026-07-31 (ADR-007 B133).** This divergence is now moot in both directions: PB-SEC-2
+> is **VOID**, and neither the prompt nor the enrolment-invalidation behaviour it turns on still
+> exists — `Provisioning.kt:422` sets `setInvalidatedByBiometricEnrollment(false)` on both KEKs.
+> Item 5 of the round's exit list below (*"`PB-SEC-2`'s per-prompt token; enrolment invalidation
+> terminal until explicit repair"*) is discharged the same way: **not done, and no longer owed.**
+> The methodological point the divergence illustrates — two reviewers grading the same mechanism
+> differently, resolved by measurement rather than by seniority — is why it is left standing.
+
 ## Blind spots — what nobody asked, including me
 
 - **Nobody re-audited all 143 rows against their evidence.** Sampling found two fossil artifacts

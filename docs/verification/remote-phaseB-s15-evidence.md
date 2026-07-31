@@ -1,5 +1,31 @@
 # S15 evidence — which tier seals which state (PB-STATE-9, PB-STATE-6, PB-SEC-10)
 
+> ## AMENDED 2026-07-31 (ADR-007 B133) — the word "lock" throughout this file has lost its producer
+>
+> **None of this slice's three requirements is voided or narrowed.** PB-STATE-6 is named in B133 as
+> explicitly KEPT and for a reason worth restating: a backup is a copy of the device keys leaving
+> the device over the network, which is the wire threat model stated in the vocabulary of a
+> settings toggle. PB-SEC-10 and PB-STATE-9 are untouched as requirements, and **every container,
+> field assignment and byte-level measurement below is still what ships.**
+>
+> **What changed is the EVENT this file reasons about.** All phone-side user authentication is
+> removed, so there is no screen lock, no backgrounding verdict and no freshness lapse; the purge
+> trigger is now revoke or unpair (`internal/phonecore/state.go:808`). Three consequences, each
+> marked at its site below:
+>
+> 1. **"At the screen lock" never happens.** Wherever this file says the purge runs at a lock, read
+>    revoke/unpair.
+> 2. **The "Lifetime at lock" column is no longer true of a purge.** `PurgeKeys` now destroys
+>    **both** tiers and everything sealed under either, so `content_kept` is not preserved and
+>    `wake_state` is not readable. That is a change of substance, argued at the code, not a rename.
+> 3. **A "locked process" still exists and still needs the split**, which is why PB-STATE-9's
+>    criterion survives intact. It is now a process that has **not opened the content tier** — the
+>    FCM wake path, or any start before `Resume` — rather than one whose user has walked away.
+>
+> The amendments in the next section are left exactly as written. They were correct against the
+> decision they were taken under, and amendment (2) in particular is the reason there are three
+> containers on disk rather than one.
+
 **Commit**: `82eb7e6`. **Requirements**: PB-STATE-9, PB-STATE-6, PB-SEC-10.
 **Decisions**: PB-STATE-9 amended three ways at `e649b4b` before implementation.
 
@@ -42,6 +68,26 @@ Found during RED, amended before implementation rather than discovered by the im
 3. **`PendingOps` is content tier and NON-purgeable**: user content by any reading, but not a
    *decrypted* cache, so the lock purge must leave it.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — amendments (2) and (3) rest on a lock, and there is none.**
+>
+> Amendment (2)'s premise was "a Save taken while locked must preserve the send-seq ceiling it
+> cannot read, but `PurgeKeys` runs AT the screen lock and must destroy the decrypted caches."
+> Neither half of that collision occurs any more: `PurgeKeys` runs at a **revoke**, where it
+> destroys **both** tiers and everything sealed under either — there is nothing left to preserve,
+> because the pairing itself is what is being destroyed and re-pairing mints fresh keys and a
+> fresh epoch anyway.
+>
+> **The three containers are nonetheless still right, on a different and narrower argument.** A
+> process that has not opened the content tier — the FCM wake path — must still be able to write
+> `wake_state` without renumbering or discarding what it cannot read, and `ErrContentTierLocked`
+> (`internal/phonecore/state.go:516`) still refuses a Save that would change content-tier state
+> such a process cannot open. **Amendment (3) survives on its own terms**: `PendingOps` is user
+> content and not a decrypted cache, which is a statement about what the field IS.
+>
+> The honest limit: **the joint-unsatisfiability argument that produced the split can no longer be
+> re-demonstrated**, because one of its two horns has left the product. What replaced it is a
+> weaker argument for the same shipped shape, and it is recorded as weaker rather than swapped in.
+
 ## What shipped
 
 **Schema v4 -> v5.** Three sealed containers replace eight cleartext fields:
@@ -54,6 +100,20 @@ Found during RED, amended before implementation rather than discovered by the im
 
 The purge writes `content_kept` and `wake_state` back verbatim without reading either — it cannot,
 and does not need to.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — the fourth column and the sentence under it are superseded.**
+> The container/KEK/fields columns are unchanged and are still what is on disk. The **lifetime**
+> column described a screen lock, which no longer exists. Read it as two separate facts now:
+>
+> - **In a process that never opened the content tier** (the FCM wake path): `wake_state` is
+>   readable, the two content containers are not, and a Save that would change what they hold is
+>   refused rather than renumbered. That is the surviving subject of PB-STATE-9's criterion.
+> - **At a purge, which is now a revoke or unpair**: all three go. `PurgeKeys` destroys both tiers
+>   and everything sealed under either, without unsealing anything — destroying a blob has never
+>   required being able to read it. So "preserved byte for byte" and "readable while locked" are
+>   **false of a purge today**, deliberately: a revoked handset that keeps a resident wake key and
+>   its op queue has not been revoked in any sense the owner would recognise
+>   (`internal/phonecore/state.go:803-827`).
 
 Left in the clear, and this is exactly amendment (1)'s pinned list: `schema_version`, `machine`, the
 three machine public keys, `routing_id`, `epoch_id`, `push_preference`, `reconciled_epoch`,

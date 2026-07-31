@@ -1,5 +1,19 @@
 # BRIEF — Phase B slice S17: the phone's push client (PB-PUSH-4, PB-PUSH-9)
 
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — this brief is a DATED INSTRUCTION and parts of it would now
+> instruct wrongly.** The trust boundary is the wire between phone and computer; all phone-side user
+> authentication is removed with its code. **PB-SEC-2 is VOID; PB-KEY-2, PB-KEY-7, PB-KEY-8,
+> PB-APP-7, PB-PUSH-4 and PB-E2E-5 are NARROWED.** The brief is left unedited as the record of what
+> the implementer was told. Do not hand it to anyone as current instructions without reading B133
+> and `docs/specifications/remote-phaseB-deauth-plan.md` first.
+>
+> Specific to this brief: *"the content tier is biometric-gated and a locked read returns"* is
+> **false of the shipped app** — `Provisioning.kt:421` requests `setUserAuthenticationRequired(false)`
+> and the unwrap does not refuse. PB-PUSH-4 keeps its content-free rendering, because FCM reads push
+> payloads and the lock screen still exists; what it loses is the clause *"unless the user has
+> authenticated"*.
+
 cwd = `/Users/Nathan/Code/swarm/.claude/worktrees/remote-control-research`. Work only there.
 
 You are the TEST AUTHOR (RED). Write ONLY tests plus the minimum scaffolding to compile and fail

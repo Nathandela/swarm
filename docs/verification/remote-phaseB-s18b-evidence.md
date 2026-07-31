@@ -296,6 +296,11 @@ unused). Both were orphaned at **`26a47a4`, Phase A**, well before this slice �
    plain-JVM test over a routing table and touches no Keystore, Context or hardware — and it was
    not run here in any case.
 
+   > **AMENDED 2026-07-31 (ADR-007 B133).** "No real biometrics" has left PB-E2E-5's scope,
+   > because the feature left the product — removal by feature deletion, not reclassification.
+   > Camera, FCM delivery, Doze and hardware attestation stay deferred. Nothing else in this
+   > residual changes.
+
 ## Derivation
 
 **MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row per

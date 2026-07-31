@@ -7,6 +7,11 @@ full-suite sweep recorded under Gates below. **PB-E2E-5 remains DEFERRED and not
 that**: no real biometrics, no real camera, no real FCM delivery, no Doze, no hardware Keystore
 attestation.
 
+> **AMENDED 2026-07-31 (ADR-007 B133).** "No real biometrics" has left PB-E2E-5's scope, because
+> the feature left the product — removal by feature deletion, not reclassification by fiat. Camera,
+> FCM, Doze and hardware Keystore attestation stay deferred and stay in the gate. The
+> PB-E2E-1 chain below is unaffected: nothing in it passed through a phone-side authenticator.
+
 **Scope of this file**: the IMPLEMENTATION half. The exit test itself was written by an
 independent RED author who fixed nothing; the seam inventory lives in the header of
 `internal/skeleton/s19_e2e_test.go`. What is recorded here is the four production holes the exit
@@ -161,6 +166,21 @@ signed for, so the signature is never outlived by the lease nor the lease by the
 backing is PB-E2E-5, which is deferred — nothing here claims a BiometricPrompt gated it. What the
 token delivers is the property the daemon actually enforces: one-shot, unforgeable by the relay,
 bound to this exact command.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — this paragraph was right, and B133 makes it load-bearing
+> rather than a caveat.** The two references it defers to are both gone or narrowed: PB-SEC-2 is
+> **VOID** (there is no biometric freshness table for §6.0 to hold), and "real biometrics" has
+> left PB-E2E-5's scope with the feature. **What is left is the sentence's second half, and B133
+> checked it against the source rather than assuming it**: `GateToken` is a random 16-byte
+> one-shot minted per take-control (`internal/phonesim/phonesim.go:409`), its function is
+> **anti-swap** — the daemon recomputes `content_hash = SHA256(GateToken)` over the wire value
+> (`internal/protocol/server.go:1519`, computed at `:1539-1541`), so a relay that substitutes the
+> token produces a hash the device signature does not cover — plus single-use replay prevention
+> through the durable claim. **Both are WIRE properties. It survives entirely and matters MORE
+> now, because the wire is the whole boundary.**
+>
+> The only thing that was ever wrong with it is the word "biometric-attested" in its comments at
+> `internal/protocol/server.go:1400,1513,1608`. The mechanism stays; the naming is what was false.
 
 ### The diagnosability defect behind hole 4
 

@@ -69,6 +69,19 @@ The end-of-phase gate (§3) runs the full committee; individual slices bake thes
 - Remote `OpDataIn`/`OpAttach`/`OpResize` reopen ONLY inside a valid take_control session
   (device signature + biometric gate token + current lease generation + `requireRemoteAuthz`);
   outside it they stay fail-closed.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — the MECHANISM stays; the words "biometric gate token" are
+> what is wrong, and they were wrong when written.** `GateToken` is a random 16-byte one-shot
+> minted per take-control (`internal/phonesim/phonesim.go:409`). It is not a cryptographic
+> attestation of anything and never was. Its function is **anti-swap** — the daemon recomputes
+> `content_hash = SHA256(GateToken)` over the wire value (`internal/protocol/server.go:1519`), so a
+> relay that substitutes the token produces a hash the device signature does not cover — plus
+> single-use replay prevention through the durable claim. **Both are wire properties, so the token
+> survives B133 entirely and matters MORE, because the wire is now the whole trust boundary.**
+> Every clause of the authorization tuple above still holds; read "gate token" wherever this
+> document says "biometric gate token", here and at A7 below. The same false word survives in three
+> code comments (`internal/protocol/server.go:1400,1513,1608`), which are reported rather than
+> edited from here.
 - Adversarial tests: replay/reorder/dup of take_control, expired session, wrong lease
   generation, missing gate token, kill-switch-off — each refused with the stable error taxonomy.
 

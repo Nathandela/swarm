@@ -66,6 +66,19 @@ surface.
     desktop confirmation (fail closed); pinned semantics of what the QR actually carries;
     relay-mediated remote revocation plus on-device biometric gate before mutating ops
     (device loss currently equals RCE via finding 6).
+
+    > **AMENDED 2026-07-31 (ADR-007 B133) — the last clause is WITHDRAWN as a remedy, and its
+    > underlying observation is ACCEPTED instead.** There is no on-device gate before mutating
+    > ops: all phone-side user authentication is removed with its code. *"Device loss equals
+    > RCE"* is no longer a finding to be closed — **it is the accepted residual risk, recorded
+    > once in B133**: a stolen unlocked phone gives its holder full control of agents that edit
+    > code on the machine, and **the only surviving mitigation is `swarm remote off` or a device
+    > revoke, issued FROM THE COMPUTER.** That makes the other clause of this item —
+    > relay-mediated remote revocation — load-bearing in a way it was not; it was the outer of
+    > two layers and is now the only layer. **The QR, the mandatory desktop confirmation and the
+    > SAS are unaffected and matter more**: the emoji comparison is now the only
+    > human-in-the-loop security step in the product, and B133 forbids anything that makes it
+    > easier to skip.
 12. Scope contradiction resolved (sonnet). v1 goal includes spawn, but Phase 1 as drafted
     deferred it silently; phasing now states explicitly what ships when and why.
 13. "Tamper-evident" audit log downgraded to signed local activity log unless checkpoints

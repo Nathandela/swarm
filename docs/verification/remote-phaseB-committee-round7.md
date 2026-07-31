@@ -1,5 +1,22 @@
 # Phase B audit committee — round 7
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — one of the objections recorded below no longer has a
+> subject.** GPT-5.6 sol's NO cites two grounds: *"The dial handshake is unbounded"* and
+> *"PB-SEC-2 is still not cryptographically enforced"*. **The first stands.** The second is now
+> **VOID rather than open**: the trust boundary has moved to the wire, all phone-side user
+> authentication is removed with its code, and a requirement whose subject has left the product
+> cannot be met, failed, or reopened by a later slice.
+>
+> **This does not convert the verdict.** No committee vote is re-cast here, and the round's REVISE
+> stands as recorded; what changes is only that a reader must not go looking for open work behind
+> the PB-SEC-2 clause. Everything else in this round — the gateway redial defect, the unbounded
+> dial handshake, staleness by silence, the enumeration residuals — is untouched by B133.
+>
+> The counts below (**131 of 144, 11 NOT MET**) are the round's own measurement and are left as
+> they were taken. The current numbers are in `docs/verification/remote-phaseB-traceability.md`,
+> which now records PB-SEC-2 as void inside the NOT-MET bucket because that report has a single
+> override dict — the honest reading of its count is *n* not met plus one void.
+
 **Convened** 2026-07-30 against the round-6-remediated tree. **Verdict: REVISE.**
 **Closed test: 1 YES, 3 NO. Production: unanimous NO.** Seven rounds, seven REVISE verdicts.
 

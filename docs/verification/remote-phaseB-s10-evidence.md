@@ -256,6 +256,23 @@ Fixed by refusing to ack on either custody sentinel. Worth keeping: **the non-ac
 locked**, because a keyless phone commits no sealed frame and the relay cursor does not advance past
 the bootstrap anyway — it is simply re-offered each poll until the tier opens.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — the SCENARIO above no longer arises; the FIX is unchanged
+> and stays.** "Pair, phone wakes with the screen locked, grant acked, relay deletes it, user
+> unlocks to every send failing forever" needed a content KEK that refuses while the user is away.
+> `Provisioning.kt:421` now requests `setUserAuthenticationRequired(false)`, so there is no locked
+> content tier to be the designed steady state, and **`crypto.ErrKeyAuthRequired` is raisable by
+> exactly one population**: an install provisioned BEFORE B133, whose content KEK still carries
+> `AUTH_BIOMETRIC_STRONG` because `KeystoreCustodyBootstrap.ensure` returns early when the alias
+> exists. For that population this bug and this fix are still live, and a re-pair is what clears it.
+>
+> **The ack rule itself is not narrowed and must not be relaxed.** Refusing to ack on a custody
+> sentinel is right for any refusal that is not a permanent verdict, and the relay still deletes
+> what it is acked. What changed is only how often the antecedent fires.
+>
+> The "conditional worth re-checking if the design changes" note below is that re-check, and this
+> is the change: a phone is no longer keyless at Resume because its user is away — it is keyless
+> because it has been purged by a revoke or has not resumed yet.
+
 *A conditional worth re-checking if the design changes*: "costs nothing" holds **because** a phone
 locked at Resume binds a zero content key, so no sealed frame commits and the relay cursor cannot
 advance past the bootstrap. If anything ever makes the content tier re-openable in-process without a
@@ -295,6 +312,25 @@ is keyless at exactly the coordinates the gateway is about to resend.
 
 Fenced both ways, including a false-positive guard — a relay replaying a retired grant to a phone
 with a **working** key must not be marked — which fails if the keyless condition is dropped.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — the correction above still holds, and one of the two
+> requirements it cites is now VOID while the other has NARROWED.** PB-SEC-2 is void: its subject
+> left the product. PB-KEY-7's purge mechanism survives whole and only its trigger moved, from
+> screen lock to revoke or unpair (`internal/phonecore/state.go:808`).
+>
+> Three consequences for the paragraphs above and below this note:
+>
+> - **"After any screen lock the phone is keyless" never happens now**, so the B44 exclusion the
+>   correction describes protects a case that no longer occurs. B44's conclusion — that a screen
+>   lock must not land a healthy phone in the terminal state — is not reversed by this; its
+>   antecedent is simply gone.
+> - **PB-KEY-3 remains MET**, unchanged and for the reason the correction already gives: genuine
+>   cross-epoch-rotation grant loss still reaches the terminal state.
+> - **"The purge preserves the coordinates" is STILL TRUE and is worth checking rather than
+>   assuming, because the purge got wider.** `PurgeKeys` now destroys **both** tiers and
+>   everything sealed under either, but `dropAllKeyMaterial` (`internal/phonecore/state.go:796`)
+>   drops key material and the push token only — `GrantEpoch` and `GrantSeq` survive it, so the
+>   replay defence this bullet depends on is intact.
 
 *Residual, stated plainly*: this closes the causes that are **terminal**. It does not flag "the relay
 purged the frame and the gateway has not reconnected", correctly, because the machine still holds the

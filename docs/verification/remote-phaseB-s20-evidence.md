@@ -306,6 +306,15 @@ was gated), so I did not make it. **Applied by `9c1f1a2`**, and re-verified here
 and regenerating the index produces a byte-identical file. **E15.1's shipped == evidenced now
 holds**, with the single remaining requirement being the one B31 approves as deferred.
 
+> **AMENDED 2026-07-31 — the block quoted above is a dated snapshot and is no longer the report's
+> output.** It is left verbatim because it is what was re-verified on the day. Two things have
+> moved since, and only the second is B133's: the requirement count and the NOT-MET bucket grew
+> through the round-4 to round-7 re-derivations, and **PB-SEC-2 has since been marked VOID rather
+> than unmet** (ADR-007 B133), which the generated index now states beside its own count. PB-E2E-5
+> is still the deferred remainder, narrowed: real biometrics left its scope with the feature.
+> Regenerate `docs/verification/remote-phaseB-traceability.md` for the current numbers rather than
+> reading them here.
+
 ---
 
 ## 5. PB-OPS-1 — executed once, with the artifact
@@ -449,6 +458,10 @@ pairing QR with a camera; real biometrics; real FCM delivery (no Google account,
 project, no `google-services.json` — the sender has **never run against Google**); Doze; hardware
 Keystore attestation. PB-E2E-5 stays deferred and an emulator is not a handset.
 
+> **AMENDED 2026-07-31 (ADR-007 B133).** "Real biometrics" has left PB-E2E-5's scope, because the
+> feature left the product. Everything else in this list stays deferred, stays unexecuted, and
+> stays in `docs/operations/physical-handset-gate.md`. See §6b for the fuller amendment.
+
 ---
 
 ## 6b. PB-E2E-5's runbook — added to scope, and every step of it is UNRUN
@@ -465,6 +478,25 @@ with a wrong-destination negative control, real FCM (registration, foreground, b
 locked-device, after-reboot, token rotation, re-registration against an **empty** relay store),
 reboot, lock/unlock, process death, and Wi-Fi ↔ cellular handoff.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — PB-E2E-5 has NARROWED and one whole section of the runbook
+> this paragraph describes is now VOID.** The enumeration above is quoted from B31 and is the
+> right record of what was authored on the day; **it is no longer the gate's scope.** All
+> phone-side user authentication is deleted, so "real biometrics (success, cancel, per-use vs
+> timed, and a re-enrolled fingerprint invalidating a key)" has nothing to exercise. This is
+> removal by feature deletion, not reclassification by fiat: **the other items — hardware-backed
+> Keystore via `KeyInfo` and attestation, real camera, real FCM, Doze, reboot, process death and
+> the network handoff — all stay deferred and all stay in the gate.**
+>
+> `docs/operations/physical-handset-gate.md` carries the narrowing at its own head (its §4 is void
+> in full, its §1a/§1b preconditions shrink, and one step is flagged against an open behaviour
+> decision B133 records). **Every step of the gate remains UNRUN**, which is the claim this section
+> actually makes and which is unchanged.
+>
+> **§0's recording rule is untouched and is now the more important half.** "Record what the device
+> reported, per role and per alias, never that a step succeeded" was written because a software-only
+> key unwraps perfectly and a device with no biometric enrolled skips the prompt and succeeds. The
+> first of those two failure modes is exactly as live as it was.
+
 **Its §0 is the part that matters**, and it is written around your two specifics. The recording rule
 is *what the device reported, per role and per alias* — never that a step succeeded — because a
 software-only key unwraps perfectly, a device with no biometric enrolled skips the prompt and
@@ -480,6 +512,16 @@ for PB-KEY-8 and a fail for the hardware-backing claims.
    spurious StrongBox. **A handset returning a purely software KEK provisions cleanly and nothing
    objects.** Partly an API limit — `KeyGenParameterSpec` has no "require secure hardware" setter —
    which is precisely why step 2a makes it a human observation.
+
+   > **AMENDED 2026-07-31 (ADR-007 B133) — this finding is UNCHANGED and is now the sharper of the
+   > two, because hardware backing is one of the few things the gate still measures.** Two of the
+   > three axes the `downgrades` list *does* check have changed value rather than gone away: the
+   > spec now REQUESTS `setUserAuthenticationRequired(false)` and
+   > `setInvalidatedByBiometricEnrollment(false)`, so a requested-versus-achieved comparison on
+   > those axes still bites, in the other direction. **The axis it never checked, and the one
+   > B133's KEPT list depends on, is still unchecked**: sealing at rest is retained precisely
+   > because the key is non-exportable and hardware-backed, and nothing in the app objects when
+   > that turns out to be false.
 2. **`CustodyPlan.forDevice` refuses to provision without `KEYSTORE_X25519` and `KEYSTORE_ED25519`,
    and no row in `KeyCustodyMatrix` consumes either.** Every role is `KEYSTORE_WRAPPED` per ADR-007
    B17(a), so the asymmetric private halves live in the Go core under an **AES-GCM** KEK and Keystore

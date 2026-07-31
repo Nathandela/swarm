@@ -1,5 +1,42 @@
 # Phase B progress and handoff
 
+> ## AMENDED 2026-07-31 (ADR-007 B133) — five passages in this log are superseded
+>
+> The trust boundary is now the **wire** between phone and computer; both endpoints are trusted,
+> and all phone-side user authentication is removed with its code. This is a working log, so the
+> superseded passages are corrected here in one place rather than five, each quoted so it can be
+> found. **PB-SEC-2 is VOID; PB-KEY-2, PB-KEY-7, PB-KEY-8, PB-APP-7, PB-PUSH-4 and PB-E2E-5 are
+> NARROWED; PB-SEC-1, PB-STATE-6, PB-KEY-5, PB-KEY-6 and PB-KEY-9 are unaffected.**
+>
+> 1. **Build environment, §1** — *"Only PB-E2E-5 (real camera, real biometrics, real FCM, Doze,
+>    reboot, hardware Keystore attestation) needs physical hardware."* **Real biometrics has left
+>    PB-E2E-5's scope**, because the feature left the product. The rest of the list stands.
+> 2. **The S17 reachability gate** — *"a wake callback never fetches content while no user is
+>    present."* PB-PUSH-4 has narrowed and *"while no user is present"* has no producer. **The
+>    property the guard carries is unchanged and is the one that mattered**: a wake callback never
+>    fetches content, full stop. That is a wire property — FCM reads push payloads — and B133 keeps
+>    content-free rendering for exactly that reason.
+> 3. **PB-APP-3's Stop, on why no `interrupt` action was minted** — *"it would need its own authz
+>    tuple, its own biometric tier, and its own replay story."* There is no biometric tier. **The
+>    conclusion is unaffected**: the authz tuple and the replay story are still two good reasons,
+>    and the argument was never carried by the third.
+> 4. **`crypto.ErrKeyAuthRequired` -> `reauth_required`** — *"the loop keeps dialing, because the
+>    biometric may be satisfied at any moment."* **`reauth_required` no longer exists**: it was
+>    removed atomically across `error_taxonomy.tsv`, `mobile/relay.go`, the Kotlin
+>    `ConnectionState`/`ErrorState` enums and `Remedy.AUTHENTICATE`, because with no authenticator
+>    there is nothing for the loop to wait for. Both custody verdicts now land on
+>    `repair_required`, and the remedy is "pair this device again" — which is a remedy the one
+>    population that can still raise `ErrKeyAuthRequired` (an install provisioned before B133) can
+>    actually carry out.
+> 5. **The realcli smoke, item 7** — *"`biometricGate = false` with no switch, because the module
+>    has nowhere durable to keep a handset-local preference."* **The toggle is deleted**, not
+>    defaulted: PB-APP-7 narrows to its two push toggles and the biometric-gate toggle goes with
+>    the gate. The note's own verdict — that it claimed the least — is why nothing depended on it.
+>
+> The accepted residual risk is stated once, in ADR-007 B133, and is not re-litigated per slice: a
+> stolen unlocked phone gives its holder full control of the agents on the machine, and the only
+> surviving mitigation is `swarm remote off` or a revoke issued from the computer.
+
 **Branch**: `worktree-remote-control-research`. **Spec**: `docs/specifications/remote-phaseB-requirements.md` (v3.5.1, **143 requirements** -- the count has risen four times mid-implementation, each time because someone found a hole that would otherwise have shipped; see below).
 **Gates**: `python3 scripts/check-phaseb-manifest.py` (ownership + DAG), `go build/vet/test -race ./...`.
 

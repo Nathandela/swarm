@@ -1,5 +1,19 @@
 # BRIEF — Phase B slice S15: which tier seals which state (PB-STATE-9, PB-STATE-6, PB-SEC-10)
 
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — this brief is a DATED INSTRUCTION and parts of it would now
+> instruct wrongly.** The trust boundary is the wire between phone and computer; all phone-side user
+> authentication is removed with its code. **PB-SEC-2 is VOID; PB-KEY-2, PB-KEY-7, PB-KEY-8,
+> PB-APP-7, PB-PUSH-4 and PB-E2E-5 are NARROWED.** The brief is left unedited as the record of what
+> the implementer was told. Do not hand it to anyone as current instructions without reading B133
+> and `docs/specifications/remote-phaseB-deauth-plan.md` first.
+>
+> Specific to this brief: *"PB-KEY-7 purges them from memory on lock"* — there is no lock; the purge
+> trigger is revoke or unpair, and the purge now takes both tiers. *"Reachable without the
+> biometric"* — the content key is reachable after first unlock **by design** now, so that phrasing
+> describes a property the product no longer claims. The three requirements this slice owns are
+> unaffected, and PB-STATE-6 is on B133's explicitly-KEPT list.
+
 cwd = `/Users/Nathan/Code/swarm/.claude/worktrees/remote-control-research`. Work only there.
 
 You are the TEST AUTHOR (RED). Write ONLY tests plus the minimum scaffolding to compile and fail

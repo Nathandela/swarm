@@ -136,6 +136,12 @@ leaves the machine enrolled while the phone holds nothing), `PB-SEC-2` (a biomet
 the ledger that can mint an authorization after invalidation) and the 500 ms echo path are all
 first-session experiences.
 
+> **AMENDED 2026-07-31 (ADR-007 B133).** The `PB-SEC-2` clause of the sentence above — and the
+> corresponding row in the findings table, *"per-prompt identity fixed one site, not the class"* —
+> are **VOID rather than open**. There is no prompt, no ledger and no authorization to mint: all
+> phone-side user authentication has been removed with its code. The verdict recorded here is not
+> re-cast, and `PB-PAIR-4` and the echo path are unaffected.
+
 **An owner-attended bring-up on the owner's own handset is reasonable now and was not before.** That
 distinction is the round's practical result.
 

@@ -16,6 +16,13 @@ permissions before reading anything — and was replaced rather than reported as
 2. **Transport security has no production caller** (PB-NET-2). Unanimous where examined.
 3. **The lock purge and the freshness gate are absent, not merely unverified** (PB-KEY-7, PB-SEC-2),
    and one evidence file asserted the opposite in a sentence the index counted as evidence.
+
+   > **AMENDED 2026-07-31 (ADR-007 B133).** The **freshness gate** half of this finding is VOID:
+   > there is no timed tier, no per-use tier and no gate, and PB-SEC-2's subject has left the
+   > product. The **lock purge** half survives NARROWED — PB-KEY-7's purge mechanism is shipped and
+   > its trigger moved from screen lock to revoke or unpair. The finding's real lesson is untouched
+   > and is why round 1 mattered: an evidence file asserted the opposite of the code, and the index
+   > counted the assertion.
 4. **The traceability count is not readiness evidence** — evidence is measured per *slice*, and the
    strengthened fence is a substring check. Both members who examined it said so unprompted.
 

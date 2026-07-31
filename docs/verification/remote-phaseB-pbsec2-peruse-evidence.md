@@ -1,5 +1,44 @@
 # PB-SEC-2 — the per-use tier, wired (ADR-007 B51 and B59)
 
+> ## WITHDRAWN 2026-07-31 (ADR-007 B133) — READ THIS BEFORE CITING ANYTHING BELOW
+>
+> **PB-SEC-2 is VOID, and every mechanism this file records has been deleted from the product.**
+> The trust boundary is now the wire between the phone and the computer. Both endpoints are
+> trusted, and all phone-side user authentication was removed *with its code* — `keys/PerUseGate.kt`,
+> `keys/BiometricPrompts.kt`, `keys/BiometricPolicy.kt`, `keys/TimedTierGate.kt`,
+> `runtime/ContentLock.kt`, and the four `android/gate/s20_pbsec2_*` fences (commits `e0e644d`,
+> `11f0517`, `52b8abf`, `7863f8c`).
+>
+> **What that costs this file, stated plainly rather than glossed: nothing below can be
+> re-demonstrated.** Every mutation in §4 targets a file that no longer exists; §2's claim —
+> "the action runs only after the platform releases a key for that one use; each use prompts
+> again" — is a claim about a feature that no longer ships; §7's last two bullets describe a
+> handset-capability price the product no longer pays. There is no substitute measurement and
+> none is offered here.
+>
+> This is not a finding that the work was wrong. It was correct against the decision it was
+> written under, and B133 replaced the decision. **The body is left unedited below this banner as
+> the dated record of what was demonstrated on 2026-07-26.** Do not read it as current evidence.
+>
+> **Three things in it are about method rather than about the gate, and they survive:**
+>
+> 1. **§5 is still live and still true.** The `androidx.biometric:biometric:1.1.0` dependency, its
+>    lockfile row, its `verification-metadata.xml` component and `android/dependency-inventory.tsv:37`
+>    are all **still in the tree**, still justified by this now-void requirement. The
+>    corrupted-checksum run that proved verification bites is a PB-SEC-14 result and is unaffected.
+>    Removing the dependency is a supply-chain action needing a reviewed lockfile and metadata
+>    regeneration, so it is its own slice, not cleanup collateral — see the de-auth plan's
+>    follow-up section. `TestB133_TheAppImportsNothingFromAndroidxBiometric` in
+>    `android/gate/s16_ui_test.go` now fences that no Kotlin file imports it.
+> 2. **§4.4's defect-in-the-fence finding** — a fence a KDoc sentence could satisfy, then a regexp
+>    that walked back over blanked comments — is about how source-scanning fences fail. It does not
+>    depend on what was being scanned.
+> 3. **§4.3's S1** recorded a mutation that initially PASSED because a cross-file name search was
+>    satisfied by a call inside a function nothing invoked. The gate it fenced is gone
+>    (`PhoneRuntime.kt:172` now carries only a comment naming
+>    `refuseAHandsetThatCannotHoldTheContentKek` as removed), but "a call inside a dead function
+>    satisfies a name search" is a standing lesson about `bodyMustName`-style fences.
+
 Evidence for closing ADR-007 B51: PB-SEC-2's per-use authorization tier, found **entirely
 unimplemented** by the round-2 audit, and ADR-007 B44's missing in-app re-authentication.
 

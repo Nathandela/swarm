@@ -21,6 +21,15 @@ camera, real FCM delivery, real Doze behaviour or hardware Keystore attestation.
 model POLICY — which state is rendered for which input — and `android/gate/s16_ui_test.go`'s
 `TestS16_NoUnitTestClaimsAPhysicalHandsetProperty` fences that they keep doing only that.
 
+> **AMENDED 2026-07-31 (ADR-007 B133).** "A real biometric" has left PB-E2E-5's scope, because the
+> feature left the product — removal by feature deletion, not reclassification by fiat. The other
+> four items stay deferred and stay in `docs/operations/physical-handset-gate.md`. The fence named
+> above is unaffected and still fences the same property.
+>
+> `android/gate/s16_ui_test.go` also now carries
+> `TestB133_TheAppImportsNothingFromAndroidxBiometric`, so the deleted gate cannot return by
+> accident while the dependency is still declared in `build.gradle.kts`.
+
 It also proves nothing about the scanner: **PB-PAIR-3 is a recorded decision, not an implementation.**
 ADR-007 B21 names the library; no scanner dependency is declared and no camera code exists. The
 pairing screen models the permission POLICY only.
@@ -160,6 +169,19 @@ it; `KeystoreProvisioner.generate`; and `PhoneRuntime` constructing `swarmmobile
 failably. A KEK that is genuinely gone surfaces as `KeyPermanentlyInvalidated` (re-pair), never as a
 silent failure to start — a first launch with no key is generation, and a launch where the alias
 existed and the material is unusable is permanent invalidation.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — one clause above is now false, and it is a clause, not the
+> sentence.** *"The content tier's gate is the unwrap refusing rather than a flag beside it"* had a
+> producer only while the content KEK was auth-gated. `Provisioning.kt:421` now requests
+> `setUserAuthenticationRequired(false)`, so **the unwrap does not refuse and the content tier has
+> no user-authentication gate at all** — B133 accepts that, and records that code discipline is
+> what is left of the phone-side tier boundary.
+>
+> **Everything else in the paragraph is untouched and is explicitly KEPT by B133**: `SealedStore`
+> under `noBackupFilesDir`, sealing at rest, a `KekProvider` that never caches the KEK, and the
+> generation-versus-permanent-invalidation distinction. Non-exportability defends an attacker
+> holding the app's data directory and not the handset, which is not the holder and which nothing
+> in the new boundary trusts.
 
 ### PB-TOK-1
 
@@ -350,6 +372,27 @@ model the lease as a state flag. Closed in S19 —
 
 *Criterion: "UI test; revoke + kill switch gated per PB-SEC-2."*
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — this criterion has NARROWED, and the paragraph below
+> asserts three tests that no longer exist.** PB-SEC-2 is VOID: the trust boundary is the wire,
+> and there is no local authentication on this handset for a freshness table to describe. The
+> criterion loses its "gated per PB-SEC-2" clause entirely.
+>
+> **The three named tests were DELETED, not rewritten**, and what each fenced is recorded at
+> `android/app/src/test/kotlin/dev/swarm/phone/ui/MachineAndLaunchTest.kt:12-28` so nobody goes
+> looking: `destructive actions demand a per-use authentication and typing does not` transcribed
+> section 6.0's freshness table; `an authentication for one action never authorises another` drove
+> PB-SEC-2's last clause; `backgrounding or a screen lock invalidates every outstanding grant`
+> drove three events that no longer occur. **None of this can be re-demonstrated, and no
+> substitute is offered — the gate is gone.**
+>
+> **What survives is the half that was never about the holder**, and it is everything else in the
+> paragraph below: the four display elements, and the kill switch being displayed and never
+> settable from the phone. That is a daemon-side refusal (`handleRemoteSetControl` refuses the
+> remote tier before consulting its backend) plus a bound surface that exports no setter, so it is
+> unaffected by anything removed from the phone. **It also matters more now**, because
+> `swarm remote off` and revoke from the computer are the only surviving mitigation for a lost
+> handset.
+
 `android/app/src/test/kotlin/dev/swarm/phone/ui/MachineAndLaunchTest.kt`, `MachinePaneTest`:
 `the pane shows presence, the paired device and the activity log` covers the four display
 elements; `the kill switch is displayed and can never be set from the phone` is the read-only
@@ -491,7 +534,7 @@ rather than claimed. Nothing here touches PB-E2E-5's deferred set.
 | PB-APP-4 | DERIVED | `App.Peek` re-processes the daemon's bytes -- `strings.ReplaceAll(strings.Join(s.Lines, "\n"), "\t", "    ")`, a plausible on-device re-sanitize -> `TestPBAPP4_ThePeekRendersTheDaemonsBytesAndNothingElse` fails. **Two further mutations SURVIVED -- see finding (2)** |
 | PB-APP-5 | DERIVED | a `func (a *App) SetKillSwitch(on bool) error` added to the bound surface -> `TestPBBIND3_FacadeCannotEnableTheKillSwitch` fails (*"which would let a stolen phone re-enable remote control"*), with `TestPBBIND3_NoUntracedEntryPoint` and `TestPBBIND7_ExportedSurfaceMatchesTheGolden` beside it. The read-only half is structural. Presence, paired device and activity log are `MachinePaneTest.kt` and were NOT exercised (no JDK) |
 | PB-APP-6 | DERIVED | (a) `App.Launch`'s geometry default removed, so a spec with no size seals `cols=0 rows=0` -> `TestS19_ARemoteLaunchCarriesATerminalGeometryTheMachineAccepts` fails: *"the daemon refuses ... PB-APP-6's launch never reaches a PTY"*. (b) the sole production Kotlin call `app.launch(specOf(draft))` removed from `PhoneSurface.kt` -> `TestPBAPP6_TheAppCanStartASessionAndTheLedgerAgrees` and `TestBoundVerbs_EveryBoundVerbIsCalledFromProductionKotlinOrLedgered` fail |
-| PB-APP-7 | DERIVED | both toggles wired to one category (`NeedsInput: pref.Alerts, Finished: pref.Alerts`) -> `TestPBAPP7_TheTwoTogglesAreIndependentAndNotInverted` fails: *"A switch that gates both categories leaves the other switch dead"*. **The INVERSION mutation SURVIVED -- see finding (3)** |
+| PB-APP-7 | DERIVED | both toggles wired to one category (`NeedsInput: pref.Alerts, Finished: pref.Alerts`) -> `TestPBAPP7_TheTwoTogglesAreIndependentAndNotInverted` fails: *"A switch that gates both categories leaves the other switch dead"*. **The INVERSION mutation SURVIVED -- see finding (3)**. **AMENDED 2026-07-31 (ADR-007 B133) — NARROWED, and this row's subject is on the KEPT side of the narrowing.** The settings screen's biometric-gate toggle is deleted and the requirement no longer names it; the **two push toggles are explicitly kept**, and they are the whole of what this mutation touches. `TestPBAPP7_TheTwoTogglesAreIndependentAndNotInverted` is live in `mobile/conformance/s16_pushprefs_test.go`, and finding (3) below is unaffected and still open. Verdict carried forward, not re-earned |
 | PB-APP-8 | DERIVED | (a) `streamStale` stops consulting the per-channel flag (`return !reconciled - a.core.MachineSilentAt(now)` only) -> `TestPBAPP8_EveryJournalDerivedReadModelCarriesItsStreamsStaleness`, `_AResyncInFlightIsVisibleAndIsNotAThirdValueOfStreamState` and four `TestS10_*` resync tests fail. (b) `SessionList.stale` repointed from the journal channel to the REPLY bucket -> `TestPBAPP8_EveryJournalDerivedReadModelCarriesItsStreamsStaleness` fails, so the bucket distinction is real. A journal->terminal repoint survives, correctly: PB-SYNC-1 requires a shared-bucket gap to stale BOTH, so the two flags are indistinguishable by construction |
 | PB-APP-9 | DERIVED | `stampErrorClass` stops stamping (early return after the message check), so facade errors leave unclassified -> `TestPBAPP9_EveryErrorTheFacadeReturnsCarriesAKnownClass` fails on `App.Interrupt`, `App.Paste` and `App.Resize`: *"classified as \"swarm/unknown\" ... the user is told nothing they can act on"*. Totality is carried structurally by the barrier, as this file's own review correction (2) states. **A MISROUTE still survives -- see finding (5)** |
 | PB-APP-10 | DERIVED | (a) the `relay.ErrRevoked` arm of the dial switch made unreachable -> `TestPBAPP10_ARevokedDeviceIsToldToRePairInsteadOfLoopingForever` fails (*"a revoked phone reports \"reconnecting\" ... it redials every 250 ms forever behind a spinner"*) and `TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace` with it. (b) the keyless split collapsed so both answers return `errGrantLost` -> `TestPBAPP10_APairedKeylessPhoneIsToldToWaitRatherThanToActOnTheMachine` fails on both the class and the collapse |

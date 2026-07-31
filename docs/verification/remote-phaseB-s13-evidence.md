@@ -174,6 +174,12 @@ no-op.
   `NoiseStatic`/`Recipient` roles cannot be Keystore-native — which would silently degrade
   PB-KEY-8 on old devices. 33 makes PB-KEY-8 clean by construction instead of forcing a fallback
   matrix nobody exercises.
+
+  > **AMENDED 2026-07-31 (ADR-007 B133).** PB-KEY-8 has NARROWED — its matrix no longer expresses
+  > auth-gated key generation, and `USER_AUTH_PER_USE` has left the capability enum. **This bullet
+  > is unaffected**: minSdk 33 and the Curve25519 argument are ADR-007 B16/B17's and have nothing
+  > to do with authentication. The pin is a product choice, which B17 already records, and the
+  > requirement it protects is still there in narrowed form.
 - **`GOTOOLCHAIN: local` at workflow level** (`.github/workflows/ci.yml:13`), with the seven Go
   pins raised to 1.25 per ADR-008. `GOTOOLCHAIN` defaults to `auto`, so a pin that silently
   downloads a different toolchain "reads as verified while naming a toolchain nothing was built

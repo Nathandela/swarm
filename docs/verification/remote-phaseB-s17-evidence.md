@@ -152,6 +152,32 @@ earned: `ARotatedTokenStillReceivesDelivery`, `ReRegistrationRestoresDeliveryAft
 > redaction and notification-channel privacy are set.
 > *Criterion:* Robolectric test: locked -> generic alert only; authenticated -> content rendered.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — PB-PUSH-4 has NARROWED, and the clause that went is the
+> one quoted above in italics.** "Unless the user has authenticated" has no producer: all
+> phone-side user authentication is removed, so there is no authentication event and no locked
+> device in the sense the criterion meant. The criterion's second branch — *authenticated ->
+> content rendered* — loses its subject with it.
+>
+> **Content-free rendering itself is KEPT, and B133 says why in one line: FCM reads push payloads,
+> and the lock screen still exists.** The whole of this section's argument — that the defect is
+> the FETCH and not the string, and that the three fences sit at the custody seam, the Kotlin call
+> graph and the exported surface — is untouched, and it is the half that was always about the
+> wire. `WakeNotifications.kt:27` records the same: the lock-screen redaction is kept because the
+> lock screen is a surface a passer-by can read, which is a fact about the screen, not about
+> authentication.
+>
+> **What `ContentReady` now means, and the honest gap.** It is still
+> `core.State().Keys.ContentKey != zero` (`mobile/pushwake.go:127`) — whether the content tier is
+> open in this process — but the reason it would be closed has changed: it is now "this process
+> has not resumed, or its keys were purged by a revoke", never "the user has not authenticated".
+> **`mobile/pushwake.go:57-59` and `:118-121` still describe it the old way**, calling it
+> "whether the user has authenticated" and naming an "auth-gated KEK". Those are stale comments in
+> code, outside this file's ownership, reported rather than edited here.
+>
+> **A design decision is OWED and is NOT resolved by this amendment**: what sets
+> `contentReady = false` on a handset where nothing gates the content KEK. It is listed in
+> `docs/specifications/remote-phaseB-deauth-plan.md` as owed, and this file does not answer it.
+
 ### The defect is the FETCH, not the string, and that is where the fences are
 
 The payload cannot leak: it is a constant 78 bytes over an empty plaintext with zeroed key ids
@@ -334,7 +360,7 @@ owed by someone — they are not S17's.
 | "Kotlin: 328 tests across 47 classes, zero failures" | `3b6694f` commit message | **FALSE, and already retracted** by `59fcbd5` (205 across 31; inflated by summing stale Gradle result XML). Today's tree: **208 `@Test` methods across 31 files**, counted from source. |
 | "zero failures" for the Kotlin suite | `3b6694f`, `59fcbd5` | **UNVERIFIED HERE.** No JDK; `./gradlew test` cannot start. Carried forward, not re-asserted. |
 | PB-PUSH-4's Robolectric acceptance (`WakeNotificationTest`, 7 tests) | requirement criterion | **NOT RUN.** The file exists and was read; its assertions are described above from source. |
-| "authenticated -> content rendered" | PB-PUSH-4 criterion | **MET IN A WEAKENED FORM.** No content is rendered on either branch; the test asserts distinguishability of two constants. Deliberate and argued, but the criterion's wording does not match the code. |
+| "authenticated -> content rendered" | PB-PUSH-4 criterion | **MET IN A WEAKENED FORM.** No content is rendered on either branch; the test asserts distinguishability of two constants. Deliberate and argued, but the criterion's wording does not match the code. **AMENDED 2026-07-31 (ADR-007 B133): this row is now MOOT rather than weak.** The criterion clause it measures has been removed with the narrowing — there is no authentication event to be the antecedent — so the gap between wording and code closes by the wording going away, not by the code improving. It is left here because "the criterion was never met as written" is a fact about 2026-07-26 that a later reader should still be able to see. |
 | "deletion on revoke/**disable**" fully wired in Android | PB-PUSH-9 | **HALF TRUE.** Revoke is wired; `PushTokens.disable` has no production caller, and the gate for it passes on an uncalled function. |
 | a failing-first (RED) run for S17 | GG-5 | **NOT IN THE HISTORY.** `git log --follow` shows the gate file, `wake.go` and the conformance files first appearing in `3b6694f` — the RED file and the GREEN implementation landed in the same commit. The vacuous-pass probes documented in the test headers are the only failing-first record, and they are the author's own report. |
 
@@ -380,5 +406,5 @@ everything reachable from Go: the `android/gate` source fences over production K
 
 | Requirement | Verdict | The mutation, and its result |
 |---|---|---|
-| PB-PUSH-4 | DERIVED | three, all caught, covering both halves of the amended criterion. **The unreachability half** (the one the amendment calls "what makes it safe"): a `PhoneRuntime.facade()?.roster()` call added to `SwarmMessagingService.onMessageReceived` -> `TestS17_TheWakeCallbackReachesNoContentVerb` fails naming the verb — the FETCH is the defect, not the string. **The distinguishability half**: `HandlePushWake`'s `ContentReady` forced true -> `TestS17_ALockedDeviceIsToldContentIsUnavailable` fails ("that is the flag the app renders session content on"). **Non-vacuity**: `AcceptWake`'s refusal bypassed so any input renders -> four conformance tests fail on their own NON-VACUITY assertions rather than on the alert's contents. Unexercised: the 7 Robolectric assertions in `WakeNotificationTest` (no JVM, see scope above) |
+| PB-PUSH-4 | DERIVED | three, all caught, covering both halves of the amended criterion. **The unreachability half** (the one the amendment calls "what makes it safe"): a `PhoneRuntime.facade()?.roster()` call added to `SwarmMessagingService.onMessageReceived` -> `TestS17_TheWakeCallbackReachesNoContentVerb` fails naming the verb — the FETCH is the defect, not the string. **The distinguishability half**: `HandlePushWake`'s `ContentReady` forced true -> `TestS17_ALockedDeviceIsToldContentIsUnavailable` fails ("that is the flag the app renders session content on"). **Non-vacuity**: `AcceptWake`'s refusal bypassed so any input renders -> four conformance tests fail on their own NON-VACUITY assertions rather than on the alert's contents. Unexercised: the 7 Robolectric assertions in `WakeNotificationTest` (no JVM, see scope above). **AMENDED 2026-07-31 (ADR-007 B133) — NARROWED, and all three mutations still have live subjects.** The clause that left the requirement is *"unless the user has authenticated"*, which nothing below mutates: the unreachability half fences the FETCH, the distinguishability half fences a flag the phone computes from its own memory, and the non-vacuity arm fences `AcceptWake`'s refusal. All three are wire properties and all three are on the KEPT side of B133 — content-free rendering stays, because FCM reads push payloads and the lock screen still exists. **What DID change under them is what `ContentReady=false` MEANS**: no longer "the user has not authenticated" but "this process has not opened the content tier". `TestS17_ALockedDeviceIsToldContentIsUnavailable` keeps its name and its assertion (`mobile/conformance/s17_pushwake_test.go:138`); the word "Locked" in it now refers to the tier, not the screen. Verdict carried forward, not re-earned |
 | PB-PUSH-9 | DERIVED | three, all caught, including the criterion's own end-to-end half. `onNewToken` emptied so rotation never reaches the facade -> `TestS17_OnNewTokenReachesTheFacadeRegistration`; `PushTokens.disable` no longer calling `App.DeletePushToken` -> `_ProductionKotlinDeletesTheTokenOnRevokeOrDisable`; and the one that matters most, **`App.onConnected`'s token arm removed** so nothing re-registers on an authenticated reconnect -> `TestS17_ReRegistrationRestoresDeliveryAfterARelayRestart` against a relay with an EMPTY token store (the AMENDED criterion, the only configuration in which re-registration is the thing measured) plus `_ATokenRotatedWithNoConnectionIsNotLost`, `_ARegisteredTokenSurvivesAProcessDeath` and `_ATokenIsReadableAndReRegistrableWithTheContentTierLocked`. Unexercised: nothing on the JVM was needed for these; the recorded residual that `PushTokens.disable` has no production caller is unchanged by this tranche |

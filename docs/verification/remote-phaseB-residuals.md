@@ -226,6 +226,24 @@ ADR-007 B9/B16. `KEYSTORE_WRAPPED` is accurate for `RELAY_AUTH` — the key *is*
 Keystore AES key — but the tier's gate is the **split**, not the KEK. Stated because PB-KEY-8's
 matrix forbids a residual on a non-`SOFTWARE_ONLY` row. `S14`.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — this residual now covers BOTH KEKs, and its second
+> sentence is the whole of it.** Neither KEK is user-authentication-gated: `Provisioning.kt:421`
+> requests `setUserAuthenticationRequired(false)` for the content tier as well. *"The tier's gate
+> is the split, not the KEK"* was written as a caveat about one row and is now the general
+> statement — and B133 records the narrowing it causes plainly: **removing auth-gating leaves code
+> discipline as the only phone-side enforcement of the tier boundary**
+> (`keys/Custody.kt:184` is now `EnforcementMechanism.CODE_DISCIPLINE`).
+>
+> **The property the split exists to buy is not weakened, because it never rested on this half.**
+> The wake key is content-free because FCM reads push payloads, and that is enforced at the
+> SENDER: the gateway's push path holds the wake key only and never uses the content key. The
+> receiver-side half was always the weaker one on Android, since `FirebaseMessagingService` runs
+> in the app process rather than an iOS-style NSE.
+>
+> **This residual is therefore no longer "by design, and narrow" — it is by design, and it is now
+> the phone-side story in full.** It stays OPEN in that sense: nothing on the handset separates
+> the tiers except code and the fence that checks it.
+
 ---
 
 ## 3. Class O — the owner's machine, local faults, and misconfiguration
@@ -334,6 +352,25 @@ any outage longer than sixty seconds, which is every outage a queue exists for. 
 time is not available either: PB-SEC-2 pins the biometric gate as **per-use** for revoke, kill
 switch, launch and kill — exactly ADR-007 D7's list of what may queue — so re-authoring needs the
 user present and consenting again, which is a prompt and not a queue.
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — the SECOND leg of this argument is gone; the residual
+> stays OPEN on the first.** PB-SEC-2 is VOID: there is no per-use gate, no prompt, and nothing
+> that needs the user present, so *"re-signing at drain time is not available"* can no longer be
+> argued that way. **The first leg is untouched and is the one that decides it**: the commands
+> this system authors carry a signed one-minute `ExpiresAt`, `internal/phonecore/opqueue.go` never
+> re-signs or re-keys on replay, and `internal/skeleton/deviceauth.go` refuses an expired command.
+> `b42_offlinequeue_test.go` proves that half executably and does not touch the gate.
+>
+> **This makes the residual narrower, not smaller.** Whoever amends PB-NET-4 now has to answer a
+> question B133 did not close: with no user-consent step in the way, is re-signing at drain time
+> *acceptable*, and what would authorise it? That is a security decision about the wire — the
+> signed horizon exists so a captured command cannot be replayed later by the relay — and it must
+> not be resolved by observing that the prompt is gone.
+>
+> The sentence below beginning *"PB-NET-4's queue clause and ADR-007 D7's last sentence are
+> invalidated by later decisions"* now has one invalidating decision rather than two: §6.0's
+> signed horizon by op class. PB-SEC-2's per-use gate is not a live decision to be invalidated
+> against.
 
 Proven, executably, in `internal/skeleton/b42_offlinequeue_test.go`.
 
@@ -451,7 +488,17 @@ a trap for the next slice that adds a caller.
 - **PB-E2E-5 (physical handset)** — ADR-007 **B31**, approved by enumeration: no real biometrics, no
   camera, no FCM delivery, no Doze, no hardware Keystore attestation. **An emulator is not a
   handset**, and every Android claim in this phase is *what the app asks the platform for*, never
-  what the platform then does. The gate's runbook is
+  what the platform then does.
+
+  > **AMENDED 2026-07-31 (ADR-007 B133) — NARROWED by one item.** "Real biometrics" has left this
+  > enumeration because the feature left the product: all phone-side user authentication is
+  > removed, so there is no prompt, per-use tier or timed tier to exercise on a handset. This is
+  > removal by feature deletion, not reclassification by fiat. **Camera, FCM delivery, Doze and
+  > hardware Keystore attestation stay deferred, stay in the gate, and stay UNRUN** — and the
+  > hardware-attestation item matters more now, because sealing at rest is one of the three things
+  > B133 explicitly keeps and its value rests on the key really being hardware-backed.
+
+  The gate's runbook is
   `docs/operations/physical-handset-gate.md`, **every step of it marked UNRUN**; writing it
   surfaced the two entries below, which are residuals rather than deferrals because they are
   properties of the shipped code and not of the missing device.

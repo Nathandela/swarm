@@ -110,6 +110,16 @@ keystroke before the app does (**so the lease and the biometric gate protect the
 the keyboard**), and an accessibility service can read the rendered screen and synthesise
 gestures (**so neither `FLAG_SECURE` nor `filterTouchesWhenObscured` excludes it**).
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — "the lease and the biometric gate" is now "the lease".**
+> There is no biometric gate; all phone-side user authentication is removed. **The limit itself is
+> unchanged and so is the point being made**: a third-party IME sees keystrokes before the app
+> does, and what the lease protects is the CHANNEL between phone and machine, never the keyboard.
+> That distinction was always the wire-side claim, and under B133 the wire is the whole boundary.
+>
+> **PB-SEC-12's tapjacking filtering survives and matters MORE**, not less: `revoke` and
+> `take control` no longer sit behind a per-use prompt, so `filterTouchesWhenObscured` is what
+> stands between an overlay and a destructive action.
+
 ### PB-SEC-13 — the release build
 
 `isDebuggable = false` and `isProfileable = false`, stated rather than inherited, with the
@@ -296,6 +306,11 @@ classes=32 tests=208 failures=0 errors=0     (baseline 205 across 31; +3 in 1 ne
    biometrics, camera, FCM delivery, Doze or hardware attestation. `FLAG_SECURE`,
    `setRecentsScreenshotEnabled` and `filterTouchesWhenObscured` are asserted as *what the app
    asks the platform for*, never as what the platform then does.
+
+   > **AMENDED 2026-07-31 (ADR-007 B133).** "No real biometrics" has left PB-E2E-5's scope,
+   > because the feature left the product — removal by feature deletion, not reclassification.
+   > Camera, FCM delivery, Doze and hardware attestation stay deferred. Nothing else in this
+   > residual changes.
 
 ## Derivation
 

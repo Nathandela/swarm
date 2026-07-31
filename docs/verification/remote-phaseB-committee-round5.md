@@ -99,6 +99,13 @@ added `PB-SAS-4` together — **one protocol change, not two**); the biometric g
 halves; the unwired app surfaces; `PB-E2E-5` on real hardware, which first requires making it
 runnable; and a single immutable commit with every gate evidenced against it.
 
+> **AMENDED 2026-07-31 (ADR-007 B133) — one blocker in this list is void and one has narrowed.**
+> *"The biometric gate's three open halves"* is **VOID**: the gate is deleted, PB-SEC-2's subject
+> has left the product, and nothing is owed on it. *"`PB-E2E-5` on real hardware"* stays blocking
+> and **narrows by one item** — real biometrics leaves its scope with the feature; real camera,
+> real FCM, Doze and hardware Keystore attestation stay in the gate and stay UNRUN. The other five
+> blockers are unaffected, and no vote recorded here is re-cast.
+
 ## The trajectory, stated honestly
 
 Rounds 1–4 each found more than the last. **Round 5 found less that is new and more that is

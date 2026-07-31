@@ -1,5 +1,35 @@
 # S14a evidence — the Go custody seam (PB-KEY-9, first half)
 
+> ## AMENDED 2026-07-31 (ADR-007 B133) — the seam survives whole; the words "lock" and "biometric" in it do not
+>
+> **PB-KEY-9 is unaffected**, and so is everything this slice actually built: the failable
+> `crypto.KeyStore`, the two distinguishable sentinels, the injectable `Sealer` at
+> `phonecore.Resume`, fail-closed omission, `Insecure...`-at-the-call-site, the re-derived publics
+> and `ErrPublicKeyMismatch`, and the `PurgeKeys` verb. `internal/remote/crypto` is FROZEN and B133
+> changes no wire format, no on-disk format and no Go interface signature.
+>
+> **What B133 removes is the EVENT this file's prose keeps naming.** All phone-side user
+> authentication is deleted, so there is no screen lock, no "after the user authenticates", no
+> freshness window and no prompt. Read every such phrase below as follows:
+>
+> - **"A lock stops signing" / "a purge taken with the tier locked"** — the tier is no longer
+>   locked by a user walking away. It is closed in a process that has not resumed, and it is
+>   destroyed by a **revoke or unpair**, which is where `PurgeKeys` is now reached from
+>   (`internal/phonecore/state.go:808`). The purge also got **wider**: both tiers go, not just
+>   content.
+> - **"A content key installed after the user authenticates"** (F2) — the defect and its fix are
+>   unchanged; the caller that installs a content key is now `UnsealContent` on an ordinary
+>   resume rather than one behind a prompt.
+> - **"The content key was recoverable without the biometric"** — the at-rest split is still real
+>   and still sealed; what it no longer buys is an authentication check, and B133 accepts that
+>   explicitly. Sealing at rest is KEPT because non-exportability defends **offline extraction of
+>   the app data directory**, an attacker who holds the bytes and not the handset.
+> - **"The push that asks for the biometric"** — the push still arrives and the routing id is
+>   still needed; nothing asks for a biometric at the end of it.
+>
+> **PB-KEY-2 and PB-KEY-7 are NARROWED, PB-KEY-6 and PB-KEY-9 are not, and PB-SEC-2 is VOID.**
+> The single-row Derivation section at the end of this file is for PB-KEY-9 and is unaffected.
+
 **Commits**: `582676e` (slice), `3dfbab7` (B18(a) fence), `010876a` (re-audit fixes).
 **Requirement**: PB-KEY-9. **Decisions**: ADR-007 B14, B17, B18.
 

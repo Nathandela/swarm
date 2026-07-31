@@ -91,6 +91,19 @@ gate before TDD begins.
    for the NSE (decrypts only "activity on machine X"); session/mailbox content under a biometric-gated
    content key; generic outer payload.
 
+   > **AMENDED 2026-07-31 (ADR-007 B133) — this finding produced the two-tier split, the split is
+   > KEPT IN FULL, and its rationale has been rewritten out from under it.** The premise quoted here
+   > — 5.1's *"a stolen phone must not become data exfiltration"* — is **retired**: the phone and
+   > whoever holds it are now trusted, exactly as the owner-uid user of the Mac has always been.
+   > **The remedy nonetheless survives whole, on a different and stronger argument**: the wake key
+   > is content-free because **FCM/Google reads every push payload it carries**, and the carrier of
+   > the push is squarely inside the declared adversary. So "content-free wake key, content under a
+   > separate key, generic outer payload" is still exactly what ships — and it is now enforced at
+   > the SENDER, in the gateway, rather than by a phone-side gate. Delete "biometric-gated" from the
+   > sentence; keep everything else. The accepted residual is stated once, in B133: a stolen
+   > unlocked phone gives its holder full control, and revoke from the computer is the only
+   > surviving mitigation.
+
 8. HIGH — Connection lifecycle, error taxonomy, and migrations under-specified (codex, sonnet). No
    client-side reconnect backoff/jitter (only "no retry storm on Asleep"), no keepalive/half-open bounds,
    no duplicate-connection takeover, no machine-readable refusal-reason vocabulary (four areas invent

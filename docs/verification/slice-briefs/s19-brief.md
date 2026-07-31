@@ -1,5 +1,18 @@
 # BRIEF — Phase B slice S19: the exit demonstration (PB-E2E-1/2/3/4)
 
+
+> **AMENDED 2026-07-31 (ADR-007 B133) — this brief is a DATED INSTRUCTION and parts of it would now
+> instruct wrongly.** The trust boundary is the wire between phone and computer; all phone-side user
+> authentication is removed with its code. **PB-SEC-2 is VOID; PB-KEY-2, PB-KEY-7, PB-KEY-8,
+> PB-APP-7, PB-PUSH-4 and PB-E2E-5 are NARROWED.** The brief is left unedited as the record of what
+> the implementer was told. Do not hand it to anyone as current instructions without reading B133
+> and `docs/specifications/remote-phaseB-deauth-plan.md` first.
+>
+> Specific to this brief: the PB-E2E-5 instruction below is unchanged in spirit — **"may not be
+> reclassified" still binds.** B133 is not a reclassification: real biometrics leaves the gate
+> because the feature leaves the product, and real camera, real FCM, Doze and hardware Keystore
+> attestation all stay deferred and stay in the gate.
+
 cwd = `/Users/Nathan/Code/swarm/.claude/worktrees/remote-control-research`. Work only there.
 
 Four requirements. This is the slice that decides whether Phase B is real, and 27 of the 29 slices

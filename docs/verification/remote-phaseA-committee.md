@@ -31,6 +31,11 @@ peeks on any revoke). Consider epoch rotation on revoke.
 codex#4 + opus F2 + sonnet#2. (a) `off` re-checks per keystroke (drops input) but never tears down
 the lease/connections or clears cc.control, so ON before the signed expiry reactivates the lease
 without a fresh take_control/biometric — contradicts the DoD "off severs the gateway". (b) The
+<!-- AMENDED 2026-07-31 (ADR-007 B133): read "without a fresh take_control" -- there is no
+     biometric. The finding and its fix are unaffected; only the second half of that pairing has
+     lost its subject. `swarm remote off` -> `SeverAllRemoteControl` is now the ONLY surviving
+     mitigation for a lost handset, so this blocker's subject matters more than when it was
+     raised, not less. -->
 OUTBOUND seq counters (RelaySink.seq journal+terminal, CommandBridge.replySeq) are in-memory and
 reset to 0 on gateway restart while EpochID + the phone's per-stream high-water are durable -> the
 phone silently drops ALL journal + terminal + reply frames after any gateway restart until the
