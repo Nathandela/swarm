@@ -7320,3 +7320,116 @@ policy, a keying scheme these re-sent-state frames do not have, and an answer to
 cascade — a quota refusal means the mailbox is full, and retrying into a full mailbox is how
 you make it worse. **That is a design question with a budget attached, and it is recorded here
 rather than answered in a defect fix.**
+
+---
+
+## B128 — The instrument: compare the requirement's SUBJECT against the fence's
+
+**2026-07-31.** The S13 tranche (`PB-TOOL-1..7`, `PB-RUN-1..5`, twelve rows, all green, never
+examined) was derived independently. Four findings, six rows verified clean, two named as **NOT
+DERIVED** rather than counted. **The instrument matters more than the findings, so it is recorded
+above them.**
+
+> **THREE OF THE FOUR FINDINGS ARE ONE SHAPE: A FENCE POSITIONED ONE LEVEL ABOVE ITS
+> REQUIREMENT'S SUBJECT.** The **job** instead of the lane. The **table** instead of the socket.
+> The hash's **shape** instead of the hash.
+>
+> **Ask what the requirement is quantified over. Then ask what the fence is quantified over.** A
+> requirement quantified over "every X", over a channel, or over an observer is routinely fenced
+> at one component or one call site — and the fence then passes for a reason that has nothing to
+> do with the property.
+>
+> This is the same instrument that found B125's cursor, and it has now produced findings in five
+> separate families. It is the highest-yield question in this audit.
+
+### C — two copies of a supply-chain hash, neither verified against anything (PB-TOOL-4)
+
+The Gradle distribution SHA-256 exists twice: the copy `gradle-wrapper.properties` **enforces**,
+and `SWARM_GRADLE_DISTRIBUTION_SHA256` in `android/toolchain.env`. `TestPBTOOL4_DistributionIsPinnedAndVerified`
+checked the enforced copy for **shape only** — non-empty, 64 hex characters — so replacing it with
+`deadbeef` repeated eight times left the whole package green. And the pin's copy had **no consumer
+anywhere in the repository**: a dead duplicate that could not disagree with anything.
+
+**The receiver's irreversible act is what makes this the serious one.** The wrapper does not fetch
+the distribution, it **executes** it, and this hash is the only thing deciding whether the fetched
+bytes are the bytes anybody chose. B125's ninth axis — *who mints the value, and what does the
+receiver do with it that it cannot undo* — applied to a supply chain.
+
+**The technique was known and applied forty lines away.** `TestPBTOOL4_WrapperJarChecksumMatchesThePin`
+hashes the committed jar and compares it to its pin. **One of the two hashes was verified against
+reality; the other against nothing.** `s18_sec14_supplychain_test.go` covers neither.
+
+### A — a lane is its STEPS (PB-TOOL-7)
+
+`TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen` states in its own doc that it "rejects the two
+annotations that make a failing lane report success". It read `job.continueOnError` and
+`job.ifCond`; `ciStep` **did not carry the fields at all**, so step-level annotations were not
+unchecked but unparsed. Measured, whole package green each time: `continue-on-error: true` on the
+Gradle-gate step, and `if: false` on the tagged-artifact step. The second disables the only place
+the real AAR is inspected per-ABI and for absolute builder paths — precisely the orphan hole
+`TestPBTOOL7_AndroidLaneRunsTheTaggedArtifactAssertions` exists to close.
+
+### B — a fixture whose data cannot discriminate (PB-TOOL-6)
+
+The same test searched the **concatenated run body** for each Gradle task. The lane's last step is
+`go test -tags androidgate ...`, which contains `"test"`. So deleting `test` from
+`./gradlew --no-daemon lint test` **survived**, while deleting `lint` — a word appearing nowhere
+else in the lane — was **caught**. The asymmetry is the tell, and it is round 7's batcher defect
+in a different costume: a fixture whose data cannot tell the correct implementation from the
+broken one passes both.
+
+### A and B compose, and the composition then happened by accident
+
+Applied together they let CI run **zero Kotlin unit tests and zero real-artifact assertions** with
+`android/gate` and `internal/verify` both green. **Hours after that was measured, `692ca66` broke
+the Kotlin build on the pushed branch and nothing noticed** — it replaced the `LifecycleConvergence`
+import in `PhoneSurface.kt` with duplicates of two imports eighteen lines above, while line 495
+references it from another package. `go build`, `go vet` and `go test ./...` are green over it,
+because none of them compiles Kotlin; the CI Gradle gate is the only thing in the repository that
+does, and it is exactly the step A and B could silently remove. Fixed in `cb77823`. **The risk and
+its realisation, independently, in one session** — recorded together because neither is as
+convincing alone.
+
+### D — PB-RUN-3 is fenced twice at a description and never at the socket. OPEN.
+
+The row's subject is *what the socket does* on backgrounding, Doze, App Standby and battery saver.
+`connectivity_test.go` fences the TSV (totality, closed vocabulary, joint consistency).
+`ConnectivityPolicyTest.kt` fences that the `ConnectivityPolicy` object **equals the TSV**. Two
+representations of one table, cross-checked against each other; **nothing fences that the shipping
+code obeys the object.** `PhoneSurface.release()` closes the socket and no test exercises it.
+Inspection, not mutation, and labelled so — the Kotlin mutation could not run against a module
+that did not compile. **Left open, not fixed here.**
+
+### NOT DERIVED — two rows, named rather than counted
+
+`LifecycleConvergenceTest.kt` (PB-RUN-5's behavioural half) and `RuntimeManifestTest.kt`
+(PB-RUN-2's Android-runtime half) could not be mutated, for the compile reason above. The whole
+tagged `androidgate` lane is likewise underived; it needs a full toolchain run on a quiet host.
+**A future reader must be able to tell "we looked and it held" from "we could not look"**, so
+these are marked in `docs/verification/remote-phaseB-s13-evidence.md` rather than folded into the
+clean count. The traceability table cannot carry this distinction — it is generated by
+`scripts/phaseb-traceability.py` and its status column is about shipping.
+
+### PB-RUN-2 was built right, and that is recorded as loudly as the defects
+
+Eight rounds of this document are findings. `PermissionGateTest.kt` is a truth table over four
+inputs that covers **the two states real apps get wrong** — that "permanently denied" is not
+`!shouldShowRequestPermissionRationale`, since that predicate is equally false before the first
+ask, and that `POST_NOTIFICATIONS` **does not exist** below API 33, which is a third answer rather
+than a convenience. It adds a totality check over the enum so a permission a later slice adds
+cannot silently resolve to granted, asserts the degraded capabilities are **distinct per
+permission**, and persists the "have we asked" bit the platform does not offer under a data root
+excluded from both cloud backup and device-to-device transfer. **A row that was built right
+deserves its line.**
+
+### RESIDUAL — which hosts may serve a Gradle distribution
+
+> The PB-TOOL-4 fix binds the two copies of the distribution hash **to each other**. It binds
+> neither to the real Gradle distribution, and **nothing constrains `distributionUrl`'s HOST** —
+> repointing it at another host while keeping the version and the `https://` scheme survives every
+> fence in the package.
+>
+> **Which hosts a distribution may be fetched from is a policy nobody has stated; it is recorded
+> as residual, not invented here** — the same form PB-APP-11 uses for its beacon interval and
+> B126 for its cursors-per-seq slack. It is a decision for whoever owns §6.0, and it is now
+> decidable because it is specified.

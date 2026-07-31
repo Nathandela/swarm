@@ -109,7 +109,7 @@ func TestPBTOOL4_DistributionIsPinnedAndVerified(t *testing.T) {
 }
 
 // TestPBTOOL4_DistributionChecksumMatchesThePin is the sibling of the jar test below, and it
-// was MISSING -- derived 2026-07-31, ADR-007 B127 finding C.
+// was MISSING -- derived 2026-07-31, ADR-007 B128 finding C.
 //
 // Two copies of this hash exist: the one Gradle actually enforces, in
 // gradle-wrapper.properties, and SWARM_GRADLE_DISTRIBUTION_SHA256 in the toolchain pin. The

@@ -21,7 +21,7 @@ type ciStep struct {
 	with map[string]string
 	env  map[string]string
 	// continueOnError and ifCond are the STEP-level twins of the job scalars below. They were
-	// not parsed at all until ADR-007 B127 finding A, which is why a `continue-on-error: true`
+	// not parsed at all until ADR-007 B128 finding A, which is why a `continue-on-error: true`
 	// on the Gradle-gate step and an `if: false` on the tagged-artifact step both survived
 	// every assertion in this package: the fence was quantified over the job, and a lane is
 	// its steps.
@@ -448,7 +448,7 @@ func TestCIYAMLParser_ReadsJobsStepsAndBlockScalars(t *testing.T) {
 	}
 }
 
-// The step-level annotations and the gradlew command-line reader, both added by ADR-007 B127
+// The step-level annotations and the gradlew command-line reader, both added by ADR-007 B128
 // after each survived the mutation it was supposed to catch. This file's own rule is that the
 // reader is unit-tested against the mutations the PB-TOOL-7 assertions must catch, so the two
 // new readers get their positive AND negative controls here before anything asserts on them.

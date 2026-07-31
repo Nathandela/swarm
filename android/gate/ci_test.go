@@ -70,7 +70,7 @@ func TestPBTOOL7_AndroidLaneBuildsTheAAR(t *testing.T) {
 // TestPBTOOL7_AndroidLaneRunsTheGradleGate reads the gradlew COMMAND LINE.
 //
 // It used to search the whole concatenated run body for "gradlew" and, separately, for each
-// task name. ADR-007 B127 finding B: the lane's last step is `go test -tags androidgate ...`,
+// task name. ADR-007 B128 finding B: the lane's last step is `go test -tags androidgate ...`,
 // which contains "test", so deleting `test` from `./gradlew --no-daemon lint test` left this
 // assertion -- and every other one in this package -- green, while deleting `lint`, a word
 // that appears nowhere else in the lane, was caught. A fixture whose data cannot tell the
@@ -120,7 +120,7 @@ func TestPBTOOL7_AndroidLaneRunsTheTaggedArtifactAssertions(t *testing.T) {
 // TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen rejects the two annotations that make a failing
 // lane report success -- AT BOTH LEVELS.
 //
-// It used to read the job scalars only, and ADR-007 B127 finding A is that a lane IS ITS STEPS:
+// It used to read the job scalars only, and ADR-007 B128 finding A is that a lane IS ITS STEPS:
 // `continue-on-error: true` on the Gradle-gate step and `if: false` on the tagged-artifact step
 // each survived this entire package. The second is the worse one -- that step is the only place
 // the real AAR is inspected per-ABI and for leaked builder paths, which is precisely the orphan
