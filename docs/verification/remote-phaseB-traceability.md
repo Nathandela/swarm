@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**105 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**106 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -135,7 +135,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-OPS-1 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-2 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-3 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
-| PB-OPS-4 | S4 | shipped | not derived | `docs/verification/remote-phaseB-s4-evidence.md` |
+| PB-OPS-4 | S4 | shipped | **DERIVED** — `.goreleaser.yaml`'s `main: ./cmd/swarm-relay` repointed at `./cmd/swarm`, so the relay stops being a release artifact -> `TestGoreleaser_ShipsGatewayAndRelay` (`internal/remote/supervise/release_test.go`) fails. Reverted; sha256 `57bf718d5a90...` identical. **Recorded because the first run looked like a finding and was not:** I ran `internal/version`, `cmd/swarm` and `internal/verify` — the packages `grep goreleaser` surfaced first — and all three passed, which reads as "nothing fences the release set". The fence lives in a fourth package. **A null result from an incomplete test set is not a finding**, and the check that separated them was listing every `_test.go` that mentions the file before believing the first run. | `docs/verification/remote-phaseB-s4-evidence.md` |
 | PB-OPS-5 | S20 | shipped | not derived | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-PAIR-1 | S3 | shipped | not derived | `docs/verification/remote-phaseB-s3-evidence.md` |
 | PB-PAIR-2 | S16 | shipped | **DERIVED** — `PermissionGate.degradedCapability` mutated so a **DENIED** camera permission names no degraded capability (the `PERMANENTLY_DENIED` arm left intact, so only one of the two denial paths breaks) -> **two Kotlin tests fail**: `PermissionGateTest > every_non_granted_state_names_a_degraded_capability` and `PairingPermissionTest > both denial paths offer manual entry`. Reverted; `PermissionGate.kt` sha256 `220e27a4b185...` identical. **The second failure is the row's own clause** — the manual-entry fallback is fenced against *both* denial paths, not just the permanent one, which is the distinction a user who taps "deny" once rather than "never ask again" actually lives in. | `docs/verification/remote-phaseB-s16-evidence.md` |
