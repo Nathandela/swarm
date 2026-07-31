@@ -230,3 +230,21 @@ PB-PAIR-4 requires.
 - One existing security assertion was **restated and made stricter**, with its reasoning recorded in
   `96b41ef`: it had demanded the machine "cleanly accept" a tampered decision while the device
   failed closed, which **was the deterministic half-pair asserted as expected behaviour.**
+
+## Derivation
+
+**Backfilled 2026-07-31 from ADR-007 B116**, which recorded the round-7 `PB-BIND` deep-derivation.
+Those mutations were **run and their results recorded per row**, in prose rather than in this marker
+format — so the generator read the family as underived while four rows had in fact been broken on
+purpose. **Only rows whose mutation B116 names individually are backfilled here.** The rest stay
+`NOT DERIVED`, including three that B116 recorded as findings and one it explicitly left unmutated.
+
+| requirement | verdict | mutation made to fail |
+|---|---|---|
+| PB-BIND-1 | NOT DERIVED | B116 recorded the topology half as READ, not mutated, and the row's literal criterion — `gomobile bind` succeeds — **skips** on any host without an Android SDK. Not derived, and its own criterion does not execute in the normal gate. |
+| PB-BIND-2 | DERIVED | Real `gobind` run, 167 elements / 167 bind-legal / 0 illegal, with a live negative control that hard-refuses `internal/phonecore`. Non-vacuous **by measurement** rather than by assertion; confirmed not silently skipping. |
+| PB-BIND-3 | NOT DERIVED | Round-7 FINDING, unfixed: a facade method that never works — error-classed, traced, golden regenerated — **passed both full suites**. The test named `Every...` has no completeness check. |
+| PB-BIND-4 | NOT DERIVED | Round-7 FINDING, unfixed: a second reverse-bound key-crossing interface passes both custody fences. They fence DIRECTION; nothing fences COUNT ACROSS TYPES. |
+| PB-BIND-5 | DERIVED | `defer barrier(&err)` removed from `App.Start` -> the source half fails (*"the first statement of App.Start is not a deferred recover"*) while the runtime half passes, because `Start` on a zero receiver errors before it can panic. The two halves are complementary, and the **total** one is the source half. |
+| PB-BIND-6 | NOT DERIVED | Round-7 FINDING, unfixed: inverting `drop-oldest` to drop-**newest** — same constant, same counter, same doc string — leaves **both** fences passing. One checks the constant and the prose, the other that *some* events dropped. Nothing checks WHICH. |
+| PB-BIND-7 | DERIVED | Tripped by **every** surface-changing mutation in the round-7 pass, including a `Sas()`/`SAS()` Java-namespace collision. Sensitive; its limit is that it pins **Go** names, not the Java namespace the app compiles against. |

@@ -103,3 +103,12 @@ Full-suite failures at the time of this run belong to slice S3's failing-first Q
 (`qrterm` build-RED, `cmd/swarm` QR x4, `internal/skeleton` PB-PAIR-7 x2), confirmed not
 attributable to S1 by stashing S1's files and reproducing the identical failures at HEAD.
 `TestRemotePeek_LargeGridClippedUnderMaxFrame` is a known pre-existing load flake.
+
+## Derivation
+
+**Backfilled 2026-07-31 from ADR-007 B116** — mutation run and result recorded in round 7, in prose
+rather than this marker format.
+
+| requirement | verdict | mutation made to fail |
+|---|---|---|
+| PB-BIND-0 | DERIVED | `import _ ".../internal/daemon"` added to the facade -> FAILS naming **32 of 59** packages, across host + android/arm64 + ios/arm64. Note `internal/phonecore/deps_allowlist_test.go` guards a **different** and no-longer-bound subject and correctly stayed green under the same mutation: two allowlists, only one on the right subject, and it is the right one. |
