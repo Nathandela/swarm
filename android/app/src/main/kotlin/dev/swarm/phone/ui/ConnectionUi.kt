@@ -176,3 +176,41 @@ data class ClockBanner(
             }
     }
 }
+
+/**
+ * PB-APP-11 -- how recently the MACHINE itself last spoke, and whether anything on screen may
+ * still be presented as current.
+ *
+ * IT IS NOT A CONNECTION STATE, and that is the whole reason it exists. The declared adversary
+ * (ADR-007 D9) does not have to break the connection: it withholds the newest frames and keeps
+ * answering the polls. No gap forms, so no stream is stale; the poll succeeds, so
+ * [ConnectionBanner] reads "Connected to your machine."; and `App.Presence` asks that same
+ * relay whether the machine is alive. The only signal left is the machine's own AAD-covered
+ * timestamp, which a relay can make older by holding a frame and can never make newer.
+ *
+ * @param silent `swarmmobile.Freshness.Silent`: past section 6.0's five-minute budget.
+ * @param lastHeardUnixMs the MACHINE's own stamp, not this phone's arrival time. Zero means
+ *   this phone has never heard from its machine -- a first launch, or a restore that has not
+ *   yet taken a frame -- which is silent, and honestly so.
+ */
+data class MachineFreshness(
+    val silent: Boolean,
+    val lastHeardUnixMs: Long,
+) {
+    /**
+     * The user-facing line, or null while the machine is inside the budget.
+     *
+     * The time is formatted by the CALLER (an Android formatter carrying the user's locale and
+     * time zone), so this model states WHAT to say and never has to be right about a time zone
+     * to be testable.
+     *
+     * It says "not heard from" rather than "your machine is offline" deliberately: nothing on
+     * this wire is a liveness beacon, so an idle machine and a withheld one are
+     * indistinguishable from here. The phone reports what it knows.
+     */
+    fun notice(formatTime: (Long) -> String): String? = when {
+        !silent -> null
+        lastHeardUnixMs == 0L -> "Not heard from your machine yet."
+        else -> "Not heard from your machine since ${formatTime(lastHeardUnixMs)}."
+    }
+}

@@ -117,8 +117,18 @@ data class AuthGrant(
  */
 data class MachinePane(
     val machineId: String,
-    /** `App.Presence`, verbatim. */
+    /**
+     * `App.Presence`, verbatim -- and it is the RELAY'S OPINION, never evidence about the
+     * machine (PB-APP-11). It must be rendered with [freshness] beside it, which is why that
+     * is a required parameter of this pane rather than a screen's option.
+     */
     val presence: String,
+    /**
+     * `App.MachineFreshness` -- the phone's OWN evidence: how long since the machine's newest
+     * authenticated word. A relay that withholds every frame while answering every poll leaves
+     * presence reading "online" and this reading silent, which is the whole of ADR-007 B121.
+     */
+    val freshness: MachineFreshness,
     val pairedDeviceName: String,
     /** True when the owner has turned remote control OFF at the machine. */
     val killSwitchEngaged: Boolean,
@@ -127,6 +137,17 @@ data class MachinePane(
     val canSetKillSwitch: Boolean = false
 
     val canRevokeThisDevice: Boolean = true
+
+    /**
+     * What the pane says about reachability, and it refuses to let the relay's word stand
+     * alone: while the machine is silent past section 6.0's budget, the presence line is
+     * qualified by what this phone can actually vouch for.
+     */
+    fun presenceExplanation(formatTime: (Long) -> String): String =
+        freshness.notice(formatTime)?.let { notice ->
+            "$notice The relay reports \"$presence\", which is the relay's word and not your " +
+                "machine's."
+        } ?: "Your machine is $presence."
 
     val killSwitchExplanation: String
         get() = if (killSwitchEngaged) {

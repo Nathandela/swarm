@@ -22,9 +22,11 @@ class MachinePaneTest {
         presence: String = "online",
         killSwitchEngaged: Boolean = false,
         activity: List<JournalRow> = emptyList(),
+        freshness: MachineFreshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_753_900_000_000),
     ) = MachinePane(
         machineId = "machine-endpoint-0001",
         presence = presence,
+        freshness = freshness,
         pairedDeviceName = "swarm phone",
         killSwitchEngaged = killSwitchEngaged,
         activity = activity,
@@ -36,6 +38,41 @@ class MachinePaneTest {
         assertEquals("online", p.presence)
         assertEquals("swarm phone", p.pairedDeviceName)
         assertEquals(1, p.activity.size)
+    }
+
+    /**
+     * PB-APP-11. The relay is the declared adversary and it answers the presence query, so a
+     * pane that renders "online" on its word alone is reporting the adversary's claim as the
+     * machine's state. While this phone has not heard from the machine itself past section
+     * 6.0's budget, what it can vouch for has to be said too.
+     */
+    @Test
+    fun `a silent machine is never presented on the relay's word alone`() {
+        val silent = pane(
+            presence = "online",
+            freshness = MachineFreshness(silent = true, lastHeardUnixMs = 1_753_900_000_000),
+        )
+        val line = silent.presenceExplanation { "14:26" }
+        assertTrue("the user is told WHEN", line.contains("since 14:26"))
+        assertTrue("the relay's word is attributed to the relay", line.contains("relay"))
+
+        val healthy = pane(presence = "online")
+        assertFalse(
+            "a machine inside the budget carries no warning",
+            healthy.presenceExplanation { "14:26" }.contains("Not heard"),
+        )
+    }
+
+    /**
+     * A phone that has never heard from its machine says so rather than naming a time it does
+     * not have. Zero is not a timestamp, and rendering it would read as 1 January 1970.
+     */
+    @Test
+    fun `a phone that has never heard from its machine names no time`() {
+        val never = MachineFreshness(silent = true, lastHeardUnixMs = 0)
+        val notice = never.notice { "14:26" }
+        assertEquals("Not heard from your machine yet.", notice)
+        assertNull("inside the budget there is nothing to say", MachineFreshness(false, 0).notice { "14:26" })
     }
 
     /**
