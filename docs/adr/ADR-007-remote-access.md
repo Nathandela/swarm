@@ -7657,3 +7657,86 @@ the three blockers above corresponds to a requirement**, met or unmet — they a
 asymmetries, a policy interacting with a test topology, and a stale binary. **The derivation backlog
 measures whether fences hold; it does not measure whether the system can be stood up.** Both matter,
 and only one of them had been getting attention.
+
+## B132 — Second bring-up: the app reached a real handset, and a derivation mutation reached a binary
+
+B131 rendered a QR. This reached an **Android 16 (SDK 36) Galaxy A26 5G**, serial `RZGL41Y3E1A`: APK
+installed, `dev.swarm.phone/.PhoneActivity` launched, surface rendered, view hierarchy dumped. Five
+findings. **The first is the serious one, and it is about this process rather than the product.**
+
+### 1. A derivation mutation escaped into a runnable artifact
+
+`internal/remotegw/service.go` carried an uncommitted `&& false`:
+
+```go
+if w, ok := s.cfg.Relay.(LinkWatcher); ok && false {
+```
+
+That disables the **PB-NET-4 relay link watcher** — by its own comment *"the only observer of a link
+that dies while nothing is outstanding"*, and the fix for one of round 7's four CRITICALs. It is a
+mutation somebody made to fail a fence on purpose (B129's requirement) and never reverted.
+
+**The timestamps are the finding.** `service.go` last written **06:44:24**; the gateway binary staged
+for the demo built **06:56:03**. The binary about to be run in front of a user had the critical fix
+compiled out. **Nothing committed it, and nothing caught it** — it surfaced only because a `git status`
+was printed incidentally while looking for something else.
+
+**B129 made mutation mandatory for derivation and said nothing about reverting it.** The obligation to
+break a fence created an obligation to restore it, and only the first half was written down. Reverted;
+gateway rebuilt from a clean tree.
+
+> **No artifact intended for execution should be built from a tree with uncommitted modifications
+> without saying so.** Candidate requirement, not yet in the index.
+
+### 2. The handset with no enrolled biometric is stranded behind a wall of dead controls
+
+**B59 named this strand and priced it** — *"the only case the credential authenticator uniquely
+rescues is a handset with no enrolled Class-3 biometric"* — and the decision to refuse
+`AUTH_DEVICE_CREDENTIAL` stands on its own argument. **What B59 did not do is say what such a handset
+should SEE.** Observed, in full, on a fresh install with a PIN and no fingerprint:
+
+```
+Authenticate to carry on -- the key this needs sits behind your device unlock.
+[UNLOCK YOUR SESSIONS] [TAKE CONTROL] [SEND LINE] [KILL SESSION] [LAUNCH A SESSION] [REVOKE THIS DEVICE]
+This action needs a fingerprint or face unlock. Add one in system settings, then try again.
+```
+
+**Every one of those six controls is inoperable on an unpaired device**, and `PairingSurface` — which
+exists, and carries both a scanner and a typed-payload path — is a hidden child of `PhoneSurface`
+(`PhoneSurface.kt:163`) that never becomes visible. The one line of guidance names a fingerprint. **A
+user cannot deduce from this screen that pairing is the missing step**, and the requirement set has
+nothing to say about it: the first-run state is legible nowhere.
+
+> **An unpaired device must present pairing as the available action, and must not present session
+> controls it cannot perform.** Candidate requirement, not yet in the index.
+
+### 3. The gateway is quiescent before pairing; the runbook implies the opposite
+
+`swarm-remote` exits immediately, cleanly, and correctly:
+
+```
+swarm-remote: no paired device to serve (0 paired, want exactly 1): supervise: nothing to serve; gateway quiescent
+```
+
+**The behaviour is right.** The runbook is not: §1 says `init` *"installs the supervision unit that
+starts it"* and §3's pair step reads as though the gateway is already up. The gateway starts **after**
+a device exists. Ordering defect in `docs/operations/operator-runbook.md`, not in the code.
+
+### 4. Samsung Auto Blocker blocks both USB **and** wireless debugging
+
+One UI's Auto Blocker gates the ADB path entirely; wireless debugging is not an escape hatch from it.
+Costed two round-trips with the operator. No runbook mentions it, and any Samsung tester meets it.
+
+### 5. The surface does not apply window insets
+
+The status bar overlaps the top text on SDK 36, which forces edge-to-edge. Cosmetic, real, trivial.
+
+### What this says about the audit, second time
+
+**B131 observed that none of its three blockers corresponded to a requirement. That repeated: none of
+these five do either.** Two consecutive bring-ups have produced ten findings, **zero** of which the
+requirement set could have surfaced — and this round's most serious was a defect in **the audit's own
+method**, where making a fence fail left the failure in the tree.
+
+Round 7 concluded the specification *"has no instrument for mechanisms it never named."* Hardware
+contact is that instrument, and it has now outperformed re-derivation twice running.
