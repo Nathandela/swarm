@@ -2,6 +2,7 @@ package dev.swarm.phone.keys
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -75,9 +76,12 @@ class CustodyPersistenceTest {
     }
 
     /**
-     * The tier of a restored entry survives too. It decides which KEK opens the blob, so a
-     * store that came back with everything on the WAKE tier would open the content key with no
-     * user present -- PB-KEY-2's split silently collapsed by a restart.
+     * The tier of a restored entry survives too. It decides which KEK opens the blob, so a store
+     * that came back with everything on the WAKE tier would be holding one tier under two names
+     * -- PB-KEY-2's split silently collapsed by a restart, and with it every property the split
+     * still buys after ADR-007 B133: separate aliases are what keep a purge, a discard or a
+     * platform invalidation of one tier from taking the other, and what keeps the content
+     * material out of reach of the key the FCM path uses.
      */
     @Test
     fun `the tier of a restored entry survives the restart`() {
@@ -138,38 +142,56 @@ class CustodyPersistenceTest {
     }
 
     /**
-     * And the two verdicts stay apart across the restart. A locked handset is RECOVERABLE --
-     * the user authenticates and it works -- while a destroyed key is not, and the remedies are
-     * "prompt" and "pair this device again". Collapsing them either loops a user on a prompt
-     * that can never succeed, or throws away a working pairing because the screen was locked.
+     * And the two verdicts stay apart across the restart, TOKEN AND ALL.
+     *
+     * WHAT THIS TEST USED TO CLAIM, and why the claim is gone rather than reworded (ADR-007
+     * B133). It was `a locked tier after a restart is recoverable and not a re-pair`, and it
+     * ended by calling `unlockAll()` and asserting the blob opened -- "the way out works, which
+     * is what makes the refusal a prompt rather than a dead end". THERE IS NO WAY OUT ANY MORE.
+     * No prompt exists in this app, so an auth-required refusal is NOT recoverable: PhoneRuntime
+     * routes it to the same permanent verdict as a destroyed key, because the only population
+     * that can raise it is a pre-B133 install whose content KEK a re-pair replaces. A test that
+     * kept driving `unlockAll()` would be fencing a recovery the product cannot perform.
+     *
+     * WHAT SURVIVES IS THE DISTINCTNESS, and it survives for a reason that has nothing to do
+     * with screens: `phonecore.openSealedDeviceKeys` reads these tokens to tell a per-operation
+     * refusal from a container it cannot parse, and refuses a Resume outright for anything that
+     * is neither. Two refusals carrying one token is a handset that will not start.
      */
     @Test
-    fun `a locked tier after a restart is recoverable and not a re-pair`() {
+    fun `the two refusal verdicts stay distinct across a restart`() {
         val kek = FakeKeystoreKek(lockedTiers = emptySet())
         val backing = PersistentCustodyBacking.inMemoryForTest()
         SealedStore.openOver(kek, backing).put("probe", KeyTier.CONTENT, blob())
 
         kek.lockedTiers = setOf(KeyTier.CONTENT)
-        val restarted = SealedStore.openOver(kek, backing)
         try {
-            restarted.open("probe")
-            fail("a locked content tier must refuse")
+            SealedStore.openOver(kek, backing).open("probe")
+            fail("a content tier whose KEK demands an authentication must refuse")
         } catch (e: KeyCustodyException.UserAuthenticationRequired) {
             assertTrue(
+                "the refusal must carry the auth-required token, or the Go core cannot tell it " +
+                    "from a corrupt container and refuses the Resume outright",
                 (e.message ?: "").contains(GoCustodyFailure.AUTH_REQUIRED_TOKEN),
             )
+            assertFalse(
+                "the two verdicts carry each other's token, so the discriminator decides nothing",
+                (e.message ?: "").contains(GoCustodyFailure.KEY_INVALIDATED_TOKEN),
+            )
         }
-
-        // The way out works, which is what makes the refusal a prompt rather than a dead end.
-        kek.unlockAll()
-        assertArrayEquals(blob(), SealedStore.openOver(kek, backing).open("probe"))
     }
 
     /**
-     * The KEK is fetched PER OPERATION and never memoized -- the property KeyCustody's own doc
-     * calls the thing that makes the content tier's gate real. A store that cached the unwrapped
-     * key across a restart would satisfy every assertion above while keeping the handset
-     * decrypting content after the screen locked (PB-KEY-7).
+     * The KEK is fetched PER OPERATION and never memoized.
+     *
+     * ITS PREMISE MOVED WITH PB-KEY-7's TRIGGER (ADR-007 B133 decision 3). It used to be the
+     * property that made the content tier's GATE real -- "an auth-gated Keystore key re-checks
+     * authorisation on every unwrap; a cached answer keeps decrypting content after the screen
+     * locks". There is no lock event and no gate. What the property now defends is the PURGE: on
+     * revoke or unpair the session drops its record and the Go core zeroizes its copy, and a
+     * store holding the unwrapped tier key in a field would keep serving content material to
+     * anything that asked, after the device stopped being entitled to it -- while every
+     * restart-based test above still passed.
      */
     @Test
     fun `the restored store still asks the KEK on every open`() {
@@ -182,10 +204,9 @@ class CustodyPersistenceTest {
         val after = kek.handedOut.size
         restored.open("probe")
         assertTrue(
-            "the second open handed out no new key, so the unwrapped KEK is cached. An " +
-                "auth-gated Keystore key re-checks authorisation on every unwrap; a cached " +
-                "answer keeps decrypting content after the screen locks, while every " +
-                "restart-based test still passes",
+            "the second open handed out no new key, so the unwrapped KEK is cached. A cached " +
+                "answer survives PB-KEY-7's purge -- the material a revoke exists to make " +
+                "unreachable stays reachable -- while every restart-based test still passes",
             kek.handedOut.size > after,
         )
     }

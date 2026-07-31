@@ -9,8 +9,17 @@ import org.junit.Test
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-APP-7: settings.
  *
- * "Two coarse push toggles honored by PB-PUSH-0's trigger, plus the biometric gate toggle.
+ * "Two coarse push toggles honored by PB-PUSH-0's trigger, ~~plus the biometric gate toggle~~.
  *  UI test; toggles persist and demonstrably suppress delivery."
+ *
+ * PB-APP-7 NARROWS TO TWO SWITCHES (ADR-007 B133). The biometric-gate toggle lost its subject:
+ * there is no local authentication on this handset to turn on or off. The test that drove it --
+ * `disabling the biometric gate never relaxes a per-use action` -- is DELETED rather than
+ * rewritten, and what it fenced is worth restating so nobody looks for it later: it required
+ * that consent could not relax PB-SEC-2's per-use tier, so a settings switch could not become
+ * the "in-memory authenticated = true" the requirement said a test must fail on. PB-SEC-2 is
+ * VOID and the per-use tier it protected does not exist, so the assertion has nothing left to
+ * hold apart.
  *
  * THE SUPPRESSION HALF IS NOT HERE AND MUST NOT BE. PB-PUSH-8 is explicit that local filtering
  * does not satisfy it -- the push would still have been sent and the provider would still see
@@ -28,7 +37,7 @@ class SettingsScreenTest {
     /** Each switch carries its own category. Two controls wired to one preference is the defect. */
     @Test
     fun `the two push toggles address different categories`() {
-        val s = SettingsScreen(alerts = true, mentions = false, biometricGate = true)
+        val s = SettingsScreen(alerts = true, mentions = false)
         assertNotEquals(
             "the two toggles must name different push categories: needs_input is the agent " +
                 "blocked on the owner, finished is the agent handing work back",
@@ -49,11 +58,15 @@ class SettingsScreenTest {
      */
     @Test
     fun `a rebuilt screen shows the persisted values and never a default`() {
-        val persisted = SettingsScreen(alerts = false, mentions = true, biometricGate = false)
+        val persisted = SettingsScreen(alerts = false, mentions = true)
         val rebuilt = SettingsScreen.restore(persisted.snapshot())
         assertFalse(rebuilt.alerts)
         assertTrue(rebuilt.mentions)
-        assertFalse(rebuilt.biometricGate)
+        assertFalse(
+            "a restored screen must not claim the machine has acknowledged what it just read " +
+                "off disk: the values are persisted, the acknowledgement is not",
+            rebuilt.pendingSync,
+        )
     }
 
     /**
@@ -68,7 +81,7 @@ class SettingsScreenTest {
      */
     @Test
     fun `a toggle not yet acknowledged by the machine is shown as pending`() {
-        val s = SettingsScreen(alerts = true, mentions = true, biometricGate = true)
+        val s = SettingsScreen(alerts = true, mentions = true)
         val pending = s.setAlerts(false)
         assertFalse(pending.alerts)
         assertTrue("the machine has not answered yet", pending.pendingSync)
@@ -80,21 +93,24 @@ class SettingsScreenTest {
     }
 
     /**
-     * The biometric gate toggle governs the 60-second window actions only. It can never turn OFF
-     * the per-use gate on revoke, kill switch, launch and kill: PB-SEC-2's table is not a
-     * preference, and a settings switch that relaxed it would be the "in-memory
-     * authenticated = true" the requirement says a test must fail on, reached by consent.
+     * THE SET IS EXACTLY TWO, and that is the assertion PB-APP-7's narrowing needs (ADR-007
+     * B133). What the snapshot carries is what the screen renders after a process death, so a
+     * third preference re-introduced here would be a switch that survives a restart, and this is
+     * where a settings surface silently re-grows one.
      */
     @Test
-    fun `disabling the biometric gate never relaxes a per-use action`() {
-        val off = SettingsScreen(alerts = true, mentions = true, biometricGate = false)
-        assertEquals(BiometricFreshness.PER_USE, off.freshnessFor(GatedAction.REVOKE_DEVICE))
-        assertEquals(BiometricFreshness.PER_USE, off.freshnessFor(GatedAction.KILL_SESSION))
-        assertEquals(BiometricFreshness.PER_USE, off.freshnessFor(GatedAction.LAUNCH))
-        assertEquals(BiometricFreshness.NONE, off.freshnessFor(GatedAction.SEND_INPUT))
-
-        val on = SettingsScreen(alerts = true, mentions = true, biometricGate = true)
-        assertEquals(BiometricFreshness.WINDOW_60S, on.freshnessFor(GatedAction.SEND_INPUT))
+    fun `the persisted set is the two push categories and nothing else`() {
+        val fields = SettingsSnapshot::class.java.declaredFields
+            .filterNot { it.isSynthetic }
+            .map { it.name }
+            .toSet()
+        assertEquals(
+            "SettingsSnapshot persists $fields. PB-APP-7 is two coarse push toggles; the " +
+                "biometric-gate toggle left with PB-SEC-2 and there is no local authentication " +
+                "on this handset for a third preference to govern",
+            setOf("alerts", "mentions"),
+            fields,
+        )
     }
 
     /**
@@ -105,12 +121,12 @@ class SettingsScreenTest {
      */
     @Test
     fun `a denied notification permission is surfaced beside the toggles`() {
-        val denied = SettingsScreen(alerts = true, mentions = true, biometricGate = true)
+        val denied = SettingsScreen(alerts = true, mentions = true)
             .withNotificationPermission(dev.swarm.phone.runtime.PermissionState.PERMANENTLY_DENIED)
         assertTrue(denied.notificationsBlockedNotice.isNotBlank())
         assertTrue(denied.togglesDisabled)
 
-        val notApplicable = SettingsScreen(alerts = true, mentions = true, biometricGate = true)
+        val notApplicable = SettingsScreen(alerts = true, mentions = true)
             .withNotificationPermission(dev.swarm.phone.runtime.PermissionState.NOT_APPLICABLE)
         assertFalse("below API 33 notifications work and the toggles are live", notApplicable.togglesDisabled)
     }

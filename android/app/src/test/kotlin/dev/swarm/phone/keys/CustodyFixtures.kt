@@ -48,8 +48,23 @@ object Pin {
  * way the platform drives it: by REFUSING, not by a flag the code under test can read.
  */
 class FakeKeystoreKek(
-    /** Tiers whose key currently refuses to unwrap, as a locked device refuses CONTENT. */
-    var lockedTiers: Set<KeyTier> = setOf(KeyTier.CONTENT),
+    /**
+     * Tiers whose key refuses to unwrap for want of a user authentication.
+     *
+     * THE DEFAULT IS EMPTY BECAUSE NOTHING THIS BUILD PROVISIONS CAN BE LOCKED (ADR-007 B133):
+     * every tier KEK is generated with `setUserAuthenticationRequired(false)`. It defaulted to
+     * `setOf(CONTENT)` and that default was what kept four tests green over a state production
+     * could no longer enter -- a fixture asserting the old decision on behalf of every test
+     * that never mentioned it.
+     *
+     * IT IS NOT REMOVED, because one population can still raise it: an install provisioned
+     * BEFORE B133, whose content KEK still carries `AUTH_BIOMETRIC_STRONG` and which
+     * `KeystoreCustodyBootstrap.ensure` does not re-spec because the alias already exists
+     * (`KeyCustodyException.UserAuthenticationRequired`'s own note). A test that wants that
+     * handset must now ASK for it -- and must assert the verdict production actually gives it,
+     * which is permanent-and-re-pair, not prompt-and-retry.
+     */
+    var lockedTiers: Set<KeyTier> = emptySet(),
     /** Tiers whose key has been destroyed by a biometric enrollment change. */
     var invalidatedTiers: Set<KeyTier> = emptySet(),
     /** Tiers whose Keystore entry is gone entirely. */

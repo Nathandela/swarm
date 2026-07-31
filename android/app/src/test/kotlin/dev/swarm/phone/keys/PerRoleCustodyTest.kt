@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,8 +12,16 @@ import org.junit.Test
  * each of {NoiseStatic, Recipient, CommandSign, RelayAuth} and state whether the sealed grant
  * blob is discarded after opening or retained under the content tier."
  *
- * Acceptance criterion, verbatim: "an attacker with after-first-unlock access and everything
- * at rest reaches no content key."
+ * PB-KEY-5 ITSELF IS UNAFFECTED BY ADR-007 B133. Role separation has nothing to do with
+ * authentication and survives whole; the tier assignment, the matrix agreement and the sealed
+ * grant's fate are all asserted below unchanged.
+ *
+ * THE ACCEPTANCE CRITERION QUOTED AGAINST IT IS NOT. Verbatim, and left verbatim: "an attacker
+ * with after-first-unlock access and everything at rest reaches no content key." That clause
+ * belongs to PB-KEY-2, it is FALSIFIED by B133 rather than narrowed -- the content KEK now asks
+ * for no authenticator, so the content key is reachable after first unlock by design -- and it
+ * is recorded here as struck rather than quietly reworded into something true. What stands in
+ * its place is the attacker B133 keeps; see the note above the last test.
  *
  * Plain JVM.
  */
@@ -41,9 +48,14 @@ class PerRoleCustodyTest {
      *    it under the content tier and the app cannot reconnect until the user authenticates,
      *    which defeats the wake path B16 depends on.
      *  - RECIPIENT must be CONTENT because OpenSealedBox recovers BOTH epoch keys from a grant
-     *    (internal/remote/crypto/keystore.go:163). An after-first-unlock recipient key plus
-     *    the persisted grant hands a stolen once-unlocked handset the content key -- and
-     *    falsifies ADR-007:89 inside the phase meant to implement it.
+     *    (internal/remote/crypto/keystore.go:163), so a recipient key in the WAKE tier is a
+     *    content key in the WAKE tier. ITS REASON CHANGED WITH ADR-007 B133 AND THE ASSIGNMENT
+     *    DID NOT: the argument used to be about a stolen once-unlocked handset, which is no
+     *    longer a boundary this design defends. What it is about now is the PUSH PATH.
+     *    `PushWakePath` declares the WAKE tier and nothing else, because FirebaseMessagingService
+     *    runs IN the app process and that declaration is the only phone-side enforcement left;
+     *    a RECIPIENT key inside the set that path may touch would put the content key in reach
+     *    of a process FCM woke, which is the whole subject of PB-KEY-2's split.
      */
     @Test
     fun each_role_has_the_tier_ADR_007_B9_assigns_it() {
@@ -104,17 +116,48 @@ class PerRoleCustodyTest {
     // --- the attacker ------------------------------------------------------
 
     /**
-     * PB-KEY-5's criterion, driven directly.
+     * THE AFTER-FIRST-UNLOCK ATTACKER IS GONE FROM THIS FILE, AND THE CLAIM IS FALSIFIED RATHER
+     * THAN NARROWED (ADR-007 B133). Two tests stood here:
+     * `an_after_first_unlock_attacker_reaches_no_content_key` and
+     * `the_custody_session_refuses_the_after_first_unlock_attacker`. They drove the criterion
+     * quoted at the top of this file -- "an attacker with after-first-unlock access and
+     * everything at rest reaches no content key" -- and they PASSED, because they set the
+     * fixture's content tier to locked themselves.
      *
-     * The attacker has a stolen handset that has been unlocked at least once since boot (so
-     * the wake tier is usable) and every byte the app has at rest. They do not have a
-     * biometric. Nothing they can open may yield the content key.
+     * That state is now unreachable in production. Every KEK carries
+     * `setUserAuthenticationRequired(false)`, so the content key IS reachable after first unlock,
+     * BY DESIGN. The claim is false, not reduced: a narrowed requirement leaves a true residue
+     * and this one leaves none. Re-wording it into something true would have produced a test that
+     * read as this phase's central security claim while fencing a fixture's own lock.
+     *
+     * The residual risk is stated where a residual risk belongs -- ADR-007 B133: a stolen
+     * unlocked phone gives the holder full control of the agents on the machine, and the only
+     * surviving mitigation is `swarm remote off` or a revoke issued FROM the machine.
+     *
+     * The criterion in this file's header is left quoted verbatim, and marked, rather than
+     * silently edited to match what the code now does.
+     *
+     * What replaces them is below, and it is a DIFFERENT attacker.
+     */
+
+    /**
+     * The attacker B133 explicitly keeps: someone holding the app's bytes and NOT the handset.
+     *
+     * This is a copied data directory -- a backup, a `run-as` extraction, an image lifted off the
+     * disk -- opened somewhere the Keystore entries do not exist. It is a WIRE-side concern and
+     * not a holder-side one, which is why the sealing, the hardware backing and the
+     * non-exportability all survive the removal of the gate: they are the whole of what makes
+     * those bytes worthless elsewhere.
+     *
+     * The sweep is over EVERY blob rather than a chosen one, because the failure this catches is
+     * an artifact that was never given a tier and so was never sealed -- which is how `device.key`
+     * came to sit in the clear.
      */
     @Test
-    fun an_after_first_unlock_attacker_reaches_no_content_key() {
+    fun an_attacker_holding_the_bytes_without_the_keystore_reaches_nothing() {
         val contentKey = tierKeyBytes(0x70)
         val recipientPriv = tierKeyBytes(0x30)
-        val kek = FakeKeystoreKek(lockedTiers = setOf(KeyTier.CONTENT))
+        val kek = FakeKeystoreKek()
         val store = SealedStore(kek)
 
         store.put(CustodyBlobs.tierKey(KeyTier.WAKE), KeyTier.WAKE, tierKeyBytes(0x10))
@@ -129,48 +172,39 @@ class PerRoleCustodyTest {
             store.put(CustodyBlobs.SEALED_GRANT, KeyTier.CONTENT, contentKey + recipientPriv)
         }
 
-        val reachable = mutableMapOf<String, ByteArray>()
+        // ANTI-VACUITY FIRST, because every assertion below is of the form "nothing was
+        // reached": on the device that sealed them, these blobs really do open. A store that
+        // held nothing at all would satisfy the sweep and prove no custody whatsoever.
+        assertTrue("precondition: the store holds something", store.names().isNotEmpty())
         for (name in store.names()) {
-            runCatching { store.open(name) }.onSuccess { reachable[name] = it }
-        }
-
-        assertTrue(
-            "the attacker reached NOTHING, so this assertion proves nothing. The wake tier " +
-                "must really open after first unlock",
-            reachable.isNotEmpty(),
-        )
-        for ((name, plaintext) in reachable) {
-            assertFalse(
-                "$name is reachable after first unlock and yields the content key",
-                containsBytes(plaintext, contentKey),
-            )
-            assertFalse(
-                "$name is reachable after first unlock and yields the recipient key, which " +
-                    "opens any retained grant and therefore the content key",
-                containsBytes(plaintext, recipientPriv),
+            assertTrue(
+                "$name does not open on the handset that sealed it, so the sweep below is over " +
+                    "a store that never worked",
+                store.open(name).isNotEmpty(),
             )
         }
-    }
-
-    /**
-     * The same attacker, at the layer above: the custody session must refuse, and the refusal
-     * must be the typed one -- not a null, not an empty array, not a silently absent key that
-     * the next content operation discovers as a decrypt failure.
-     */
-    @Test
-    fun the_custody_session_refuses_the_after_first_unlock_attacker() {
-        val kek = FakeKeystoreKek(lockedTiers = setOf(KeyTier.CONTENT))
-        val store = SealedStore(kek)
-        val core = RecordingCore()
-        store.put(CustodyBlobs.tierKey(KeyTier.CONTENT), KeyTier.CONTENT, tierKeyBytes(0x70))
-        store.put(CustodyBlobs.deviceRole(KeyRole.RECIPIENT), KeyTier.CONTENT, tierKeyBytes(0x30))
-
-        val session = KeyCustodySession(store, core)
-
-        assertThrows(KeyCustodyException.UserAuthenticationRequired::class.java) {
-            session.installTier(KeyTier.CONTENT)
+        for (name in store.names()) {
+            assertFalse(
+                "$name sits at rest carrying its own plaintext: the seal is decoration",
+                containsBytes(store.rawBytes(name), store.open(name)),
+            )
         }
-        assertEquals(0, core.installedContent.size)
-        assertFalse(session.contentAvailable())
+
+        // The bytes are now somewhere the Keystore entries are not.
+        kek.missingTiers = KeyTier.entries.toSet()
+
+        for (name in store.names()) {
+            val opened = runCatching { store.open(name) }
+            assertTrue(
+                "$name opened off the device, without either tier KEK. Everything PB-SEC-1 " +
+                    "claims about an extracted data directory rests on this refusing",
+                opened.isFailure,
+            )
+            assertTrue(
+                "$name refused with ${opened.exceptionOrNull()}, which is not a typed custody " +
+                    "failure -- a caller that read it as 'no key yet' would carry on",
+                opened.exceptionOrNull() is KeyCustodyException,
+            )
+        }
     }
 }

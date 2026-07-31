@@ -16,26 +16,38 @@ import org.robolectric.RobolectricTestRunner
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-PUSH-4: what the phone puts on the lock screen.
  *
- * "The app receives a push and renders a content-free notification unless the user has
- *  authenticated; it never decrypts session content with a locked device (PB-KEY-2).
+ * "The app receives a push and renders a content-free notification ~~unless the user has
+ *  authenticated~~; it never decrypts session content with a locked device (PB-KEY-2).
  *  Lock-screen redaction and notification-channel privacy are set.
- *  Robolectric test: locked -> generic alert only; authenticated -> content rendered."
+ *  Robolectric test: ~~locked~~ -> generic alert only; ~~authenticated~~ -> content rendered."
+ *
+ * PB-PUSH-4 NARROWS, AND THE PART THAT SURVIVES IS THE PART THAT MATTERS MOST (ADR-007 B133).
+ * The struck clauses lost their producer: nothing on this handset is gated on a user
+ * authentication, so there is no authenticated side to be "unless" of. CONTENT-FREE RENDERING
+ * ITSELF IS KEPT WHOLE -- FCM reads push payloads, Google is on the declared wire, and the lock
+ * screen still exists on every handset this app runs on. VISIBILITY_SECRET, the no-leak sweep
+ * and the no-interpolation fence are unchanged below.
+ *
+ * `contentReady` IS RE-PREMISED, NOT DELETED, and it is not a fixture's invention: it comes off
+ * the Go core (`alert.getContentReady()` in `SwarmMessagingService`) and it now tracks KEY
+ * AVAILABILITY rather than authentication. It is false on a phone awaiting its first epoch grant
+ * and on one whose keys a revoke purged -- two states the product reaches for reasons that have
+ * nothing to do with who is holding the phone. So the two-sided tests keep both sides.
  *
  * WHAT ROBOLECTRIC CAN AND CANNOT SAY, before the assertions rather than after. It models
  * POLICY: which channel is created with which visibility, which text a builder produces for a
  * given input. It models NO handset. There is no real FCM delivery here, no Doze, no lock
- * screen, no biometric prompt and no real Keystore. PB-E2E-5 is the physical-handset gate, it
- * is DEFERRED under section 13, and nothing in this file may be read as covering any part of
- * it. A UI test that appeared to prove a real lock screen redacted something would be worse
- * than no test at all.
+ * screen and no real Keystore. PB-E2E-5 is the physical-handset gate, it is DEFERRED under
+ * section 13, and nothing in this file may be read as covering any part of it. A UI test that
+ * appeared to prove a real lock screen redacted something would be worse than no test at all.
  *
- * WHAT IS DELIBERATELY NOT HERE. "It never decrypts session content with a locked device" is
- * NOT asserted in Kotlin, and must not be: a Kotlin test can only observe that this builder was
- * handed no content, which is true of an app that fetched content, was refused, and rendered
- * the generic string anyway. That property is measured at the CUSTODY SEAM, in
- * mobile/conformance/s17_pushwake_test.go, by counting content-tier KEK unwraps -- zero -- and
- * fenced at the source in android/gate/s17_pushclient_test.go, which requires that no content
- * verb is reachable from onMessageReceived at all.
+ * WHAT IS DELIBERATELY NOT HERE. "It never decrypts session content" is NOT asserted in Kotlin,
+ * and must not be: a Kotlin test can only observe that this builder was handed no content, which
+ * is true of an app that fetched content, was refused, and rendered the generic string anyway.
+ * That property is measured at the CUSTODY SEAM, in mobile/conformance/s17_pushwake_test.go, by
+ * counting content-tier KEK unwraps -- zero -- and fenced at the source in
+ * android/gate/s17_pushclient_test.go, which requires that no content verb is reachable from
+ * onMessageReceived at all.
  *
  * THE INPUT IS TWO PRIMITIVES, not the bound WakeAlert, on purpose. The service adapts the Go
  * type; this file tests the rendering policy. Binding the AAR type here would make a
@@ -122,12 +134,16 @@ class WakeNotificationTest {
     }
 
     /**
-     * Locked: the constant, and nothing else. The text is supplied by the Go core
+     * No content key: the constant, and nothing else. The text is supplied by the Go core
      * (swarmmobile.WakeNotificationText) so there is one copy of it and no Kotlin string to
      * drift towards saying more.
+     *
+     * The leak sweep below is the one assertion in this file that would matter even if
+     * `contentReady` disappeared entirely: FCM reads the payload and the notification lands on a
+     * lock screen, so a session name reaching either is the exposure PB-PUSH-4 is about.
      */
     @Test
-    fun `a locked device renders the constant it was given`() {
+    fun `a phone holding no content key renders the constant it was given`() {
         val notification = WakeNotifications.build(context, text = GENERIC, contentReady = false)
 
         val rendered = notification.extras.getString(Notification.EXTRA_TEXT).orEmpty() + " " +
@@ -138,26 +154,26 @@ class WakeNotificationTest {
         )
         for (leak in listOf(LOUD_SESSION, "refactor-the-auth-middleware", "build-box-17")) {
             assertFalse(
-                "PB-PUSH-4: the locked notification contains $leak",
+                "PB-PUSH-4: the content-free notification contains $leak",
                 rendered.contains(leak),
             )
         }
     }
 
     /**
-     * Locked and UNAUTHENTICATED means no action that would need content, either. A content
-     * intent that opens a session screen is a tap that drives a decrypt, and the phone is locked
-     * -- the user gets a refusal they did not ask for, and the app has expressed an intention to
-     * read content from a push.
+     * Holding no content key means no action that would need content, either. A content intent
+     * that opens a session screen is a tap that drives a decrypt, and there is no key to do it
+     * with -- the user gets a refusal they did not ask for, and the app has expressed an
+     * intention to read content from a push.
      */
     @Test
-    fun `a locked notification offers no action that needs content`() {
+    fun `a notification with no content key offers no action that needs content`() {
         val notification = WakeNotifications.build(context, text = GENERIC, contentReady = false)
 
         assertEquals(
-            "PB-PUSH-4/PB-KEY-2: the locked notification carries ${notification.actions?.size} " +
-                "action(s). Every action on this notification would run against a locked content " +
-                "tier",
+            "PB-PUSH-4/PB-KEY-2: the content-free notification carries ${notification.actions?.size} " +
+                "action(s). Every action on this notification would run against a content " +
+                "tier this phone holds no key for",
             0,
             notification.actions?.size ?: 0,
         )
@@ -168,40 +184,44 @@ class WakeNotificationTest {
      * implementation that rendered the generic notification unconditionally would pass every
      * test before this one and would never show the user anything else.
      *
+     * ITS PREMISE IS KEY AVAILABILITY (ADR-007 B133) and the control is worth MORE under it, not
+     * less: with the authenticated side gone, hardwiring `contentReady` to true is the obvious
+     * simplification, and this is what fails when somebody makes it.
+     *
      * What "content rendered" means here is deliberately narrow -- the notification is
-     * DISTINGUISHABLE from the locked one -- because what content to show is the session
-     * screen's business and PB-APP-9's taxonomy already owns how it is worded.
+     * DISTINGUISHABLE from the other one -- because what content to show is the session screen's
+     * business and PB-APP-9's taxonomy already owns how it is worded.
      */
     @Test
-    fun `an authenticated device renders something other than the generic alert`() {
-        val locked = WakeNotifications.build(context, text = GENERIC, contentReady = false)
-        val unlocked = WakeNotifications.build(context, text = GENERIC, contentReady = true)
+    fun `a phone holding the content key renders something other than the generic alert`() {
+        val withoutKey = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+        val withKey = WakeNotifications.build(context, text = GENERIC, contentReady = true)
 
-        val lockedText = locked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
-        val unlockedText = unlocked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        val withoutKeyText = withoutKey.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        val withKeyText = withKey.extras.getString(Notification.EXTRA_TEXT).orEmpty()
         assertTrue(
-            "PB-PUSH-4: an authenticated device is shown exactly what a locked one is shown. " +
-                "'unless the user has authenticated' has to have an authenticated side, or the " +
-                "requirement is met by rendering the generic alert forever",
-            lockedText != unlockedText || locked.actions?.size != unlocked.actions?.size,
+            "PB-PUSH-4: a phone holding the content key is shown exactly what a phone without " +
+                "one is shown, so `contentReady` decides nothing. That is what hardwiring it " +
+                "to a constant looks like, and it is the likeliest edit here now that the " +
+                "authenticated side of the requirement is gone",
+            withoutKeyText != withKeyText || withoutKey.actions?.size != withKey.actions?.size,
         )
     }
 
     /**
      * The clause PB-PUSH-4's 2026-07-26 amendment ADDED, and which nothing asserted.
      *
-     * The amendment weakened "authenticated -> content rendered" to "authenticated -> a
-     * *distinguishable* notification that still reads NO session content", explicitly because
-     * distinguishability alone is satisfiable by a defect. Only the first half had a test: the
-     * content-leak loop above runs against `contentReady = false` only, so an implementation
-     * that appended a session name on the authenticated path was distinguishable, leaked, and
-     * green. The behaviour was right by construction, so this closes a missing CHECK rather
-     * than a live defect -- see the mutation note below.
+     * The amendment weakened "content rendered" to "a *distinguishable* notification that still
+     * reads NO session content", explicitly because distinguishability alone is satisfiable by a
+     * defect. Only the first half had a test: the content-leak loop above runs against
+     * `contentReady = false` only, so an implementation that appended a session name on the
+     * ready path was distinguishable, leaked, and green. The behaviour was right by
+     * construction, so this closes a missing CHECK rather than a live defect.
      *
      * HOW IT IS ASSERTED, because a leak-marker list would not do it. The test supplies no
      * session content, so "the rendered text does not contain build-box-17" is satisfied by any
      * implementation that leaked something ELSE. What can be asserted exactly is that the
-     * authenticated notification is the locked one PLUS A KNOWN CONSTANT: the difference is
+     * ready notification is the content-free one PLUS A KNOWN CONSTANT: the difference is
      * compared against the string resource itself, so ANY added text that is not that resource
      * fails, whatever it is and wherever it came from.
      *
@@ -210,31 +230,31 @@ class WakeNotificationTest {
      * resource either.
      */
     @Test
-    fun `an authenticated device is told more without being told anything about a session`() {
-        val locked = WakeNotifications.build(context, text = GENERIC, contentReady = false)
-        val unlocked = WakeNotifications.build(context, text = GENERIC, contentReady = true)
+    fun `a phone holding the content key is told more without being told about a session`() {
+        val withoutKey = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+        val withKey = WakeNotifications.build(context, text = GENERIC, contentReady = true)
 
-        val lockedText = locked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
-        val unlockedText = unlocked.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        val withoutKeyText = withoutKey.extras.getString(Notification.EXTRA_TEXT).orEmpty()
+        val withKeyText = withKey.extras.getString(Notification.EXTRA_TEXT).orEmpty()
 
         assertTrue(
-            "PB-PUSH-4: the authenticated notification is not an EXTENSION of the locked one " +
-                "(locked=$lockedText, authenticated=$unlockedText). Authenticating may add a " +
+            "PB-PUSH-4: the ready notification is not an EXTENSION of the content-free one " +
+                "(without=$withoutKeyText, with=$withKeyText). Holding the key may add a " +
                 "constant invitation; it may not rewrite the line the Go core supplied",
-            unlockedText.startsWith(lockedText),
+            withKeyText.startsWith(withoutKeyText),
         )
         assertEquals(
-            "PB-PUSH-4: authenticating added text that is not the constant invitation. The " +
-                "amendment permits a DISTINGUISHABLE notification that still reads no session " +
-                "content, so the only thing the authenticated path may add is this resource",
+            "PB-PUSH-4: holding the content key added text that is not the constant invitation. " +
+                "The amendment permits a DISTINGUISHABLE notification that still reads no " +
+                "session content, so the only thing this path may add is that resource",
             context.getString(R.string.wake_notification_open),
-            unlockedText.removePrefix(lockedText).trim(),
+            withKeyText.removePrefix(withoutKeyText).trim(),
         )
         assertEquals(
-            "PB-PUSH-4/PB-KEY-2: the authenticated notification carries an action. An action " +
-                "opens a screen, which on this path is a tap that drives a content read",
+            "PB-PUSH-4/PB-KEY-2: the ready notification carries an action. An action opens a " +
+                "screen, which on this path is a tap that drives a content read",
             0,
-            unlocked.actions?.size ?: 0,
+            withKey.actions?.size ?: 0,
         )
     }
 

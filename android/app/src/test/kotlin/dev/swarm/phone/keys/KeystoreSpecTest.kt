@@ -16,14 +16,27 @@ import java.security.KeyStoreException
 import java.security.UnrecoverableKeyException
 
 /**
- * PB-SEC-2's requesting half and PB-KEY-8's verifying half.
+ * PB-KEY-8's requesting half and its verifying half, after ADR-007 B133.
  *
- * THE HARD LIMIT, stated first because everything below sits just under it. Real biometric
- * prompts, hardware-backed Keystore attestation and real TEE/StrongBox behaviour cannot be
- * exercised on an emulator or in Robolectric. They belong to PB-E2E-5, the physical-handset
- * gate that §13 records as explicitly deferred. Nothing here may be read as covering them.
+ * WHAT THIS FILE USED TO BE, because the inversion is the point rather than a tidy-up. It was
+ * PB-SEC-2's requesting half: it asserted that the content KEK DEMANDED a Class-3 biometric,
+ * that a re-enrollment destroyed it, and that each gated operation carried the freshness window
+ * its tier implied. PB-SEC-2 is VOID -- the trust boundary is the wire, and there is no local
+ * authentication on this handset for a spec to request. Those assertions were correct as written
+ * for a decision that has been superseded, so they are inverted or deleted here deliberately,
+ * after the ADR, rather than relaxed until the code passed.
  *
- * What IS asserted, and why it is worth asserting:
+ * WHAT IS KEPT, and B133 keeps it explicitly: the KEK is generated INSIDE Keystore, is
+ * non-exportable, is refused when the platform says it is in software, and prefers StrongBox
+ * with a fallback. None of that is about the person holding the handset -- it is what makes a
+ * copy of the app's data directory unopenable anywhere else, which is a wire-side concern.
+ *
+ * THE HARD LIMIT, stated because everything below sits just under it. Hardware-backed Keystore
+ * attestation and real TEE/StrongBox behaviour cannot be exercised on an emulator or in
+ * Robolectric. They belong to PB-E2E-5, the physical-handset gate that §13 records as explicitly
+ * deferred. Nothing here may be read as covering them.
+ *
+ * What IS asserted:
  *   - that the code REQUESTS the right KeyGenParameterSpec. These are real specs built by the
  *     real Builder and read back through the real getters, so the assertion is on the API call
  *     the device will receive -- not on a parallel description of it that can drift.
@@ -40,26 +53,70 @@ class KeystoreSpecTest {
     // --- the KEK per tier ---------------------------------------------------
 
     /**
-     * The content KEK is the gate. If it does not require user authentication, every other
-     * assertion in this slice is theatre: the unwrap would succeed on a locked handset and
-     * PB-KEY-2's split would be enforced by nothing at all.
+     * NEITHER TIER ASKS FOR AN AUTHENTICATOR (ADR-007 B133), and the content tier is the one
+     * that changed. It carried `setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG)` and
+     * was the gate; the flag is now the whole cost of the trust-boundary decision.
+     *
+     * IT IS ASSERTED RATHER THAN LEFT UNSAID because the request is baked into the key at
+     * GENERATION and `KeystoreCustodyBootstrap.ensure` returns early when the alias exists. A
+     * spec that re-acquired an authenticator would reach fresh installs only, and every one of
+     * them would hold a content KEK that nothing in this app can ever satisfy -- there is no
+     * prompt anywhere in the product to offer.
      */
     @Test
-    fun the_content_kek_requires_a_strong_biometric() {
+    fun the_content_kek_asks_for_no_user_authentication() {
         val spec = KeystoreSpecs.kek(KeyTier.CONTENT, strongBox = false)
 
-        assertTrue("the content KEK is the gate; without this it is a UI boolean", spec.isUserAuthenticationRequired)
-        assertTrue(
-            "the content KEK must accept a strong biometric (authType was ${spec.userAuthenticationType})",
-            (spec.userAuthenticationType and KeyProperties.AUTH_BIOMETRIC_STRONG) != 0,
+        assertFalse(
+            "the content KEK requests a user authentication that nothing in this app can " +
+                "satisfy: ADR-007 B133 removed every prompt, so this key would refuse forever",
+            spec.isUserAuthenticationRequired,
         )
         assertEquals(KeystoreAliases.forTier(KeyTier.CONTENT), spec.keystoreAlias)
     }
 
-    /** PB-SEC-2 requires invalidation on biometric-enrollment change, and this is the flag. */
+    /**
+     * AND THE ENROLLMENT FLAG IS OFF, which is the inverse of what this file used to assert.
+     *
+     * `setInvalidatedByBiometricEnrollment` defaults to TRUE, so this is set rather than
+     * inherited: leaving it would let a re-enrolled fingerprint destroy a KEK that no longer has
+     * anything to do with fingerprints. The content tier would become unopenable and the wake
+     * tier would lose background wakes, recoverable in both cases only by re-pairing -- over a
+     * biometric the design stopped using.
+     */
     @Test
-    fun the_content_kek_is_invalidated_by_a_biometric_enrollment_change() {
-        assertTrue(KeystoreSpecs.kek(KeyTier.CONTENT, strongBox = false).isInvalidatedByBiometricEnrollment)
+    fun neither_kek_is_destroyed_by_a_biometric_enrollment_change() {
+        for (tier in KeyTier.entries) {
+            assertFalse(
+                "the $tier KEK is destroyed when the user re-enrolls a fingerprint, which this " +
+                    "design no longer uses for anything. The only way back is a re-pair",
+                KeystoreSpecs.kek(tier, strongBox = false).isInvalidatedByBiometricEnrollment,
+            )
+        }
+    }
+
+    /**
+     * PB-SEC-1's non-exportability, at the one flag that could take it away.
+     *
+     * A symmetric AndroidKeyStore key is generated INSIDE Keystore and its bytes are never
+     * handed back -- that is what makes an extracted data directory unopenable off the device,
+     * and it is what B133 keeps while dropping the authenticator. `PURPOSE_WRAP_KEY` is the
+     * purpose that would change it: it exists so a key can be exported in wrapped form, and it
+     * is one `or` away from the two this spec carries.
+     */
+    @Test
+    fun the_kek_is_an_encrypt_decrypt_key_with_no_export_purpose() {
+        for (tier in KeyTier.entries) {
+            val spec = KeystoreSpecs.kek(tier, strongBox = false)
+            assertEquals(
+                "the $tier KEK carries a purpose beyond encrypt/decrypt. PURPOSE_WRAP_KEY in " +
+                    "particular exists so a Keystore key can leave the device in wrapped form, " +
+                    "which is the one thing PB-SEC-1's at-rest claim rests on not happening",
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                spec.purposes,
+            )
+            assertEquals(256, spec.keySize)
+        }
     }
 
     /**
@@ -102,77 +159,14 @@ class KeystoreSpecTest {
         )
     }
 
-    // --- per-operation specs ------------------------------------------------
-
-    /**
-     * 6.0's freshness row, expressed in the parameter the platform actually reads. Per-use is
-     * timeout 0 -- which is what forces a CryptoObject -- and the timed tier is 60.
-     *
-     * The expected window is stated as a LITERAL as well as read from the policy. Comparing
-     * the spec only against BiometricPolicy would be circular, because the spec builder
-     * derives its timeout from that same policy: the two would move together and a wrong
-     * number would agree with itself.
-     */
-    @Test
-    fun each_operation_requests_the_timeout_its_freshness_tier_implies() {
-        val expectedWindow = mapOf(
-            GatedOperation.INPUT to 60,
-            GatedOperation.TAKE_CONTROL to 60,
-            GatedOperation.REVOKE to 0,
-            GatedOperation.KILL_SWITCH to 0,
-            GatedOperation.LAUNCH to 0,
-            GatedOperation.KILL to 0,
-        )
-        assertEquals(GatedOperation.entries.toSet(), expectedWindow.keys)
-
-        for (op in GatedOperation.entries) {
-            val expected = BiometricPolicy.specFor(op)
-            val spec = KeystoreSpecs.forOperation(op, strongBox = false)
-
-            assertTrue("$op is gated, so its key requires authentication", spec.isUserAuthenticationRequired)
-            assertEquals(
-                "6.0 binds $op to a ${expectedWindow.getValue(op)}s window; the key requests " +
-                    "${spec.userAuthenticationValidityDurationSeconds}s",
-                expectedWindow.getValue(op),
-                spec.userAuthenticationValidityDurationSeconds,
-            )
-            assertEquals(
-                "$op wants ${expected.freshness} but requests a ${spec.userAuthenticationValidityDurationSeconds}s window",
-                expected.timeoutSeconds,
-                spec.userAuthenticationValidityDurationSeconds,
-            )
-            assertTrue(
-                "$op must be authorized by a strong biometric",
-                (spec.userAuthenticationType and KeyProperties.AUTH_BIOMETRIC_STRONG) != 0,
-            )
-            assertTrue(
-                "$op is a gated action; a biometric enrollment change must invalidate it",
-                spec.isInvalidatedByBiometricEnrollment,
-            )
-        }
-    }
-
-    /**
-     * The mutation that makes the timeout assertion above insufficient on its own: revoke and
-     * kill are per-use, and per-use means each one gets its own key entry. One shared entry
-     * with a zero timeout still lets a single CryptoObject authorization be pointed at
-     * whichever operation the caller picks.
-     */
-    @Test
-    fun per_use_operations_do_not_share_a_keystore_entry() {
-        val perUse = GatedOperation.entries.filter { BiometricPolicy.specFor(it).requiresCryptoObject }
-        val aliases = perUse.map { KeystoreSpecs.forOperation(it, strongBox = false).keystoreAlias }
-
-        assertTrue("precondition: some operations are per-use", perUse.isNotEmpty())
-        assertEquals(
-            "per-use operations share a Keystore entry, so one authorization reaches all of " +
-                "them: $aliases",
-            perUse.size,
-            aliases.toSet().size,
-        )
-    }
-
     // --- StrongBox: a preference with a fallback, not a claim ----------------
+    //
+    // The two per-operation tests that used to sit here are DELETED, not relaxed. They asserted
+    // that `KeystoreSpecs.forOperation` requested the freshness window each gated operation's
+    // tier implied, and that the per-use operations did not share a Keystore entry so one
+    // CryptoObject authorization could not be pointed at another verb. Both subjects left the
+    // product with PB-SEC-2: there is no `GatedOperation`, no `BiometricPolicy` and no
+    // `forOperation`. A rewrite would have had to invent something for them to fence.
 
     @Test
     fun the_strongbox_fallback_differs_only_in_strongbox() {
@@ -250,24 +244,31 @@ class KeystoreSpecTest {
 
     /**
      * PB-KEY-8's verification, and the standing defect class it belongs to: a key whose
-     * KeyInfo is never read back so a software fallback goes unnoticed. Each downgrade below
+     * KeyInfo is never read back so a software fallback goes unnoticed. Each disagreement below
      * is one the platform is entitled to hand you.
+     *
+     * EVERY AXIS HAS FLIPPED DIRECTION (ADR-007 B133) and the check has not lost its point --
+     * `KeyInfoRecord`'s own note says so. What must not happen now is the platform silently
+     * ADDING an authenticator, or an enrollment invalidation, to a key that requested neither:
+     * both produce a KEK that refuses over something no screen in this app can resolve, and the
+     * user's only exit is a re-pair. The read-back is what turns that into a named refusal at
+     * provisioning time instead of an app that stops working later for no stated reason.
      */
     @Test
-    fun provisioning_fails_closed_when_the_platform_delivers_something_weaker() {
+    fun provisioning_fails_closed_when_the_platform_delivers_something_other_than_requested() {
         val requested = KeystoreSpecs.kek(KeyTier.CONTENT, strongBox = false)
         val faithful = faithfulRecord(requested, strongBox = false)
 
         val downgrades = mapOf(
-            "authentication silently not required" to
-                faithful.copy(userAuthenticationRequired = false),
-            "a longer window than was asked for" to
+            "an authenticator this app has no prompt to satisfy" to
+                faithful.copy(userAuthenticationRequired = true),
+            "a window that was never asked for" to
                 faithful.copy(
                     userAuthenticationValidityDurationSeconds =
                         faithful.userAuthenticationValidityDurationSeconds + 60,
                 ),
-            "enrollment invalidation dropped" to
-                faithful.copy(invalidatedByBiometricEnrollment = false),
+            "an enrollment invalidation that was explicitly turned off" to
+                faithful.copy(invalidatedByBiometricEnrollment = true),
         )
 
         for ((description, achieved) in downgrades) {
@@ -308,8 +309,16 @@ class KeystoreSpecTest {
     /**
      * Both Keystore exceptions extend java.security.InvalidKeyException. A mapping that
      * branches on the SUPERTYPE -- which is the natural thing to write, since that is what the
-     * Cipher/Signature APIs declare -- collapses a permanent invalidation into "prompt again",
-     * and produces an endless prompt against a key that no longer exists.
+     * Cipher/Signature APIs declare -- collapses the two into one.
+     *
+     * THE `UserNotAuthenticatedException` ARM IS KEPT ALTHOUGH NOTHING THIS BUILD PROVISIONS CAN
+     * RAISE IT (ADR-007 B133), and the reason is not symmetry. An install made BEFORE B133 still
+     * holds an `AUTH_BIOMETRIC_STRONG` content KEK -- `KeystoreCustodyBootstrap.ensure` returns
+     * early when the alias exists, so the new spec never reaches it. The alternative to naming
+     * that refusal is [KeyCustodyException.Unexpected], which `phonecore.openSealedDeviceKeys`
+     * treats as a Resume it must refuse outright: the upgraded handset becomes an app that will
+     * not start with nothing on screen saying why. Where the two verdicts go once named is
+     * `PhoneStartupRoutingTest`'s subject, and after B133 it is the same screen for both.
      */
     @Test
     fun platform_failures_map_onto_the_right_typed_custody_failure() {

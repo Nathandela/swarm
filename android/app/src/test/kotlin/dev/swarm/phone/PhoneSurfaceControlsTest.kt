@@ -56,13 +56,13 @@ class PhoneSurfaceControlsTest {
     fun every_action_pb_e2e_2_names_has_a_control_that_performs_it() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val labels = activity.gatedActionViews()
+                val labels = activity.touchFilteredViews()
                     .filterIsInstance<TextView>()
                     .map { it.text.toString() }
                 for ((label, clause) in requiredControls) {
                     assertTrue(
-                        "PB-E2E-2: no gated control labelled \"$label\", so the smoke cannot " +
-                            "perform $clause.\nthe gated controls were:\n" +
+                        "PB-E2E-2: no declared control labelled \"$label\", so the smoke cannot " +
+                            "perform $clause.\nthe declared controls were:\n" +
                             labels.joinToString("\n"),
                         labels.contains(label),
                     )
@@ -75,10 +75,14 @@ class PhoneSurfaceControlsTest {
      * PB-SEC-12 clause 1 for the controls S19 added, asserted as a PROPERTY OF THE HIERARCHY
      * rather than of a list the surface hands out.
      *
-     * `PhoneActivityWindowTest` already walks `gatedActionViews()`, and that list is exactly what
-     * a new panel can forget to contribute to. This looks at every Button and Switch actually on
-     * screen instead, so a control added without being gated fails here even if nobody remembered
-     * to add it to the list.
+     * `PhoneActivityWindowTest` already walks `touchFilteredViews()`, and that list is exactly
+     * what a new panel can forget to contribute to. This looks at every Button and Switch
+     * actually on screen instead, so a control added without the filter fails here even if
+     * nobody remembered to add it to the list.
+     *
+     * IT IS THE STRONGER OF THE TWO AFTER ADR-007 B133. The overlay filter is now the only
+     * defence standing on revoke and take-control, so the fence that cannot be satisfied by
+     * remembering to update a list is the one that has to hold.
      */
     @Test
     fun every_button_and_switch_on_screen_filters_obscured_touches() {

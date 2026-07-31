@@ -14,11 +14,15 @@ import org.junit.Test
  *
  * THIS IS WHERE EVERY ERROR IDENTITY BECOMES A VISIBLE STATE. Other slices spent real effort
  * making failures DISTINGUISHABLE rather than collapsing them -- phonecore.ErrGrantLost was
- * given its own identity for exactly this, and its doc says so. Three remedies, and two of
- * them are dead ends if misrouted:
+ * given its own identity for exactly this, and its doc says so.
  *
- *   crypto.ErrKeyAuthRequired -> authenticate (recoverable)
- *   crypto.ErrKeyInvalidated  -> pair this device again (permanent)
+ * PB-APP-10 NARROWS FROM THREE REMEDIES TO TWO (ADR-007 B133). The row that left is
+ * `crypto.ErrKeyAuthRequired -> authenticate`, and it left because BOTH ends of it went: there
+ * is no prompt in this app to offer, so `Remedy.AUTHENTICATE` was advice nobody could carry out,
+ * and `ConnectionState.REAUTH_REQUIRED` had no producer once `mobile/relay.go` stopped emitting
+ * it. The two that remain must still never collapse:
+ *
+ *   crypto.ErrKeyInvalidated  -> pair this device again (permanent, and the user CAN do it)
  *   phonecore.ErrGrantLost    -> the MACHINE must re-grant  <- the user cannot act on this one
  *
  * Sending a grant-loss user to "pair again" is a BRICK, not a wording problem: BeginPairing
@@ -62,27 +66,54 @@ class ConnectionBannerTest {
     fun `revoked is a connection state the app understands`() {
         val revoked = ConnectionState.of("revoked")
         assertTrue(revoked.isTerminal)
-        assertFalse(revoked.needsBiometricPrompt)
         assertNotEquals(ConnectionState.REPAIR_REQUIRED, revoked)
     }
 
     /**
-     * ONLINE IS THE ONLY QUIET STATE, and the two custody verdicts are NOT transport conditions.
-     * S14 recorded the defect this asserts against: a recoverable refusal presented as
-     * "reconnecting" tells the user to wait for a condition only a biometric ends.
+     * ONLINE IS THE ONLY QUIET STATE, and the custody verdict is NOT a transport condition.
+     * S14 recorded the defect this asserts against: a refusal presented as "reconnecting" tells
+     * the user to wait for a condition that waiting never ends.
+     *
+     * THE REAUTH ROW IS GONE FROM THIS TEST (ADR-007 B133) AND ITS SHAPE IS NOT. It asserted
+     * that a recoverable custody refusal carried `Remedy.AUTHENTICATE` and no spinner; the state
+     * and the remedy were removed atomically with `mobile/relay.go`'s `connReauthRequired` and
+     * the taxonomy row, because a row kept on one side of that join is a banner nothing can
+     * reach. Keeping it "for safety" is the vacuous case this file was most exposed to:
+     * `each connection state renders its own banner` iterates the enum, so a producer-less row
+     * would have gone on reading as covered. The property it carried -- a terminal state may
+     * never show a spinner -- is asserted below over every state that has one.
      */
     @Test
     fun `a custody refusal is never rendered as a network condition`() {
         assertFalse(ConnectionBanner.of(ConnectionState.ONLINE).visible)
         assertTrue(ConnectionBanner.of(ConnectionState.RECONNECTING).visible)
 
-        val reauth = ConnectionBanner.of(ConnectionState.REAUTH_REQUIRED)
-        assertEquals(Remedy.AUTHENTICATE, reauth.remedy)
-        assertFalse("a spinner says 'wait'; only a prompt ends this", reauth.showsSpinner)
-
         val repair = ConnectionBanner.of(ConnectionState.REPAIR_REQUIRED)
         assertEquals(Remedy.RE_PAIR, repair.remedy)
         assertFalse(repair.showsSpinner)
+    }
+
+    /**
+     * A SPINNER IS A PROMISE THAT WAITING IS ENOUGH, over the whole enum rather than the two
+     * rows somebody remembered.
+     *
+     * It matters more now that `reauth_required` is gone: the states left that end only when the
+     * user acts are all TERMINAL, and every one of them is a screen the user reaches by doing
+     * exactly what the product told them to do (revoking a lost handset, above all). One shown
+     * behind a spinner is a phone that looks busy forever.
+     */
+    @Test
+    fun `no terminal state is shown behind a spinner`() {
+        for (state in ConnectionState.entries) {
+            val banner = ConnectionBanner.of(state)
+            if (!state.isTerminal) continue
+            assertFalse(
+                "$state has stopped retrying and shows a spinner, which tells the user to wait " +
+                    "for something that is never going to happen",
+                banner.showsSpinner,
+            )
+            assertTrue("$state is terminal and the banner does not say so", banner.terminal)
+        }
     }
 
     /**
@@ -147,22 +178,69 @@ class ConnectionBannerTest {
 class ErrorRoutingTest {
 
     /**
-     * The three remedies, kept apart. Driven from the TOKENS the facade stamps, because that is
+     * The two remedies, kept apart. Driven from the TOKENS the facade stamps, because that is
      * all gomobile leaves of a Go error at the JNI boundary -- keycustody.go established the
-     * shape for the two custody verdicts and PB-APP-9 generalises it.
+     * shape for the custody verdicts and PB-APP-9 generalises it.
+     *
+     * IT WAS THREE (ADR-007 B133). `Remedy.AUTHENTICATE` went with its subject. The pair that is
+     * left is the pair that was always the dangerous one to merge: both say "the key situation is
+     * permanent", and only ONE of them names something the user can do from the handset.
      */
     @Test
-    fun `the three remedies never collapse into each other`() {
-        val reauth = ErrorRouter.route(SwarmErrorTokens.REAUTH_REQUIRED)
+    fun `the two remedies never collapse into each other`() {
         val rePair = ErrorRouter.route(SwarmErrorTokens.REPAIR_REQUIRED)
         val grantLost = ErrorRouter.route(SwarmErrorTokens.GRANT_LOST)
 
-        assertEquals(Remedy.AUTHENTICATE, reauth.remedy)
         assertEquals(Remedy.RE_PAIR, rePair.remedy)
         assertEquals(Remedy.MACHINE_REGRANT, grantLost.remedy)
 
-        assertEquals(3, setOf(reauth.remedy, rePair.remedy, grantLost.remedy).size)
-        assertEquals(3, setOf(reauth.state, rePair.state, grantLost.state).size)
+        assertEquals(2, setOf(rePair.remedy, grantLost.remedy).size)
+        assertEquals(2, setOf(rePair.state, grantLost.state).size)
+    }
+
+    /**
+     * AND THE REMOVAL IS ATOMIC ON THIS SIDE TOO.
+     *
+     * `AUTHENTICATE` was one of `Remedy`'s rows and one of `ErrorRouter`'s answers. If either
+     * came back without the other -- a remedy with no producer, or a routed state whose remedy
+     * nothing renders -- the user meets a screen telling them to perform an authentication this
+     * app has no way to collect. There is no scenario in which that is better than the honest
+     * "pair this device again", so the absence is asserted rather than assumed.
+     *
+     * THE SECOND HALF IS THE ONE THAT KEEPS THE FIRST FROM BEING A RENAME. Deleting a remedy row
+     * is worth nothing if the failures it used to answer now route to NONE, which is a screen
+     * that states a problem and offers no way out -- PB-APP-10's subject, reached from the other
+     * side. Every failure that lost `AUTHENTICATE` has to have landed on something a person or a
+     * machine can actually do.
+     *
+     * IT IS ASSERTED ON THE REMEDY AND NOT ON THE PROSE, deliberately: the REPAIR_REQUIRED
+     * message reads "no authentication brings it back", which is exactly right and which a
+     * substring scan for "authenticate" flags as a violation. What the user is told to DO is the
+     * remedy; the message explains why.
+     */
+    @Test
+    fun `no routed failure asks for an authentication or leaves the user without a remedy`() {
+        assertFalse(
+            "Remedy still declares AUTHENTICATE. ADR-007 B133 removed every prompt from this " +
+                "app, so it is advice that cannot be carried out",
+            Remedy.entries.any { it.name == "AUTHENTICATE" },
+        )
+        for (token in listOf(
+            SwarmErrorTokens.REPAIR_REQUIRED,
+            SwarmErrorTokens.GRANT_LOST,
+            SwarmErrorTokens.AWAITING_KEY,
+            SwarmErrorTokens.STATE_CORRUPT,
+            SwarmErrorTokens.REVOKED,
+        )) {
+            val routed = ErrorRouter.route(token)
+            assertNotEquals(
+                "$token routes to Remedy.NONE. Dropping AUTHENTICATE must not have left its " +
+                    "failures with nothing at all: \"${routed.message}\"",
+                Remedy.NONE,
+                routed.remedy,
+            )
+            assertTrue("$token routes to a state with nothing to say", routed.message.isNotBlank())
+        }
     }
 
     /**
@@ -208,9 +286,21 @@ class ErrorRoutingTest {
      */
     @Test
     fun `the custody tokens are the ones the keys module already owns`() {
-        assertEquals(GoCustodyFailure.AUTH_REQUIRED_TOKEN, SwarmErrorTokens.REAUTH_REQUIRED)
         assertEquals(GoCustodyFailure.KEY_INVALIDATED_TOKEN, SwarmErrorTokens.REPAIR_REQUIRED)
-        assertNotEquals(SwarmErrorTokens.REAUTH_REQUIRED, SwarmErrorTokens.GRANT_LOST)
         assertNotEquals(SwarmErrorTokens.REPAIR_REQUIRED, SwarmErrorTokens.GRANT_LOST)
+
+        // THE AUTH-REQUIRED TOKEN STILL EXISTS AND NO LONGER HAS A TAXONOMY ROW (ADR-007 B133),
+        // and both halves of that matter. `internal/remote/crypto` is FROZEN and still raises
+        // `ErrKeyAuthRequired`, so the token has to keep classifying at the custody boundary --
+        // `phonecore.openSealedDeviceKeys` refuses a Resume outright for anything it cannot
+        // recognise. What it must NOT do is come back as a rendered state, because the state's
+        // whole content was "prompt and it will connect".
+        assertNotEquals(GoCustodyFailure.AUTH_REQUIRED_TOKEN, SwarmErrorTokens.REPAIR_REQUIRED)
+        assertEquals(
+            "the auth-required token is routed to a state of its own again. It has no remedy " +
+                "this app can offer; PhoneRuntime routes the verdict to the permanent screen",
+            ErrorState.UNKNOWN,
+            ErrorRouter.route(GoCustodyFailure.AUTH_REQUIRED_TOKEN).state,
+        )
     }
 }

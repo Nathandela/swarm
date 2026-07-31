@@ -35,11 +35,11 @@ import org.robolectric.RobolectricTestRunner
  * [SettingsSurface] already use: every view is added once and visibility is what changes. The
  * wordings below are a SET rather than a string for the same reason; see [SUBMIT_CONTROL].
  *
- * PB-E2E-5 STAYS DEFERRED. Nothing here drives a camera, a biometric, an FCM delivery or a real
- * launch: the phone core is a native library cross-compiled for Android ABIs, so
- * `PhoneRuntime.phone()` answers [PhoneStartup.Unavailable] under Robolectric and no assertion
- * below depends on a machine being reachable. What is asserted is that the controls exist and
- * carry PB-SEC-2's gate -- not that pressing one launches anything.
+ * PB-E2E-5 STAYS DEFERRED. Nothing here drives a camera, an FCM delivery or a real launch: the
+ * phone core is a native library cross-compiled for Android ABIs, so `PhoneRuntime.phone()`
+ * answers [PhoneStartup.Unavailable] under Robolectric and no assertion below depends on a
+ * machine being reachable. What is asserted is that the controls exist and are the ones the
+ * surface built -- not that pressing one launches anything.
  */
 @RunWith(RobolectricTestRunner::class)
 class PhoneLaunchSurfaceTest {
@@ -116,47 +116,47 @@ class PhoneLaunchSurfaceTest {
     }
 
     /**
-     * PB-SEC-2's tier, at the control rather than in the table.
+     * THE PER-USE GATE ASSERTION IS GONE AND ITS ANTI-VACUITY JOB IS NOT (ADR-007 B133).
      *
-     * Requirements 6.0 and `ui/MachineAndLaunch.kt`'s own `GateFreshness` both put LAUNCH in the
-     * PER-USE tier, and android/gate/s20_pbsec2_peruse_test.go already requires every production
-     * call of a per-use facade verb to be declared through `PhoneSurface.perUseButton` -- with a
-     * comment saying `app.launch(` is in that list precisely so the gate becomes mandatory the
-     * day this screen lands. A per-use control reaches [PhoneSurface.gatedActions] by
-     * construction, so this asserts the join: the control a user presses to start a session is
-     * the gated one, and not a plain Button added beside it.
+     * What stood here was `the_control_that_starts_a_session_carries_the_per_use_gate`. It read
+     * `PhoneSurface.gatedActions` and required the launch control to be in it, because
+     * requirements 6.0 put LAUNCH in PB-SEC-2's PER-USE tier and
+     * android/gate/s20_pbsec2_peruse_test.go carried a CALL-SITE FLOOR -- every production call
+     * of a per-use verb declared through `PhoneSurface.perUseButton`, failing if fewer than two
+     * such call sites were found -- precisely so the gate would become mandatory the day this
+     * screen landed. PB-SEC-2 is VOID; `perUseButton`, `gatedButton` and `gatedActions` are all
+     * gone; the floor's subject does not exist. It is deleted rather than neutered, because a
+     * gate assertion rewritten to assert nothing is worse than no assertion.
      *
-     * IT IS ALSO THE ANTI-VACUITY HALF of the test above. Three views carrying the right words
-     * and no wiring satisfy the two assertions before this one -- measured, by adding exactly
-     * that to [PhoneSurface] and watching them go green while this one stayed red.
+     * ITS OTHER JOB HAS TO SURVIVE, and this is why the file does not simply lose a test. Three
+     * views carrying the right words and no wiring satisfy the two assertions above -- measured,
+     * once, by adding exactly that to [PhoneSurface] and watching them go green. So the join is
+     * re-anchored to the fence that DID survive: PB-SEC-12 clause 1's touch filter, which
+     * matters more now that there is no second checkpoint behind any of these controls.
      *
-     * WHAT IT CANNOT SEE, because a fence that overclaims is worse than one that says its limit:
-     * this reads a LIST the surface publishes, so it proves REGISTRATION, not the factory. A
-     * plain Button added to [PhoneSurface.gatedActions] would satisfy it. The per-use half is
-     * android/gate/s20_pbsec2_peruse_test.go, which requires every production call of a per-use
-     * facade verb to be declared through `PhoneSurface.perUseButton` and already carries
-     * `app.launch(` in its list for that day; what this adds is the other direction -- that the
-     * control a user presses is one of the surface's declared gated ones, which is
-     * [PhoneSurface.gatedActions]' own stated rule ("a new panel contributes its own gated set
-     * here rather than being remembered about") and PB-SEC-12 clause 1's subject.
+     * WHAT IT CANNOT SEE, because a fence that overclaims is worse than one that states its
+     * limit: this reads a LIST the surface publishes, so it proves REGISTRATION, not the
+     * factory. A plain Button added to [PhoneSurface.touchFilteredActions] would satisfy it, and
+     * `PhoneSurfaceControlsTest.every_button_and_switch_on_screen_filters_obscured_touches` is
+     * the half that walks the hierarchy instead. It makes NO claim about authentication, because
+     * there is none to claim.
      */
     @Test
-    fun the_control_that_starts_a_session_carries_the_per_use_gate() {
+    fun the_control_that_starts_a_session_is_one_the_surface_declares() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val gated = activity.gatedActionViews()
+                val declared = activity.touchFilteredViews()
                     .filterIsInstance<TextView>()
                     .map { it.text.toString().lowercase() }
                 assertTrue(
-                    "PB-SEC-2 / PB-APP-6: the control that starts a session is not in the " +
-                        "surface's gated set, so either it does not exist or it was added as a " +
-                        "plain control beside the gated ones. Requirements 6.0 puts LAUNCH in " +
-                        "the PER-USE tier: ending or starting work on someone's machine is one " +
-                        "prompt away from a phone in a stranger's hand, and a per-use verb " +
-                        "reached without PhoneSurface.perUseButton is the silent downgrade " +
-                        "ADR-007 B51 found shipped.\n" +
-                        describe("the gated controls were", gated),
-                    gated.any { label -> submitControl.any { label.contains(it) } },
+                    "PB-APP-6 / PB-SEC-12: the control that starts a session is not among the " +
+                        "surface's declared action views, so either it does not exist or it was " +
+                        "added as a bare Button beside the ones built by the factory. Launch " +
+                        "starts work on someone's machine from a phone; the overlay filter is " +
+                        "the only thing standing between a tap on it and a tap the user could " +
+                        "not see.\n" +
+                        describe("the declared controls were", declared),
+                    declared.any { label -> submitControl.any { label.contains(it) } },
                 )
             }
         }

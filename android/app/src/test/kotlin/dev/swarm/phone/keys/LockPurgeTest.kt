@@ -3,33 +3,38 @@ package dev.swarm.phone.keys
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * PB-KEY-7 -- "Lock purges live memory. Invalidating the biometric gate is not enough...
- * On lock, background, or auth expiry the core must stop content operations, zeroize/discard
- * native key custody, purge decrypted session/snapshot/reply caches and sensitive UI state,
- * and require a fresh unwrap before restoring content."
+ * PB-KEY-7 -- "purges live memory... the core must stop content operations, zeroize/discard
+ * native key custody, purge decrypted session/snapshot/reply caches and sensitive UI state."
  *
- * The Go half is App.PurgeKeys. This is the ANDROID half: the events that must reach it, the
- * Kotlin-side material that must be destroyed alongside it, and the recovery -- because a purge
- * with no way back bricks the app on the first screen lock.
+ * THE MECHANISM SURVIVES ADR-007 B133; ITS TRIGGER MOVED. The requirement read "LOCK purges live
+ * memory... on lock, background, or auth expiry", and there is no lock event, no backgrounding
+ * verdict and no auth expiry on this handset any more -- nothing is gated on a user
+ * authentication, so none of the three has a producer. The purge is now reached from REVOKE and
+ * UNPAIR, which is where the phone stops being entitled to the epoch keys at all.
  *
- * WHAT THE PURGE MEANS CHANGED WITH ADR-007 B35/B36, in one direction, and these tests changed
- * with it. It ends CONTENT custody: the live epoch content key, the router binding and the
- * decrypted caches. It leaves the sealed content key at rest -- destroying it is a permanent
- * brick, because PB-KEY-10 delivers the epoch key inside Go and the grant watermark refuses a
- * re-delivery as a replay -- and it leaves the WAKE tier entirely alone, because a push arrives
- * with nobody there to authorize anything.
+ * AND THE PURGE GOT WIDER, WHICH IS A CHANGE OF SUBSTANCE RATHER THAN OF NAME. The lock purge
+ * deliberately SPARED the wake tier (ADR-007 B35): a high-priority FCM push is the sole
+ * background wake path, it arrives with nobody there, and a screen lock is a state the phone
+ * comes back from. A revoke is not. The device's registration is gone, so a wake it could still
+ * answer is a wake it has no business answering -- both tiers go, and it is NOT RECOVERABLE
+ * WITHOUT PAIRING AGAIN. These tests changed in that direction, not to make the code pass.
+ *
+ * WHAT THE OLD FILE ASSERTED AND WHY THAT COULD NOT BE KEPT. Five `InvalidationEvent`s each
+ * purging; the wake tier surviving each; a fresh unwrap restoring content afterwards. The events
+ * are gone with `session.invalidate(event)`; "the wake tier survives" is now the inverse of the
+ * truth; and "a fresh unwrap restores content" described a screen lock the user comes back from,
+ * which a revoke is not.
  *
  * Plain JVM.
  */
 class LockPurgeTest {
 
-    private fun unlockedSession(): Triple<KeyCustodySession, RecordingCore, FakeKeystoreKek> {
-        val kek = FakeKeystoreKek(lockedTiers = emptySet())
+    private fun armedSession(): Triple<KeyCustodySession, RecordingCore, FakeKeystoreKek> {
+        val kek = FakeKeystoreKek()
         val store = SealedStore(kek)
         store.put(CustodyBlobs.tierKey(KeyTier.WAKE), KeyTier.WAKE, tierKeyBytes(0x10))
         store.put(CustodyBlobs.tierKey(KeyTier.CONTENT), KeyTier.CONTENT, tierKeyBytes(0x70))
@@ -41,27 +46,29 @@ class LockPurgeTest {
     }
 
     /**
-     * The three events PB-KEY-7 names outright, plus the two that reach the same state by
-     * another route. Every one must purge; missing one leaves the content key live in a
-     * process the user believes is locked.
+     * The purge reaches the Go core, and it takes BOTH tiers.
+     *
+     * The wake half is the assertion that inverted. It used to say the purge must NOT drop the
+     * wake tier, because a session that forgot it would report the sole background wake path as
+     * unavailable while it was in fact working. After a revoke the phone is not entitled to wake
+     * either: the machine has dropped its registration, and a handset still answering pushes for
+     * it is the state PB-KEY-7's purge exists to prevent, one tier over.
      */
     @Test
-    fun every_invalidation_event_purges_the_core() {
-        for (event in InvalidationEvent.entries) {
-            val (session, core, _) = unlockedSession()
-            assertTrue("precondition: content custody is live", session.contentAvailable())
+    fun a_revoke_purges_the_core_and_leaves_neither_tier_armed() {
+        val (session, core, _) = armedSession()
+        assertTrue("precondition: content custody is live", session.contentAvailable())
+        assertTrue("precondition: wake custody is live", session.wakeAvailable())
 
-            session.invalidate(event)
+        session.purge()
 
-            assertEquals("$event did not purge the Go core's key custody", 1, core.purgeCount)
-            assertFalse("$event left content custody available", session.contentAvailable())
-            assertTrue(
-                "$event dropped the WAKE tier as well. App.PurgeKeys does not touch it " +
-                    "(ADR-007 B35), so a session that forgets it reports the sole background " +
-                    "wake path as unavailable while it is in fact working",
-                session.wakeAvailable(),
-            )
-        }
+        assertEquals("the revoke did not purge the Go core's key custody", 1, core.purgeCount)
+        assertFalse("the revoke left content custody available", session.contentAvailable())
+        assertFalse(
+            "the revoke left the WAKE tier armed. The device's registration is gone, so a wake " +
+                "this handset can still answer is a wake it has no business answering",
+            session.wakeAvailable(),
+        )
     }
 
     /**
@@ -69,16 +76,16 @@ class LockPurgeTest {
      * unwrapped bytes are still reachable on the Java heap -- where a heap dump, an
      * ADB-triggered ANR trace, or the next GC-delayed allocation can find them.
      *
-     * Two observation points, because they catch different implementations. The KEK's own
-     * output catches a session that never zeroized what it was handed. The session's FIELDS
-     * catch the likelier shortcut: caching the unwrapped key so the user is not re-prompted,
-     * which leaves the whole purge cosmetic while the first check still passes.
+     * Two observation points, because they catch different implementations. The KEK's own output
+     * catches a session that never zeroized what it was handed. The session's FIELDS catch the
+     * likelier shortcut: caching the unwrapped key to avoid a Keystore round trip, which leaves
+     * the whole purge cosmetic while the first check still passes.
      */
     @Test
     fun a_purge_leaves_no_key_material_live_in_the_custody_layer() {
-        val (session, _, kek) = unlockedSession()
+        val (session, _, kek) = armedSession()
 
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
+        session.purge()
 
         assertTrue("precondition: the KEK handed out something", kek.handedOut.isNotEmpty())
         for (buffer in kek.handedOut) {
@@ -93,85 +100,58 @@ class LockPurgeTest {
         }
     }
 
+    /**
+     * THE RECOVERY DIRECTION IS THE ONE THAT CHANGED, so it is asserted rather than left to the
+     * doc comment.
+     *
+     * A lock was a state the phone came back from and the old file proved it did: unlock, install
+     * the tier again, content operations resume. A revoke is terminal. What this asserts is the
+     * half the custody layer owns -- the session reports neither tier after the purge, and it
+     * does not quietly re-arm itself. Re-pairing is what restores custody, and it goes through
+     * provisioning rather than through this object.
+     *
+     * `PushWakePath.prepare` is the sharp case and the reason this is not just the previous
+     * test again: it re-installs unconditionally, because it runs in a process that may have
+     * been started BY a push and may hold nothing. It must not be a back door that re-arms a
+     * revoked handset off the sealed blobs that are still on disk.
+     */
     @Test
-    fun content_operations_are_refused_until_a_fresh_unwrap() {
-        val (session, core, kek) = unlockedSession()
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
-        kek.lockedTiers = setOf(KeyTier.CONTENT)
+    fun nothing_the_session_can_do_re_arms_a_purged_handset() {
+        val (session, core, _) = armedSession()
 
-        assertThrows(KeyCustodyException.UserAuthenticationRequired::class.java) {
-            session.installTier(KeyTier.CONTENT)
-        }
-        assertEquals("nothing new crossed while locked", 1, core.installedContent.size)
+        session.purge()
+        session.purge()
+
+        assertEquals("purging twice is not an error and must not be a no-op", 2, core.purgeCount)
         assertFalse(session.contentAvailable())
-    }
-
-    /** "Recoverable by re-installing the tier key" -- a screen lock must not brick the app. */
-    @Test
-    fun a_fresh_unwrap_restores_content_operations() {
-        val (session, core, kek) = unlockedSession()
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
-
-        kek.unlockAll()
-        session.installTier(KeyTier.CONTENT)
-
-        assertTrue(session.contentAvailable())
-        assertEquals(2, core.installedContent.size)
-        assertArrayEquals(tierKeyBytes(0x70), core.installedContent.last())
+        assertFalse(session.wakeAvailable())
     }
 
     /**
-     * THIS TEST IS THE INVERSE OF THE ONE IT REPLACES, and the replacement is the point rather
-     * than a tidy-up. It was `the_wake_tier_is_reinstallable_after_a_purge_without_authentication`
-     * -- ADR-007 B17(b)'s named fence -- and B35 established that it pinned a property the
-     * product cannot have, twice over:
+     * The sealed material at rest is NOT destroyed by the purge, and that is deliberate rather
+     * than an oversight.
      *
-     *  - the CLAIM was that App.PurgeKeys clears `st.Keys` wholesale, so a push arriving after a
-     *    lock finds no wake key and Kotlin must re-install it. The purge no longer touches the
-     *    wake tier at all, precisely so that this situation cannot arise;
-     *  - and the REMEDY was unbuildable regardless. PB-KEY-10 moved epoch-key delivery entirely
-     *    into Go, so the Android side has no source for those bytes: every `CustodyBlobs.tierKey`
-     *    reference outside this test tree is under `src/test/`, and a wired production re-install
-     *    would have thrown on its first call rather than restoring anything.
-     *
-     * So the fence stays at the same seam -- where the wrong model would be reintroduced -- and
-     * asserts what has to be true instead: a screen lock leaves the sole background wake path
-     * working, with nothing to re-install and nobody present to authorize it if there were.
+     * PB-KEY-10 delivers the epoch key inside Go and the grant watermark refuses a re-delivery
+     * as a replay, so destroying the sealed content key here would be a permanent brick reached
+     * from a verb the user pressed. What makes the revoke terminal is the machine dropping the
+     * registration and `PhoneRuntime.purgeKeys` asking the core to discard what it holds -- not
+     * this layer shredding blobs it cannot replace.
      */
     @Test
-    fun the_wake_tier_survives_a_lock_and_needs_no_reinstall() {
-        val (session, core, kek) = unlockedSession()
-        val wakeInstallsBefore = core.installedWake.size
+    fun the_purge_does_not_destroy_the_sealed_material_it_cannot_replace() {
+        val kek = FakeKeystoreKek()
+        val store = SealedStore(kek)
+        store.put(CustodyBlobs.tierKey(KeyTier.CONTENT), KeyTier.CONTENT, tierKeyBytes(0x70))
+        val session = KeyCustodySession(store, RecordingCore())
+        session.installTier(KeyTier.CONTENT)
 
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
-        kek.lockedTiers = setOf(KeyTier.CONTENT)
+        session.purge()
 
         assertTrue(
-            "the lock dropped the wake tier. A high-priority FCM push is the SOLE background " +
-                "wake path (ADR-007 B9/B16) and the handset holds no other source for the key, " +
-                "so a lock that takes it stops the phone being wakeable for good",
-            session.wakeAvailable(),
+            "the purge removed the sealed content key from the store. PB-KEY-10 delivers the " +
+                "epoch key inside Go and the watermark refuses a re-delivery, so those bytes " +
+                "cannot be fetched again: this is a brick, not a purge",
+            store.names().contains(CustodyBlobs.tierKey(KeyTier.CONTENT)),
         )
-
-        // And the push path still runs on a locked handset, which is the property that matters.
-        PushWakePath.prepare(session)
-        assertTrue(session.wakeAvailable())
-        assertTrue(
-            "the push path could not arm itself while the CONTENT tier was locked",
-            core.installedWake.size > wakeInstallsBefore,
-        )
-        assertFalse("re-arming the wake path must not restore content custody", session.contentAvailable())
-    }
-
-    /** Purging twice is not an error; lock and background arrive together all the time. */
-    @Test
-    fun purging_is_idempotent() {
-        val (session, core, _) = unlockedSession()
-
-        session.invalidate(InvalidationEvent.DEVICE_LOCKED)
-        session.invalidate(InvalidationEvent.APP_BACKGROUNDED)
-
-        assertFalse(session.contentAvailable())
-        assertEquals(2, core.purgeCount)
     }
 }

@@ -66,21 +66,34 @@ class PhoneActivityWindowTest {
 
     // --- PB-SEC-12 clause 1 -------------------------------------------------
 
+    /**
+     * PB-SEC-12 clause 1 SURVIVES ADR-007 B133 AND MATTERS MORE, which is why this is re-anchored
+     * rather than deleted along with everything else the word "gated" used to attach to.
+     *
+     * The subject is `PhoneActivity.touchFilteredViews()`, which was `gatedActionViews()`. Only
+     * the NAME changed: the list always carried the touch filter and never a gate, and after
+     * B133 a name saying "gated" would claim a protection this app no longer has. The attack is
+     * unchanged -- an overlay covers a control so the user's tap lands on something they cannot
+     * see -- and the controls behind it are the ones that revoke a device and take control of a
+     * shell. WHAT CHANGED IS THAT THERE IS NO SECOND CHECKPOINT BEHIND THEM ANY MORE. The touch
+     * filter used to be the outer of two defences on those buttons; it is now the only one.
+     */
     @Test
-    fun every_gated_action_filters_obscured_touches() {
+    fun every_touch_filtered_action_filters_obscured_touches() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val gated = activity.gatedActionViews()
+                val filtered = activity.touchFilteredViews()
                 assertTrue(
-                    "PB-SEC-12: the Activity exposes no gated action view, so this assertion " +
-                        "has no subject. Tapjacking is the attack where an overlay covers a " +
-                        "confirm button so the user's tap lands on something they cannot see, " +
-                        "and the buttons at stake revoke a device and take control of a shell",
-                    gated.isNotEmpty(),
+                    "PB-SEC-12: the Activity exposes no touch-filtered action view, so this " +
+                        "assertion has no subject. Tapjacking is the attack where an overlay " +
+                        "covers a confirm button so the user's tap lands on something they " +
+                        "cannot see, and the buttons at stake revoke a device and take control " +
+                        "of a shell -- with nothing else behind them since ADR-007 B133",
+                    filtered.isNotEmpty(),
                 )
-                for (view in gated) {
+                for (view in filtered) {
                     assertTrue(
-                        "PB-SEC-12: a gated action view does not filter obscured touches",
+                        "PB-SEC-12: a declared action view does not filter obscured touches",
                         view.filterTouchesWhenObscured,
                     )
                 }

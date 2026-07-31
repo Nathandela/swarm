@@ -41,11 +41,20 @@ class FailableCustodyTest {
     }
 
     /**
-     * Both failure modes, through every tier, at the store. A `runCatching { ... }.getOrNull()`
+     * Every failure mode, through every tier, at the store. A `runCatching { ... }.getOrNull()`
      * anywhere on this path turns a refusal into a null the caller reads as "no key yet".
+     *
+     * THE THREE MODES ARE NOT INTERCHANGEABLE and the reason is not the UI (ADR-007 B133 sends
+     * two of them to the same screen). It is `phonecore.openSealedDeviceKeys`, which refuses a
+     * Resume outright for any content-tier error that is neither sentinel -- so a refusal that
+     * arrived as the wrong type, or as the untyped third, is a handset whose app will not start.
+     *
+     * `lockedTiers` IS ASKED FOR EXPLICITLY HERE, and the fixture no longer supplies it by
+     * default. Nothing this build provisions can be in that state; the population that can is an
+     * install made before B133, still holding an `AUTH_BIOMETRIC_STRONG` content KEK.
      */
     @Test
-    fun every_tier_surfaces_auth_required_and_permanent_invalidation_from_the_store() {
+    fun every_tier_surfaces_each_failure_mode_as_its_own_type_from_the_store() {
         for (tier in KeyTier.entries) {
             val (locked, _, _) = storeWith { it.lockedTiers = setOf(tier) }
             assertThrows(
@@ -58,6 +67,13 @@ class FailableCustodyTest {
                 "$tier must surface a permanent invalidation distinctly from an auth refusal",
                 KeyCustodyException.KeyPermanentlyInvalidated::class.java,
             ) { invalidated.open(CustodyBlobs.tierKey(tier)) }
+
+            val (missing, _, _) = storeWith { it.missingTiers = setOf(tier) }
+            assertThrows(
+                "$tier's Keystore entry is gone, which is neither of the two sentinels and " +
+                    "must not be reported as either",
+                KeyCustodyException.KeystoreKeyMissing::class.java,
+            ) { missing.open(CustodyBlobs.tierKey(tier)) }
         }
     }
 
@@ -69,7 +85,7 @@ class FailableCustodyTest {
 
             val (locked, _, _) = storeWith { it.lockedTiers = setOf(tier) }
             assertThrows(
-                "$role is $tier-tier, so it must refuse when that tier is gated",
+                "$role is $tier-tier, so it must refuse when that tier refuses",
                 KeyCustodyException.UserAuthenticationRequired::class.java,
             ) { locked.open(CustodyBlobs.deviceRole(role)) }
 
@@ -106,21 +122,18 @@ class FailableCustodyTest {
     }
 
     /**
-     * A permanent invalidation of a CONTENT-tier key is not a prompt away. Those keys carry
-     * the device's identity -- COMMAND_SIGN is what the daemon registry pins the device id to
-     * (`crypto/keystore.go`, R-DEV.1) -- so losing them to a biometric enrollment change is a
-     * pairing-level event, not an authentication-level one. Recovering by re-prompting
-     * produces a prompt the user can satisfy and that changes nothing.
+     * DELETED HERE AND NOT REPAIRED: `a_permanently_invalidated_content_key_is_not_recovered_by_
+     * reauthenticating`. It read `GateInvalidation.recoveryFor(BIOMETRIC_ENROLLMENT_CHANGED)` and
+     * required the answer to be re-provision or re-pair rather than re-prompt. `GateInvalidation`
+     * and its `Recovery` are gone with ADR-007 B133 -- their middle answer was REAUTHENTICATE and
+     * there is nothing left to name -- so the assertion has no subject at this layer.
+     *
+     * ITS CLAIM DID NOT EVAPORATE, it moved: what a destroyed key is worth to the USER is
+     * `PhoneStartupRoutingTest.a_destroyed_or_missing_key_still_routes_to_the_re_pair_it_needs`,
+     * over the table PhoneRuntime actually consults. This file's own doc explains why that split
+     * matters -- accepting the two as an interchangeable pair is correct at THIS layer and is
+     * exactly what hid them being merged one layer up.
      */
-    @Test
-    fun a_permanently_invalidated_content_key_is_not_recovered_by_reauthenticating() {
-        val recovery = GateInvalidation.recoveryFor(InvalidationEvent.BIOMETRIC_ENROLLMENT_CHANGED)
-        assertTrue(
-            "recovery from a destroyed content-tier key must re-provision or re-pair, not " +
-                "re-prompt; it was $recovery",
-            recovery == Recovery.REPROVISION_KEK || recovery == Recovery.REPAIR_DEVICE,
-        )
-    }
 
     /**
      * The wake tier must NOT be invalidated by an enrollment change, or a re-enrolled

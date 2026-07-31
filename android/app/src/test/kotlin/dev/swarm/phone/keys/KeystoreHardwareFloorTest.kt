@@ -172,21 +172,42 @@ class KeystoreHardwareFloorTest {
     /**
      * The floor is a floor and not a substitute for the request comparison. A software-level
      * answer must not be the only thing checked, nor must adding it have displaced the
-     * downgrades that were already caught.
+     * disagreements that were already caught.
+     *
+     * THE DOWNGRADE AXIS CHANGED WITH ADR-007 B133 AND THE TEST DID NOT LOSE ITS SUBJECT. It
+     * used to weaken `userAuthenticationRequired` to false against a spec that requested TRUE;
+     * the spec now requests FALSE, so that mutation is no longer a disagreement at all and the
+     * test would have passed against a `readBack` that compared nothing. Both axes below are
+     * disagreements the platform can still produce, both are invisible to the security-level
+     * floor -- TRUSTED_ENVIRONMENT and STRONGBOX are affirmative answers -- and both matter:
+     *
+     *  - a SPOOFED StrongBox claim on a key that did not request it is the plan holding a
+     *    guarantee the key does not carry, which every later decision is then taken against;
+     *  - an enrollment invalidation the spec explicitly turned OFF is a KEK that a re-enrolled
+     *    fingerprint destroys, over a biometric this design no longer uses for anything. The
+     *    only way back from that is a re-pair.
      */
     @Test
     fun the_floor_does_not_replace_the_requested_versus_achieved_comparison() {
         val requested = KeystoreSpecs.kek(KeyTier.CONTENT, strongBox = false)
-        val weakened = achieved(requested, KeystoreSecurityLevel.TRUSTED_ENVIRONMENT)
-            .copy(userAuthenticationRequired = false)
+        val disagreements = mapOf(
+            "claimed StrongBox for a key that did not request it" to
+                achieved(requested, KeystoreSecurityLevel.STRONGBOX),
+            "re-armed the enrollment invalidation the spec turned off" to
+                achieved(requested, KeystoreSecurityLevel.TRUSTED_ENVIRONMENT)
+                    .copy(invalidatedByBiometricEnrollment = true),
+        )
 
-        assertThrows(
-            "a key in secure hardware that silently dropped the authentication requirement " +
-                "was accepted; the floor must be additional to the read-back, not instead of it",
-            KeyCustodyException::class.java,
-        ) {
-            CustodyProvisioning(FixedProvisioner(), FixedReader(weakened))
-                .provision(KeyTier.CONTENT, strongBoxPreferred = false)
+        for ((what, weakened) in disagreements) {
+            assertThrows(
+                "the platform $what and provisioning accepted it. The level it reported " +
+                    "AFFIRMS secure hardware, so the floor says nothing here: the requested " +
+                    "versus achieved comparison has to be additional to it, not instead of it",
+                KeyCustodyException::class.java,
+            ) {
+                CustodyProvisioning(FixedProvisioner(), FixedReader(weakened))
+                    .provision(KeyTier.CONTENT, strongBoxPreferred = false)
+            }
         }
     }
 }

@@ -65,7 +65,10 @@ class PhoneStartupRoutingTest {
         val routed = routeStartupFailure(
             KeyCustodyException.PlatformCapabilityMissing(
                 role = KeyRole.COMMAND_SIGN,
-                capability = PlatformCapability.USER_AUTH_PER_USE,
+                // Was USER_AUTH_PER_USE, which left the enum with PB-SEC-2 (ADR-007 B133).
+                // KEYSTORE_AES_GCM is the one capability the design still consumes, so it is
+                // also the only one this refusal can now be about.
+                capability = PlatformCapability.KEYSTORE_AES_GCM,
             ),
         )
         assertEquals(ErrorState.DEVICE_UNSUPPORTED, routed.state)
@@ -111,12 +114,35 @@ class PhoneStartupRoutingTest {
         assertEquals(Remedy.RE_PAIR, missing.remedy)
     }
 
-    /** The recoverable verdict, which must stay a prompt and not become any of the above. */
+    /**
+     * THE VERDICT THAT USED TO BE RECOVERABLE, AND IS NOT (ADR-007 B133).
+     *
+     * This test was `an_authentication_refusal_stays_a_prompt`, and it required
+     * REAUTH_REQUIRED / `Remedy.AUTHENTICATE`. Both are gone: there is no prompt anywhere in this
+     * app, so telling the user to authenticate is advice they cannot carry out -- PB-APP-10's
+     * failure loop reached through the remedy, exactly like the two defects at the top of this
+     * file, and this one would have been reached by a user whose app simply would not open.
+     *
+     * WHO CAN STILL RAISE IT, because the arm is not dead code. An install provisioned BEFORE
+     * B133 holds an `AUTH_BIOMETRIC_STRONG` content KEK, and `KeystoreCustodyBootstrap.ensure`
+     * returns early when the alias exists -- so the new spec never reaches it and the platform
+     * goes on refusing. For that handset the key really is unusable and pairing again really is
+     * the fix: a re-pair discards the alias and the next provision writes one that asks for no
+     * authenticator. RE_PAIR is the honest answer rather than a fallback.
+     *
+     * The assertion is written against REPAIR_REQUIRED specifically, and not merely "not
+     * REAUTH_REQUIRED", so routing it to DEVICE_UNSUPPORTED or INTERNAL fails here too. Neither
+     * would be true: the handset is capable, and nothing is broken.
+     */
     @Test
-    fun an_authentication_refusal_stays_a_prompt() {
+    fun a_legacy_auth_gated_key_is_routed_to_the_re_pair_that_actually_fixes_it() {
         val routed = routeStartupFailure(KeyCustodyException.UserAuthenticationRequired(KeyTier.CONTENT))
-        assertEquals(ErrorState.REAUTH_REQUIRED, routed.state)
-        assertEquals(Remedy.AUTHENTICATE, routed.remedy)
+        assertEquals(ErrorState.REPAIR_REQUIRED, routed.state)
+        assertEquals(Remedy.RE_PAIR, routed.remedy)
+        assertTrue(
+            "the one remedy for this state is a pairing, so the screen has to offer the flow",
+            routed.offersPairing,
+        )
     }
 
     /**

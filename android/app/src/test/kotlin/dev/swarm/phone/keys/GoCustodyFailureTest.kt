@@ -1,8 +1,10 @@
 package dev.swarm.phone.keys
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,14 +15,18 @@ import org.junit.Test
  * only a MESSAGE. It was a recorded S14a residual -- "the two sentinels are not machine-readable
  * across the gomobile boundary" -- and S14 owns it.
  *
- * The requirement is that the UI act DIFFERENTLY on each: one is a re-prompt, the other means
- * the key is gone and the device must pair again. So the discriminator is a stable token the
- * facade stamps onto every custody refusal (centrally, in the panic barrier every entry point
- * installs) and this maps it back onto a type.
+ * WHAT THE DISCRIMINATOR IS FOR NOW (ADR-007 B133), because its consumer moved and the
+ * classification did not. It used to decide what the UI did: one was a re-prompt, the other was
+ * "pair this device again". There is no prompt left in the product, so both verdicts route to
+ * the same screen -- and BOTH TOKENS SURVIVE ANYWAY, because the reader that matters is not the
+ * UI. `internal/remote/crypto` is FROZEN and still raises both sentinels, and
+ * `phonecore.openSealedDeviceKeys` refuses a Resume OUTRIGHT for any content-tier error that is
+ * neither of them. So a token dropped here does not merge two screens; it turns a legible
+ * refusal into a handset whose app will not start. The classification is a WIRE property.
  *
- * Plain JVM. Nothing here touches Keystore, a prompt, or hardware of any kind; the Go side of
- * the same pin is mobile/s14_custody_test.go, which holds these literals and the bound
- * constants to each other in the direction that matters -- Go is authoritative.
+ * Plain JVM. Nothing here touches Keystore or hardware of any kind; the Go side of the same pin
+ * is mobile/s14_custody_test.go, which holds these literals and the bound constants to each
+ * other in the direction that matters -- Go is authoritative.
  */
 class GoCustodyFailureTest {
 
@@ -28,26 +34,35 @@ class GoCustodyFailureTest {
         "$token: swarmmobile: the content Keystore key needs a fresh authentication: " +
             "crypto: key requires user authentication"
 
+    /**
+     * The two sentinels arrive as two TYPES and never as one.
+     *
+     * The `recoveryFor` assertions that used to close each of these are gone with
+     * `GoCustodyFailure.Recovery`: its middle answer was REAUTHENTICATE, and ADR-007 B133
+     * removed the state that answer named. What is asserted instead is the property the tokens
+     * still buy -- each verdict is distinguishable at the boundary, which is what
+     * `phonecore.openSealedDeviceKeys` reads and what `PhoneStartupRoutingTest` routes.
+     */
     @Test
-    fun a_recoverable_refusal_from_the_go_core_becomes_the_re_prompt_type() {
+    fun a_refusal_for_want_of_authentication_arrives_as_its_own_type() {
         val mapped = GoCustodyFailure.classify(
             KeyTier.CONTENT,
             goErrorMessage(GoCustodyFailure.AUTH_REQUIRED_TOKEN),
         )
         assertTrue(
-            "a recoverable refusal must arrive as UserAuthenticationRequired; it was $mapped",
+            "an auth-required refusal must arrive as UserAuthenticationRequired; it was $mapped",
             mapped is KeyCustodyException.UserAuthenticationRequired,
         )
-        assertEquals(Recovery.REAUTHENTICATE, GoCustodyFailure.recoveryFor(mapped!!))
     }
 
     /**
-     * The consequential direction. A permanent invalidation reported as an authentication
-     * problem produces a prompt the user CAN satisfy and that changes nothing -- forever,
-     * because the key it would authorize no longer exists.
+     * The consequential direction, and it survives B133 unchanged. A permanent invalidation
+     * that arrived as anything else would be read by `openSealedDeviceKeys` as a container it
+     * cannot parse rather than a key that is gone, and a re-pairable handset becomes an app
+     * that refuses to start.
      */
     @Test
-    fun a_permanent_refusal_from_the_go_core_is_never_reported_as_a_prompt() {
+    fun a_permanent_refusal_from_the_go_core_is_never_the_other_verdict() {
         val mapped = GoCustodyFailure.classify(
             KeyTier.CONTENT,
             goErrorMessage(GoCustodyFailure.KEY_INVALIDATED_TOKEN),
@@ -56,10 +71,9 @@ class GoCustodyFailureTest {
             "a permanent invalidation must arrive as KeyPermanentlyInvalidated; it was $mapped",
             mapped is KeyCustodyException.KeyPermanentlyInvalidated,
         )
-        assertNotEquals(
-            "the key is gone; prompting again cannot bring it back",
-            Recovery.REAUTHENTICATE,
-            GoCustodyFailure.recoveryFor(mapped!!),
+        assertFalse(
+            "the two sentinels collapsed into one type at the boundary",
+            mapped is KeyCustodyException.UserAuthenticationRequired,
         )
     }
 
@@ -117,26 +131,25 @@ class GoCustodyFailureTest {
         assertTrue("$invalid contains $auth", !invalid.contains(auth))
     }
 
-    // --- the two transport states PB-KEY-6 needs ----------------------------
+    // --- the terminal state PB-KEY-6 needs ----------------------------------
 
     /**
      * `App.ConnectionState` reports strings, so the mapping is total in the direction the UI
-     * reads it. The two custody states differ from the four transport ones in the two ways that
-     * matter: one asks for a biometric, the other stops retrying.
+     * reads it. The custody state differs from the four transport ones in the way that is left:
+     * it stops retrying.
+     *
+     * THE OTHER HALF OF THIS TEST IS GONE, DELIBERATELY (ADR-007 B133). It asserted that
+     * `reauth_required` was a state the app understood and that it asked for a biometric while
+     * not being terminal. There is no prompt anywhere in this product, so the state had lost its
+     * producer AND its remedy at once -- a screen nothing can reach, whose only instruction is
+     * an act the user cannot perform. It was removed atomically with `mobile/relay.go`'s
+     * `connReauthRequired`, the taxonomy row and `Remedy.AUTHENTICATE`; the next test is what
+     * holds that removal to being atomic.
      */
     @Test
-    fun the_custody_connection_states_are_distinguishable_from_the_transport_ones() {
-        assertEquals(ConnectionState.REAUTH_REQUIRED, ConnectionState.of("reauth_required"))
+    fun the_custody_connection_state_is_distinguishable_from_the_transport_ones() {
         assertEquals(ConnectionState.REPAIR_REQUIRED, ConnectionState.of("repair_required"))
-
-        assertTrue(ConnectionState.REAUTH_REQUIRED.needsBiometricPrompt)
-        assertTrue(!ConnectionState.REAUTH_REQUIRED.isTerminal)
-
         assertTrue(ConnectionState.REPAIR_REQUIRED.isTerminal)
-        assertTrue(
-            "a terminal state must not ask for a biometric: the key it would authorize is gone",
-            !ConnectionState.REPAIR_REQUIRED.needsBiometricPrompt,
-        )
 
         for (transport in listOf(
             ConnectionState.OFFLINE,
@@ -144,9 +157,32 @@ class GoCustodyFailureTest {
             ConnectionState.ONLINE,
             ConnectionState.RECONNECTING,
         )) {
-            assertTrue("$transport is a transport state and must not prompt", !transport.needsBiometricPrompt)
-            assertTrue("$transport is a transport state and must not be terminal", !transport.isTerminal)
+            assertFalse(
+                "$transport is a transport state and must not stop the app retrying",
+                transport.isTerminal,
+            )
         }
+    }
+
+    /**
+     * THE REMOVAL HAS TO BE ATOMIC, and this is the half a Kotlin test can hold.
+     *
+     * `of` errors on a wire string it does not know, which is the right behaviour -- a state the
+     * facade reports and the app cannot name is not something to guess at. So if
+     * `mobile/relay.go` ever emits `reauth_required` again while nothing here can render it, the
+     * app CRASHES on a live connection rather than showing a wrong banner. Asserting the refusal
+     * here is what makes re-introducing the producer a failure in this suite instead of on a
+     * handset, and it is the reason the enum row could be deleted rather than kept "for safety":
+     * a row kept with no producer is a screen nobody can ever reach.
+     */
+    @Test
+    fun the_removed_reauth_state_is_not_quietly_still_understood() {
+        assertThrows(
+            "ConnectionState still maps the reauth_required wire string. It was removed with " +
+                "its producer and its remedy (ADR-007 B133); a row kept on one side of that " +
+                "join is a state the app can enter and offer nothing for",
+            IllegalStateException::class.java,
+        ) { ConnectionState.of("reauth_required") }
     }
 
     // --- the seam itself, on the BOUND interface ----------------------------
@@ -178,14 +214,21 @@ class GoCustodyFailureTest {
     }
 
     /**
-     * The gate, at the seam. A locked handset must make the CONTENT key unobtainable by the Go
-     * core -- and the refusal must arrive carrying the token, because that is the only thing
-     * distinguishing "the user is not authenticated" from "this blob is not ours" once gomobile
-     * has flattened it. `phonecore.openSealedDeviceKeys` refuses a Resume outright for the
-     * second, so a mis-stamped refusal turns a locked handset into an app that cannot start.
+     * A refusing content tier at the seam, and the premise is now a NAMED POPULATION rather than
+     * "the screen is locked" (ADR-007 B133).
+     *
+     * Nothing this build provisions can refuse for want of an authentication -- both KEKs carry
+     * `setUserAuthenticationRequired(false)`. What still can is an install made BEFORE that
+     * change, whose content KEK holds `AUTH_BIOMETRIC_STRONG` and which
+     * `KeystoreCustodyBootstrap.ensure` does not re-spec because the alias exists. On that
+     * handset the refusal is real and permanent, and it must still arrive carrying the token:
+     * that is the only thing distinguishing it from "this blob is not ours" once gomobile has
+     * flattened the error, and `phonecore.openSealedDeviceKeys` refuses a Resume outright for
+     * the second. A mis-stamped refusal turns an upgradeable handset into an app that cannot
+     * start, with nothing on screen saying why.
      */
     @Test
-    fun a_locked_content_tier_refuses_the_go_core_with_the_token_it_reads() {
+    fun a_refusing_content_tier_refuses_the_go_core_with_the_token_it_reads() {
         val custody = custodyOver(FakeKeystoreKek(lockedTiers = setOf(KeyTier.CONTENT)))
 
         val refusal = try {

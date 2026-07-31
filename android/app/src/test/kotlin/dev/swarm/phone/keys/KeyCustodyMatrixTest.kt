@@ -157,10 +157,12 @@ class KeyCustodyMatrixTest {
         PlatformCapability.KEYSTORE_X25519 -> nativeRowUses(KeyAlgorithm.X25519)
         PlatformCapability.KEYSTORE_ED25519 -> nativeRowUses(KeyAlgorithm.ED25519)
 
-        // Per-use authorization is not a matrix column: it is BiometricPolicy's freshness
-        // tier for the gated operations, and KeystoreSpecs.forOperation requests it.
-        PlatformCapability.USER_AUTH_PER_USE ->
-            GatedOperation.entries.any { BiometricPolicy.specFor(it).requiresCryptoObject }
+        // USER_AUTH_PER_USE HAS NO ARM BECAUSE IT HAS NO ENUM ENTRY (ADR-007 B133). It was
+        // derived from `BiometricPolicy`'s per-use tier, which left the product with PB-SEC-2.
+        // Its removal from PlatformCapability is what keeps this `when` honest: an entry left in
+        // the enum with a `-> false` arm here would be a capability the planner still probes,
+        // still fails closed on, and that nothing on earth consumes -- residuals §2.8 re-armed
+        // by whoever next reads the list as a to-do.
 
         // Its absence is a fallback, never a refusal.
         PlatformCapability.STRONGBOX -> false
@@ -191,17 +193,24 @@ class KeyCustodyMatrixTest {
      * auth capability". Refusal is the interesting half -- a silent downgrade to SOFTWARE_ONLY
      * is what the requirement exists to prevent.
      *
-     * THE LIST IS THE CONSUMED SET, and it shrank in the residuals §2.8 fix: it used to name
-     * KEYSTORE_X25519 and KEYSTORE_ED25519 as well, which no row consumes. Their case did not
-     * go untested -- it moved to [a_capability_no_row_consumes_is_recorded_rather_than_refused],
-     * and [the_floor_refuses_exactly_the_capabilities_the_matrix_consumes] now covers every
-     * capability in both non-PRESENT states rather than four of them in one.
+     * THE LIST IS THE CONSUMED SET, and it has shrunk twice. The residuals §2.8 fix took
+     * KEYSTORE_X25519 and KEYSTORE_ED25519 out, because no row consumes them; ADR-007 B133 took
+     * USER_AUTH_PER_USE out with the authenticator it described, leaving ONE row. Neither case
+     * went untested: the Curve25519 one moved to
+     * [a_capability_no_row_consumes_is_recorded_rather_than_refused], and
+     * [the_floor_refuses_exactly_the_capabilities_the_matrix_consumes] covers every capability
+     * in both non-PRESENT states rather than a hand-picked few in one.
+     *
+     * A ONE-ELEMENT LIST IS NOT A WEAKER TEST HERE, and this is where that could be misread. The
+     * property is "refused BY NAME rather than downgraded", and it is the naming that is at
+     * stake: a planner that refused without saying which capability was missing would surface a
+     * platform exception as INTERNAL, which is the opaque failure PB-KEY-8's defined refusal
+     * exists to replace.
      */
     @Test
     fun a_missing_algorithm_is_refused_by_name_not_downgraded() {
         for (capability in listOf(
             PlatformCapability.KEYSTORE_AES_GCM,
-            PlatformCapability.USER_AUTH_PER_USE,
         )) {
             val caps = allPresent()
             caps[capability] = CapabilityState.ABSENT

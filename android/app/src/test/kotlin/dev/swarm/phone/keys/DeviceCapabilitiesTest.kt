@@ -19,7 +19,9 @@ import org.robolectric.RobolectricTestRunner
  * defect class.
  *
  * WHAT MAKES WIRING IT DANGEROUS, and why the assertions below are shaped the way they are.
- * The fatal floor was narrowed to {KEYSTORE_AES_GCM, USER_AUTH_PER_USE} precisely so this gate
+ * The fatal floor was narrowed to the capabilities the design actually consumes -- today
+ * {KEYSTORE_AES_GCM} alone, since ADR-007 B133 took USER_AUTH_PER_USE out of the enum with the
+ * authenticator it described -- precisely so this gate
  * could not stop a phone starting over a capability nothing consumes (residuals §2.8). Turning
  * the gate on re-opens that risk one layer down: a probe that answers non-PRESENT for a
  * consumed capability on a handset the app supports produces an app that will not start, which
@@ -49,11 +51,17 @@ class DeviceCapabilitiesTest {
             pairs[algorithm] ?: CapabilityState.ABSENT
     }
 
+    /**
+     * THE `sdkInt` PARAMETER IS GONE FROM THE PROBE (ADR-007 B133) and this helper lost it with
+     * the production constructor. The only capability that was an API-LEVEL fact was
+     * USER_AUTH_PER_USE -- `setUserAuthenticationParameters(timeout, type)` landed in API 30 --
+     * and the design makes that call nowhere any more. Every remaining capability is a question
+     * about what this Keystore offers, which is what [KeystoreAlgorithms] answers.
+     */
     private fun capabilities(
-        sdkInt: Int = Pin.minSdk,
         strongBox: Boolean = false,
         algorithms: KeystoreAlgorithms = FakeAlgorithms(),
-    ) = DeviceCapabilities(sdkInt = sdkInt, strongBox = strongBox, algorithms = algorithms)
+    ) = DeviceCapabilities(strongBox = strongBox, algorithms = algorithms)
 
     /**
      * The probe answers EVERY capability the planner can ask about.
@@ -142,23 +150,19 @@ class DeviceCapabilitiesTest {
     }
 
     /**
-     * Per-use authentication across the SUPPORTED range, read from the pin rather than written
-     * down again. `setUserAuthenticationParameters(timeout, type)` -- the call that expresses
-     * per-use versus timed at all -- landed in API 30, and PB-RUN-1's floor is above it, so no
-     * handset the app installs on can answer anything but PRESENT. If that ever stops being
-     * true this fails here rather than on a user's phone.
+     * DELETED, NOT REWRITTEN: `per_use_authentication_is_present_at_every_supported_api_level`.
+     * It swept API levels from the pinned minSdk upwards and required the probe to answer
+     * PRESENT for USER_AUTH_PER_USE at each. There is no such capability: ADR-007 B133 removed
+     * the entry from the enum rather than demoting it to a canary, because a canary records a
+     * Keystore behaving unlike its API level promises and an API LEVEL is not something a
+     * Keystore can get wrong.
+     *
+     * HAD THE ENTRY BEEN KEPT, this test would have compiled and passed while fencing nothing at
+     * all -- the probe would answer PRESENT from a constant, about an authenticator the design
+     * asks for nowhere. That is why the enum entry going is what makes the deletion honest:
+     * `the_probe_answers_every_capability_the_planner_can_ask_about` above is now the thing that
+     * fails if anybody puts it back without a consumer.
      */
-    @Test
-    fun per_use_authentication_is_present_at_every_supported_api_level() {
-        for (sdkInt in Pin.minSdk..Pin.int("SWARM_ANDROID_COMPILE_SDK")) {
-            assertEquals(
-                "API $sdkInt is a supported level and the probe answers it cannot gate a key " +
-                    "per use, which refuses the app on a handset PB-RUN-1 says it supports",
-                CapabilityState.PRESENT,
-                capabilities(sdkInt = sdkInt).probe()[PlatformCapability.USER_AUTH_PER_USE],
-            )
-        }
-    }
 
     /** StrongBox is a fallback, never a refusal, and it is claimed only when it is there. */
     @Test

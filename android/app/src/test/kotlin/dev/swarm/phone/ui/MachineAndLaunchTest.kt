@@ -9,12 +9,27 @@ import org.junit.Test
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-APP-5 (machine pane) and PB-APP-6 (launch).
  *
- * PB-APP-5's criterion is "revoke + kill switch gated per PB-SEC-2", and PB-SEC-2's own
- * criterion is that "a test must fail if the implementation is an in-memory
- * `authenticated = true` flag". So what is modelled here is the POLICY -- which freshness a
- * given action demands, and that the demand is per-use for the destructive ones -- and NOT a
- * biometric. Whether the platform enforces it is PB-E2E-5, which is deferred; nothing in this
- * file imports androidx.biometric, and android/gate/s16_ui_test.go fences that.
+ * PB-APP-5 NARROWS WITH ADR-007 B133. Its criterion was "revoke + kill switch GATED PER
+ * PB-SEC-2", and PB-SEC-2 is VOID: the trust boundary is the wire, and there is no local
+ * authentication on this handset for a freshness table to describe. What survives is the half
+ * that was never about the holder -- the phone SHOWS the kill switch and can never set it, which
+ * is a daemon-side refusal (`handleRemoteSetControl` refuses the remote tier before consulting
+ * its backend) and is unaffected by anything the phone does.
+ *
+ * THREE TESTS WERE DELETED HERE, NOT REWRITTEN, and what they fenced is worth stating so nobody
+ * goes looking:
+ *
+ *  - `destructive actions demand a per-use authentication and typing does not` transcribed
+ *    section 6.0's freshness table onto `GateFreshness`;
+ *  - `an authentication for one action never authorises another` drove PB-SEC-2's last clause --
+ *    a grant scoped to the action it was obtained for, so an `authenticated = true` flag failed;
+ *  - `backgrounding or a screen lock invalidates every outstanding grant` drove the three events
+ *    that dropped one.
+ *
+ * `GatedAction`, `BiometricFreshness`, `GateFreshness`, `AuthGrant` and `GateEvent` are all gone
+ * from `ui/MachineAndLaunch.kt`. They were deleted rather than left answering NONE for
+ * everything, because a freshness model that always says "none" reads as coverage -- which is
+ * exactly what a rewrite of these three would have produced.
  */
 class MachinePaneTest {
 
@@ -92,54 +107,6 @@ class MachinePaneTest {
         assertTrue("revoking THIS device is the phone's own panic action", engaged.canRevokeThisDevice)
     }
 
-    /**
-     * PB-SEC-2's freshness table, transcribed from section 6.0: 60 s for input and take_control;
-     * PER-USE for revoke, kill switch, launch and kill.
-     *
-     * A per-use requirement is what a CryptoObject-bound Keystore key enforces, and the reason
-     * it cannot be a boolean is the last clause of PB-SEC-2: "no reuse of one authentication for
-     * a different action". A flag set by one prompt authorises everything after it.
-     */
-    @Test
-    fun `destructive actions demand a per-use authentication and typing does not`() {
-        assertEquals(BiometricFreshness.PER_USE, GateFreshness.of(GatedAction.REVOKE_DEVICE))
-        assertEquals(BiometricFreshness.PER_USE, GateFreshness.of(GatedAction.KILL_SESSION))
-        assertEquals(BiometricFreshness.PER_USE, GateFreshness.of(GatedAction.LAUNCH))
-        assertEquals(BiometricFreshness.WINDOW_60S, GateFreshness.of(GatedAction.TAKE_CONTROL))
-        assertEquals(BiometricFreshness.WINDOW_60S, GateFreshness.of(GatedAction.SEND_INPUT))
-    }
-
-    /**
-     * The negative half, and the one PB-SEC-2 names: an authentication satisfied for one action
-     * must not authorise a different one. Expressed as policy -- a grant is scoped to the action
-     * it was obtained for -- so an implementation holding a single `authenticated = true` fails.
-     */
-    @Test
-    fun `an authentication for one action never authorises another`() {
-        val grant = AuthGrant(action = GatedAction.TAKE_CONTROL, atMillis = 1_000)
-        assertTrue(grant.authorises(GatedAction.TAKE_CONTROL, nowMillis = 1_500))
-        assertFalse(grant.authorises(GatedAction.REVOKE_DEVICE, nowMillis = 1_500))
-        assertFalse(
-            "a per-use action is never covered by an earlier grant, however fresh",
-            grant.authorises(GatedAction.KILL_SESSION, nowMillis = 1_000),
-        )
-        assertFalse(
-            "and the 60 s window really expires",
-            grant.authorises(GatedAction.TAKE_CONTROL, nowMillis = 1_000 + 60_001),
-        )
-    }
-
-    /**
-     * Backgrounding, screen lock and process death invalidate it. PB-SEC-2 lists all three, and
-     * PB-KEY-7's purge is what makes the third real on the Go side.
-     */
-    @Test
-    fun `backgrounding or a screen lock invalidates every outstanding grant`() {
-        val grant = AuthGrant(action = GatedAction.TAKE_CONTROL, atMillis = 1_000)
-        assertNull(grant.afterEvent(GateEvent.BACKGROUNDED))
-        assertNull(grant.afterEvent(GateEvent.SCREEN_LOCKED))
-        assertNull(grant.afterEvent(GateEvent.BIOMETRIC_ENROLLMENT_CHANGED))
-    }
 }
 
 class LaunchScreenTest {
