@@ -322,19 +322,32 @@ func TestS7Residual_PersistedReconcileStillRefusesAForeignAuthority(t *testing.T
 	}
 }
 
-// TestPBKEY7_PurgeKeysIsRecoverableNotABrick is the same question asked of the lock purge.
-// PB-KEY-7 requires lock to zeroize custody and drop every decrypted cache. If that state
-// cannot be restored ON THE DEVICE, the first screen lock bricks the app until a re-pair --
-// fail-closed turning into PB-STATE-10's brick.
+// TestPBKEY7_TheRevokePurgeIsNotRecoverableInPlaceAndIsNotABrick is PB-KEY-7 asked of the
+// trigger the requirement actually has (ADR-007 B133).
 //
-// THE RECOVERY IS App.UnlockContent, and after ADR-007 B35 it is the only one. This test used
-// to call InstallContentKey, which cannot be the recovery on a real handset: PB-KEY-10 moved
-// epoch-key delivery entirely into Go, so Kotlin has no source for those bytes and every
-// reference to the Kotlin-side epoch-key blob is under src/test/. UnlockContent re-opens the
-// sealed key the lock deliberately leaves at rest, through the Keystore-backed KEK -- which is
-// PB-KEY-7's own "require a fresh unwrap before restoring content" and is what makes the
-// recovery local, immediate, and independent of the machine.
-func TestPBKEY7_PurgeKeysIsRecoverableNotABrick(t *testing.T) {
+// WHAT THIS TEST USED TO ASSERT AND WHY IT NO LONGER CAN. Its subject was a SCREEN LOCK: the
+// lock zeroized live custody, the sealed blobs were deliberately left at rest (ADR-007 B35),
+// and App.UnlockContent re-opened them through the Keystore KEK -- a local, immediate recovery
+// that made the first lock survivable rather than PB-STATE-10's brick. B133 removes every
+// phone-side user authentication, so there is no lock, no unlock, and no screen-lock event for
+// any of that to hang from. The trigger is now REVOKE / UNPAIR, and internal/phonecore's
+// Store.PurgeKeys carries the whole argument: BOTH tiers go, in memory and at rest, because a
+// revoked handset that keeps a resident key -- or that restores itself with one local unwrap --
+// has not been revoked in any sense the owner would recognise.
+//
+// SO THE RECOVERY INVERTS, AND "NOT A BRICK" SURVIVES THE INVERSION. Not-recoverable-in-place
+// is not the same as bricked: re-pairing mints a fresh epoch and fresh keys and is the intended
+// and only way back, which is a thing the owner can actually do. What this test now fences is
+// the difference between those two, in both directions -- the in-place recovery must be GONE
+// (or a revoke is cosmetic), and what is left must be a state a re-pair resolves rather than a
+// dead end (or the revoke bricks the handset it was meant to protect).
+//
+// WHAT IT DOES NOT COVER, said plainly rather than implied by a name: it does not drive a
+// re-pair. This harness seeds a paired phone by writing durable state and holds no machine-side
+// pairing responder (that rig is s16MachinePairing / s10Machine). What is asserted here is that
+// the purged phone lands in the state a re-pair RESOLVES -- keyless and waiting, its durable
+// blob still loadable -- and not in one it cannot.
+func TestPBKEY7_TheRevokePurgeIsNotRecoverableInPlaceAndIsNotABrick(t *testing.T) {
 	h := newHarness(t)
 	h.PushReconcile()
 	h.PushTerminal(testSession, []string{"SECRET"}, 80, 24)
@@ -347,19 +360,64 @@ func TestPBKEY7_PurgeKeysIsRecoverableNotABrick(t *testing.T) {
 		t.Fatalf("PurgeKeys: %v", err)
 	}
 	if snap, err := h.App.Peek(testSession); err == nil && strings.Contains(snap.Text, "SECRET") {
-		t.Errorf("PB-KEY-7: decrypted session content survived the lock purge. Invalidating the " +
-			"biometric gate is not enough while the process still holds already-decrypted content")
+		t.Errorf("PB-KEY-7: decrypted session content survived the purge. Destroying the keys is " +
+			"not enough while the process still holds content it already decrypted -- that is what " +
+			"a revoked handset would still be showing its finder")
 	}
 
-	if err := h.App.UnlockContent(); err != nil {
-		t.Fatalf("PB-KEY-7/PB-STATE-10: content operations cannot be restored after a lock purge "+
-			"(%v). The first screen lock would brick the app", err)
+	// KEYLESS AND WAITING, not grant-LOST. The two are one field apart and have opposite
+	// remedies: PB-KEY-3's terminal state is one the user cannot act on at all, while this one
+	// is cleared by the machine issuing a grant -- which is exactly what a re-pair produces.
+	// Read through the classifier because that is what the screen routes on (PB-APP-9).
+	werr := h.App.TerminalWatch(testSession)
+	if werr == nil {
+		t.Fatal("PB-KEY-7: a content operation succeeded after the purge, so the keys it needs " +
+			"outlived the revoke they were destroyed by")
 	}
-	h.PushTerminal(testSession, []string{"AFTER-UNLOCK"}, 80, 24)
-	eventually(t, "content operations never resumed after the fresh unwrap", func() bool {
-		snap, err := h.App.Peek(testSession)
-		return err == nil && strings.Contains(snap.Text, "AFTER-UNLOCK")
-	})
+	class, cerr := h.App.ErrorClass(werr.Error())
+	if cerr != nil {
+		t.Fatalf("App.ErrorClass: %v", cerr)
+	}
+	if class != swarmmobile.ErrClassAwaitingKey {
+		t.Errorf("PB-KEY-7/PB-STATE-10: after the purge a content operation classified as %q, "+
+			"want %q (error: %v). A purged phone is keyless and WAITING: the state a re-pair "+
+			"clears. Classified as %q it would be the terminal grant loss instead, whose remedy "+
+			"the user cannot perform -- the brick expressed as a screen.",
+			class, swarmmobile.ErrClassAwaitingKey, werr, swarmmobile.ErrClassGrantLost)
+	}
+
+	// THE IN-PLACE RECOVERY IS GONE, and this assertion is the old one with its sign reversed.
+	// UnlockContent re-opens a sealed content tier; the purge destroyed the blob it would open,
+	// so it has nothing to do and says so by succeeding (phonecore's fileStore.UnsealContent
+	// returns early when every container is already "opened, holding nothing"). What must NOT
+	// happen is content operations coming back: a revoke undone by one local call is a revoke
+	// that never happened.
+	if err := h.App.UnlockContent(); err != nil {
+		t.Fatalf("UnlockContent after a purge returned %v. It is not the recovery any more, but "+
+			"it is still a verb the app calls on the wake path and it must not fail here", err)
+	}
+	if err := h.App.TerminalWatch(testSession); err == nil {
+		t.Error("PB-KEY-7: content operations resumed after UnlockContent alone. The revoke purge " +
+			"destroys both tiers precisely so that no local unwrap can undo it -- re-pairing is " +
+			"the way back, and a phone that restores itself has not been revoked")
+	}
+
+	// AND IT IS NOT A BRICK. The durable blob must still LOAD: a purge that left it unreadable
+	// would fail Resume, and PB-STATE-4's fail-closed refusal is the one state with no App to
+	// offer the pairing flow from (ErrClassStateCorrupt), so the re-pair this test calls the
+	// recovery could not even be started from the handset.
+	fresh := h.openApp()
+	sum, err := fresh.StateSummary()
+	if err != nil {
+		t.Fatalf("PB-KEY-7/PB-STATE-10: a fresh App over the purged directory will not open (%v). "+
+			"The purge left the durable state unloadable, which turns a revoke into the brick "+
+			"PB-STATE-10 names -- there is no App left to start a re-pair from", err)
+	}
+	if !sum.Restored {
+		t.Errorf("PB-KEY-7: the purged phone came up with no restored state (%+v). The purge "+
+			"destroys KEY MATERIAL, not the record of which machine this handset belongs to",
+			sum)
+	}
 }
 
 // TestS7Residual_OutcomeIsNeverAStaleReplyForAnotherOp. Recorded residual: "ReplyCache is

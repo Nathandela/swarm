@@ -38,15 +38,21 @@ import (
 // The error classes. Each VALUE is the token that crosses JNI and that the Android side
 // branches on; each NAME is what the construction site must lexically mention.
 //
-// TWO OF THE VALUES ARE DELIBERATELY THE SAME STRINGS PB-KEY-6 ALREADY SHIPPED
-// (KeyCustodyAuthRequired / KeyCustodyKeyInvalidated). They are not renamed and not aliased:
-// the Kotlin side has matched on those exact tokens since S14 (dev.swarm.phone.keys
-// .GoCustodyFailure), and a third spelling would be a third thing to keep in step. They are
-// re-declared as literals rather than as `= KeyCustodyAuthRequired` because the taxonomy fence
-// reads each class's value from SOURCE as a plain string literal -- a const that referred to
-// another const would be unreadable to it, and the point of reading from source is that a
-// drifted table cannot lie about what crosses. s16_taxonomy_agreement_test.go pins the two
-// spellings to each other so the duplication cannot become a divergence.
+// ONE OF THE VALUES IS DELIBERATELY A STRING PB-KEY-6 ALREADY SHIPPED
+// (KeyCustodyKeyInvalidated). It is not renamed and not aliased: the Kotlin side has matched on
+// that exact token since S14 (dev.swarm.phone.keys.GoCustodyFailure), and a third spelling would
+// be a third thing to keep in step. It is re-declared as a literal rather than as
+// `= KeyCustodyKeyInvalidated` because the taxonomy fence reads each class's value from SOURCE
+// as a plain string literal -- a const that referred to another const would be unreadable to it,
+// and the point of reading from source is that a drifted table cannot lie about what crosses.
+// mobile/s14_custody_test.go pins the spellings to the Kotlin side so the duplication cannot
+// become a divergence.
+//
+// THERE WERE TWO UNTIL ADR-007 B133. The second was ErrClassReauthRequired, carrying
+// KeyCustodyAuthRequired's string, and it is gone -- see ErrClassRepairRequired, which is where
+// its sentinel lands now. KeyCustodyAuthRequired itself stays: it is the token Kotlin STAMPS
+// (dev.swarm.phone.keys.GoCustodyFailure.AUTH_REQUIRED_TOKEN), so it still crosses inbound and
+// keycustody.go still reads it. What no longer exists is a class of its own for it.
 const (
 	// ErrClassUnknown is RESERVED: App.ErrorClass answers it for a message this facade did
 	// not produce, and for nothing else. It is what makes the exhaustiveness sweep a real
@@ -122,13 +128,24 @@ const (
 	// registered (PB-STATE-10), so "pair again" is advice that cannot be carried out.
 	ErrClassGrantLost = "swarm/grant-lost"
 
-	// ErrClassReauthRequired is crypto.ErrKeyAuthRequired: RECOVERABLE. Prompt for the
-	// biometric; the operation is worth retrying afterwards. Same token as
-	// KeyCustodyAuthRequired -- see the block comment above.
-	ErrClassReauthRequired = "swarm-custody/auth-required"
-
-	// ErrClassRepairRequired is crypto.ErrKeyInvalidated: PERMANENT. The Keystore key is
-	// destroyed and no prompt brings it back. Same token as KeyCustodyKeyInvalidated.
+	// ErrClassRepairRequired is PERMANENT: the Keystore key cannot be used and nothing done on
+	// this handset brings it back. Same token as KeyCustodyKeyInvalidated.
+	//
+	// IT CLASSIFIES BOTH CRYPTO SENTINELS AFTER ADR-007 B133. crypto.ErrKeyInvalidated is the
+	// destroyed key it has always meant. crypto.ErrKeyAuthRequired had a class of its own,
+	// ErrClassReauthRequired, whose remedy was "prompt for the biometric" -- and B133 removes
+	// every phone-side user authentication, so that remedy names an act the product can no
+	// longer offer. The refusal still HAPPENS: an install provisioned BEFORE B133 keeps its
+	// AUTH_BIOMETRIC_STRONG content KEK, because KeystoreCustodyBootstrap.ensure returns early
+	// when the alias exists and does not re-request the spec on upgrade. For that handset the
+	// key really is unusable and pairing again really is the fix -- a re-pair discards the alias
+	// and the next provision writes one that asks for no authenticator.
+	//
+	// This is the arm dev.swarm.phone.PhoneRuntime.routeCustodyVerdict already puts
+	// KeyCustodyException.UserAuthenticationRequired in, and the one mobile/relay.go's dial
+	// switch already collapsed the two sentinels onto (connRepairRequired). This file was the
+	// last of the three still splitting them, which is how a class the taxonomy has no row for
+	// survived: it reaches the screen as an opaque exception, which is what PB-APP-9 stops.
 	ErrClassRepairRequired = "swarm-custody/key-invalidated"
 
 	// ErrClassRevoked is relay.ErrRevoked: the OWNER removed this device. The remedy
@@ -157,7 +174,6 @@ const (
 // this package; the taxonomy TSV is checked against the GOLDEN, never against this slice.
 var errClasses = []string{
 	ErrClassDeviceUnsupported,
-	ErrClassReauthRequired,
 	ErrClassRepairRequired,
 	ErrClassInvalidRequest,
 	ErrClassUnreconciled,
@@ -271,13 +287,19 @@ func stampErrorClass(err error) error {
 		return err
 	}
 	switch {
-	case errors.Is(err, crypto.ErrKeyInvalidated):
+	case errors.Is(err, crypto.ErrKeyInvalidated), errors.Is(err, crypto.ErrKeyAuthRequired),
+		errors.Is(err, phonecore.ErrContentTierLocked):
+		// THE THREE IDENTITIES OF ONE UNUSABLE KEY (ADR-007 B133). ErrKeyAuthRequired kept a
+		// class of its own while there was a prompt to offer; there is none left anywhere in
+		// the product, so the remedy that remains is the permanent one -- see
+		// ErrClassRepairRequired for which population still raises it and why re-pairing is
+		// genuinely the fix for them.
+		//
+		// ErrContentTierLocked is not a custody sentinel: it is the Save that refuses because
+		// THIS process could not open the content tier. It shared a class with
+		// ErrKeyAuthRequired before B133 and still does, because the reason a content KEK does
+		// not open on a handset with no authentication left IS one of the two above.
 		return classed(ErrClassRepairRequired, err)
-	case errors.Is(err, crypto.ErrKeyAuthRequired), errors.Is(err, phonecore.ErrContentTierLocked):
-		// ErrContentTierLocked is not a custody sentinel and reaches the same screen: the
-		// content KEK would not open, so the user must authenticate. Routing it anywhere else
-		// tells a locked handset it is broken.
-		return classed(ErrClassReauthRequired, err)
 	case errors.Is(err, phonecore.ErrCorruptState):
 		return classed(ErrClassStateCorrupt, fmt.Errorf("%w. %s", err, stateCorruptRecovery))
 	case errors.Is(err, relay.ErrRevoked):

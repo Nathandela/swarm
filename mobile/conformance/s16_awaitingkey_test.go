@@ -85,8 +85,8 @@ func TestPBAPP10_APairedKeylessPhoneIsToldToWaitRatherThanToActOnTheMachine(t *t
 	// AND IT CLASSIFIES AS ITS OWN STATE. A class the taxonomy does not map reaches the screen
 	// as an exception message, which is the failure PB-APP-9 exists to remove.
 	classify := s16Lookup(t, app, "ErrorClass", "(string) (string, error)", "PB-APP-10",
-		"The three keyless answers -- authenticate, wait, the machine must re-grant -- have to "+
-			"be distinguishable from Kotlin, not merely inside Go.")
+		"The keyless answers -- wait, pair again, the machine must re-grant -- have to be "+
+			"distinguishable from Kotlin, not merely inside Go.")
 	class, cerr := s16StringErr(t, classify.Call([]reflect.Value{reflect.ValueOf(werr.Error())}))
 	if cerr != nil {
 		t.Fatalf("App.ErrorClass: %v", cerr)
@@ -96,22 +96,27 @@ func TestPBAPP10_APairedKeylessPhoneIsToldToWaitRatherThanToActOnTheMachine(t *t
 		t.Fatalf("PB-APP-10: the waiting state classified as %q, which is unknown or unmapped", class)
 	}
 
-	// DISTINCT FROM ALL THREE REMEDIES, asserted against the classes those identities resolve
-	// to rather than against literals, so a rename cannot silently satisfy it.
+	// DISTINCT FROM EVERY OTHER KEYLESS ANSWER, asserted against the classes those identities
+	// resolve to rather than against literals, so a rename cannot silently satisfy it.
+	//
+	// THE AUTH-REQUIRED PROBE IS GONE WITH ITS CLASS (ADR-007 B133). KeyCustodyAuthRequired is
+	// still the token Kotlin stamps, but the facade no longer has a class for it: the verdict
+	// is classified as the PERMANENT one, which the second row here already probes. Left in, it
+	// would have asserted only that an unclassifiable string differs from this one -- true of
+	// any string, which is a probe that cannot fail.
 	for _, wrong := range []struct{ msg, what string }{
 		{swarmmobile.ErrClassGrantLost + ": the machine must re-grant", "grant loss (the MACHINE must act)"},
 		{swarmmobile.KeyCustodyKeyInvalidated + ": key gone", "the PERMANENT custody refusal (re-pair)"},
-		{swarmmobile.KeyCustodyAuthRequired + ": authenticate", "the RECOVERABLE custody refusal (biometric)"},
 	} {
 		other, oerr := s16StringErr(t, classify.Call([]reflect.Value{reflect.ValueOf(wrong.msg)}))
 		if oerr != nil {
 			t.Fatalf("App.ErrorClass: %v", oerr)
 		}
 		if other == class {
-			t.Errorf("PB-APP-10: waiting for the first grant and %s both classify as %q. Three of "+
-				"the four keyless answers ask the user to DO something and this one asks them to "+
-				"wait; collapsed, the one state that resolves itself is rendered as one that never "+
-				"will", wrong.what, class)
+			t.Errorf("PB-APP-10: waiting for the first grant and %s both classify as %q. The other "+
+				"keyless answers ask the user -- or the machine -- to DO something and this one "+
+				"asks them to wait; collapsed, the one state that resolves itself is rendered as "+
+				"one that never will", wrong.what, class)
 		}
 	}
 

@@ -60,17 +60,24 @@ const errClassPrefix = "ErrClass"
 // reason: a traceability table is reviewable and a hard-coded slice in a test is not.
 const taxonomyFile = "error_taxonomy.tsv"
 
-// The three remedies of PB-APP-10 and PB-KEY-3, as the vocabulary the table must use.
+// The two remedies of PB-APP-10 and PB-KEY-3, as the vocabulary the table must use.
 //
-// THEY ARE THREE AND NOT TWO, and that is the whole requirement. Each sends the user
-// somewhere different and two of them are DEAD ENDS if misrouted: telling a grant-loss user
-// to re-pair is a brick, because BeginPairing fail-fasts while a device is registered
+// THEY WERE THREE UNTIL ADR-007 B133 AND THE THIRD IS NOT COMING BACK. `authenticate` named
+// an act the product performs nowhere -- every phone-side user authentication is removed --
+// so a row carrying it would be advice nobody can follow, which is the defect this file
+// exists to catch rather than an exception to it. crypto.ErrKeyAuthRequired outlived its
+// remedy (internal/remote/crypto is FROZEN) and is classified with crypto.ErrKeyInvalidated:
+// a key demanding an authentication that cannot happen is unusable, and pairing again
+// re-provisions it without one.
+//
+// THE TWO THAT REMAIN MAY NEVER COLLAPSE, and that is the whole requirement. One is an act
+// the user CAN carry out and the other is one they cannot: telling a grant-loss user to
+// re-pair is a brick, because BeginPairing fail-fasts while a device is registered
 // (PB-STATE-10), so the advice cannot be acted on and the only exit is physical access to
 // the machine.
 const (
-	remedyAuthenticate   = "authenticate"    // crypto.ErrKeyAuthRequired -- recoverable; prompt
-	remedyRePair         = "re_pair"         // crypto.ErrKeyInvalidated  -- permanent; pair again
-	remedyMachineReGrant = "machine_regrant" // phonecore.ErrGrantLost    -- the MACHINE must act
+	remedyRePair         = "re_pair"         // the crypto sentinels -- permanent; pair again
+	remedyMachineReGrant = "machine_regrant" // phonecore.ErrGrantLost -- the MACHINE must act
 	sentinelAuthRequired = "crypto.ErrKeyAuthRequired"
 	sentinelKeyInvalid   = "crypto.ErrKeyInvalidated"
 	sentinelGrantLost    = "phonecore.ErrGrantLost"
@@ -79,13 +86,17 @@ const (
 
 // taxonomyRow is one row of error_taxonomy.tsv.
 type taxonomyRow struct {
-	Class    string // the exported const name, e.g. ErrClassGrantLost
-	Token    string // its VALUE: what App.ErrorClass returns and Kotlin branches on
-	Sentinel string // the Go error identity it classifies, or "-" for a facade-local class
-	State    string // the rendered UI state (a Kotlin enum constant)
-	Remedy   string // what the user (or the machine) must do
-	Req      string
-	Line     int
+	Class string // the exported const name, e.g. ErrClassGrantLost
+	Token string // its VALUE: what App.ErrorClass returns and Kotlin branches on
+	// Sentinels are the Go error identities the class classifies, empty for a facade-local
+	// class ("-" in the table). A class may carry MORE than one: B133 left both crypto
+	// sentinels on one class, and a column that could hold only one would have had to drop an
+	// identity PB-APP-10 requires to be traced.
+	Sentinels []string
+	State     string // the rendered UI state (a Kotlin enum constant)
+	Remedy    string // what the user (or the machine) must do
+	Req       string
+	Line      int
 }
 
 func TestPBAPP9_EveryErrorClassOnTheBoundSurfaceHasARenderedState(t *testing.T) {
@@ -95,12 +106,13 @@ func TestPBAPP9_EveryErrorClassOnTheBoundSurfaceHasARenderedState(t *testing.T) 
 	if len(golden) == 0 {
 		t.Fatalf("PB-APP-9: the pinned surface declares no %s* constant, so there is no error "+
 			"taxonomy at all.\nThe facade must export one constant per error class the UI has to "+
-			"route differently -- at minimum the three remedies of PB-APP-10/PB-KEY-3 "+
-			"(%s, %s, %s), which are three because each sends the user somewhere different and "+
-			"two of them are dead ends if misrouted.\nDeclaring them as EXPORTED consts is what "+
-			"makes the set closed: the golden is regenerated only as a reviewed change, so a "+
-			"class cannot be added without this test seeing it.",
-			errClassPrefix, sentinelAuthRequired, sentinelKeyInvalid, sentinelGrantLost)
+			"route differently -- at minimum the two remedies of PB-APP-10/PB-KEY-3 (%s for %s "+
+			"and %s, %s for %s), which are two because they send the user somewhere different "+
+			"and one of them is a dead end if misrouted.\nDeclaring them as EXPORTED consts is "+
+			"what makes the set closed: the golden is regenerated only as a reviewed change, so "+
+			"a class cannot be added without this test seeing it.",
+			errClassPrefix, remedyRePair, sentinelKeyInvalid, sentinelAuthRequired,
+			remedyMachineReGrant, sentinelGrantLost)
 	}
 
 	rows := loadTaxonomy(t, src.Dir)
@@ -171,42 +183,51 @@ func TestPBAPP9_EveryErrorClassOnTheBoundSurfaceHasARenderedState(t *testing.T) 
 	}
 }
 
-// TestPBAPP9_TheThreeRemediesAreNeverCollapsed is the requirement's real subject.
+// TestPBAPP9_TheTwoRemediesAreNeverCollapsed is the requirement's real subject.
 //
 // Other slices spent considerable effort making these failures DISTINGUISHABLE rather than
 // collapsing them -- phonecore.ErrGrantLost exists as a separate identity for exactly this
 // reason, and its own doc says so. This is where that pays off or is wasted.
-func TestPBAPP9_TheThreeRemediesAreNeverCollapsed(t *testing.T) {
+//
+// IT WAS THREE REMEDIES AND IS NOW TWO (ADR-007 B133), and the narrowing is the one thing this
+// file may not treat as a collapse: `authenticate` did not merge into another remedy, its
+// SUBJECT was removed, and a remedy naming an act the product cannot perform is exactly the
+// unfollowable advice the fence exists to catch. What survives untouched is the property: the
+// remedy the user CAN carry out and the one they cannot must never share a row, a remedy or a
+// screen.
+func TestPBAPP9_TheTwoRemediesAreNeverCollapsed(t *testing.T) {
 	src := loadFacade(t)
 	rows := loadTaxonomy(t, src.Dir)
 
 	bySentinel := map[string]taxonomyRow{}
 	for _, r := range rows {
-		if r.Sentinel == "" || r.Sentinel == "-" {
-			continue
+		for _, s := range r.Sentinels {
+			if prev, dup := bySentinel[s]; dup {
+				t.Errorf("%s:%d: %s is classified twice (also line %d). One identity, one class: "+
+					"two rows means the rendered state depends on lookup order",
+					taxonomyFile, r.Line, s, prev.Line)
+			}
+			bySentinel[s] = r
 		}
-		if prev, dup := bySentinel[r.Sentinel]; dup {
-			t.Errorf("%s:%d: %s is classified twice (also line %d). One identity, one class: two "+
-				"rows means the rendered state depends on lookup order",
-				taxonomyFile, r.Line, r.Sentinel, prev.Line)
-		}
-		bySentinel[r.Sentinel] = r
 	}
 
+	// The user-performable side and the machine side, named by the identities that reach them.
+	// Both crypto sentinels are on the re_pair side after B133 -- see the const block.
 	want := map[string]string{
-		sentinelAuthRequired: remedyAuthenticate,
+		sentinelAuthRequired: remedyRePair,
 		sentinelKeyInvalid:   remedyRePair,
 		sentinelGrantLost:    remedyMachineReGrant,
 	}
 	for _, sentinel := range []string{sentinelAuthRequired, sentinelKeyInvalid, sentinelGrantLost} {
 		row, ok := bySentinel[sentinel]
 		if !ok {
-			t.Errorf("PB-APP-9/PB-APP-10: %s has no row in %s. It is one of the three remedies, and "+
-				"the one it is most often collapsed into is the wrong one: %s says re-pair and %s "+
-				"says the MACHINE must re-grant, and BeginPairing fail-fasts while a device is "+
-				"registered -- so routing a grant-loss user to re-pair is a brick whose only exit is "+
-				"physical access to the machine (PB-STATE-10)",
-				sentinel, taxonomyFile, sentinelKeyInvalid, sentinelGrantLost)
+			t.Errorf("PB-APP-9/PB-APP-10: %s has no row in %s. Every identity the facade routes "+
+				"must say which of the two remedies it reaches, and the collapse that matters is "+
+				"between them: %s and %s say pair again, %s says the MACHINE must re-grant, and "+
+				"BeginPairing fail-fasts while a device is registered -- so routing a grant-loss "+
+				"user to re-pair is a brick whose only exit is physical access to the machine "+
+				"(PB-STATE-10)",
+				sentinel, taxonomyFile, sentinelKeyInvalid, sentinelAuthRequired, sentinelGrantLost)
 			continue
 		}
 		if row.Remedy != want[sentinel] {
@@ -215,27 +236,41 @@ func TestPBAPP9_TheThreeRemediesAreNeverCollapsed(t *testing.T) {
 		}
 	}
 
-	// Pairwise distinctness, asserted rather than implied by the three literals above: the
-	// defect this fence exists for is two identities SHARING a remedy, and a future edit that
-	// renamed both consistently would satisfy the check above and collapse them anyway.
-	seenRemedy := map[string]string{}
-	seenState := map[string]string{}
-	for _, sentinel := range []string{sentinelAuthRequired, sentinelKeyInvalid, sentinelGrantLost} {
+	// THE TWO CRYPTO SENTINELS SHARE ONE ROW, asserted rather than left to the remedy check: a
+	// later edit that gave crypto.ErrKeyAuthRequired its own class again would have to come
+	// through here, where B133's reasoning is, instead of quietly re-introducing a screen that
+	// asks for an authentication this product cannot perform.
+	a, haveAuth := bySentinel[sentinelAuthRequired]
+	b, haveInvalid := bySentinel[sentinelKeyInvalid]
+	if haveAuth && haveInvalid && a.Line != b.Line {
+		t.Errorf("%s:%d and :%d: %s and %s are classified separately (%s and %s). ADR-007 B133 "+
+			"removed every phone-side user authentication, so a key gated on one is as unusable "+
+			"as a destroyed key and has the same fix; a class of its own would need a remedy, and "+
+			"the only one it could name is an act nobody can perform",
+			taxonomyFile, a.Line, b.Line, sentinelAuthRequired, sentinelKeyInvalid, a.Class, b.Class)
+	}
+
+	// Distinctness ACROSS the two remedies, asserted rather than implied by the literals above:
+	// the defect this fence exists for is the user-performable remedy and the machine-only one
+	// sharing a destination, and a future edit that renamed both consistently would satisfy the
+	// check above and collapse them anyway.
+	lost, haveLost := bySentinel[sentinelGrantLost]
+	for _, sentinel := range []string{sentinelAuthRequired, sentinelKeyInvalid} {
 		row, ok := bySentinel[sentinel]
-		if !ok {
+		if !ok || !haveLost {
 			continue
 		}
-		if other, dup := seenRemedy[row.Remedy]; dup {
-			t.Errorf("PB-APP-10: %s and %s both send the user to remedy %q. They are different "+
-				"failures with different fixes; collapsed, one of the two users is given advice "+
-				"they cannot act on", other, sentinel, row.Remedy)
+		if row.Remedy == lost.Remedy {
+			t.Errorf("PB-APP-10: %s and %s both send the user to remedy %q. One of them is an act "+
+				"the user can carry out and the other is one only the MACHINE can; collapsed, the "+
+				"grant-loss user is given advice they cannot act on",
+				sentinel, sentinelGrantLost, row.Remedy)
 		}
-		seenRemedy[row.Remedy] = sentinel
-		if other, dup := seenState[row.State]; dup {
+		if row.State == lost.State {
 			t.Errorf("PB-APP-10: %s and %s render the SAME state %q, so the screen cannot tell the "+
-				"user which of the two happened even if the taxonomy can", other, sentinel, row.State)
+				"user which of the two happened even if the taxonomy can", sentinel, sentinelGrantLost,
+				row.State)
 		}
-		seenState[row.State] = sentinel
 	}
 
 	// A revoked device is the fourth identity PB-APP-10 names, and it is not a custody
@@ -398,9 +433,10 @@ func loadTaxonomy(t *testing.T, dir string) []taxonomyRow {
 		t.Fatalf("PB-APP-9 requires a checked-in error taxonomy at %s: %v\n"+
 			"Columns (tab separated): class_const<TAB>token<TAB>sentinel<TAB>rendered_state"+
 			"<TAB>remedy<TAB>requirement<TAB>note.\n"+
-			"`sentinel` is the Go error identity the class classifies (%s, %s, %s, %s, ...) or "+
-			"\"-\" for a class the facade authors itself. `rendered_state` must be a constant of "+
-			"the Kotlin error-state enum -- android/gate checks that direction.",
+			"`sentinel` is the Go error identity the class classifies (%s, %s, %s, %s, ...), "+
+			"comma-separated where one class classifies several, or \"-\" for a class the facade "+
+			"authors itself. `rendered_state` must be a constant of the Kotlin error-state enum "+
+			"-- android/gate checks that direction.",
 			path, err, sentinelAuthRequired, sentinelKeyInvalid, sentinelGrantLost, sentinelRelayRevoked)
 	}
 	var rows []taxonomyRow
@@ -417,7 +453,14 @@ func loadTaxonomy(t *testing.T, dir string) []taxonomyRow {
 			}
 			return ""
 		}
-		row.Token, row.Sentinel = get(1), get(2)
+		row.Token = get(1)
+		// One class may classify several identities, comma-separated. "-" is the facade's own
+		// classes, which have no Go sentinel at all.
+		for _, s := range strings.Split(get(2), ",") {
+			if s = strings.TrimSpace(s); s != "" && s != "-" {
+				row.Sentinels = append(row.Sentinels, s)
+			}
+		}
 		row.State, row.Remedy, row.Req = get(3), get(4), get(5)
 		if row.Req == "" {
 			t.Errorf("%s:%d: class %q names no requirement", taxonomyFile, row.Line, row.Class)

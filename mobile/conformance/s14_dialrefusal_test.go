@@ -16,13 +16,18 @@ package conformance_test
 // It went LIVE the moment PB-KEY-9's Keystore-backed KEK landed -- in this same slice -- and
 // left two failures with no user-visible difference between them and no way out:
 //
-//   - ErrKeyAuthRequired (RECOVERABLE): an endless "reconnecting" with no prompt. The user is
-//     never told that authenticating is what fixes it.
-//   - ErrKeyInvalidated (PERMANENT): the same silent loop, forever, against a key that no
-//     longer exists.
+//   - ErrKeyAuthRequired: an endless "reconnecting" with no prompt and, after ADR-007 B133, no
+//     prompt to give -- the key demands an authentication this product no longer performs.
+//   - ErrKeyInvalidated: the same silent loop, forever, against a key that no longer exists.
 //
 // Both tests below fail against that `continue`: the state stays "reconnecting" in the first
 // and the dial count keeps climbing in the second.
+//
+// THE TWO SENTINELS NOW SHARE AN OUTCOME, NOT A TEST (ADR-007 B133). They arrive by
+// different routes -- one is a destroyed key, one is a key gated on an authentication that no
+// longer exists -- and mobile/relay.go's dial switch deliberately lands both on
+// connRepairRequired. Keeping a test per identity is what makes that a decision rather than a
+// coincidence: if a later change split the arm, one of these would fail rather than neither.
 //
 // The refusal is injected at the KEK, not at the signature, deliberately. That is where a real
 // handset's refusal originates -- Keystore declining to unwrap -- and it makes the assertion a
@@ -58,16 +63,25 @@ func awaitConnState(t *testing.T, app *swarmmobile.App, want string, within time
 	}
 }
 
-// TestS14_ARecoverableCustodyRefusalAsksForTheBiometricRatherThanSpinning.
+// TestS14_AnAuthGatedCustodyRefusalTellsTheUserToRePairRatherThanSpinning.
 //
-// PB-KEY-6's recoverable half. The state the user sees must say what to DO, and "reconnecting"
-// says the opposite -- it says the app is working on it and the user should wait, which is a
-// wait that never ends because nothing but a biometric will end it.
+// PB-KEY-6's other sentinel, RE-PREMISED by ADR-007 B133 rather than retired. It used to assert
+// a prompt: crypto.ErrKeyAuthRequired meant "authenticate and it will connect", so the state had
+// to be one the UI could turn into a biometric prompt, the loop had to keep dialing so that
+// satisfying it was noticed, and the KEK answering again had to reconnect. B133 removes every
+// phone-side user authentication, so there is no prompt to offer and nothing for the loop to
+// wait for -- all three of those assertions now describe a product that does not exist.
 //
-// It also asserts the state is not a dead end: once the KEK answers again, the very next retry
-// connects. A re-prompt state that could only be left by restarting the app would be a
-// different defect with the same screen.
-func TestS14_ARecoverableCustodyRefusalAsksForTheBiometricRatherThanSpinning(t *testing.T) {
+// WHAT SURVIVES UNCHANGED IS WHY THIS FILE WAS WRITTEN: the dial error must not be discarded,
+// leaving the user on a spinner for a condition nothing can clear. Only the REMEDY moved, from
+// "authenticate" to "pair this device again" -- and for the one population that still raises
+// this verdict that is a fix they can carry out. An install provisioned BEFORE B133 keeps its
+// AUTH_BIOMETRIC_STRONG content KEK, because KeystoreCustodyBootstrap.ensure returns early when
+// the alias exists and does not re-request the spec on upgrade; a re-pair discards the alias and
+// the next provision writes one that asks for no authenticator.
+// dev.swarm.phone.PhoneRuntime.routeCustodyVerdict puts the Kotlin exception in the same arm,
+// and mobile/error_taxonomy.tsv classifies the sentinel with crypto.ErrKeyInvalidated.
+func TestS14_AnAuthGatedCustodyRefusalTellsTheUserToRePairRatherThanSpinning(t *testing.T) {
 	h := newHarness(t)
 
 	if got, ok := awaitConnState(t, h.App, "online", 5*time.Second); !ok {
@@ -76,7 +90,7 @@ func TestS14_ARecoverableCustodyRefusalAsksForTheBiometricRatherThanSpinning(t *
 	}
 
 	// The Keystore starts refusing the WAKE tier -- the tier RelayAuth lives in (ADR-007 B9) --
-	// with the recoverable verdict, and the link is cycled so the next dial has to sign.
+	// with the auth-gated verdict, and the link is cycled so the next dial has to sign.
 	h.Custody.Refuse("wake", swarmmobile.KeyCustodyAuthRequired)
 	if err := h.App.Stop(); err != nil {
 		t.Fatalf("App.Stop: %v", err)
@@ -85,31 +99,50 @@ func TestS14_ARecoverableCustodyRefusalAsksForTheBiometricRatherThanSpinning(t *
 		t.Fatalf("App.Start: %v", err)
 	}
 
-	got, ok := awaitConnState(t, h.App, "reauth_required", 5*time.Second)
+	got, ok := awaitConnState(t, h.App, "repair_required", 5*time.Second)
 	if !ok {
-		t.Fatalf("PB-KEY-6: a RECOVERABLE custody refusal (crypto.ErrKeyAuthRequired) left the "+
+		t.Fatalf("PB-KEY-6: an auth-gated custody refusal (crypto.ErrKeyAuthRequired) left the "+
 			"phone reporting %q. The dial error is being discarded, so the user sees a spinner "+
-			"for a condition only a biometric prompt can clear and is never told so. The state "+
-			"must be one the UI can turn into a prompt.", got)
+			"for a condition nothing on this handset can clear and is never told what would. "+
+			"The state must be one the UI can turn into 'pair this device again'.", got)
 	}
 
-	// It must keep TRYING while it says so -- a recoverable refusal is recoverable at any
-	// moment, and the retry is what notices. A state that stopped the loop would need an
-	// explicit resume verb the facade does not have.
+	// TERMINAL, and this is the assertion that CHANGED SIGN. It used to require the loop to keep
+	// dialing, because a biometric could be satisfied at any moment and the retry was what
+	// noticed. There is no such moment left, so every further dial is a websocket handshake
+	// spent re-proving an unusable key -- on a battery, against the relay's per-source budget.
+	//
+	// Two observation windows rather than one, as in the permanent case below: the first lets a
+	// dial already in flight when the state flipped finish, so this measures the steady state
+	// and not a race.
+	time.Sleep(300 * time.Millisecond)
 	before := h.Custody.Unwraps("wake")
 	time.Sleep(1 * time.Second)
-	if after := h.Custody.Unwraps("wake"); after <= before {
-		t.Errorf("PB-KEY-6: the phone stopped dialing while in reauth_required (%d -> %d wake "+
-			"unwraps). A RECOVERABLE refusal must keep retrying, or satisfying the biometric "+
-			"changes nothing until the app is restarted", before, after)
+	if after := h.Custody.Unwraps("wake"); after != before {
+		t.Errorf("PB-KEY-6: the phone made %d further dial attempts after an auth-gated custody "+
+			"refusal. After ADR-007 B133 nothing the user can do makes that key answer, so the "+
+			"retry is spending the battery and the relay budget to re-learn the same verdict",
+			after-before)
 	}
 
-	// And the way out works. Without this the assertion above is satisfied by a phone that can
-	// never connect again, which is the vacuous form of "it asked for the biometric".
+	// AND THE VERDICT STICKS. The old test ended by clearing the refusal and requiring the phone
+	// back online, which was the way out a prompt promised. There is no such way out now, so the
+	// same stimulus asserts the opposite: a KEK that starts answering again is not a user acting,
+	// and a phone that silently returned to online would have hidden a custody verdict the owner
+	// was told to re-pair for. The intended re-arm is a PAIRING (mobile/relay.go's
+	// rearmAfterPairing), which this does not perform.
 	h.Custody.Refuse("wake", "")
-	if got, ok := awaitConnState(t, h.App, "online", 10*time.Second); !ok {
-		t.Errorf("PB-KEY-6: the KEK answers again and the phone is still %q. reauth_required is "+
-			"a dead end rather than a prompt: authenticating fixes nothing", got)
+	if got, ok := awaitConnState(t, h.App, "online", 1*time.Second); ok {
+		t.Errorf("PB-KEY-6: the phone returned to %q on its own once the KEK answered again. "+
+			"No user action occurred, so the terminal custody verdict was cleared by the "+
+			"platform changing its mind -- the screen telling the user to pair again vanishes "+
+			"under them", got)
+	}
+	if state, err := h.App.ConnectionState(); err != nil {
+		t.Fatalf("App.ConnectionState: %v", err)
+	} else if state != "repair_required" {
+		t.Errorf("PB-KEY-6: the terminal custody state was overwritten with %q. A phone whose "+
+			"relay-auth key is unusable must not report a transport condition", state)
 	}
 }
 

@@ -48,11 +48,10 @@ import (
 //
 // FAILURE IS EXPECTED AND MUST BE DISTINGUISHABLE. gomobile flattens a Java exception into
 // a Go error carrying only its MESSAGE, so the two custody verdicts are carried by the
-// tokens below: an implementation whose exception message contains KeyCustodyAuthRequired is
-// a recoverable refusal (prompt for the biometric), and one containing
-// KeyCustodyKeyInvalidated is permanent (the key is gone; the device must pair again).
-// Anything else is an opaque failure and is treated as fatal, because a custody verdict that
-// cannot be read must not be guessed at.
+// tokens below: an implementation whose exception message contains KeyCustodyKeyInvalidated
+// or KeyCustodyAuthRequired is refusing PERMANENTLY (the key cannot be used; the device must
+// pair again -- ADR-007 B133, see the constants). Anything else is an opaque failure and is
+// treated as fatal, because a custody verdict that cannot be read must not be guessed at.
 type KeyCustody interface {
 	// WakeKEK is the wake-tier data key. It must open with NO USER PRESENT -- a push
 	// arrives with nobody there -- so the Keystore key behind it is deliberately not
@@ -64,15 +63,28 @@ type KeyCustody interface {
 	ContentKEK() ([]byte, error)
 }
 
-// The two custody verdicts, as tokens that survive gomobile's error flattening in BOTH
-// directions: Kotlin stamps them onto the exceptions it throws out of KeyCustody, and the
-// facade stamps them onto every error it returns that wraps the matching crypto sentinel
-// (see barrier). They are exported so the Android side binds these constants instead of
-// keeping a second copy of a discriminator string -- a copy that drifted would fail
-// silently, degrading a permanent invalidation into a prompt the user can never satisfy.
+// The two custody verdicts, as tokens that survive gomobile's error flattening. Kotlin stamps
+// both onto the exceptions it throws out of KeyCustody; the facade reads them back and answers
+// with ErrClassRepairRequired's token in the other direction (see barrier), which after ADR-007
+// B133 is the one class both of them reach. They are exported so the Android side binds these
+// constants instead of keeping a second copy of a discriminator string -- a copy that drifted
+// would fail silently, turning a verdict with a real remedy into an opaque failure with none.
 const (
-	// KeyCustodyAuthRequired marks a RECOVERABLE refusal: crypto.ErrKeyAuthRequired. The
-	// user must authenticate; the operation is worth retrying afterwards.
+	// KeyCustodyAuthRequired marks a key gated on a user authentication:
+	// crypto.ErrKeyAuthRequired.
+	//
+	// IT WAS THE RECOVERABLE VERDICT AND IS NO LONGER ONE (ADR-007 B133). "The user must
+	// authenticate" named an act the product can no longer offer -- every phone-side
+	// authentication mechanism is removed -- so the refusal is now permanent in the only sense
+	// that matters to the person holding the handset. The population that still raises it is an
+	// install provisioned BEFORE B133, whose content KEK is still AUTH_BIOMETRIC_STRONG because
+	// KeystoreCustodyBootstrap.ensure returns early when the alias exists. Pairing again is a
+	// real fix for them: it discards the alias and re-provisions without an authenticator.
+	//
+	// THE TOKEN STAYS AND IS STILL STAMPED. dev.swarm.phone.keys.GoCustodyFailure
+	// .AUTH_REQUIRED_TOKEN is the same string and Custody.kt still throws it, so removing this
+	// constant would make that verdict unreadable and it would classify as ErrClassInternal --
+	// "report a bug" for a handset that needs to pair again.
 	KeyCustodyAuthRequired = "swarm-custody/auth-required"
 
 	// KeyCustodyKeyInvalidated marks a PERMANENT one: crypto.ErrKeyInvalidated. The key is
@@ -150,6 +162,12 @@ func (s custodySealer) Open(sealed []byte) ([]byte, error) {
 // this direction is worse than in the other: phonecore.openSealedDeviceKeys refuses a Resume
 // outright for any content-tier error that is NOT one of these two, so a refusal that failed
 // to classify would turn a locked handset into an app that cannot start.
+//
+// THE TWO VERDICTS KEEP DISTINCT SENTINELS AND SHARE ONE CLASS (ADR-007 B133). The sentinel is
+// what the Go side of this repository routes on, and phonecore tells the two apart in several
+// places; the CLASS is what the user is shown, and there is only one thing left to show either
+// of them -- pair this device again. Collapsing the sentinels too would be a change to
+// internal/remote/crypto's contract, which is frozen, for no gain on screen.
 func classifyCustodyVerdict(tier string, err error) error {
 	msg := err.Error()
 	switch {
@@ -157,22 +175,23 @@ func classifyCustodyVerdict(tier string, err error) error {
 		return classed(ErrClassRepairRequired, fmt.Errorf(
 			"swarmmobile: the %s Keystore key is gone: %w: %v", tier, crypto.ErrKeyInvalidated, err))
 	case strings.Contains(msg, KeyCustodyAuthRequired):
-		return classed(ErrClassReauthRequired, fmt.Errorf(
-			"swarmmobile: the %s Keystore key needs a fresh authentication: %w: %v",
-			tier, crypto.ErrKeyAuthRequired, err))
+		return classed(ErrClassRepairRequired, fmt.Errorf(
+			"swarmmobile: the %s Keystore key demands a user authentication this handset no "+
+				"longer performs: %w: %v", tier, crypto.ErrKeyAuthRequired, err))
 	}
-	// Deliberately NOT one of the two verdicts. An opaque platform failure mapped onto
-	// "authenticate again" is a prompt the user can never satisfy, which is the failure
-	// PB-KEY-6 exists to remove -- so it classifies as the bug it is.
+	// Deliberately NOT one of the two verdicts. An opaque platform failure mapped onto "pair
+	// this device again" is a remedy that cannot fix it, which is the failure PB-KEY-6 exists
+	// to remove -- so it classifies as the bug it is.
 	return classed(ErrClassInternal,
 		fmt.Errorf("swarmmobile: the %s Keystore key could not be obtained: %w", tier, err))
 }
 
 // THE OUTBOUND HALF MOVED TO errorclass.go WITH SLICE S16. stampCustodyVerdict stamped these
 // two verdicts and nothing else; PB-APP-9 generalised it to the whole surface, so
-// stampErrorClass now does the same job for every error class -- including these two, whose
-// tokens are unchanged and are still the ones the Android side has matched on since S14
-// (ErrClassReauthRequired and ErrClassRepairRequired carry the identical strings).
+// stampErrorClass now does the same job for every error class -- including these two, which
+// after ADR-007 B133 are both stamped ErrClassRepairRequired, whose token is the string
+// KeyCustodyKeyInvalidated already carried and the one the Android side has matched on since
+// S14 (dev.swarm.phone.keys.GoCustodyFailure.KEY_INVALIDATED_TOKEN).
 //
 // One stamping function rather than two is the point: two would each be total over their own
 // arm and neither total over the surface, which is how a class ships unmapped.
