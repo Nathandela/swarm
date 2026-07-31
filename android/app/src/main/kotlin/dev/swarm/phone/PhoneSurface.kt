@@ -20,8 +20,7 @@ import dev.swarm.phone.keys.TimedTierGate
 import dev.swarm.phone.keys.TimedTierNotice
 import dev.swarm.phone.runtime.ConnectivityPolicy
 import dev.swarm.phone.runtime.ContentUnlockPolicy
-import android.text.format.DateFormat
-import android.view.View
+import dev.swarm.phone.runtime.LifecycleConvergence
 import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
