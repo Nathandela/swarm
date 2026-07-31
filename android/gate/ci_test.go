@@ -67,16 +67,33 @@ func TestPBTOOL7_AndroidLaneBuildsTheAAR(t *testing.T) {
 	}
 }
 
+// TestPBTOOL7_AndroidLaneRunsTheGradleGate reads the gradlew COMMAND LINE.
+//
+// It used to search the whole concatenated run body for "gradlew" and, separately, for each
+// task name. ADR-007 B127 finding B: the lane's last step is `go test -tags androidgate ...`,
+// which contains "test", so deleting `test` from `./gradlew --no-daemon lint test` left this
+// assertion -- and every other one in this package -- green, while deleting `lint`, a word
+// that appears nowhere else in the lane, was caught. A fixture whose data cannot tell the
+// correct workflow from the broken one passes both.
 func TestPBTOOL7_AndroidLaneRunsTheGradleGate(t *testing.T) {
 	job, ok := androidLane(t)
 	if !ok {
 		t.Fatalf("PB-TOOL-7: no Android lane (see TestPBTOOL7_AnAndroidLaneExists)")
 	}
-	body := job.allRun()
+	ran := job.gradleTasks()
 	for _, task := range []string{"lint", "test"} {
-		if !strings.Contains(body, "gradlew") || !strings.Contains(body, task) {
-			t.Errorf("PB-TOOL-7/PB-TOOL-6: the Android lane does not run `./gradlew %s`. "+
-				"Steps run:\n%s", task, body)
+		found := false
+		for _, got := range ran {
+			if got == task {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("PB-TOOL-7/PB-TOOL-6: the Android lane never runs `gradlew %s`. Tasks "+
+				"actually named on a gradlew command line: %v. The Kotlin unit tests -- "+
+				"PB-RUN-2's manifest half and PB-RUN-5's behavioural half among them -- run "+
+				"nowhere else.\nSteps run:\n%s", task, ran, job.allRun())
 		}
 	}
 }
@@ -100,8 +117,18 @@ func TestPBTOOL7_AndroidLaneRunsTheTaggedArtifactAssertions(t *testing.T) {
 	}
 }
 
-// TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen rejects the two annotations that
-// make a failing lane report success.
+// TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen rejects the two annotations that make a failing
+// lane report success -- AT BOTH LEVELS.
+//
+// It used to read the job scalars only, and ADR-007 B127 finding A is that a lane IS ITS STEPS:
+// `continue-on-error: true` on the Gradle-gate step and `if: false` on the tagged-artifact step
+// each survived this entire package. The second is the worse one -- that step is the only place
+// the real AAR is inspected per-ABI and for leaked builder paths, which is precisely the orphan
+// hole TestPBTOOL7_AndroidLaneRunsTheTaggedArtifactAssertions exists to close.
+//
+// Not hypothetical: hours after these two mutations were measured, a commit broke the Kotlin
+// build on the pushed branch and nothing noticed, because the CI Gradle gate is the only thing
+// in the repository that compiles Kotlin and `go test ./...` cannot see it.
 func TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen(t *testing.T) {
 	job, ok := androidLane(t)
 	if !ok {
@@ -114,6 +141,17 @@ func TestPBTOOL7_AndroidLaneCannotBeSilentlyGreen(t *testing.T) {
 	if job.ifCond != "" {
 		t.Errorf("PB-TOOL-7: the Android lane is conditional (`if: %s`). A lane that can "+
 			"skip itself is not coverage", job.ifCond)
+	}
+	for _, s := range job.steps {
+		if s.continueOnError {
+			t.Errorf("PB-TOOL-7: step %q sets continue-on-error: true. The lane stays green "+
+				"while that step fails, which is the same defect as annotating the job and is "+
+				"one word smaller in review", s.name)
+		}
+		if s.ifCond != "" {
+			t.Errorf("PB-TOOL-7: step %q is conditional (`if: %s`). A step that can skip "+
+				"itself is not coverage either", s.name, s.ifCond)
+		}
 	}
 }
 

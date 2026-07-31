@@ -20,6 +20,13 @@ type ciStep struct {
 	run  string
 	with map[string]string
 	env  map[string]string
+	// continueOnError and ifCond are the STEP-level twins of the job scalars below. They were
+	// not parsed at all until ADR-007 B127 finding A, which is why a `continue-on-error: true`
+	// on the Gradle-gate step and an `if: false` on the tagged-artifact step both survived
+	// every assertion in this package: the fence was quantified over the job, and a lane is
+	// its steps.
+	continueOnError bool
+	ifCond          string
 }
 
 type ciJob struct {
@@ -83,6 +90,42 @@ func (j ciJob) allRun() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// gradleTasks returns every task named on a `gradlew` command line in this job.
+//
+// It reads COMMAND LINES rather than the concatenated body, and that distinction is finding B:
+// the old check asked whether the body contained "gradlew" and, separately, whether it
+// contained the task name anywhere at all. The lane's last step is
+// `go test -tags androidgate ...`, which contains "test" -- so deleting `test` from
+// `./gradlew --no-daemon lint test` left every assertion in this package green, while deleting
+// `lint`, which appears nowhere else, was caught. That asymmetry is what a fixture that cannot
+// discriminate looks like.
+//
+// A token is a task unless it is an option (`--no-daemon`) or an option's value; `:app:foo` is
+// kept whole so a qualified task cannot be confused with a bare one.
+func (j ciJob) gradleTasks() []string {
+	var out []string
+	for _, line := range strings.Split(j.allRun(), "\n") {
+		f := strings.Fields(line)
+		at := -1
+		for i, tok := range f {
+			if tok == "gradlew" || strings.HasSuffix(tok, "/gradlew") {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		for _, tok := range f[at+1:] {
+			if strings.HasPrefix(tok, "-") {
+				continue
+			}
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 func (j ciJob) usesAction(prefix string) bool {
@@ -307,6 +350,10 @@ func parseSteps(lines []yamlLine) []ciStep {
 			cur.with = nestedMap(lines, i, l.indent)
 		case "env":
 			cur.env = nestedMap(lines, i, l.indent)
+		case "continue-on-error":
+			cur.continueOnError = strings.Trim(val, `"'`) == "true"
+		case "if":
+			cur.ifCond = strings.Trim(val, `"'`)
 		case "run":
 			if val == "|" || val == ">" || val == "|-" || val == ">-" || val == "" {
 				// Block scalar: consume the more-indented lines that follow.
@@ -398,6 +445,91 @@ func TestCIYAMLParser_ReadsJobsStepsAndBlockScalars(t *testing.T) {
 	}
 	if jobs[1].name != "android (aar + gradle gate)" {
 		t.Fatalf("job name = %q", jobs[1].name)
+	}
+}
+
+// The step-level annotations and the gradlew command-line reader, both added by ADR-007 B127
+// after each survived the mutation it was supposed to catch. This file's own rule is that the
+// reader is unit-tested against the mutations the PB-TOOL-7 assertions must catch, so the two
+// new readers get their positive AND negative controls here before anything asserts on them.
+const sampleStepAnnotationWorkflow = `name: CI
+
+on:
+  push:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gradle gate
+        working-directory: android
+        continue-on-error: true
+        run: ./gradlew --no-daemon lint test
+      - name: Tagged assertions
+        if: false
+        run: go test -tags androidgate ./android/gate/...
+      - name: Debug APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+`
+
+func TestCIYAMLParser_ReadsStepLevelContinueOnErrorAndIf(t *testing.T) {
+	jobs := parseCIJobs(sampleStepAnnotationWorkflow)
+	if len(jobs) != 1 {
+		t.Fatalf("parsed %d jobs, want 1", len(jobs))
+	}
+	steps := jobs[0].steps
+	if len(steps) != 3 {
+		t.Fatalf("parsed %d steps, want 3: %+v", len(steps), steps)
+	}
+	if !steps[0].continueOnError {
+		t.Errorf("step-level continue-on-error: true not detected; it is the annotation that " +
+			"turns a failing Gradle gate green")
+	}
+	if steps[1].ifCond != "false" {
+		t.Errorf("step-level `if` = %q, want %q", steps[1].ifCond, "false")
+	}
+	// The negative controls. Without these the assertions built on these fields would pass by
+	// reading `false`/`""` off every step, including the annotated ones.
+	if steps[1].continueOnError || steps[2].continueOnError {
+		t.Errorf("continue-on-error falsely detected on an unannotated step")
+	}
+	if steps[0].ifCond != "" || steps[2].ifCond != "" {
+		t.Errorf("`if` falsely detected on an unannotated step")
+	}
+	// The job itself carries neither, which is exactly why the job-level check missed these.
+	if jobs[0].continueOnError || jobs[0].ifCond != "" {
+		t.Errorf("the JOB reports an annotation only its STEPS carry; the two must not be conflated")
+	}
+}
+
+func TestCIYAMLParser_GradleTasksReadsTheCommandLineNotTheBody(t *testing.T) {
+	jobs := parseCIJobs(sampleStepAnnotationWorkflow)
+	got := jobs[0].gradleTasks()
+	want := []string{"lint", "test", ":app:assembleDebug"}
+	if len(got) != len(want) {
+		t.Fatalf("gradleTasks() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("gradleTasks() = %v, want %v", got, want)
+		}
+	}
+
+	// THE MUTATION THAT SURVIVED. `test` is gone from the gradlew line but still present in the
+	// body, in `go test -tags androidgate`. A body search says the task is there; the command
+	// line says it is not, and the command line is what runs.
+	mutated := strings.Replace(sampleStepAnnotationWorkflow,
+		"./gradlew --no-daemon lint test", "./gradlew --no-daemon lint", 1)
+	body := parseCIJobs(mutated)[0].allRun()
+	if !strings.Contains(body, "test") {
+		t.Fatal("premise: the mutated body no longer contains `test` anywhere, so this control " +
+			"proves nothing about discriminating a body search from a command-line one")
+	}
+	for _, task := range parseCIJobs(mutated)[0].gradleTasks() {
+		if task == "test" {
+			t.Fatalf("gradleTasks() still reports `test` after it was deleted from the gradlew " +
+				"invocation; it is reading the body, not the command line")
+		}
 	}
 }
 
