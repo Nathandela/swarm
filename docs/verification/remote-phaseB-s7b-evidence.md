@@ -130,3 +130,12 @@ PASS**, `ok internal/remotegw 0.96 s`, `ok internal/phonecore 0.70 s`.
   constructor to `crypto`, the gateway's own `OpenMailbox`-then-bound-then-`Accept` sequence becomes
   redundant and should be retired deliberately rather than left as a second, divergent enforcement
   point.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `DERIVED` means the fence was made to FAIL ON PURPOSE and
+restored; a `DERIVED` row naming no mutation is malformed and counted NOT DERIVED.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-GW-2 | DERIVED | the ORDERING is the requirement, so all three orderings were broken in `OpenMailboxFrameAt`. (a) age check moved AFTER `recv.Accept` -> `TestS7bBoundedAge_RejectionDoesNotPoisonTheStream` and `..._DoesNotReplaceTheSeqReplayGuard` fail (one retained frame permanently bricks typing); (b) moved BEFORE `crypto.OpenMailbox` -> `..._AForgeryIsRefusedAsAForgeryNotAsStale` fails (the bound would be judging a timestamp only the untrusted relay vouched for); (c) the one-sided bound "improved" into a symmetric window -> `..._ToleratesTheSkewBudgetInBothDirections/phone_an_hour_ahead` fails. The fixture that matters DISCRIMINATES because it is in a different package: the "legitimate traffic is unaffected" half runs REAL phone seals through the real entry point in `internal/phonecore/s7b_gateway_live_traffic_test.go`, not hand-stamped `IssuedAt` values |

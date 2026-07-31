@@ -227,3 +227,43 @@ The four rows above are all `internal/phonecore` properties, exercised at the co
 PB-STATE-2) against a real second process. None of them was exercised through the **bound facade**
 until S19: `internal/phonesim`, which drives nearly every integration test in this repo, never
 constructs a `phonecore.Core` at all. See `docs/verification/remote-phaseB-s19-evidence.md`.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `DERIVED` means the fence was made to FAIL ON PURPOSE and
+restored; a `DERIVED` row naming no mutation is malformed and counted NOT DERIVED. This section
+covers only PB-GW-6; S7's other rows (PB-STATE-*) are not derived here.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-GW-6 | DERIVED | `IssuedAt: issuedAt()` in `sealPhoneFrame` (`internal/phonecore/direction.go:67`) replaced with `IssuedAt: 0` — the original ~56-year-old-frame defect — -> 7 tests fail in `internal/phonecore`, including both of the row's own (`TestPhoneSeals_StampANonZeroIssuedAt`, `..._PassTheBoundedAgeCheckThatWouldRejectTodaysFrames`). **But see FINDING F below: two further mutations show the row's OWN fence covers 5 of the 7 producers, and the two it misses are caught only incidentally, by another requirement's end-to-end tests** |
+
+## FINDING F — PB-GW-6's fence enumerates five producers; there are seven
+
+The requirement's grammatical subject is **every** phone -> machine seal. `phoneSeals`
+(`internal/phonecore/issuedat_test.go:50`) hand-lists **five**: `SealInputData`,
+`SealInputResize`, `SealCommandEnvelope`, `SealTakeControlEnvelope`, `SealLaunchEnvelope`. Two
+more exist and both post-date S7 — `SealResyncEnvelope` (PB-SYNC-2) and `SealPushPrefsEnvelope`
+(PB-PUSH-8), `internal/phonecore/command.go:114,130` — and both are production-reachable from
+`mobile/commands.go:716,796`. `direction.go:55` states the hazard in as many words: the stamp
+"was once missed at one of five".
+
+Measured, not assumed. Each of the two was rewritten to seal INLINE without `IssuedAt` — the
+shape a producer added later takes when it does not route through the `sealPhoneFrame` funnel:
+
+- `SealPushPrefsEnvelope` unstamped: `internal/phonecore` **PASSES**, `internal/remotegw`
+  **PASSES**, `mobile` **PASSES**, `internal/skeleton` **PASSES**. Caught only by four
+  `mobile/conformance` tests belonging to **PB-APP-7** (`TestPBAPP7_ADisabledToggleSendsNoPushAtAll`
+  and three siblings).
+- `SealResyncEnvelope` unstamped: same four packages **PASS**. Caught only by
+  `TestS10_ResyncAsksTheMachine` in `mobile/conformance`, belonging to **PB-SYNC-2**.
+
+So the row is DERIVED — the connection was broken and something failed — but what fences the two
+newest producers is another requirement's end-to-end test, not PB-GW-6's enumeration. The
+enumeration is a hand-kept list with nothing structural behind it, which is the same shape as
+PB-PUSH-3's known-false producer sweep. The user-visible consequence if a future producer misses
+the funnel and no e2e test happens to cover it: PB-GW-2's 10-minute bound refuses that verb
+FOREVER, silently, at the gateway.
+
+Fixed in this tranche: see `internal/phonecore/issuedat_test.go`'s producer sweep, which now
+derives the list from the package source instead of restating it.

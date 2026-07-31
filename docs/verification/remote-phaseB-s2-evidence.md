@@ -165,3 +165,21 @@ incidental downstream mechanisms), and keeps the still-valid conditional Phase-B
 from the disproved shipped-Phase-A one.
 
 It is dated to S19 rather than backdated to S2, because that is when it was written.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `scripts/phaseb-traceability.py` reads this section for the
+traceability table's DERIVATION column and `internal/verify/phaseb_derivation_test.go` fences that
+it does. `DERIVED` means somebody made this row's fence FAIL ON PURPOSE and restored it — not that
+a test exists, not that the slice shipped. A `DERIVED` row naming no mutation is malformed and
+counted NOT DERIVED.
+
+Every mutation below is to the CONNECTION in production code (B113), never to a constant a test
+transcribes. All were reverted; the package is green at HEAD.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-GW-1 | DERIVED | three, all caught. (a) `NewCommandBridge` no longer calls `recv.SeedHighWater` -> 16 tests fail across 4 files, including the §4.6 trace; (b) `b.cursor = ck.Cursor` deleted -> `TestCommandBridge_MailboxCursorSeededOnStart` fails ("re-reads from 0 and re-consumes every item still in the relay's store"); (c) `consume` stops calling `saveCheckpoint` -> all 16 fail. Production reachability confirmed at `cmd/swarm-remote/config.go:174` (`OpenInboundState`) and `:213` (`Inbound:`) |
+| PB-GW-3 | DERIVED | each per-class ordering broken SEPARATELY, so neither rides the other's test. Input persist moved AFTER `routeInput` -> only `TestCrashMatrix_InputLostNotDuplicatedWhenCrashBeforePTYWrite` fails; mutation persist moved BEFORE `routeCommand` -> only `TestCrashMatrix_MutationDuplicateBoundedToOneRedelivery` and `..._WatchConvergesAndDuplicateWindowCloses` fail. Both halves are independently fenced |
+| PB-GW-4 | DERIVED | class-selective: `consume` returns early for every frame that is not `FrameInput`, so the four non-input classes are refused by nothing at the guard -> all five subtests of `TestReplay_RetainedFrameClassesRefusedAfterRestart` fail independently, plus the four mutation/watch crash-matrix tests. The input class's fixture DISCRIMINATES: run 2 re-seals `take_control` at seq 1 (a genuinely seq-regressed phone) and the retaining relay re-serves at FRESH storage cursors 100/101/102, so the read-cursor half cannot stand in for the high-water half |
+| PB-GW-5 | NOT DERIVED | **FINDING E, open — there is no fence over this row's subject to break.** PB-GW-5 is a prohibition on the CONTENT of `docs/verification/remote-phaseA-committee-closure.md`, and nothing in the tree reads that file: `grep -rn 'committee-closure' --include=*.go --include=*.py` returns nothing. Mutation attempted anyway: PB-DOC-5's entire deliverable, the `## SCOPED NOTE` section, was DELETED from the closure and `go test ./internal/verify/` stayed GREEN. Deleting the note is the strongest available mutation and it survives; adding the disproved exploit claim back — the thing the row actually forbids — has no fence at all. The row's shipped status rests on the evidence FILE existing, which is the comfortable fiction B67(1) already names |

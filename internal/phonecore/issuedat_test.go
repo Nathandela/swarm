@@ -24,10 +24,13 @@ package phonecore
 // age is small -- and that is exactly what is asserted.
 
 import (
+	"os"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
 
@@ -73,12 +76,68 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealLaunchEnvelope: %v", err)
 	}
+	resync, err := SealResyncEnvelope(key, epoch, seq.Next(), auth, 12)
+	if err != nil {
+		t.Fatalf("SealResyncEnvelope: %v", err)
+	}
+	prefs, err := SealPushPrefsEnvelope(key, epoch, seq.Next(), auth, schema.PushPrefs{Version: 1})
+	if err != nil {
+		t.Fatalf("SealPushPrefsEnvelope: %v", err)
+	}
 	return map[string][]byte{
 		"SealInputData":           data,
 		"SealInputResize":         resize,
 		"SealCommandEnvelope":     cmd,
 		"SealTakeControlEnvelope": take,
 		"SealLaunchEnvelope":      lau,
+		"SealResyncEnvelope":      resync,
+		"SealPushPrefsEnvelope":   prefs,
+	}
+}
+
+// phoneSealSources are the files every phone -> machine seal producer lives in. The sweep
+// below reads them, so the covered set cannot silently fall behind the package.
+var phoneSealSources = []string{"command.go", "input.go"}
+
+// TestPhoneSeals_TheSweepCoversEveryProducerInThePackage is PB-GW-6's completeness half, and
+// it exists because the list above is HAND-KEPT. When S7 wrote it there were five producers;
+// SealResyncEnvelope (PB-SYNC-2) and SealPushPrefsEnvelope (PB-PUSH-8) were added later and
+// the list did not follow, so for two verbs "every phone -> machine seal stamps IssuedAt" was
+// asserted about nothing. Both were measured: rewritten to seal inline without IssuedAt, they
+// left internal/phonecore, internal/remotegw, mobile and internal/skeleton entirely GREEN --
+// the only thing that caught either was another requirement's end-to-end conformance test.
+//
+// The producer set is DERIVED FROM THE SOURCE rather than restated, so a new Seal* that
+// forgets the sealPhoneFrame funnel fails HERE, at PB-GW-6's own fence, instead of waiting for
+// some unrelated e2e test to notice. The failure mode it guards is silent and permanent:
+// PB-GW-2's 10-minute bound refuses an unstamped verb forever, with nothing logged.
+func TestPhoneSeals_TheSweepCoversEveryProducerInThePackage(t *testing.T) {
+	key := testContentKey()
+	var seq Sequencer
+	covered := phoneSeals(t, key, 7, &seq)
+
+	// `func SealX(` at the start of a line: the package's own declaration syntax.
+	decl := regexp.MustCompile(`(?m)^func (Seal[A-Za-z0-9_]*)\(`)
+	found := 0
+	for _, file := range phoneSealSources {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		for _, m := range decl.FindAllStringSubmatch(string(src), -1) {
+			found++
+			if _, ok := covered[m[1]]; !ok {
+				t.Errorf("%s declares %s, which the IssuedAt sweep does not cover: PB-GW-6 says EVERY "+
+					"phone -> machine seal stamps IssuedAt, and an uncovered producer that forgets the "+
+					"stamp is refused by PB-GW-2's 10-minute bound forever, silently", file, m[1])
+			}
+		}
+	}
+	// Vacuity control: a regexp that matched nothing would make the loop above a no-op and
+	// this fence would pass for a package with no producers at all.
+	if found < len(covered) {
+		t.Fatalf("the producer scan found %d declarations across %v but the sweep seals %d; the scan is "+
+			"not reading the package", found, phoneSealSources, len(covered))
 	}
 }
 

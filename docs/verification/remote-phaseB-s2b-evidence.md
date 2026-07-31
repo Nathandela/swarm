@@ -123,3 +123,14 @@ tests are strictly stronger than required: both wrong answers are asserted again
 delivery-unknown test, the refusal test drives a real relay through a real post-commit TCP cut
 and verifies the item landed, and the budget test replays the accepted stream through a real
 `crypto.MailboxReceiver` checking gaps, journal completeness and a liveness floor.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `DERIVED` means the fence was made to FAIL ON PURPOSE and
+restored; a `DERIVED` row naming no mutation is malformed and counted NOT DERIVED. Every mutation
+is to the CONNECTION in production code (B113); all reverted, package green at HEAD.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-GW-7 | DERIVED | four, all caught, and the two that matter most are B125's ninth axis. (a) **the refusal-lie restored** — `s.reuse = seq` added back after a failed `appendLocked` -> 12 subtests of `TestRelaySink_ARelayAuthoredRefusalNeverReissuesASeq` plus all 6 of `..._TheRelayCannotCauseLOSSWithoutCausingAGAP` fail; (b) **the known-false remedy** — reissue only when the error carries `ErrQuotaExceeded`/`ErrNotAuthorized`/`ErrRevoked`, i.e. the relay's own code trusted as evidence about the relay's own storage -> the SAME 18 fail, so the classifier exception cannot be smuggled back; (c) the admission window deleted from `CoalescingSink.release` -> `TestRelaySink_SustainedPeekStaysUnderAppendBudget`, `TestGatewayRunTerminal_CoalescedPeekShowsLatestGrid`, `TestCoalescingSink_MultiSessionStaysUnderCombinedBudget` fail; (d) all three pre-append `s.reuse = seq` assignments removed, so a frame that provably never left the process burns a seq -> `TestRelaySink_ASeqIsReissuedWhenTheFrameNeverLeftTheProcess` fails. `NewCoalescingSink` production-reachable at `internal/remotegw/service.go:196` |
+| PB-GW-8 | DERIVED | four, all caught, and they separate the two halves the requirement says a local cursor write alone cannot cover. (a) `New`'s `CursorSource` seeding disabled -> `TestGateway_SeedsResumePointFromDurableCursor` fails ALONE — `TestGateway_RestartDoesNotReAppendDeliveredJournalRecords` survives it, because `RelaySink.Event` carries its own `resumed` guard, which is defence in depth rather than a redundant fence; (b) `NewRelaySink` no longer seeds `resumed: outbox.Cursor()` -> `TestGateway_RestartDoesNotReAppendDeliveredJournalRecords` fails; (c) a delivery-unknown record recovered by RE-SEALING at a fresh seq instead of replaying the reserved bytes verbatim -> `TestRelaySink_DeliveryUnknownRetryIsVerbatimNotReSealed` and `..._ARefusedOutboxFrameKeepsItsSeqThroughTheReservation` fail; (d) `outbox.Reserve` moved from BEFORE the append to after it -> those two plus `TestRelaySink_DeliveryUnknownNeverReusesASeqForDifferentPlaintext` (which drives a REAL relay behind a TCP proxy cut after commit, before the reply) and `..._OutboxReplayIsIdempotent` fail |
