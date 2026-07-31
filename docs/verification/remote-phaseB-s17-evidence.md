@@ -363,3 +363,22 @@ owed by someone — they are not S17's.
    asks for*. `TestS17_TheFirebaseInitialisationGapIsRecordedRatherThanClaimed` is where the
    boundary is written down: there is no `google-services.json` and no Google account in this
    project, so FCM never actually calls `onNewToken` here. PB-E2E-5 stays deferred.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `DERIVED` means the fence was made to FAIL ON PURPOSE and
+restored; a `DERIVED` row naming no mutation is malformed and counted NOT DERIVED.
+
+**Scope stated before the verdicts.** Both rows have a Kotlin/Robolectric half that **could not
+be run in this tranche**: there is no Java runtime on this host (`./gradlew --version` reports
+*"Unable to locate a Java Runtime"*), so `WakeNotificationTest` and every other JVM assertion is
+unexercised — the same wall S13 hit on PB-RUN-2/-5. That is NOT the PB-E2E-5 hardware deferral
+and is not being reclassified as one: PB-E2E-5 (real FCM delivery, real Doze, real handset
+attestation) stays DEFERRED and nothing below touches it. What WAS broken on purpose is
+everything reachable from Go: the `android/gate` source fences over production Kotlin, and the
+`mobile/conformance` rig with a real relay, the real FCM v1 sender and a fake FCM endpoint.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-PUSH-4 | DERIVED | three, all caught, covering both halves of the amended criterion. **The unreachability half** (the one the amendment calls "what makes it safe"): a `PhoneRuntime.facade()?.roster()` call added to `SwarmMessagingService.onMessageReceived` -> `TestS17_TheWakeCallbackReachesNoContentVerb` fails naming the verb — the FETCH is the defect, not the string. **The distinguishability half**: `HandlePushWake`'s `ContentReady` forced true -> `TestS17_ALockedDeviceIsToldContentIsUnavailable` fails ("that is the flag the app renders session content on"). **Non-vacuity**: `AcceptWake`'s refusal bypassed so any input renders -> four conformance tests fail on their own NON-VACUITY assertions rather than on the alert's contents. Unexercised: the 7 Robolectric assertions in `WakeNotificationTest` (no JVM, see scope above) |
+| PB-PUSH-9 | DERIVED | three, all caught, including the criterion's own end-to-end half. `onNewToken` emptied so rotation never reaches the facade -> `TestS17_OnNewTokenReachesTheFacadeRegistration`; `PushTokens.disable` no longer calling `App.DeletePushToken` -> `_ProductionKotlinDeletesTheTokenOnRevokeOrDisable`; and the one that matters most, **`App.onConnected`'s token arm removed** so nothing re-registers on an authenticated reconnect -> `TestS17_ReRegistrationRestoresDeliveryAfterARelayRestart` against a relay with an EMPTY token store (the AMENDED criterion, the only configuration in which re-registration is the thing measured) plus `_ATokenRotatedWithNoConnectionIsNotLost`, `_ARegisteredTokenSurvivesAProcessDeath` and `_ATokenIsReadableAndReRegistrableWithTheContentTierLocked`. Unexercised: nothing on the JVM was needed for these; the recorded residual that `PushTokens.disable` has no production caller is unchanged by this tranche |

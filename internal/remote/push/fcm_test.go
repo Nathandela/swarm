@@ -535,6 +535,30 @@ func TestPBPUSH5_InvalidCredentialsFailLoudlyAtConstruction(t *testing.T) {
 		"unparseable key":     []byte(`{"type":"service_account","project_id":"p","client_email":"e@x","token_uri":"https://t","private_key":"-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----\n"}`),
 		"missing project":     []byte(`{"type":"service_account","client_email":"e@x","token_uri":"https://t","private_key":"x"}`),
 	}
+	// DISCRIMINATING CASES. Every fixture above carries a private key that is absent or
+	// unparseable, so every one is refused by parseRSAPrivateKey and NONE of them exercises
+	// the required-field validation at all: deleting that validation from BOTH layers
+	// (LoadServiceAccount's field loop AND NewFCM's completeness check) left
+	// internal/remote/push and internal/remote/relay entirely green. A fixture that cannot
+	// tell a correct implementation from one with no field checking passes both.
+	//
+	// These carry a WELL-FORMED key and omit exactly one required field each, which is the
+	// shape a real misconfiguration takes -- a hand-edited or templated credential. Without
+	// them, such a credential constructs a sender that posts to `/projects//messages:send`
+	// and 404s on every wake, which is the silent-until-a-user-misses-a-handoff failure this
+	// requirement exists to convert into a loud one.
+	for _, field := range []string{"project_id", "client_email", "token_uri"} {
+		var doc map[string]string
+		if err := json.Unmarshal(testServiceAccount(t, fake.srv.URL+"/token"), &doc); err != nil {
+			t.Fatalf("control: the well-formed service account does not unmarshal: %v", err)
+		}
+		delete(doc, field)
+		b, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("marshal %s-less service account: %v", field, err)
+		}
+		cases["valid key, no "+field] = b
+	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {
 			acct, err := LoadServiceAccount(doc)

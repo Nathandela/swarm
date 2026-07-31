@@ -196,3 +196,54 @@ packages ok, zero failures.**
   *surface* and S12 shipped the *verb*; the wiring between them is S16's, and S16's RED tests for
   exactly this are in the working tree now ("has been stale since S12 shipped `ActionPushPrefs`").
   Until that lands, the user's toggle is a boolean the machine has never heard of.
+
+## Derivation
+
+**MACHINE-READABLE** (ADR-007 B129). `scripts/phaseb-traceability.py` reads this section for the
+traceability table's DERIVATION column and `internal/verify/phaseb_derivation_test.go` fences that
+it does. `DERIVED` means somebody made this row's fence FAIL ON PURPOSE and restored it — not that
+a test exists, not that the slice shipped. A `DERIVED` row naming no mutation is malformed and
+counted NOT DERIVED. It is ORTHOGONAL to Status: PB-PUSH-3 below is NOT MET and derived.
+
+Every mutation is to the CONNECTION in production code (B113), never to a constant a test
+transcribes. All reverted; the packages are green at HEAD.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-PUSH-0 | DERIVED | eight, all caught. Trigger selection: `isWakeWorthy` widened to include `GroupWorking` -> `TestPBPUSH0_TransitionIntoWorkingNeverPushes`; `isTransition` always true -> three tests; `Snapshot` stops seeding `lastGroup` -> `_ReconnectRosterSeedsWithoutPushing`; `claimWindow`'s window disabled -> `_CoalescesRepeatTransitionsWithinTheWindow`. Key custody: a `crypto.ContentKey` field added to `PushConfig` -> `_PushConfigCarriesNoContentKey` (whose positive control requiring a `WakeKey` was verified present, so an empty struct cannot pass); loud key ids restored to the wake header -> `PBPUSH3_WakeHeaderCarriesNoStableEndpointIdentifiers`. Production wiring: `NewService`'s `PushTriggerer` type-assert disabled, and separately the notifier unhooked from the journal path -> `_ServiceWiresTheNotifierIntoTheLiveJournalPath` names each cause distinctly |
+| PB-PUSH-1 | DERIVED | `type APNsSink = PushSink` appended to `internal/remote/relay/push.go` — the alias the requirement calls a documented landmine — -> `TestPBPUSH1_NoExportedAPNsNameSurvivesTheRename` fails naming the offender. This is the mutation the fence was written for: the alias keeps every call site compiling and every Phase A test green, so only a declaration scan distinguishes a rename from a second name |
+| PB-PUSH-2 | DERIVED | three, all caught. `classify` rekeyed to prune on any 404 instead of the structured `UNREGISTERED` errorCode — the misconfiguration-prunes-the-fleet mistake its own comment warns about — -> `TestPBPUSH2_OtherNotFoundIsNotAPruningSignal`; 5xx made non-retryable -> `_ServerErrorsAreRetriedAndThenSucceed` and `_RetriesAreBounded`; `accessTokenFor`'s cache-hit disabled so every push exchanges -> `_AccessTokenIsAcquiredOnceAndReused` (3 exchanges for 3 pushes) |
+| PB-PUSH-3 | DERIVED | **derived, and still NOT MET — the two facts are orthogonal (B129).** Two mutations broke its shipped fences: loud `RecipientKeyID`/`SenderKeyID` restored to the wake header -> `TestPBPUSH3_WakeHeaderCarriesNoStableEndpointIdentifiers`; `AcceptWake`'s refusal bypassed so a replayed or forged wake renders -> four `mobile/conformance` non-vacuity assertions. What was NOT re-derived, by instruction, is the row's OPEN defect — the presence sweep is separable by SHAPE, not by size — whose remedy is known false: the producer enumeration matches syntax, so a `var p PushPayload` with field assignment plus an indirect call through a func value is invisible to it |
+| PB-PUSH-5 | DERIVED | three caught, and **one SURVIVED — FINDING G, fixed here.** Caught: the relay's push verdict made to fail the trigger -> three `TestPushDelivery_*`; `PushNotifier.Event` returning the wake error -> `_PushFailureNeverFailsTheJournalRecord` plus two fail-closed siblings; the `cfg.Pusher == nil` arm removed -> `_NoPusherConfiguredLeavesTheCorePathsUntouched`. Survived: **the credential validation deleted from BOTH layers** (`LoadServiceAccount`'s required-field loop AND `NewFCM`'s completeness check) left `internal/remote/push` and `internal/remote/relay` entirely green. See FINDING G |
+| PB-PUSH-6 | DERIVED | three, all caught. `putToken` removed so the token is cached but never persisted -> four tests including `_TokenIsNotStoredInTheClearAlongsideTheCiphertext`; `deleteToken` removed so a restart resurrects a revoked token -> `_TokenDeleteAlsoSurvivesARestart` (2 pushes, want 1); `loadTokens` replaced by an empty map at boot -> three restart tests. The fixture DISCRIMINATES on the third: the relay is genuinely restarted against the same store rather than re-read in process |
+| PB-PUSH-7 | DERIVED | `handleTokenRegister` changed from last-wins to first-wins, so a re-registered handset keeps the stale token -> `TestPBPUSH7_SecondTokenForOneRoutingIDReplacesTheFirst` fails naming the old token. The row asks for a decision plus a test PINNING the behaviour, and the pin is what the mutation proves is real |
+| PB-PUSH-8 | DERIVED | three, all caught, and the first is the requirement's own distinction. `categoryEnabled` removed from `maybeWake`, i.e. suppression moved off the sender — the "local filtering is not sufficient" defect the row names — -> `_DisabledCategorySendsNoPushAtAll` (3 pushes, want 0) and three siblings; `applyPushPrefs`'s `reply.Op == OpError` arm disabled so the gateway applies without the daemon's authorization -> `_DaemonRefusalLeavesThePreferenceUnchanged`; the ack moved ahead of the persist -> `PBPUSH10_AcknowledgementIsSealedOnlyAfterThePreferenceIsDurable` |
+| PB-PUSH-10 | DERIVED | five caught, one survived and is fenced here. Caught: the persist replaced by an in-memory cache -> `_PreferenceSurvivesAProcessRestart`, `_PreferenceIsStoredAsInspectableState` and the requirement's literal criterion `_DisabledPreferenceStillSuppressesAtTheSenderAfterARestart` (3 pushes at the SENDER, want 0); the version guard disabled -> `_StaleVersionNeverOverwritesANewerPreference`; a corrupt file read as the ENABLED default -> `_CorruptPreferenceIsNeverSilentlyTheEnabledDefault`; the bootstrap flipped to off -> `_NeverConfiguredDefaultsToBothCategoriesEnabled`. Survived: `SavePrefs` falling back to the bootstrap default when the STORED record cannot be read — defeating the fail-closed rule its own doc states — left every PB-PUSH-8/-10 test green. Fenced now by `TestPBPUSH10_AnUnreadableRecordBLOCKSTheWriteRatherThanResettingTheVersion`, verified RED under exactly that mutation |
+
+## FINDING G — PB-PUSH-5's credential fixtures could not tell a validated loader from an unvalidated one
+
+**Measured.** `LoadServiceAccount`'s required-field loop and `NewFCM`'s completeness check were
+BOTH deleted, so a service account missing `project_id`, `client_email` and `token_uri` is
+accepted and an `FCM` sender constructs happily. `go test ./internal/remote/push/
+./internal/remote/relay/` was **green**.
+
+The cause is the fixture set, not the code. All five cases in
+`TestPBPUSH5_InvalidCredentialsFailLoudlyAtConstruction` carry a private key that is absent or
+unparseable, so every one is refused by `json.Unmarshal` or by `parseRSAPrivateKey` — measured
+directly: **zero of the five reach `NewFCM` at all**, because the loop's
+`if err != nil { return // refused at load }` fires first every time. The assertion at that
+test's `NewFCM` arm is unreachable, and the requirement's property was resting on two checks
+each of which was fenced only by the OTHER one existing.
+
+The reachable misconfiguration this leaves unfenced is ordinary: a credential with a valid
+private key and an empty or missing `project_id` — a hand-edited or templated service account.
+The sender constructs, then posts to `/v1/projects//messages:send` and fails on every wake,
+which is precisely the "constructs happily and fails on every send" failure the test's own
+comment says it exists to prevent: *"a relay that looks healthy while push is dead; the operator
+finds out from a user who missed a hand-off."*
+
+**Fixed here.** Three discriminating cases were added — a well-formed generated key with exactly
+one of `project_id` / `client_email` / `token_uri` removed. Controls measured: at HEAD all three
+pass; with both validation layers deleted all three fail naming the field. Removing either layer
+alone still passes, which is correct and is recorded as such — the property survives on either
+check, so the redundancy is defence in depth, the same shape as PB-GW-8's two `resumed` guards.

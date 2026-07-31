@@ -419,3 +419,39 @@ func prefsReplyControl(t *testing.T, key crypto.ContentKey, raw []byte) protocol
 	_, ctrl := openReplyControl(t, key, raw)
 	return ctrl
 }
+
+// TestPBPUSH10_AnUnreadableRecordBLOCKSTheWriteRatherThanResettingTheVersion fences the
+// fail-closed direction SavePrefs's own doc states -- "a stored record that cannot be READ
+// blocks every write ... an unreadable file whose version is unknown could be newer than p,
+// so accepting p might be the rollback this guard exists to refuse".
+//
+// It exists because that stated intent was UNFENCED. Rewriting SavePrefs's read of the
+// current record to fall back to the enabled bootstrap default on error left every
+// PB-PUSH-8 and PB-PUSH-10 test green, and the version guard is the only thing standing
+// between a relay-retained "on" frame and a preference the user has since turned off: with
+// the current version read as 0, ANY retained frame is newer and is applied.
+//
+// The corrupt file is the reachable form of "cannot be read". The assertion is on the
+// REFUSAL, not on any particular error text.
+func TestPBPUSH10_AnUnreadableRecordBLOCKSTheWriteRatherThanResettingTheVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "push-prefs.json")
+	prefs, err := OpenPushPrefs(path)
+	if err != nil {
+		t.Fatalf("OpenPushPrefs: %v", err)
+	}
+	// Control: a writable custody accepts a normal update, so the refusal below is about
+	// the unreadable record and not about SavePrefs refusing everything.
+	if err := prefs.SavePrefs(PushPrefs{Version: 7, NeedsInput: false, Finished: false}); err != nil {
+		t.Fatalf("control: SavePrefs refused a normal update: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not json at all"), 0o600); err != nil {
+		t.Fatalf("corrupt the stored record: %v", err)
+	}
+	// A REPLAY: version 1 is below the 7 that was stored before the corruption. If the
+	// unreadable record is read as the bootstrap default it looks newer and is applied.
+	if err := prefs.SavePrefs(PushPrefs{Version: 1, NeedsInput: true, Finished: true}); err == nil {
+		t.Fatal("SavePrefs accepted a replayed version-1 preference over an unreadable record: the " +
+			"version guard was reset to 0, so any retained frame re-enables push against a setting the " +
+			"user turned off")
+	}
+}
