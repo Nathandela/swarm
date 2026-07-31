@@ -28,6 +28,8 @@ No hand-rolled primitives: `flynn/noise`, `golang.org/x/crypto` (nacl/box, curve
 
 **Two X25519 keys per phone device, not one** (audit-003 M1 / A14): a Noise-static key and a sealed-box-recipient key, both pinned/stored at pairing (R-PAIR.3/.7, R-DEV.1); the EpochGrant seals to the recipient key, not the Noise static. Reusing one key across both protocols has no demonstrated oracle (neither protocol exposes the raw shared secret) but voids the clean composable argument; a second key is nearly free and buys it back.
 
+> **A15 AMENDED BY B133 (2026-07-31).** The two-tier split is KEPT unchanged; its rationale is rewritten from stolen-device to transport-only, and "biometric-gated" below no longer holds — all phone-side user authentication is removed.
+
 **Two epoch keys per epoch — wake vs content** (audit-003 M2 / A15): each EpochGrant delivers a **wake key** (after-first-unlock, app-group-readable by the Notification Service Extension, decrypts only content-free "activity on machine X" push payloads) and a **content key** (biometric-gated, not NSE-readable and not derivable from the wake key, decrypts mailbox session content). A once-unlocked stolen phone yields only the wake key — no session history — closing the content-at-rest exposure. The device long-term and command-signing keys stay biometric-gated.
 
 ### D3. Identity and pairing
@@ -2798,6 +2800,8 @@ against `ErrPinMismatch` (a wrong persisted pin), while the case that actually b
 real one is the defect class this phase has found ten times**, and it would be built deliberately here.
 Keep the seam narrow and inert in release, as the existing one is.
 ### B59 — PB-SEC-2's per-use tier is WIRED; `AUTH_DEVICE_CREDENTIAL` is REFUSED, and B44's exit is built
+
+> **SUPERSEDED BY B133 (2026-07-31).** This entry's premise — "the threat model is a device someone else is holding" — is retired: the trust boundary is now the wire, and all phone-side user authentication is removed. The refusal below stands on its own terms but no longer decides anything, and its point 2 (fresh-installs-only) does not bind. PB-SEC-2 is VOID.
 
 B51 recorded the ninth uncalled-symbol instance. This records what closed it, and the two judgement
 calls it forced.
@@ -7740,3 +7744,191 @@ method**, where making a fence fail left the failure in the tree.
 
 Round 7 concluded the specification *"has no instrument for mechanisms it never named."* Hardware
 contact is that instrument, and it has now outperformed re-derivation twice running.
+
+## B133 — The trust boundary is the WIRE. All phone-side user authentication is REMOVED, and three things a strict reading would wrongly delete with it are KEPT
+
+**2026-07-31.** Owner decision, taken after the two bring-ups (B131, B132) put the product in front of
+a real handset. **This is the root entry of Phase B's de-auth work: the ADR entries, requirement
+edits, deletions and rewrites in `docs/specifications/remote-phaseB-deauth-plan.md` are all derivable
+from the boundary restated here, and none of them may be taken before this one lands.** It is a
+production decision, not a demo shortcut.
+
+### The boundary, stated formally
+
+**The trust boundary is the wire between the phone and the computer.**
+
+- **In scope — the declared adversary:** the relay, the network path, **FCM/Google (which reads every
+  push payload it carries)**, and any MITM that can position itself between the two endpoints.
+- **Out of scope — trusted:** the phone, and whoever is holding it. The computer, and whoever has
+  owner-uid on it.
+
+The original framing (Context, above) said *"a stolen phone or a compromised relay must not become
+code execution."* **The two halves are now separated and only the second survives.** The phone
+endpoint is trusted the way the computer endpoint has always been trusted: swarm has never asked the
+owner-uid user of the Mac to re-authenticate before typing into a session, and the phone is now the
+same class of object.
+
+### What follows necessarily
+
+Every local user-authentication mechanism on the phone is removed. Not weakened, not made optional —
+**removed, with the code deleted**, because a disabled gate that still compiles is a gate someone
+re-enables by accident. The biometric gate, the per-use `CryptoObject` tier, the timed-freshness tier,
+the content lock, gate invalidation, and the unlock control all go:
+`keys/PerUseGate.kt`, `keys/BiometricPolicy.kt` (which is also `GateInvalidation`'s home,
+`BiometricPolicy.kt:147`), `keys/BiometricPrompts.kt`, `keys/TimedTierGate.kt`,
+`runtime/ContentLock.kt`, and in `PhoneSurface.kt` the `unlockContent` control (`:276`) with the
+`gatedActions` list that carries it (`:344-346`). The app opens freely.
+
+### What is KEPT, and why a strict reading would wrongly delete it — the most important content in this entry
+
+"The endpoints are trusted" is not "the phone's storage is uninteresting." **Three mechanisms look
+like phone-side authentication and are not; each one defends the wire, and each one survives.**
+
+**1. Keystore sealing at rest, with `setUserAuthenticationRequired(false)`.** The auth *parameters*
+go (`keys/Provisioning.kt:405-406` and `:431-432` request
+`setUserAuthenticationParameters(…, AUTH_BIOMETRIC_STRONG)`; both become
+`setUserAuthenticationRequired(false)`). **The sealing does not.** Non-exportability defends *offline
+extraction of the app data directory* — an attacker who has the bytes but not the running device.
+That attacker is not the holder, and nothing in the new boundary trusts them. Hardware backing is
+retained. The cost of keeping this is one flag.
+
+**2. Android backup exclusion (PB-STATE-6 / PB-SEC-10).** This one reads most like a phone-side
+control and is the least like one. **A backup is a copy of the device keys leaving the device over
+the network.** That is the threat model itself, stated in the vocabulary of a settings toggle.
+`allowBackup=false` stays.
+
+**3. The two-tier wake/content key split (PB-KEY-2, A15).** The wake key is content-free **because
+FCM reads push payloads** (B20: key ids zeroed, a fixed 78 bytes over an empty plaintext). Google is
+on the wire, and the split is what keeps the wire's carrier from reading session content. **That
+defence is enforced at the SENDER, in the gateway** — PB-PUSH-0's criterion is that the push path
+holds the wake key only and the content key is never used there — **so it is untouched by anything
+removed from the phone.** The split is kept in full and its rationale is rewritten below.
+
+**The narrowing this does cause, stated rather than glossed.** PB-KEY-2 names the phone-side
+enforcement of the tier boundary as "Keystore auth-gating (unwrap fails while locked) **plus code
+discipline** — *not* OS isolation", because `FirebaseMessagingService` runs in the app process rather
+than an iOS-style NSE. **Removing auth-gating leaves code discipline as the only phone-side
+enforcement of the tier boundary.** That is a real reduction, it is accepted here, and it is small
+for one reason: the receiver-side half was always the weaker one on Android, and the property the
+split exists to buy — that the carrier of the push cannot read content — never rested on it.
+
+Noise XXpsk0, the pinned static keys, channel binding, the SAS, epoch grants and relay-distrust are
+all kept, and they are now **the whole security budget**.
+
+### The SAS becomes the ONLY human-in-the-loop security step in the product
+
+Until today the emoji comparison was one of two checkpoints a human passed: compare the SAS at
+pairing, and satisfy a biometric at every subsequent privileged action. **The second checkpoint is
+gone, so the first is load-bearing alone.** It is what defeats a relay MITM, and there is no longer
+anything behind it.
+
+**It must therefore get harder to skip, never easier. No auto-confirm, no timeout-to-accept, no
+"looks close enough" affordance, no path that reaches a paired state without a human having compared
+six emoji.** Any future change that shortens this step is a change to the security posture of the
+whole product and needs its own entry.
+
+### The accepted residual risk
+
+**A stolen unlocked phone gives the holder full control of agents that edit code on the Mac.** No
+prompt stands between them and take-control, type, kill or launch. This is accepted, once, here, and
+is not to be re-litigated by implementation slices.
+
+**The only surviving mitigation is `swarm remote off` / device revoke, issued FROM THE COMPUTER.**
+That makes the kill switch and the revoke path load-bearing in a way they were not: they were
+previously the outer of two layers, and they are now the only layer. `SeverAllRemoteControl`
+(`internal/protocol/server.go:1395`) is the mechanism, and its correctness is now the difference
+between a recoverable loss and an unrecoverable one.
+
+### Verified contained — checked against the source, not assumed
+
+- **The content key does not feed the Noise handshake, channel binding, or SAS.** `ContentKey` is
+  reachable in the frozen package only from `epoch.go` (generation, seal, unseal) and `envelope.go`
+  (`SealMailbox`/`OpenMailbox`, `:111,118`). `NoiseConfig` carries the static keypair, the pinned peer,
+  the pairing PSK and the prologue — no epoch key. `SAS` takes one argument, a channel binding
+  (`sas.go:58`), and that binding is the Noise handshake hash (`noise.go:248,275`). **Removing the
+  gate in front of the content key cannot touch the handshake, the pinning, or the emoji.**
+- **`GateToken` is NOT a cryptographic biometric attestation, and never was.** It is a random 16-byte
+  one-shot token minted per take-control (`internal/phonesim/phonesim.go:409`). Its function is
+  **anti-swap**: the daemon recomputes `content_hash = SHA256(GateToken)` over the wire value
+  (`internal/protocol/server.go:1519`, computed at `:1539-1541`), so a relay that substitutes the
+  token produces a hash the device signature does not cover and verification fails. Its second
+  function is single-use replay prevention through the durable claim. **Both are wire properties.
+  It survives entirely and matters MORE now, because the wire is the whole boundary.** The only thing
+  wrong with it is the word "biometric-attested" in its comments
+  (`internal/protocol/server.go:1400,1513,1608`). **The mechanism stays; the naming is what is
+  false.**
+- **No wire format, no on-disk format, no protocol, and no Go interface signature changes.**
+  `internal/remote/crypto` stays **FROZEN**. Dropping an authenticator from PB-KEY-8's capability
+  matrix is a **NARROWING**, which B8 permits.
+
+### Requirements consequences
+
+- **`PB-SEC-2` — VOID.** Its entire subject is "the biometric gate is cryptographically enforced, not
+  cosmetic." There is no gate. A requirement whose subject has left the product is void, not failed.
+- **`PB-KEY-2` — NARROWS.** The clause "the content key is user-authentication-gated" goes. **"Not
+  readable by the push path or derivable from the wake key" stays, and is now the whole requirement**
+  — see the third kept mechanism above.
+- **`PB-KEY-7` — NARROWS.** "Lock purges live memory" has no lock event to trigger on. The purge
+  becomes **revoke/unpair**-triggered. `MailboxRouter` still holds `ContentKey` by value, so the
+  purge itself is not optional.
+- **`PB-KEY-8` — NARROWS.** The matrix no longer expresses auth-gated key generation for any role.
+- **`PB-APP-7` — NARROWS.** Both push toggles stay; the biometric-gate toggle goes with its subject.
+- **`PB-E2E-5` — NARROWS legitimately.** "Real biometrics" leaves the physical-handset gate because
+  **the feature leaves the product**. Real camera, real FCM, real Doze and hardware Keystore
+  attestation **stay deferred and stay in the gate**. This is removal-by-feature-deletion, and it is
+  distinguishable from reclassification by fiat by exactly that test: nothing that still ships was
+  moved out.
+- **`PB-SEC-1`, `PB-STATE-6`, `PB-KEY-6`, `PB-KEY-9` — UNAFFECTED.** Sealing, failability and the
+  custody seam are all wire-side or extraction-side.
+
+### B59 is SUPERSEDED
+
+B59 refused `AUTH_DEVICE_CREDENTIAL`, and its third argument was the load-bearing one: *"The cost
+lands on the declared adversary. **The threat model is a device someone else is holding.**"* **That
+premise is retired here, so the conclusion goes with it.** The refusal is not overturned on its
+merits — it was correct under its premise, and the semantic-downgrade objection it raised (that
+"authenticated" would quietly become "whatever unlocked the phone") was sound. It is superseded
+because the question no longer arises: there is nothing left for a device credential to satisfy.
+
+**Two things are recorded honestly rather than left implied.**
+
+**B59 anticipated exactly this handset.** It wrote that adding the credential authenticator *"rescues
+exactly one case: a handset with no enrolled Class-3 biometric"* — and B132 then met that handset,
+a Galaxy A26 with a PIN and no fingerprint, behind a wall of six inoperable controls. The strand B59
+priced and accepted is the strand that forced this decision. **It did not get cheaper; the product
+changed shape around it.**
+
+**One of B59's four arguments does not bind, and would have been wrong to cite in support.** Point 2
+held that a spec change reaches **fresh installs only**, because `setUserAuthenticationParameters` is
+baked in at generation and the bootstrap returns early when the alias exists. **That does not apply to
+the population this decision is about.** B59's own closing paragraphs establish why: the platform
+refuses to *generate* an `AUTH_BIOMETRIC_STRONG` key with nothing enrolled, and
+`PhoneRuntime.refuseAHandsetThatCannotHoldTheContentKek` (`PhoneRuntime.kt:191`) fails the app closed
+before provisioning. **On a handset with no enrolled biometric there is no content KEK on disk, so
+there is nothing to migrate and no early return to trip.** The install is fresh by construction.
+
+### A15 is AMENDED
+
+**The two-tier wake/content split is KEPT, unchanged in structure, wire format and on-disk format.
+Only its rationale is rewritten, from device-holder to transport.**
+
+A15 as written argued the split from a *stolen phone* — "a once-unlocked stolen phone yields only the
+wake key." That argument is retired with the premise. **The split's surviving justification is that
+the push payload passes through FCM, which reads it**: the wake key must be readable by a path that
+Google's carrier can observe, and the content key must not be derivable from it. That is a property
+of the wire, it is unchanged by this entry, and it is sufficient on its own to require two keys.
+`epoch.go:62-64`'s comment calling the content key "biometric-gated" is now false and is corrected in
+place; the type, the sealing, and the 53:85 byte layout in the grant are untouched.
+
+### One open question, recorded and NOT answered here
+
+**Lease severing currently triggers partly on biometric-freshness expiry** —
+`internal/phonecore/lease.go:198` lists *"a transport loss, a release, app backgrounding, a
+biometric-freshness lapse"* as the reasons the phone ends its own lease, and `:52` records the 60 s
+freshness window colliding with PB-INPUT-5's sustained-typing floor as the reason `TakeControlTTL` is
+15 minutes. **With no freshness to lapse, what severs a lease on backgrounding is an open behaviour
+decision, owed before the Go comment pass touches those lines.** The candidate answers are not
+equivalent: sever on background, sever on transport loss only, or keep a timer with a
+non-authentication justification. **This is a behaviour decision, not a comment fix, and silently
+dropping the clause while rewording the comment would be a change to what the product does made under
+cover of a documentation edit.**
