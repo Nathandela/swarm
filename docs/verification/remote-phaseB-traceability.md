@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**97 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**98 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -159,7 +159,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-RUN-2 | S13 | shipped | **DERIVED** — **Re-derived 2026-07-31 once the Android toolchain ran.** The earlier verdict was NOT DERIVED because the app module did not compile, so no Kotlin fence could be mutated -- an honest limit of the auditor, not of the fence. With the AAR rebuilt and `gradlew` green, the same mutation was run properly: `CAMERA` removed from `AndroidManifest.xml` -> `RuntimeManifestTest > manifest_declares_every_permission_the_gate_resolves FAILED` (`RuntimeManifestTest.kt:40`), `BUILD FAILED in 53s`. Reverted; manifest sha256 `d604140f8f4a...` identical. **The Go gate does survive that mutation** -- the fence is Kotlin-side, which is exactly why the toolchain run was a prerequisite and not a formality. | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-RUN-3 | S13 | shipped | not derived | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-RUN-4 | S13 | shipped | **DERIVED** — `wake high` -> `normal` -> caught | `docs/verification/remote-phaseB-s13-evidence.md` |
-| PB-RUN-5 | S13 | shipped | not derived | `docs/verification/remote-phaseB-s13-evidence.md` |
+| PB-RUN-5 | S13 | shipped | **DERIVED** — **Re-derived 2026-07-31 once the Android toolchain ran**, for the same reason as PB-RUN-2: the earlier verdict recorded an auditor limit, not a fence limit. `LifecycleConvergence.planFor`'s `NETWORK_LOST` arm mutated `cancelOutstandingWait = true` -> `false` -> `LifecycleConvergenceTest > losing_the_network_cancels_the_outstanding_wait FAILED`, `BUILD FAILED in 56s`. Reverted; sha256 `d8b437da920b...` identical. **A first attempt is recorded as NOT a proof:** replacing the whole arm introduced a non-existent enum member and produced `compileDebugKotlin FAILED` -- a COMPILE failure, which fails tautologically and proves nothing about the fence (ADR-007 B113's neighbour). It was redone as a single field flip that compiles, so the failure is the behaviour and not the syntax. | `docs/verification/remote-phaseB-s13-evidence.md` |
 | PB-SAS-1 | S8 | shipped | not derived | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-2 | S8 | shipped | not derived | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-SAS-3 | S16 | shipped | not derived | `docs/verification/remote-phaseB-s16-evidence.md` |
