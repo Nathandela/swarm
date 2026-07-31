@@ -391,3 +391,71 @@ tests, and that is what their criteria ask for. What no S16 fence could do is re
 this suite's harness answers the phone itself, so every requirement whose real gate lives in the
 daemon — the lease gate, the launch validator, the reply tagging — was satisfiable while the
 product did not work. That is defect class (v) in the S19 brief, and PB-E2E-1 exists because of it.
+
+---
+
+## PB-APP-11 — staleness by silence (added and implemented 2026-07-31, ADR-007 B121)
+
+**The requirement is new and the mechanism it names was specified in v2.** §6.0 has carried
+*"cached-state freshness before it is shown as stale — 5 min without a successful poll"* since
+the second round, `grep` returned **zero hits for it outside the requirements file**, and the
+staleness decision it governs (`App.StreamState` -> `streamStale` -> `Core.StreamStale` -> the
+persisted per-channel flags) had **no clock input at any layer**. It was not a row falsely
+marked met; it was a binding number nobody implemented, and nothing in the project could see
+that — which is why `internal/verify/phaseb_budget_test.go` now checks §6.0's table for an
+owner and a fence per row.
+
+**What it defends against.** Every staleness mechanism here keys on a GAP, and a gap is
+observable only when a LATER seq arrives. So the declared adversary's cheapest move is not a
+forgery: it withholds the newest frames and keeps answering polls with an empty page. No gap
+forms, so nothing is stale; the poll SUCCEEDS, so no connection-state machinery fires; and
+`Presence()` asks **the withholding party** whether the machine is alive.
+
+**RED, evidenced** (`mobile/conformance/pbapp11_silence_test.go`, before any implementation —
+genuine assertion failures against the real relay, not a compile error):
+
+```
+--- FAIL: TestPBAPP11_SilenceIsNotLive (0.33s)
+    the machine's newest authenticated word is 6 minutes old and StreamState("journal") = "live", want "stale"
+    ... same for "terminal", "reply", "grant"
+    SessionList.Stale() = false (err <nil>), want true
+    JournalPage.Stale() = false (err <nil>), want true
+--- FAIL: TestPBAPP11_TheVerdictSurvivesARestart (0.25s)
+    after a restart StreamState("journal") = "live", want "stale"
+    ... same for "terminal", "reply", "grant"
+```
+
+**The test moves the CONNECTION, not a constant** (ADR-007 B113): the machine's `RelaySink`
+seals six minutes in the past, which is byte-for-byte indistinguishable from a relay that held
+the frame for six minutes — `IssuedAt` is AAD-covered, so a relay can only make a frame look
+OLDER. Six minutes is inside PB-TIME-2's ten-minute window, so every frame is ACCEPTED: this is
+not the age-refusal path. The suite asserts the attack's PREMISE too — `ConnectionState` still
+reads `online` while the polls keep succeeding — so a run that passed because the transport
+noticed something would fail instead.
+
+**Mutation-proved, each applied and reverted in one command with the file checksummed after:**
+
+| mutation of the production connection | result |
+|---|---|
+| `heardAt` returns the ARRIVAL instant instead of the machine's stamp | all silence assertions fail, including *"a coordinate this fresh is the phone's ARRIVAL time, which is the one clock in this exchange the relay controls"* |
+| the coordinate is OVERWRITTEN rather than kept monotonic | `ALateFrameDoesNotMoveTheCoordinateBackwards` fails: a retained frame becomes the relay's switch for the phone's warning state |
+| never-heard reads as live | `APhoneThatHasNeverHeardIsNotLive` fails |
+| the coordinate is live-only (dropped from `persistState`) | `TheVerdictSurvivesARestart` fails: `1785456077553 -> 0` |
+| `MachinePane` drops the freshness parameter / DEFAULTS it / keeps the boolean and drops the stamp | the three `android/gate/pbapp11_freshness_test.go` assertions fail in turn |
+
+**Where it lives**: `internal/phonecore/freshness.go` (the budget, the clamp and the verdict),
+the durable `State.LastHeardAt` committed inside the existing receive transaction (schema
+7 -> 8, v8 fixture pinned), `mobile/app.go`'s `streamStale` — the ONE function all four read
+models resolve to — and `App.MachineFreshness` for the explicit *"not heard from your machine
+since HH:MM"* state, traced in `screen_coverage.tsv` under `stale_state`.
+
+**The Go/Kotlin seam is fenced** because ADR-007 B121/S-1 is the same failure one requirement
+earlier: a repair channel complete in Go with no production Kotlin caller, surviving because
+each side's tests pass over the other's absence. `android/gate/pbapp11_freshness_test.go` reads
+BOTH sources and requires the pane that renders relay presence to carry the phone's own
+evidence as a REQUIRED parameter.
+
+**Recorded residual, not invented away**: nothing on this wire is a liveness beacon, so an idle
+machine and a withheld one are indistinguishable from the handset. The state is therefore
+worded as what the phone knows ("not heard from") and never as a claim that the machine is
+down. A beacon needs an interval in §6.0 that nobody has decided.

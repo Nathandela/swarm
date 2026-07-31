@@ -1,7 +1,12 @@
 package remotegw_test
 
-// §6.0's inbound drain budget, asserted as BEHAVIOUR rather than as constants (ADR-007 B101's
-// sibling shape: a live object with no fence at all).
+// §6.0's inbound drain budget -- the ACK PLACEMENT and ACK RATE halves, owned by PB-NET-5(c)
+// and PB-GW-7 -- asserted as BEHAVIOUR rather than as constants (ADR-007 B101's sibling shape:
+// a live object with no fence at all).
+//
+// The requirement ids are named because section 6.0's budget table now cites this file as
+// their fence, and internal/verify/phaseb_budget_test.go requires a cited fence to name the
+// requirement it is cited for -- a citation that names nothing can point anywhere.
 //
 // WHAT WAS ALREADY COVERED AND WHY IT IS NOT THIS. transport/drainbudget_test.go pins
 // MaxDrainReadsPerSec and MaxDrainAcksPerSec and the arithmetic against the relay's OpsPerMin

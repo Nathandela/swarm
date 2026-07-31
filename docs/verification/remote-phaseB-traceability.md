@@ -20,9 +20,9 @@ against HEAD.
 
 | | count |
 |---|---|
-| Requirements | 144 |
-| Shipped (asserted by hand) | 131 |
-| Evidenced (measured on disk) | 131 |
+| Requirements | 146 |
+| Shipped (asserted by hand) | 133 |
+| Evidenced (measured on disk) | 133 |
 | **NOT MET (slice shipped, requirement invalidated later)** | **11** |
 | Remaining | 2 |
 | **Shipped with NO evidence file** | **0** |
@@ -56,6 +56,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-APP-8 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-9 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-APP-10 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+| PB-APP-11 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
 | PB-BIND-0 | S1 | shipped | `docs/verification/remote-phaseB-s1-evidence.md` |
 | PB-BIND-1 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
 | PB-BIND-2 | S8 | shipped | `docs/verification/remote-phaseB-s8-evidence.md` |
@@ -113,6 +114,7 @@ which is the record working rather than failing. See ADR-007 B67(1) and B79.
 | PB-NET-5 | S6b | **NOT MET** | DECOMPOSES, and I refuted it wrongly once already (B98) by checking the numeric clause and not the quantifier. The criterion clause (p50 150ms phone Type -> PTY write) and the drop-the-gateway-poll clause ARE fenced on live code. But the requirement says BOTH HOPS, and the PHONE hop's fence is transport/s6b_input_test.go -- all six tests driving the dead Session.Follow, which is the only phone-side MailboxWait caller in the tree and has zero production callers. The shipped phone does not follow, it POLLS: mobile/app.go pollInterval = 500ms. So what shipped is a GATEWAY-SIDE-ONLY fix -- the exact mirror of the phone-side-only fix this requirement's own text warns would fake the criterion. UNFENCED, not disproven: the shipped poll plausibly avoids head-of-line blocking by a cruder mechanism, but nothing measures it, and the echo direction it gates is outside the numeric criterion by construction (ADR-007 B100) |
 | PB-NET-6 | S6 | **NOT MET** | THE REPLACEMENT FENCE CANNOT FAIL ON THE DEFECT IT IS NAMED FOR. mobile/pbnet6_drainreaders_test.go pins CALL SITES by AST scan, not concurrency: mutating App.run to launch two genuinely concurrent drains on one connection -- verbatim the defect the fence's own error message describes -- leaves it PASSING. And concurrent-drain is not a clause this requirement names; it names seq gating, replay/reorder/dup rejection, the mailbox cap and hostile-pagination termination. THE ROW IS CLOSER THAN THIS REASON SUGGESTS: all four named clauses have live subjects (relay/abuse_test.go for the cap, skeleton's adversarial replay test, phonecore/processdeath_test.go for restart, and conformance/drain_test.go's non-advancing-page test which IS hostile-pagination termination in its shipped form, currently attributed to PB-SYNC-6). Nobody has assembled that union under this row, and none of those four has been mutated (ADR-007 B112) |
 | PB-NET-7 | S6 | **NOT MET** | THE LIVE DEFECT IS FIXED (c4cc8b8); the ENUMERATION residual returns. B112's critical -- MailboxWait parked 70s against a silent relay because its only bound was a ceiling the DECLARED ADVERSARY enforces -- is closed at the caller, in the gateway loop, WITHOUT touching TestCallDeadline_TheLongPollIsNotBoundedByIt, whose contract that the long poll ends on the CALLER's deadline is deliberate. Every named clause is now fenced and mutation-proven: the 10s budget pinned from section 6.0's table rather than the constant, cancellation on request AND dial, the goroutine-leak assertion over 12 cycles, typed refusal after close, and Close idempotency. WHAT REMAINS is what B109 first named and then discharged wrongly: the row says 'timeouts EVERYWHERE' and nothing ENUMERATES the call paths, so a NEW unbounded call site would be caught by nothing. Fixing the one instance does not close a quantifier -- that is residual 4.23's shape, and this round has now found the same gap at four separate rows. REFERRED to the round-7 committee rather than adjudicated by me (ADR-007 B112, B115) |
+| PB-NET-8 | S6 | shipped | `docs/verification/remote-phaseB-s6-evidence.md` |
 | PB-OPS-1 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-2 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |
 | PB-OPS-3 | S20 | shipped | `docs/verification/remote-phaseB-s20-evidence.md` |

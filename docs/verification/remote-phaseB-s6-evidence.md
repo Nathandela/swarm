@@ -217,3 +217,46 @@ criterion is the gate block above.
 **Its one honest exception is already recorded in the residuals**: `Close()` deadlocks if an
 `OnState` callback calls `Close()`. That is a hygiene defect inside PB-NET-7's own subject
 matter, so it is named here rather than left in a list a reader of this row would not reach.
+
+---
+
+## PB-NET-8 — the machine hop's recovery mechanism (added 2026-07-31, ADR-007 B120)
+
+**The requirement is new; the code that satisfies it landed in round 7.** That order is the
+finding, not an accident of bookkeeping: the mechanism was absent for the whole project and
+**no row required it**, so seven rounds of re-deriving existing rows could not find it. It took
+an adversarial member cutting a live connection and measuring what happened.
+
+**What was measured before the fix** (ADR-007 B120/F1), against a real relay, a real `Service`
+and a real client, with only a proxy cut:
+
+```
+premise: phone received 1 item(s) over the live link
+Service.Run was STILL RUNNING 8s after its only relay connection died, and nothing redialled
+post-cut: phone still sees 1 item(s) -- nothing delivered after the cut
+```
+
+`cmd/swarm-remote/main.go` dialled **once per process**. `Service.Run` had no relay reconnect —
+`runJournal` reconnects to the **daemon** — and `relay.Client.Done()`/`Err()`, which exist
+precisely to notice a drop without issuing a request, had **zero production callers**. The
+process therefore never exited, so `KeepAlive{SuccessfulExit:false}` and `Restart=on-failure`
+(PB-LIFE-1/-5) never fired: **a supervision policy written against exit cannot restart a
+zombie.** The phone reconnected, reported `online`, and nothing appeared in any log.
+
+**What satisfies it now**: `Service.Run` watches the relay connection through the `LinkWatcher`
+seam and returns `ErrRelayGone`, distinct from a revoke and from a cancelled parent;
+`cmd/swarm-remote`'s `run` loop redials on §6.0's backoff, resets it on `Service.Progressed()`
+(traffic crossed the link) rather than on a successful dial, treats a cancelled parent as the
+shutdown it is, and rebuilds each generation while carrying the durable coordinates across. The
+`relayConn` interface pins the liveness half at **compile** time, because a client that quietly
+stopped satisfying `LinkWatcher` would not fail the build — it would fail to reconnect,
+silently, in the field.
+
+**Fences**: `internal/remotegw/pbnet4_relaylink_test.go` (Run ends when the link dies),
+`cmd/swarm-remote/pbnet4_reconnect_test.go` (the redial, the backoff between redials, and the
+cancelled-context path). Both name PB-NET-8 as well as PB-NET-4.
+
+**What this row does NOT claim**: B120's F1b — the relay dropping exactly one reply so the
+client's `pending` counter never returns to zero, leaving the gateway able to RECEIVE and never
+to SEND — is a separate condition with its own residual. A dead LINK is now recovered; a link
+that is up and unusable is not this row.

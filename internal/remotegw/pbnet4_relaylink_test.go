@@ -1,5 +1,12 @@
 package remotegw
 
+// PB-NET-8 OWNS THIS FILE'S SUBJECT as of 2026-07-31. The tests were written against
+// PB-NET-4, whose text says "automatic reconnect" without naming a hop and whose fences are
+// the PHONE's; the machine hop had no row at all, which is why its recovery mechanism was
+// absent for the whole project (ADR-007 B120/F1). The row now exists and cites this file, so
+// the id is named here: a fence nobody can find by grepping the requirement is a fence the
+// next audit re-derives from scratch.
+//
 // PB-NET-4 / ADR-007 section 6.0 ("client reconnect backoff + jitter on BOTH hops"),
 // MACHINE half, FAILING FIRST.
 //
