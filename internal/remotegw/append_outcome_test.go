@@ -13,28 +13,22 @@ package remotegw
 // Accept: seq <= high-water is ErrStaleSeq). That is SILENT journal/snapshot loss or
 // reordering -- strictly worse than the gap it was trying to avoid.
 //
-// THE REQUIRED SPLIT, and the seam these tests pin:
+// THE RULE, as it stands after ADR-007 B127. These tests once pinned a classifier
+// (ClassifyAppend / AppendOutcome) that carved out an exception: the relay's REFUSAL
+// SENTINELS -- ErrQuotaExceeded, ErrNotAuthorized, ErrRevoked -- were "a DEFINITIVE
+// pre-commit refusal" whose seq was safe to reissue. That exception was DELETED, because the
+// party that mints the error code is the party whose storage state the code was being read as
+// evidence about, and this design names that party the adversary (B125's ninth axis). The
+// surviving rule is uniform and needs no classification at all:
 //
-//	type AppendOutcome int
-//	const (
-//		AppendDelivered AppendOutcome = iota // the relay acked
-//		AppendRefused                        // DEFINITIVE pre-commit refusal: nothing was stored
-//		AppendUnknown                        // delivery unknown: it may or may not have committed
-//	)
-//	func ClassifyAppend(err error) AppendOutcome
+//	Once the bytes are handed to the appender the seq is SPENT. A seq is reissued only
+//	where the frame provably never crossed the process boundary.
 //
-//   - AppendRefused is reserved for the relay's REFUSAL SENTINELS (relay.ErrQuotaExceeded,
-//     relay.ErrNotAuthorized, relay.ErrRevoked), which are replied before the store. Such a
-//     seq is safe to reuse and MUST NOT be burned -- burning it manufactures the very gap
-//     PB-SYNC-1 has to pay for.
-//   - Everything else is AppendUnknown, INCLUDING the relay codes that carry no sentinel.
-//     `decodeError` maps only the codes in `codeToErr`; `bad_request`, `auth_failed` and
-//     `unsupported` decode to a bare `fmt.Errorf("relay: %s", code)` indistinguishable by
-//     errors.Is from a transport failure. Sniffing those strings is forbidden: the safe
-//     classification is the conservative one.
-//   - On AppendUnknown the sink may burn the seq or retry the IDENTICAL sealed envelope, and
-//     nothing else. The duplicate is free to the receiver (Accept stale-drops it), so this
-//     needs no relay protocol change.
+// A delivery-unknown seq may therefore be burned, or recovered by re-appending the IDENTICAL
+// sealed envelope -- and nothing else. The duplicate is free to the receiver (Accept
+// stale-drops it), so this needs no relay protocol change. What remains here is the
+// REAL-RELAY measurement the rule rests on, plus the outbox fences that implement the
+// verbatim half; the adversary half is fenced in relay_authored_refusal_test.go.
 
 import (
 	"context"
@@ -56,16 +50,13 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-func outcomeName(o AppendOutcome) string {
-	switch o {
-	case AppendDelivered:
-		return "AppendDelivered"
-	case AppendRefused:
-		return "AppendRefused"
-	case AppendUnknown:
-		return "AppendUnknown"
-	}
-	return fmt.Sprintf("AppendOutcome(%d)", int(o))
+// carriesARefusalSentinel reports whether err is one of the three codes the relay replies
+// BEFORE it stores. It is a description of the error, never a decision about the seq: see the
+// package rule at the top of this file.
+func carriesARefusalSentinel(err error) bool {
+	return errors.Is(err, relay.ErrQuotaExceeded) ||
+		errors.Is(err, relay.ErrNotAuthorized) ||
+		errors.Is(err, relay.ErrRevoked)
 }
 
 // cutProxy is a byte-transparent TCP proxy in front of a REAL relay that severs the
@@ -171,13 +162,22 @@ func startTestRelay(t *testing.T, ctx context.Context, appendPerMin int) (*relay
 	return srv, phone, mPub, mPriv
 }
 
-// TestAppendOutcome_PreCommitRefusalVsDeliveryUnknownAreDistinct establishes, against a REAL
-// relay, that the distinction PB-GW-7 requires is a real property of this relay and not a
-// modelling convenience: a quota refusal stores NOTHING and carries a sentinel, while a
-// connection lost before the reply leaves the item COMMITTED and carries no sentinel at all.
-// An implementation that cannot tell them apart cannot safely decide whether a seq may be
-// reused.
-func TestAppendOutcome_PreCommitRefusalVsDeliveryUnknownAreDistinct(t *testing.T) {
+// TestAppendReply_IsTheRelaysOwnTestimonyAboutItsOwnStorage measures, against a REAL relay,
+// the two facts the seq rule rests on -- and the reason the rule cannot key on either of them.
+//
+// FACT 1: a connection lost before the reply leaves the item COMMITTED, with the gateway told
+// the append failed and no sentinel to say otherwise. This is why "a failed append never
+// consumes a seq" is unsafe, and it is injected here rather than assumed.
+//
+// FACT 2: a quota refusal stores NOTHING and carries a sentinel. Both facts are properties of
+// the HONEST relay, and both are reported over a channel the relay WRITES. Fact 2 looked for a
+// long time like evidence that a refused seq was unspent; it is not, because the same sentinel
+// is available to a relay that stored the item, and the gateway has no second source. So the
+// distinction measured here is real, is worth recording, and is deliberately NOT ACTED ON:
+// the seq is spent either way (ADR-007 B125 F-2, B127). Sentinel EXCLUSIVITY is still asserted
+// -- a severed connection must not surface a refusal code -- because a relay-side regression
+// that blurred them would silently weaken every caller that reads these errors for any purpose.
+func TestAppendReply_IsTheRelaysOwnTestimonyAboutItsOwnStorage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// Quota 2 per target: append #1 is cut post-commit, #2 succeeds, #3 is refused over quota.
@@ -201,13 +201,10 @@ func TestAppendOutcome_PreCommitRefusalVsDeliveryUnknownAreDistinct(t *testing.T
 	case <-time.After(2 * time.Second):
 		t.Fatal("the proxy never swallowed a reply: the cut did not land after the relay's commit")
 	}
-	if got := ClassifyAppend(cutErr); got != AppendUnknown {
-		t.Errorf("ClassifyAppend(%v) = %s, want AppendUnknown: the connection died after the request "+
-			"was written, so whether the relay committed is UNKNOWABLE from the error", cutErr, outcomeName(got))
-	}
-	if errors.Is(cutErr, relay.ErrQuotaExceeded) || errors.Is(cutErr, relay.ErrNotAuthorized) {
+	if carriesARefusalSentinel(cutErr) {
 		t.Errorf("a severed connection surfaced a refusal sentinel (%v); the sentinels must stay "+
-			"exclusive to pre-commit refusals", cutErr)
+			"exclusive to pre-commit refusals, so that no caller reading them for any purpose is "+
+			"silently handed a post-commit failure wearing a refusal's clothes", cutErr)
 	}
 
 	// (2) The cut append DID commit: the item is in the phone's mailbox even though the
@@ -235,11 +232,6 @@ func TestAppendOutcome_PreCommitRefusalVsDeliveryUnknownAreDistinct(t *testing.T
 	if !errors.Is(refErr, relay.ErrQuotaExceeded) {
 		t.Fatalf("over-quota append returned %v, want relay.ErrQuotaExceeded", refErr)
 	}
-	if got := ClassifyAppend(refErr); got != AppendRefused {
-		t.Errorf("ClassifyAppend(relay.ErrQuotaExceeded) = %s, want AppendRefused: a quota refusal is "+
-			"replied BEFORE the store, so its seq was never spent and must not be burned (PB-GW-7)",
-			outcomeName(got))
-	}
 	items, err = phone.MailboxRead(ctx, 0)
 	if err != nil {
 		t.Fatalf("mailbox read after the refusal: %v", err)
@@ -250,15 +242,14 @@ func TestAppendOutcome_PreCommitRefusalVsDeliveryUnknownAreDistinct(t *testing.T
 	}
 }
 
-// TestClassifyAppend_UnsentinelledFailuresAreDeliveryUnknown pins the conservative half of
-// the classification. Only the codes in relay's codeToErr become sentinels; `bad_request`
-// (which mailbox_append returns for a malformed or oversized request) decodes to a bare
-// error, and a transport failure decodes to something else again. Neither may be treated as
-// a definitive refusal on the strength of its message text: unknown means unknown.
-func TestClassifyAppend_UnsentinelledFailuresAreDeliveryUnknown(t *testing.T) {
-	if got := ClassifyAppend(nil); got != AppendDelivered {
-		t.Errorf("ClassifyAppend(nil) = %s, want AppendDelivered", outcomeName(got))
-	}
+// TestAppendFailure_NoUnsentinelledErrorImpersonatesARefusal is what survives of the old
+// classifier's conservative half. `relay.decodeError` maps only the codes in `codeToErr`, so
+// `bad_request` (which mailbox_append returns for a malformed or oversized request),
+// `auth_failed` and `unsupported` arrive as a bare `fmt.Errorf("relay: %s", code)` that
+// errors.Is cannot tell apart from a transport failure. Nothing in the tree may recognise a
+// refusal by its message TEXT: a decision resting on a string the relay never promised breaks
+// silently the moment the wording moves (ADR-007 B113).
+func TestAppendFailure_NoUnsentinelledErrorImpersonatesARefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -269,10 +260,9 @@ func TestClassifyAppend_UnsentinelledFailuresAreDeliveryUnknown(t *testing.T) {
 		{"bounded-append deadline", context.DeadlineExceeded},
 		{"raw network failure", io.ErrUnexpectedEOF},
 	} {
-		if got := ClassifyAppend(tc.err); got != AppendUnknown {
-			t.Errorf("ClassifyAppend(%s) = %s, want AppendUnknown: only the relay's refusal SENTINELS "+
-				"prove a pre-commit refusal; matching on message text would make the seq-reuse decision "+
-				"depend on a string the relay never promised", tc.name, outcomeName(got))
+		if carriesARefusalSentinel(tc.err) {
+			t.Errorf("%s matches a refusal sentinel; only the relay's SENTINELS may ever be "+
+				"recognised as refusals, never a message string", tc.name)
 		}
 	}
 	for _, tc := range []struct {
@@ -284,8 +274,9 @@ func TestClassifyAppend_UnsentinelledFailuresAreDeliveryUnknown(t *testing.T) {
 		{"revoked", relay.ErrRevoked},
 		{"wrapped quota", fmt.Errorf("append journal record: %w", relay.ErrQuotaExceeded)},
 	} {
-		if got := ClassifyAppend(tc.err); got != AppendRefused {
-			t.Errorf("ClassifyAppend(%s) = %s, want AppendRefused", tc.name, outcomeName(got))
+		if !carriesARefusalSentinel(tc.err) {
+			t.Errorf("%s does not match any refusal sentinel; a wrapped sentinel must stay "+
+				"recognisable through errors.Is", tc.name)
 		}
 	}
 }
@@ -359,8 +350,9 @@ func TestRelaySink_DeliveryUnknownNeverReusesASeqForDifferentPlaintext(t *testin
 	case <-time.After(2 * time.Second):
 		t.Fatal("the proxy never swallowed a reply: the cut did not land after the relay's commit")
 	}
-	if got := ClassifyAppend(errB); got != AppendUnknown {
-		t.Fatalf("ClassifyAppend on the severed append = %s, want AppendUnknown", outcomeName(got))
+	if carriesARefusalSentinel(errB) {
+		t.Fatalf("the severed append surfaced a refusal sentinel (%v); the harness is not exercising "+
+			"the delivery-unknown case", errB)
 	}
 	machine.Close()
 
@@ -502,8 +494,9 @@ func TestRelaySink_DeliveryUnknownRetryIsVerbatimNotReSealed(t *testing.T) {
 		t.Fatal("record B returned nil though its reply was lost; the error must reach the caller so " +
 			"Gateway.deliver declines to advance its cursor")
 	}
-	if got := ClassifyAppend(errB); got != AppendUnknown {
-		t.Fatalf("ClassifyAppend on a lost reply = %s, want AppendUnknown", outcomeName(got))
+	if carriesARefusalSentinel(errB) {
+		t.Fatalf("the lost-reply append surfaced a refusal sentinel (%v); the harness is not "+
+			"exercising the delivery-unknown case", errB)
 	}
 	// Gateway.deliver did not advance its cursor, so the record is re-delivered to the SAME
 	// live sink (ackcursor_test drives exactly this).
@@ -569,12 +562,22 @@ func (a *refuseNthAppender) MailboxAppend(_ context.Context, _ string, env []byt
 	return uint64(len(a.stored)), nil
 }
 
-// TestRelaySink_DefinitiveRefusalDoesNotBurnASeq is the other side of the split: a refusal
-// the relay replied BEFORE storing anything leaves the seq unspent, so the next frame must
-// carry it. Burning it instead manufactures a gap at the phone -- and PB-SYNC-1 cannot
-// attribute a gap in the shared bucket to journal or terminal, so ONE burned seq costs a
-// conservative resync of BOTH streams against PB-SYNC-6's budget.
-func TestRelaySink_DefinitiveRefusalDoesNotBurnASeq(t *testing.T) {
+// TestRelaySink_ARefusedOutboxFrameKeepsItsSeqThroughTheReservation pins that a refused
+// JOURNAL record costs no gap -- and, since ADR-007 B127, pins the MECHANISM that earns it.
+//
+// This test predates B127 and passed before it, which is exactly why its rationale is
+// restated here: the seq survives because the OUTBOX RESERVATION owns it, so Event's retry
+// re-appends the IDENTICAL sealed envelope at the same seq. It has never depended on the
+// refusal being "definitive", and it must not be read as evidence that a relay-authored
+// refusal code says anything about the relay's storage -- the old doc comment on this test
+// said exactly that, and the reuse it justified is deleted.
+//
+// The property is worth its own fence because the alternative is expensive: PB-SYNC-1 cannot
+// attribute a gap in the shared bucket to journal or terminal, so one burned seq costs a
+// conservative resync of BOTH streams against PB-SYNC-6's budget. Outbox-backed frames avoid
+// that cost SOUNDLY, by holding the bytes rather than by believing the relay. The cursor==0
+// frames have no such reservation and now pay the gap: see B127's arithmetic.
+func TestRelaySink_ARefusedOutboxFrameKeepsItsSeqThroughTheReservation(t *testing.T) {
 	key := budgetTestKey()
 	sender := [8]byte{2, 7, 1, 8, 2, 8, 1, 8}
 	app := &refuseNthAppender{refuse: 2}
@@ -619,10 +622,10 @@ func TestRelaySink_DefinitiveRefusalDoesNotBurnASeq(t *testing.T) {
 			t.Fatalf("the phone rejected stored envelope %d (seq %d): %v", i, env.Header.Seq, err)
 		}
 		if res.Gap {
-			t.Fatalf("the phone saw a GAP at seq %d: the definitively-refused append burned a seq the "+
-				"relay never stored. A pre-commit refusal spends no seq, so the next frame must reuse "+
-				"it -- a burned one costs a conservative resync of BOTH journal and terminal, because "+
-				"MailboxResult.Gap carries no frame kind (PB-GW-7, PB-SYNC-1)", env.Header.Seq)
+			t.Fatalf("the phone saw a GAP at seq %d: the refused append lost the seq its outbox "+
+				"reservation was holding, so the retry did not re-append the identical envelope at it. "+
+				"A burned seq costs a conservative resync of BOTH journal and terminal, because "+
+				"MailboxResult.Gap carries no frame kind (PB-GW-7, PB-GW-8, PB-SYNC-1)", env.Header.Seq)
 		}
 	}
 }

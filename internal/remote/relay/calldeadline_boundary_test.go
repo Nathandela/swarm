@@ -206,11 +206,14 @@ func TestCallDeadline_ATornDownConnectionAlwaysReportsItself(t *testing.T) {
 // TestCallDeadline_ATimeoutIsNeverMistakenForARefusal is the seq-safety half.
 //
 // The relay writes its reply AFTER it stores the item, so a timed-out append MAY have
-// committed. remotegw.ClassifyAppend reuses the seq of a DEFINITIVE pre-commit refusal
-// (ErrQuotaExceeded / ErrNotAuthorized / ErrRevoked) and must never do that here: reusing a
-// seq the relay actually stored puts two different envelopes at one seq, and the phone
-// accepts whichever lands first and stale-drops the other -- silent journal loss, which is
-// strictly worse than the gap the reuse exists to avoid.
+// committed. Reusing a seq the relay actually stored puts two different envelopes at one seq,
+// and the phone accepts whichever lands first and stale-drops the other -- silent journal
+// loss, which is strictly worse than the gap the reuse would avoid.
+//
+// The gateway no longer reuses a seq on ANY append reply, refusal sentinels included: the
+// relay mints those codes and cannot be its own witness (ADR-007 B125 F-2, B127). What this
+// test still guards is the relay-side property that a timeout is not dressed as a refusal,
+// so no caller reading these errors for any purpose is handed the wrong one.
 func TestCallDeadline_ATimeoutIsNeverMistakenForARefusal(t *testing.T) {
 	machine, devRID, proxy := silentRelayFixture(t)
 	proxy.Silence()

@@ -77,8 +77,10 @@ type RelaySink struct {
 
 	mu      sync.Mutex
 	lastErr error
-	// reuse holds a seq whose frame was DEFINITIVELY refused before the relay stored
-	// anything, so the next frame carries it instead of leaving a gap (see sealAtSeqLocked).
+	// reuse holds a seq whose frame PROVABLY never crossed the process boundary -- the
+	// marshal, the seal or the outbox reservation failed, all of them BEFORE the append --
+	// so the next frame carries it instead of leaving a gap (see sealAtSeqLocked). A seq the
+	// appender was handed is never held here, however the relay answered for it (B127).
 	// 0 means none held.
 	reuse uint64
 	// resumed is the journal cursor high-water this process RECOVERED: the outbox's durable
@@ -485,14 +487,23 @@ func (s *RelaySink) sealAtSeqLocked(cursor uint64, build func(seq uint64, issued
 		}
 	}
 	if err := s.appendLocked(raw); err != nil {
-		// A DEFINITIVE pre-commit refusal (relay sentinel) stored nothing, so its seq is
-		// unspent and the next frame must carry it -- burning it manufactures a gap that
-		// PB-SYNC-1 charges to BOTH journal and terminal. An outbox-backed frame needs no
-		// such hold: its reservation already owns the seq and Event's retry re-appends the
-		// identical envelope. Delivery-UNKNOWN never reuses: the relay may hold that seq.
-		if cursor == 0 && ClassifyAppend(err) == AppendRefused {
-			s.reuse = seq
-		}
+		// THE SEQ IS SPENT, whatever the relay says about it. Once the bytes are handed to
+		// the appender, whether they were stored is the RELAY's to know and the relay's to
+		// answer -- and the relay is the adversary this design names. Its refusal codes
+		// (quota_exceeded, not_authorized, revoked) are replied before the store by the
+		// HONEST relay, and that made them look like proof of non-commitment; but a relay
+		// that STORES and then denies gets the seq reissued for a freshly sealed DIFFERENT
+		// plaintext, holds both rivals, and chooses which one lands. The loser is
+		// stale-dropped with NO GAP reported anywhere, because the seq was consumed by its
+		// rival -- silent loss, invisible to every staleness mechanism (ADR-007 B125 F-2,
+		// B127). No coordinate can stand in for the sentinel: the relay speaks last on the
+		// append and authors the mailbox read too, so nothing it returns establishes
+		// non-commitment. Burning costs ONE gap per CONTIGUOUS run of refusals, which
+		// PB-SYNC-1 charges to both journal and terminal; silent loss costs everything.
+		//
+		// An outbox-backed frame is unaffected either way: its reservation already owns the
+		// seq and Event's retry re-appends the IDENTICAL envelope, which the phone's
+		// receiver stale-drops for free.
 		s.setErrLocked(err)
 		return err
 	}
@@ -505,9 +516,9 @@ func (s *RelaySink) sealAtSeqLocked(cursor uint64, build func(seq uint64, issued
 	return nil
 }
 
-// nextSeqLocked hands out the seq the next frame carries: a seq held back by a definitive
-// pre-commit refusal is reissued (the relay stored nothing at it), otherwise a fresh one is
-// reserved. The caller must hold s.mu.
+// nextSeqLocked hands out the seq the next frame carries: a seq held back by a failure that
+// happened before the append is reissued (nothing was ever offered at it), otherwise a fresh
+// one is reserved. The caller must hold s.mu.
 func (s *RelaySink) nextSeqLocked() (uint64, error) {
 	if s.reuse != 0 {
 		seq := s.reuse

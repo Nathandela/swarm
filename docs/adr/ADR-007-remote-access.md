@@ -7204,3 +7204,119 @@ finding is the axis, not the mailbox.
 `AcceptCommitAt` commits the cursor only through `commitReceive` (a frame that opened) or
 `installGrant` (a grant that opened); a refused frame returns before either. The phone's only
 exposure was — and remains — the keyed variant.
+
+---
+
+## B127 — The relay is not a witness to its own storage: the refusal-lie seq reuse is closed
+
+**2026-07-31.** B125's F-2 is closed. It is the second half of the ninth axis — **a
+relay-minted error code adopted as evidence about the relay's own state** — and it closes by
+deleting the belief rather than by fencing it, because there is nothing to fence it with.
+
+### The defect, measured
+
+`ClassifyAppend` named `relay.ErrQuotaExceeded` / `ErrNotAuthorized` / `ErrRevoked` *"a
+DEFINITIVE pre-commit refusal — the relay replied before storing anything, so the seq was
+never spent"*, and `sealAtSeqLocked` reissued that seq for a freshly sealed **different**
+plaintext. The claim is **true of the honest relay** — `handleMailboxAppend` does refuse
+before it stores, verified — and it is **a CHOICE for the adversary, which this design names
+as the relay.**
+
+A relay that stores what it denies, driven through a real `RelaySink` into a real
+`crypto.MailboxReceiver`:
+
+```
+the relay is holding 3 envelopes at seqs [1 2 2]
+  item 1 (seq 1): accepted, gap=false, "one"
+  item 2 (seq 2): accepted, gap=false, "TWO -- the frame the relay stored and denied"
+  item 3 (seq 2): REFUSED -- crypto: stale or reordered sequence number
+accepted=2 refused=1 gapReported=false
+```
+
+**The relay holds both rivals and chooses which one lands, and NO GAP IS REPORTED** — the seq
+was consumed by its rival, so every staleness mechanism stays silent. That is B121's
+"staleness by silence" reached **while the phone is actively receiving**. The same file's own
+`AppendUnknown` comment already forbade exactly this shape for the delivery-unknown case;
+the "definitive" classes were the one door left open for it.
+
+**Scope:** the `cursor==0` frames — terminal snapshots, roster records, `Reconcile`, and **the
+journal reseed, which is the only journal repair channel.** Sustained, it pins the watched grid
+arbitrarily far behind with everything reading `online` and `live`. Journal `Event`s were never
+exposed: their outbox reservation owns the seq and the retry re-appends the identical bytes.
+
+### The rule, and why nothing weaker was available
+
+> **A seq may be reissued only where the frame PROVABLY never crossed the process boundary.
+> Once the bytes are handed to the appender the seq is SPENT, whatever the relay says.**
+
+The obvious weaker fix — find a coordinate that proves non-commitment — **does not exist against
+this adversary.** The relay speaks last on the append, and it authors the mailbox read as well,
+so it can withhold an item now and serve it later; no reply and no read-back establishes
+non-commitment. The honest question is not *which of its codes can we trust* but *whether its
+testimony about itself can ever be load-bearing*, and the answer is no.
+
+The three surviving reuse sites are unaffected and are the rule's positive half: a failed
+marshal, a failed seal, and a failed outbox `Reserve` all happen **before** the append, so the
+seq is unspent as local fact rather than relay testimony.
+`TestRelaySink_ASeqIsReissuedWhenTheFrameNeverLeftTheProcess` pins that, so the fix cannot
+silently widen into "never reuse a seq".
+
+### The arithmetic, stated rather than chosen quietly
+
+The reuse existed to avoid a gap, and burning does cost one. **It costs less than it looks.**
+
+1. **A contiguous run of burns costs ONE gap, not one per burn.**
+   `crypto.MailboxReceiver.Accept` computes `gap := seen && e.Header.Seq > hi+1` — a single
+   bit on the next accepted frame, whatever the size of the hole. N refusals in a row are one
+   gap.
+2. **One gap costs a conservative resync of BOTH streams.** `MailboxResult.Gap` carries no
+   frame kind, so PB-SYNC-1 cannot attribute a shared-bucket gap to journal or terminal.
+   That is the whole price: one resync per refusal *episode*.
+3. **On the honest path the episode count is designed to be zero.** `quota_exceeded` is the
+   only recurring refusal; the §6.0 budget of <= 8 appends/s combined is 480/min against
+   `MailboxAppendPerMin: 600`, and `TestRelaySink_SustainedPeekStaysUnderAppendBudget` asserts
+   `refused == 0` over 150 s of sustained peek at the real 16 ms render debounce, across two
+   tumbling minute boundaries. `not_authorized` and `revoked` are terminal conditions — the
+   pairing is gone and a resync is moot.
+
+So the honest-relay cost is **one resync in a régime the append budget already keeps empty**,
+and the adversary-relay saving is **unbounded silent loss with every indicator green**. The
+trade is not close, and it needed no new number: **nothing here is a §6.0 quantity nobody has
+decided.**
+
+### What was deleted, and the instrument that required it
+
+`ClassifyAppend` and `AppendOutcome` had exactly one production consumer — the unsound branch —
+so removing it left them dead. **B94's reachability gate caught them**, naming
+`internal/remotegw.ClassifyAppend` as *"1 unreachable exported symbol"* and noting that
+PB-DOC-1/PB-GW-7/PB-GW-8 evidence still cited it as code. They are deleted rather than
+allowlisted: an allowlist entry would have recorded a withdrawn belief as an intentional one.
+This is the second time in two rounds the instrument has converted a defect fix into a fossil
+sweep (B126 deleted `CommandBridge.SetCursor` the same way).
+
+**Three doc comments carried the withdrawn rule and are corrected, not left to rot:**
+`relay/errors.go`'s `ErrTimeout`, `relay`'s `TestCallDeadline_ATimeoutIsNeverMistakenForARefusal`,
+and — the one that matters most — the test formerly named
+`TestRelaySink_DefinitiveRefusalDoesNotBurnASeq`. **That test passed before this change and
+passes after it**, because the property it measures was always earned by the OUTBOX
+RESERVATION and never by the refusal being definitive. Its name and doc said otherwise, and a
+future reader would have taken a green test as evidence for the deleted belief. It is now
+`TestRelaySink_ARefusedOutboxFrameKeepsItsSeqThroughTheReservation`.
+
+The real-relay measurement survives as
+`TestAppendReply_IsTheRelaysOwnTestimonyAboutItsOwnStorage`: a post-commit cut leaves the item
+committed with no sentinel, a quota refusal stores nothing and carries one — **both facts real,
+both reported over a channel the relay writes, and neither acted on.** Sentinel exclusivity is
+still asserted, because a relay-side regression that blurred the two would mislead every
+caller that reads these errors for any purpose.
+
+### Residual, recorded not invented
+
+**The `cursor==0` frames still have no delivery custody.** Burning is correct but lossy: a
+refused terminal snapshot, roster record, reconcile record or **journal reseed** is simply
+gone, and only the next frame's gap tells the phone to repair. Extending the outbox to them
+would keep the seq soundly (verbatim re-append, no belief required), but it needs a retry
+policy, a keying scheme these re-sent-state frames do not have, and an answer to the
+cascade — a quota refusal means the mailbox is full, and retrying into a full mailbox is how
+you make it worse. **That is a design question with a budget attached, and it is recorded here
+rather than answered in a defect fix.**

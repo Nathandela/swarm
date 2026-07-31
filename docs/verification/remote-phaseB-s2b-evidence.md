@@ -35,13 +35,27 @@ DIFFERENT sealed envelopes"*. No blanket policy passes both.
 Shipped: `AppendRefused` => the seq is reused (no gap). `AppendUnknown` => burned, or the
 **identical sealed envelope** re-appended. Never new plaintext at a live seq.
 
+> **SUPERSEDED by ADR-007 B127 (round 8).** The `AppendRefused` half of that split was
+> **withdrawn and the classifier deleted**. It rested on the relay's own error code being
+> evidence about the relay's own storage; a relay that STORES and then answers
+> `quota_exceeded` got the seq reissued for different plaintext — the same silent loss this
+> section calls forbidden, reached through the one door left open for it. The shipped rule is
+> now uniform: **a seq handed to the appender is spent**, and reuse survives only where the
+> frame provably never crossed the process boundary. The mutation argument recorded above
+> still holds and now has a third arm, fenced in
+> `internal/remotegw/relay_authored_refusal_test.go`.
+
 ## The brief was half wrong about sentinels, and the tests pin the conservative answer
 
 The relay's error codes are only half distinguishable: `decodeError` maps `codeToErr` only, so
 `bad_request`, `auth_failed` and `unsupported` decode to a bare error **indistinguishable by
-`errors.Is` from a transport failure**. `ClassifyAppend` is therefore sentinel-only (quota,
+`errors.Is` from a transport failure**. `ClassifyAppend` was therefore sentinel-only (quota,
 not-authorized, revoked — all verified pre-commit in the relay handler) and conservatively
-returns unknown otherwise. String-sniffing is explicitly forbidden by test.
+returned unknown otherwise. String-sniffing is explicitly forbidden by test, and that
+prohibition outlives the classifier: B127 deleted `ClassifyAppend`, and
+`TestAppendFailure_NoUnsentinelledErrorImpersonatesARefusal` carries the rule forward.
+"All verified pre-commit in the relay handler" is where the defect hid — it is a property of
+the HONEST relay's handler, and the relay is the adversary.
 
 ## Review found a blocking defect the tests could not see
 

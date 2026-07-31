@@ -51,9 +51,10 @@ var (
 	// relay completes the handshake and then goes quiet (DefaultCallTimeout).
 	//
 	// IT IS NOT A REFUSAL AND MUST NOT BE TREATED AS ONE. The relay writes its reply
-	// AFTER it stores the item, so a timed-out append may well have committed:
-	// remotegw.ClassifyAppend leaves it in AppendUnknown, where re-appending the
-	// IDENTICAL sealed envelope is the only safe retry.
+	// AFTER it stores the item, so a timed-out append may well have committed, and
+	// re-appending the IDENTICAL sealed envelope is the only safe retry. Note that the
+	// gateway draws no seq consequence from the refusal sentinels either: a seq handed
+	// to the appender is spent whatever the reply says (ADR-007 B127).
 	ErrTimeout = errors.New("relay: the relay did not answer within the call deadline")
 
 	// ErrConnClosed reports a connection that died underneath a caller. The underlying
