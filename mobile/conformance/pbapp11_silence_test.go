@@ -111,12 +111,12 @@ func TestPBAPP11_SilenceIsNotLive(t *testing.T) {
 		t.Fatalf("MachineFreshness: %v", err)
 	}
 	if !fresh.Silent {
-		t.Errorf("MachineFreshness().Silent = false after 6 minutes of silence, want true: the "+
-			"screen has nothing to render \"not heard from your machine since HH:MM\" from, so the "+
+		t.Errorf("MachineFreshness().Silent = false after 6 minutes of silence, want true: the " +
+			"screen has nothing to render \"not heard from your machine since HH:MM\" from, so the " +
 			"phone degrades to a successful empty poll instead (PB-APP-11)")
 	}
 	if fresh.LastHeardUnixMs == 0 {
-		t.Fatalf("MachineFreshness().LastHeardUnixMs = 0 after a frame was accepted; there is no "+
+		t.Fatalf("MachineFreshness().LastHeardUnixMs = 0 after a frame was accepted; there is no " +
 			"timestamp to show the user")
 	}
 	// THE STAMP IS THE MACHINE'S, NOT THE PHONE'S ARRIVAL INSTANT. An implementation that
@@ -184,7 +184,7 @@ func TestPBAPP11_ALateFrameDoesNotMoveTheCoordinateBackwards(t *testing.T) {
 			before.LastHeardUnixMs, after.LastHeardUnixMs)
 	}
 	if after.Silent {
-		t.Errorf("a late frame put a phone that heard from its machine seconds ago into the "+
+		t.Errorf("a late frame put a phone that heard from its machine seconds ago into the " +
 			"silent state")
 	}
 }
@@ -205,7 +205,7 @@ func TestPBAPP11_APhoneThatHasNeverHeardIsNotLive(t *testing.T) {
 			fresh.LastHeardUnixMs)
 	}
 	if !fresh.Silent {
-		t.Errorf("MachineFreshness().Silent = false on a phone that has never heard from its "+
+		t.Errorf("MachineFreshness().Silent = false on a phone that has never heard from its " +
 			"machine at all, so its restored state would be presented as live (PB-APP-11)")
 	}
 }
@@ -295,7 +295,7 @@ func TestPBAPP11_TheVerdictSurvivesARestart(t *testing.T) {
 		t.Fatalf("Roster after restart: %v", err)
 	}
 	if n, _ := list.Count(); n == 0 {
-		t.Fatalf("the restart restored no roster at all, so nothing is being presented and this "+
+		t.Fatalf("the restart restored no roster at all, so nothing is being presented and this " +
 			"test proves nothing")
 	}
 	for _, stream := range pbapp11Streams {
