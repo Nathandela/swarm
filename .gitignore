@@ -27,6 +27,11 @@ android/app/build/
 # PB-TOOL-2: the AAR and its sources jar are build outputs of android/build-aar.sh.
 android/app/libs/
 *.aar
+# Kotlin 2.x writes build-session state here. It is a build output, it is not under any
+# directory already ignored above, and this repository has five recorded incidents of a
+# `git add -A` committing an artifact -- one of them a derivation mutation that reached a demo
+# binary (ADR-007 B132 F1, residuals 4.7). Ignoring it is cheaper than the sixth.
+android/.kotlin/
 
 # PB-TOOL-3: release signing material is operator-supplied and never enters the repository.
 # local.properties additionally carries the machine's SDK path.
