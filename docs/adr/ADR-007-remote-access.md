@@ -7592,3 +7592,22 @@ before they were caught.** The rule that works is: verify the extent *after* eve
 readiness. **It has not been reached**, and the obstacle is no longer a list of known defects: it is
 fifty requirements whose fences nobody has ever made fail, on a codebase where every examined tranche
 produced findings.
+
+**B130 addendum, same day: the Android toolchain run is DONE and green.** Recorded because B130 listed
+it first among the blockers and said nothing about this branch's Android half was trustworthy until it
+ran.
+
+```
+source android/toolchain.env && ./android/build-aar.sh          EXIT 0  (arm64-v8a, x86_64)
+cd android && ./gradlew --no-daemon lint test                   BUILD SUCCESSFUL in 2m 16s
+```
+
+Run at load 2.18 on a quiet host. **The AAR rebuilds cleanly with `PB-APP-11`'s new verbs bound, and
+the full Kotlin lint and unit-test suite passes against it** — so the import break fixed at `cb77823`
+was the ONLY Android-side defect, and nothing else was hiding behind the stale AAR.
+
+**The uncertainty was correctly stated rather than assumed away.** The agent that found the break said
+it could not tell whether anything beyond the import failed once the AAR was rebuilt, and declined to
+run a gomobile cross-compile on a host several agents were working on. Both calls were right: the
+question was real, and it needed a quiet host to answer. **Three blockers remain, none of them
+Android.**
