@@ -79,7 +79,15 @@ import (
 // what makes a downgrade fail LOUDLY rather than quietly: a v6 build reading a v7 blob would
 // drop the pin, and a handset whose platform trust-root source is TrustRootsPinned would then
 // refuse every dial with no way for the user to tell a lost pin from a hostile relay.
-const StateSchemaVersion = 7
+//
+// v8 adds last_heard_at, PB-APP-11's freshness coordinate: the newest authenticated machine
+// timestamp this phone has accepted. The bump is required for v4's reason exactly one channel
+// over -- a build one version back drops the field, so the next launch reports a machine that
+// has said nothing for hours as live and renders its restored sessions and grids as current.
+// That is the lie PB-APP-8 forbids, and the whole point of the coordinate is that NOTHING ELSE
+// on the phone can notice the condition: a withholding relay leaves no gap, answers every poll,
+// and is itself the source of the only other liveness signal (ADR-007 B121).
+const StateSchemaVersion = 8
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -176,6 +184,28 @@ type State struct {
 	// this records that the fold HAPPENED, which nothing else can witness when every
 	// authority is legitimately zero.
 	ReconciledEpoch uint32
+
+	// LastHeardAt is the newest AAD-COVERED IssuedAt this phone has ACCEPTED from the
+	// machine, in unix milliseconds; zero means it has never heard from it (PB-APP-11).
+	//
+	// IT IS THE ONLY HONEST FRESHNESS CLOCK THE PHONE HAS. Every other staleness mechanism
+	// here keys on a GAP, and a gap is observable only when a LATER seq arrives -- so a relay
+	// that simply stops delivering the newest frames and keeps answering polls with an empty
+	// page raises nothing: no gap forms, the poll SUCCEEDS, and Presence() asks the
+	// withholding party whether the machine is alive (ADR-007 B121). IssuedAt is covered by
+	// the AEAD, so the relay can only make a frame look OLDER by holding it, never newer:
+	// the bound therefore fails closed under exactly the attack it exists for.
+	//
+	// It is DURABLE for the same reason StaleStreams is, and the case is the routine one:
+	// Android SIGKILLs the app, the next launch renders the RESTORED caches, and a
+	// freshness coordinate held only in memory comes back clear -- so the phone re-presents
+	// content it already knew was old as live. It likewise survives a lock purge: it is a
+	// record ABOUT content, not content.
+	//
+	// It is MONOTONIC. A retained frame delivered late must not move it backwards, and it is
+	// clamped to the acceptance instant so a machine whose clock runs fast cannot buy itself
+	// an unbounded freshness window with one stamp.
+	LastHeardAt int64
 
 	// purgeGen is the lock-purge counter this snapshot was taken at. It is custody's own
 	// bookkeeping, never persisted and never set by a caller: Store stamps every State it
@@ -340,6 +370,10 @@ type stateFile struct {
 	Stale       []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
+	// LastHeardAt is PB-APP-11's freshness coordinate (see State.LastHeardAt). It is
+	// cleartext for the same reason the staleness sets are: it records how old the content
+	// is, which is not the content, and a locked handset must not lose it.
+	LastHeardAt int64 `json:"last_heard_at,omitempty"`
 
 	// Everything below is READ ONLY, and only from a blob written before v5. These fields
 	// carried the tiered state in the clear up to v4; a v5 Save writes none of them and puts
@@ -1023,6 +1057,7 @@ func (s *fileStore) load() error {
 		GrantEpoch:          f.GrantEpoch,
 		GrantSeq:            f.GrantSeq,
 		RelayCursor:         f.RelayCursor,
+		LastHeardAt:         f.LastHeardAt,
 		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
 		// arrive from the sealed containers below), so this is the forward migration and not a
 		// second source: an installed v4 blob loads with its replay guard intact and the first
@@ -1259,6 +1294,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		GrantEpoch:          st.GrantEpoch,
 		GrantSeq:            st.GrantSeq,
 		RelayCursor:         st.RelayCursor,
+		LastHeardAt:         st.LastHeardAt,
 	}
 	for b, stale := range st.Stale {
 		if stale {

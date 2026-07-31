@@ -103,6 +103,7 @@ func fullState() State {
 		OpOutcomes:          map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
 		Stale:               map[Bucket]bool{replyBucket(7): true},
 		StaleStreams:        map[string]bool{StreamJournal: true},
+		LastHeardAt:         1753900000000,
 	}
 }
 
@@ -434,12 +435,22 @@ const stateV6Fixture = `{"schema_version":6,"machine":"m1","machine_static":"oaG
 // and unable to say why.
 const stateV7Fixture = `{"schema_version":7,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"EBaE3Bdu6rALf4KpmJgkUQ8vhYzj3JKs4Yuotx7gzLUv+Kwvcoi0tGTXcIKc9dZtz5f8xj6IPS45mCDn","content_key":"HAAHxTrbcrBi5XRWefLS34Fo3cP4wAYLtjS9yZgNK9l1tGcL6Dq9HVgF/KQmWx1xW8hyY0/9lmTeI1zz","wake_state":"KtkliB1bq/J5u7IxtFcKrN3dZISvExKteu91vzErxFE/TtU0fFdKBAvuEvWxm1oRdsZegekXuCd5tp2K/1fcjXmNbgMdlUS3f+E=","content_kept":"BcyyV6bCHEHoCl7SFwz9x9QIMmxWPIGWV0lpCgBcK415TC20pUECSPq2grb2II89LaUd2qU66o125A8vWd6QCOZs4A3IcxOuTbUgF13NfXt/cPWpZ0VdAAgrEYlZ1vIlLrQlqzLEcvqLvjLcKqNNQ2Bmyf33um0aGCB8U5cW7PPuHcKKoJ65QBMkml+BHXt8JA50mtS0Ts7uq1gMm6XjayvslgaxHY2WPH1QK911QY76IiEW5m9tpmWLqNGRFfv1Obhk9ztlo2ts5VyWOizaZNJuZ29dBS/bjw8ppHOGvXBRrh23JTAKxh1ZmmsxQF/20QLNouiV/V1qP0zMFuBqzlfuXn9kB8nHZdjb3iwlabWXSQN+rIOyPOjygpyMcNE3j38+PXBuVlx+G+9AwCHTLbVV2TuuY5xabcbbcCiYcVCAOaXbr8Fcl3ooRLjZ7cwl8zhYnJuQEGf5JhjX0suTSqcZd4O4XbHokHcsBbg6Wdn9oQwoLKOjRz7u00kblx1GO2DfiY5AHMyYw8jOpfkfhKAN1u1F","content_purgeable":"FtMqSl/uWSWlKM5N5GWhsvtgpRiiq9mnLBbFxUlcC+nCGkUUD1TQ1YzP7JaMOGDR0o0EcEOBjaD+X3k+jrnkj36Myicx+IID3GsSjEeHL0ANciRIEfPSZN1a6FHeRc8U+0d34P5RCJ+7zGhdb+6MAHM7myzKc6oegCZIvAXy5S+i0Py7umWaz81nnuZlyYUzwbAgOLBuC7HsfgB0CM0ISsqiO7qPqUd639EOGB4whjF9sSz3eN2nv7x162XEvGWc/4GX/Bu8IwtT+qtfB5pqWKwo4oRjc0XS434JxUhXMWGUzMhoJVuodgNUvNQ4kApFWIkbXBulavM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
 
+// stateV8Fixture is the PINNED v8 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v8 adds last_heard_at, PB-APP-11's freshness coordinate -- the newest
+// authenticated machine timestamp the phone has accepted. A build one version back drops it,
+// so the next launch reports a machine that has said nothing for hours as live and renders its
+// restored sessions and grids as current, which is the one thing PB-APP-8 forbids and which
+// nothing else on the handset can notice: a withholding relay leaves no gap, answers every
+// poll, and is itself the source of the only other liveness signal (ADR-007 B121).
+const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"hPJbGpYBeXu34Ub3WP7aZ1tJB3D9iqeNhT7TTnXIrK8P6sGdWFuy9xwbpRW/FKCR/wpjAXP90vcitbQn","content_key":"AwfT5hR5qtbhxGZGYrz1UpBREKgZZVwBzdZmlhwnh2qOuTgH9Q3eyHgd44QB+lOOeLEmB81RHtQQpwKR","wake_state":"phivocSvyexkNimLclLozrWLhBwtNKBR62NlSbpfQcBdKBhO74q0qkZJcTUcOjWdY0KaiaoE4NxUGeCmL3S3ih0t2q9Gm5yLUlA=","content_kept":"HbPSffp/swWt4sNhdsxM9ee7HiedO/iID0toRsT86lpBWOqe9ML1U9ncv2oRm1n6dG5kuKmBwpsaUzCVfTEQMB+7bXqHFBshprbXQQlTfS5cme/FPEw9bkNyT/+0FYzwPlQ6F+UfWK+WWVG3ZZwRWYQ+zENzfS74A+i9Nzc5iGCEghYBo7lb2tuQKY/DHl+y1Aj6ruvdGoCrNKEi3vn56XKu25rC0Psep1D0zDqM2sbmKP7L8IAy3sC1BkLBvUgM4Vl3OvSHSWOMVXTe4jI/nP1UMeSrMGdhzjshlFVbKHm7wcVZTyuA98abyZboLTCI4tBJroNAYLaP/OfCm7y5r+uIJDtAKUtbEVpzc0txeUY4m2reVLLlhkZFJ4Xg7D8YEJ0+L8yC6qI03YcAp+/938pxOvLPfNvkjjPBv8xvE2tYOWfSSx2fA00nkR7rX+aqsHNE2TaEnWIeFd3hRR5V+4Sqctjw/E2KLxuE75e3DUuG8D8Zn08fap9ES9T8uk5IeOKIPXPt/J3r2tRC7Tr155XP1fBD","content_purgeable":"ERUT6HrGCfcR6YOQS1tqoSkPQeY6gqI2WmJmXriI9Sfe43f1NJvy2BRrb/ZE2HBb/HUd1R79v8BNvfae5lyrH2wfGx3snbMQmwRd84ZwY7wugMa4PQyMaaEVBiPgHYrCwyFejONtYOS9sGZZMd0tnOXwt1XZuSa7JTv6k27VSnM4cq1EJY8jj3zHPW49kICbZPCmSIjYg+7nx38leMjPSb6gcj43WxxRzly9B/ic/7mTRDhjsulfp1NlK4xa0XwiaJEtPIU3ljxSKTTFEsK9/bQflwAYdVVIOsMa3UAWIpBjSZzyxqieOBdYeLukrLTM62iqnjOEVF8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
 var stateFixtures = map[int]string{
 	1: stateV1Fixture,
 	4: stateV4Fixture,
 	5: stateV5Fixture,
 	6: stateV6Fixture,
 	7: stateV7Fixture,
+	8: stateV8Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

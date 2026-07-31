@@ -620,7 +620,11 @@ func (c *Core) Reconcile() error {
 // the one channel its kind repairs, and both land in the one Save that moves the high-water.
 // A failed Save therefore leaves the flags exactly as they were -- the repair is repeatable,
 // and the phone never comes back believing it is fresh over content it never recorded.
-func (c *Core) commitReceive(b Bucket, f inboundFrame, cursor uint64) (contiguous bool, streams map[string]bool, err error) {
+// PB-APP-11 rides this transaction too, and it rides it for EVERY frame the AEAD vouched
+// for -- gapped or contiguous. The frame is proof that the machine was alive at the moment
+// it stamped it, which is true whether or not the frames before it arrived, so freshness and
+// completeness are independent facts and only one of them is what a hole damages.
+func (c *Core) commitReceive(b Bucket, f inboundFrame, cursor uint64, now time.Time) (contiguous bool, streams map[string]bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.st.clone()
@@ -650,6 +654,9 @@ func (c *Core) commitReceive(b Bucket, f inboundFrame, cursor uint64) (contiguou
 	}
 	if cursor > st.RelayCursor {
 		st.RelayCursor = cursor
+	}
+	if heard := heardAt(f.issuedAt, now); heard > st.LastHeardAt {
+		st.LastHeardAt = heard
 	}
 	if contiguous {
 		c.foldContent(&st, f)

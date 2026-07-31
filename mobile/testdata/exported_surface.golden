@@ -30,6 +30,8 @@ field Event.Message string
 field Event.SessionID string
 field Event.State string
 field Event.Stream string
+field Freshness.LastHeardUnixMs int64
+field Freshness.Silent bool
 field JournalEntry.Cursor int64
 field JournalEntry.Group string
 field JournalEntry.SessionID string
@@ -95,6 +97,7 @@ method App.IsRunning() (bool, error)
 method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
+method App.MachineFreshness() (*Freshness, error)
 method App.Outcome(string) (*Outcome, error)
 method App.PairingState() (string, error)
 method App.Paste(string, string) error
@@ -149,6 +152,7 @@ type App struct
 type Config struct
 type Event struct
 type EventListener interface
+type Freshness struct
 type JournalEntry struct
 type JournalPage struct
 type KeyCustody interface

@@ -923,6 +923,33 @@ func (a *App) StreamState(stream string) (state string, err error) {
 	return "live", nil
 }
 
+// MachineFreshness is PB-APP-11: how long it has been since the machine itself last spoke,
+// and whether anything the phone holds may still be shown as current.
+//
+// IT IS THE STATE THE PHONE DEGRADES TO INSTEAD OF A SUCCESSFUL EMPTY POLL. The relay is the
+// declared adversary (ADR-007 D9) and its cheapest attack is not a forgery: it withholds the
+// newest frames and keeps answering. No gap forms, so no stream is marked stale; the poll
+// succeeds, so ConnectionState goes on reading "online"; and Presence() asks that same relay
+// whether the machine is alive. Section 6.0's freshness budget is the only thing in the
+// system that can see it, because it measures the machine's own AAD-covered stamp -- which a
+// relay can make older by holding a frame, and can never make newer.
+//
+// PRESENCE IS NOT THIS, and a screen may not substitute one for the other: Presence is the
+// relay's opinion, and this is the phone's evidence.
+func (a *App) MachineFreshness() (f *Freshness, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	last := core.LastHeard()
+	out := &Freshness{Silent: core.MachineSilentAt(time.Now())}
+	if !last.IsZero() {
+		out.LastHeardUnixMs = last.UnixMilli()
+	}
+	return out, nil
+}
+
 // Resync ASKS THE MACHINE to repair a stream. It does NOT clear the stale mark: PB-SYNC-3
 // clears a channel only when that channel's own repair lands, committed atomically with the
 // matching transport watermark, so clearing on the request would turn "resync" into "forget"
@@ -1072,11 +1099,23 @@ func (a *App) resyncBudget(stream string, now time.Time) error {
 // The unreconciled clause is separate and additive: with no authority in hand the phone
 // cannot verify any bucket of this epoch, so every channel is reported stale until a
 // reconcile record lands (PB-STATE-4).
+//
+// THE SILENCE CLAUSE IS THE THIRD, AND IT IS THE ONE NO GAP CAN EXPRESS (PB-APP-11). The
+// other two answer "is there a hole in what arrived"; a relay that simply stops delivering
+// leaves no hole, answers every poll, and is itself the source of the only other liveness
+// signal the phone has. So the age of the newest authenticated machine timestamp bounds every
+// channel at once -- unlike a gap, which belongs to one bucket -- because all four are
+// rendered from content that came over the same withheld link.
+//
+// It is applied HERE rather than at each read model deliberately: this one function is what
+// StreamState, SessionList.Stale, JournalPage.Stale and Snapshot.Stale all resolve to, and a
+// screen that has to remember to ask a second question beside every read is one that will
+// forget once, silently.
 func (a *App) streamStale(stream string) bool {
 	a.mu.Lock()
 	reconciled := a.reconciled
 	a.mu.Unlock()
-	return !reconciled || a.core.StreamStale(stream)
+	return !reconciled || a.core.MachineSilentAt(time.Now()) || a.core.StreamStale(stream)
 }
 
 // ---- outcomes ------------------------------------------------------------------

@@ -295,6 +295,25 @@ type StateSummary struct {
 	Reconciled  bool
 }
 
+// Freshness is PB-APP-11's verdict: how recently the MACHINE last spoke, and whether what
+// the phone is holding may still be presented as live.
+//
+// IT IS A SEPARATE FACT FROM StreamState, not a third value of it. A stream is stale because
+// it has a hole; the phone is silent because nothing has arrived at all -- and the second
+// carries a TIME the screen has to render ("not heard from your machine since 14:32"),
+// which an enum cannot. Both are true at once often enough that collapsing them would lose
+// one, and it is the silence half that a withholding relay produces while every other
+// signal on the handset reads healthy.
+//
+// LastHeardUnixMs is the machine's OWN authenticated stamp, not the phone's arrival time:
+// it is what the machine said about itself, and the one clock in this system the relay
+// cannot move forward. Zero means this phone has never heard from its machine -- a first
+// launch, or a restore that has not yet taken a frame -- which is Silent, and honestly so.
+type Freshness struct {
+	Silent          bool
+	LastHeardUnixMs int64
+}
+
 // QRPayload is the DISPLAYABLE content of a scanned pairing QR: enough to show the user
 // where the phone is about to connect (PB-PAIR-6), and deliberately not the pairing
 // secret, which never leaves the Go core.

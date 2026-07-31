@@ -86,6 +86,7 @@ const (
 	s15GrantSeq    uint64 = 8300000000000000037
 	s15WakeReplay  uint64 = 8400000000000000041
 	s15RelayCursor uint64 = 8500000000000000053
+	s15LastHeardAt int64  = 8600000000000000061
 )
 
 // s15Bucket is the receive bucket the high-water sentinel is keyed by. Its sender id is what
@@ -152,6 +153,7 @@ func s15State() State {
 		PushToken:           s15PushToken,
 		PushPreference:      PushPreference{Alerts: true},
 		ReconciledEpoch:     s15ReconciledEpoch,
+		LastHeardAt:         s15LastHeardAt,
 	}
 	return st
 }
@@ -339,6 +341,13 @@ func s15Inventory() []s15Tier {
 				"byte form of each appears throughout any file, so no needle distinguishes 'written in " +
 				"the clear' from 'absent'. Its tier is asserted by round trip instead, in " +
 				"TestS15_ALockedProcessReadsOnlyTheWakeTierState"},
+
+		{field: "LastHeardAt", needles: s15Num(uint64(s15LastHeardAt), 8),
+			why: "PB-APP-11's freshness coordinate: the newest authenticated machine timestamp this " +
+				"phone has accepted. It is the record of how OLD the content is, not the content -- the " +
+				"same class as Stale and StaleStreams, and unassigned for the same reason -- and it must " +
+				"be readable while the content tier is LOCKED, because a phone that comes back from a " +
+				"lock without it would present its restored caches as live"},
 
 		{field: "ReconciledEpoch", needles: s15Num(uint64(s15ReconciledEpoch), 4),
 			why: "records that a fold of the machine's rollback authorities happened; adopting one " +

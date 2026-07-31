@@ -75,6 +75,7 @@ type harness struct {
 	phoneTarget         string
 
 	mu       sync.Mutex
+	sealSkew time.Duration           // added to the MACHINE's issued-at clock (see SealOffset)
 	recv     *crypto.MailboxReceiver // machine-side inbound seq guard
 	cursor   uint64
 	replySeq uint64
@@ -171,6 +172,7 @@ func newHarness(t *testing.T) *harness {
 		RecipientKeyID: crypto.KeyID(ks.RecipientPublic()),
 		SenderKeyID:    h.senderKeyID,
 		Authorities:    fixedAuthorities{},
+		Now:            h.sealNow,
 	})
 
 	h.App = h.openApp()
@@ -236,6 +238,28 @@ func (h *harness) openApp() *swarmmobile.App {
 }
 
 // ---- machine -> phone --------------------------------------------------------
+
+// SealOffset moves the MACHINE's issued-at clock, which is the only knob that can express
+// "the phone has not heard from its machine for a while" without sleeping for it.
+//
+// IT IS INDISTINGUISHABLE FROM WITHHOLDING, BY CONSTRUCTION, and that is why it is the right
+// mutation for PB-APP-11 rather than a fake phone clock: IssuedAt is AAD-covered, so a relay
+// can only make a frame LOOK OLDER (by holding it) and never newer. A frame the machine
+// sealed six minutes ago and a frame the relay sat on for six minutes arrive identical.
+// Offsets inside PB-TIME-2's InboundMaxAge are ACCEPTED by the phone; beyond it they are
+// refused, which is a different mechanism (ADR-007 B42) with its own signal.
+func (h *harness) SealOffset(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sealSkew = d
+}
+
+// sealNow is the RelaySink's issued-at clock. Real time plus whatever SealOffset set.
+func (h *harness) sealNow() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return time.Now().Add(h.sealSkew)
+}
 
 func (h *harness) PushRoster(recs ...schema.JournalRecord) {
 	h.t.Helper()

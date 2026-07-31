@@ -794,7 +794,7 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 	// One Save covers the guard AND the content; a frame that left a hole in the bucket is
 	// delivered but NOT trusted into the durable model -- the phone resyncs (or reconciles)
 	// that stream first. See commitReceive.
-	contiguous, streams, err := r.core.commitReceive(b, f, cursor)
+	contiguous, streams, err := r.core.commitReceive(b, f, cursor, now)
 	if err != nil {
 		return Receipt{Gap: res.Gap}, err
 	}
