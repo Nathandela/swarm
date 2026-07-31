@@ -382,3 +382,65 @@ in the clear.
   accurate for RELAY_AUTH — the key *is* wrapped by a Keystore AES key — but the tier's gate is the
   split, not the KEK. Stated in the row's rationale, since PB-KEY-8's matrix forbids a residual on a
   non-`SOFTWARE_ONLY` row.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row
+per requirement, the verdict token `DERIVED` or `NOT DERIVED`, and — for `DERIVED` — **the
+mutation that was made to fail, in the same row**. A `DERIVED` verdict with an empty mutation
+cell is refused and counted NOT DERIVED. Any requirement with no row here is NOT DERIVED.
+
+`DERIVED` means somebody made this row's fence fail on purpose and restored it. Every mutation
+below was applied to a PRODUCTION file in a detached worktree, the named test run, and the
+mutation reverted. **`internal/remote/crypto` was not touched**: it is frozen, and one clause
+below is NOT DERIVED for exactly that reason rather than being waved through.
+
+**THE KOTLIN FENCES RAN.** `android/app/libs/swarm.aar` was stale and the app module did not
+compile; `android/build-aar.sh` rebuilt it (exit 0) and `:app:testDebugUnitTest` is green at
+HEAD, so every Kotlin mutation below is a real Robolectric/JVM run rather than a deferral.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-KEY-1 | DERIVED | BIDIRECTIONAL, both on `mobile/app.go`. Added an OUTBOUND secret verb `App.ExportNoiseStaticPrivate() []byte` -> caught by `TestPBBIND4_TheOnlySecretCrossingIsNamedAndInbound`. Renamed `InstallContentKey` -> `LoadContentKey` -> caught three ways: the crossing is no longer one of the documented artifacts, the named crossing has vanished, and `screen_coverage.tsv` no longer resolves |
+| PB-KEY-2 | DERIVED | Kotlin, in the real `KeyGenParameterSpec`: the CONTENT KEK's `setUserAuthenticationRequired(true)` -> `false` -> caught (`KeystoreSpecTest.the_content_kek_requires_a_strong_biometric`); the WAKE KEK's `false` -> `true` -> caught (`the_wake_kek_works_on_a_locked_handset`), so both directions of the split are fenced. Go at-rest half: `sealDeviceKeys` sealing the CONTENT tier under the WAKE KEK -> caught |
+| PB-KEY-5 | DERIVED | `KeyCustodyMatrix.rows[RECIPIENT].tier` CONTENT -> WAKE (the matrix production reads through `KeyTierPolicy.tierOf` and `CustodyPlan.Provisioned`) -> caught by `PerRoleCustodyTest.an_after_first_unlock_attacker_reaches_no_content_key`, which is the requirement's own criterion, plus the tier-assignment and inventory joins. `COMMAND_SIGN` CONTENT -> WAKE -> caught |
+| PB-KEY-6 | DERIVED | `sealedKeyStore.SignCommand` memoizing the unsealed content tier -> caught (*"a memoized tier keeps signing after the screen locks"*). `OpenSealedBox` swallowing the custody refusal -> caught three ways including `TestS14A_LockedContentTierRefusesEverySigningPath`. `SignRelayAuth` swallowing its refusal and returning an empty signature -> **survives `internal/phonecore`, `mobile` and `android/gate`, and is caught only in `mobile/conformance`** — see the note below on where "every signing path" actually lives |
+| PB-KEY-7 | DERIVED | Kotlin: `KeyCustodySession.invalidate` no longer calling `core.purgeKeys()` -> caught (`LockPurgeTest.every_invalidation_event_purges_the_core`). Go: memoizing the content tier in `sealedKeyStore` -> caught by `TestS14A_TheContentTierIsUnsealedPerOperationNotCached`, which is the in-process screen-lock case a restart-based test cannot see |
+| PB-KEY-8 | DERIVED | `USER_AUTH_PER_USE` removed from `CustodyPlan.required` — the silent downgrade the row forbids -> caught by three `KeyCustodyMatrixTest` assertions. An UNKNOWN StrongBox probe claimed as PRESENT -> caught by `absent_strongbox_falls_back_without_claiming_hardware_it_lacks`. **The wire-KAT clause is NOT derived**: its subject is `internal/remote/crypto`, which is frozen, so no mutation was attempted there and none is claimed. **PB-E2E-5's `KeyInfo` clause is HARDWARE-BLOCKED** |
+| PB-SEC-1 | DERIVED | `sealDeviceKeys` writing the content tier in the clear instead of through `content.Seal` -> caught; the same for the wake tier -> caught; the epoch-key half, `sl.Seal(key)` replaced by the identity in `internal/phonecore/state.go` -> caught naming BOTH epoch keys verbatim in `phone-state.json`. **FINDING I below**: a container that seals correctly AND writes a second cleartext copy survives every fence |
+| PB-SEC-2 | DERIVED | five mutations, all on the real `KeyGenParameterSpec` and gate code, all caught: content KEK `setInvalidatedByBiometricEnrollment(true)` -> `false` (`the_content_kek_is_invalidated_by_a_biometric_enrollment_change`); every gated op given the TIMED window instead of its own spec (`each_operation_requests_the_timeout_its_freshness_tier_implies`); per-use ops sharing one Keystore alias (`per_use_operations_do_not_share_a_keystore_entry`); `TimedTierGate.withFreshAuthorization` running the action instead of pausing on a stale window (`the_action_runs_without_a_prompt_inside_the_window_and_not_outside_it`); the timed gate accepting a per-use operation (`the_timed_gate_refuses_a_per_use_operation`). **This does not make the row MET** — its open first clause has no fence to break, which is why it is NOT MET, and derivation is orthogonal to status (B129) |
+
+### FINDING I — PB-SEC-1's recorded blind spot has a stated mitigation that does not hold. OPEN.
+
+`android/gate/keycustody_test.go` records that its byte search cannot see material buried at an
+unaligned offset inside a longer base64 field, and states that *"the positive half — that the
+material went through an injected sealer — is what covers that, and it lives in phonecore's
+in-package mirror (`TestS14A_ResumeSealsBothTheDeviceKeysAndTheEpochKeys`)"*.
+
+Measured: adding a `Backup []byte` field to `sealedDeviceKeys` and writing
+`NoiseStaticPriv || RecipientPriv || CommandSignSeed` into it **in the clear**, while sealing the
+content tier correctly as well, gives `ok internal/phonecore` and `ok android/gate`. The mirror
+does not catch it because `s14aSealedMaterial` asks only whether the material was EVER handed to
+a sealer — which stays true when a duplicate is also written down beside it — and
+`s14aFindMaterial` searches base64 with the same 3-byte alignment blind spot as the gate it is
+supposed to cover. Neither test enumerates the container's fields.
+
+The gap is that no fence asserts what `device.key` MAY contain, only what it may not contain
+verbatim. B125's ninth axis puts it plainly: the core mints these bytes and the disk cannot
+un-write them.
+
+### Where "every signing path" actually lives, and it is not the test named for it
+
+PB-KEY-6's criterion quantifies over **every signing path**.
+`TestS14A_LockedContentTierRefusesEverySigningPath` covers the three CONTENT-tier paths
+(`SignCommand`, `NoiseStatic`, `OpenSealedBox`) and asserts `SignRelayAuth` **succeeds** — the
+wake tier is not gated on the user, which is correct. So no assertion in that file drives a
+custody FAILURE through the wake path, and `SignRelayAuth` returning `(nil, nil)` on a refusal
+passes `internal/phonecore`, `mobile` and `android/gate`.
+
+It is caught, two packages away, by `mobile/conformance`:
+`TestS14_ARecoverableCustodyRefusalAsksForTheBiometricRatherThanSpinning` and
+`TestS14_APermanentCustodyRefusalIsTerminalAndStopsRetrying`. The requirement is covered. What is
+recorded here is that the fence a reader would go to for it does not carry it, and that a
+package-scoped mutation run would have reported a hole that is not there — the reason every
+survival above was re-run against a wider package set before being written down.
