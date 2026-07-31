@@ -244,15 +244,14 @@ func (b *CommandBridge) Cursor() uint64 {
 	return b.cursor
 }
 
-// SetCursor seeds the read cursor from durable state on resume (monotonic; a lower
-// value is ignored so a stale seed cannot replay already-consumed commands).
-func (b *CommandBridge) SetCursor(c uint64) {
-	b.mu.Lock()
-	if c > b.cursor {
-		b.cursor = c
-	}
-	b.mu.Unlock()
-}
+// SetCursor IS DELETED, not merely unused. Its doc claimed it "seeds the read cursor from
+// durable state on resume", which it never did -- NewCommandBridge seeds from the checkpoint
+// directly, and PB-GW-1's own text records that it "is never called from production startup".
+// Its ONE real caller was processBatch's advance-past-every-item-read, and that advance is
+// exactly the defect: a cursor set from an item the bridge never handled is a value it has no
+// evidence for. The resume point now moves only inside consume, under the same lock that
+// carries the replay high-water, so a public setter is a second way to move a coordinate that
+// must have exactly one.
 
 // PollOnce reads every mailbox item past the current cursor, processes each (open ->
 // forward -> seal reply), advances the cursor past all of them, and returns how many
