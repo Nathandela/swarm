@@ -260,3 +260,21 @@ cancelled-context path). Both name PB-NET-8 as well as PB-NET-4.
 client's `pending` counter never returns to zero, leaving the gateway able to RECEIVE and never
 to SEND — is a separate condition with its own residual. A dead LINK is now recovered; a link
 that is up and unusable is not this row.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** (ADR-007 B129). One row per
+requirement, verdict `DERIVED` or `NOT DERIVED`, and for `DERIVED` the mutation that was made to fail,
+in the same row.
+
+**Backfilled 2026-07-31** from ADR-007 B112, B113, B114 and B118 — the round-7 adjudication and the
+independent composition audit, which mutated these fences and recorded each result **per row**, in
+prose. **Derivation is orthogonal to shipped status:** three of these rows are NOT MET and thoroughly
+derived, which is exactly the distinction the column exists to carry.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-NET-3 | DERIVED | Both halves mutation-proven on the SHIPPED path: a second raw-plaintext `MailboxAppend` in `sendInputFrame` -> fails the base64 arm (the relay's control frames carry binary as base64, so that is the same leak); and a `crypto.ContentKey` nested TWO levels deep inside `Conn` -> caught, reporting the exact path `relay.Client.conn[].probe.K`. The traversal reaches through pointer plus struct, so it is not a one-level field check. |
+| PB-NET-4 | DERIVED | `App.run`'s `case <-time.After(rb.next())` reverted to the pre-fix fixed 250ms, constants untouched -> `TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff` fails (`gap #0 was 253.850041ms, want within [400ms, 600ms]`). Separately, `setConn`'s `emit` suppressed while the state write stays correct -> the same test fails for a different reason (`connection states seen, in order: []`). **Both mutate the CONNECTION, not a constant the test transcribes** (B113). Row is NOT MET on the jitter residual, and derived. |
+| PB-NET-6 | DERIVED | `App.run` mutated to launch two genuinely concurrent drains on one connection -- verbatim the defect the fence's own error message describes -- and the fence **PASSED** (`ok, 0.800s`). A second reader added to package `mobile` -> fails by name. So the fence is non-vacuous and cannot fail on the defect it is named for; that is the finding, and it was reached by mutation. Row is NOT MET, and derived. |
+| PB-NET-7 | DERIVED | Every named clause mutated independently, each reverted: `DefaultCallTimeout` -> 5s fails the budget pin quoting section 6.0; `bounded()` made to drop the caller's ctx -> fails after 8.33s; `authenticate` given a fresh 8s ctx -> *"took 8.03s to honour a 300ms context"*; one goroutine leaked per `dialConn` -> 36 live against baseline 12; `closeOnce` removed -> only `Close_twice` and the socket-already-died case move, the mixed-order cases pass straight through. Row is NOT MET on the enumeration residual, and derived. |
