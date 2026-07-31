@@ -296,3 +296,72 @@ classes=32 tests=208 failures=0 errors=0     (baseline 205 across 31; +3 in 1 ne
    biometrics, camera, FCM delivery, Doze or hardware attestation. `FLAG_SECURE`,
    `setRecentsScreenshotEnabled` and `filterTouchesWhenObscured` are asserted as *what the app
    asks the platform for*, never as what the platform then does.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** to emit the
+traceability table's DERIVATION column (ADR-007 B129). One row per requirement, the verdict
+token `DERIVED` or `NOT DERIVED`, and — for `DERIVED` — **the mutation that was made to fail, in
+the same row**. A `DERIVED` verdict with an empty mutation cell is refused and counted NOT
+DERIVED. Any requirement with no row here is NOT DERIVED.
+
+**`DERIVED` means somebody made this row's fence fail on purpose and restored it.** Reading a
+fence is not deriving it. Every mutation below was applied to a PRODUCTION file in a detached
+worktree, the named test run, and the mutation reverted; the `AndroidManifest.xml`,
+`build.gradle.kts`, `verification-metadata.xml`, `toolchain.env` and Kotlin edits are edits to
+the artifacts the build and the platform actually consume, not to a table a test transcribes
+(B113).
+
+**THE KOTLIN MODULE COMPILES AGAIN.** The stale `android/app/libs/swarm.aar` that blocked every
+Kotlin fence this morning was rebuilt (`android/build-aar.sh`, exit 0) and
+`:app:testDebugUnitTest` is green, so PB-SEC-12's clause-1 mutation below was driven through a
+real Robolectric Activity rather than deferred. That is what separated this row's two fences.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-SEC-3 | DERIVED | Kotlin: `Log.d("swarm", "grid " + gridText)` added to `PhoneSurface.kt` -> caught. Kotlin: a log call taking `contentKey` added to `keys/KeystoreCustody.kt` -> caught by the ARGUMENT scan, not only the inventory. **Go root proven live too**: `log.Printf("ck=%x", contentKey)` added to `internal/phonecore/state.go` (compiling) -> caught, naming the file, line and identifier |
+| PB-SEC-4 | DERIVED | the requirement is INVERTED, so the mutation reinstates what it forbids: a `FLAG_SECURE` `setFlags` call added to `SecureWindow.kt` -> caught; `setRecentsScreenshotEnabled(false)` added to `PhoneActivity.onCreate` -> caught. Both fail `TestPBSEC4_NoProductionSourceReinstatesTheScreenshotBlock`, which is the property B65 kept |
+| PB-SEC-5 | DERIVED | `android:usesCleartextTraffic="false"` -> `"true"` in the shipped manifest -> caught |
+| PB-SEC-6 | DERIVED | `controlGateOpen` clause 3 (the server-clock expiry re-check) deleted -> caught: *"a phone kept typing past the horizon its own take_control signed"*. Kill switch needed BOTH layers removed to fail — clause 1 alone SURVIVES, and `SeverAllRemoteControl` alone SURVIVES; removing both fails `the_kill_switch_halts_a_lease_that_is_already_live`. **FINDING E below: clause 2, the gate's fail-closed default, survives the WHOLE of `internal/skeleton` + `internal/protocol`** |
+| PB-SEC-7 | DERIVED | `a.rotateEpoch()` neutered at the revoke call site -> caught (*"the epoch did not rotate on revoke (1 -> 1)"*); the gateway's `return ErrDeviceRevoked` removed -> caught by two independent tests. The chain's two arrows are fenced separately |
+| PB-SEC-8 | DERIVED | `com.google.firebase:firebase-analytics` injected into the RESOLVED closure (`verification-metadata.xml`) -> caught by both the analytics scan and the bidirectional inventory join; a non-analytics `org.example:widget-lib` injected -> caught as an unjustified dependency, so the join is not analytics-specific |
+| PB-SEC-11 | DERIVED | `SwarmMessagingService` `exported="false"` -> `"true"` -> caught by the manifest/allowlist join; `android:exported` deleted from `BootReceiver` -> caught; a `sendInput(` call added to the exported `PhoneActivity.kt` -> caught by the last clause |
+| PB-SEC-12 | DERIVED | `SecureWindow.gate` changed to set `filterTouchesWhenObscured = false` — the identifier stays, so the Go text scan SURVIVES — caught by the Kotlin `PhoneSurfaceControlsTest.every_button_and_switch_on_screen_filters_obscured_touches` walking the real View hierarchy. **FINDING F below**: removing every `SecureWindow.gate(...)` CALL SITE while leaving the object intact survives the entire Go gate |
+| PB-SEC-13 | DERIVED | release `isDebuggable = false` -> `true` -> caught; `isProfileable = true` added to the release block -> caught; `android:debuggable="true"` hardcoded on `<application>` -> caught; `if (BuildConfig.DEBUG) { b.takeControl(1L) }` added to production Kotlin -> caught |
+| PB-SEC-14 | DERIVED | the `dependencyLocking { lockAllConfigurations() }` block deleted -> caught; `<verify-metadata>true</verify-metadata>` -> `false` -> caught; EVERY `<sha256>` stripped from one component (`androidx.activity:activity`) -> caught as *"1 of 459 pinned components carry no sha256/sha512"*; `SWARM_ANDROID_NDK` floated to `27` -> caught; `SWARM_GOMOBILE_VERSION` -> `latest` -> caught |
+
+### FINDING E — PB-SEC-6's fail-closed default has no fence anywhere. OPEN.
+
+`controlGateOpen` clause 2 is the daemon's fail-closed default: no control session on this
+connection means drop. Changing it to **`if ctl == nil { return true }`** — the gate opens for a
+connection that never took control, and clauses 3-5 are skipped with it — passes
+`go test ./internal/skeleton/ ./internal/protocol/` in full: 128 s of skeleton and the whole
+protocol package, both `ok`.
+
+The end-to-end refusal PB-SEC-6 observes comes from one layer up: `LeaseManager.Input` finds no
+`LeaseConn` for an unleased session and returns, so the keystroke never reaches the daemon and
+the daemon's own default is never consulted. That is defence in depth working — and it is also
+why nothing measures the second layer. `no_lease_the_server_refuses_the_keystroke` cannot
+distinguish a daemon that refuses from a daemon that is never asked.
+
+Contrast clause 4, which looked identical from the PB-SEC-6 suite (removing it survives both
+PB-SEC-6 tests) and turned out to be fenced elsewhere:
+`internal/protocol/TestProtocol_RevokeSeversLeaseViaSeparateServer` catches it. Clause 2 has no
+such test. The distinction only appears if the mutation is run against the whole suite rather
+than against the requirement's own file, which is the method note worth keeping.
+
+### FINDING F — PB-SEC-12 clause 1: the Go gate counts the identifier, not the call sites. RECORDED, covered.
+
+`TestPBSEC12_GatedActionsFilterObscuredTouches` scans `src/main` for the string
+`filterTouchesWhenObscured` and passes if any file contains it. Deleting **all five**
+`SecureWindow.gate(...)` call sites — `PhoneSurface.kt` x3, `SettingsSurface.kt`,
+`PairingSurface.kt` — leaves the identifier inside a now-dead `SecureWindow.gate` and the whole
+Go PB-SEC-12 suite stays green. The requirement is quantified over *gated actions*; that fence
+is quantified over *the module containing a string*.
+
+**It is covered, and by the fence that was unrunnable this morning.**
+`PhoneSurfaceControlsTest.every_button_and_switch_on_screen_filters_obscured_touches` walks
+`android.R.id.content` and asserts the property of every `Button`/`CompoundButton` actually on
+screen, so it catches both the disconnection and a new control added ungated. Recorded rather
+than fixed: the two fences are correctly layered, but the Go one reads as covering the clause on
+its own and does not.
