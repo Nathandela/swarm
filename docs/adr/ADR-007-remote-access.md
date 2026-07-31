@@ -7009,3 +7009,90 @@ the artifact I use to report this project's state.
 **Recorded rather than quietly fixed** because the count is this audit's headline number, it was wrong
 in the optimistic direction, and it was wrong because of an editing accident rather than a judgement.
 **A count that moves without a finding behind it is the thing this entire record exists to prevent.**
+
+---
+
+## B125 — A ninth axis: what the relay AUTHORS, not what it does to frames
+
+**2026-07-31.** Round 8 replaced row-derivation with an **adversary-capability map**, built from the
+15-op client surface rather than from the requirement set, so it could contain cells no row projects
+onto. **It found in one round what seven rounds of deriving rows did not.**
+
+### F-1 CRITICAL — the relay mints `Item.Cursor` and both ends persist it, unbounded, forever
+
+`relay.Item.Cursor`'s own doc says *"the relay's own monotonic storage cursor (**UNTRUSTED**
+ordering)"*. **That comment is the only place in the tree that says so.** Every row mentioning the
+cursor — `PB-GW-1/-3/-8`, `PB-STATE-1/-7` — is about **persisting** it. **None is about trusting it.**
+
+**Phone**, measured against a real relay and a fully reconciled facade, one item forwarded with the
+JSON cursor rewritten to `1<<63` and the envelope bytes untouched:
+
+```
+premise: RelayCursor=2, StreamState(journal/terminal/replies/grant) = "live" x4
+after ONE poisoned item: RelayCursor = 9223372036854775808
+post-poison: delivered=false, ConnectionState="online", Presence="online",
+             StreamState = "live" x4 UNCHANGED
+Resync("journal") err=<nil>, delivered-after-resync=false
+after process death: unchanged
+```
+
+**Every machine→phone frame gone, permanently, with no indicator moving.** The repair channel cannot
+repair it, because a reseed is delivered *through* the poisoned cursor. Recovery is deleting the state
+directory and re-pairing.
+
+**Gateway — worse, and verified here.** `processBatch` takes `maxCursor` from every item **before**
+`handle()`, so **six bytes of garbage suffice; no key is needed.** Post-poison `PollOnce` forwards 1
+of 3 and returns `nil` — **indistinguishable from an idle mailbox** — and the poison survives restart.
+**Server-side variant, also unfenced:** `store.go`'s `afterCursor+1` wraps at `MaxUint64`, so the relay
+re-serves the whole mailbox from the beginning on every read.
+
+**Neither NEW row reaches it.** `PB-NET-8` is armed by the link **dying**; here the link is healthy —
+and its own text says durable coordinates are *"resolved ONCE and carried across, so a redial RESUMES
+rather than restarts"*, **so a redial re-seeds the poison by design.** `PB-APP-11` would make the phone
+half visible after five minutes once implemented, but recovers neither end.
+
+### F-2 HIGH — the relay's error CODE is trusted as evidence about the relay's own storage
+
+`ClassifyAppend` treats `ErrQuotaExceeded`/`ErrNotAuthorized`/`ErrRevoked` as *"a DEFINITIVE pre-commit
+refusal — the relay replied before storing anything, so the seq was never spent."* **True of the honest
+relay. A choice for the adversary.** `sealAtSeqLocked` then reissues that seq for a freshly sealed
+**different** plaintext — which the same file's `AppendUnknown` comment forbids. Measured: the relay
+holds envelopes at seqs `[1 2 2]`, **chooses which lands, and NO GAP IS REPORTED**, because the seq was
+consumed by its rival. Scope is the `cursor==0` frames — terminal snapshots, roster records,
+`Reconcile`, and **the journal reseed, the only journal repair channel.**
+
+### The ninth axis, and why eight were not enough
+
+> **All eight axes I named are about WHAT THE RELAY DOES TO FRAMES.** Both hits are about **WHAT A
+> PARTY BELIEVES BECAUSE THE RELAY SAID SO** — a relay-minted scalar adopted as a durable control
+> coordinate, and a relay-minted error code adopted as evidence about the relay's own state. Neither is
+> an order, timing, withholding, retention, duplication, size, lifetime or metadata property, **which
+> is why seven rounds of those questions did not reach them.**
+>
+> **AUTHORITY: for every value crossing the wire, ask who MINTS it and what the receiver does with it
+> that it cannot undo.** The system is rigorous about **authenticating** what the relay carries and has
+> **no instrument for what the relay AUTHORS.** `Item.Cursor` carries the word "untrusted" in its own
+> doc comment and is persisted unvalidated at both ends: **the knowledge existed, and no fence
+> projected onto it.**
+
+**F-3, recorded inert:** the relay mints the client's own routing id in `auth_resp` and the client
+adopts it rather than the value it computed and signed over. Zero production consumers today, so
+unexploitable — **the first production consumer inherits an adversary-chosen identity.**
+
+### Two corrections the author made to its own work
+
+**It WITHDREW a finding on my prediction.** The ack amplifier — a poisoned cursor propagating into
+`MailboxAck`, ordering destruction of the victim's own backlog — is real and measured, and it withdrew
+it because **against the declared adversary a relay that can delete the mailbox can simply delete it.**
+A restatement of conceded storage economics, exactly as I guessed when flagging that axis.
+
+**And it caught its own premise error.** Its first phone run showed all four streams **stale** after
+the poison and it nearly reported that as a consequence. **It was the premise** — that harness never
+reconciles. Adding the reconcile produced the far stronger *"live ×4, unchanged"* result. **The first
+version would have understated the finding by making it look partly surfaced.**
+
+**Null results recorded so nobody re-probes:** auth-challenge domain separation holds; reflection
+between legs is genuinely closed by the authenticated direction tag; retention/replay is fenced at both
+ends across restart; ordinary-frame flood is backpressured (only `MsgWaitReply` is not);
+`ackItems`/`readItemsPage` are correct against an honest peer. **Every defect found here is in what the
+CLIENT believes, never in the server's own bookkeeping** — which is itself the ninth axis restated.
