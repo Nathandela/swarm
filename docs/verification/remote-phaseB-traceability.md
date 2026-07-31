@@ -52,7 +52,7 @@ be shipped and underived, or NOT MET and thoroughly derived; both exist today.
 **NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a
 statement about the audit, not about the code.
 
-**109 of 146 requirements are DERIVED.** The rest have never had a fence broken on
+**110 of 146 requirements are DERIVED.** The rest have never had a fence broken on
 purpose, which is this project's largest measured blind spot: seven tranches have been
 re-derived and seven produced findings. Nothing backfills this column -- 43 evidence
 files carry mutation prose in at least seven phrasings and not one is keyed to a
@@ -190,7 +190,7 @@ column exists to measure. See ADR-007 B129 for the marker's shape.
 | PB-SYNC-1 | S10 | shipped | **DERIVED** — Backfilled from ADR-007 B121 (round-7 derivation, run then, written in prose). Two mutations: `streamsOf` drops `StreamTerminal` from the shared bucket -> 4 failures; `repairedBy` lets a command reply clear `StreamReply` -> `TestB85_AContiguousReplyDoesNotClearTheReplyStream` fails. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-2 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-3 | S10 | shipped | **DERIVED** — Backfilled from B121: `commitReceive`'s contiguity branch made to clear the channel regardless of contiguity -- the optimistic clear this row forbids -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
-| PB-SYNC-4 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
+| PB-SYNC-4 | S10 | shipped | **DERIVED** — The kill-switch half made unreachable — `if cc.srv.remoteTier && cc.srv.remoteControlDisabled()` in `handleJournalRead` replaced with `if false`, so `journal_read` serves the journal with remote control switched OFF -> `TestProtocol_OffGatesJournalSubscribe` fails, and `TestPhonesim_ObserveTerminalRecoversAfterKillSwitchToggle` in `internal/skeleton` fails with it. Reverted; `server.go` sha256 `282d5f4ab16b...` identical. **This corrects an earlier NOT DERIVED verdict that recorded the kill-switch half as fenced "one file over" and READ rather than mutated.** It is fenced, in two packages, and the second failure is the useful one: the phonesim test drives a real toggle end to end, so the guard is not merely present at the call site but observable in the behaviour a phone sees. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-5 | S10 | shipped | not derived | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-6 | S10 | shipped | **DERIVED** — Backfilled from B121. Two mutations: `App.resyncBudget` returns nil unconditionally -> caught; the drain loops on a non-empty page instead of on cursor progress -> caught. | `docs/verification/remote-phaseB-s10-evidence.md` |
 | PB-SYNC-7 | S1b | shipped | not derived | `docs/verification/remote-phaseB-s1b-evidence.md` |
