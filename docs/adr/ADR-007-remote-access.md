@@ -7450,3 +7450,86 @@ deserves its line.**
 > as residual, not invented here** — the same form PB-APP-11 uses for its beacon interval and
 > B126 for its cursors-per-seq slack. It is a decision for whoever owns §6.0, and it is now
 > decidable because it is specified.
+
+---
+
+## B129 — Derivation is now first-class, and it reads 8 of 146
+
+**2026-07-31.** The traceability table could say a row is **shipped** and **evidenced**. It could
+not say whether anyone had ever independently made that row's fence **fail on purpose** — and
+"green but unexamined" is this project's dominant risk: **seven tranches re-derived, seven
+produced findings.** The count of unexamined rows came from humans reading committee reports
+rather than from running anything. That is now a generated, fenced column.
+
+### The measurement that decided the design, taken before anything was built
+
+**Derivation cannot be backfilled, and inferring it would have manufactured the exact confidence
+the column exists to measure.** Measured across `docs/verification/`:
+
+- **43 evidence files carry mutation PROSE**, in at least seven phrasings — `mutation-proven`,
+  `mutation-checked`, `mutation-verified`, `mutation-confirmed`, `mutation-tested`,
+  *"mutation applied, the result recorded, the mutation reverted"*, *"mutation evidence, verbatim
+  from the commit"*.
+- **Not one of them is keyed to a requirement id.** Before this entry, exactly two non-generated
+  files contained any requirement-keyed table row, and one of those was written the same day.
+
+A file saying "mutation-proven" somewhere in two hundred lines covering thirteen requirements
+**cannot say which row was derived.** So nothing is backfilled: the column starts at **8 of 146**,
+and that number is the finding rather than a defect in the report.
+
+### The marker's shape
+
+In any evidence file, a section headed `## Derivation` holding
+
+```
+| PB-XXX-N | DERIVED     | the mutation that was made to fail, and its result |
+| PB-XXX-N | NOT DERIVED | why not                                            |
+```
+
+Four rules, each answering a way the marker could have been worthless:
+
+1. **Only rows inside that section count**, so a slice's own status table (S20 has one) cannot be
+   misread as a derivation claim.
+2. **`NOT DERIVED` is tested before `DERIVED`**, because it contains it as a substring.
+3. **A `DERIVED` row with an empty mutation cell is MALFORMED** and counted NOT DERIVED. This is
+   the only teeth a self-reported marker can have: the token may not be claimed without naming
+   what was broken, so the claim carries its own evidence.
+4. **Absence of a row means NOT DERIVED.** It is derived from evidence, not maintained as a
+   roster in the script — a hand-kept list of derived rows would be a second copy of the audit,
+   and this script has already been broken twice by edits whose extent was not checked.
+
+### NOT DERIVED is the default and is NOT a defect
+
+It means **nobody has looked**. It is a statement about the audit, not about the code, and the
+report says so where it is read. It is **orthogonal to `Status`**: a row can be shipped and
+underived, or NOT MET and thoroughly derived, and both exist today. Conflating them is what made
+the distinction invisible in the first place — `Status` means *shipped*, which is why the verdict
+could not simply be written into it.
+
+### The column is fenced, because an unchecked number is the hole it closes
+
+`internal/verify/phaseb_derivation_test.go` asserts the generated column says exactly what the
+markers say, and that a `DERIVED` verdict names its mutation. Both carry vacuity controls, and
+**all three attacks on the new fence were measured failing it**:
+
+- hand-editing the generated table to claim `PB-RUN-5` is DERIVED → *"the traceability table says
+  derived=true, the evidence markers say false"*;
+- a marker claiming DERIVED with an empty mutation cell → *"claims DERIVED and names no mutation"*;
+- the generator silently ceasing to emit the cell → *"parsed 146 rows and NOT ONE reads DERIVED …
+  both make this fence vacuous"*.
+
+**Adding the column broke an existing guard, and its own vacuity control is what caught it.**
+`TestPBE2E3_EveryShippedRequirementsEvidenceFileNamesIt` matched the four-column shape, so the new
+cell landed in the capture group holding the evidence path and every row reported *"cites not
+derived, which cannot be read"*. The pattern is widened to skip the cell deliberately rather than
+capture it; the same 133 shipped-and-evidenced rows are checked before and after, verified by
+counting both.
+
+### Applying the definition strictly cost two rows, which is the definition working
+
+S13's own tranche was re-scored against "somebody made this fence fail on purpose". **PB-TOOL-5**
+became NOT DERIVED — its intended mutation would not apply and no other was attempted — and
+**PB-RUN-2** became NOT DERIVED: its resolver fence was read and its production reachability
+confirmed, but it was never broken, because the app module did not compile. **Reading a fence is
+not deriving it**, and a column that let those two count as derived would have been the same
+comfortable fiction as counting evidence files by existence (B67(1)).

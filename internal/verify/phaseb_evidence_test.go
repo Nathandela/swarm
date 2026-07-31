@@ -31,8 +31,14 @@ import (
 // traceRow matches one row of the generated per-requirement table:
 //
 //	| PB-APP-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
-var traceRow = regexp.MustCompile(`^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|\s*(\S+)\s*\|\s*(\w+)\s*\|\s*` +
-	"`?([^`|]*)`?" + `\s*\|`)
+// The DERIVATION cell sits between Status and Evidence (ADR-007 B129) and is deliberately
+// skipped rather than captured: this guard is about the evidence citation, and a parser that
+// silently read the wrong cell is how it would die. It DID die that way for one run while the
+// column was being added -- the four-column pattern matched, group 4 became the derivation text,
+// and every row reported "cites not derived, which cannot be read". The `checked` control below
+// is what proves the widened pattern still asserts over the same rows rather than none.
+var traceRow = regexp.MustCompile(`^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|\s*(\S+)\s*\|\s*(\w+)\s*\|` +
+	`[^|]*\|\s*` + "`?([^`|]*)`?" + `\s*\|`)
 
 // TestPBE2E3_EveryShippedRequirementsEvidenceFileNamesIt is the floor.
 //

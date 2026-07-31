@@ -227,6 +227,83 @@ def evidence_superseded(rel):
     return any(m in head for m in SUPERSEDED_MARKERS)
 
 
+# ---------------------------------------------------------------------------
+# DERIVATION (ADR-007 B129). Orthogonal to SHIPPED, and the distinction is the point.
+#
+# The traceability table could say a row is shipped and evidenced. It could not say whether
+# anyone had ever independently BROKEN that row's fence -- and "green but unexamined" is this
+# project's dominant risk: seven tranches have been re-derived and seven produced findings, while
+# the count of unexamined rows came from humans reading committee reports rather than from
+# running anything.
+#
+# WHY THIS IS A MARKER SCAN AND NOT A BACKFILL. Measured before it was built: 43 evidence files
+# carry mutation PROSE, in at least seven phrasings ("mutation-proven", "mutation-checked",
+# "mutation-verified", "mutation applied, the result recorded, the mutation reverted", ...), and
+# NOT ONE of them is keyed to a requirement id. A file saying "mutation-proven" somewhere in two
+# hundred lines covering thirteen requirements cannot say WHICH row was derived. Inferring it
+# from that prose would manufacture the exact confidence this column exists to measure, so
+# derivation is NOT backfilled: it starts almost entirely NOT DERIVED, and that number is the
+# finding rather than a defect in the report.
+#
+# THE MARKER'S SHAPE. In any evidence file, a section headed `## Derivation` holding a table of
+#
+#     | PB-XXX-N | DERIVED | the mutation that was made to fail, and its result |
+#     | PB-XXX-N | NOT DERIVED | why not |
+#
+# Only rows inside that section count, so a slice's own status table cannot be misread as one.
+# NOT DERIVED is tested first because it contains DERIVED as a substring. A DERIVED row with an
+# empty mutation cell is MALFORMED and counted NOT DERIVED: the token may not be claimed without
+# naming what was broken, which is the only teeth a self-reported marker can have.
+DERIVATION_HEADING = "## Derivation"
+DERIVATION_ROW = re.compile(
+    r"^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|\s*$"
+)
+
+
+def scan_derivation():
+    """Return (verdicts, malformed) read from every evidence file's `## Derivation` section.
+
+    verdicts maps requirement -> (derived, mutation, source file). malformed lists rows that
+    claimed DERIVED without naming a mutation.
+    """
+    verdicts, malformed = {}, []
+    if not os.path.isdir(VERIF):
+        return verdicts, malformed
+    for name in sorted(os.listdir(VERIF)):
+        if not name.endswith(".md"):
+            continue
+        rel = "docs/verification/" + name
+        try:
+            with open(os.path.join(VERIF, name), encoding="utf-8") as fh:
+                body = fh.read()
+        except OSError:
+            continue
+        if DERIVATION_HEADING not in body:
+            continue
+        # The section runs to the next h2, so a later table cannot leak into it.
+        section = body.split(DERIVATION_HEADING, 1)[1]
+        lines = section.split("\n")
+        cut = len(lines)
+        for i, line in enumerate(lines):
+            if line.startswith("## "):
+                cut = i
+                break
+        for line in lines[:cut]:
+            m = DERIVATION_ROW.match(line)
+            if m is None:
+                continue
+            req, verdict, mutation = m.group(1), m.group(2).upper(), m.group(3).strip()
+            if "NOT DERIVED" in verdict:
+                verdicts[req] = (False, mutation, rel)
+            elif "DERIVED" in verdict:
+                if not mutation:
+                    malformed.append((req, rel))
+                    verdicts[req] = (False, "", rel)
+                else:
+                    verdicts[req] = (True, mutation, rel)
+    return verdicts, malformed
+
+
 def main():
     rows = []
     with open(MANIFEST, encoding="utf-8") as fh:
@@ -238,6 +315,9 @@ def main():
             if len(parts) != 2:
                 continue
             rows.append((parts[0], parts[1]))
+
+    verdicts, malformed = scan_derivation()
+    n_derived = sum(1 for r, _ in rows if verdicts.get(r, (False,))[0])
 
     shipped = set(SHIPPED)
     by_slice = {}
@@ -308,8 +388,29 @@ def main():
                 % (sl, n, "" if n == 1 else "s", ", ".join(sorted(by_slice[sl]))))
         out("\n")
 
+    out("## Derivation: has anyone ever broken this row's fence?\n\n")
+    out("**ORTHOGONAL TO *Status*, and that is the point.** *Status* says whether the work\n")
+    out("shipped. *Derivation* says whether anyone has independently made this row's fence FAIL\n")
+    out("ON PURPOSE and restored it -- not that a test exists, not that a slice landed. A row can\n")
+    out("be shipped and underived, or NOT MET and thoroughly derived; both exist today.\n\n")
+    out("**NOT DERIVED IS THE DEFAULT AND IS NOT A DEFECT.** It means nobody has looked. It is a\n")
+    out("statement about the audit, not about the code.\n\n")
+    out("**%d of %d requirements are DERIVED.** The rest have never had a fence broken on\n"
+        % (n_derived, len(rows)))
+    out("purpose, which is this project's largest measured blind spot: seven tranches have been\n")
+    out("re-derived and seven produced findings. Nothing backfills this column -- 43 evidence\n")
+    out("files carry mutation prose in at least seven phrasings and not one is keyed to a\n")
+    out("requirement, so inferring derivation from it would manufacture the confidence this\n")
+    out("column exists to measure. See ADR-007 B129 for the marker's shape.\n\n")
+    if malformed:
+        out("**%d row(s) claim DERIVED without naming a mutation** and are counted NOT DERIVED:\n"
+            % len(malformed))
+        for req, rel in malformed:
+            out("- %s in `%s`\n" % (req, rel))
+        out("\n")
+
     out("## Every requirement\n\n")
-    out("| Requirement | Slice | Status | Evidence |\n|---|---|---|---|\n")
+    out("| Requirement | Slice | Status | Derivation | Evidence |\n|---|---|---|---|---|\n")
 
     def sort_key(row):
         req, sl = row
@@ -325,7 +426,12 @@ def main():
             status = "shipped"
             path = evidence_path(sl)
             ev = "`%s`" % path if path else "**none — commit message only**"
-        out("| %s | %s | %s | %s |\n" % (req, sl, status, ev))
+        derived, mutation, _ = verdicts.get(req, (False, "", None))
+        if derived:
+            deriv = "**DERIVED** — %s" % mutation
+        else:
+            deriv = "not derived"
+        out("| %s | %s | %s | %s | %s |\n" % (req, sl, status, deriv, ev))
 
     return 0
 
