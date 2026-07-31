@@ -112,6 +112,20 @@ class FacadeBridge(private val app: App) {
         ConnectionBanner.of(ConnectionState.of(app.connectionState()))
 
     /**
+     * PB-APP-11, and it is a SEPARATE question from [connectionBanner] on purpose.
+     *
+     * The transport can only report what it knows: the socket is up and the polls are
+     * succeeding. A relay that answers every poll with an empty page while withholding the
+     * machine's frames leaves that reading "online" forever, with no gap for any staleness
+     * mechanism to key on. This asks the one thing the relay cannot fake -- how long since the
+     * machine's own AAD-covered timestamp -- and it is PULLED for [clockBanner]'s reason: a
+     * screen that opens after the fact was never sent an event.
+     */
+    fun machineFreshness(): MachineFreshness = app.machineFreshness().let {
+        MachineFreshness(silent = it.getSilent(), lastHeardUnixMs = it.getLastHeardUnixMs())
+    }
+
+    /**
      * PB-APP-8 for one repair channel.
      *
      * Stale and repairing are asked for SEPARATELY because they are orthogonal facts: a stream

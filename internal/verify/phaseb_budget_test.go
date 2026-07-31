@@ -115,9 +115,7 @@ func parseBudgetRows(spec string) []budgetRow {
 			label: strings.TrimSpace(markdownNoise.ReplaceAllString(cells[0], "")),
 			line:  i + 1,
 		}
-		for _, id := range budgetIDPattern.FindAllString(l, -1) {
-			row.owners = append(row.owners, id)
-		}
+		row.owners = append(row.owners, budgetIDPattern.FindAllString(l, -1)...)
 		sort.Strings(row.owners)
 		row.owners = dedupe(row.owners)
 		row.withdrawn = strings.Contains(l, "WITHDRAWN")

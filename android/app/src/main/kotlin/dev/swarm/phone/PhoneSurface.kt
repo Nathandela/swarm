@@ -1,6 +1,7 @@
 package dev.swarm.phone
 
 import android.graphics.Typeface
+import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -19,7 +20,8 @@ import dev.swarm.phone.keys.TimedTierGate
 import dev.swarm.phone.keys.TimedTierNotice
 import dev.swarm.phone.runtime.ConnectivityPolicy
 import dev.swarm.phone.runtime.ContentUnlockPolicy
-import dev.swarm.phone.runtime.LifecycleConvergence
+import android.text.format.DateFormat
+import android.view.View
 import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
@@ -32,6 +34,7 @@ import dev.swarm.phone.ui.LaunchResult
 import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.TerminalPeek
+import java.util.Date
 import swarmmobile.App
 import swarmmobile.LaunchSpec
 
@@ -551,7 +554,17 @@ class PhoneSurface(
         showContentUnlock(contentRefusal)
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
-        status.text = bridge.connectionBanner().text
+        // PB-APP-11 rides the same line as the connection banner, and it has to: the banner is
+        // the TRANSPORT's opinion, and a relay that answers every poll with an empty page while
+        // withholding the machine's frames leaves it reading "Connected to your machine." with
+        // nothing behind it. The freshness notice is the only thing on this screen that comes
+        // from the machine's own clock.
+        status.text = listOfNotNull(
+            bridge.connectionBanner().text,
+            bridge.machineFreshness().notice { millis ->
+                DateFormat.getTimeFormat(status.context).format(Date(millis))
+            },
+        ).filter { it.isNotEmpty() }.joinToString(" ")
         notice.text = CapabilityNotice.of(startup.anomalies)
 
         // No navigation on this surface, so the target is the first row of the triage inbox --
