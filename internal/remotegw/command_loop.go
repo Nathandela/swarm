@@ -142,9 +142,8 @@ type CommandBridgeConfig struct {
 // aggregated into the returned error while the good items still process. Both the read
 // cursor and the per-(sender,epoch) replay high-water are DURABLE (PB-GW-1, see the Inbound
 // seam), so a restart resumes where the previous run stopped and refuses anything the relay
-// retained beyond it. The daemon's own
-// two-phase idempotency (D6) covers only the one bounded re-delivery a crash between a
-// daemon forward and its persist can produce (see handle).
+// retained beyond it. The daemon's own two-phase idempotency (D6) covers only the one bounded
+// re-delivery a crash between a daemon forward and its persist can produce (see handle).
 type CommandBridge struct {
 	cfg      CommandBridgeConfig
 	recv     *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
@@ -244,20 +243,16 @@ func (b *CommandBridge) Cursor() uint64 {
 	return b.cursor
 }
 
-// SetCursor IS DELETED, not merely unused. Its doc claimed it "seeds the read cursor from
-// durable state on resume", which it never did -- NewCommandBridge seeds from the checkpoint
-// directly, and PB-GW-1's own text records that it "is never called from production startup".
-// Its ONE real caller was processBatch's advance-past-every-item-read, and that advance is
-// exactly the defect: a cursor set from an item the bridge never handled is a value it has no
-// evidence for. The resume point now moves only inside consume, under the same lock that
-// carries the replay high-water, so a public setter is a second way to move a coordinate that
-// must have exactly one.
+// There is deliberately NO SetCursor. It existed, PB-GW-1's text names it, and its ONE caller
+// was processBatch's advance-past-every-item-read -- the defect itself. The resume point now
+// moves only inside consume, under the same lock that carries the replay high-water, and a
+// public setter would be a second way to move a coordinate that must have exactly one.
 
 // PollOnce reads every mailbox item past the current cursor, processes each (open ->
-// forward -> seal reply), advances the cursor past all of them, and returns how many
-// were forwarded successfully. Per-item failures (a malformed/wrong-key envelope, a
-// forward error, a reply-seal error) are joined into the returned error but do not
-// stop the batch or hold back the cursor.
+// forward -> seal reply), and returns how many were forwarded successfully. Per-item
+// failures (a malformed/wrong-key envelope, a forward error, a reply-seal error) are joined
+// into the returned error but do not stop the batch. The cursor advances past the items that
+// were HANDLED, never past one that failed to open (processBatch).
 func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 	items, err := b.cfg.Mailbox.MailboxRead(ctx, b.Cursor())
 	if err != nil {
@@ -301,7 +296,8 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 // What this does NOT fence is the VALUE a HANDLED item carries: that is the relay's own
 // coordinate and nothing authenticates it, so a relay that rewrites the cursor of a genuine
 // phone-sealed frame still moves the resume point. Bounding that needs a limit on how far a
-// cursor may move per page, which no requirement states; it is recorded as a residual rather than invented here.
+// cursor may move per page, which no requirement states; it is recorded as a residual rather
+// than invented here.
 func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (int, uint64, []error) {
 	processed := 0
 	var errs []error
