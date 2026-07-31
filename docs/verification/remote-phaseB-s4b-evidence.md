@@ -120,3 +120,14 @@ units' own `supervise.ExitCodeFor` + `ShouldRestart`.
 `internal/skeleton`, `internal/protocol`, `internal/daemon`; `-race` green on `supervise`;
 `gofmt -l` clean; `golangci-lint` clean on the required packages. Re-verified independently before
 commit.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** to emit the traceability
+table's DERIVATION column: the verdict token `DERIVED` or `NOT DERIVED`, and -- for `DERIVED` --
+the mutation that was made to fail, in the same row. `DERIVED` means somebody made the fence fail
+on purpose and restored it; reading a fence is not deriving it.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-LIFE-7 | DERIVED | the pre-B15 second default restored at the daemon's end only -- `skeletonConfigFromEnv`'s `RemoteSocketPath: gatewaySocket(stateDir)` reverted to `os.Getenv(daemon.EnvRemoteSocket)` (`cmd/swarm/main.go`), leaving the unit still dialing D4's canonical path. Five tests fail and each reports the real symptom: `TestDefaultInstall_GatewayIsServedOrTheOperatorIsTold` (*"started the gateway against .../remote.sock, but nothing is listening there ... The daemon assembled from this same environment listens on \"\""*), `TestDefaultInstall_NoThrottledRestartLoop` (three identical restarts with nothing changing between them), `TestRemoteSocket_OneDefinition`, `TestRemoteInitThenPair_DoesNotLeaveTheGatewayDialingNothing` (*"The phone is paired and will be served nothing"*), and `TestRemoteInit_TellsTheOperatorWhenTheRunningDaemonServesNoRemoteSocket`, whose control subtest catches the opposite error -- a warning that fires on a correctly-served machine. The fence drives a real `net.Dial` against a real `skeleton.Serve` and walks the restart loop with the units' own `ExitCodeFor`/`ShouldRestart`, so it is measuring the install rather than a config computation |

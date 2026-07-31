@@ -308,3 +308,49 @@ The behavioural concurrency tests are the slow ones and they ran green under con
   restored from disk is by construction a lease the machine does not hold — the "assume the lease"
   failure PB-INPUT-2 forbids. So process death is fenced by asserting the lease is **absent from
   durable state** (`TestS11Lease_IsNeverDurable`), not by asserting it is cleared on load.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** to emit the traceability
+table's DERIVATION column, and `internal/verify` fences that it does. One row per requirement, the
+verdict token `DERIVED` or `NOT DERIVED`, and -- for `DERIVED` -- **the mutation that was made to
+fail, in the same row**. A `DERIVED` verdict with an empty mutation cell is refused.
+
+**`DERIVED` means somebody made this row's fence fail on purpose and restored it.** Reading a fence
+is not deriving it. Every mutation below moved a PRODUCTION connection (ADR-007 B113) -- a branch,
+an assignment, a call site -- never a constant a test transcribes; each was applied, run, and
+reverted, and `git status` is clean.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-INPUT-1 | DERIVED | `InputCoalescer.Fail` re-buffers the failed frame instead of recording it, turning the live-only path into a queue one frame at a time -> `TestS11Coalescer_AFailedFrameIsReportedNotResent`, `_ResizeIsLiveOnlyToo` and `TestS11Stop_IsAKeystrokeAndInheritsBothInputRules` all fail. Also `drain`'s window guard disabled -> `_AbandonReportsDeliveryUnknownAndNeverReplays` fails |
+| PB-INPUT-2 | DERIVED | `LeaseState.Require` returns nil for a missing entry AND for a non-live one, so the gate opens with no confirmed generation -> nine tests fail across `s11_lease_test.go`, `s11r3_leaserestart_test.go` and `s11r4_severance_test.go`, including *"the notice is delivered and ignored, so the phone keeps typing into a released lease"*. **A second mutation SURVIVED -- see finding (1)** |
+| PB-INPUT-3 | DERIVED | (a) `CommandTTLFor` stops discriminating on the action (`_ = action; return CommandTTL`) -> `TestS11TTL_ByOpClassResolvesTheThreeWayCollision` fails on both the value and its own non-vacuity check. (b) `Require`'s horizon comparison disabled -> `_SurvivesWellPastSixtySeconds` mutation control, `_ExpiryIsDistinctFromAbsenceAndFromSilentLoss` and `_TheMachinesExpiryWinsOverThePhonesSignedHorizon` fail |
+| PB-INPUT-4 | DERIVED | the binding clause after ADR-007 B92 is *"the input path performs no resend at all"*; the coalescer mutation above (`Fail` re-buffers) is a resend and `_AFailedFrameIsReportedNotResent` catches it, asserting both the ledger entry and that no later `Due`/`Flush` hands the frame back. **A resend one layer UP survived -- see finding (2)** |
+| PB-INPUT-5 | DERIVED | the coalescing window in `InputCoalescer.drain` disabled (`if false && !force && s.started && ...`), so every keystroke emits its own frame -> `TestS11Coalescer_SustainedAutorepeatStaysUnderTheRelayQuota` fails with *"worst 60s window issued 1800 appends, over the relay's MailboxAppendPerMin of 600"*, and `_FirstKeystrokeOfABurstIsNotDelayed` fails beside it |
+| PB-INPUT-6 | DERIVED | `InputCoalescer.Resize` emits the resize frame BEFORE draining the buffer instead of after -> `TestS11Coalescer_FlushesBeforeResize` fails: *"Resize emitted \"resize,data\", want \"data,resize\""*. The same `drain` mutation as PB-INPUT-5 additionally fails `_FlushEmptiesEveryBoundary` on all three boundaries and `_PasteIsAtomicAndNeverInterleaved` |
+
+### Findings from this derivation
+
+1. **PB-INPUT-2's Kotlin fence still has the round-6 hole, and it is the one that matters.**
+   `android/gate/pbapp6_pbinput2_surface_test.go` rejects a boolean LITERAL at the
+   `FacadeBridge.terminalPeek` call site (`isBooleanLiteral` accepts only `true`/`false`). Moving
+   the constant one level in -- `private fun leaseConfirmedFor(...)` given `if (true) return true`
+   as its first statement -- leaves **all of `./android/gate` green**. That mutated app tells every
+   user they hold control of every session and opens the keyboard over a machine that granted
+   nothing, which the fence's own doc calls *"strictly worse than `false`"*. No Kotlin test covers
+   it either: `grep` finds no test in `android/app/src/test` that touches `leaseConfirmedFor`,
+   `keyboardEnabled` or the surface's lease path at all, which is consistent with the gate file's
+   own explanation that no JVM test can reach `PhoneStartup.Ready`. The check needs to follow the
+   argument to its definition, or assert the helper reads a reply.
+2. **PB-INPUT-4's "no resend" is fenced at the coalescer and unfenced at the facade.** Inserting a
+   blind retry into `App.sendCoalesced` -- `if err := a.sendInputFrame(...); err != nil { if err2
+   := a.sendInputFrame(...); err2 == nil { continue } ... }` -- leaves **`./mobile` and
+   `./mobile/conformance` entirely green** (3m06s, both `ok`). That is a genuine second append of
+   the same keystroke at a fresh seq, which is exactly what ADR-007 D7 and this row forbid. The
+   layer where a resend would actually be written has no fence over it.
+3. **PB-INPUT-1's "surfaced to the user" half has no production caller.** `App.UndeliveredInputs`,
+   `App.ClearUndeliveredInputs` and `UndeliveredList.Dropped` are all ledgered in
+   `android/unbound-verbs.tsv` as unbound with a screen that does not exist. Disclosed, not hidden
+   -- recorded here because the row's grammatical subject is the USER and the fence's subject is a
+   Go read model.

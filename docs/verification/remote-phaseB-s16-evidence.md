@@ -459,3 +459,77 @@ evidence as a REQUIRED parameter.
 machine and a withheld one are indistinguishable from the handset. The state is therefore
 worded as what the phone knows ("not heard from") and never as a claim that the machine is
 down. A beacon needs an interval in §6.0 that nobody has decided.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** to emit the traceability
+table's DERIVATION column, and `internal/verify` fences that it does. One row per requirement, the
+verdict token `DERIVED` or `NOT DERIVED`, and -- for `DERIVED` -- **the mutation that was made to
+fail, in the same row**. An empty mutation cell is refused and counted NOT DERIVED.
+
+**Reading a fence is not deriving it.** Every mutation below moved a PRODUCTION connection
+(ADR-007 B113) -- a branch, a field assignment, a call site, a Kotlin constructor parameter --
+never a constant a test transcribes. Each was applied, run, and reverted; `git status` is clean.
+
+**Scope limit, stated before the table.** No JDK is available in this environment
+(`/usr/libexec/java_home` reports none; `./gradlew` cannot start), so **no JVM/Robolectric test was
+run or mutated**. Every Kotlin-side derivation below is a mutation of Kotlin PRODUCTION SOURCE
+checked by a Go gate in `./android/gate`, which reads checked-in source and needs no toolchain.
+Where a row's only remaining evidence is a Robolectric UI test, that half is called out in the row
+rather than claimed. Nothing here touches PB-E2E-5's deferred set.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-APP-1 | DERIVED | `Pairing.ConfirmOrigin`'s `if origin != want` guard disabled, so the phone joins a destination other than the one it displayed -> `TestPBPAIR6_AnOriginSwappedAfterDisplayIsRejected` fails: *"The user said yes to one URL and the phone joined another"*. **A second mutation SURVIVED -- see finding (1)** |
+| PB-APP-2 | DERIVED | `App.Session` derives the roster Group on-device (`Group: "active"`) instead of copying `cs.Group` from the wire -> the fence fires with *"Session.Group = \"active\", want \"needs_you\" taken VERBATIM from the wire"* -- but from `TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend`, a test named for a different requirement. See finding (4). The four-Groups-and-empty-state half is `TriageInboxTest.kt` and was NOT exercised (no JDK) |
+| PB-APP-3 | DERIVED | `interruptByte` changed from `0x03` to `0x1b` at its single use in `App.Interrupt`, so Stop sends ESC -> `TestPBAPP3_StopIsTheInterruptKeystrokeOnTheLiveLease` fails: *"PB-APP-3: Stop sent no 0x03 to the machine"* |
+| PB-APP-4 | DERIVED | `App.Peek` re-processes the daemon's bytes -- `strings.ReplaceAll(strings.Join(s.Lines, "\n"), "\t", "    ")`, a plausible on-device re-sanitize -> `TestPBAPP4_ThePeekRendersTheDaemonsBytesAndNothingElse` fails. **Two further mutations SURVIVED -- see finding (2)** |
+| PB-APP-5 | DERIVED | a `func (a *App) SetKillSwitch(on bool) error` added to the bound surface -> `TestPBBIND3_FacadeCannotEnableTheKillSwitch` fails (*"which would let a stolen phone re-enable remote control"*), with `TestPBBIND3_NoUntracedEntryPoint` and `TestPBBIND7_ExportedSurfaceMatchesTheGolden` beside it. The read-only half is structural. Presence, paired device and activity log are `MachinePaneTest.kt` and were NOT exercised (no JDK) |
+| PB-APP-6 | DERIVED | (a) `App.Launch`'s geometry default removed, so a spec with no size seals `cols=0 rows=0` -> `TestS19_ARemoteLaunchCarriesATerminalGeometryTheMachineAccepts` fails: *"the daemon refuses ... PB-APP-6's launch never reaches a PTY"*. (b) the sole production Kotlin call `app.launch(specOf(draft))` removed from `PhoneSurface.kt` -> `TestPBAPP6_TheAppCanStartASessionAndTheLedgerAgrees` and `TestBoundVerbs_EveryBoundVerbIsCalledFromProductionKotlinOrLedgered` fail |
+| PB-APP-7 | DERIVED | both toggles wired to one category (`NeedsInput: pref.Alerts, Finished: pref.Alerts`) -> `TestPBAPP7_TheTwoTogglesAreIndependentAndNotInverted` fails: *"A switch that gates both categories leaves the other switch dead"*. **The INVERSION mutation SURVIVED -- see finding (3)** |
+| PB-APP-8 | DERIVED | (a) `streamStale` stops consulting the per-channel flag (`return !reconciled - a.core.MachineSilentAt(now)` only) -> `TestPBAPP8_EveryJournalDerivedReadModelCarriesItsStreamsStaleness`, `_AResyncInFlightIsVisibleAndIsNotAThirdValueOfStreamState` and four `TestS10_*` resync tests fail. (b) `SessionList.stale` repointed from the journal channel to the REPLY bucket -> `TestPBAPP8_EveryJournalDerivedReadModelCarriesItsStreamsStaleness` fails, so the bucket distinction is real. A journal->terminal repoint survives, correctly: PB-SYNC-1 requires a shared-bucket gap to stale BOTH, so the two flags are indistinguishable by construction |
+| PB-APP-9 | DERIVED | `stampErrorClass` stops stamping (early return after the message check), so facade errors leave unclassified -> `TestPBAPP9_EveryErrorTheFacadeReturnsCarriesAKnownClass` fails on `App.Interrupt`, `App.Paste` and `App.Resize`: *"classified as \"swarm/unknown\" ... the user is told nothing they can act on"*. Totality is carried structurally by the barrier, as this file's own review correction (2) states. **A MISROUTE still survives -- see finding (5)** |
+| PB-APP-10 | DERIVED | (a) the `relay.ErrRevoked` arm of the dial switch made unreachable -> `TestPBAPP10_ARevokedDeviceIsToldToRePairInsteadOfLoopingForever` fails (*"a revoked phone reports \"reconnecting\" ... it redials every 250 ms forever behind a spinner"*) and `TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace` with it. (b) the keyless split collapsed so both answers return `errGrantLost` -> `TestPBAPP10_APairedKeylessPhoneIsToldToWaitRatherThanToActOnTheMachine` fails on both the class and the collapse |
+| PB-APP-11 | DERIVED | five mutations, all caught. (a) `heardAt` returns the phone's ARRIVAL instant instead of the machine's stamp -> `TestPBAPP11_SilenceIsNotLive` fails on all four `StreamState` channels, `SessionList.Stale`, `JournalPage.Stale`, `MachineFreshness().Silent` and the stamp itself (*"A coordinate this fresh is the phone's ARRIVAL time, which is the one clock in this exchange the relay controls"*), and `_TheVerdictSurvivesARestart` fails too. (b) `Core` overwrites `st.LastHeardAt` instead of keeping it monotonic -> `_ALateFrameDoesNotMoveTheCoordinateBackwards` fails, naming the millisecond regression. (c) `Snapshot.Stale` hardcoded false -> caught, but only by `TestPBAPP8_*` (finding 4). (d) `LastHeardAt` dropped from the persisted file form -> `_TheVerdictSurvivesARestart` fails `1785466717639 -> 0`. (e) `MachinePane.freshness` given a default value in `MachineAndLaunch.kt` -> `TestPBAPP11_TheMachinePaneCannotRenderPresenceWithoutTheFreshnessVerdict` fails |
+
+### Findings from this derivation
+
+1. **The different-machine guard's narrow comparison is STILL unfenced.** This file's own
+   independent review (2026-07-25, correction 1) recorded *"Fence owed"* for exactly this, and it
+   was not delivered. Widening `App.differentMachine` to also compare the relay-auth key --
+   `!bytes.Equal(st.MachineRelayAuthPub, out.Machine.MachineRelayAuthPub)` -- leaves **`./mobile`
+   and `./mobile/conformance` green**. The code's own comment says that widening would refuse a
+   same-machine re-pair after a key rotation, i.e. break S8's revoke-then-re-pair, which is the
+   flow `pin()` exists to serve. The same-machine subtest re-pairs against byte-identical
+   coordinates, so it cannot distinguish the narrow comparison from a total one.
+2. **PB-APP-4's fixture does not discriminate in two directions.** (a) `strings.TrimSpace` around
+   the joined peek text is a no-op on the fixture -- three lines with inner tabs and inner double
+   spaces but no leading or trailing whitespace and no blank lines -- so it PASSES, while a real
+   daemon-rendered grid whose bottom rows are blank would have them silently stripped and the two
+   ends would disagree about what the user saw, which is what the test's own message forbids.
+   (b) the geometry is pushed as **80x24**, the universal default, so hardcoding `Cols: 80, Rows:
+   24` in `App.Peek` also PASSES. A non-default fixture (say 132x43) and one trailing blank line
+   close both.
+3. **PB-APP-7's inversion test does not detect inversion.** Swapping the mapping to `NeedsInput:
+   pref.Mentions, Finished: pref.Alerts` leaves `TestPBAPP7_TheTwoTogglesAreIndependentAndNotInverted`
+   **green**: its two assertions are that each toggle gates exactly one category and that they gate
+   different ones, both of which a swap preserves. The requirement fixes the assignment (Alerts
+   carries NEEDS_INPUT, Mentions carries FINISHED) and production's own comment names the cost --
+   *"swapping them silences the notifications the user asked for while delivering the ones they
+   refused"*. The test needs to name which category each toggle delivered, not count them.
+4. **Two properties are held INCIDENTALLY by tests named for other requirements.** PB-APP-2's
+   "Group is verbatim from the wire" is caught only by `TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend`,
+   and PB-APP-11's `Snapshot.Stale` -- enumerated by name in that row's own criterion (b) -- is
+   caught only by `TestPBAPP8_EveryJournalDerivedReadModelCarriesItsStreamsStaleness`.
+   `pbapp11_silence_test.go` asserts `StreamState`, `SessionList.Stale` and `JournalPage.Stale` and
+   never `Snapshot.Stale`, which is the terminal grid -- the read model the withholding attack
+   renders as live. Both properties hold; neither is guarded by a test whose title would send a
+   maintainer to it.
+5. **A MISROUTE in the error taxonomy is still invisible.** Reclassifying `relay.ErrQuotaExceeded`
+   from `ErrClassRateLimited` to `ErrClassInternal` -- a user with a quota refusal told to file a
+   bug -- leaves `./mobile` and `./mobile/conformance` green, including
+   `TestPBAPP9_TheThreeRemediesAreNeverCollapsed`. This is the residual this file's review
+   correction (2) already recorded ("what can slip past is a misroute ... not an unmapped class"),
+   re-measured and still open. It is outside the row's literal criterion, which maps class to
+   rendered state rather than sentinel to class, so it is recorded rather than counted against the
+   verdict.

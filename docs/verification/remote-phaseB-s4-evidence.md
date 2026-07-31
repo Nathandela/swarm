@@ -330,3 +330,34 @@ uncommitted slices are in flight in the same checkout. `internal/remotegw` and
 package has any dependency on anything S4 touches (`go list -deps` confirms). `cmd/swarm`'s
 `TestTUI_OpensAndRestoresOverPTY` and `TestRunShim_LaunchesAgentPersistsAndLeadsSession` fail
 only under whole-repo parallel load and pass when the package is run on its own.
+
+## Derivation
+
+**MACHINE-READABLE. `scripts/phaseb-traceability.py` reads this section** to emit the traceability
+table's DERIVATION column. One row per requirement, the verdict token `DERIVED` or `NOT DERIVED`,
+and -- for `DERIVED` -- **the mutation that was made to fail, in the same row**; an empty mutation
+cell is refused and counted NOT DERIVED.
+
+Every mutation below moved a PRODUCTION connection (ADR-007 B113) -- a template directive, a
+branch, a file mode, a call site -- and was applied, run, and reverted. `git status` is clean.
+
+| Requirement | Verdict | The mutation, and its result |
+|---|---|---|
+| PB-LIFE-1 | DERIVED | (a) the launchd template's `KeepAlive/SuccessfulExit` flipped `<false/>` -> `<true/>`, i.e. restart on CLEAN exit only -> `TestRenderLaunchd_RestartPolicyOwnerAndNoSecrets` fails. (b) the systemd template hardcodes `ExecStart=/usr/local/bin/swarm-remote` and `RestartSec=30` instead of `{{.Exec}}`/`{{.BackoffSeconds}}`, breaking the ONE-SOURCE clause -> `TestRender_OneSourceDrivesBothUnits` fails on both fields, in both directions (*"still carries the OLD Exec after the Spec changed"*) |
+| PB-LIFE-2 | DERIVED | the `ensureGatewayRunning("pair", stderr)` call removed from `runRemotePair` after `res.Paired` (`cmd/swarm/remote.go:979`) -> `TestRemotePair_SuccessEnsuresGatewayRunning`, `TestRemotePair_UnitNotInstalledIsAHintNotAFailure`, `TestRemotePair_SupervisorFailureIsReportedNotSwallowed` and `TestRemoteInitThenPair_DoesNotLeaveTheGatewayDialingNothing` all fail |
+| PB-LIFE-3 | DERIVED | (a) `ExitCodeFor` stops treating `ErrQuiescent` as success -> `TestExitCodeFor_QuiescenceIsNotAFailure`, `TestSupervisionSequence_RevokeQuiescenceRepair_NoCrashLoop` (*"gateway started 1 times across 100 zero-device ticks"*) and `TestGateway_ExitsQuiescentWithNoPairedDevice` fail, i.e. the revoke crash loop returns. (b) `Desired` maps zero devices to `StateFailed` and everything else to `StateActive` -> `TestDesired_ThreeStates` fails on 0, 2 and 7 |
+| PB-LIFE-4 | DERIVED | (a) `hostSupervisor` writes and chmods the installed unit `0o644` instead of `0o600` -> `TestInstall_WritesOwnerOnlyUnderTheStateDir` fails. (b) `Environment=SWARM_RELAY_TOKEN=...` added to the systemd template -> `TestUnits_CarryNoCredentials` fails, naming the line |
+| PB-LIFE-5 | DERIVED | `StartLimitIntervalSec`/`StartLimitBurst` removed from the systemd `[Unit]` section and `ThrottleInterval` removed from the plist -> `TestRenderSystemd_UserUnitRestartsOnFailureOnly` (*"without it a failing gateway restarts unthrottled"*), `TestRenderLaunchd_RestartPolicyOwnerAndNoSecrets` and `TestRender_ZeroBackoffStillThrottles` all fail. **A second mutation SURVIVED -- see finding (1)** |
+| PB-LIFE-6 | DERIVED | (a) the `swarm-remote` build's `binary:` renamed to `swarm-remote-preview` in `.goreleaser.yaml` -> `TestGoreleaser_ShipsGatewayAndRelay` and `TestGoreleaser_CaskLinksEveryBinaryItsArchiveShips` fail. (b) the whole `id: swarm-remote` build block deleted -> the same two fail, naming *"declares no build with id \"swarm-remote\"; got ids [swarm swarm-relay]"* |
+
+### Finding from this derivation
+
+1. **PB-LIFE-5's rounding rule is unfenced, and production names the hazard itself.**
+   `Spec.resolve` computes `BackoffSeconds: int((backoff + time.Second - 1) / time.Second)` under a
+   comment that reads *"Rounded UP: both unit types take whole seconds, and rounding a sub-second
+   backoff down to zero would leave the gateway unthrottled (PB-LIFE-5)."* Changing it to
+   `int(backoff / time.Second)` leaves `./internal/remote/supervise` **entirely green**. The
+   surviving coverage is `Backoff == 0` (which takes the `DefaultBackoff` branch, 10s, unaffected
+   by rounding) and `Backoff < 0` (refused). Nothing exercises `0 < Backoff < 1s`, which is the
+   only input the rule exists for and which renders `RestartSec=0` / `ThrottleInterval=0` -- an
+   unthrottled crash loop, this row's exact prohibition. One table case at 500ms closes it.
