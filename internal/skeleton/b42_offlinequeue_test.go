@@ -23,11 +23,13 @@ package skeleton
 // enqueued less than a minute before the reconnect, which is not an offline queue; it is a
 // sixty-second retry.
 //
-// AND IT CANNOT BE FIXED BY RE-SIGNING AT DRAIN TIME. PB-SEC-2 pins the biometric gate as
-// PER-USE (`CryptoObject`) for revoke, kill switch, launch and kill -- exactly the actions
-// ADR-007 D7 names as the queue's contents -- so re-authoring on reconnect requires the user
-// present and consenting again. That is a prompt, not a queue, and it is a different product
-// decision needing its own ADR.
+// RE-SIGNING AT DRAIN TIME NO LONGER FIXES IT EITHER, and the reason has changed. It used to
+// be that PB-SEC-2 pinned a per-use gate for exactly the actions ADR-007 D7 names as the
+// queue's contents, so a drain was a prompt rather than a queue. PB-SEC-2 is VOID (ADR-007
+// B133) and there is no prompt left -- and the withdrawal is UNAFFECTED, because it never
+// rested on that argument: it rests on the ExpiresAt arithmetic above, which is independent of
+// who is authenticated. Recorded so nobody re-derives the queue from the disappearance of the
+// weaker argument.
 //
 // WHAT THIS TEST DOES NOT CLAIM. It says nothing about whether an offline queue is desirable.
 // It pins that the one described by PB-NET-4 and ADR-007 D7, built out of the signed commands

@@ -7,7 +7,7 @@
 //
 //   - F2: a real content key installed AFTER the user authenticates is silently discarded,
 //     so the phone comes back on the previous epoch's key and decrypts nothing (PB-KEY-3).
-//   - F4: a lock purge taken while the content tier is locked never reaches disk, which the
+//   - F4: a purge taken while the content tier is unopened never reaches disk, which the
 //     function's own doc comment says it must (PB-KEY-7).
 //   - F1: the carry-verbatim behaviour that prevents a permanent brick had NO test at all;
 //     deleting it failed nothing repo-wide.
@@ -141,16 +141,16 @@ func TestS14A_ALockedContentTierIsCarriedVerbatimAcrossASave(t *testing.T) {
 // F4: destroying a tier is not the same act as having nothing to write.
 // ---------------------------------------------------------------------------
 
-// TestS14A_APurgeWithTheContentTierLockedReachesDisk. PB-KEY-7's lock purge must take the
+// TestS14A_APurgeWithTheContentTierUnopenedReachesDisk. PB-KEY-7's purge must take the
 // durable copy with it, and resealTier's own doc comment says so -- but a purge inferred
 // from an all-zero key is indistinguishable from the wake path's normal condition, so with
-// the content tier locked the old sealed blob survived on disk and the phone recovered the
-// supposedly purged key at the next unlock.
+// the content tier unopened the old sealed blob survived on disk and the phone recovered the
+// supposedly purged key at the next start.
 //
 // The seam this pins: destroying a tier is an EXPLICIT act (Core.PurgeKeys, carried through
 // Store.PurgeKeys), never a Save that happens to hold zeros. That is what lets the carry
 // above and the purge here coexist -- they stop sharing one signal.
-func TestS14A_APurgeWithTheContentTierLockedReachesDisk(t *testing.T) {
+func TestS14A_APurgeWithTheContentTierUnopenedReachesDisk(t *testing.T) {
 	dir, wake, content, keys := s14aR2Sealed(t)
 
 	// Decrypted content the purge must drop with the keys, seeded through the same durable
@@ -164,32 +164,29 @@ func TestS14A_APurgeWithTheContentTierLockedReachesDisk(t *testing.T) {
 		t.Fatalf("seeding the decrypted caches: %v", err)
 	}
 
-	// The screen locks on a process that came up on a push and never opened the tier.
+	// The revoke lands on a process that came up on a push and never opened the tier.
 	content.openErr = crypto.ErrKeyAuthRequired
 	locked := s14aR2Resume(t, dir, wake, content)
 	if err := locked.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys with the content tier locked: %v", err)
+		t.Fatalf("PurgeKeys with the content tier unopened: %v", err)
 	}
 
 	// The strongest reader there is: a fresh Resume holding BOTH KEKs.
 	content.openErr = nil
 	reopened := s14aR2Resume(t, dir, wake, content)
 	after := reopened.State()
-	// The two tier KEYS survive, and after the ADR-007 B35/B36 round that is the requirement
-	// rather than a leak. Destroying them is unimplementable: PB-KEY-10 delivers the epoch key
-	// as a machine-sealed grant inside Go, so the handset has no source for those bytes, and the
-	// grant watermark refuses the machine's re-appended frame as a replay -- the first screen
-	// lock would be a permanent brick. The blob is sealed under an auth-gated Keystore KEK, so
-	// destroying it defends only against an attacker who has already defeated Keystore and
-	// therefore holds device.key too. What the purge destroys is the DECRYPTED CACHES.
-	if after.Keys.ContentKey != keys.ContentKey {
-		t.Errorf("PB-KEY-7/PB-KEY-3: the purge destroyed the sealed content key at rest, so the phone "+
-			"cannot recover without a machine-side re-grant.\n got %x\nwant %x",
-			after.Keys.ContentKey, keys.ContentKey)
+	// BOTH tier keys go, and after ADR-007 B133 that is the requirement rather than a brick.
+	// B35 refused to destroy them because the trigger was a SCREEN LOCK and the handset had no
+	// source for the bytes: the first lock would have been permanent. The trigger is now
+	// revoke/unpair, where being unable to get back in without the machine is the point, and
+	// re-pairing mints fresh keys anyway.
+	if after.Keys.ContentKey == keys.ContentKey {
+		t.Errorf("PB-KEY-7: the purge left the sealed content key at rest, so a restart recovers it: %x",
+			after.Keys.ContentKey)
 	}
-	if after.Keys.WakeKey != keys.WakeKey {
-		t.Errorf("PB-KEY-7/B16: the purge destroyed the wake key, so the handset stops being wakeable "+
-			"at the first screen lock.\n got %x\nwant %x", after.Keys.WakeKey, keys.WakeKey)
+	if after.Keys.WakeKey == keys.WakeKey {
+		t.Errorf("PB-KEY-7: the purge left the wake key at rest, so a revoked handset is still wakeable "+
+			"by the machine: %x", after.Keys.WakeKey)
 	}
 	if len(after.Snapshots) != 0 || len(after.Sessions) != 0 {
 		t.Errorf("PB-KEY-7: the purge left %d snapshots and %d sessions on disk. Zeroizing the keys while "+
@@ -198,10 +195,12 @@ func TestS14A_APurgeWithTheContentTierLockedReachesDisk(t *testing.T) {
 	}
 }
 
-// TestS14A_APurgeIsRecoverableNotABrick. PB-KEY-7's purge must be recoverable by installing
-// the tier key again, or the first screen lock bricks the app. It is the control the test
-// above needs: refusing to ever hold a content key again would satisfy every purge assertion.
-func TestS14A_APurgeIsRecoverableNotABrick(t *testing.T) {
+// TestS14A_APurgeIsRecoverableByRePairing. PB-KEY-7's purge takes both tiers and is not
+// undone locally (ADR-007 B133), but the DEVICE must not be bricked: installing tier keys
+// again -- which is what a re-pairing does -- has to reach disk. It is the control the test
+// above needs: a store that refused to ever hold a content key again would satisfy every
+// purge assertion in this file while making the app unusable after one revoke.
+func TestS14A_APurgeIsRecoverableByRePairing(t *testing.T) {
 	dir, wake, content, keys := s14aR2Sealed(t)
 
 	core := s14aR2Resume(t, dir, wake, content)

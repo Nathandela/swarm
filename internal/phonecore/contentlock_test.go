@@ -1,40 +1,39 @@
-// FAILING-FIRST (TDD RED, GG-5) for PB-KEY-7's lock purge and PB-SEC-2's freshness gate,
-// against the model ADR-007 B35/B36 established and deliberately did not choose between.
+// PB-KEY-7's purge, re-anchored on its surviving trigger (ADR-007 B133).
 //
-// THE DECISION THESE TESTS ENCODE. A lock returns the content tier to LOCKED; it does not
-// destroy it. B35 established that destroying it is unimplementable as specified: PB-KEY-10
-// moved epoch-key delivery entirely into Go, so nothing on the handset has a source for those
-// bytes, and dropKeyMaterial left GrantEpoch/GrantSeq standing so the machine re-appending the
-// very same grant is refused as a replay. Wired as it stood, the FIRST SCREEN LOCK would land
-// the phone in PB-KEY-3's terminal state, exitable only by physical access to the machine.
+// WHAT MOVED. The requirement used to read "lock purges live memory", with three named
+// triggers -- screen lock, background, auth expiry. B133 removes every phone-side user
+// authentication mechanism, so none of the three exists as an event any more. The MECHANISM
+// survives whole and matters more than it did: `MailboxRouter` holds `ContentKey` by value,
+// and B133 makes revoke-from-the-computer the ONLY surviving mitigation for a lost handset,
+// so a revoked device that keeps a resident key and decrypted content has not been revoked
+// in any sense the owner would recognise.
 //
-// What replaces it costs nothing and is the state the design already models. The sealed
-// content-key blob at rest is ALREADY behind an auth-gated Keystore KEK
-// (`Provisioning.kek`: setUserAuthenticationParameters(60, AUTH_BIOMETRIC_STRONG)), which is
-// PB-SEC-1's at-rest gate and holds across a process restart. Destroying that blob buys
-// nothing against an attacker holding a locked handset -- it only helps against one who has
-// already defeated Keystore, and who therefore also holds device.key and the COMMAND_SIGN seed
-// -- while costing the brick above. So the lock:
+// THE TRIGGER IS NOW REVOKE / UNPAIR, and the three expectations B133 left open are decided:
 //
-//	drops from MEMORY exactly what a locked LOAD leaves unread: the epoch content key, the
-//	  send-seq ceilings, the receive high-waters, the op queue and the three decrypted caches;
-//	destroys AT REST only the decrypted caches (ContentPurgeable), which cost nothing because
-//	  PB-SYNC-2 re-derives them by resync;
-//	CARRIES the sealed content key and ContentKept verbatim, as every Save already does for a
-//	  tier this process could not open;
-//	leaves the WAKE tier entirely alone (ADR-007 B9/B16: a push arrives with nobody there).
+//	BOTH TIERS GO. The wake tier was spared by a lock because a push arrives with nobody
+//	  there and the handset had to stay wakeable (ADR-007 B9/B16). A revoked device must not
+//	  be wakeable: the wake key is what lets the machine reach it at all.
+//	IT IS NOT RECOVERABLE WITHOUT RE-PAIRING. The lock kept the sealed blobs because
+//	  PB-KEY-10 left nothing on the handset that could re-derive them, so destroying them
+//	  made the first lock a permanent brick (ADR-007 B35). A revoke has no such cost: the
+//	  pairing is what was destroyed, and re-pairing is the intended and only way back.
+//	THE WATERMARKS AND THE OP QUEUE DO NOT SURVIVE. PB-STATE-9(2)/(3) rule them
+//	  non-purgeable, and that ruling was argued against a LOCK: a phone that keeps talking
+//	  under the same epoch must not renumber its send-seq from 1. A revoke rotates the epoch
+//	  on the machine and ends the pairing, so there is no stream left for a watermark to
+//	  guard and no lease for a queued op to run under -- and PendingOps carries session ids
+//	  and typed command lines, which is exactly the user content a revoke exists to remove.
 //
-// Recovery is PB-KEY-7's own recovery clause read literally -- "require a fresh unwrap before
-// restoring content" -- and that unwrap is a Keystore round trip that enforces both the lock
-// state and the 60-second window. That is also the whole of B36: the defect there is that the
-// content key was unwrapped ONCE at Resume and read from Go memory forever after, so the
-// window never bit. Nothing else has to enforce it once the memory is not held across a lock.
+// PB-SEC-2 IS VOID (B133), and its two tests are deleted rather than adapted. Its whole
+// subject was "the biometric gate is cryptographically enforced, not cosmetic"; there is no
+// gate. They were the worst vacuous-green case in the repo: pure Go over fake sealers, with
+// `crypto.ErrKeyAuthRequired` still compiling because `internal/remote/crypto` is FROZEN, so
+// they would have stayed GREEN while fencing a screen-lock event that exists nowhere.
 
 package phonecore
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,10 +42,10 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// lockFixture is a paired phone with both tiers sealed, decrypted caches on disk and a
-// send-seq ceiling recorded -- i.e. a handset that has been running normally and is about to
-// have its screen locked.
-func lockFixture(t *testing.T) (dir string, wake, content *s14aSealer, keys crypto.EpochKeys) {
+// revokeFixture is a paired phone with both tiers sealed, decrypted caches on disk, a
+// send-seq ceiling and a queued op recorded -- i.e. a handset that has been running normally
+// and is about to be revoked from the computer.
+func revokeFixture(t *testing.T) (dir string, wake, content *s14aSealer, keys crypto.EpochKeys) {
 	t.Helper()
 	dir, wake, content, keys = s14aR2Sealed(t)
 
@@ -56,8 +55,7 @@ func lockFixture(t *testing.T) (dir string, wake, content *s14aSealer, keys cryp
 	st.Snapshots = []Snapshot{{Session: "m/s", Lines: []string{"decrypted terminal content"}, Cols: 80, Rows: 24}}
 	st.SendSeq = map[uint32]uint64{st.EpochID: 17}
 	st.PendingOps = []QueuedOp{{Op: "kill", SessionID: "m/s"}}
-	// The grant watermark a real phone carries: it is what refuses a replayed grant, and it is
-	// the reason a purge that destroyed the key at rest could never be recovered from.
+	// The grant watermark a real phone carries: it is what refuses a replayed grant.
 	st.GrantEpoch, st.GrantSeq = st.EpochID, 3
 	if err := seeded.Save(st); err != nil {
 		t.Fatalf("seeding the content tier: %v", err)
@@ -81,15 +79,18 @@ func readStateFile(t *testing.T, dir string) stateFile {
 }
 
 // ---------------------------------------------------------------------------
-// PB-KEY-7: what the lock destroys, and what it must not.
+// PB-KEY-7: what a revoke destroys, and what it must not.
 // ---------------------------------------------------------------------------
 
-// TestPBKEY7_ALockClearsTheContentKeyAndTheDecryptedCachesFromMemory is the requirement's own
-// verification criterion: "no content key and no decrypted session content remains reachable
-// after lock". It is the half that is NOT met today -- there is no trigger anywhere, and after
-// one resume the core keeps State.Keys.ContentKey with MailboxRouter still bound to it.
-func TestPBKEY7_ALockClearsTheContentKeyAndTheDecryptedCachesFromMemory(t *testing.T) {
-	dir, wake, content, _ := lockFixture(t)
+// TestPBKEY7_ARevokeClearsTheContentKeyAndTheDecryptedCachesFromMemory is the requirement's
+// own verification criterion, with its trigger moved: no content key and no decrypted
+// session content remains reachable after revoke/unpair.
+//
+// The router half is the point. `MailboxRouter` holds `ContentKey` BY VALUE for its
+// lifetime, so a purge that only cleared State would leave the live object still able to
+// open every frame the relay hands it.
+func TestPBKEY7_ARevokeClearsTheContentKeyAndTheDecryptedCachesFromMemory(t *testing.T) {
+	dir, wake, content, _ := revokeFixture(t)
 	core := s14aR2Resume(t, dir, wake, content)
 
 	if err := core.PurgeKeys(); err != nil {
@@ -98,25 +99,23 @@ func TestPBKEY7_ALockClearsTheContentKeyAndTheDecryptedCachesFromMemory(t *testi
 
 	st := core.State()
 	if st.Keys.ContentKey != (crypto.ContentKey{}) {
-		t.Errorf("PB-KEY-7: the content key is still in core memory after the lock: %x", st.Keys.ContentKey)
+		t.Errorf("PB-KEY-7: the content key is still in core memory after the revoke: %x", st.Keys.ContentKey)
 	}
 	if len(st.Sessions) != 0 || len(st.Snapshots) != 0 || len(st.OpOutcomes) != 0 {
-		t.Errorf("PB-KEY-7: the lock left %d session(s), %d snapshot(s) and %d reply outcome(s) in memory",
+		t.Errorf("PB-KEY-7: the revoke left %d session(s), %d snapshot(s) and %d reply outcome(s) in memory",
 			len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes))
 	}
 	if k, _, _, _, _ := core.Router().bound(); k != (crypto.ContentKey{}) {
-		t.Errorf("PB-KEY-7: MailboxRouter is still bound to the content key after the lock: %x", k)
+		t.Errorf("PB-KEY-7: MailboxRouter is still bound to the content key after the revoke: %x", k)
 	}
 }
 
-// TestPBKEY7_ALockDestroysTheDecryptedCachesAtRest is the at-rest half, and it is the clause
-// that costs nothing: the three caches are re-derivable by PB-SYNC-2's resync, so destroying
-// them strands nothing.
+// TestPBKEY7_ARevokeDestroysTheDecryptedCachesAtRest is the at-rest half.
 //
-// It is asserted from the BYTES, because a Load answers from the in-memory copy the purge just
-// cleared and would pass over a blob that survived untouched.
-func TestPBKEY7_ALockDestroysTheDecryptedCachesAtRest(t *testing.T) {
-	dir, wake, content, _ := lockFixture(t)
+// It is asserted from the BYTES, because a Load answers from the in-memory copy the purge
+// just cleared and would pass over a blob that survived untouched.
+func TestPBKEY7_ARevokeDestroysTheDecryptedCachesAtRest(t *testing.T) {
+	dir, wake, content, _ := revokeFixture(t)
 	core := s14aR2Resume(t, dir, wake, content)
 
 	if err := core.PurgeKeys(); err != nil {
@@ -124,228 +123,162 @@ func TestPBKEY7_ALockDestroysTheDecryptedCachesAtRest(t *testing.T) {
 	}
 
 	if blob := readStateFile(t, dir).ContentPurgeable; len(blob) > 0 {
-		t.Errorf("PB-KEY-7: the sealed decrypted-cache container survived the lock (%d bytes). "+
+		t.Errorf("PB-KEY-7: the sealed decrypted-cache container survived the revoke (%d bytes). "+
 			"Zeroizing the key while the content it protected stays on disk is not a purge", len(blob))
 	}
 }
 
-// TestPBKEY7_ALockLeavesTheContentKeyRecoverableWithNoReGrant is the constraint B35 found and
-// declined to resolve, stated as a fence.
+// TestPBKEY7_ARevokeIsNotRecoverableWithoutRePairing is the first of the three expectations
+// B133 left open, decided.
 //
-// dropKeyMaterial destroyed the sealed content key while leaving GrantEpoch/GrantSeq standing,
-// and crypto.GrantReceiver enforces strict (epoch, seq) monotonicity -- so the gateway
-// re-appending the very same bootstrap frame next session is refused as a replay, forever.
-// PB-KEY-10 removed the Kotlin-side copy of those bytes, so nothing on the handset can put the
-// key back either. Wired as it stood, the first screen lock was a permanent brick with the
-// machine as its only exit (PB-KEY-3's terminal state, PB-STATE-10's).
+// A LOCK deliberately kept the sealed content key: PB-KEY-10 moved epoch-key delivery
+// entirely into Go, so nothing on the handset could put those bytes back, and the grant
+// watermark refuses the machine's re-appended frame as a replay -- so destroying the blob
+// made the first screen lock a permanent brick with the machine as its only exit (B35).
 //
-// The mutation this catches is the shipped one: destroy the sealed tiers in Store.PurgeKeys.
-func TestPBKEY7_ALockLeavesTheContentKeyRecoverableWithNoReGrant(t *testing.T) {
-	dir, wake, content, keys := lockFixture(t)
+// A REVOKE inverts that arithmetic. The pairing is the thing being destroyed, so "the phone
+// cannot get back in without the machine" is the OUTCOME rather than the cost, and the only
+// intended way back is re-pairing -- which mints a fresh epoch and fresh keys anyway. A
+// revoked handset that can restore its content key with one local unwrap has not been
+// revoked; it has been asked nicely.
+func TestPBKEY7_ARevokeIsNotRecoverableWithoutRePairing(t *testing.T) {
+	dir, wake, content, keys := revokeFixture(t)
 	core := s14aR2Resume(t, dir, wake, content)
-	before := core.State()
 
 	if err := core.PurgeKeys(); err != nil {
 		t.Fatalf("PurgeKeys: %v", err)
 	}
 
-	// The user authenticates. Nothing else happens: no machine, no relay, no re-grant.
+	// Everything a re-pair does NOT do: no machine, no relay, no re-grant. Just the local
+	// unwrap that used to be the whole recovery from a lock.
 	if err := core.UnsealContent(); err != nil {
-		t.Fatalf("PB-KEY-7: the fresh unwrap after a lock failed, so the lock is a brick: %v", err)
-	}
-	after := core.State()
-	if after.Keys.ContentKey != keys.ContentKey {
-		t.Errorf("PB-KEY-7: the content key was not restored by a fresh unwrap.\n got %x\nwant %x",
-			after.Keys.ContentKey, keys.ContentKey)
-	}
-	if after.GrantEpoch != before.GrantEpoch || after.GrantSeq != before.GrantSeq {
-		t.Errorf("the lock moved the grant watermark (%d/%d -> %d/%d); it is the replay guard and "+
-			"must not be rolled back to make recovery work",
-			before.GrantEpoch, before.GrantSeq, after.GrantEpoch, after.GrantSeq)
-	}
-	if core.StreamStale(StreamGrant) {
-		t.Errorf("PB-KEY-3: the lock put the phone into the grant-loss terminal state. A screen lock " +
-			"must never be a state whose only exit is physical access to the machine")
-	}
-}
-
-// TestPBKEY7_ALockDoesNotDisturbTheWakeTier. ADR-007 B9/B16: a high-priority FCM push is the
-// SOLE background wake path and arrives with nobody there, so the wake KEK is deliberately not
-// auth-gated. A lock that took the wake key with it would leave a handset that stops being
-// wakeable at the first screen lock -- and the Kotlin side has no source for those bytes
-// either, so nothing would put it back (B35).
-//
-// Both halves are asserted: the live key and the sealed blob.
-func TestPBKEY7_ALockDoesNotDisturbTheWakeTier(t *testing.T) {
-	dir, wake, content, keys := lockFixture(t)
-	core := s14aR2Resume(t, dir, wake, content)
-
-	if err := core.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
-	}
-
-	if got := core.State().Keys.WakeKey; got != keys.WakeKey {
-		t.Errorf("PB-KEY-7/B16: the lock cleared the WAKE key from memory. The push path is the only "+
-			"background wake there is and it runs with nobody present to re-authorize.\n got %x\nwant %x",
-			got, keys.WakeKey)
-	}
-	if blob := readStateFile(t, dir).WakeKey; len(blob) == 0 {
-		t.Errorf("PB-KEY-7/B16: the lock destroyed the sealed WAKE key at rest. The handset stops " +
-			"being wakeable at the first screen lock, with no on-device source for the bytes")
-	}
-
-	// And the strongest reader: a fresh process, with the content tier still locked, must come
-	// up holding the wake key -- which is exactly a push arriving after a screen lock.
-	content.openErr = crypto.ErrKeyAuthRequired
-	woken := s14aR2Resume(t, dir, wake, content)
-	if got := woken.State().Keys.WakeKey; got != keys.WakeKey {
-		t.Errorf("PB-KEY-7/B16: a push-woken process after a lock holds no wake key.\n got %x\nwant %x",
-			got, keys.WakeKey)
-	}
-}
-
-// TestPBKEY7_ALockPreservesTheReplayGuardsAndTheOpQueueAtRest. PB-STATE-9 clause 2: the
-// send-seq ceiling and the receive high-waters are NOT decrypted content -- they are the
-// record of how far the streams got -- and destroying them renumbers the phone from 1 under an
-// epoch the gateway already holds a high-water for, which stale-drops everything it sends for
-// the life of that epoch. PendingOps is content-tier and explicitly non-purgeable.
-//
-// The lock cannot READ them (it runs with the tier locked by definition) and does not need to:
-// the container is carried verbatim, which is what every Save already does for an unopened
-// tier.
-func TestPBKEY7_ALockPreservesTheReplayGuardsAndTheOpQueueAtRest(t *testing.T) {
-	dir, wake, content, _ := lockFixture(t)
-	core := s14aR2Resume(t, dir, wake, content)
-	epoch := core.State().EpochID
-
-	if err := core.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
-	}
-	if blob := readStateFile(t, dir).ContentKept; len(blob) == 0 {
-		t.Fatalf("PB-STATE-9: the lock destroyed the non-purgeable content container")
-	}
-
-	if err := core.UnsealContent(); err != nil {
-		t.Fatalf("UnsealContent: %v", err)
-	}
-	st := core.State()
-	if got := st.SendSeq[epoch]; got != 17 {
-		t.Errorf("PB-STATE-9: the send-seq ceiling did not survive the lock: got %d, want 17. The phone "+
-			"renumbers from 1 and the gateway stale-drops every frame for the life of the epoch", got)
-	}
-	if len(st.PendingOps) != 1 || st.PendingOps[0].Op != "kill" {
-		t.Errorf("PB-STATE-9: the offline op queue did not survive the lock: %+v", st.PendingOps)
-	}
-}
-
-// TestPBKEY7_ALockLeavesTheStoreExactlyWhereALockedLoadLeavesIt is the fence that keeps the
-// two paths from drifting. A lock is not a new state: it is the state a process that came up
-// on a push is already in, which the design has modelled since S15 and every Save already
-// handles. Anything the lock leaves behind that a locked load does not is content this process
-// is holding with the screen locked.
-func TestPBKEY7_ALockLeavesTheStoreExactlyWhereALockedLoadLeavesIt(t *testing.T) {
-	dir, wake, content, _ := lockFixture(t)
-
-	locked := s14aR2Resume(t, dir, wake, content)
-	if err := locked.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
-	}
-
-	// The same directory, opened by a process that never had the content tier at all.
-	content.openErr = crypto.ErrKeyAuthRequired
-	woken := s14aR2Resume(t, dir, wake, content)
-	content.openErr = nil
-
-	got, want := locked.State(), woken.State()
-	for _, c := range []struct {
-		what      string
-		got, want int
-	}{
-		{"sessions", len(got.Sessions), len(want.Sessions)},
-		{"snapshots", len(got.Snapshots), len(want.Snapshots)},
-		{"reply outcomes", len(got.OpOutcomes), len(want.OpOutcomes)},
-		{"send-seq ceilings", len(got.SendSeq), len(want.SendSeq)},
-		{"receive high-waters", len(got.Receive), len(want.Receive)},
-		{"pending ops", len(got.PendingOps), len(want.PendingOps)},
-	} {
-		if c.got != c.want {
-			t.Errorf("PB-KEY-7: after a lock the core holds %d %s; a process that came up with the "+
-				"content tier locked holds %d. A lock must reach the same state, or it is holding "+
-				"content-tier material with the screen locked", c.got, c.what, c.want)
-		}
-	}
-	if got.Keys.ContentKey != want.Keys.ContentKey {
-		t.Errorf("PB-KEY-7: content key after a lock %x, after a locked load %x", got.Keys.ContentKey, want.Keys.ContentKey)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// PB-SEC-2: the gate is the Keystore refusing, not a flag beside it.
-// ---------------------------------------------------------------------------
-
-// TestPBSEC2_RestoringContentGoesBackToKeystoreAndIsRefusedWhileLocked is B36's finding as a
-// fence. The content key was unwrapped ONCE at Resume and read from Go memory for every
-// outbound send thereafter, so after a single resume neither a screen lock nor the stated
-// 60-second window stopped any content operation.
-//
-// The tier sealer IS the Keystore round trip (mobile/keycustody.go custodySealer holds the
-// FETCHER, never a key), so the assertion is that restoring content consults it and honours
-// its refusal -- with the refusal arriving as crypto.ErrKeyAuthRequired, which is exactly what
-// a handset past its 60-second window returns.
-func TestPBSEC2_RestoringContentGoesBackToKeystoreAndIsRefusedWhileLocked(t *testing.T) {
-	dir, wake, content, keys := lockFixture(t)
-	core := s14aR2Resume(t, dir, wake, content)
-
-	if err := core.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
-	}
-
-	// The screen is locked, or the 60-second window has lapsed. Same refusal either way.
-	content.openErr = crypto.ErrKeyAuthRequired
-	opensBefore := content.opens
-	err := core.UnsealContent()
-	if !errors.Is(err, crypto.ErrKeyAuthRequired) {
-		t.Fatalf("PB-SEC-2: restoring content while the tier is locked must surface the custody "+
-			"refusal unchanged; got %v", err)
-	}
-	if content.opens == opensBefore {
-		t.Errorf("PB-SEC-2: restoring content never asked the tier sealer. A core that answers from " +
-			"its own memory keeps decrypting content after the screen locked, while every " +
-			"restart-based test still passes")
+		t.Fatalf("UnsealContent after a revoke must be a no-op, not an error: %v", err)
 	}
 	if got := core.State().Keys.ContentKey; got != (crypto.ContentKey{}) {
-		t.Errorf("PB-SEC-2: a refused unwrap installed a content key anyway: %x", got)
+		t.Errorf("PB-KEY-7: a local unwrap put the content key back after a revoke: %x. The revoke is "+
+			"the only mitigation B133 leaves for a lost handset, and one that a fresh process undoes "+
+			"by itself is not one", got)
 	}
 
-	// The user authenticates.
-	content.openErr = nil
-	if err := core.UnsealContent(); err != nil {
-		t.Fatalf("PB-SEC-2: restoring content after a fresh authentication failed: %v", err)
+	// The strongest reader there is: a fresh process holding BOTH real KEKs.
+	reopened := s14aR2Resume(t, dir, wake, content)
+	if got := reopened.State().Keys.ContentKey; got == keys.ContentKey {
+		t.Errorf("PB-KEY-7: the sealed content key survived the revoke at rest, so a restart recovers "+
+			"it: %x", got)
 	}
-	if got := core.State().Keys.ContentKey; got != keys.ContentKey {
-		t.Errorf("PB-SEC-2: the content key was not restored by the fresh unwrap.\n got %x\nwant %x",
-			got, keys.ContentKey)
+	if blob := readStateFile(t, dir).ContentKey; len(blob) > 0 {
+		t.Errorf("PB-KEY-7: the sealed content-key blob is still on disk after the revoke (%d bytes)", len(blob))
 	}
 }
 
-// TestPBSEC2_ALockedCoreCannotBeUnlockedByASave is the control on the test above: it must not
-// be satisfiable by any path that does not go through the tier KEK. Save adopts State
-// wholesale, so a caller holding a pre-lock snapshot is the obvious way back in -- and it is
-// the one S14a's purgeGen already closes. Asserted here because this is the requirement that
-// depends on it: if a Save can restore the key, "require a fresh unwrap" is decoration.
-func TestPBSEC2_ALockedCoreCannotBeUnlockedByASave(t *testing.T) {
-	dir, wake, content, keys := lockFixture(t)
+// TestPBKEY7_ARevokePurgesTheWakeTierToo is the second decided expectation, and it is the
+// one that inverts a rule the lock purge was built around.
+//
+// ADR-007 B9/B16 spared the wake tier from a lock because a high-priority FCM push is the
+// SOLE background wake path and arrives with nobody there: a lock that took the wake key
+// left a handset that stopped being wakeable at the first screen lock, with no on-device
+// source for the bytes. That argument is about a phone that must go on WORKING.
+//
+// A revoked phone must not go on working. The wake key is precisely what lets the machine
+// reach it, and PB-PUSH-9 already requires deletion of the push registration on revoke; a
+// wake key left behind is the other half of the same door.
+func TestPBKEY7_ARevokePurgesTheWakeTierToo(t *testing.T) {
+	dir, wake, content, keys := revokeFixture(t)
 	core := s14aR2Resume(t, dir, wake, content)
-	stale := core.State() // taken BEFORE the lock, and it holds the real key
 
 	if err := core.PurgeKeys(); err != nil {
 		t.Fatalf("PurgeKeys: %v", err)
 	}
-	content.openErr = crypto.ErrKeyAuthRequired
-	_ = core.Save(stale) // may refuse; what matters is what it cannot do
 
-	if got := core.State().Keys.ContentKey; got == keys.ContentKey {
-		t.Errorf("PB-SEC-2: a Save carrying a pre-lock snapshot put the content key back with no "+
-			"Keystore round trip at all: %x", got)
+	if got := core.State().Keys.WakeKey; got == keys.WakeKey {
+		t.Errorf("PB-KEY-7: the revoke left the WAKE key in memory: %x", got)
+	}
+	if blob := readStateFile(t, dir).WakeKey; len(blob) > 0 {
+		t.Errorf("PB-KEY-7: the sealed WAKE key survived the revoke at rest (%d bytes). The wake key is "+
+			"what lets the machine reach this handset at all", len(blob))
+	}
+
+	// And the strongest reader: a fresh process, which is what a push would wake.
+	woken := s14aR2Resume(t, dir, wake, content)
+	if got := woken.State().Keys.WakeKey; got == keys.WakeKey {
+		t.Errorf("PB-KEY-7: a process started after the revoke comes up holding the wake key: %x", got)
+	}
+}
+
+// TestPBKEY7_ARevokeTakesTheWatermarksAndTheOpQueue is the third decided expectation.
+//
+// PB-STATE-9(2)/(3) rule the send-seq ceiling, the receive high-waters and PendingOps
+// NON-PURGEABLE, and that ruling is sound against a LOCK: a phone that keeps talking under
+// the same epoch and renumbers its send-seq from 1 is stale-dropped by the gateway for the
+// life of that epoch, and a queued op is work the user asked for and has not been told about.
+//
+// A revoke ends the epoch and the pairing together. There is no stream left for a watermark
+// to guard, no lease for a queued op to ride, and PendingOps carries session ids and the
+// command line typed for a launch -- user content by any reading. Carrying it across a
+// revoke would leave the one thing the owner revoked the device to remove.
+func TestPBKEY7_ARevokeTakesTheWatermarksAndTheOpQueue(t *testing.T) {
+	dir, wake, content, _ := revokeFixture(t)
+	core := s14aR2Resume(t, dir, wake, content)
+
+	if err := core.PurgeKeys(); err != nil {
+		t.Fatalf("PurgeKeys: %v", err)
+	}
+	if blob := readStateFile(t, dir).ContentKept; len(blob) > 0 {
+		t.Errorf("PB-KEY-7: the non-purgeable content container survived the revoke (%d bytes). It "+
+			"carries the send-seq ceiling, the receive high-waters and the offline op queue -- "+
+			"session ids and the command line typed for a launch", len(blob))
+	}
+
+	// The strongest reader there is: a fresh process holding BOTH real KEKs.
+	reopened := s14aR2Resume(t, dir, wake, content)
+	st := reopened.State()
+	if len(st.SendSeq) != 0 {
+		t.Errorf("PB-KEY-7: the send-seq ceilings survived the revoke: %+v", st.SendSeq)
+	}
+	if len(st.Receive) != 0 {
+		t.Errorf("PB-KEY-7: the receive high-waters survived the revoke: %+v", st.Receive)
+	}
+	if len(st.PendingOps) != 0 {
+		t.Errorf("PB-KEY-7: the offline op queue survived the revoke: %+v", st.PendingOps)
+	}
+}
+
+// TestPBKEY7_ARevokedDirectoryHoldsNoKeyMaterialAtAll is the whole-purge fence, and it is
+// what stops the four above from being satisfied one field at a time.
+//
+// It replaces the equivalence fence this file used to carry ("a lock leaves the store
+// exactly where a locked load leaves it"), which was right for a lock -- a lock WAS the
+// state a push-woken process is already in -- and is wrong for a revoke: a push-woken
+// process still holds the wake key, and a revoked one holds nothing.
+func TestPBKEY7_ARevokedDirectoryHoldsNoKeyMaterialAtAll(t *testing.T) {
+	dir, wake, content, _ := revokeFixture(t)
+	core := s14aR2Resume(t, dir, wake, content)
+
+	if err := core.PurgeKeys(); err != nil {
+		t.Fatalf("PurgeKeys: %v", err)
+	}
+
+	f := readStateFile(t, dir)
+	for _, c := range []struct {
+		what string
+		blob []byte
+	}{
+		{"the sealed wake key", f.WakeKey},
+		{"the sealed content key", f.ContentKey},
+		{"the wake-tier state container", f.WakeState},
+		{"the non-purgeable content container", f.ContentKept},
+		{"the decrypted-cache container", f.ContentPurgeable},
+	} {
+		if len(c.blob) > 0 {
+			t.Errorf("PB-KEY-7: %s survived the revoke (%d bytes)", c.what, len(c.blob))
+		}
+	}
+
+	// MUTATION CONTROL: a purge that took the whole state FILE would satisfy every
+	// assertion above and would also lose the machine binding the load path must read
+	// before it can open anything (PB-STATE-9(1)). The file must still be a state file.
+	if f.Machine == "" {
+		t.Error("PB-KEY-7: the revoke destroyed the state file's machine binding, so the assertions " +
+			"above are measuring an absent file rather than a purged one")
 	}
 }

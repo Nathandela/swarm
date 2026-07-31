@@ -3,7 +3,8 @@ package skeleton
 // FAILING-FIRST end-to-end test for committee finding C2a at the ASSEMBLY layer: `swarm remote off`
 // (SetRemoteControl(false)) must PROACTIVELY sever a live take_control lease on the remote Server,
 // not merely pause per-keystroke input. Otherwise turning `on` again before the signed expiry would
-// silently resume control without a fresh take_control (a new biometric gate). The assembly wires
+// silently resume control without a fresh take_control (a new device signature over a new
+// single-use gate token). The assembly wires
 // the coreAPI kill-switch setter to the remote Server's SeverAllRemoteControl seam.
 //
 // RED today (behavioral): SetRemoteControl(false) sets the manual override but never signals the

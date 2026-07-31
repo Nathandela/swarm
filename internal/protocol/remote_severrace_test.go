@@ -7,7 +7,8 @@ package protocol
 // SeverAllRemoteControl runs in that window it snapshots the live leases BEFORE cc.control
 // exists, so its release misses the escaping lease. The kill switch (clause 1) then merely
 // PAUSES that lease while off — turning it back ON resumes control with NO fresh take_control
-// (no new biometric gate). The OFF variant is undefended: `off` does not remove the device,
+// (no new device signature, no new single-use gate token). The OFF variant is undefended: `off`
+// does not remove the device,
 // so controlGateOpen clause 4 (device registered) still passes.
 //
 // Fix: take_control captures a monotonic sever generation BEFORE authz and re-checks it AFTER

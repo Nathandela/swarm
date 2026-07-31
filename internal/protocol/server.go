@@ -1396,9 +1396,9 @@ func (s *Server) severRevokedDeviceControl(deviceID string) {
 // peek on this Server (C2a). It is the PROACTIVE teardown the kill switch invokes when remote
 // control transitions to DISABLED (`swarm remote off`, or the last paired device removed): the
 // per-keystroke controlGateOpen clause-1 drop only PAUSES a live lease, so turning the switch back
-// ON before the signed expiry would silently RESUME it without a fresh take_control (no new
-// biometric gate). This SEVERS the lease instead — clearing cc.control and closing its upstream
-// stream — so resuming control requires a new take_control. Exported so the assembly's coreAPI
+// ON before the signed expiry would silently RESUME it without a fresh take_control — no new device
+// signature, no new single-use gate token. This SEVERS the lease instead — clearing cc.control and
+// closing its upstream stream — so resuming control requires a new take_control. Exported so the assembly's coreAPI
 // kill-switch setter can signal the remote Server across the package boundary (mirroring how the
 // daemon's cross-package hooks are wired as callbacks).
 func (s *Server) SeverAllRemoteControl() {
@@ -1510,8 +1510,12 @@ func (cc *clientConn) handleAttach(c Control) {
 // SCOPE: establishment + authz. Input forwarding under this lease
 // (OpDataIn/OpResize) is slice A5-b.
 //
-// Slice A5-c binds a one-shot, "biometric-attested" gate token into the device
-// signature and makes the operation_id single-use. Both properties require the durable
+// Slice A5-c binds a one-shot ANTI-SWAP gate token into the device signature and makes
+// the operation_id single-use. The token is a random 16 bytes minted per take_control; it
+// attests nothing about who is holding the phone and never did (ADR-007 B133) — its whole
+// function is that the daemon recomputes SHA256 over the WIRE value, so a relay that
+// substitutes it produces a content_hash the device signature does not cover and
+// verification fails. Both properties require the durable
 // idempotency store, so the whole mechanism engages ONLY when the backend implements
 // OperationClaimer (the production coreAPI always does); a bare stub keeps the A5-a/A5-b
 // establishment path unchanged. When engaged, the order is: present-check (an absent
@@ -1605,7 +1609,8 @@ func (cc *clientConn) handleTakeControl(c Control) {
 	// revoke) ran concurrently and may have snapshotted its live leases BEFORE this one was
 	// published (a silent escape that a later `on` would resume with NO fresh take_control). So
 	// FAIL CLOSED: do not publish cc.control, and release the just-established lease below. A
-	// fresh take_control (new biometric gate) is then required to resume control.
+	// fresh take_control — a new device signature over a new single-use gate token — is then
+	// required to resume control.
 	if cc.srv.severGen.Load() != severAtStart {
 		cc.ctlMu.Unlock()
 		cc.srv.releaseLease(cc, local, gen, true, true)

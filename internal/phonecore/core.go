@@ -38,8 +38,9 @@ type Acker interface {
 // (PB-KEY-9). Both are REQUIRED whenever anything is written at rest -- Resume fails with
 // ErrNoSealer rather than writing key material in the clear (ADR-007 B18(c)). They are
 // separate because one KEK over both tiers is the collapse the plaintext files already had:
-// the wake KEK opens with no user present, so anything under it is reachable without the
-// biometric the content tier exists to require.
+// the wake KEK is the one the push path opens, so anything under it is reachable by the very
+// process PB-KEY-2 keeps away from session content -- and FCM reads every push payload it
+// carries (ADR-007 A15 as amended by B133), which is why the split is a WIRE property.
 type Config struct {
 	Dir           string
 	Machine       string
@@ -77,7 +78,7 @@ type Core struct {
 	// Without it the two halves of two rebinds interleave, and PB-KEY-7 is the direction that
 	// matters: a Save whose rebind read PRE-purge state applies after the purge's, leaving
 	// MailboxRouter bound to the content key the purge destroyed -- after PurgeKeys has
-	// returned and every writer has finished, with the screen locked. That is the memory half
+	// returned and every writer has finished, on a device the owner has revoked. That is the memory half
 	// PB-KEY-7 lists FIRST, and it is the same race round 3 closed on the durable side; the
 	// argument is the one that fix already made, because PurgeKeys arrives from an Android
 	// lifecycle callback on another thread.
@@ -214,15 +215,15 @@ func (c *Core) Mutate(fn func(*State)) error {
 	return nil
 }
 
-// PurgeKeys is PB-KEY-7's lock purge at the durable layer: the content tier returns to LOCKED
-// and every DECRYPTED cache it protected is destroyed, in memory and at rest. It REBINDS
+// PurgeKeys is PB-KEY-7's revoke/unpair purge at the durable layer: BOTH tier keys and
+// everything sealed under either one are destroyed, in memory and at rest. It REBINDS
 // afterwards for the same reason Save does -- the live objects must come off the purged epoch,
 // or the router keeps opening frames under a key the phone no longer holds.
 //
-// THE SEALED BLOBS STAY. This comment used to say they went with the keys; ADR-007 B44 struck
-// that. The tier is unopened, not erased, which is the state a push-woken process is already
-// in, and UnsealContent -- a fresh Keystore unwrap -- is the way back. Store.PurgeKeys carries
-// why destroying the blob is unimplementable rather than merely undesirable.
+// THE SEALED BLOBS GO. This comment has said both things: ADR-007 B44 struck the claim while
+// the trigger was a screen lock, and ADR-007 B133 moves the trigger to revoke/unpair, where
+// re-pairing rather than a local unwrap is the intended way back. Store.PurgeKeys carries the
+// whole argument.
 //
 // It is a distinct verb from Save because a Save whose keys are zero is ambiguous: the wake
 // path holds zeros for a content key it could not read and Saves constantly, so custody
@@ -232,8 +233,8 @@ func (c *Core) Mutate(fn func(*State)) error {
 // The durable error is REPORTED but never short-circuits the rest: custody purges its own
 // memory unconditionally, so adopting and rebinding is what carries that through to the live
 // objects. Returning early on a failed write left the keys in c.st and bound in the router
-// with the screen locked -- the half of PB-KEY-7 that cannot fail, gated behind the half that
-// can.
+// on a device the owner has revoked -- the half of PB-KEY-7 that cannot fail, gated behind the
+// half that can.
 func (c *Core) PurgeKeys() error {
 	c.mu.Lock()
 	err := c.store.PurgeKeys()
@@ -243,12 +244,14 @@ func (c *Core) PurgeKeys() error {
 	return err
 }
 
-// UnsealContent restores content operations by re-opening the content tier through its KEK --
-// PB-KEY-7's "require a fresh unwrap", and the only way back from PurgeKeys.
+// UnsealContent restores content operations by re-opening the content tier through its KEK.
+// It is what a process that came up WITHOUT the content tier calls -- the push/wake path holds
+// the wake key and never asks for the other (PB-KEY-2) -- and NOT a way back from PurgeKeys,
+// which destroys the blob it would open.
 //
 // It REBINDS on success for the same reason PurgeKeys does: the live objects must come back
 // onto the restored epoch key, or the router keeps refusing frames the phone can now open.
-// A refusal changes nothing at all, so a locked core stays exactly locked.
+// A refusal changes nothing at all, so a core without the tier stays exactly without it.
 func (c *Core) UnsealContent() error {
 	c.mu.Lock()
 	err := c.store.UnsealContent()
@@ -424,13 +427,12 @@ func (c *Core) MarkGrantLost() error {
 // machine. And a phone that is merely keyless has proved nothing: the gateway may simply not
 // have reconnected yet, which is answered by waiting, not by a re-grant.
 //
-// A LOCKED CONTENT TIER IS EXCLUDED TWICE, and after ADR-007 B35 it needs to be. The first
-// exclusion is the one that was always here: the sealed-box open runs before the replay check
-// and uses the RECIPIENT key, which is a content-tier device scalar unsealed per operation, so
-// a handset whose Keystore is refusing never reaches this function. The second is the caller's
-// keyless test, which now asks whether the phone HAS a key rather than whether this process is
-// holding one -- because the lock purge stopped destroying the sealed key, and a purge taken
-// while the KEK still opens (a backgrounding with the device unlocked, mid-drain) would
+// AN UNOPENED CONTENT TIER IS EXCLUDED TWICE, and it needs to be. The first exclusion is the
+// one that was always here: the sealed-box open runs before the replay check and uses the
+// RECIPIENT key, which is a content-tier device scalar unsealed per operation, so a handset
+// whose Keystore is refusing never reaches this function. The second is the caller's keyless
+// test, which asks whether the phone HAS a key rather than whether this process is holding one
+// -- the push/wake path runs without the content tier by design (PB-KEY-2), and it would
 // otherwise present a phone that is fine as one that is permanently lost.
 //
 // WHAT IT DELIBERATELY DOES NOT CLAIM. A
@@ -470,9 +472,9 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 	epoch, seq, keys, err := c.grants.Accept(c.ks, ed25519.PublicKey(c.st.MachineSignPub), g)
 	if err != nil {
 		// KEYLESS MEANS THE PHONE HAS NO KEY, not that this process is not holding one. A
-		// content tier that is merely LOCKED holds its sealed key at rest and recovers it with
+		// content tier that is merely UNOPENED holds its sealed key at rest and recovers it with
 		// a fresh unwrap, so treating it as keyless would make PB-KEY-3's terminal state the
-		// ordinary consequence of a screen lock -- see State.contentSealed.
+		// ordinary consequence of serving a push -- see State.contentSealed.
 		keyless := c.st.Keys.ContentKey == (crypto.ContentKey{}) && !c.st.contentSealed
 		c.mu.Unlock()
 		if grantLossDetected(err, keyless) {

@@ -342,15 +342,20 @@ func TestS11Coalescer_FlushesBeforeResize(t *testing.T) {
 
 // TestS11Coalescer_FlushEmptiesEveryBoundary covers PB-INPUT-6's remaining boundaries with
 // ONE mechanism, because they are one mechanism: release / take_control_end, app
-// backgrounding, and biometric-freshness expiry all end the ability to type and must leave
-// nothing buffered. §6.0 is explicit that a freshness lapse "must pause input and
-// re-authorize, not silently continue or silently drop".
+// backgrounding, and the lease horizon passing all end the ability to type and must leave
+// nothing buffered. PB-INPUT-3 is explicit that expiry has "defined UX rather than silent
+// keystroke loss".
+//
+// The third boundary used to be §6.0's biometric-freshness expiry. ADR-007 B133 withdrew
+// it with the gate it measured, so the boundary named in its place is the lease horizon --
+// PB-INPUT-3's surviving wall, and the one thing that still ends a typing session with the
+// app in the foreground and the transport up.
 //
 // The mutation control is the second half: after the flush the SAME bytes must not be
 // emitted again by a later Due(). A coalescer that copies rather than consumes its buffer
 // passes the first assertion and double-types the user's line.
 func TestS11Coalescer_FlushEmptiesEveryBoundary(t *testing.T) {
-	boundaries := []string{"release / take_control_end", "app backgrounding", "biometric freshness expiry"}
+	boundaries := []string{"release / take_control_end", "app backgrounding", "lease horizon passed"}
 	for _, name := range boundaries {
 		t.Run(name, func(t *testing.T) {
 			clk := s11NewClock()

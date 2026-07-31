@@ -199,7 +199,7 @@ type State struct {
 	// It is DURABLE for the same reason StaleStreams is, and the case is the routine one:
 	// Android SIGKILLs the app, the next launch renders the RESTORED caches, and a
 	// freshness coordinate held only in memory comes back clear -- so the phone re-presents
-	// content it already knew was old as live. It likewise survives a lock purge: it is a
+	// content it already knew was old as live. It likewise survives the purge: it is a
 	// record ABOUT content, not content.
 	//
 	// It is MONOTONIC. A retained frame delivered late must not move it backwards, and it is
@@ -207,7 +207,7 @@ type State struct {
 	// an unbounded freshness window with one stamp.
 	LastHeardAt int64
 
-	// purgeGen is the lock-purge counter this snapshot was taken at. It is custody's own
+	// purgeGen is the purge counter this snapshot was taken at. It is custody's own
 	// bookkeeping, never persisted and never set by a caller: Store stamps every State it
 	// hands out, and a Save carrying an OLDER stamp is a writer that has not noticed the
 	// purge in between, whose key material and decrypted caches are dropped rather than
@@ -220,12 +220,11 @@ type State struct {
 	// every State the Store hands out, never persisted, never set by a caller.
 	//
 	// It is what separates "this phone has no epoch key" from "this process cannot read the one
-	// it has", and those became different facts when the lock purge stopped destroying the
-	// sealed key (PurgeKeys, ADR-007 B35). Only grantLossDetected consumes it, and there it is
-	// load-bearing: without it a bootstrap grant re-appended while the content tier is locked is
-	// a replay against a phone that LOOKS keyless, so PB-KEY-3's TERMINAL state would be entered
-	// by a screen lock -- the brick the lock purge was redesigned to avoid, arriving by the
-	// other road.
+	// it has", and those are different facts for every process that comes up without the content
+	// tier -- the push/wake path holds the wake key and never asks for the other (PB-KEY-2).
+	// Only grantLossDetected consumes it, and there it is load-bearing: without it a bootstrap
+	// grant re-appended to such a process is a replay against a phone that LOOKS keyless, so
+	// PB-KEY-3's TERMINAL state would be entered by ordinary push traffic.
 	contentSealed bool
 }
 
@@ -270,17 +269,19 @@ func (s State) clone() State {
 type Store interface {
 	Load() State
 	Save(State) error
-	// PurgeKeys is PB-KEY-7's lock purge: it returns the CONTENT tier to LOCKED and destroys
-	// every decrypted cache derived from it, in memory and at rest.
+	// PurgeKeys is PB-KEY-7's REVOKE/UNPAIR purge: it destroys BOTH tier keys and everything
+	// sealed under either of them, in memory and at rest.
 	//
-	// IT DOES NOT DESTROY THE SEALED CONTENT KEY. This contract used to say "the SEALED blobs
-	// included", and ADR-007 B44 struck that claim: destroying the blob is unimplementable as
-	// specified, because nothing on the handset can re-obtain those bytes and the replay guard
-	// survives any purge, so the first screen lock would land the phone in PB-KEY-3's terminal
-	// state. The clause is corrected HERE and not only at the implementation because this
-	// interface is what a SECOND implementation gets written against -- one built to the struck
-	// wording would be correct by its own contract and would brick every handset it ran on.
-	// See fileStore.PurgeKeys for the whole argument, and UnsealContent for the way back.
+	// IT DESTROYS THE SEALED BLOBS, and the history of that clause is worth carrying because
+	// it flipped twice. It first said so; ADR-007 B44 struck it, correctly, while the trigger
+	// was a SCREEN LOCK -- nothing on the handset can re-obtain the epoch key and the replay
+	// guard survives any purge, so the first lock would have landed the phone in PB-KEY-3's
+	// terminal state. ADR-007 B133 deletes the lock and makes revoke/unpair the trigger, and
+	// the same fact reads the other way: being unable to get back in without the machine is
+	// what a revoke IS, and re-pairing mints fresh keys. The monotonic replay guards
+	// (GrantEpoch/GrantSeq, WakeReplay) are the exception and survive; see dropAllKeyMaterial.
+	// The clause is stated HERE and not only at the implementation because this interface is
+	// what a SECOND implementation gets written against.
 	//
 	// It is a method rather than a Save of a State whose keys are zero because those two
 	// are not the same act and custody cannot tell them apart from the bytes: a process that
@@ -295,14 +296,15 @@ type Store interface {
 	// the purged state either way.
 	PurgeKeys() error
 
-	// UnsealContent re-opens the content tier IN PLACE, through the tier KEK, and is
-	// PB-KEY-7's "require a fresh unwrap before restoring content" read literally.
+	// UnsealContent re-opens the content tier IN PLACE, through the tier KEK: the way a
+	// process that came up without the content tier -- the push/wake path, which holds the
+	// wake key and never asks for the other (PB-KEY-2) -- restores content operations.
 	//
-	// It is the only way back from PurgeKeys, and it must stay the only one: the whole of
-	// PB-SEC-2 is that the gate is the Keystore refusing an unwrap rather than a flag beside
-	// it, so a path that restored content without consulting the sealer would make the lock
-	// decoration. A refusal is returned VERBATIM -- crypto.ErrKeyAuthRequired for a locked
-	// tier or a lapsed 60-second window, crypto.ErrKeyInvalidated for a destroyed KEK -- and
+	// It is NOT a way back from PurgeKeys, which destroys the blob it would open; after a
+	// revoke it opens nothing and installs nothing. It must stay the ONLY path that installs
+	// a content key from rest: one that answered from anywhere else would restore content the
+	// sealer never released. A refusal is returned VERBATIM -- crypto.ErrKeyAuthRequired for
+	// a tier the KEK declines to open, crypto.ErrKeyInvalidated for a destroyed KEK -- and
 	// nothing is adopted unless every container opened.
 	UnsealContent() error
 
@@ -364,8 +366,8 @@ type stateFile struct {
 	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
 
 	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
-	// (PB-KEY-9): one file cannot be gated two ways, and a content key recoverable
-	// without the biometric collapses the tier split the design exists for.
+	// (PB-KEY-9): one file cannot be opened two ways, and a content key the push path can
+	// reach collapses the tier split the design exists for (PB-KEY-2).
 	WakeKey    []byte `json:"wake_key,omitempty"`
 	ContentKey []byte `json:"content_key,omitempty"`
 
@@ -421,8 +423,8 @@ type wakeContainer struct {
 	WakeReplay uint64 `json:"wake_replay,omitempty"`
 }
 
-// keptContainer is the plaintext of stateFile.ContentKept: content-tier state a lock purge
-// must PRESERVE. The replay-guard coordinates are not decrypted content -- they are the
+// keptContainer is the plaintext of stateFile.ContentKept: content-tier state a writer that
+// cannot OPEN the tier must carry verbatim. The replay-guard coordinates are not decrypted content -- they are the
 // record of how far the streams have got -- and PendingOps is user content that no
 // machine-sealed frame produced, so PB-KEY-7's purge leaves all three.
 type keptContainer struct {
@@ -478,7 +480,7 @@ type fileStore struct {
 	// under the content KEK.
 	wakeState, kept, purgeable stateTier
 
-	// purgeGen counts the lock purges this store has taken. It stamps every State handed
+	// purgeGen counts the purges this store has taken. It stamps every State handed
 	// out, so a Save can tell a snapshot from before a purge from one after it.
 	purgeGen uint64
 }
@@ -615,7 +617,7 @@ func (s *fileStore) Save(st State) error {
 	// purge destroyed instead: the rest of the snapshot still lands, because refusing the
 	// whole Save would hold the purge by losing every unrelated coordinate with it.
 	if st.purgeGen < s.purgeGen {
-		st = dropContentMaterial(st)
+		st = dropAllKeyMaterial(st)
 	}
 	// A CALLER ARRIVING WITH A REAL CONTENT KEY HAS PROVED THE TIER IS OPEN, and the containers
 	// have to be told. resealTier's "a real key always wins" branch is about to seal that key
@@ -761,14 +763,14 @@ func purgeableContainerOf(st State) purgeableContainer {
 // nothing to do with the content tier. A locked load holds nothing here for exactly the same
 // reason, and every Save has coped with that since S15.
 //
-// THE WAKE KEY IS NOT TOUCHED. A high-priority FCM push is the sole background wake path and
-// arrives with nobody there (ADR-007 B9/B16), so its KEK is deliberately not auth-gated and its
-// key must stay usable across a screen lock. Clearing it would stop the handset being wakeable
-// at the first lock, and nothing on the device could put it back (ADR-007 B35).
+// THE WAKE KEY IS NOT TOUCHED HERE. A high-priority FCM push is the sole background wake path
+// and arrives with nobody there (ADR-007 B9/B16), so the wake tier is what a process that
+// never opened the content tier still holds. That is what this function models, and it is why
+// it is the wrong drop for a revoke -- see dropAllKeyMaterial.
 //
 // StaleStreams deliberately SURVIVES. It is not decrypted content -- it is the record that a
-// channel has a hole in it -- and dropping it would make the first screen lock promote every
-// known-holed stream back to live, which is the lie PB-APP-8 forbids.
+// channel has a hole in it -- and dropping it would promote every known-holed stream back to
+// live, which is the lie PB-APP-8 forbids.
 func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
 	st.Sessions, st.Snapshots, st.OpOutcomes = nil, nil, nil
@@ -776,65 +778,80 @@ func dropContentMaterial(st State) State {
 	return st
 }
 
-// PurgeKeys is PB-KEY-7's lock purge: it returns the CONTENT tier to LOCKED and destroys the
-// decrypted caches it protected, in memory and at rest. Nothing is unsealed and the content KEK
-// is never consulted -- a purge that needed the biometric could not run at the screen lock that
-// triggers it.
+// dropAllKeyMaterial returns st holding no epoch key material of either tier and nothing
+// sealed under either one. It is PB-KEY-7's revoke purge in memory (ADR-007 B133): a revoked
+// device must be unreachable, not merely unable to read, so the WAKE tier goes with the
+// content tier -- the wake key and the push coordinates sealed under it are exactly what lets
+// the machine reach this handset at all.
 //
-// IT DOES NOT DESTROY THE SEALED CONTENT KEY, and that is the decision rather than a shortcut.
-// ADR-007 B35 established that destroying it is unimplementable as specified: PB-KEY-10 moved
-// epoch-key delivery entirely into Go, so nothing on the handset holds those bytes, and
-// GrantEpoch/GrantSeq survive any purge (they are the replay guard) -- so the machine
-// re-appending the very same signed grant next session is refused as a replay, forever. Wired
-// as it stood, the FIRST SCREEN LOCK landed the phone in PB-KEY-3's terminal state, exitable
-// only by physical access to the machine. Against that cost, destroying the blob buys nothing:
-// it is already sealed under an auth-gated Keystore KEK, so a locked handset cannot open it,
-// and an attacker who has defeated Keystore already holds device.key and the COMMAND_SIGN seed.
+// PushToken goes with it, which is PB-PUSH-9's "deletion on revoke" done at the durable layer:
+// left behind it is a provider-visible identifier for a device its owner disowned.
 //
-// SO THE LOCK IS A TRANSITION TO A STATE THE DESIGN ALREADY MODELS -- the one a process woken
-// by a push is in, having never opened the tier. The sealed content key and ContentKept are
-// carried VERBATIM by every subsequent Save, which is what an unopened tier has always meant,
-// and UnsealContent is the way back: a fresh Keystore unwrap, which is PB-KEY-7's own recovery
-// clause and the round trip PB-SEC-2's 60-second window is enforced at.
+// GrantEpoch/GrantSeq and WakeReplay deliberately SURVIVE, and this is the one thing a
+// "destroy everything" reading gets wrong. They are strictly monotonic replay guards, and
+// rolling a replay guard BACK is never the safe direction -- a purged watermark accepts a
+// captured frame the phone has already consumed. They are also plaintext counters rather than
+// key material or user content: nothing is learned from them and nothing is reachable with
+// them. A re-pairing mints a higher epoch, so they cost the intended recovery nothing.
+func dropAllKeyMaterial(st State) State {
+	st = dropContentMaterial(st)
+	st.Keys.WakeKey = crypto.WakeKey{}
+	st.PushToken = ""
+	return st
+}
+
+// PurgeKeys is PB-KEY-7's purge: BOTH tiers are destroyed and everything sealed under either
+// one goes with them, in memory and at rest. Nothing is unsealed and neither KEK is consulted
+// -- destroying a blob has never required being able to read it, which is what lets the purge
+// run from a process that never opened the content tier.
+//
+// ITS TRIGGER IS REVOKE / UNPAIR (ADR-007 B133). The requirement used to name a screen lock,
+// and the shape of this function still carries the argument that produced: ADR-007 B35 refused
+// to destroy the sealed keys because PB-KEY-10 moved epoch-key delivery entirely into Go, so
+// nothing on the handset could put those bytes back, and GrantEpoch/GrantSeq survive any purge
+// -- so the machine re-appending the very same signed grant was refused as a replay, forever,
+// and the FIRST SCREEN LOCK landed the phone in PB-KEY-3's terminal state.
+//
+// THAT ARITHMETIC INVERTS FOR A REVOKE, which is why the decision changes with the trigger
+// rather than surviving it. "The phone cannot get back in without the machine" was the COST of
+// a lock purge and is the POINT of a revoke: the pairing is the thing being destroyed, and
+// re-pairing -- which mints a fresh epoch and fresh keys anyway -- is the intended and only way
+// back. B133 makes revoke-from-the-computer the only surviving mitigation for a lost handset,
+// so a revoked device that keeps a resident key and decrypted content, or that restores itself
+// with one local unwrap, has not been revoked in any sense the owner would recognise.
+//
+// THE WAKE TIER GOES TOO, reversing ADR-007 B9/B16's exemption for the same reason. A lock
+// spared the wake key because a push is the sole background wake path and a handset that stops
+// being wakeable at the first screen lock is broken. A revoked handset must not be wakeable:
+// the wake key is what lets the machine reach it at all, and PB-PUSH-9 already requires the
+// push registration to go on revoke.
 //
 // THE MEMORY HALF IS UNCONDITIONAL, and it happens first. It cannot fail, and PB-KEY-7 lists
 // it first; gating it behind the durable write -- which can fail, on a full disk or a data
-// directory that has gone read-only -- left the key live and bound with the screen locked.
-// "In-memory advances only once the write succeeded" is right for a Save and backwards here: a
-// Save must not claim what is not durable, a purge must not KEEP what it was told to destroy.
-// The durable failure is still returned; the caches at rest genuinely did survive it.
+// directory that has gone read-only -- left the key live and bound on a device the owner has
+// revoked. "In-memory advances only once the write succeeded" is right for a Save and backwards
+// here: a Save must not claim what is not durable, a purge must not KEEP what it was told to
+// destroy. The durable failure is still returned; the material at rest genuinely did survive it.
 //
-// THE PURGEABLE CONTAINER IS DROPPED AND ITS RECORD SAYS SO -- opened, holding nothing -- so a
-// later Save writes no field rather than resurrecting the blob just destroyed, and a Save after
-// a failed write finishes the job. That is also why the caches are the only thing destroyed at
-// rest: they cost nothing, because PB-SYNC-2 re-derives every one of them by resync.
+// EVERY CONTAINER RECORD SAYS OPENED, HOLDING NOTHING -- never "could not open" -- so a later
+// Save writes no field rather than carrying the blob just destroyed verbatim, and a Save after
+// a failed write finishes the job.
 func (s *fileStore) PurgeKeys() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.purgeGen++
-	s.st = dropContentMaterial(s.st.clone())
+	s.st = dropAllKeyMaterial(s.st.clone())
 	s.st.purgeGen = s.purgeGen
-	// LOCKED, not destroyed: the blobs stay, this process forgets what was in them.
-	s.contentTier.opened = false
-	s.kept.opened = false
-	// Opened, holding nothing: the decrypted caches are gone for good.
-	s.purgeable = stateTier{opened: true}
+	s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
+	s.wakeState = stateTier{opened: true}
+	s.kept, s.purgeable = stateTier{opened: true}, stateTier{opened: true}
 	if s.path == "" {
 		return nil
 	}
-	// The wake tier is sealed from what is STILL HELD rather than carried blindly: a wake key
-	// installed and not yet Saved would otherwise be lost at rest by the one lock that must not
-	// touch it. Sealing under the wake KEK needs no user present, which is its whole point.
-	wake, err := resealTier(s.wake, s.st.Keys.WakeKey[:], s.wakeTier, s.st.EpochID)
-	if err != nil {
-		return fmt.Errorf("seal wake key: %w", err)
-	}
-	s.wakeTier = wake
-	return persistState(s.path, s.st, stateSeals{
-		wakeKey: wake.blob, contentKey: s.contentTier.blob,
-		wakeState: s.wakeState.blob, kept: s.kept.blob,
-	})
+	// No seals at all: there is no key material left to seal, and an empty stateSeals is what
+	// makes persistState omit every sealed field rather than rewrite the blobs.
+	return persistState(s.path, s.st, stateSeals{})
 }
 
 // RewindRelayCursor zeroes the durable relay read cursor. See the Store interface for why it
@@ -1115,12 +1132,12 @@ func (s *fileStore) load() error {
 	if err := applyReceive(&st, f.LegacyReceive); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 	}
-	// The WAKE tier opens with no user present -- that is its whole purpose -- so one that
-	// will not open means this blob is not ours, and starting from an empty checkpoint
-	// would leave the replay guard blind. The CONTENT tier legitimately refuses (the phone
-	// comes up on a push before any biometric): the phone then holds no content key, and
-	// the durable blob is carried through every Save untouched until a tier that can read
-	// it arrives.
+	// The WAKE tier is the one the push path opens -- that is its whole purpose -- so one
+	// that will not open means this blob is not ours, and starting from an empty checkpoint
+	// would leave the replay guard blind. The CONTENT tier legitimately does not open (a
+	// process serving a push must not reach session content, PB-KEY-2): the phone then holds
+	// no content key, and the durable blob is carried through every Save untouched until a
+	// process that opens the tier arrives.
 	if len(f.WakeKey) > 0 {
 		s.wakeTier.blob, s.wakeTier.epoch = f.WakeKey, f.EpochID
 		plain, oerr := s.wake.Open(f.WakeKey)
@@ -1244,10 +1261,10 @@ func (s *fileStore) loadWakeState(st *State, blob []byte, path string) error {
 }
 
 // loadContentState unseals the two content-tier containers into st. Either may legitimately
-// refuse -- the phone comes up on a push before any biometric -- and a container this process
-// could not open stays unopened, so every Save carries it verbatim rather than resealing the
-// emptiness the refusal produced. Only a refusal that is NOT a custody verdict says the blob
-// is not ours.
+// stay shut -- a process serving a push must not reach session content (PB-KEY-2) -- and a
+// container this process could not open stays unopened, so every Save carries it verbatim
+// rather than resealing the emptiness the refusal produced. Only a refusal that is NOT a
+// custody verdict says the blob is not ours.
 func (s *fileStore) loadContentState(st *State, f stateFile, path string) error {
 	tier, plain, err := s.openContentContainer(f.ContentKept, path, "content state")
 	if err != nil {

@@ -35,8 +35,14 @@ package phonecore
 // was about to re-send -- and every re-delivery after that was a replay, forever. ADR-007 B35
 // established that this is a BRICK rather than a feature: PB-KEY-10 delivers the epoch key
 // inside Go, so nothing on the handset could put it back, and the only exit was physical access
-// to the machine. The purge no longer destroys the sealed key, and TestS10_R8_AScreenLockIs-
-// NotTheTerminalState below is the fence that keeps it that way.
+// to the machine.
+//
+// THE SCREEN LOCK IS GONE (ADR-007 B133) and the purge's trigger is now revoke/unpair, where
+// destroying the sealed key is the point rather than the cost -- re-pairing is the way back.
+// What the argument above still rules out is a KEYLESS-LOOKING process being marked terminal by
+// ordinary re-delivery, and that state is still reachable without any purge at all: the push
+// path holds the wake key and never opens the content tier.
+// TestS10_R8_AnUnopenedContentTierIsNotTheTerminalState below is the fence on that.
 //
 // WHAT REMAINS REACHABLE is PB-KEY-3's own scenario: a phone that has moved to an epoch it
 // holds no key for, with a relay that can still deliver only the retired one. mobile.App.pin
@@ -132,17 +138,24 @@ func TestS10_R8_APurgedKeyAndAReplayedSidecarIsTheTerminalState(t *testing.T) {
 	}
 }
 
-// TestS10_R8_AScreenLockIsNotTheTerminalState is the fence on ADR-007 B35's decision, at the
-// exact seam where the brick was.
+// TestS10_R8_AnUnopenedContentTierIsNotTheTerminalState is the fence on ADR-007 B35's
+// decision, at the exact seam where the brick was.
 //
-// The gateway re-appends its bootstrap sidecar ONCE PER GATEWAY SESSION, so a phone that locks
-// its screen and stays connected will be handed a replay within seconds. If a lock leaves the
-// phone looking keyless, that replay is grantLossDetected's proof and the phone is marked
-// PB-KEY-3 TERMINAL -- exitable only at the machine -- by the ordinary act of putting it in a
-// pocket. That is a permanent exposure traded for a live-process one, and it is worse.
+// The gateway re-appends its bootstrap sidecar ONCE PER GATEWAY SESSION, so a connected phone
+// is handed a replay within seconds of every gateway start. If a process that is holding no
+// content key looks KEYLESS, that replay is grantLossDetected's proof and the phone is marked
+// PB-KEY-3 TERMINAL -- exitable only at the machine -- by ordinary traffic. That is a permanent
+// exposure traded for a live-process one, and it is worse.
+//
+// THE STATE IS REACHED DIFFERENTLY SINCE ADR-007 B133, and it is still reached. The trigger
+// used to be a screen lock, which no longer exists as an event. What produces it now is the
+// push/wake path: PB-KEY-2's tier boundary is enforced by CODE DISCIPLINE on Android, so a
+// process serving a push holds the wake key and never opens the content tier at all. The
+// sealed content key at rest and the fresh unwrap that restores it are unchanged, which is
+// what makes the replayed sidecar prove nothing.
 //
 // Both halves are asserted: the state is not entered, and the phone genuinely recovers.
-func TestS10_R8_AScreenLockIsNotTheTerminalState(t *testing.T) {
+func TestS10_R8_AnUnopenedContentTierIsNotTheTerminalState(t *testing.T) {
 	m := newS10Machine(t)
 	dir, wake, content, frame, keys := s10r8Provisioned(t, m)
 	c := s10r8Resume(t, dir, wake, content, &recordingAcker{})
@@ -151,28 +164,32 @@ func TestS10_R8_AScreenLockIsNotTheTerminalState(t *testing.T) {
 		t.Fatalf("the machine's bootstrap grant: %v", err)
 	}
 
-	// The screen locks. The content key leaves memory; the SEALED copy stays, behind the KEK.
-	if err := c.PurgeKeys(); err != nil {
-		t.Fatalf("PurgeKeys: %v", err)
-	}
+	// A process that holds no content key while the SEALED copy stays at rest. It is reached
+	// by a restart that does not open the tier -- the push path's own condition -- rather than
+	// by PurgeKeys, which is the REVOKE purge and destroys the sealed copy on purpose
+	// (PB-KEY-7, ADR-007 B133). The refusal is the stimulus available to a fake sealer; what
+	// it stands for in production is a process that never asked.
+	content.openErr = crypto.ErrKeyAuthRequired
+	c = s10r8Resume(t, dir, wake, content, &recordingAcker{})
+	content.openErr = nil
 	if c.State().Keys.ContentKey != (crypto.ContentKey{}) {
-		t.Fatalf("precondition: the lock did not clear the live content key")
+		t.Fatalf("precondition: the process came up holding a content key")
 	}
 
 	// The gateway reconnects and re-appends the same sidecar, which it does every session.
 	if _, err := c.Router().AcceptCommit(frame, 1201); !errors.Is(err, crypto.ErrGrantReplay) {
-		t.Fatalf("re-delivery of the same sidecar after a lock = %v; want crypto.ErrGrantReplay", err)
+		t.Fatalf("re-delivery of the same sidecar to a keyless process = %v; want crypto.ErrGrantReplay", err)
 	}
 	if c.StreamStale(StreamGrant) {
-		t.Errorf("PB-KEY-3/PB-KEY-7: a SCREEN LOCK put the phone into the terminal state. The phone " +
-			"holds its sealed content key at rest and one fresh unwrap restores it, so a replayed " +
-			"sidecar proves nothing -- and the state it was put in has no exit but physical access " +
-			"to the machine")
+		t.Errorf("PB-KEY-3/PB-KEY-7: a process that never opened the content tier was put into the " +
+			"terminal state. The phone holds its sealed content key at rest and one fresh unwrap " +
+			"restores it, so a replayed sidecar proves nothing -- and the state it was put in has no " +
+			"exit but physical access to the machine")
 	}
 
 	// And the recovery is local, immediate, and needs neither the machine nor the network.
 	if err := c.UnsealContent(); err != nil {
-		t.Fatalf("PB-KEY-7: the fresh unwrap after a lock failed: %v", err)
+		t.Fatalf("PB-KEY-7: the fresh unwrap failed: %v", err)
 	}
 	if got := c.State().Keys.ContentKey; got != keys.ContentKey {
 		t.Errorf("PB-KEY-7: the content key was not restored by a fresh unwrap.\n got %x\nwant %x",

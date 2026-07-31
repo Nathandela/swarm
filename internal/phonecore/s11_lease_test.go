@@ -215,10 +215,12 @@ func TestS11Lease_EveryLifecycleEventSeversTheLease(t *testing.T) {
 			func(l *LeaseState) { l.Apply(s11Severance("session exited")) },
 		},
 		{
-			// PB-RUN-3's backgrounding policy: the app stops being allowed to type.
-			// §6.0 forbids silently continuing.
-			"app backgrounding",
-			func(l *LeaseState) { l.SeverAll("app backgrounded") },
+			// PB-RUN-3's backgrounding policy. Backgrounding is no longer a severance
+			// trigger in its own right (ADR-007 B133 deleted the freshness lapse it was
+			// paired with), but it still ends the lease: it DISCONNECTS the phone
+			// (ADR-007 B16), and the whole-device transport loss is what severs.
+			"app backgrounding (via the disconnect it forces)",
+			func(l *LeaseState) { l.SeverAll("the connection to the machine was lost") },
 		},
 	}
 
@@ -378,30 +380,39 @@ func TestS11Lease_TheInboundPathFeedsTheLeaseState(t *testing.T) {
 // PB-INPUT-3 -- TTL by op class, and expiry with a defined UX
 // ---------------------------------------------------------------------------
 
-// TestS11TTL_ByOpClassResolvesTheThreeWayCollision pins §6.0's exception. PB-INPUT-3
+// TestS11TTL_ByOpClassResolvesTheSixtySecondCollision pins §6.0's exception. PB-INPUT-3
 // records that the lease is the EARLIEST of now+maxControlSessionTTL (30 m),
 // now+TTLSeconds and the device-signed ExpiresAt -- so a blanket 1-minute signed horizon
-// makes the real lease 60 s, colliding with PB-INPUT-5's >= 60 s sustained-typing test and
-// §6.0's 60 s biometric freshness. §6.0 resolves it by signing take_control at 15 minutes
-// while ordinary commands stay at 1 minute.
+// makes the real lease 60 s, colliding with PB-INPUT-5's >= 60 s sustained-typing test.
+// §6.0 resolves it by signing take_control at 15 minutes while ordinary commands stay at
+// 1 minute.
+//
+// PB-INPUT-3 counted THREE walls at 60 s until ADR-007 B133; §6.0's biometric-freshness row
+// is withdrawn with the requirement that owned it, so there are two, and this test names
+// the one that is left rather than the pair.
 //
 // Today mobile/app.go:33 signs EVERY command, take_control included, at commandTTL =
 // 2 minutes: over §6.0's 1-minute command TTL and far under its 15-minute take_control
 // exception. Both halves are wrong, in opposite directions.
-func TestS11TTL_ByOpClassResolvesTheThreeWayCollision(t *testing.T) {
+func TestS11TTL_ByOpClassResolvesTheSixtySecondCollision(t *testing.T) {
 	if CommandTTL != time.Minute {
 		t.Errorf("CommandTTL = %v, want 1m (§6.0, PB-TIME-1)", CommandTTL)
 	}
 	if TakeControlTTL != 15*time.Minute {
 		t.Errorf("TakeControlTTL = %v, want 15m (§6.0's stated exception, PB-INPUT-3)", TakeControlTTL)
 	}
-	// The exception only works if it clears the walls it was written to clear.
+	// The exception only works if it clears the wall it was written to clear.
 	if TakeControlTTL <= time.Minute {
-		t.Errorf("TakeControlTTL %v does not clear the 60s biometric-freshness and sustained-typing walls it exists to clear", TakeControlTTL)
+		t.Errorf("TakeControlTTL %v does not clear the 60s sustained-typing wall it exists to clear", TakeControlTTL)
 	}
 	// ... and stays under the server cap, or it is silently clamped and the phone's
-	// countdown is wrong from the first second.
+	// countdown is wrong from the first second. The cap is re-declared here as a literal
+	// because it is unexported on the daemon side, which also makes it the pin on
+	// phonecore's own copy: the two must not drift.
 	const maxControlSessionTTL = 30 * time.Minute // internal/protocol/server.go:156 (unexported)
+	if MaxControlSessionTTL != maxControlSessionTTL {
+		t.Errorf("MaxControlSessionTTL = %v, want the daemon's %v -- the phone's fallback horizon would outlive or undercut the lease the daemon actually granted", MaxControlSessionTTL, maxControlSessionTTL)
+	}
 	if TakeControlTTL > maxControlSessionTTL {
 		t.Errorf("TakeControlTTL %v exceeds the daemon's %v cap, so the daemon clamps and the phone's displayed expiry is wrong", TakeControlTTL, maxControlSessionTTL)
 	}
@@ -430,8 +441,9 @@ func TestS11TTL_ByOpClassResolvesTheThreeWayCollision(t *testing.T) {
 }
 
 // TestS11Lease_SurvivesWellPastSixtySeconds is PB-INPUT-3's acceptance criterion. The
-// number 60 is not incidental: it is where three independent walls used to collide, and
-// PB-INPUT-5's sustained-typing test sits exactly on it.
+// number 60 is not incidental: it is where the walls collide -- two of them since ADR-007
+// B133 withdrew the biometric-freshness one -- and PB-INPUT-5's sustained-typing test sits
+// exactly on it.
 func TestS11Lease_SurvivesWellPastSixtySeconds(t *testing.T) {
 	now := time.Now()
 	exp := now.Add(TakeControlTTL)
@@ -498,6 +510,48 @@ func TestS11Lease_TheMachinesExpiryWinsOverThePhonesSignedHorizon(t *testing.T) 
 	got, ok := l.Lease(s11Session)
 	if !ok || !got.ExpiresAt.Equal(clamped) {
 		t.Fatalf("Lease().ExpiresAt = %v (ok=%v), want the machine's %v", got.ExpiresAt, ok, clamped)
+	}
+}
+
+// TestS11Lease_AConfirmationWithNoHorizonIsStillBoundedByTheDaemonCap is PB-INPUT-3 read
+// after ADR-007 B133.
+//
+// A confirmation that carries no ExpiresAt AND answers no take_control the phone still
+// remembers (a daemon restart, an older gateway, a severance that dropped the request)
+// used to open the gate with NO horizon at all. That was survivable only because something
+// else always ended the lease: the phone severed on app backgrounding and on a
+// biometric-freshness lapse. B133 deletes the freshness lapse outright and takes
+// backgrounding out of the severance set, so an unbounded horizon is now a keyboard that
+// stays live forever against a lease the daemon capped 30 minutes ago -- every keystroke
+// after that silently dropped by the daemon's own deadline check.
+//
+// The two walls PB-INPUT-3 leaves standing are the signed ExpiresAt and the daemon's
+// maxControlSessionTTL. The daemon binds every lease to the EARLIEST of the three bounds it
+// computes (internal/protocol/server.go:1580-1601), so now+MaxControlSessionTTL is a bound
+// the phone KNOWS holds even when the confirmation tells it nothing.
+func TestS11Lease_AConfirmationWithNoHorizonIsStillBoundedByTheDaemonCap(t *testing.T) {
+	now := time.Now()
+	l := NewLeaseState()
+
+	// No Requested: the phone remembers no take_control this answers, and the gateway seals
+	// no expiry of its own (remotegw/lease_confirm.go sets Op+Generation only).
+	l.Apply(schema.Control{Op: protocol.OpLease, SessionID: s11Session, Generation: s11Gen})
+
+	if err := l.Require(s11Session, now); err != nil {
+		t.Fatalf("setup: the confirmation did not open the gate: %v", err)
+	}
+	got, ok := l.Lease(s11Session)
+	if !ok || got.ExpiresAt.IsZero() {
+		t.Fatalf("Lease().ExpiresAt = %v (ok=%v), want a horizon -- with no freshness lapse and no backgrounding severance left, an unbounded lease is never ended by anything the phone can observe", got.ExpiresAt, ok)
+	}
+	if err := l.Require(s11Session, now.Add(MaxControlSessionTTL+time.Second)); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("Require one second past the daemon's %v cap = %v, want ErrLeaseExpired -- the daemon released this lease at the cap and drops every keystroke after it, so a phone that still shows a live keyboard is typing into a void", MaxControlSessionTTL, err)
+	}
+	// MUTATION CONTROL: a fallback that clamps SHORTER than the cap would refuse keystrokes
+	// the machine would have accepted, which is the failure ErrLeaseExpired's own doc warns
+	// about from the other side.
+	if err := l.Require(s11Session, now.Add(MaxControlSessionTTL-time.Minute)); err != nil {
+		t.Fatalf("Require one minute inside the daemon's %v cap = %v, want nil", MaxControlSessionTTL, err)
 	}
 }
 

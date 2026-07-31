@@ -4,7 +4,8 @@ package protocol
 // PAUSE. Today `off` (RemoteControlEnabled()==false) makes controlGateOpen clause 1 DROP input
 // per keystroke, but the live take_control LEASE (cc.control) is never torn down and the remote
 // connection stays open — so turning `on` again before the signed expiry REACTIVATES the existing
-// lease WITHOUT a fresh take_control (no new biometric gate). And journal_subscribe is NOT
+// lease WITHOUT a fresh take_control (no new device signature, no new single-use gate token). And
+// journal_subscribe is NOT
 // kill-switch-gated (unlike the terminal peek), so a still-open phone keeps receiving session
 // lifecycle events after `off`. This contradicts the DoD "off severs the gateway".
 //

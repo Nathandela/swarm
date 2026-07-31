@@ -149,9 +149,13 @@ func (c *InputCoalescer) Due() []InputFrame {
 }
 
 // Flush empties every buffer regardless of the window. It is PB-INPUT-6's boundary
-// mechanism -- release / take_control_end, app backgrounding and biometric-freshness expiry
+// mechanism -- release / take_control_end, app backgrounding and the lease horizon passing
 // are one mechanism, because each ends the ability to type and must leave nothing buffered.
 // The bytes are CONSUMED, never copied, so a flushed line cannot be typed twice.
+//
+// The biometric-freshness expiry that used to head that list is gone with the gate it
+// measured (ADR-007 B133); the lease horizon named in its place is PB-INPUT-3's surviving
+// wall and ends the ability to type for exactly the same reason.
 func (c *InputCoalescer) Flush() []InputFrame {
 	return c.all(true)
 }

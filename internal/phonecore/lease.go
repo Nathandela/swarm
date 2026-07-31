@@ -48,9 +48,18 @@ const (
 	// TakeControlTTL is §6.0's stated exception. The daemon's lease deadline is the
 	// EARLIEST of the device-signed ExpiresAt, now+TTLSeconds and a 30-minute cap, so a
 	// blanket 1-minute signed horizon would make the SIGNATURE the thing that ends a typing
-	// session -- colliding with PB-INPUT-5's >= 60 s sustained-typing criterion and §6.0's
-	// 60 s biometric freshness at once. 15 minutes clears both walls and stays under the cap.
+	// session -- colliding with PB-INPUT-5's >= 60 s sustained-typing criterion. 15 minutes
+	// clears that wall and stays under the cap.
+	//
+	// PB-INPUT-3 counts TWO walls here, not three (ADR-007 B133): §6.0's 60 s biometric
+	// freshness was the third, and it is withdrawn with the requirement that owned it. The
+	// signed horizon and the sustained-typing floor are what remain, and neither moved.
 	TakeControlTTL = 15 * time.Minute
+	// MaxControlSessionTTL mirrors the daemon's own cap on a control-session lifetime
+	// (internal/protocol/server.go:156, unexported). It is written as a literal for the
+	// reason the op names above are: PB-BIND-0 keeps internal/protocol out of phonecore's
+	// bound closure, and the S11 tests pin the value against the daemon's.
+	MaxControlSessionTTL = 30 * time.Minute
 )
 
 // CommandTTLFor is the signed-ExpiresAt horizon for one action class (§6.0). Only
@@ -173,7 +182,19 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 		case ctrl.OperationID != "" && ctrl.OperationID == e.op:
 			e.expiresAt = e.signed
 		default:
-			e.expiresAt = time.Time{}
+			// Neither authority spoke: the machine sealed no expiry and this confirmation
+			// answers no request the phone still remembers (a daemon restart, an older
+			// gateway, a severance that dropped the request). It is still BOUNDED, by the
+			// only horizon the phone can derive without being told one -- the daemon caps
+			// every lease at now+maxControlSessionTTL (protocol/server.go:1586), so a lease
+			// cannot outlive it whatever else was clamped.
+			//
+			// An unbounded horizon was survivable only while something else ended the lease:
+			// the phone severed on app backgrounding and on a biometric-freshness lapse.
+			// ADR-007 B133 removes both, leaving the signed ExpiresAt and this cap as
+			// PB-INPUT-3's two walls -- so a zero here is now a keyboard that stays live
+			// forever while the daemon silently drops every keystroke past its own deadline.
+			e.expiresAt = time.Now().Add(MaxControlSessionTTL)
 		}
 	case opDetach:
 		// The generation is recorded dead FIRST, whether or not the notice applies to the
@@ -194,9 +215,14 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 	}
 }
 
-// Sever ends a session's lease from the phone's own side: a transport loss, a release, app
-// backgrounding, a biometric-freshness lapse. The severed generation is remembered so a
-// confirmation for it cannot resurrect the lease.
+// Sever ends a session's lease from the phone's own side: a transport loss, or a release.
+// The severed generation is remembered so a confirmation for it cannot resurrect the lease.
+//
+// BACKGROUNDING IS NOT ITSELF A TRIGGER (ADR-007 B133), and neither is any freshness lapse:
+// there is no phone-side authentication left to go stale. A backgrounded app still loses its
+// lease, because backgrounding DISCONNECTS the phone (ADR-007 B16) and the transport loss is
+// what severs. What bounds a lease nobody severs is time alone -- the signed ExpiresAt and
+// the daemon's MaxControlSessionTTL, PB-INPUT-3's two walls.
 func (l *LeaseState) Sever(session, reason string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -301,9 +327,8 @@ func (e *leaseEntry) namesAnotherLease(ctrl schema.Control) bool {
 }
 
 // severLocked drops a live lease and remembers its generation as dead. It is the phone's OWN
-// severance -- a transport loss, a release, backgrounding, a freshness lapse -- which is
-// attributable to everything the phone has authored, because the phone cannot know whether
-// any of it reached the machine.
+// severance -- a transport loss, or a release -- which is attributable to everything the
+// phone has authored, because the phone cannot know whether any of it reached the machine.
 func (l *LeaseState) severLocked(e *leaseEntry, reason string) {
 	l.severNoticedLocked(e, reason, "")
 }

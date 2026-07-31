@@ -10,8 +10,8 @@ package phonecore
 // instead, as a Sealer per PB-KEY-2 TIER.
 //
 // ONE SEALER WOULD NOT BE ENOUGH. Under the wake KEK -- which must open with no user
-// present, because a push arrives with nobody there -- the content material is reachable
-// without the biometric, which is exactly the collapse the plaintext file already had.
+// present, because a push arrives with nobody there -- the content material is reachable by
+// the push path itself, which is exactly the collapse the plaintext file already had.
 // Under the content KEK the wake path cannot start at all. So the roles split by PB-KEY-5:
 // NoiseStatic, Recipient and CommandSign are content tier; RelayAuth is wake tier.
 
@@ -182,8 +182,8 @@ func openSealedDeviceKeys(f sealedDeviceKeys, wake, content Sealer) (crypto.KeyS
 	if _, err := ks.wakeStore(); err != nil {
 		return nil, fmt.Errorf("unseal wake key custody: %w", err)
 	}
-	// The CONTENT tier legitimately refuses: the phone comes up on a push before any
-	// biometric. Only a refusal that is not a custody verdict says the blob is not ours;
+	// The CONTENT tier legitimately stays shut: a process serving a push must not reach
+	// session content. Only a refusal that is not a custody verdict says the blob is not ours;
 	// a locked or invalidated tier is surfaced per operation, where the caller can act.
 	// ErrPublicKeyMismatch is deliberately in the fatal set: the seals opened fine and the
 	// container still lied about what is in them, so the directory has been written to.
@@ -218,9 +218,9 @@ func newSealedKeyStore(f sealedDeviceKeys, wake, content Sealer) *sealedKeyStore
 }
 
 // contentStore unseals the content tier and builds a store over it FOR ONE OPERATION.
-// Nothing is memoized: an auth-gated key re-checks authorisation on every use, and a store
-// that unwrapped once would keep signing after the screen locks (PB-KEY-7) while every
-// restart-based test still passed. The relay-auth seed is deliberately left zero here --
+// Nothing is memoized: the tier is re-opened per operation, so a store that unwrapped once
+// cannot keep signing after custody has been purged (PB-KEY-7) while every restart-based test
+// still passes. The relay-auth seed is deliberately left zero here --
 // this instance answers only content-tier operations, so its RelayAuthPublic is not the
 // device's and is deliberately NOT among the publics checked below.
 func (k *sealedKeyStore) contentStore() (crypto.KeyStore, error) {

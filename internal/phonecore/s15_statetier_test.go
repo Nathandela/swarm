@@ -641,20 +641,21 @@ func TestS15_ASaveWhileLockedNeitherExposesNorDestroysTheContentTier(t *testing.
 	}
 }
 
-// TestS15_TheLockPurgeStillReachesTheSealedContentTier. PB-KEY-7's purge destroys the DECRYPTED
-// CACHES (and clears the live content key). Once those caches are behind the content KEK, a purge taken
-// at the screen lock CANNOT read them -- and destroying a blob has never required being able
-// to read it (PurgeKeys' own comment). The failure this fences is a purge that, unable to open
-// the content tier, carries it verbatim by the very mechanism the test above requires: the
-// lock then leaves the journal, the snapshots and the outcomes at rest, which is the state
-// PB-KEY-7 exists to prevent.
+// TestS15_ThePurgeStillReachesTheSealedContentTier. PB-KEY-7's purge destroys what is behind
+// the content KEK, and it must do so from a process that never opened that tier -- destroying
+// a blob has never required being able to read it (PurgeKeys' own comment). The failure this
+// fences is a purge that, unable to open the content tier, carries it verbatim by the very
+// mechanism the test above requires: the journal, the snapshots and the outcomes then stay at
+// rest, which is the state PB-KEY-7 exists to prevent.
 //
-// The purge is taken from a LOCKED process, because that is when a screen lock happens.
+// The purge is taken from a process that has not opened the tier, because a revoke can arrive
+// at one -- the push path never opens it (PB-KEY-2 is enforced by code discipline since
+// ADR-007 B133), and the revoke is issued from the computer.
 //
 // LEGITIMATE PASSER TODAY. Nothing is sealed yet, so the purge reaches the caches trivially
 // and this is green on the RED run. It is the fence on the GREEN: the failure it names only
 // becomes reachable once the content tier exists and carrying-verbatim becomes an option.
-func TestS15_TheLockPurgeStillReachesTheSealedContentTier(t *testing.T) {
+func TestS15_ThePurgeStillReachesTheSealedContentTier(t *testing.T) {
 	dir, wake, content := s15Provision(t)
 
 	content.openErr = crypto.ErrKeyAuthRequired
@@ -663,8 +664,8 @@ func TestS15_TheLockPurgeStillReachesTheSealedContentTier(t *testing.T) {
 		t.Fatalf("Resume with the content tier locked: %v", err)
 	}
 	if err := locked.PurgeKeys(); err != nil {
-		t.Fatalf("PB-KEY-7: the lock purge failed: %v. It runs at the screen lock, where the content "+
-			"tier is by definition locked, so it may not need the KEK", err)
+		t.Fatalf("PB-KEY-7: the purge failed: %v. It must run from a process that never opened the "+
+			"content tier, so it may not need the KEK", err)
 	}
 
 	// The strongest reader there is: a fresh Resume holding BOTH real KEKs.
@@ -676,53 +677,47 @@ func TestS15_TheLockPurgeStillReachesTheSealedContentTier(t *testing.T) {
 	st := reopened.State()
 
 	if len(st.Sessions) != 0 || len(st.Snapshots) != 0 || len(st.OpOutcomes) != 0 {
-		t.Errorf("PB-KEY-7: after a lock purge taken with the content tier locked, the decrypted caches "+
+		t.Errorf("PB-KEY-7: after a purge taken with the content tier unopened, the decrypted caches "+
 			"are still recoverable through the seal: %d session(s), %d snapshot(s), %d outcome(s). A "+
 			"purge that carried the tier verbatim because it could not open it destroyed nothing",
 			len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes))
 	}
-	// AND THE SEALED CONTENT KEY MUST SURVIVE IT, which is the half this test asserted the
-	// opposite of until the ADR-007 B35/B36 round. Destroying it makes the first screen lock a
-	// permanent brick: PB-KEY-10 delivers the epoch key as a machine-sealed grant inside Go, so
-	// nothing on the handset holds those bytes, and the grant watermark refuses the machine's
-	// re-appended frame as a replay. The blob is already behind an auth-gated Keystore KEK, so a
-	// locked handset cannot open it either way -- destroying it trades a live-process exposure
-	// for a permanent one. What the lock destroys is the decrypted caches; what it does is
-	// return the tier to LOCKED (Store.PurgeKeys, Store.UnsealContent).
-	if st.Keys.ContentKey == (crypto.ContentKey{}) {
-		t.Error("PB-KEY-7/PB-KEY-3: the lock purge destroyed the SEALED content key at rest. There is " +
-			"no on-device source for those bytes and the grant watermark refuses a re-delivery as a " +
-			"replay, so the first screen lock strands the phone in PB-KEY-3's terminal state with " +
-			"physical access to the machine as its only exit")
+	// AND THE SEALED CONTENT KEY GOES WITH THEM. This test asserted the opposite through the
+	// ADR-007 B35/B36 round, and correctly: while the trigger was a SCREEN LOCK, destroying the
+	// blob was a permanent brick, because PB-KEY-10 delivers the epoch key as a machine-sealed
+	// grant inside Go and the grant watermark refuses a re-delivery as a replay. B133 moves the
+	// trigger to revoke/unpair, where "no way back without the machine" is the outcome rather
+	// than the cost: re-pairing mints a fresh epoch and fresh keys.
+	if st.Keys.ContentKey != (crypto.ContentKey{}) {
+		t.Errorf("PB-KEY-7: the revoke purge left the SEALED content key at rest, so a restart "+
+			"recovers it with no re-pairing at all: %x", st.Keys.ContentKey)
 	}
 
-	// AND THE CONTENT TIER IS NOT ONE THING. dropContentMaterial destroys the content key and the three
-	// decrypted caches and deliberately leaves everything else, because the replay-guard
-	// coordinates are not content: a purge that reset the send-seq ceiling would brick the phone
-	// at every screen lock exactly as the locked-Save case does. So the content tier cannot be a
-	// single sealed blob -- a locked purge must destroy the caches inside it while preserving
-	// counters it cannot read. That is the constraint these two tests impose jointly, and it is
-	// stated here rather than left for the implementer to discover from one of them.
-	if got := st.SendSeq[s15EpochID]; got != s15SendCeiling {
-		t.Errorf("PB-KEY-7/PB-STATE-3: the lock purge took the send-seq ceiling with it (%d, want %d). "+
-			"The purge destroys key material and DECRYPTED CACHES; the replay-guard coordinates are "+
-			"neither, and a phone that renumbers from 1 at every screen lock has every frame it sends "+
-			"stale-dropped for the life of the epoch", got, s15SendCeiling)
+	// AND THE CONTENT TIER IS STILL NOT ONE THING, for a reason the purge no longer carries.
+	// dropContentMaterial -- the drop a Save takes when the tier is unopened -- destroys the
+	// content key and the three decrypted caches while the replay-guard coordinates are carried
+	// verbatim by a writer that cannot read them. That two-container split is a correctness
+	// argument about renumbering, independent of any purge, and it is what the locked-Save case
+	// one test over depends on. A REVOKE takes the whole tier, counters included: the epoch is
+	// dead, so there is no stream left for a watermark to guard.
+	if got := st.SendSeq[s15EpochID]; got != 0 {
+		t.Errorf("PB-KEY-7: the revoke purge left the send-seq ceiling at rest (%d). The epoch it "+
+			"guards died with the pairing", got)
 	}
-	if got := st.Receive[s15Bucket]; got != s15ReceiveSeq {
-		t.Errorf("PB-KEY-7/PB-STATE-1: the lock purge took the receive high-water with it (%d, want %d), "+
-			"leaving the replay guard blind against every frame the relay still retains", got, s15ReceiveSeq)
+	if got := st.Receive[s15Bucket]; got != 0 {
+		t.Errorf("PB-KEY-7: the revoke purge left the receive high-water at rest (%d)", got)
 	}
 
-	// The wake tier is untouched -- key and state alike (ADR-007 B9/B16: a push arrives with
-	// nobody there, so its KEK is deliberately not auth-gated and neither half may depend on a
-	// screen being unlocked). This is the line between "lock the content tier" and "purge the
-	// device".
-	if st.PushToken != s15PushToken {
-		t.Errorf("PB-KEY-7: the lock purge destroyed the push token (%q, want %q). The purge takes the "+
-			"epoch KEY material and the decrypted caches; a phone that loses its push token at every "+
-			"screen lock stops being wakeable, and re-registration only happens if the app is "+
-			"foregrounded (PB-PUSH-9)", st.PushToken, s15PushToken)
+	// The wake tier goes too. ADR-007 B9/B16 spared it from a LOCK -- a push arrives with nobody
+	// there, and a handset that stops being wakeable in a pocket is broken -- and a revoked
+	// handset must not be wakeable at all. The push token is the same door from the provider's
+	// side, which is what PB-PUSH-9 requires deleted on revoke.
+	if st.PushToken != "" {
+		t.Errorf("PB-KEY-7/PB-PUSH-9: the revoke purge left the push token at rest (%q). It is a "+
+			"provider-visible identifier for a device its owner disowned", st.PushToken)
+	}
+	if st.Keys.WakeKey != (crypto.WakeKey{}) {
+		t.Errorf("PB-KEY-7: the revoke purge left the wake key at rest: %x", st.Keys.WakeKey)
 	}
 }
 

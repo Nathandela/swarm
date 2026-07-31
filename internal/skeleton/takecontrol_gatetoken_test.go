@@ -1,7 +1,7 @@
 package skeleton
 
-// FAILING-FIRST (TDD RED) end-to-end tests for slice A5-c — binding a single-use,
-// "biometric-attested" gate token into the signed take_control command, and refusing a
+// FAILING-FIRST (TDD RED) end-to-end tests for slice A5-c — binding a single-use, ANTI-SWAP
+// gate token into the signed take_control command, and refusing a
 // REPLAYED take_control (operation_id single-use). A5-a landed take_control as a signed,
 // authorized lease establishment and A5-b reopened input behind it; A5-c ADDS (1) a
 // per-invocation gate token bound into the device signature via the content-hash
