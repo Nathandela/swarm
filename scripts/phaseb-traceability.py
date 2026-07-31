@@ -116,18 +116,21 @@ NOT_MET = {
                  "document says so in as many words -- 'Still open: the sweep is separable "
                  "by SHAPE, just not by SIZE' -- while this row read shipped. Mutation: a "
                  "plaintext payload leaves every PB-PUSH-3 test passing (ADR-007 B96)",
-    "PB-SEC-2": "REASON REPLACED 2026-07-31; the lifecycle defect is CLOSED and the pre-fix "
-                "text is fossil. The timed tier has the per-use tier's prompt lifecycle, and "
-                "two live BYPASSES found by mutating the production connection are fenced: a "
-                "button that stops calling its gate, and observers never installed. WHAT "
-                "REMAINS is the row's FIRST clause, untouched by round 7: 'cryptographically "
-                "enforced, not cosmetic ... Keystore-enforced unwrap/sign authorization rather "
-                "than a UI boolean'. The timed tier reads an IN-MEMORY LEDGER TIMESTAMP and "
-                "invokes the action when fresh; SendInput accepts no proof; resolveSend reuses "
-                "an already-resident content key without consulting Keystore. The authorized "
-                "biometric operation is not cryptographically bound to the Go action -- the "
-                "clause the requirement wrote 'rather than a UI boolean' to forbid "
-                "(ADR-007 B117)",
+    "PB-SEC-2": "**VOID, NOT FAILED** (ADR-007 B133, 2026-07-31). The trust boundary moved to "
+                "the WIRE; all phone-side user authentication is REMOVED with its code deleted, "
+                "so this row's entire subject -- 'the biometric gate is cryptographically "
+                "enforced, not cosmetic' -- has left the product. A requirement whose subject no "
+                "longer ships is VOID, and the distinction is load-bearing: NOT MET invites a "
+                "later slice to close it, VOID forbids that. It stays in this dict, and in the "
+                "manifest, so the id is never reused. **IT SITS IN THE 'NOT MET' BUCKET FOR A "
+                "MECHANICAL REASON ONLY** -- this report has one override dict -- so the summary "
+                "count of 11 is honestly 10 not-met plus 1 void. The round-7 reason it replaces "
+                "is fossil twice over: it described an open first clause in a mechanism that is "
+                "being deleted, and the DERIVED cell beside it cites five mutations against a "
+                "`KeyGenParameterSpec` and gate code that will not exist. **TWO ARTIFACTS ARE "
+                "OWED REPAIR AND THIS DICT CANNOT EXPRESS EITHER**: the `## Derivation` row in "
+                "docs/verification/remote-phaseB-s14-evidence.md, and the android/gate/"
+                "s20_pbsec2_* fences that are deleted rather than adapted (ADR-007 B133)",
     "PB-BIND-3": "THE TEST NAMED 'Every' ENUMERATES NOTHING. "
                  "TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend is a hand-written "
                  "linear script with no reflective completeness check -- its NAME asserts a "
@@ -357,6 +360,12 @@ def main():
     out("| **NOT MET (slice shipped, requirement invalidated later)** | **%d** |\n" % n_not_met)
     out("| Remaining | %d |\n" % (len(rows) - n_shipped - n_not_met))
     out("| **Shipped with NO evidence file** | **%d** |\n\n" % n_no_evidence)
+    out("**THE *NOT MET* BUCKET NOW CONTAINS ONE ROW THAT IS *VOID* RATHER THAN UNMET**\n")
+    out("(ADR-007 B133, 2026-07-31). PB-SEC-2's subject -- the phone-side biometric gate -- left\n")
+    out("the product, so the requirement is void: nothing is owed on it and no later slice may\n")
+    out("reopen it as unfinished work. It is counted here only because this report has a single\n")
+    out("override dict, so the honest reading of the number above is **10 not met + 1 void**. The\n")
+    out("row stays in the manifest and in the spec, marked VOID, so the id is never reused.\n\n")
 
     stale = sorted(
         {sl for _, sl in rows if sl in shipped and evidence_superseded(evidence_path(sl))},
