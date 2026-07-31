@@ -936,3 +936,33 @@ hunting that class.
 **Also recorded**: my `git add -A` swept this work into an unrelated commit — the **eighth**
 occurrence. Verified intact after the fact, which is luck rather than process, exactly as residual 4.7
 says.
+
+## 4.10 Two open holes found by the PB-KEY/PB-SEC derivation, and one method note
+
+Recorded here because both survive the whole suite, so nothing else will report them. Full
+detail sits with the rows: `remote-phaseB-s18-evidence.md` (E, F) and
+`remote-phaseB-s14-evidence.md` (I).
+
+**E — PB-SEC-6's fail-closed default is enforced by nobody who is ever asked.** `controlGateOpen`
+clause 2 says: no control session on this connection, drop. Changing it to `return true` — the
+gate opens for a connection that never took control — passes `go test ./internal/skeleton/
+./internal/protocol/` in full. The refusal PB-SEC-6 observes comes one layer up, where
+`LeaseManager.Input` finds no `LeaseConn` and returns before the daemon is consulted. Clause 4
+looked identical from PB-SEC-6's own file and turned out to be fenced in
+`internal/protocol` — the difference only appears when the mutation is run against the whole
+suite rather than the requirement's own package, which is the method note.
+
+**I — PB-SEC-1's blind spot has a stated mitigation that does not hold.**
+`android/gate/keycustody_test.go` records that its byte search cannot see material buried
+unaligned inside a longer base64 field, and states that the in-package mirror
+`TestS14A_ResumeSealsBothTheDeviceKeysAndTheEpochKeys` covers it. It does not: adding a field to
+`sealedDeviceKeys` carrying a cleartext copy of the three content-tier scalars, while sealing
+correctly as well, gives `ok internal/phonecore` and `ok android/gate`. `s14aSealedMaterial` asks
+only whether material was EVER handed to a sealer, which stays true beside a duplicate; and its
+own search carries the same alignment blind spot. No fence asserts what `device.key` MAY contain.
+
+**F, closed by layering rather than open** — PB-SEC-12's Go fence is an existence scan for the
+identifier `filterTouchesWhenObscured`, so deleting all five `SecureWindow.gate(...)` call sites
+keeps it green. The Kotlin hierarchy test catches it, and that test could only be RUN because the
+stale AAR was rebuilt this session (residual 4.6's artifact, again). Two rows in this tranche were
+separated by an unrelated build repair, which is the standing argument for keeping the AAR fresh.
