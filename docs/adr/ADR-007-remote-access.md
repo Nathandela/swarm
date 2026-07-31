@@ -7932,3 +7932,81 @@ equivalent: sever on background, sever on transport loss only, or keep a timer w
 non-authentication justification. **This is a behaviour decision, not a comment fix, and silently
 dropping the clause while rewording the comment would be a change to what the product does made under
 cover of a documentation edit.**
+
+---
+
+## B134. The design system: four decisions the artifact could not make for us (2026-07-31)
+
+Substrate is chosen (B3), its 31 tokens are pinned and drift-guarded against the design source, and
+none of it renders. The app's entire visual output is `setPadding(24)` in raw pixels, one
+`Typeface.MONOSPACE` and one `Typeface.BOLD`; there is no `setTextColor`, no `R.color` and no
+`R.dimen` anywhere in production Kotlin. PB-DS (§6.20) and PB-TOK-5..8 are the family that closes
+that. Four of its decisions are recorded here because the artifacts do not contain them and an
+implementer would otherwise invent each one silently.
+
+### 1. `ReadyForReview` takes `--p-ok`, and `Completed` takes `--p-ink3`
+
+**The largest hole in the design.** `ReadyForReview` is a server-derived first-class `status.Group`
+that the phone renders verbatim and never re-derives. Substrate gives it **no token**. The mock
+paints it `#bf5af2`; the directions artifact's own rationale retires purple, and its demo phone
+silently renders only *Needs you / Working / Done* — so the one screen that would have exposed the
+gap omits the section instead.
+
+The candidates were a 32nd token, or a rebinding. Rebinding wins: **`--p-att` / `--p-work` /
+`--p-ok` / `--p-ink3`** across the four Groups. Substrate's demo labelled the green dot "Done"; this
+moves green to `ReadyForReview` and gives `Completed` the recessive grey. That is what swarm's own
+TUI identity already does (`docs/design/ui-preview.html`: review green, completed grey), it is what a
+triage surface needs — finished work should recede, not hold the most saturated colour on screen —
+and it costs zero new tokens while giving all four Groups distinct hues. PB-TOK-8 makes the mapping a
+checked-in table joined bidirectionally to both `status.Group` and the theme, so a fifth Group or a
+re-bound token cannot land silently.
+
+### 2. The fonts are the platform families, and the residual is named
+
+`--p-font` names SF Pro and `--p-mono` names SF Mono. Neither is licensable off Apple, so **every
+text style in this app has always been rendering a substitute chosen by nobody** — the token pinned a
+value the platform cannot supply, and the gate could not see it because a font stack has no ARGB
+form. Decision: `sans-serif` and `monospace`, zero bundled assets. `--p-display-wt: 650` is reachable
+because `android:textFontWeight` resolves against the platform's variable Roboto at API 33, which
+`minSdk` guarantees.
+
+**Recorded residual:** Android's `monospace` is Droid Sans Mono, which does not cover U+2500–257F. A
+terminal peek carrying box-drawing from an agent TUI may render tofu. The upgrade path is bundling
+JetBrains Mono and it is deliberately not taken now — PB-DS-3 requires a test that renders a
+box-drawing string through the chosen family, so the residual is *observed* rather than assumed, and
+the decision to bundle is made against evidence.
+
+### 3. No decorative animation
+
+Substrate declares no `@keyframes`, no `transition` and no `animation` anywhere. Its working
+affordance is the **static** `0 0 9px` dot glow plus the **static** workbar gradient, and its stated
+rule is "nothing glows unless it is alive". The mock's `pulse 1.6s` dot is inherited from the
+pre-skin palette and is a conflict, not a specification.
+
+Decision: only navigation affordances move — the bottom sheet and the push banner, `translateY` over
+350 ms on `cubic-bezier(0.32, 0.72, 0, 1)` — plus the streaming caret, which reports liveness rather
+than decorating. Reduced motion is honoured at animator construction via `ANIMATOR_DURATION_SCALE`,
+and it covers the toggle, which the artifact's own `prefers-reduced-motion` selector list omits.
+
+### 4. `minSdk 33` retires the three conversion fallbacks; elevation stays banned
+
+`BlendMode.SOFT_LIGHT` (API 29) and `RenderEffect.createBlurEffect` (API 31) are both unconditionally
+available at `minSdk 33`, so the grain overlay and the tab-bar blur need no fallback path. What does
+*not* have a primitive is the glow: both dot glows and the CTA bloom are symmetric zero-offset blurs,
+and `View.elevation` with `setOutlineSpotShadowColor` produces a directional light-source shadow, not
+a halo. `Paint.setShadowLayer(r, 0, 0, colour)` on a software layer is the one faithful
+implementation, and it solves `--p-cta-fx` and both `.pdot` glows at once.
+
+**`View.elevation` is the wrong implementation of `--p-card-fx` despite being the obvious one.**
+Substrate bans drop shadows outright — elevation is one ladder step lighter, never a shadow — so the
+inset key-light is a `layer-list` with a 1 dp top-edge rect at `#0BFFFFFF` clipped to the card radius,
+and PB-DS-5 fences `elevation` out of surface code entirely.
+
+### What this entry does not decide
+
+The design is **incomplete**, and PB-DS-7 is the scope that closes it: 14 of 38 components carry a
+Substrate spec and the other 24 exist only in the mock's retired iOS-derived palette. Deriving them
+is design authoring, not transcription. Two need genuine invention rather than substitution — **the
+focus ring**, which today uses the documentation chrome's `#e2a33b` and is undefined for the product,
+and **the scrim and grab handle**, which have no near token. Those land as a reviewable table, one
+row per component, no cell a bare hex.
