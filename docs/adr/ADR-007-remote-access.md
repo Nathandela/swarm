@@ -7096,3 +7096,111 @@ between legs is genuinely closed by the authenticated direction tag; retention/r
 ends across restart; ordinary-frame flood is backpressured (only `MsgWaitReply` is not);
 `ackItems`/`readItemsPage` are correct against an honest peer. **Every defect found here is in what the
 CLIENT believes, never in the server's own bookkeeping** — which is itself the ninth axis restated.
+
+---
+
+## B126 — Fencing a relay-minted cursor: what evidence buys, and the one number it cannot
+
+**2026-07-31.** B125's F-1 is closed to the extent evidence allows, and the part that needs a
+budget decision is recorded rather than invented. Three fences, one recovery, one reversal, one
+residual.
+
+### The rule, and it is the ninth axis made operational
+
+> **A party may adopt a relay-authored value only where it has evidence for that value, and
+> where adopting it wrongly is RECOVERABLE.** Neither half is optional. The cursor had neither.
+
+**Evidence, gateway side.** `processBatch` took the batch maximum cursor from every item
+**before** `handle()`, so six bytes of garbage moved the durable resume point and the ack that
+followed ordered the relay to compact the backlog it had just made undeliverable. The resume
+point now moves **only through `consume`** — only for an item the bridge actually opened and
+handled. The advance is a MAXIMUM over handled items rather than a contiguous prefix, so the
+no-wedge property the old rule existed for survives: an item that can never open is stepped
+over by the next one that does, and only one sitting at the mailbox **tail** is re-read, which
+is the same bounded cost the phone's drain already accepts.
+
+**Evidence, transport side.** `relay.Client` now refuses a page that breaks the contract the
+relay states for its own store: items strictly greater than the requested cursor, strictly
+ascending. One check, in the one place **both** ends read through, on `mailbox_wait` as well as
+`mailbox_read`. **This is half a fence and is documented as half** — a page of ONE item
+satisfies every clause whatever cursor it carries, which is precisely the measured phone
+attack.
+
+**Server side.** `store.readItemsPage` computed its scan start as `afterCursor + 1`, which
+wraps at `MaxUint64`: the one value meaning "past every item this mailbox can hold" scanned
+from key 0 and the relay re-served the **entire mailbox** on every read from it. `afterCursor`
+is untrusted input — it is whatever the reader asked for — and it is now bounded in the one
+function both read paths share.
+
+**Recovery.** `App.Resync` rewinds `State.RelayCursor` to zero **locally, before any round
+trip**. The verb's MEANING changes and this is the record of it: from *"ask the machine for a
+reseed"* to *"reset my read position AND ask for a reseed"*. The local half must come first
+because **the reseed is delivered THROUGH the read position** — measured, the poisoned phone's
+`Resync` returned `nil` and changed nothing. It rides **every** admitted resync, not only the
+journal's, because the read cursor belongs to the transport and all four channels share it: a
+user whose terminal has gone silent must not have to guess which button repairs the connection.
+
+*Re-reading from zero replays nothing, and that is the load-bearing argument.* **The cursor is
+not the guard.** It is an optimisation — do not re-read what has been read — and what actually
+refuses a redelivered frame is the durable per-bucket seq high-water plus the grant watermark,
+both authenticated and both untouched by the rewind. The work is bounded by the relay's own
+mailbox depth cap.
+
+*It is a `Store` METHOD for the reason `PurgeKeys` is one:* custody cannot tell a rewind from an
+ordinary `Save` of a `State` whose cursor happens to be zero, because a phone that has never
+read anything holds zero too. `mergeGuards` raises `RelayCursor` monotonically — it is grouped
+with the replay guards — so a naive rewind is **silently undone by custody**. That trap is what
+the phonecore test pins, verified by mutating the implementation onto the naive path and
+watching it fail with the poisoned value intact.
+
+### The reversal, recorded because a code comment carried the old decision
+
+`command_loop.go` documented that the read cursor *"advances past every item it reads —
+INCLUDING a malformed or unforwardable one — so a poisoned envelope can neither wedge the loop
+nor be retried forever."* **That decision was the keyless variant of the defect.** It is
+reversed here, its stated purpose is preserved by the maximum-over-handled rule above, and
+`CommandBridge.SetCursor` is deleted: removing the defective advance left it with zero
+production callers, `internal/verify`'s B94 reachability gate caught it, and its doc comment
+claimed a behaviour ("seeds the read cursor from durable state on resume") **it never had** —
+`NewCommandBridge` seeds from the checkpoint directly, and PB-GW-1's own text already said so.
+The instrument working as intended, and a fossil one level down.
+
+### RESIDUAL — the number nobody has decided
+
+> **How many storage cursors may be minted per authenticated seq?** That is the quantity a
+> per-page delta bound needs, and no requirement states it.
+>
+> A delta bound would otherwise be EXACT. Cursors are minted **densely** — `store.appendItem`
+> does `next, next+1` — and the depth cap **refuses** rather than evicts, so a refused append
+> mints nothing and a page after cursor C is exactly C+1, C+2, ...
+>
+> **Two constraints make a client-side constant wrong.** (1) `RetentionCap` purges unacked
+> items and opens a legitimate hole whose size is governed by `RetentionCap` and
+> `MailboxMaxItems` — **relay-side config the protocol does not carry**, so transcribing either
+> into a client is B113's shape: it breaks silently the moment an operator tunes it. (2) The
+> authenticated coordinate the eventual rule must key on is the envelope **seq**, and the slack
+> between the two is **not zero even today** — the phone's mailbox also carries the grant
+> sidecar in its own seq space, and PB-GW-7's delivery-unknown retry mints two cursors for one
+> seq **by design**.
+>
+> **Choosing the cursors-per-seq slack is a §6.0 number nobody has decided; it is recorded as
+> residual, not invented here** — the same form PB-APP-11 uses for its beacon interval. Until
+> it is decided, a relay that rewrites the cursor of a **single** genuine sealed frame still
+> moves the resume point at either end. What changes is that the damage is no longer permanent.
+
+### Two recorded, not acted on
+
+**`mobile/types.go:292` exposes `RelayCursor` as `int64`.** A `uint64` narrowing at the facade
+boundary is its own defect independent of any fence, and it is how the poison reached Kotlin as
+a **negative** number (`-9223372036854775808` in the measured run).
+
+**`snapshot.go:753` acks the UNVALIDATED cursor on the `ErrStaleSeq` path.** This is **not**
+B125's withdrawn ack amplifier. That withdrawal reasoned "a relay that can delete the mailbox
+can simply delete it" — conceded storage economics. **This is one unvalidated relay-authored
+scalar reaching two different destructive sinks, and only one of them is now fenced.** The
+finding is the axis, not the mailbox.
+
+**Null result worth recording:** the phone never had the gateway's keyless variant.
+`AcceptCommitAt` commits the cursor only through `commitReceive` (a frame that opened) or
+`installGrant` (a grant that opened); a refused frame returns before either. The phone's only
+exposure was — and remains — the keyed variant.
