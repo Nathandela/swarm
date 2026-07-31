@@ -1,0 +1,69 @@
+PB-DS-8 / ADR-007 B134 decision 3 -- RED evidence (GG-5).
+
+MotionTest.kt was written against dev.swarm.phone.ui.kit.Motion before that object existed.
+This is the actual output of running it in that state -- failing for the right reason (a
+missing implementation), not a syntax error in the test itself.
+
+$ . android/toolchain.env && cd android && ./gradlew --no-daemon :app:testDebugUnitTest \
+    --tests 'dev.swarm.phone.ui.kit.MotionTest'
+
+> Task :app:compileDebugUnitTestKotlin
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:54:28 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:59:28 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:64:28 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:74:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:76:20 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:87:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:89:20 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:99:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:106:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:113:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:135:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:137:20 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:153:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:162:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:169:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:182:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:182:75 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:189:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:189:75 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:196:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:196:67 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:205:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:205:96 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:212:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:212:96 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:221:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:221:66 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:221:102 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:235:26 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:236:26 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:237:29 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:238:29 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:246:29 Cannot infer type for type parameter 'R'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:246:35 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:246:68 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:252:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:260:24 Unresolved reference 'Motion'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt:272:9 Unresolved reference 'Motion'.
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin
+'org.jetbrains.kotlin.android').
+> A failure occurred while executing
+  org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+BUILD FAILED in 32s
+
+Every failure names the same missing symbol -- `dev.swarm.phone.ui.kit.Motion` does not exist
+yet -- which is the right-reason failure TDD's RED phase asks for: 35 unresolved-reference
+errors plus two type-inference errors that are themselves consequences of the same missing
+type (the lambda parameter and the reified type argument in the two colorTransition/
+ApplicationProvider calls cannot be inferred without Motion's declared signatures). Not a
+syntax error in the test, and not a wrong assertion -- there is simply nothing yet to assert
+against.

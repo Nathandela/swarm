@@ -1,0 +1,59 @@
+$ . android/toolchain.env && cd android && ./gradlew --no-daemon :app:testDebugUnitTest \
+    --tests 'dev.swarm.phone.ui.kit.KitFoundationTest' \
+    --tests 'dev.swarm.phone.ui.kit.InboxRowTest' \
+    --tests 'dev.swarm.phone.ui.kit.InboxChromeTest'
+
+InboxRowTest > the row's internal spacing is the scale's FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:133
+InboxRowTest > the session list carries the side padding and the gap between rows FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:258
+InboxRowTest > the session row resolves the design's card and type FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:133
+InboxRowTest > only the live Groups glow, and only they are on a software layer FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:110
+InboxRowTest > the working bar is on the Working row and on no other FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:133
+InboxRowTest > the working bar fades to a transparent WORKING colour, not to a transparent black FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:133
+InboxRowTest > only the NeedsInput row is the attention variant FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:133
+InboxRowTest > the status dot is the design's 7dp mark in its Group's colour FAILED
+    kotlin.NotImplementedError at InboxRowTest.kt:69
+InboxChromeTest > the chip row carries the gap and the side padding FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:133
+InboxChromeTest > the tab badge appears only for a non-zero count FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:247
+InboxChromeTest > the live counter is the phosphor readout the design specifies FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:227
+InboxChromeTest > the presence dot is the design's 5dp mark, present only when a machine is named FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:95
+InboxChromeTest > the nav header resolves the display title and the live counter FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:189
+InboxChromeTest > the badge is the attention pill the derivation table specifies FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:343
+InboxChromeTest > the filter chip resolves both of its states FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:61
+InboxChromeTest > the tab bar is the design's translucent bar with a hairline rule FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:247
+InboxChromeTest > the tab items resolve the inactive and active inks FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:247
+InboxChromeTest > the section label is the design's mono uppercase heading FAILED
+    kotlin.NotImplementedError at InboxChromeTest.kt:171
+KitFoundationTest > the two live Groups glow at the design's share and the other two do not glow FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:100
+KitFoundationTest > the key light is an inset one-dp band clipped to the card radius FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:208
+KitFoundationTest > the blend is the premultiplied one CSS specifies FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:126
+KitFoundationTest > the card surface resolves the design's card FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:182
+KitFoundationTest > every status Group resolves to the colour its checked-in token declares FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:67
+KitFoundationTest > the attention card carries the derived border and the attention rail FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:248
+KitFoundationTest > the blend is not the un-premultiplied one that fades through black FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:170
+KitFoundationTest > the chip surface resolves both chip states FAILED
+    kotlin.NotImplementedError at KitFoundationTest.kt:283
+29 tests completed, 26 failed
+BUILD FAILED in 2m 21s

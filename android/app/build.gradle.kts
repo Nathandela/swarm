@@ -106,6 +106,14 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // artifacts, not a copy, or the two halves can agree with each other while disagreeing
     // with the design source.
     from(rootProject.layout.projectDirectory.file("design-tokens.tsv"))
+    // PB-TOK-8 / PB-DS-7 (S23): the Group -> token join, for the same reason and by the same
+    // arrangement. The component kit paints four status dots, one per status.Group, and which
+    // token each Group IS is ADR-007 B134's decision -- green moved to ReadyForReview and
+    // Completed took the recessive grey. A Robolectric test that hardcoded that mapping would be
+    // a second copy of a checked-in table, disagreeing with it silently the day it changes; read
+    // from here, the expected colour for every Group is computed by following group-tokens.tsv
+    // into design-tokens.tsv into the origin.
+    from(rootProject.layout.projectDirectory.file("group-tokens.tsv"))
     from(rootProject.layout.projectDirectory.dir("..").file("internal/design/tokens.json"))
     // PB-DS-1..4 (S22b): the design ARTIFACT and the style-to-selector join, for the same
     // reason and by the same arrangement. tokens.json pins 31 tokens; it carries no spacing,

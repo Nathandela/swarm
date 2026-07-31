@@ -1,0 +1,81 @@
+$ go test ./android/gate/ -run "TestPBDS[567]_" -v
+
+=== RUN   TestPBDS6_EveryInboxComponentIsAKitFactory
+    s23_kit_test.go:207: PB-DS-6: the kit has no StatusDot.kt, which is where statusDot() lives.
+        	the 7dp mark and its glow are Substrate's; WHICH Group takes which colour, and which two of the four glow at all, is B134's rebinding and exists nowhere else
+    s23_kit_test.go:207: PB-DS-6: the kit has no SessionRow.kt, which is where sessionRow() lives.
+        	the triage row, with the .prow.attention variant its rail and warmed border
+    s23_kit_test.go:207: PB-DS-6: the kit has no SessionRow.kt, which is where sessionList() lives.
+        	the rows' container carries the 12dp side padding and the 7dp gap. Without it a screen types both, which is the PB-DS-6 violation the kit exists to prevent
+    s23_kit_test.go:207: PB-DS-6: the kit has no WorkingBar.kt, which is where workingBar() lives.
+        	Substrate's Working affordance is this static gradient plus the dot glow, no pulse
+    s23_kit_test.go:207: PB-DS-6: the kit has no FilterChip.kt, which is where filterChip() lives.
+        	scope bar chip; .chip.on is the selected variant and .chip .pd the presence dot
+    s23_kit_test.go:207: PB-DS-6: the kit has no FilterChip.kt, which is where chipRow() lives.
+        	same reason as sessionList: the gap and the side padding belong to the container
+    s23_kit_test.go:207: PB-DS-6: the kit has no SectionLabel.kt, which is where sectionLabel() lives.
+        	the Group heading. Uppercase is the component's, per text-transform
+    s23_kit_test.go:207: PB-DS-6: the kit has no NavHeader.kt, which is where navHeader() lives.
+        	the root-screen header: big title on the left, live counter pushed right
+    s23_kit_test.go:207: PB-DS-6: the kit has no NavHeader.kt, which is where liveCounter() lives.
+        	a separate factory because §1.4 ships it beside the badge, counting a different thing
+    s23_kit_test.go:207: PB-DS-6: the kit has no TabBar.kt, which is where tabBar() lives.
+        	the bar, its top rule, its translucency and its four items
+    s23_kit_test.go:207: PB-DS-6: the kit has no Badge.kt, which is where badge() lives.
+        	Substrate's artifact has no badge at all -- it uses the live counter instead. §1.4 ships both and recolours this one from the mock's retired red to --p-att
+--- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.01s)
+=== RUN   TestPBDS6_EveryKitFactoryIsAnInboxComponent
+    s23_kit_test.go:280: PB-DS-6: no top-level factories found in the files s23Inbox names; this direction passed over an empty set and says nothing
+--- FAIL: TestPBDS6_EveryKitFactoryIsAnInboxComponent (0.00s)
+=== RUN   TestPBDS7_EveryDerivationCitationResolvesToARow
+    s23_kit_test.go:310: PB-DS-7: no `derived:` citation found anywhere in the kit, yet 2 component(s) in s23Inbox are specified only by the derivation table. This check passed over an empty set.
+--- FAIL: TestPBDS7_EveryDerivationCitationResolvesToARow (0.00s)
+=== RUN   TestPBDS5_TheKitNeverReachesForElevation
+--- PASS: TestPBDS5_TheKitNeverReachesForElevation (0.00s)
+=== RUN   TestPBDS6_NoColourIsTypedInTheKit
+--- PASS: TestPBDS6_NoColourIsTypedInTheKit (0.00s)
+=== RUN   TestPBDS6_NoTypefaceIsChosenInTheKit
+--- PASS: TestPBDS6_NoTypefaceIsChosenInTheKit (0.00s)
+=== RUN   TestPBDS6_NoRawDimensionIsTypedInTheKit
+    s23_kit_test.go:574: PB-DS-6: the kit makes no padding or margin call at all, so this scan says nothing -- and a component set that spaces nothing is not one
+--- FAIL: TestPBDS6_NoRawDimensionIsTypedInTheKit (0.00s)
+=== RUN   TestPBDS6_EveryKitSpacingIsTheLedgersStep
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SessionRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: WorkingBar.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: FilterChip.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SectionLabel.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SectionLabel.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: SectionLabel.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: NavHeader.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: NavHeader.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: NavHeader.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: NavHeader.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: TabBar.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:709: PB-DS-6: TabBar.kt does not exist, so its spacing cannot be checked
+--- FAIL: TestPBDS6_EveryKitSpacingIsTheLedgersStep (0.00s)
+=== RUN   TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber
+    s23_kit_test.go:848: PB-DS-7: no annotated metric constant was checked against the design; either the kit declares none (and every component's fixed sizes came from somewhere unstated) or the annotation parser stopped matching
+--- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.01s)
+=== RUN   TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping
+    s23_kit_test.go:921: PB-DS-7: the kit has no Kit.kt, which is where the Group binding lives
+--- FAIL: TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping (0.00s)
+=== RUN   TestPBDS7_TheDotGlowsAreTheDeclaredDerivations
+    s23_kit_test.go:985: PB-DS-7: the kit has no Kit.kt
+--- FAIL: TestPBDS7_TheDotGlowsAreTheDeclaredDerivations (0.00s)
+=== RUN   TestPBDS7_TheMetricJoinCanActuallyFail
+--- PASS: TestPBDS7_TheMetricJoinCanActuallyFail (0.00s)
+=== RUN   TestPBDS6_TheAnnotationParserCanActuallyFail
+--- PASS: TestPBDS6_TheAnnotationParserCanActuallyFail (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.758s
+FAIL
