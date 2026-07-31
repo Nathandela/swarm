@@ -7533,3 +7533,62 @@ became NOT DERIVED — its intended mutation would not apply and no other was at
 confirmed, but it was never broken, because the app module did not compile. **Reading a fence is
 not deriving it**, and a column that let those two count as derived would have been the same
 comfortable fiction as counting evidence files by existence (B67(1)).
+
+---
+
+## B130 — Session handoff: what is measured, what is blocked, and what to do first
+
+**2026-07-31.** Recorded so the next session starts from state rather than from rediscovery.
+
+### The number that changed
+
+**Derivation went 8 -> 96 of 146 in one day**, where DERIVED means *somebody made this fence fail on
+purpose and recorded the mutation in the same row.* Before B129 it was a hand-count of ~76 that nothing
+could check. **The estimate was wrong by a factor of nine, in the optimistic direction.**
+
+**133 of 146 shipped. 96 derived. 11 NOT MET. 2 hardware-deferred.**
+
+### Do these first, in this order
+
+1. **`./android/build-aar.sh && cd android && ./gradlew --no-daemon lint test` on a QUIET host.** The
+   Kotlin app module broke today (`692ca66` replaced an import with duplicates) and **no Go gate saw
+   it** — `go build`, `go vet` and `go test ./...` are all green over a non-compiling Android app.
+   Fixed at `cb77823`, but a stale AAR masks whether anything else fails once `PB-APP-11`'s new verbs
+   are bound. **Nothing about this branch's Android half is trustworthy until that run is green.**
+2. **Two numbers nobody has decided**, both fully specified so they *can* be decided: how far a
+   relay-minted cursor may advance per page relative to items delivered (B126), and which Gradle
+   distribution hosts are acceptable (B128). **Seven agents refused to invent values this session and
+   every refusal was correct.** Do not let the eighth invent one.
+3. **Derive the remaining ~50 rows.** Ten tranches derived, **ten produced findings.** The remaining
+   green rows are unexamined, not known-good.
+
+### The three instruments that produced almost everything
+
+- **The fence's grammatical SUBJECT is narrower than the requirement's.** Found at **eight** rows this
+  session alone: the poll instead of the observer, the component instead of the channel, the job
+  instead of the lane, the table instead of the socket, the monitor instead of the phone, the Go
+  computation instead of the absent Kotlin one.
+- **Mutate the CONNECTION, not the VALUE** (B113). A mutation that moves a constant the test
+  transcribes proves the test reads the constant, never that production uses it.
+- **Who MINTS this value, and what does the receiver do with it that it cannot undo?** (B125). Two
+  criticals came from that question and nothing else reached them.
+
+### What to distrust in this record
+
+**Prose in evidence files.** 43 files carry mutation claims in seven phrasings and **not one is keyed
+to a requirement id**, which is why nothing could be backfilled except from ADR entries that name
+mutations per row. **A file saying "mutation-proven" somewhere in two hundred lines cannot say which
+row.**
+
+**And this orchestrator's own edits.** Three times today an edit had a different extent than intended —
+a range replace that silently deleted three NOT MET rows, a bare `git commit` that swept 3,318 lines of
+a peer's staged deletion, and a duplicate `## Derivation` section the parser ignored. **Two landed
+before they were caught.** The rule that works is: verify the extent *after* every edit — `git show
+--stat`, the key list, the row count — and never trust that a change did only what it was for.
+
+### Status of the goal
+
+**Eight rounds, eight REVISE verdicts.** The gate is unanimous audit-committee agreement on production
+readiness. **It has not been reached**, and the obstacle is no longer a list of known defects: it is
+fifty requirements whose fences nobody has ever made fail, on a codebase where every examined tranche
+produced findings.
