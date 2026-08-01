@@ -30,6 +30,29 @@ data class SessionRow(
      * is holed that all is well as long as the machine answers.
      */
     val present: Boolean,
+    /**
+     * `swarmmobile.Session.Agent`, verbatim from the wire, and EMPTY MEANS THE MACHINE REPORTED
+     * NONE -- never that nobody asked. mobile/types.go states both halves: the field is "the agent
+     * identity the machine reported for this session", and "unlike Title it is never derived
+     * on-device". So nothing downstream may fill a gap here from the title, the id, or a word like
+     * "unknown"; the row simply draws no agent cell at all (`ui/kit/SessionRow.kt`).
+     *
+     * IT HAS NO DEFAULT ON PURPOSE, and [JournalRow.sessionId] one screen over is the same field
+     * class deciding the same question the same way -- for a reason that was learned rather than
+     * argued. That field was carried by the facade all along and `FacadeBridge.journal` did not
+     * read it, so the activity feed could report that a session launched and not which one; its
+     * KDoc records that "a default value here would have made the field optional at nine
+     * construction sites and it would have gone unpopulated at whichever one nobody revisited,
+     * which is how it was lost the first time".
+     *
+     * THE COLLAPSE A DEFAULT WOULD CAUSE IS THIS FIELD'S OWN SUBJECT, which is what makes the
+     * precedent binding here rather than merely similar. A mapping that FORGOT the agent renders
+     * exactly what a machine reporting none renders -- and since `sessionRow` now draws no cell for
+     * an absent agent, the two are not even ambiguous on screen, they are identical: nothing.
+     * Requiring the field spends one line at each construction site to buy a compiler that refuses
+     * to let the next mapping be written wrong.
+     */
+    val agent: String,
 )
 
 /**

@@ -69,15 +69,28 @@ fun sessionRow(
             tag = KitTag.PROJECT
         },
     )
-    line.addView(
-        TextView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
-            setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
-            text = agent
-            layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
-            tag = KitTag.AGENT
-        },
-    )
+    // NO AGENT MEANS NO CELL, not an empty one. `swarmmobile.Session.Agent` is verbatim from the
+    // wire and mobile/types.go states what an empty one means: "the session's records carried
+    // none". It is never derived on-device. So the honest rendering of a session the machine said
+    // nothing about is no view at all -- an empty `TextView` here still spent the 8 dp gap before
+    // it, which is a cell claiming to be the agent's while naming nobody.
+    //
+    // IT IS THE ROW'S OWN RULE, not a new one: the workbar below exists only on a Working session,
+    // and the tab badge renders nothing at zero rather than a badge reading "0". What must never
+    // happen in this cell is the other repair -- a placeholder, or a fall back to the project or
+    // the id -- which would put a fabricated identity where a reader trusts to find the agent's
+    // (ADR-007 B135).
+    if (agent.isNotBlank()) {
+        line.addView(
+            TextView(context).apply {
+                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
+                setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
+                text = agent
+                layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
+                tag = KitTag.AGENT
+            },
+        )
+    }
 
     val row = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL

@@ -37,12 +37,14 @@ class TriageInboxScreenTest {
         group: String,
         need: String = "doing something",
         present: Boolean = true,
+        agent: String = "claude",
     ) = SessionRow(
         id = id,
         title = id.substringAfter('/'),
         group = group,
         need = need,
         present = present,
+        agent = agent,
     )
 
     private fun screenOf(
@@ -157,10 +159,31 @@ class TriageInboxScreenTest {
         assertEquals("mbp/api", rendered.id)
         assertEquals("api", rendered.project)
         assertEquals("wants to run: git push", rendered.need)
-        // `swarmmobile.Session` carries ID, Title, Group, Need and Present and no agent
-        // (mobile/types.go). The kit's `.prow .ag` slot therefore has no source, and an invented
-        // one would be simulated data in production code -- so the slot renders empty and the
-        // absence is asserted rather than hidden behind a plausible string.
+        // THE AGENT IS THE WIRE'S WORD, CARRIED THROUGH UNCHANGED. This assertion used to read
+        // `assertEquals("", rendered.agent)` on the stated ground that "`swarmmobile.Session`
+        // carries ID, Title, Group, Need and Present and no agent (mobile/types.go)". That stopped
+        // being true at 5f45f34: mobile/types.go now documents Agent as "the agent identity the
+        // machine reported for this session, verbatim from the wire". The old assertion pinned the
+        // ABSENCE of the field, so it could not survive the field arriving; what it was really
+        // protecting -- that this screen invents nothing -- is pinned in both directions now, here
+        // and in the test below.
+        assertEquals("claude", rendered.agent)
+    }
+
+    /**
+     * The other direction, and it is the one that matters.
+     *
+     * `mobile/types.go` states that an empty Agent means "the session's records carried none" and
+     * that it is never derived on-device. So a screen that filled the gap -- with the project, the
+     * id, or a word like "unknown" -- would render a fabricated identity in the one cell a reader
+     * trusts to name the agent, and it would be indistinguishable from a real one (ADR-007 B135).
+     * The Go side pins the same pair; this is its other end.
+     */
+    @Test
+    fun `a session whose records carried no agent gets none invented for it`() {
+        val screen = screenOf(listOf(row("mbp/api", "working", agent = "")))
+        val rendered = screen.sections.first { it.group == "working" }.rows.single()
+
         assertEquals(
             "the agent slot was filled with something the wire never sent",
             "",

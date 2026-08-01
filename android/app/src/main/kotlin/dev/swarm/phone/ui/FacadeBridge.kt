@@ -188,6 +188,12 @@ class FacadeBridge(private val app: App) {
         group = session.getGroup(),
         need = session.getNeed(),
         present = session.getPresent(),
+        // VERBATIM, AND WITH NO FALLBACK. The daemon puts `persist.Meta.AgentType` on the journal
+        // record and phonecore folds it through unchanged, so this is the machine's own word for
+        // what is running. An empty one means the session's records carried none -- which is a
+        // fact, not a gap to fill: substituting the title or the id here would put a fabricated
+        // identity in the one cell a reader trusts to name the agent.
+        agent = session.getAgent(),
     )
 
     /** The text crosses verbatim. There is no renderer on this side to put between them. */

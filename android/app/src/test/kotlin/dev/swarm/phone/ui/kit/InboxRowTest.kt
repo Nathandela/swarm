@@ -480,6 +480,42 @@ class InboxRowTest {
         )
     }
 
+    /**
+     * `.prow .ag` carries what the MACHINE reported, and draws nothing at all when it reported
+     * nothing.
+     *
+     * BOTH DIRECTIONS, because only one of them is the defect. `swarmmobile.Session.Agent` is
+     * "verbatim from the wire" and mobile/types.go states that an empty Agent means "the session's
+     * records carried none" -- it is never derived on-device. So a row for a session the machine
+     * said nothing about must show NOTHING: no placeholder, no "unknown", and above all no falling
+     * back to the title or the id, which would render a fabricated identity in the exact cell a
+     * reader trusts to name the agent. That is ADR-007 B135's class.
+     *
+     * AN EMPTY CELL IS NOT NOTHING, which is what this row used to draw: the agent `TextView` was
+     * added unconditionally, so a session with no agent still got a view carrying the 8 dp gap
+     * before it. The component already makes this distinction where the design does -- the workbar
+     * exists only on a Working row -- and the tab badge makes it for a zero count ("Zero means no
+     * badge at all, not a badge reading 0"). This is the same rule for the same reason.
+     */
+    @Test
+    fun `the agent cell is the wire's word, and is absent when the wire carried none`() {
+        val named = sessionRow(context, "quanthome/api", "claude", "Wants to run something", "working")
+        assertEquals(
+            "the agent cell does not carry the agent the machine reported",
+            "claude",
+            (named.kitRequire(KitTag.AGENT) as TextView).text.toString(),
+        )
+
+        val anonymous = sessionRow(context, "quanthome/api", "", "Wants to run something", "working")
+        assertNull(
+            "a session whose records carried NO agent still gets an agent cell on its row -- an " +
+                "empty TextView holding the 8 dp gap before it. `swarmmobile.Session.Agent` is " +
+                "verbatim from the wire and an empty one means the machine reported none, so the " +
+                "honest rendering is no view at all rather than a blank one",
+            anonymous.kitFind(KitTag.AGENT),
+        )
+    }
+
     /** The gaps and the offsets: `.t`'s 7px gap and `.ln`'s 4px top margin, through the ledger. */
     @Test
     fun `the row's internal spacing is the scale's`() {

@@ -76,8 +76,15 @@ data class MachinesPanel(
  * `endpoint id` and a meta line -- and this product has ONE identifier for a machine, not two.
  * `MachinePane.machineId` IS the endpoint id (`machine-endpoint-0001` in the model's own test),
  * and rendering it twice would be a second copy of the name wearing the mock's label rather than
- * a second fact. [InboxRow.agent] is the same cell in the same position and is empty for the same
- * reason: `swarmmobile.Session` carries no agent, so the slot has no source on the wire.
+ * a second fact.
+ *
+ * THE PARALLEL THIS COMMENT USED TO DRAW IS GONE, and the correction is recorded rather than
+ * quietly dropped. It said [InboxRow.agent] was "the same cell in the same position and is empty
+ * for the same reason: `swarmmobile.Session` carries no agent, so the slot has no source on the
+ * wire". Both halves are false as of 5f45f34: the facade carries `Agent` verbatim from the wire,
+ * and the inbox row renders it. So that cell is empty only when the machine reported no agent,
+ * which is a fact about one session rather than a gap in the wire. This row's own reason is
+ * unaffected -- it never rested on the parallel, only borrowed it.
  */
 data class MachineRow(
     /** Row 11's `name`, `Title.Row` / `--p-ink`: the machine as this product names it. */

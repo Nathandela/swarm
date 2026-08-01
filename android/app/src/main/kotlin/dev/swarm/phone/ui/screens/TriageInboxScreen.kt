@@ -76,9 +76,19 @@ data class InboxRow(
     /** `.prow .pj` -- `swarmmobile.Session.Title`, the id's own local part. */
     val project: String,
     /**
-     * `.prow .ag`. EMPTY, and deliberately: `swarmmobile.Session` carries ID, Title, Group, Need
-     * and Present and no agent (mobile/types.go), so the slot has no source on the wire. An
-     * invented one would be simulated data in production code, which is worse than a blank.
+     * `.prow .ag` -- the agent identity the machine reported, verbatim from the wire.
+     *
+     * THIS FIELD USED TO BE THE EMPTY STRING BY CONSTRUCTION, on the ground that "`swarmmobile.
+     * Session` carries ID, Title, Group, Need and Present and no agent (mobile/types.go)". That
+     * ceased to be true at 5f45f34, which carried `Agent` the whole way from the daemon's
+     * `persist.Meta.AgentType` to `swarmmobile.Session` -- and the sentence was left behind citing
+     * the very file that refuted it, which is the defect class this project treats most seriously.
+     * It is deleted rather than softened.
+     *
+     * EMPTY STILL MEANS SOMETHING, and it is the opposite of what it used to mean: not "the wire
+     * has no such field" but "the machine reported no agent for this session". mobile/types.go says
+     * it is never derived on-device, so nothing here fills the gap -- the row draws no agent cell
+     * at all (`ui/kit/SessionRow.kt`) rather than a blank one or a plausible substitute.
      */
     val agent: String,
     /** `.prow .ln` -- the journal record type verbatim, never an invented phrase. */
@@ -168,7 +178,7 @@ object TriageInboxScreen {
                         InboxRow(
                             id = row.id,
                             project = row.title,
-                            agent = "",
+                            agent = row.agent,
                             need = row.need,
                             group = row.group,
                             stateDescription = headingOf(section.group),
