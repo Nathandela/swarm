@@ -2,14 +2,14 @@ package gate
 
 // FAILING-FIRST (TDD RED, GG-5) is demonstrated on SYNTHETIC sources for this file, not on the
 // repository: PB-DS-8's fence is preventative, and the repository has never contained an
-// animator construct outside dev/swarm/phone/ui/kit/Motion.kt (verified by hand, and re-verified
-// when the exemption was narrowed from the kit package to that one file: `grep -rn
-// 'ObjectAnimator\|ValueAnimator\|ViewPropertyAnimator\|\.animate(\|startAnimation\|
-// TransitionManager' android/app/src/main/kotlin/` finds nothing else). A real-repo
-// run can therefore only ever demonstrate ACCEPTANCE of a clean tree, the same limitation
-// pbsec3_logdiscrimination_test.go documents for the log scan -- so the guard's ability to
-// REJECT is proved here on sources built to contain the violation, in the style established
-// there and by scanLogSinksIn's roots parameter.
+// animator construct outside dev/swarm/phone/ui/kit/Motion.kt (verified by hand, re-verified
+// when the exemption was narrowed from the kit package to that one file, and re-verified again
+// when the fence was inverted from a name denylist to a vocabulary allowlist: `grep -rniE
+// 'animat|transition' android/app/src/main/kotlin/` finds three hits and all three are prose in
+// comments, which kotlinCodeOnly strips). A real-repo run can therefore only ever demonstrate
+// ACCEPTANCE of a clean tree, the same limitation pbsec3_logdiscrimination_test.go documents for
+// the log scan -- so the guard's ability to REJECT is proved here on sources built to contain the
+// violation, in the style established there and by scanLogSinksIn's roots parameter.
 //
 // "PB-DS-8: Motion: Substrate is static, and the exceptions are named." ADR-007 B134 decision 3:
 // no decorative animation anywhere. Only the bottom sheet, the push banner and the streaming
@@ -68,6 +68,20 @@ import (
 var animatorConstructPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bObjectAnimator\b`),
 	regexp.MustCompile(`\bValueAnimator\b`),
+	// ADDED 2026-08-01. A reviewer showed the six-string list was an allowlist of APIs, not of
+	// behaviour: `AnimatorInflater.loadAnimator(ctx, id).start()` and
+	// `SpringAnimation(view, DynamicAnimation.ALPHA).start()` both construct an animation that
+	// never passes Motion.duration(), and both walked the fence. PB-DS-8's text is that NO
+	// animator is constructed outside the kit, so the list has to cover the platform's other
+	// entry points rather than the six that happened to be in use.
+	regexp.MustCompile(`\bAnimatorInflater\b`),
+	regexp.MustCompile(`\bAnimatorSet\b`),
+	regexp.MustCompile(`\bSpringAnimation\b`),
+	regexp.MustCompile(`\bFlingAnimation\b`),
+	regexp.MustCompile(`\bDynamicAnimation\b`),
+	regexp.MustCompile(`\bAlphaAnimation\b`),
+	regexp.MustCompile(`\bTranslateAnimation\b`),
+	regexp.MustCompile(`\bAnimationUtils\b`),
 	regexp.MustCompile(`\bViewPropertyAnimator\b`),
 	regexp.MustCompile(`\.animate\s*\(`),
 	regexp.MustCompile(`\bstartAnimation\s*\(`),

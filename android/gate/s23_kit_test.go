@@ -903,7 +903,13 @@ func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
 // annotation are optional for the same reason: `private val NAME: Float = 7f` is the same number
 // wearing different clothes.
 var s23MetricConst = regexp.MustCompile(
-	`^\s*(?:(?:private|internal|public)\s+)?(?:const\s+)?val\s+([A-Z][A-Z0-9_]*)\s*(?::\s*Float\s*)?=\s*(-?[0-9.]+)f\s*$`)
+	// WIDENED 2026-08-01. Two reviewers found this independently: the pattern was an allowlist
+	// of SPELLINGS, so `= 7F`, a camelCase name, a trailing `// comment` and `@JvmField` each
+	// walked a metric straight past the origin requirement. The exact round-1 defect (`private`)
+	// was closed and the CLASS was not. A fence whose failure mode is "a spelling nobody listed"
+	// is the defect, so every Kotlin form that can hold a dp/alpha literal is matched here, and
+	// TestPBDS7_TheMetricScanCatchesEverySpelling enumerates them.
+	`^\s*(?:@JvmField\s+)?(?:(?:private|internal|public|protected)\s+)?(?:const\s+)?val\s+([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*Float\s*)?=\s*(-?[0-9.]+)[fF]\s*(?://.*)?$`)
 
 // s23MetricCSSOrigin is `origin: .pdot { width }` -- a declaration in the shared block.
 var s23MetricCSSOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(\S.*?)\s*\{\s*([a-z-]+)\s*\}\s*(?:\*/)?\s*$`)
