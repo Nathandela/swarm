@@ -101,13 +101,46 @@ class FacadeBridge(private val app: App) {
     /**
      * PB-APP-4's grid.
      *
+     * A SESSION WITH NO FRAME YET IS NOT A FAILURE, and this is the one place that can say so
+     * (agents-tracker-9ds). `App.Peek` reads a cache the MACHINE fills, and refuses with
+     * [SwarmErrorTokens.NOT_FOUND] while it holds nothing for the session -- which is the state
+     * every session is in for the whole round trip after `terminalWatch`. Propagated, that refusal
+     * crossed `PhoneSurface.render`, reached `PhoneEvents`' `main.post { }` uncaught and killed the
+     * app on the ordinary path of opening a session that has not printed. [TerminalPeek] models the
+     * empty grid and `SessionDetailPanel.hasSnapshot` draws it; nothing had to invent a state, only
+     * to stop treating "not yet" as "broken".
+     *
+     * ONLY THAT ONE CLASS IS ABSORBED. Every other refusal is a real failure and keeps propagating
+     * to the router that already renders it with a remedy: a device revoked, a custody state
+     * needing repair, a rate limit or a refused transport must never reach a user as a terminal
+     * that has quietly printed nothing. `FacadeBridgeTest` asserts both directions and reads the
+     * class list by reflection, so a token added to the taxonomy propagates by default.
+     *
      * @param leaseHeld whether the machine has CONFIRMED a control lease. It is not on the
      *  snapshot and is not asked for here: the lease is the outcome of this screen's own
      *  take_control operation (PB-INPUT-3), and reading it back from a snapshot would be
      *  guessing at a fact the reply already carries.
      */
-    fun terminalPeek(sessionId: String, leaseHeld: Boolean): TerminalPeek =
+    fun terminalPeek(sessionId: String, leaseHeld: Boolean): TerminalPeek = try {
         peekOf(app.peek(sessionId), leaseHeld = leaseHeld, online = isOnline())
+    } catch (refused: Exception) {
+        if (!isAwaitingFirstFrame(classOf(refused))) throw refused
+        noFrameYet(sessionId, leaseHeld = leaseHeld, online = isOnline())
+    }
+
+    /**
+     * What the GO side calls this refusal, or nothing when it cannot say.
+     *
+     * `App.ErrorClass` fails through `a.ready()` like every other verb, so a phone whose core has
+     * closed cannot classify its own error. AN UNNAMEABLE FAILURE IS NOT THE BENIGN ONE: the empty
+     * string is refused by [isAwaitingFirstFrame], so the ORIGINAL refusal propagates rather than
+     * being replaced by the secondary one raised while trying to describe it.
+     */
+    private fun classOf(refused: Exception): String = try {
+        app.errorClass(refused.message.orEmpty())
+    } catch (unreadable: Exception) {
+        ""
+    }
 
     fun connectionBanner(): ConnectionBanner =
         ConnectionBanner.of(ConnectionState.of(app.connectionState()))
@@ -207,8 +240,46 @@ class FacadeBridge(private val app: App) {
         online = online,
     )
 
-    private companion object {
+    /**
+     * The two halves of [terminalPeek]'s recovery, lifted out of the instance ON PURPOSE.
+     *
+     * NEITHER TAKES AN `App`, AND THAT IS WHAT MAKES THEM TESTABLE. `swarmmobile.App` is a gomobile
+     * class over .so files cross-compiled for Android ABIs, so it cannot be constructed on the
+     * unit-test JVM and no test can call [terminalPeek] at all. The decision that can be got wrong
+     * -- which refusals mean "no frame yet" and which must keep propagating -- is pure Kotlin and
+     * is asserted in `FacadeBridgeTest`. What stays untested is the placement of the `try/catch`
+     * around them, which is review's.
+     */
+    internal companion object {
         /** `App.StreamState` answers "stale" or "live". */
         const val STREAM_STALE = "stale"
+
+        /**
+         * Whether a refusal means the machine simply has not sent this session's grid yet.
+         *
+         * IT IS AN EQUALITY AND NOT A SET, because exactly one class in the taxonomy means "not
+         * yet" and every widening of this is a real failure rendered as a quiet terminal.
+         */
+        fun isAwaitingFirstFrame(errorClass: String): Boolean =
+            errorClass == SwarmErrorTokens.NOT_FOUND
+
+        /**
+         * A session the machine has sent no frame for.
+         *
+         * IT INVENTS NOTHING. The text is empty, which is what `SessionDetail.hasSnapshotCard`
+         * reads to draw NO CARD rather than a well containing nothing; the grid is unmeasured
+         * because no grid arrived; and it is not marked stale, because staleness is a property of a
+         * view that exists and has stopped being refreshed. The lease and the link are the caller's
+         * facts and cross unchanged.
+         */
+        fun noFrameYet(sessionId: String, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
+            sessionId = sessionId,
+            text = "",
+            cols = 0,
+            rows = 0,
+            stale = false,
+            leaseHeld = leaseHeld,
+            online = online,
+        )
     }
 }
