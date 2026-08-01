@@ -62,6 +62,15 @@ class PhoneActivity : AppCompatActivity() {
      * The insets are RETURNED rather than consumed: this Activity hosts one view, but a listener
      * that swallowed them would silently stop any child that grows a listener later from seeing
      * them, and the failure would be a layout bug nobody could trace back to here.
+     *
+     * THE BOTTOM ONE IS NOW LOAD-BEARING FOR THE TAB BAR, which is a dependency worth stating
+     * because it is invisible from here. `.ptabs` reserves 14 px for the iPhone home indicator
+     * inside its own box, and the kit deliberately does not spend it: derivation row 19 rules that
+     * an iPhone frame constant yields to the platform's own measurement, and row 20 puts the inset
+     * UNDER a bar that is `tabbar_height` tall rather than inside it. So this line is the tab
+     * bar's only bottom air, and removing it does not merely un-inset the window -- it drops the
+     * bar onto the navigation bar with nothing left to compensate.
+     * `android/gate/tabbar_test.go` asserts both halves, because either alone is correct.
      */
     private fun insetTheSystemBars() {
         surface.root.setOnApplyWindowInsetsListener { view, insets ->
