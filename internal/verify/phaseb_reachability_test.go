@@ -119,9 +119,9 @@ var b94Allowed = map[string]string{
 	// result to the unit's log. Its old reason ("last-error accessor for tests; Run surfaces
 	// the same error to its caller") was the defect ADR-007 B114 recorded -- Run does NOT
 	// surface it, which is why a gateway dropping every keystroke was invisible.
-	"github.com/Nathandela/swarm/internal/remotegw.Service.Gateway": "accessor exposing an assembled sub-component to tests.",
-	"github.com/Nathandela/swarm/internal/remotegw.Service.CommandBridge":    "as Service.Gateway.",
-	"github.com/Nathandela/swarm/internal/remotegw.Service.PushNotifier":     "as Service.Gateway.",
+	"github.com/Nathandela/swarm/internal/remotegw.Service.Gateway":       "accessor exposing an assembled sub-component to tests.",
+	"github.com/Nathandela/swarm/internal/remotegw.Service.CommandBridge": "as Service.Gateway.",
+	"github.com/Nathandela/swarm/internal/remotegw.Service.PushNotifier":  "as Service.Gateway.",
 
 	// ---- internal/remote/relay: deliberately test-only, already fenced --------------------
 	// client.go says of Dial: "NO production caller may reach it, which internal/remote/
@@ -162,6 +162,19 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/pairing.Machine.Listening": "readiness probe for the rendezvous, used by tests to avoid a sleep.",
 	"github.com/Nathandela/swarm/internal/remote/qrterm.Symbol.ECC":         "error-correction level accessor, asserted by the QR tests.",
 	"github.com/Nathandela/swarm/internal/remote/supervise.ShouldRestart":   "restart predicate; the shipped supervisors (launchd, systemd) apply their own policy from the rendered unit.",
+
+	// ---- internal/design: the PB-TOK-7 derivation pipeline --------------------------------
+	// None of these run in the shipped app -- the Android module never executes Go at
+	// runtime. They run in android/gate/s22_derived_test.go, the PB-TOK-7 gate that resolves
+	// every derived colour from the staged tokens and asserts no Kotlin/XML literal in
+	// src/main equals one, which is a real production-adjacent consumer (a go test binary
+	// walking the shipped app's sources) that this test's root set -- cmd/... mains and the
+	// mobile facade -- does not and structurally cannot model.
+	"github.com/Nathandela/swarm/internal/design.Derivations":        "enumerates the derivation table; called directly by android/gate/s22_derived_test.go (derivedValues, TestPBTOK7_TheDerivationsAreReachableFromTheOrigin) to build the set of forbidden literals for the PB-TOK-7 scan.",
+	"github.com/Nathandela/swarm/internal/design.Derivation.Resolve": "computes one derivation's value; called directly by the same gate (derivedValues:127, TestPBTOK7_TheDerivationsAreReachableFromTheOrigin:274) over the staged tokens.json.",
+	"github.com/Nathandela/swarm/internal/design.RGBA.Hex":           "renders Resolve's output for comparison; called directly by android/gate/s22_derived_test.go:131 to turn the resolved RGBA into the hex spelling matched against scanned literals.",
+	"github.com/Nathandela/swarm/internal/design.ParseColor":         "called from within Derivation.Resolve (derive.go:192,202, allowed above) to parse each token's value -- deleting it breaks Resolve and therefore the PB-TOK-7 gate. Its exact grammar (hex, rgba(), transparent, strict rejection of the 3-digit shorthand) is separately pinned by TestPBTOK7_TheColourCodecRoundTrips.",
+	"github.com/Nathandela/swarm/internal/design.Mix":                "called from within Derivation.Resolve (derive.go:206, allowed above) to blend the parsed colours -- deleting it breaks Resolve for the same reason. Its premultiplied-alpha blend semantics are separately pinned by TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha and TestPBTOK7_TheBlendCanActuallyFail.",
 
 	// ---- NOT ALLOWLISTED, DELIBERATELY -------------------------------------------------------
 	// internal/remote/transport's 16 symbols are ADR-007 B94's open defect. Listing them here
