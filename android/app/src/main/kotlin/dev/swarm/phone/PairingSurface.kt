@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -86,22 +85,66 @@ class PairingSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val message = label(bold = true)
+    private val message = label(heading = true)
     private val notice = label()
-    private val destination = label().apply { typeface = Typeface.MONOSPACE }
+
+    /**
+     * The destination the user is being asked to join, in the design's code face.
+     *
+     * PB-DS-11: it was `typeface = Typeface.MONOSPACE`. `Mono.Code` is the style every mono block
+     * in this app takes (derivation row 18: "so every mono block in the app is one component"),
+     * and it carries the size and the tracking with the family rather than leaving them at
+     * whatever the platform default happens to be. A relay URL is exactly the string a
+     * proportional face makes hard to compare character by character, which is what this step
+     * asks a person to do.
+     */
+    private val destination = label().apply {
+        setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
+    }
+
     private val outcome = label()
 
     /**
      * The six symbols. Named for what it is -- a DISPLAY -- because the one thing this screen
      * must never grow is a field beside it; android/gate/s16_ui_test.go fences the shape and
      * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
+     *
+     * PB-DS-11: it was `textSize = SAS_TEXT_SP` with `SAS_TEXT_SP = 28f`, a size chosen at a call
+     * site. THE STYLE IT SHOULD TAKE DOES NOT EXIST YET: derivation row 7 specifies `Display.SAS`
+     * at 34 sp and §7 calls it "the one style this document adds to PB-DS-2's 18" --
+     * res/values/type.xml carries the 18 and not the 19th. `Display.NavTitle` at 27 sp is the
+     * largest style the scale has, so what has happened here is that the raw literal is gone and
+     * the size is 7 sp under the design's. That is a recorded approximation, not a fix; closing it
+     * is one entry in type.xml, and it belongs to whoever owns that file.
      */
-    private val sasDisplay = label(bold = true).apply { textSize = SAS_TEXT_SP }
+    private val sasDisplay = label().apply {
+        setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
+    }
+
     private val sasInstruction = label()
 
-    private val scannerHost = LinearLayout(activity).apply {
+    /**
+     * The viewfinder, sized by a rule rather than by a number.
+     *
+     * PB-DS-11: it was `LayoutParams(MATCH, SCANNER_HEIGHT)` with `SCANNER_HEIGHT = 720` -- raw
+     * PIXELS, so the preview was about 2.4 inches tall on a 3x handset and about 7 on a 1x one.
+     * That is the same defect class as `PADDING = 24`, and a reviewer found that a raw number in a
+     * layout param was invisible to every scan in this repository; `android/gate/s24_screens_test.go`
+     * now reads them.
+     *
+     * A QR SYMBOL IS SQUARE, so the replacement is not another constant but the aspect the thing
+     * being framed actually has: the viewfinder is as tall as it is wide. There is no design
+     * source for a scanner -- inventory B20 marks `.qr` as having no Substrate spec, and it
+     * describes the CODE tile shown during pairing rather than the camera preview shown while
+     * scanning one.
+     */
+    private val scannerHost = object : LinearLayout(activity) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, widthMeasureSpec)
+        }
+    }.apply {
         orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, SCANNER_HEIGHT)
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
     private val startScan = touchFilteredButton("Scan the code on your machine") { beginScanning() }
@@ -587,16 +630,22 @@ class PairingSurface(
             },
         )
 
-    private fun label(bold: Boolean = false) = TextView(activity).apply {
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+    /**
+     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. See [SettingsSurface.label]
+     * for the argument; the same two lines were in all three surface files.
+     *
+     * THIS PANEL IS NOT RECOMPOSED ON THE KIT. Derivation row 18 specifies the pairing scaffold
+     * and there is no factory for it; PB-DS-9 puts the triage inbox first. What has changed here
+     * is that the visual constants this file typed are gone.
+     */
+    private fun label(heading: Boolean = false) = TextView(activity).apply {
+        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-        const val SCANNER_HEIGHT = 720
-        const val SAS_TEXT_SP = 28f
         const val POLL_MILLIS = 400L
         const val CAMERA_ASK = 1
         const val ASK_STORE = "swarm-permission-asks"

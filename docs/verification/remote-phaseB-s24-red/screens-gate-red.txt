@@ -1,0 +1,39 @@
+$ go test ./android/gate/ -run "TestPBDS11_|TestPBDS6_TheKit|TestPBDS6_TheScreen|TestPBDS9_" -count=1 -v
+
+=== RUN   TestPBDS11_NoVisualConstantEntersTheAppExceptThroughTheTheme
+    s24_screens_test.go:313: PB-DS-11: 11 visual constants enter the app outside the theme, across 38 production sources.
+        
+        The requirement's own words: "an ARGB literal, a dp literal, a font name or a radius appearing in surface code is the defect, INDEPENDENT of whether its value is currently correct", and "existing violations are FIXED, not allowlisted".
+        
+        dev/swarm/phone/PairingSurface.kt: font named in code (`Typeface.`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PairingSurface.kt: font named in code (`Typeface.`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PairingSurface.kt: font named in code (`setTypeface(`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PairingSurface.kt: font named in code (`typeface =`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PhoneSurface.kt: font named in code (`Typeface.`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PhoneSurface.kt: font named in code (`Typeface.`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PhoneSurface.kt: font named in code (`setTypeface(`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/PhoneSurface.kt: font named in code (`typeface =`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/SettingsSurface.kt: font named in code (`Typeface.`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        dev/swarm/phone/SettingsSurface.kt: font named in code (`setTypeface(`) -- a typeface is a TextAppearance in res/values/type.xml, never a call site's choice
+        res/drawable/ic_swarm_wake.xml: colour literal #FFFFFFFF -- a colour may only enter the app as an R.color the token join covers
+--- FAIL: TestPBDS11_NoVisualConstantEntersTheAppExceptThroughTheTheme (0.06s)
+=== RUN   TestPBDS11_TheScanSeesEachClassOfViolation
+--- PASS: TestPBDS11_TheScanSeesEachClassOfViolation (0.00s)
+=== RUN   TestPBDS11_TheScanAcceptsWhatTheRequirementAllows
+--- PASS: TestPBDS11_TheScanAcceptsWhatTheRequirementAllows (0.00s)
+=== RUN   TestPBDS6_TheKitHasProductionCallSites
+    s24_screens_test.go:429: PB-DS-6: no production Kotlin outside ui/kit/ imports a single kit symbol, so the kit has ZERO production call sites and nothing a user sees is built from it. This is the state the requirement was recorded NOT MET in.
+--- FAIL: TestPBDS6_TheKitHasProductionCallSites (0.00s)
+=== RUN   TestPBDS6_TheScreenPackageIsFencedToComponentCallsPlusLayout
+    s24_screens_test.go:492: PB-DS-6 / PB-DS-9: there is no screen under dev/swarm/phone/ui/screens. The requirement's first clause is that the screens are RECOMPOSED on the kit, triage inbox first; with no screen package the fence below has no subject and would pass vacuously.
+--- FAIL: TestPBDS6_TheScreenPackageIsFencedToComponentCallsPlusLayout (0.00s)
+=== RUN   TestPBDS6_TheScreenFenceSeesEachClassOfViolation
+--- PASS: TestPBDS6_TheScreenFenceSeesEachClassOfViolation (0.00s)
+=== RUN   TestPBDS9_EveryTriageGroupHasASectionHeadingAndEmptyCopy
+    s24_screens_test.go:586: PB-DS-9: there is no screen under dev/swarm/phone/ui/screens to carry the section headings
+--- FAIL: TestPBDS9_EveryTriageGroupHasASectionHeadingAndEmptyCopy (0.00s)
+=== RUN   TestPBDS9_TheSectionTableReaderSeesAMissingGroup
+--- PASS: TestPBDS9_TheSectionTableReaderSeesAMissingGroup (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.098s
+FAIL

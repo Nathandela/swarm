@@ -1,6 +1,5 @@
 package dev.swarm.phone
 
-import android.graphics.Typeface
 import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
@@ -91,7 +90,7 @@ class PhoneSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val status = label(bold = true)
+    private val status = label(heading = true)
 
     /**
      * PB-KEY-8's non-fatal half. [dev.swarm.phone.keys.CustodyPlanner] records a capability the
@@ -99,8 +98,20 @@ class PhoneSurface(
      * was computed on every launch and read by nobody.
      */
     private val notice = label()
-    private val peekTitle = label(bold = true)
-    private val peek = label().apply { typeface = Typeface.MONOSPACE }
+    private val peekTitle = label(heading = true)
+
+    /**
+     * The daemon-rendered grid, in the design's code face.
+     *
+     * PB-DS-11: it was `typeface = Typeface.MONOSPACE`. THE FACE IS LOAD-BEARING HERE and not
+     * decoration -- the snapshot is box-drawing glyphs and column-aligned output, so a
+     * proportional face turns a frame into ragged punctuation. `Mono.Code` is the style every mono
+     * block in this app takes (derivation row 18), and `MonoBoxDrawingTest` is what checks the
+     * family behind it actually covers U+2500.
+     */
+    private val peek = label().apply {
+        setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
+    }
     private val outcome = label()
 
     /**
@@ -708,8 +719,13 @@ class PhoneSurface(
         render()
     }
 
-    private fun label(bold: Boolean = false) = TextView(activity).apply {
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+    /**
+     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. See [SettingsSurface.label];
+     * the same two lines were in all three surface files, which is what "no visual constant may
+     * enter the app except through the theme" is a fence against.
+     */
+    private fun label(heading: Boolean = false) = TextView(activity).apply {
+        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 

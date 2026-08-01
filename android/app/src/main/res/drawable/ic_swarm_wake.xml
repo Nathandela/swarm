@@ -4,13 +4,20 @@
 
      It is a flat monochrome silhouette because that is all the status bar renders: the platform
      masks the icon to its own tint, so any colour here is discarded. No -night variant and no
-     theme attribute, per PB-TOK-4. -->
+     theme attribute, per PB-TOK-4.
+
+     PB-DS-11: the fill is the PLATFORM's white rather than an ARGB literal. It used to be
+     #FFFFFFFF, and "the value is discarded anyway" is exactly the argument the requirement
+     refuses - "an ARGB literal appearing in surface code is the defect, independent of whether
+     its value is currently correct". A monochrome mask has no product token to take, so it takes
+     the platform's own resource; nothing rendered changes and the app's XML carries no colour
+     the token join cannot account for. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:fillColor="#FFFFFFFF"
+        android:fillColor="@android:color/white"
         android:pathData="M12,2 L22,12 L12,22 L2,12 Z" />
 </vector>

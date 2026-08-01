@@ -2,7 +2,6 @@ package dev.swarm.phone
 
 import android.app.Activity
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
@@ -55,7 +54,7 @@ class SettingsSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val title = label(bold = true).apply { text = "Notifications" }
+    private val title = label(heading = true).apply { text = "Notifications" }
     private val blocked = label()
     private val pending = label()
     private val outcome = label()
@@ -218,8 +217,22 @@ class SettingsSurface(
         },
     )
 
-    private fun label(bold: Boolean = false) = TextView(activity).apply {
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+    /**
+     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface.
+     *
+     * It was `setTypeface(typeface, Typeface.BOLD)` -- a font weight chosen at a call site, which
+     * is the defect the requirement names ("a font name appearing in surface code is the defect,
+     * independent of whether its value is currently correct"). `Title.Row` is the design's own
+     * style for a row heading and it carries the family, the size, the weight and the tracking
+     * together, so the four cannot drift apart.
+     *
+     * THIS PANEL IS NOT RECOMPOSED ON THE KIT and this line is not a claim that it is. PB-DS-9
+     * puts the triage inbox first; what has happened here is that the one visual constant this
+     * file typed has been removed. A settings row is derivation table row 15 and has no kit
+     * factory yet.
+     */
+    private fun label(heading: Boolean = false) = TextView(activity).apply {
+        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
