@@ -167,12 +167,47 @@ func s23KitSources(t *testing.T) map[string]string {
 	}
 	out := map[string]string{}
 	for _, path := range kotlinFiles(t, root) {
+		// DIRECT CHILDREN ONLY, and the omission is load-bearing rather than tidy. kotlinFiles
+		// RECURSES, and this map is keyed by BASENAME -- so a file at ui/kit/zz/Badge.kt used to
+		// overwrite the real ui/kit/Badge.kt in this map and take its place in every scan. That is
+		// not a missed file, it is an EVICTED one: a clean copy of Badge.kt in a subdirectory made
+		// the checked-in Badge.kt invisible to the whole gate, and `minWidth = 21` in the real file
+		// then passed the complete lane. Measured, not reasoned about.
+		//
+		// The kit is ONE Kotlin package, so a subdirectory is a different package and not "the
+		// kit" at all. Files below the root are collected by s23NestedKitFiles and refused by
+		// TestPBDS6_EveryKitFileIsClaimedByAFence rather than being silently read in here.
+		if filepath.Dir(path) != root {
+			continue
+		}
 		out[filepath.Base(path)] = readFileOrFail(t, path, "PB-DS-6")
 	}
 	if len(out) == 0 {
 		t.Fatalf("PB-DS-6: %s contains no Kotlin; every assertion below would iterate zero times",
 			mustRel(t, root))
 	}
+	return out
+}
+
+// s23NestedKitFiles returns every .kt file BELOW the kit root, as root-relative slash paths.
+//
+// These are the files s23KitSources refuses to read, for the reason it gives. They are a fault
+// rather than a silence: see TestPBDS6_EveryKitFileIsClaimedByAFence.
+func s23NestedKitFiles(t *testing.T) []string {
+	t.Helper()
+	root := s23KitRoot(t)
+	var out []string
+	for _, path := range kotlinFiles(t, root) {
+		if filepath.Dir(path) == root {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		out = append(out, filepath.ToSlash(rel))
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -184,6 +219,42 @@ func s23OwnedFiles() map[string]bool {
 		owned[c.File] = true
 	}
 	return owned
+}
+
+// s23MotionFile is the one kit source this slice does NOT own. PB-DS-8 fences it, in
+// s23_motion_test.go, and the package comment says why the split exists.
+const s23MotionFile = "Motion.kt"
+
+// s23ClaimedFiles is every file in the kit package that some fence reads, and which fence reads it.
+//
+// "THE KIT" MEANT ELEVEN OF TWELVE FILES, and until this existed the difference was a hole wide
+// enough to drive the whole slice through. Every scan in this file iterates s23OwnedFiles, which is
+// a FIXED LIST OF NAMES; the motion fence iterates the production tree but judges only animation
+// vocabulary. So a TWELFTH file dropped into ui/kit/ was read, for accounting purposes, by nothing.
+// The fourth review wrote one:
+//
+//	internal const val PROBE_PAD_PX = 37
+//	internal const val PROBE_HEX = 0x1F4
+//	internal fun probeBlink(view: View, handler: Handler) {
+//	    view.layoutParams = LinearLayout.LayoutParams(PROBE_PAD_PX, PROBE_HEX)
+//	    handler.postDelayed({ probeBlink(view, handler) }, 16L)
+//	}
+//
+// A raw pixel count in a layout param, a hex literal, and a decorative animation loop -- the three
+// things PB-DS-6, PB-DS-7 and PB-DS-8 respectively exist to forbid, in one file, and all twenty-one
+// assertions in the android/gate lane reported ok. The fence's SUBJECT was enumerated, so it could
+// not see what had been added to the package it was fencing.
+//
+// The repair is that the enumeration is now itself checked against the directory, in both
+// directions. A new file must be claimed before it can be added, which makes entering the kit a
+// reviewed act rather than a silent one.
+func s23ClaimedFiles() map[string]string {
+	claimed := map[string]string{}
+	for file := range s23OwnedFiles() {
+		claimed[file] = "PB-DS-6/PB-DS-7, by s23OwnedFiles in this file"
+	}
+	claimed[s23MotionFile] = "PB-DS-8, by s23_motion_test.go's exemption"
+	return claimed
 }
 
 // s23TopLevelFun matches a top-level factory declaration. Indented `fun` is a method and is not
@@ -291,6 +362,60 @@ func TestPBDS6_EveryKitFactoryIsAnInboxComponent(t *testing.T) {
 	if found == 0 {
 		t.Fatalf("PB-DS-6: no top-level factories found in the files s23Inbox names; this " +
 			"direction passed over an empty set and says nothing")
+	}
+}
+
+// TestPBDS6_EveryKitFileIsClaimedByAFence makes "the kit" mean the package rather than a list.
+//
+// See s23ClaimedFiles for the injection that made this necessary and what it walked past. The two
+// directions are not the same assertion:
+//
+//   - FORWARD, a file on disk that no fence claims. That is the hole: everything this gate says
+//     about colours, dimensions, metrics and literals is scoped to s23OwnedFiles, so an unclaimed
+//     file is one the accounting has never looked at. It is checked FIRST because every other
+//     assertion in this file is conditional on it.
+//   - REVERSE, a claim naming a file that is not there. Without it the list rots quietly: a
+//     component deleted in a refactor leaves its name in s23OwnedFiles, the scans skip a file that
+//     does not exist, and the forward direction still passes because the directory is a subset.
+func TestPBDS6_EveryKitFileIsClaimedByAFence(t *testing.T) {
+	sources := s23KitSources(t)
+	claimed := s23ClaimedFiles()
+
+	for _, file := range s23SortedKeys(sources) {
+		if _, ok := claimed[file]; ok {
+			continue
+		}
+		t.Errorf("PB-DS-6: %s/%s is in the kit package and no fence claims it. Every scan in this "+
+			"gate -- the colour fence, the raw-dimension fence, the metric join, the literal "+
+			"accounting -- iterates s23OwnedFiles, so a file nothing claims is a file where a raw "+
+			"pixel count, a hex literal and a decorative animation loop all pass unread; that is "+
+			"the injection s23ClaimedFiles quotes, and it defeated this entire lane. Add the file "+
+			"to s23Inbox with its design origin if it is a component, to s23OwnedFiles if it is "+
+			"foundation, or fence it from another slice and claim it here.", s23KitPackageDir, file)
+	}
+
+	for _, file := range s23SortedKeys(claimed) {
+		if _, ok := sources[file]; ok {
+			continue
+		}
+		t.Errorf("PB-DS-6: %s claims %s/%s and no such file exists. A claim over nothing makes the "+
+			"forward direction above pass by having less to check: the scans skip the missing name, "+
+			"report no fault, and the inventory goes on describing a kit that is not there.",
+			claimed[file], s23KitPackageDir, file)
+	}
+
+	// AND NOTHING MAY SIT BELOW THE ROOT. Neither direction above can see a nested file: the
+	// forward one iterates a map keyed by basename, and a nested file whose basename is already
+	// claimed does not add a key -- it OVERWRITES one. `ui/kit/zz/Badge.kt` holding a clean copy
+	// evicted the real Badge.kt from every scan in this gate, and `minWidth = 21` in the
+	// checked-in file then passed the complete lane. So the eviction is refused at the source
+	// (s23KitSources reads direct children only) and the nested file is a fault here.
+	for _, rel := range s23NestedKitFiles(t) {
+		t.Errorf("PB-DS-6: %s/%s sits below the kit root. The kit is ONE Kotlin package, so a "+
+			"subdirectory is a different package that no fence in this gate reads -- and because "+
+			"the kit is scanned by BASENAME, a nested file named after a real one used to take its "+
+			"place in every scan rather than merely being skipped. Move it up into the package and "+
+			"claim it, or fence its package from its own slice.", s23KitPackageDir, rel)
 	}
 }
 
@@ -1232,6 +1357,22 @@ func TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber(t *testing.T) {
 
 	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
 
+	// THE INVARIANT EVERY LINE BELOW RESTS ON, ASSERTED OVER THE REAL SOURCES. s23ScanAlignmentFault
+	// was exercised only over four synthetic strings, in a control -- while its own comment says the
+	// consequence of it being false is "silent and total". Four hand-written examples cannot say
+	// anything about the twelve files this gate actually reads: if kotlinCodeOnly drops or adds a
+	// line on any one of them, every constant in that file is joined to its neighbour's `origin:`
+	// annotation and the gate compares the dot's diameter against the glow's radius, green.
+	//
+	// FATAL, not an error, and over EVERY kit source rather than the owned eleven: the helper is
+	// shared, a drift on any file in the package is the same bug, and no comparison below means
+	// anything once the two views disagree.
+	for _, file := range s23SortedKeys(sources) {
+		if fault := s23ScanAlignmentFault(sources[file]); fault != "" {
+			t.Fatalf("PB-DS-7: %s: %s", file, fault)
+		}
+	}
+
 	checked := 0
 	for file, src := range sources {
 		if !owned[file] {
@@ -1840,9 +1981,17 @@ func s23StrictLines(sources map[string]string, owned map[string]bool) map[string
 
 // s23DeadExemptionFaults reports rows the kit no longer uses, for the reason s23DualQuantised
 // gives: a permission nobody is exercising is one the next bare number inherits without argument.
-func s23DeadExemptionFaults(lits []s23Literal) []string {
+//
+// A LITERAL INSIDE object KitMetrics IS NOT A USE. s23UnaccountedLiteralFaults consults no
+// exemption in the strict zone, so a `2f` in there exercises nothing -- counting it as use kept
+// rows alive on the strength of an occurrence that never reads them, which is precisely the stale
+// permission this check exists to report.
+func s23DeadExemptionFaults(lits []s23Literal, strict map[string]bool) []string {
 	used := map[string]bool{}
 	for _, l := range lits {
+		if strict[fmt.Sprintf("%s:%d", l.File, l.Line)] {
+			continue
+		}
 		used[l.Text] = true
 	}
 	var faults []string
@@ -1856,6 +2005,174 @@ func s23DeadExemptionFaults(lits []s23Literal) []string {
 	return faults
 }
 
+// ---------------------------------------------------------------------------
+// PB-DS-7: a number that is not a numeric token.
+// ---------------------------------------------------------------------------
+
+// s23TextLiteral is one string or character literal as it appears in the kit's CODE.
+//
+// THIS IS THE REGION s23CodeNoStrings ERASES, AND ERASING IT WAS A HOLE THE WHOLE LANE FELL
+// THROUGH. s23KitLiterals blanks string and char contents BEFORE s23ScanLiterals runs, for the good
+// reason that helper gives -- `"99+"` is copy, not a metric. The consequence nobody had drawn is
+// that the digits go with it. The fourth review spent, at live call sites in Badge.kt:
+//
+//	private val badgeMinWidthPx = "21".toInt()
+//	private val probeCodePx     = '%'.code
+//	private val probeConcatPx   = ("1" + "1").toFloat()
+//
+// 21 px, 37 px and 11f: three design metrics with no origin, compared to nothing, and the complete
+// lane -- Go, vet, the manifest check and `./gradlew test --rerun-tasks` on both variants -- was
+// green. s23ScanLiterals cannot see them because by the time it runs the digits are spaces, and no
+// declaration recogniser reaches them because `"21".toInt()` is not a numeric literal.
+//
+// TWO RULES, BECAUSE NEITHER ONE COVERS THE OTHER'S CASE. `'%'.code` carries no digit anywhere in
+// the source, so a content rule cannot see it; `("1" + "1").toFloat()` has the conversion applied to
+// a parenthesised expression rather than to the literal, so a receiver rule cannot see it. Both
+// spellings were demonstrated, so both rules are here.
+type s23TextLiteral struct {
+	File string
+	Line int
+	Text string // as written, quotes included
+	// Receiver is true when the literal is immediately followed by `.` or `[` -- that is, when it
+	// is the thing a member access or an index is applied TO.
+	Receiver bool
+}
+
+// s23ScanTextLiterals reads every string and char literal out of a COMMENT-STRIPPED source whose
+// strings are still INTACT. The other scans in this file take the string-blanked view; this one is
+// the only thing that looks at what was blanked.
+func s23ScanTextLiterals(file, code string) []s23TextLiteral {
+	var out []s23TextLiteral
+	line := 1
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if c == '\n' {
+			line++
+			continue
+		}
+		if c != '"' && c != '\'' {
+			continue
+		}
+		start, startLine := i, line
+		for i++; i < len(code); i++ {
+			if code[i] == '\\' {
+				i++
+				continue
+			}
+			if code[i] == '\n' {
+				line++
+				continue
+			}
+			if code[i] == c {
+				break
+			}
+		}
+		if i >= len(code) {
+			break // unterminated; the Kotlin compiler reports this one first
+		}
+		next := byte(0)
+		if i+1 < len(code) {
+			next = code[i+1]
+		}
+		out = append(out, s23TextLiteral{
+			File:     file,
+			Line:     startLine,
+			Text:     code[start : i+1],
+			Receiver: next == '.' || next == '[',
+		})
+	}
+	return out
+}
+
+// s23TextLiteralExemptions is every string the kit types that CONTAINS a digit, and the argument
+// that the digit is copy rather than a metric. Keyed by the literal exactly as written.
+//
+// EXACT TEXT, NOT A SHAPE. "a long human-readable message cannot plausibly be a metric" is a rule
+// that fails open on the first short one, and "cannot plausibly" is the reasoning every hole in
+// this file was made of. The cost is that editing an exempt string means editing its row, which is
+// one line and is the same discipline s23LiteralExemptions already imposes.
+var s23TextLiteralExemptions = map[string]string{
+	`"99+"`: "Badge's saturated count. The 100 that produces it is on s23LiteralExemptions with its " +
+		"argument; this is the text that gets drawn when the count exceeds it, and the 9s are two " +
+		"glyphs rather than a quantity -- nothing measures them.",
+	`"PB-TOK-8: $group is not a status.Group this kit can colour. The phone renders the "`: "the " +
+		"requirement ID in a failure message. It names a row in the requirements table, which is " +
+		"the one place a digit in this kit is an identifier rather than a length.",
+}
+
+// s23TextLiteralFaults reports every string or char literal that could be carrying a number.
+//
+// NO EXEMPTION APPLIES INSIDE object KitMetrics, for the same reason s23UnaccountedLiteralFaults
+// consults none there: every value in that object is a design metric by construction, so a string
+// holding digits inside it is a metric written in the one notation the numeric scan cannot read.
+func s23TextLiteralFaults(lits []s23TextLiteral, strict map[string]bool) []string {
+	var faults []string
+	for _, l := range lits {
+		inObject := strict[fmt.Sprintf("%s:%d", l.File, l.Line)]
+		if l.Receiver {
+			faults = append(faults, fmt.Sprintf("%s:%d: the literal %s is the receiver of a member "+
+				"access or an index. A string or a character is TEXT in this kit and nothing else -- "+
+				"the kit types no method call on one anywhere -- so the only thing reaching into one "+
+				"can be doing is turning it into a number that s23ScanLiterals will never see: "+
+				"`\"21\".toInt()` is 21 px with no origin, `'%%'.code` is 37 px with no digit in the "+
+				"source at all. If the number is a design metric, declare it in object %s with an "+
+				"`origin:` line. If this literal genuinely needs a method called on it, that is a new "+
+				"kind of use in this package and belongs in review, not in a widened pattern.",
+				l.File, l.Line, l.Text, s23MetricsObject))
+			continue
+		}
+		if !strings.ContainsAny(l.Text, "0123456789") {
+			continue
+		}
+		if _, exempt := s23TextLiteralExemptions[l.Text]; exempt && !inObject {
+			continue
+		}
+		where := "and it is not on s23TextLiteralExemptions"
+		if inObject {
+			where = fmt.Sprintf("and it is inside `object %s`, where s23TextLiteralExemptions does "+
+				"not apply -- every value in that object is a design metric, and one written as text "+
+				"is a metric in the one notation the numeric scan cannot read", s23MetricsObject)
+		}
+		faults = append(faults, fmt.Sprintf("%s:%d: the literal %s contains a digit, %s. The numeric "+
+			"scan blanks string and char contents before it counts anything, so a number spelled in "+
+			"here is accounted for by nothing: `(\"1\" + \"1\").toFloat()` is 11f that no fence in "+
+			"this gate can see. If it is copy, add a row saying so. If it is a metric, declare it in "+
+			"object %s with an `origin:` line.",
+			l.File, l.Line, l.Text, where, s23MetricsObject))
+	}
+	return faults
+}
+
+// s23DeadTextExemptionFaults is s23DeadExemptionFaults' twin, for the same reason: a permission
+// nobody exercises is one the next digit-bearing string inherits without anyone arguing for it.
+func s23DeadTextExemptionFaults(lits []s23TextLiteral) []string {
+	used := map[string]bool{}
+	for _, l := range lits {
+		used[l.Text] = true
+	}
+	var faults []string
+	for _, text := range s23SortedKeys(s23TextLiteralExemptions) {
+		if !used[text] {
+			faults = append(faults, fmt.Sprintf("s23TextLiteralExemptions permits the literal %s and "+
+				"the kit types it nowhere. Delete the row: an exemption nobody uses is one the next "+
+				"string of that text inherits without anyone arguing for it.", text))
+		}
+	}
+	return faults
+}
+
+// s23KitTextLiterals reads every string and char literal in the files this slice owns.
+func s23KitTextLiterals(sources map[string]string, owned map[string]bool) []s23TextLiteral {
+	var out []s23TextLiteral
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		out = append(out, s23ScanTextLiterals(file, kotlinCodeOnly(sources[file]))...)
+	}
+	return out
+}
+
 // s23KitLiterals reads every numeric literal in the files this slice owns.
 func s23KitLiterals(t *testing.T, sources map[string]string, owned map[string]bool) []s23Literal {
 	t.Helper()
@@ -1864,7 +2181,11 @@ func s23KitLiterals(t *testing.T, sources map[string]string, owned map[string]bo
 		if !owned[file] {
 			continue
 		}
-		if strings.Contains(sources[file], `"""`) {
+		// THE GUARD READS THE STRIPPED VIEW, NOT THE RAW SOURCE. It tested the raw text, so a KDoc
+		// that merely MENTIONED `"""` -- documenting this very restriction, say -- hard-failed the
+		// whole fence on a source containing no raw string at all. Comments are not code and cannot
+		// confuse s23CodeNoStrings; only a raw string in the code can.
+		if strings.Contains(kotlinCodeOnly(sources[file]), `"""`) {
 			t.Fatalf("PB-DS-7: %s contains a raw string, and s23CodeNoStrings reads only `\"` and "+
 				"`'` literals. Every number inside that raw string would be counted as a metric and "+
 				"every number after it could be missed -- this fence fails loudly rather than "+
@@ -1933,7 +2254,22 @@ func TestPBDS7_EveryNumberInTheKitIsAccountedFor(t *testing.T) {
 	for _, fault := range s23UnaccountedLiteralFaults(lits, s23BoundLiterals(sources, owned), strict) {
 		t.Errorf("PB-DS-7: %s", fault)
 	}
-	for _, fault := range s23DeadExemptionFaults(lits) {
+	for _, fault := range s23DeadExemptionFaults(lits, strict) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+
+	// And the region the numeric scan blanks. See s23TextLiteral: the three spellings that defeated
+	// the complete lane were all numbers written where s23ScanLiterals cannot look.
+	textLits := s23KitTextLiterals(sources, owned)
+	if len(textLits) == 0 {
+		t.Fatal("PB-DS-7: the text-literal scan found no string or char anywhere in the kit, which " +
+			"cannot be true of eleven files that set content descriptions and name CSS selectors -- " +
+			"the scan is broken, and a number spelled inside a string would pass through it unseen")
+	}
+	for _, fault := range s23TextLiteralFaults(textLits, strict) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+	for _, fault := range s23DeadTextExemptionFaults(textLits) {
 		t.Errorf("PB-DS-7: %s", fault)
 	}
 }
@@ -2631,18 +2967,30 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 // the axis after that would be the one nobody thought of.
 //
 // WHAT IS CONTROLLED INSTEAD IS THE CHANNEL. An unrecognised declaration -- any spelling, including
-// spellings nobody has written yet -- reaches these two functions through exactly one observable
-// state, because the scan's output is the only thing either function is told about the source:
+// spellings nobody has written yet -- reaches these functions only through what the scans report
+// about the source, so the states it can arrive in are enumerable:
 //
-//	its NAME is absent from the set s23ScanMetrics returned, and
-//	its LITERAL is absent from the positions s23BoundLiterals bound.
+//  1. its NAME is absent from the set s23ScanMetrics returned;
+//  2. its LITERAL is absent from the positions s23BoundLiterals bound, while still being a token
+//     s23ScanLiterals returned;
+//  3. its LITERAL is absent from s23ScanLiterals' output ENTIRELY.
 //
-// So the control puts both functions in exactly that state, over the REAL kit, one name and one
-// literal at a time. That is not a sample of the spelling axis; it is the complete image of the
-// spelling axis under the only functions that can observe it, and it stays complete when someone
-// invents a spelling next year. The four constructs the review injected are then run end to end
-// as regressions -- they are the instances that falsified the old claim, not the argument for the
-// new one.
+// STATE 3 WAS MISSING AND THE CLAIM THAT THERE WERE TWO WAS FALSE. It said an unrecognised
+// declaration "reaches these two functions through exactly one observable state", and the loop
+// below enumerated over `bound` -- which can only ever visit literals the numeric scan already saw.
+// A number the scan never tokenised at all is invisible to that enumeration by construction, and
+// `private val badgeMinWidthPx = "21".toInt()` is exactly that number: s23CodeNoStrings blanks the
+// digits before s23ScanLiterals runs, so 21 px reached a live call site past a control that claimed
+// to be complete over the spelling axis. The completeness argument was doing the work of a proof
+// while enumerating two thirds of its own domain.
+//
+// So the control now puts the functions in all three states, over the REAL kit, one name and one
+// literal at a time, and state 3 is closed by s23TextLiteralFaults rather than by the two functions
+// the old claim named. That is the image of the spelling axis under the functions that can observe
+// it -- and it is stated as three checked states rather than as a completeness result, because the
+// last two completeness claims here were both falsified by the next reader. The constructs the
+// third and fourth reviews injected are then run end to end as regressions: they are the instances
+// that falsified the old claims, not the argument for the new one.
 func TestPBDS7_TheCrossChecksCanActuallyFail(t *testing.T) {
 	sources := s23KitSources(t)
 	owned := s23OwnedFiles()
@@ -2748,11 +3096,86 @@ func TestPBDS7_TheCrossChecksCanActuallyFail(t *testing.T) {
 		}
 	}
 
-	// 3. And the exemption table must be capable of reporting a dead row.
-	if len(s23DeadExemptionFaults(nil)) != len(s23LiteralExemptions) {
+	// 2b. STATE 3: the literal is not in the scan's output at all. Unbinding cannot produce this
+	//     state -- the loop above enumerates `bound`, and every key in it is a literal the numeric
+	//     scan tokenised -- so it is probed by writing the number where s23ScanLiterals cannot look.
+	//     Each probe asserts BOTH halves: that the numeric scan really is blind to it (or the probe
+	//     is controlling nothing), and that the text-literal accounting reports it anyway.
+	for _, probe := range []struct {
+		what string
+		decl string
+	}{
+		{"a number spelled inside a string", `    private val badgeMinWidthPx = "21".toInt()` + "\n"},
+		{"a character's code point", `    private val probeCodePx = '%'.code` + "\n"},
+		{"a number assembled from two strings", `    private val probeConcatPx = ("1" + "1").toFloat()` + "\n"},
+	} {
+		src := "package dev.swarm.phone.ui.kit\n\n" + probe.decl
+		files := map[string]string{"Probe.kt": src}
+		only := map[string]bool{"Probe.kt": true}
+
+		if got := s23ScanLiterals("Probe.kt", s23CodeNoStrings(kotlinCodeOnly(src))); len(got) != 0 {
+			t.Errorf("PB-DS-7: %s is now a token s23ScanLiterals returns (%v), so this probe no "+
+				"longer reaches state 3. Replace it with a number the numeric scan still cannot "+
+				"see; the point of the probe is the blind spot, not the constant.", probe.what, got)
+			continue
+		}
+		if faults := s23TextLiteralFaults(s23KitTextLiterals(files, only), nil); len(faults) == 0 {
+			t.Errorf("PB-DS-7: %s reaches a live call site and NOTHING reports it. This is the "+
+				"injection the fourth review used to defeat the complete lane -- Go, vet, the "+
+				"manifest check and both Gradle variants:\n\t%s", probe.what, strings.TrimSpace(probe.decl))
+		}
+	}
+
+	// 2c. And the text-literal rules must DISCRIMINATE. A scan that flagged every string would be
+	//     satisfied by the probes above and would refuse the kit's copy, its selectors and its
+	//     failure messages -- which is how an over-strict fence becomes a deleted one.
+	for _, ok := range []string{
+		`    contentDescription = "decorative"`,
+		`    const val TITLE = ".pnav .big"`,
+		`    text = count.toString()`,
+		`    error("$group is not a Group this kit can colour")`,
+	} {
+		if faults := s23TextLiteralFaults(s23ScanTextLiterals("Probe.kt", ok), nil); len(faults) != 0 {
+			t.Errorf("PB-DS-7: the text-literal scan flags %q: %v. Strings are how this kit spells "+
+				"copy, CSS selectors and failure messages; a fence that refuses them gets switched "+
+				"off by whoever hits it first.", ok, faults)
+		}
+	}
+	// The exemption applies OUTSIDE object KitMetrics and nowhere inside it, exactly as the numeric
+	// table does. `"99+"` is Badge's saturated count in a component file, and a design metric
+	// written as text in the metrics object.
+	exempt := s23ScanTextLiterals("Probe.kt", `    text = "99+"`)
+	if faults := s23TextLiteralFaults(exempt, nil); len(faults) != 0 {
+		t.Errorf("PB-DS-7: the exempt literal `\"99+\"` is reported outside object %s: %v",
+			s23MetricsObject, faults)
+	}
+	if faults := s23TextLiteralFaults(exempt, map[string]bool{"Probe.kt:1": true}); len(faults) != 1 {
+		t.Errorf("PB-DS-7: `\"99+\"` inside object %s produces %d fault(s), want 1. No exemption is "+
+			"consulted in the strict zone, or a metric could be written as text in the one object "+
+			"every fence exists to police.", s23MetricsObject, len(faults))
+	}
+
+	// 3. And both exemption tables must be capable of reporting a dead row.
+	if len(s23DeadExemptionFaults(nil, nil)) != len(s23LiteralExemptions) {
 		t.Errorf("PB-DS-7: against a kit with no literals at all, the dead-exemption check reports "+
 			"%d of %d rows. A permission nobody uses has to be visible, or the table only grows.",
-			len(s23DeadExemptionFaults(nil)), len(s23LiteralExemptions))
+			len(s23DeadExemptionFaults(nil, nil)), len(s23LiteralExemptions))
+	}
+	if len(s23DeadTextExemptionFaults(nil)) != len(s23TextLiteralExemptions) {
+		t.Errorf("PB-DS-7: against a kit with no text literals at all, the dead-exemption check "+
+			"reports %d of %d rows of s23TextLiteralExemptions",
+			len(s23DeadTextExemptionFaults(nil)), len(s23TextLiteralExemptions))
+	}
+
+	// And a literal inside object KitMetrics must not count as USE of an exemption, because no
+	// exemption is consulted there. Counting it kept rows alive on an occurrence that never read
+	// them -- a stale permission held open by the one zone that ignores permissions.
+	inObject := []s23Literal{{File: "Probe.kt", Line: 2, Text: "0"}}
+	if faults := s23DeadExemptionFaults(inObject, map[string]bool{"Probe.kt:2": true}); len(faults) != len(s23LiteralExemptions) {
+		t.Errorf("PB-DS-7: a `0` inside object %s is counted as use of the `0` exemption: the "+
+			"dead-exemption check reports %d of %d rows, want all %d. Inside that object no "+
+			"exemption is consulted, so nothing there can be exercising one.",
+			s23MetricsObject, len(faults), len(s23LiteralExemptions), len(s23LiteralExemptions))
 	}
 
 	// 4. The constructs the third audit round injected, verbatim, end to end, plus the one the

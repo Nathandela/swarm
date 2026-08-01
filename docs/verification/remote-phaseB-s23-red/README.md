@@ -1,17 +1,33 @@
-# S23 RED evidence — PB-DS-6, PB-DS-7, PB-DS-10
+# S23 RED evidence — PB-DS-6, PB-DS-7, PB-DS-8, PB-DS-10
 
 GG-5 requires the failing-first run to be evidenced. This directory holds the actual output, not a
 claim that it happened.
 
 ## Files
 
+This table described three of the ten evidence files, which made the other seven discoverable only
+by listing the directory. All of them are here now, in the order they were written.
+
+**The original failing-first runs**, from before the implementation existed:
+
 | File | What it is |
 |---|---|
 | `gate-red.txt` | `go test ./android/gate/ -run "TestPBDS[567]_" -v` with the eleven kit files absent. 8 failing, 5 passing. |
 | `kotlin-red.txt` | The three Robolectric suites against a kit of signatures with `TODO()` bodies. 26 failing of 29. |
-| `negative-controls.txt` | 18 mutations, each with the failure it produces — the two defects they found in this slice's own fences, one recorded non-mutation (the elevation fence is not trippable by a comment), and one over the pitch probe itself. |
+| `motion-red.txt` | PB-DS-8's, not this slice's: `MotionTest.kt` run against a `dev.swarm.phone.ui.kit.Motion` that did not yet exist, failing on the missing implementation rather than on a syntax error. |
+| `negative-controls.txt` | 18 mutations, each with the failure it produces — the two defects they found in this slice's own fences, one recorded non-mutation (the elevation fence is not trippable by a comment), and one over the pitch probe itself. Carries an integrity note: a re-audit found four records that were not evidence, two corrected in place and three marked VOID. |
 
-`motion-red.txt` in this directory is PB-DS-8's, not this slice's.
+**The audit rounds**, each recording defects found in work that was already green:
+
+| File | What it is |
+|---|---|
+| `kitfix-red.txt` | Round one, the kit: six defects an adversarial committee found, and the run showing each fence failing before its fix. |
+| `motionfix-red.txt` | Round one, motion: four defects in the S23 motion work, each with the real output and the values it reported. |
+| `motionjoin-red.txt` | Round two, motion: two defects in `MotionTest.kt` itself — a false claim in its header and an anchor test that could not fail. |
+| `fences-red.txt` | Round three: the finding that both fences were allowlists of SPELLINGS rather than of behaviour. The round-one defects were closed and the CLASS was not. |
+| `crosscheck-red.txt` | Round three, the metric cross-check: the runs showing the fence green where it should have been red, and red after the fix. |
+| `contested-hold-red.txt` | Not a round: making ADR-007 B134 decision 1's CONTESTED hold mechanical, so a gate cannot report agreement the designer has not given. |
+| `closeout-red.txt` | Round four: the five findings that closed the slice — the kit meaning 11 of 12 files, a number spelled inside a string, a completeness claim covering two of three states, a self-confirming control, and an invariant never run on the real sources. States what is still fail-open. |
 
 ## How these were produced, exactly
 

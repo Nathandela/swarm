@@ -40,6 +40,13 @@ package gate
 // THE SIX-NAME DENYLIST THIS FILE USED TO CARRY IS GONE; see animatorVocabulary for what replaced
 // it and why a longer list of names was not the repair.
 //
+// WHAT THIS FENCE DOES NOT CATCH IS ASSERTED, NOT IMPLIED. animatorVocabulary judges an identifier
+// by its spelling, so animation named in words the vocabulary does not know is invisible to it, and
+// `postDelayed` cannot be listed without failing the pairing screen's state poll.
+// TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary holds that boundary as a test that goes
+// red if the fence ever widens past it, so the record cannot drift away from the rule. Read it
+// before trusting a green run here.
+//
 // KNOWN, NOT FIXED HERE: if a surface file (PhoneSurface.kt, SessionScreens.kt, TriageInbox.kt,
 // ...) is ever found constructing an animator directly, this gate must NOT grow a per-file
 // allowlist for it -- PB-DS-11 in S24 owns cleaning surface code, and an allowlist here is the
@@ -115,12 +122,38 @@ var animatorIdentifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
 // animatorAlwaysForbidden are the frame-driving APIs that animate without being spelled like it.
 //
-// `Choreographer.postFrameCallback` is a hand-rolled animation loop: it moves a view over time, it
-// is not built by Motion, and nothing in it consults ANIMATOR_DURATION_SCALE. It is listed BY NAME
-// because no vocabulary rule reaches it -- so this list inherits the very weakness the inversion
-// above exists to remove, and it is therefore held to the one entry there is evidence for rather
-// than grown speculatively. Anything added here is an admission, not a feature.
-var animatorAlwaysForbidden = []string{"Choreographer"}
+// EVERY ENTRY IS AN ADMISSION THAT THE VOCABULARY RULE DOES NOT REACH IT, not a feature. This list
+// inherits the exact weakness the inversion above exists to remove -- it fails open on every name
+// nobody put in it -- so it is held to constructs there is EVIDENCE for, and the evidence is named
+// per row. It is not grown by imagining APIs.
+//
+//   - `Choreographer.postFrameCallback` is a hand-rolled animation loop: it moves a view over time,
+//     it is not built by Motion, and nothing in it consults ANIMATOR_DURATION_SCALE. The API exists
+//     for frame-timed work and has no other use, which is what makes the name sufficient.
+//   - `Scroller` and `OverScroller` are the platform's fling and smooth-scroll drivers: they
+//     interpolate a value over a duration, they are constructed outside Motion, and neither reads
+//     ANIMATOR_DURATION_SCALE. Named by the fourth review as constructs the vocabulary misses.
+//     Both spellings are listed because animatorContains matches an identifier WHOLE -- OverScroller
+//     is not Scroller, and a list that assumed otherwise would carry a hole shaped like a subclass.
+//
+// `postDelayed` WAS ADDED HERE AND TAKEN BACK OUT, and the reason is worth more than the row was.
+// The fourth review put a file in ui/kit/ whose body was
+// `handler.postDelayed({ probeBlink(view, handler) }, 16L)` -- a 60 fps re-entrant blink, exactly
+// the decorative animation ADR-007 B134 decision 3 forbids -- and this fence called the tree clean.
+// Listing the name catches it. It also fires on PairingSurface.kt:378,
+// `poller.postDelayed({ render() }, POLL_MILLIS)` with POLL_MILLIS = 400L, which is a pairing-state
+// poll and animates nothing. THE TWO ARE THE SAME PROGRAM: a callback that re-posts itself from
+// inside the function it runs. They differ in the interval and in what the body touches, and no
+// scan over text can read either. The options were a threshold on the delay -- indefensible at any
+// value and fail-open one millisecond past it -- or an allowlist for PairingSurface.kt, which this
+// file's own header forbids in terms: PB-DS-11 in S24 owns surface code, and a per-file allowlist
+// here is the defect that requirement was reassigned away from S23 to avoid. So `postDelayed` is a
+// RESIDUAL rather than a row, recorded as one in
+// TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary.
+//
+// WHAT THIS LIST CANNOT DO is the subject of that same test, which records the residual instead of
+// pretending the list closes it.
+var animatorAlwaysForbidden = []string{"Choreographer", "Scroller", "OverScroller"}
 
 // animatorFault returns the identifier on one COMMENT-STRIPPED line that PB-DS-8 forbids, or "".
 //
@@ -380,6 +413,11 @@ func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 		{"AnimationDrawable", `(view.background as AnimationDrawable).start()`},
 		{"import of a forbidden type", `import androidx.dynamicanimation.animation.SpringAnimation`},
 		{"Choreographer", `Choreographer.getInstance().postFrameCallback(callback)`},
+		// The frame drivers that carry no animation vocabulary at all, and are therefore on
+		// animatorAlwaysForbidden by name. Both were named by the fourth review as constructs the
+		// vocabulary rule walks past; neither has a use that is not interpolation over time.
+		{"OverScroller", `OverScroller(context).startScroll(0, 0, 0, 100)`},
+		{"Scroller", `val s = Scroller(context, LinearInterpolator())`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := "package dev.swarm.phone.ui\n\nfun build() {\n    " + tc.line + "\n}\n"
@@ -394,15 +432,22 @@ func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 	}
 }
 
-// TestPBDS8_TheFenceCatchesConstructsNobodyListed is the control the inversion exists to make
-// possible, and the one a denylist could never pass.
+// TestPBDS8_TheVocabularyCatchesSpellingsNoListNames is what this test proves, under the name of
+// what it proves. IT USED TO BE CALLED TestPBDS8_TheFenceCatchesConstructsNobodyListed, AND THAT
+// NAME CLAIMED MORE THAN THE BODY DELIVERED.
 //
-// Every identifier below is invented. None appears in this file's rules, in the platform, or in
-// any review; each is what "the API nobody thought of" looks like from inside the fence. A list of
-// names scores zero here by construction, and that is precisely the defect the review named: a
-// fence whose failure mode is "a spelling nobody listed" is not a fence, it is an inventory of
-// past mistakes.
-func TestPBDS8_TheFenceCatchesConstructsNobodyListed(t *testing.T) {
+// The fourth review's finding, which is correct and is recorded here rather than argued with: every
+// identifier below contains `animat` or `transition`, so the set scores 6/6 under a vocabulary rule
+// for the same reason it would score 6/6 under a denylist containing those two substrings. It was
+// unchanged from the day the fence WAS a denylist. What it actually demonstrates is narrower than
+// "constructs nobody listed", and worth keeping at that narrower size: the rule is a VOCABULARY and
+// not an inventory, so an API whose name nobody has ever written down fails on its spelling as
+// readily as one from the platform's own documentation. A six-name list scores zero on this set;
+// the inversion is what makes it pass.
+//
+// The set it does NOT cover -- animation named outside the vocabulary -- is the residual, and it is
+// asserted separately and honestly by TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary.
+func TestPBDS8_TheVocabularyCatchesSpellingsNoListNames(t *testing.T) {
 	for _, line := range []string{
 		`val a = FooAnimator.ofFloat(view, "alpha", 0f, 1f)`,
 		`BarAnimation(view).start()`,
@@ -413,8 +458,60 @@ func TestPBDS8_TheFenceCatchesConstructsNobodyListed(t *testing.T) {
 	} {
 		if id := animatorFault(line); id == "" {
 			t.Errorf("PB-DS-8: the fence passes %q. Nothing in this file names that identifier, "+
-				"which is the whole point of the probe -- an unlisted animation API must fail on "+
-				"its SPELLING, not on someone having met it before.", line)
+				"which is the whole point of the probe -- an unlisted animation API spelled IN THE "+
+				"VOCABULARY must fail on its spelling, not on someone having met it before.", line)
+		}
+	}
+}
+
+// TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary RECORDS THE HOLE. It asserts that the
+// fence PASSES these lines, which is not a thing anyone wants to be true.
+//
+// WHY THE HOLE IS NOT CLOSED HERE. animatorVocabulary judges an identifier by its SPELLING, so an
+// animation API named in words the fence does not know is invisible to it by construction. The four
+// lines below are what that looks like: `Kinetics.tween`, `Morph.between`, `Ease.run` and `Ticker`
+// each drive a value over time and none contains `animat` or `transition`. Closing this class would
+// need the fence to judge BEHAVIOUR rather than spelling -- to know that a class called Ticker moves
+// something -- and no text scan over Kotlin can do that. The alternatives are all worse in the way
+// this file has already documented twice: a longer list of names is the denylist the inversion
+// replaced, and a vocabulary wide enough to catch `Ease` and `Morph` would refuse ordinary code.
+//
+// WHY IT IS AN ASSERTION AND NOT A COMMENT. A comment saying "we know about this" decays into a
+// comment nobody reads, and the fourth review's point about the test this one was split from is
+// that a control which cannot fail teaches the reader something false. This one fails in BOTH
+// directions and both are useful: if the fence is ever widened to catch these, this test goes red
+// and whoever widened it must come here and delete the row they closed -- so the record of what
+// this fence does not do cannot silently drift away from what it does.
+//
+// THE LAST LINE BELOW IS A DIFFERENT AND WORSE RESIDUAL, and it is here rather than on
+// animatorAlwaysForbidden because it was tried there and the row could not stay. `postDelayed` at a
+// frame interval is a hand-rolled animation; `postDelayed` at 400 ms is the pairing screen's state
+// poll, at PairingSurface.kt:378, which animates nothing. Same API, same self-re-posting shape, and
+// nothing in the text tells them apart -- see animatorAlwaysForbidden for the two ways out that
+// were rejected and why. This one is not a hypothetical spelling: it is the construct the fourth
+// review used to walk a 60 fps blink into ui/kit/ past a green lane.
+//
+// WHAT IS DEFENDED AGAINST THESE RESIDUALS INSTEAD, because "not closed" is not "not mitigated":
+// Scroller and OverScroller are on animatorAlwaysForbidden by name, a NEW file in ui/kit/ can no
+// longer arrive unread (TestPBDS6_EveryKitFileIsClaimedByAFence), and PB-DS-11 in S24 owns reading
+// the surface code that would host one. What is left is a hand-rolled loop, or a new animation
+// abstraction named in words nobody has used yet, written into this app by someone who read this
+// fence. That is a code-review finding rather than a gate finding, and saying so is more use to the
+// next reader than a green test implying otherwise.
+func TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary(t *testing.T) {
+	for _, line := range []string{
+		`val a = Kinetics.tween(view, "alpha", 0f, 1f)`,
+		`Morph.between(from, to).start()`,
+		`Ease.run(view, spec)`,
+		`val t = Ticker(view).start()`,
+		`handler.postDelayed({ probeBlink(view, handler) }, 16L)`,
+	} {
+		if id := animatorFault(line); id != "" {
+			t.Errorf("PB-DS-8: the fence now flags %q on %q, and this test records that it does "+
+				"NOT. That is an improvement, and it makes this record wrong: delete the line from "+
+				"this test, add it to TestPBDS8_EveryForbiddenConstructIsCaught, and say in "+
+				"animatorVocabulary or animatorAlwaysForbidden what now reaches it. The residual "+
+				"this fence carries must be the residual it actually carries.", line, id)
 		}
 	}
 }
