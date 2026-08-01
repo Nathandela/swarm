@@ -7946,6 +7946,21 @@ implementer would otherwise invent each one silently.
 
 ### 1. `ReadyForReview` takes `--p-ok`, and `Completed` takes `--p-ink3`
 
+> **CONTESTED 2026-08-01 by the audit committee, on three independent grounds. This decision is
+> NOT settled and must not be treated as such; it awaits the designer.** (a) The premise below is
+> overstated: Substrate does bind the token this decision moves — `design-directions.html:80`,
+> `.pdot.ok { background: var(--p-ok); box-shadow: none; }`, under the section labelled *Done*. So
+> this is not gap-filling, it is overriding an explicit binding and then filling the hole that
+> creates with grey. (b) It redefines a token against its author's stated meaning:
+> `design-directions.html:315` says *"hero is brand, CTA and live glow, success is a small flat
+> dot"* — `--p-ok` **is** success. (c) The consistency warrant is half-false. The shipped TUI
+> (`internal/tui/tui.go:407-410`) is red / blue / green / grey, so it supports the review and
+> completed rows and **refutes** NeedsInput, which is red on the desktop and amber on the phone for
+> the same session. The committee's recommendation — mint a 32nd token and leave `--p-ok` as
+> success — is cheaper to reverse than what was built, because this decision was hardened into a
+> checked-in table, a bidirectional gate and a Kotlin lookup that `error()`s, all before any human
+> reviewed it. Tracked as a beads issue.
+
 **The largest hole in the design.** `ReadyForReview` is a server-derived first-class `status.Group`
 that the phone renders verbatim and never re-derives. Substrate gives it **no token**. The mock
 paints it `#bf5af2`; the directions artifact's own rationale retires purple, and its demo phone
@@ -8005,6 +8020,14 @@ than decorating. Reduced motion is honoured at animator construction via `ANIMAT
 and it covers the toggle, which the artifact's own `prefers-reduced-motion` selector list omits.
 
 ### 4. `minSdk 33` retires the three conversion fallbacks; elevation stays banned
+
+> **CORRECTED 2026-08-01 by the audit committee: the tab-bar half of this is wrong.**
+> `RenderEffect.createBlurEffect` blurs *the view it is set on*, not the content behind it. CSS
+> `backdrop-filter` has no Android equivalent at any API level, so `minSdk 33` retires nothing here
+> — availability was never the constraint. `TabBar.kt:34-43` reached the right answer independently
+> and records the loss; this entry is what it had to disagree with. The grain half stands
+> (`BlendMode.SOFT_LIGHT` is genuinely available and genuinely sufficient), though no grain raster
+> has been produced, so PB-DS-5 is unmet on both counts rather than one.
 
 `BlendMode.SOFT_LIGHT` (API 29) and `RenderEffect.createBlurEffect` (API 31) are both unconditionally
 available at `minSdk 33`, so the grain overlay and the tab-bar blur need no fallback path. What does
