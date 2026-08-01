@@ -12,6 +12,12 @@
 .idea/
 .vscode/
 
+# Agent worktrees. `git worktree add` under .claude/ leaves a full checkout per agent, and
+# repo-wide gates that walk from the root scan them: TestB30_NoCallerOutsideTheCoreAdopts
+# TheWholeDurableBlob fails on `core.Save` inside an agent's copy of mobile/app.go, which is
+# not a caller in this repository at all. Eighteen of them accumulated during one session.
+.claude/worktrees/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
