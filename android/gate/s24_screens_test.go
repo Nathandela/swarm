@@ -876,6 +876,121 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// s24EmptyStateFile is the component PB-DS-9's most-argued clause depends on.
+const s24EmptyStateFile = "dev/swarm/phone/ui/kit/EmptyState.kt"
+
+// s24ComponentsDoc is the derivation table, which is the ONLY authority for a component Substrate
+// never drew.
+const s24ComponentsDoc = "docs/design/substrate-components.md"
+
+// s24Row8Padding reads row 8's spacing cell: "padding 48 (2 x `space_24`) vertical, `space_24`
+// horizontal".
+//
+// IT NEEDS ITS OWN READER, and that is the reason this check is here rather than in the S23 gate.
+// `s23RowPadding` matches “padding `space_N` x `space_N` “ -- the shape every other derived
+// component's cell has -- and row 8 does not have it, because its vertical padding is a MULTIPLE
+// of a step rather than a step. A row the reader cannot parse is a row nothing checks, and this is
+// the component whose absence left the triage inbox drawing four headings over nothing.
+var s24Row8Padding = regexp.MustCompile(
+	"padding ([0-9]+) \\(([0-9]+) x `(space_[0-9]+)`\\) vertical, `(space_[0-9]+)` horizontal")
+
+// TestPBDS9_TheEmptyStateSpendsTheStepsRow8States joins the derivation table to the component.
+//
+// WHAT IT IS FOR. `emptyState` is cited as `derived: <doc> #8 Empty state`, and a citation is a
+// gesture until something reads the row. This reads it: the arithmetic the cell states has to be
+// true (48 = 2 x 24), the component has to reference the step the cell names, and it must
+// reference NO OTHER step -- row 8 states exactly one, so a second would be a value chosen
+// somewhere other than the table.
+func TestPBDS9_TheEmptyStateSpendsTheStepsRow8States(t *testing.T) {
+	docPath := filepath.Join(repoRoot(t), filepath.FromSlash(s24ComponentsDoc))
+	doc := readFileOrFail(t, docPath, "PB-DS-9")
+	m := s24Row8Padding.FindStringSubmatch(doc)
+	if m == nil {
+		t.Fatalf("PB-DS-9: %s states no row-8 padding of the form this reader knows, so the empty "+
+			"state's spacing is joined to nothing", s24ComponentsDoc)
+	}
+	total, steps, vertical, horizontal := m[1], m[2], m[3], m[4]
+
+	// The cell's own arithmetic, checked rather than trusted: 48 = 2 x 24.
+	stepValue, err := strconv.Atoi(strings.TrimPrefix(vertical, "space_"))
+	if err != nil {
+		t.Fatalf("PB-DS-9: row 8's vertical step %q carries no number", vertical)
+	}
+	count, err := strconv.Atoi(steps)
+	if err != nil {
+		t.Fatalf("PB-DS-9: row 8's multiplier %q is not a number", steps)
+	}
+	want, err := strconv.Atoi(total)
+	if err != nil {
+		t.Fatalf("PB-DS-9: row 8's total %q is not a number", total)
+	}
+	if count*stepValue != want {
+		t.Errorf("PB-DS-9: row 8 states %s = %s x `%s`, and %d x %d is %d. The table disagrees "+
+			"with itself, so neither number can be spent from it.",
+			total, steps, vertical, count, stepValue, count*stepValue)
+	}
+	if vertical != horizontal {
+		t.Errorf("PB-DS-9: row 8 states `%s` vertically and `%s` horizontally; this check assumes "+
+			"one step and needs rewriting rather than relaxing", vertical, horizontal)
+	}
+
+	path := filepath.Join(s24KotlinRoot(t), filepath.FromSlash(s24EmptyStateFile))
+	if !exists(path) {
+		t.Fatalf("PB-DS-9: there is no %s. An empty section then renders as a heading over "+
+			"nothing, which is the failure the requirement names by name.", s24EmptyStateFile)
+	}
+	code := kotlinCodeOnly(readFileOrFail(t, path, "PB-DS-9"))
+
+	if !strings.Contains(code, "R.dimen.swarm_"+vertical) {
+		t.Errorf("PB-DS-9: %s never references R.dimen.swarm_%s, which is the only step row 8 "+
+			"names. A dimension that is not read from the scale is one typed at the call site.",
+			s24EmptyStateFile, vertical)
+	}
+	for _, other := range s24SpaceStepRef.FindAllStringSubmatch(code, -1) {
+		if other[1] == vertical {
+			continue
+		}
+		t.Errorf("PB-DS-9: %s spends R.dimen.swarm_%s, and row 8 states only `%s`. A second step "+
+			"is a value chosen somewhere other than the table that is this component's whole "+
+			"authority.", s24EmptyStateFile, other[1], vertical)
+	}
+}
+
+// s24SpaceStepRef is any spacing step a source reads.
+var s24SpaceStepRef = regexp.MustCompile(`R\.dimen\.swarm_(space_[0-9]+)`)
+
+// TestPBDS9_TheRow8ReaderSeesADisagreeingTable is that join's negative control.
+//
+// The reader has one job -- turn a sentence in a document into two numbers -- and the way it fails
+// silently is by matching nothing and reporting a clean run over a component nobody checked. Both
+// directions are exercised: a well-formed cell must parse, and a cell whose arithmetic is wrong
+// must be caught rather than transcribed.
+func TestPBDS9_TheRow8ReaderSeesADisagreeingTable(t *testing.T) {
+	good := "padding 48 (2 x `space_24`) vertical, `space_24` horizontal; compact variant"
+	m := s24Row8Padding.FindStringSubmatch(good)
+	if m == nil {
+		t.Fatalf("the row-8 reader cannot parse the cell as the document writes it: %q", good)
+	}
+	if m[1] != "48" || m[2] != "2" || m[3] != "space_24" || m[4] != "space_24" {
+		t.Errorf("the row-8 reader mis-parsed a well-formed cell: %v", m[1:])
+	}
+
+	// The perturbation: a table whose own arithmetic is wrong. 3 x 24 is 72, not 48 -- and a
+	// check that only read the total and the step name would transcribe it happily.
+	bad := "padding 48 (3 x `space_24`) vertical, `space_24` horizontal"
+	m = s24Row8Padding.FindStringSubmatch(bad)
+	if m == nil {
+		t.Fatal("the row-8 reader cannot parse the perturbed cell, so the control proves nothing")
+	}
+	count, _ := strconv.Atoi(m[2])
+	step, _ := strconv.Atoi(strings.TrimPrefix(m[3], "space_"))
+	total, _ := strconv.Atoi(m[1])
+	if count*step == total {
+		t.Errorf("3 x space_24 is being read as %d, which equals the stated %d -- the arithmetic "+
+			"check cannot fail", count*step, total)
+	}
+}
+
 // TestPBDS9_TheSectionTableReaderSeesAMissingGroup is that check's negative control: the reader
 // must actually be reading, and it must actually notice an absence.
 func TestPBDS9_TheSectionTableReaderSeesAMissingGroup(t *testing.T) {

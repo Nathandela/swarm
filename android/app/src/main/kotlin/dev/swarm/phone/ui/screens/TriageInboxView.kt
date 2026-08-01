@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import dev.swarm.phone.ui.kit.TabItem
 import dev.swarm.phone.ui.kit.chipRow
+import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.filterChip
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.sectionLabel
@@ -50,16 +51,12 @@ object InboxTag {
     const val SECTION_ROWS = "inbox.section.rows"
 
     /**
-     * Derivation row 8 `.empty`, under the heading of a section with nothing in it.
+     * Derivation row 8, under the heading of a section with nothing in it.
      *
-     * **NOTHING CARRIES THIS TAG YET, AND THAT IS AN UNMET CLAUSE RATHER THAN A DEAD CONSTANT.**
-     * PB-DS-9 requires an empty section to render "as a section with its empty copy", and the
-     * block that copy goes in is derivation table row 8 -- `Body.Message` / `--p-ink2`, centred,
-     * 2 x `space_24` vertical -- which the kit does not ship. This package may not build it: a
-     * visual factory outside `ui/kit/` contradicts PB-DS-6 in the same breath as claiming it, and
-     * the fence in `android/gate/s24_screens_test.go` would have to allowlist the file it lives
-     * in. The copy exists and is asserted ([TriageInboxScreen.emptyCopyFor]); what is missing is
-     * one factory, and `TriageInboxViewTest` fails on exactly this until it lands.
+     * IT IS ON THE BLOCK AND NOT ON THE SECTION, so a test can count how many sections are saying
+     * "nothing here" and compare that to how many are actually empty. Both directions are defects:
+     * a missing block is a heading over nothing, and a block on a populated section tells a user
+     * holding two live sessions that there is nothing in it.
      */
     const val SECTION_EMPTY = "inbox.section.empty"
 
@@ -139,9 +136,19 @@ fun triageInboxView(
         content.addView(
             sectionLabel(context, section.heading).apply { tag = InboxTag.SECTION_LABEL },
         )
-        // AND ITS COPY BELONGS HERE, in one call the kit cannot yet answer -- see
-        // [InboxTag.SECTION_EMPTY]. The heading survives; the sentence under it does not exist.
-        if (section.rows.isEmpty()) return@forEach
+        // AND ITS COPY GOES UNDER IT. A heading over nothing is the same defect wearing a
+        // heading, which is why row 8's own note says "the `.plabel` stays and this block sits
+        // under it".
+        //
+        // THE CONDITION IS THE POINT AND NOT BOILERPLATE. Drawing the block unconditionally is
+        // the obvious over-correction, and it tells a user holding two live sessions that the
+        // section has nothing in it. `TriageInboxViewTest` asserts both directions.
+        if (section.rows.isEmpty()) {
+            content.addView(
+                emptyState(context, section.emptyCopy).apply { tag = InboxTag.SECTION_EMPTY },
+            )
+            return@forEach
+        }
         content.addView(
             sessionList(context).apply {
                 tag = InboxTag.SECTION_ROWS
