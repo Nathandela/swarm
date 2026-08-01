@@ -1082,23 +1082,24 @@ var s24ScreenComponents = map[string]map[string]string{
 		"sectionLabel": "C6.2 `.seclabel` -- one per section",
 		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
 	},
-	// C4 -- the machines screen, whose three rows are derivation rows 11, 12 and 13. THE MACHINE
-	// ROW IS A `settingsRow`, and that is a reuse rather than an approximation: row 11 states
-	// `--p-card`, 1 dp `--p-hair`, `--p-card-r`, `padding space_12 x space_14`, `Title.Row` over
-	// `Body.Secondary` -- which is row 15's four values and two type roles exactly. What row 11
-	// has that this screen does not draw is the mono `endpoint id`, and the reason is that the
-	// product has ONE identifier for a machine rather than two (see MachinesPanel).
+	// C4 -- the machines screen. Its three blocks are derivation rows 11, 12 and 13, and TWO OF
+	// THEM ARE COMPONENTS OF THEIR OWN rather than settings rows wearing different words. Row 11's
+	// shape is a leading mark, a name and a trailing mono identifier over a meta line; row 12 is
+	// the one bordered container in the app with no fill. Only row 13 is a `settingsRow`, because
+	// with no fingerprint to render it is a name and a trailing control and nothing else.
 	//
-	// Its AUDIT LOG is deliberately absent from this list and from the screen: the activity row is
-	// row 14, it has no factory yet, it is being built beside this one, and a second one raised
-	// here would be the copy of a component §2's reuse rule exists to prevent. The section arrives
-	// with the row, not before it.
+	// Its AUDIT LOG is deliberately absent from this list and from the screen: it is row 14, the
+	// activity row, which is a second agent's component and now exists -- the section arrives when
+	// the screen is wired, and raising a second one here would be the copy §2's reuse rule exists
+	// to prevent.
 	"dev/swarm/phone/ui/screens/MachinesPanelView.kt": {
-		"navHeader":    "C4.1 -- the root header, title `Machines`, no live counter",
-		"presenceDot":  "C4.2 -- row 11's 7 dp presence mark, flat in both states",
-		"settingsRow":  "C4.2/3/4 -- the machine (row 11), remote access (row 12) and the device (row 13)",
-		"sectionLabel": "C4.4 `.seclabel` -- `Paired devices`",
-		"ctaButton":    "C4.4 -- Revoke, which is row 13's `.a2-no` treatment: DENY",
+		"navHeader":       "C4.1 -- the root header, title `Machines`, no live counter",
+		"machineRow":      "C4.2 -- row 11, with row 11's presence mark inside it",
+		"sessionList":     "C4.2/4 `.prows` -- the container the rows sit in, per §6 over `.cards`",
+		"killSwitchPanel": "C4.3 -- row 12 as amended: the state, and no control",
+		"sectionLabel":    "C4.4 `.seclabel` -- `Paired devices`",
+		"settingsRow":     "C4.4 -- row 13's device row: a name and a trailing control",
+		"denyChip":        "C4.4 -- Revoke, row 13's `.a2-no` treatment at chip metrics",
 	},
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen

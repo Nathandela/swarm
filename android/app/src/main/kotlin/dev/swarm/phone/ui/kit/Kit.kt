@@ -1,6 +1,10 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.TextAppearanceSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -107,6 +111,26 @@ internal object Kit {
     private const val ATTENTION_BORDER_SHARE = 0.36f
 
     /**
+     * Derivation row 12's panel border: `color-mix(in srgb, --p-err 36%, --p-hair)`.
+     *
+     * **IT SPENDS THE ATTENTION ROW'S SHARE, WHICH IS THE WHOLE OF ROW 12'S CELL.** The row does not
+     * declare a number of its own -- its words are "Substrate's own `.prow.attention` border recipe
+     * with `--p-err` substituted" -- so the RECIPE is the 36% and the substitution is the base. A
+     * second constant here would be a second copy of one share, needing a sixth entry in
+     * `internal/design.Derivations()` to be checkable and drifting from the first the day either
+     * moves. This is the one place in the kit where two components share a derivation, and it is
+     * shared because the design says they are the same derivation.
+     *
+     * An opaque mix rather than an alpha, for [attentionBorder]'s reason and one of row 12's own:
+     * the panel sits on the ground here and would composite differently anywhere else.
+     */
+    fun killSwitchBorder(context: Context): Int = ColorMix.mix(
+        colour(context, R.color.swarm_state_error),
+        ATTENTION_BORDER_SHARE,
+        colour(context, R.color.swarm_hairline),
+    )
+
+    /**
      * `.a2-no`'s fill: `color-mix(in srgb, --p-err 13%, transparent)`.
      *
      * A TINT OVER WHATEVER IS BEHIND IT, which is why it keeps its alpha rather than being flattened
@@ -191,6 +215,54 @@ internal object Kit {
 
     /** origin: derivation working-dot-glow */
     private const val WORKING_GLOW_SHARE = 0.55f
+
+    /**
+     * [text] with `.prow .ln b` applied over [span], or [text] unchanged when there is none.
+     *
+     * IT IS HERE BECAUSE TWO COMPONENTS NEED THE SAME SPAN. Row 14's activity row marks an inline
+     * identifier inside its body and row 12's panel marks an inline command inside its subtitle,
+     * and both cells are the same one: `Mono.InlineStrong` / `--p-ink` inside a sans line. A second
+     * private copy is how the two would drift, and a top-level helper cannot live in this package
+     * -- `TestPBDS6_EveryKitFactoryIsAnInboxComponent` reads every top-level `fun` as a component
+     * and refuses one the inventory does not name, which is what puts a shared helper inside this
+     * object.
+     *
+     * TWO SPANS AND NOT ONE, even though the ink span is the colour the body already carries. No
+     * text appearance in this app holds a colour -- Substrate binds one style to several inks --
+     * so the appearance carries the family, the size and the weight, and the ink is stated beside
+     * it. Without the second span the emphasis would inherit whatever the line is painted, and a
+     * later change to one cell would silently move the other.
+     *
+     * @param span must OCCUR in [text]. A caller naming a fragment its own sentence does not
+     *  contain has a copy bug, and this fails loudly rather than rendering the line unmarked --
+     *  which is the failure nobody would see.
+     */
+    fun emphasised(context: Context, text: CharSequence, span: CharSequence?): CharSequence {
+        if (span == null) return text
+        val start = text.toString().indexOf(span.toString())
+        if (start < 0) {
+            error(
+                "`$span` is not in `$text`, so a component was asked to emphasise a fragment its " +
+                    "own sentence does not contain. This fails loudly rather than dropping the " +
+                    "emphasis, which would render a correct-looking line that had quietly lost " +
+                    "the one part the design puts the eye on.",
+            )
+        }
+        return SpannableStringBuilder(text).apply {
+            setSpan(
+                TextAppearanceSpan(context, R.style.TextAppearance_Swarm_Mono_InlineStrong),
+                start,
+                start + span.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            setSpan(
+                ForegroundColorSpan(colour(context, R.color.swarm_text_primary)),
+                start,
+                start + span.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+    }
 }
 
 /**
@@ -374,6 +446,37 @@ internal object KitTag {
 
     /** The centred sentence under a block that cannot be typed into. Row 22's, named for the part. */
     const val READ_ONLY_NOTE = "read-only note"
+
+    /**
+     * The machine row's three cells, row 11's.
+     *
+     * THEY ARE NOT [PROJECT], [AGENT] AND [NEED], even though the three type roles are the same
+     * three the session row spends. `.prow .pj` is a SESSION's project and `.mrow .name` is a
+     * machine; one tag over both would let an appearance test find a session row when it asked for
+     * a machine row, and the two rows carry different padding, a different leading mark and a
+     * different authority -- row 11 rather than `.prow`. What the shared type roles say is that
+     * `.mrow .eid` and `.prow .ag` are the same CELL, which is the reuse the derivation table
+     * argues for; it does not make them the same VIEW.
+     */
+    const val MACHINE_NAME = "machine name"
+    const val MACHINE_ENDPOINT = "machine endpoint"
+    const val MACHINE_META = "machine meta"
+
+    /**
+     * The kill-switch panel's two cells, row 12's.
+     *
+     * THERE IS NO TAG FOR THE INLINE COMMAND, for the reason the activity row's emphasis has none:
+     * `Mono.InlineStrong` over `swarm remote off` is a SPAN inside [KILL_BODY]'s text rather than a
+     * view, so it has no `tag` to carry and what finds it is the span range on that text.
+     *
+     * AND NO TAG FOR A TRAILING CONTROL, because row 12 as amended has none: the kill switch is
+     * read-only by design and a toggle there would be a control that cannot act.
+     */
+    const val KILL_TITLE = "kill switch title"
+    const val KILL_BODY = "kill switch body"
+
+    /** Row 13's Revoke: `.a2-no`'s treatment at `.chip`'s metrics. Named for the part. */
+    const val DENY_CHIP = "deny chip"
 
     /**
      * The activity row's two parts.

@@ -286,6 +286,34 @@ internal fun pillSurface(context: Context, fill: Int): SubstrateSurface = surfac
     ),
 )
 
+/**
+ * Derivation row 12's charged container: a border on the ground, with no fill of its own.
+ *
+ * **IT IS THE ONE SURFACE IN THIS KIT THAT PAINTS NO FILL**, and that is row 12's first cell --
+ * "none (the ground shows, as in the mock)" -- rather than an omission. A `--p-card` fill here
+ * would make the panel a card that happens to have a warm border, which is a different statement:
+ * cards are things you act on and this one reports a state the phone cannot change.
+ *
+ * NO KEY LIGHT, for the reason [chipSurface] gives. The design puts `box-shadow: var(--p-card-fx)`
+ * on `.prow`, `.sheet2` and `.tcard` and nowhere else, and an inset highlight along the top edge of
+ * a container with no fill would be a 1 dp white line floating on the ground.
+ *
+ * @param stroke the border, which the CALLER computes. It is [Kit.killSwitchBorder] at the one site
+ *  this has -- a blend, not a token, so it has no `<color>` resource and cannot be looked up here.
+ */
+internal fun panelSurface(context: Context, stroke: Int): SubstrateSurface = surface(
+    SurfaceSpec(
+        fill = ColorMix.TRANSPARENT,
+        stroke = stroke,
+        strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        keyLight = null,
+        keyLightPx = 0f,
+        rail = null,
+        railPx = 0f,
+    ),
+)
+
 private fun surface(spec: SurfaceSpec): SubstrateSurface {
     val layers = mutableListOf<Drawable>(
         GradientDrawable().apply {

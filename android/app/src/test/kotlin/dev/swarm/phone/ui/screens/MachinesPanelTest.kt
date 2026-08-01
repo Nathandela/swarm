@@ -132,56 +132,92 @@ class MachinesPanelTest {
     // ---- remote access, which is a statement and not a control --------------
 
     @Test
-    fun `remote access is a labelled statement of the daemon-side switch`() {
-        assertEquals("Remote access", panel().remoteAccess.label)
-        assertEquals(pane().killSwitchExplanation, panel().remoteAccess.sublabel)
+    fun `remote access is a titled statement of the daemon-side switch`() {
+        assertEquals("Remote access", panel().remoteAccess.title)
+        assertTrue(
+            "the panel does not carry the pane's own sentence about the switch, so a second " +
+                "wording of one condition now exists: ${panel().remoteAccess.body}",
+            panel().remoteAccess.body.startsWith(pane().killSwitchExplanation),
+        )
     }
 
     @Test
-    fun `the sublabel changes with the switch and says who can move it`() {
-        val off = panel(killSwitchEngaged = true).remoteAccess.sublabel
-        val on = panel(killSwitchEngaged = false).remoteAccess.sublabel
+    fun `the body changes with the switch and says who can move it`() {
+        val off = panel(killSwitchEngaged = true).remoteAccess.body
+        val on = panel(killSwitchEngaged = false).remoteAccess.body
 
         assertTrue(
-            "an engaged kill switch reads the same as a disengaged one, so the row reports " +
+            "an engaged kill switch reads the same as a disengaged one, so the panel reports " +
                 "nothing: $off",
             off != on,
         )
         assertTrue(
-            "the row does not say the switch is the machine owner's. The phone can never set it " +
-                "-- protocol/server.go refuses the remote tier before consulting its backend -- " +
-                "and a status line that leaves that out reads as a control someone forgot: $off",
+            "the panel does not say the switch is the machine owner's. The phone can never set " +
+                "it -- protocol/server.go refuses the remote tier before consulting its backend " +
+                "-- and a status line that leaves that out reads as a control someone forgot: $off",
             off.contains("Only the machine's owner"),
         )
+    }
+
+    /**
+     * Row 12's inline command, and the half of it the mock gets wrong.
+     *
+     * `swarm remote off` and `swarm remote on` are both real verbs (`cmd/swarm/remote.go`). The
+     * mock prints the first unconditionally, which is an instruction that does nothing for the
+     * user who is reading this panel BECAUSE their remote control is off. The command rendered is
+     * the one that moves the switch from where it actually is, and it must occur in the body or
+     * the component cannot mark it.
+     */
+    @Test
+    fun `the command is the verb that moves the switch from the state it is in`() {
+        val engaged = panel(killSwitchEngaged = true).remoteAccess
+        val open = panel(killSwitchEngaged = false).remoteAccess
+
+        assertEquals("swarm remote on", engaged.command)
+        assertEquals("swarm remote off", open.command)
+        listOf(engaged, open).forEach { row ->
+            assertTrue(
+                "the command `${row.command}` is not in the body it is supposed to be marked " +
+                    "inside: ${row.body}",
+                row.body.contains(row.command),
+            )
+        }
     }
 
     // ---- the paired device ---------------------------------------------------
 
     @Test
-    fun `the paired device is this device, named, with a revoke label`() {
+    fun `the paired device is named, with a revoke label and a revoke sentence`() {
         val device = panel().pairedDevice
         assertEquals("Paired devices", panel().pairedDevicesHeading)
         assertEquals("swarm phone", device.name)
-        assertEquals("This device", device.sublabel)
         assertEquals("Revoke", device.revokeLabel)
+        assertEquals("Revoke swarm phone, this device", device.revokeDescription)
     }
 
     /**
-     * The mock's sublabel is `key <fingerprint> · this device`, and the fingerprint has no source.
+     * Row 13's second cell is a fingerprint, and the fingerprint has no source.
      *
      * `mobile/screen_coverage.tsv` gives this screen `App.Presence`, `App.RevokeThisDevice` and
      * `App.KillSwitchEngaged`; nothing on that list returns a key fingerprint, and neither does
      * [MachinePane]. A plausible-looking one -- a hash of the device name, the machine id's first
      * eight characters -- would render exactly like the real thing and be the defect ADR-007 B135
-     * names. So the half that is a fact stays and the half that would be a guess is a gap.
+     * names. So the cell is ABSENT: the model has no field for it, and the half of the mock's
+     * string that IS a fact ("this device") is on the control's description, where it says which
+     * device the irreversible action destroys.
      */
     @Test
     fun `no fingerprint is invented for the device the product cannot fingerprint`() {
-        val sublabel = panel().pairedDevice.sublabel
+        val device = panel().pairedDevice
         assertFalse(
-            "the device sublabel claims a key: $sublabel. Nothing on this handset can compute " +
-                "one, so whatever is in there was made up",
-            sublabel.contains("key"),
+            "the device row claims a key: $device. Nothing on this handset can compute one, so " +
+                "whatever is in there was made up",
+            (device.name + device.revokeLabel + device.revokeDescription).contains("key"),
+        )
+        assertTrue(
+            "the revoke control does not say it acts on this handset. It is the one irreversible " +
+                "thing on the screen and its label is a single word: ${device.revokeDescription}",
+            device.revokeDescription.contains("this device"),
         )
     }
 
@@ -195,8 +231,8 @@ class MachinesPanelTest {
     fun `the activity log does not reach this panel`() {
         val busy = panel(
             activity = listOf(
-                JournalRow(cursor = 3, type = "launch", group = "working"),
-                JournalRow(cursor = 4, type = "approval", group = "needs_input"),
+                JournalRow(cursor = 3, sessionId = "swarm", type = "launch", group = "working"),
+                JournalRow(cursor = 4, sessionId = "dotfiles", type = "approval", group = "needs_input"),
             ),
         )
         assertEquals(

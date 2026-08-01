@@ -114,21 +114,54 @@ data class MachineRow(
  * cannot act". [MachinePane.canSetKillSwitch] is the pane's statement of the same fact, and it is
  * a `val` rather than a parameter for the same reason this row has no field.
  */
-data class RemoteAccessRow(val label: String, val sublabel: String)
+data class RemoteAccessRow(
+    /** Row 12's `Title.Row` / `--p-err` cell. The mock's `.kills` title, verbatim. */
+    val title: String,
+    /**
+     * Row 12's subtitle: what the switch is doing, and where it lives.
+     *
+     * The first sentence is [MachinePane.killSwitchExplanation] unchanged -- the pane's own words
+     * about its own state, not re-worded here, for [MachineRow.presenceLine]'s reason. The second
+     * is this screen's, and it exists because the first one ends by saying the switch is somebody
+     * else's without saying where to find it.
+     */
+    val body: String,
+    /**
+     * The part of [body] that is row 12's inline `Mono.InlineStrong` cell: a real verb of the real
+     * CLI (`cmd/swarm/remote.go`), and the one that applies to the state the switch is in. The
+     * mock prints `swarm remote off` unconditionally, which is the wrong instruction to give
+     * somebody whose remote control is already off.
+     */
+    val command: String,
+)
 
 /**
- * Derivation row 13's Paired-device row: a name, a sublabel, and Revoke.
+ * Derivation row 13's Paired-device row: a name, and the one destructive action this phone has.
  *
- * The button's LABEL is here because copy is the screen's (PB-DS-9). Its click is not, and no
- * model field stands in for one: `App.RevokeThisDevice` deletes the push token and then issues a
- * signed command, PB-SEC-12 clause 1's touch filter belongs on the control, and both are the
- * surface's. `MachinesPanelView` tags the button so the surface can reach it.
+ * **ROW 13'S SECOND CELL IS ABSENT, NOT RE-WORDED.** The row states a `fingerprint` in
+ * `Mono.Agent` / `--p-ink3` and the mock prints `key e7c2…9f31 · this device`; nothing on this
+ * handset can compute a fingerprint. The tail of that string -- "this device" -- IS a fact, and an
+ * earlier draft of this file rendered it as a sublabel, which was wrong twice over: the row's
+ * second cell is mono at 10 sp and a sublabel is sans at 12, so it would have been the right words
+ * in the wrong role, and it put a caption where the row has no data. The fact moves to
+ * [revokeDescription], where it is load-bearing rather than decorative.
+ *
+ * The button's LABEL is here because copy is the screen's (PB-DS-9). Its click is not, and no model
+ * field stands in for one: `App.RevokeThisDevice` deletes the push token and then issues a signed
+ * command, PB-SEC-12 clause 1's touch filter belongs on the control, and both are the surface's.
+ * `MachinesPanelView` tags the button so the surface can reach it.
  */
 data class PairedDeviceRow(
     val name: String,
-    /** The mock's `key <fingerprint> · this device` with its unsourceable half removed. */
-    val sublabel: String,
     val revokeLabel: String,
+    /**
+     * What a screen reader announces for the control, INSTEAD of its one-word label.
+     *
+     * `Revoke` alone does not say what it revokes, and this is the only irreversible thing on the
+     * screen: it destroys this handset's pairing, and the reply to the command it sends comes back
+     * over the path the command destroys.
+     */
+    val revokeDescription: String,
 )
 
 object MachinesPanelScreen {
@@ -141,15 +174,30 @@ object MachinesPanelScreen {
 
     private const val PAIRED_DEVICES = "Paired devices"
 
-    /**
-     * What is left of §4's `key <fingerprint> · this device` once the half with no source is
-     * dropped. It is worth keeping: the Revoke button beside it acts on the phone in the reader's
-     * hand, and a destructive control should say what it destroys.
-     */
-    private const val THIS_DEVICE = "This device"
-
     /** The mock's `.rev`. Row 13 keeps the word and replaces the button; see the view. */
     private const val REVOKE = "Revoke"
+
+    /**
+     * The tail of row 13's fingerprint cell -- the half that is a fact -- said where it matters.
+     *
+     * The phone can revoke exactly one device: itself. `App.RevokeThisDevice` is the verb and
+     * `mobile/screen_coverage.tsv` records why it is the phone's panic action rather than the kill
+     * switch: the switch is owner-tier and this app can never set it.
+     */
+    private const val THIS_DEVICE = "this device"
+
+    /**
+     * The second sentence of row 12's subtitle, and the two real verbs it ends with.
+     *
+     * BOTH ARE SHIPPED CLI COMMANDS (`cmd/swarm/remote.go`: `swarm remote off` disables remote
+     * control, `swarm remote on` clears the override). The one rendered is the one that applies to
+     * the state the switch is IN -- telling a user whose remote control is already off to run
+     * `swarm remote off`, which is what the mock's static copy does, is an instruction that does
+     * nothing.
+     */
+    private const val SWITCH_LIVES = "The switch lives on the machine: "
+    private const val COMMAND_DISABLE = "swarm remote off"
+    private const val COMMAND_ENABLE = "swarm remote on"
 
     /**
      * The relay's word for a live authenticated connection (`relay.PresenceOnline`).
@@ -174,15 +222,24 @@ object MachinesPanelScreen {
             presenceLine = pane.presenceExplanation(formatTime),
             online = pane.presence == ONLINE,
         ),
-        remoteAccess = RemoteAccessRow(
-            label = REMOTE_ACCESS,
-            sublabel = pane.killSwitchExplanation,
-        ),
+        remoteAccess = remoteAccessOf(pane),
         pairedDevicesHeading = PAIRED_DEVICES,
         pairedDevice = PairedDeviceRow(
             name = pane.pairedDeviceName,
-            sublabel = THIS_DEVICE,
             revokeLabel = REVOKE,
+            revokeDescription = "$REVOKE ${pane.pairedDeviceName}, $THIS_DEVICE",
         ),
     )
+
+    private fun remoteAccessOf(pane: MachinePane): RemoteAccessRow {
+        // The verb that MOVES the switch from where it is: `on` re-enables what the owner turned
+        // off, `off` is what turns it off. Read off the same flag the sentence before it is read
+        // from, so the two cannot disagree about which state they are describing.
+        val command = if (pane.killSwitchEngaged) COMMAND_ENABLE else COMMAND_DISABLE
+        return RemoteAccessRow(
+            title = REMOTE_ACCESS,
+            body = "${pane.killSwitchExplanation} $SWITCH_LIVES$command.",
+            command = command,
+        )
+    }
 }

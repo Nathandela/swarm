@@ -185,6 +185,48 @@ var s23Inbox = []s23Component{
 			"derivation table specifies it and row 8 says so.",
 	},
 	{
+		Factory: "machineRow",
+		File:    "MachineRow.kt",
+		Derived: "#11 Machine row",
+		Why: "the machines screen's only row, and a COMPONENT rather than a reuse. Its card is " +
+			"`cardSurface` -- §2's reuse rule, the same call the settings row and the activity row " +
+			"make -- but its SHAPE is its own: a leading mark, a name, a trailing mono identifier " +
+			"on one line, and a meta line beneath, at `space_12` x `space_14` rather than " +
+			"`.prow`'s `space_10` x `space_12`. `sessionRow` is the near miss and it is a miss in " +
+			"the one place that matters: it builds its leading mark by calling statusDot with a " +
+			"`status.Group`, and a machine's reachability is not one. A reuse justified by " +
+			"identical pixels is not a reuse justified by a compatible seam; this row passed the " +
+			"first test and failed the second.",
+	},
+	{
+		Factory: "killSwitchPanel",
+		File:    "KillSwitchPanel.kt",
+		Derived: "#12 Kill-switch panel",
+		Why: "the charged container that reports the daemon-side switch. It is the one component " +
+			"in the kit with a BORDER AND NO FILL -- the ground shows through, as the mock drew " +
+			"it -- and its border is `.prow.attention`'s recipe with `--p-err` substituted for " +
+			"`--p-att`, which is row 12's own sentence and is why it spends the SAME 36% share " +
+			"internal/design declares for the attention row rather than a sixth derivation. " +
+			"Row 12's trailing control is deleted by its own 2026-08-01 amendment: " +
+			"`App.KillSwitchEngaged` is read only by design, `handleRemoteSetControl` refuses the " +
+			"remote tier before the backend is consulted, and a toggle here is a control that " +
+			"cannot act. So this factory HAS no trailing parameter -- the absence is in the " +
+			"signature, where a later caller cannot supply one by accident.",
+	},
+	{
+		Factory: "denyChip",
+		File:    "DenyChip.kt",
+		Derived: "#13 Paired-device row",
+		Why: "Revoke, which row 13 specifies as \"the `.a2-no` treatment at chip metrics\": the " +
+			"deny button's fill and ink at the scope chip's radius, padding and label style. " +
+			"NEITHER EXISTING FACTORY RENDERS IT. `ctaButton(DENY)` has the colours and the wrong " +
+			"metrics -- `--p-btn-r` 9, `space_12`, `Label.Button` against row 13's `--p-chip-r` 8, " +
+			"`space_8` x `space_10`, `Label.Chip` -- and `filterChip` has the metrics and hardcodes " +
+			"its own two fills. This is not a second denial idiom, which §2 forbids: it is the ONE " +
+			"tinted-fill denial at a second size, spending Kit.denyFill and pillSurface rather " +
+			"than restating either.",
+	},
+	{
 		Factory: "presenceDot",
 		File:    "PresenceDot.kt",
 		Derived: "#11 Machine row",
@@ -1164,6 +1206,21 @@ var s23DerivedSpacing = []struct {
 	// unambiguously -- see the scoping note on that function.
 	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_10"},
 	{"ActivityRow.kt", "#14 Activity row", "padding-x", "swarm_space_12"},
+	// Rows 11 and 12 state the SAME two steps, and the machines screen is where that stops being
+	// a coincidence: the machine row and the panel under it are inset alike, which is what makes
+	// them read as one screen rather than as two blocks that happen to be stacked. Both are joined
+	// here so a change to either row is caught rather than absorbed.
+	{"MachineRow.kt", "#11 Machine row", "padding-y", "swarm_space_12"},
+	{"MachineRow.kt", "#11 Machine row", "padding-x", "swarm_space_14"},
+	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "padding-y", "swarm_space_12"},
+	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "padding-x", "swarm_space_14"},
+	// Row 13's padding is the same pair again, and the device row spends it through `settingsRow`
+	// rather than through a component of its own -- so the join that holds it is row 15's, above.
+	// DenyChip.kt is absent from this table for a different reason: row 13 states the chip's
+	// padding as `space_8` x `space_10`, which s23DocPadding reads, but the row states TWO
+	// paddings -- the device row's and the chip's -- and this reader takes the first match. It
+	// would check the chip against the row's padding and pass while comparing the wrong pair.
+	// The chip's two steps are asserted in DenyChipTest against the resource table instead.
 }
 
 // s23DocPadding reads the "padding space_2 x space_6" cell out of a row -- vertical first and
@@ -1266,6 +1323,19 @@ var s23DerivedEdge = []struct {
 	{"NavHeaderDrill.kt", "§4 Drill-down nav header", "gap", "swarm_space_10"},
 	{"ReadOnlyNote.kt", "#22 Read-only note", "top", "swarm_space_10"},
 	{"ReadOnlyNote.kt", "#22 Read-only note", "sides", "swarm_space_18"},
+	// Row 11's two internal gaps. They are the cells that make the row a SHAPE rather than a card
+	// with text in it -- `space_8` between the name and the identifier that trails it, `space_4`
+	// between that line and the meta line under it -- and neither is expressible as a padding, so
+	// this is the reader that can hold them.
+	{"MachineRow.kt", "#11 Machine row", "gap", "swarm_space_8"},
+	{"MachineRow.kt", "#11 Machine row", "below", "swarm_space_4"},
+	// Row 12's MARGINS, which no other component in this kit has: the panel is the one thing on
+	// the machines screen that sits on the ground rather than inside a container, so its own inset
+	// is the design's rather than a list's. `space_14` sides is 2 dp wider than the `.prows`
+	// container the rows above and below it use -- both values are what their rows state, and the
+	// difference is what `.cards` becoming `.prows` (§6) costs on this one screen.
+	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "top", "swarm_space_8"},
+	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "sides", "swarm_space_14"},
 }
 
 // s23DocEdgeStep reads one edge's step out of a row.
