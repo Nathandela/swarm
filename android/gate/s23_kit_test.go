@@ -2039,6 +2039,11 @@ const (
 //
 // @return empty when the ADR still marks decision 1 CONTESTED, which is the only state in which
 // widening the binding fence is legitimate.
+// s23HoldRulingVerbs are the words that mean the question is closed. Any of them inside the
+// decision block vetoes the CONTESTED marker, because the failure round 4 found was a marker
+// surviving inside prose that rules against it.
+var s23HoldRulingVerbs = []string{"RULED", "SETTLED", "RESOLVED", "no longer CONTESTED"}
+
 func s23ContestedHoldFaults(adr string) []string {
 	start := strings.Index(adr, s23HoldEntry)
 	if start < 0 {
@@ -2059,7 +2064,34 @@ func s23ContestedHoldFaults(adr string) []string {
 	if next := strings.Index(decision[len(s23HoldDecision):], "\n### "); next >= 0 {
 		decision = decision[:len(s23HoldDecision)+next]
 	}
-	if !strings.Contains(decision, s23HoldMarker) {
+	// THE MARKER IS ANCHORED, AND A RULING VERB VETOES IT. Round 4 defeated the previous
+	// `strings.Contains(decision, "CONTESTED")` with the three spellings a designer closing this
+	// question would most plausibly write: "**RULED** ... **no longer CONTESTED**", "**RESOLVED**.
+	// The historical `CONTESTED` note follows.", and "~~CONTESTED~~ **SETTLED** ... Formerly
+	// CONTESTED". All three left the widening ON, because the word survives in prose that says the
+	// opposite. A substring is not a state.
+	//
+	// So the marker must OPEN the decision's blockquote -- a line beginning `> **CONTESTED` -- and
+	// any ruling verb anywhere in the decision vetoes it regardless. The veto is what makes the
+	// third spelling fail: a struck-through marker plus a settlement is not a hold, and the reader
+	// must not be able to find the corpse of one.
+	marked := false
+	for _, line := range strings.Split(decision, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "> **"+s23HoldMarker) {
+			marked = true
+			break
+		}
+	}
+	for _, verb := range s23HoldRulingVerbs {
+		if strings.Contains(decision, verb) {
+			return []string{fmt.Sprintf("ADR-007 B134 decision 1 carries both a %s marker and the "+
+				"word %q. A decision cannot be simultaneously open and ruled, and the widening in "+
+				"s23ContestedBindings is granted on the strength of it being open. Whichever is "+
+				"true, make the block say only that -- and if it is ruled, delete "+
+				"s23ContestedBindings with it.", s23HoldMarker, verb)}
+		}
+	}
+	if !marked {
 		return []string{fmt.Sprintf("ADR-007 B134 decision 1 no longer carries a %s marker, so the "+
 			"question is closed -- and s23ContestedBindings is still open, which makes it a "+
 			"permanent widening of the one fence that guards the colour the argument was about.\n"+

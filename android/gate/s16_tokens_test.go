@@ -153,10 +153,10 @@ type resourceConverter struct {
 // kindConverters is the whole of PB-TOK-6's dispatch.
 //
 // SCOPE, stated so the gaps are visible rather than inferred. S22a owns the two kinds that land
-// as res/values resources with an exact conversion: `color` (16 tokens -> <color>) and `dimen`
+// as res/values resources with an exact conversion: `color` (17 tokens -> <color>) and `dimen`
 // (5 radii -> <dimen>). The remaining three kinds are PB-DS's half of PB-TOK-6 -- `font` and
 // `weight` and `tracking` land in values/type.xml as text-appearance attributes rather than as
-// standalone resources, and `effect` (5 tokens: two shadows, a gradient, a translucent fill and a
+// standalone resources, and `effect` (4 tokens: two shadows, a gradient, a translucent fill and a
 // grain opacity) has no Android resource primitive at all, which ADR-007 B134 decision 4 records
 // as a custom-Drawable problem rather than a conversion problem. Until an entry exists here, a
 // row naming one of those kinds FAILS, loudly, which is the requirement.
