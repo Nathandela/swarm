@@ -63,7 +63,13 @@ func TestPBNET2_NoProductionCodeDialsTheRelayWithoutATransportPolicy(t *testing.
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "vendor", "testdata", "node_modules":
+			// `.claude` holds per-agent git worktrees -- full checkouts of this repository that
+			// `git worktree add` leaves behind. A walk from the repo root treats them as source and
+			// reports findings about another agent's private copy as findings about this tree.
+			// Adding the directory to .gitignore does NOT prevent this: gitignore governs what git
+			// tracks and has no effect on filepath.WalkDir. Four gates were red for this reason
+			// before it was understood; b30_blindadopt_test.go carries the same skip.
+			case ".git", ".claude", "vendor", "testdata", "node_modules":
 				return fs.SkipDir
 			}
 			return nil
@@ -139,7 +145,7 @@ func TestPBOPS5_OneParserOwnsRelayJSON(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "vendor", "testdata", "node_modules", "relaycfg":
+			case ".git", ".claude", "vendor", "testdata", "node_modules", "relaycfg":
 				return fs.SkipDir
 			}
 			return nil
@@ -212,7 +218,7 @@ func TestPBOPS5_OnlyRelayCfgDecodesThePin(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "vendor", "testdata", "node_modules", "relaycfg":
+			case ".git", ".claude", "vendor", "testdata", "node_modules", "relaycfg":
 				return fs.SkipDir
 			}
 			return nil
