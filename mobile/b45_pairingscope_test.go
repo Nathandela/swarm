@@ -48,7 +48,13 @@ func TestB45_OnlyThePairingDialMayUseTheUnverifiedPolicy(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "vendor", "testdata", "node_modules", "build":
+			// `.claude` holds per-agent git worktrees -- full checkouts of this repository that
+			// `git worktree add` leaves behind. A walk from the repo root treats them as source
+			// and reports findings about an agent's private copy as findings about this tree.
+			// Adding the directory to .gitignore does NOT prevent this: gitignore governs what
+			// git tracks and has no effect on filepath.WalkDir. Two gates were red for this
+			// reason before it was understood.
+			case ".git", ".claude", "vendor", "testdata", "build", "node_modules":
 				return fs.SkipDir
 			}
 			return nil
