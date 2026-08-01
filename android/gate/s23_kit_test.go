@@ -112,6 +112,29 @@ var s23Inbox = []s23Component{
 			"ReadyForReview.",
 	},
 	{
+		Factory: "toggle",
+		File:    "Toggle.kt",
+		Derived: "#4 Toggle",
+		Why: "row 15's OTHER trailing control, and the component Substrate never drew: the shared " +
+			"block declares no `.toggle` rule at all, so row 4 is the whole specification -- two " +
+			"track colours, a 24 dp thumb, an 18 dp travel, and the pill exception. Its off track " +
+			"is the FIFTH entry in internal/design's derivation table and the first one whose " +
+			"authority is this document rather than a color-mix the artifact itself writes, which " +
+			"is why the share is consumed from that table and not re-derived here.",
+	},
+	{
+		Factory: "ctaButton",
+		File:    "CtaButton.kt",
+		Origin:  ".acts2 button",
+		Derived: "§4 In-card CTA pair",
+		Why: "the approval sheet's three actions. All four rules are Substrate's OWN -- `.acts2 " +
+			"button` carries the shape, the padding and the type, and `.a2-ok`, `.a2-no`, " +
+			"`.a2-more` carry the three fills and inks -- so this is an origin, and §3 has no " +
+			"numbered row for it precisely because the artifact draws it. The `§4 In-card CTA " +
+			"pair` citation is for the one thing the artifact does NOT say: that the approve " +
+			"variant drops its `--p-cta-fx` bloom inside a card, because the card clips it.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",
@@ -908,6 +931,11 @@ var s23Spacing = []struct {
 	{"FilterChip.kt", ".chips", "gap", 0, "swarm_space_8"},
 	{"FilterChip.kt", ".chips", "padding", 1, "swarm_space_18"},
 	{"FilterChip.kt", ".chips", "padding", 2, "swarm_space_12"},
+	// `.acts2 button { padding: 12px }` is a single-field shorthand: one step on all four edges.
+	// The `.acts2` container's own `gap: 7px` is NOT here, because this slice ships the BUTTON and
+	// not the column it sits in -- a container factory with no caller is the second spelling
+	// EmptyStateTest's KDoc argues against, and the gap belongs to whoever builds the sheet.
+	{"CtaButton.kt", ".acts2 button", "padding", 0, "swarm_space_12"},
 	{"SectionLabel.kt", ".plabel", "padding", 0, "swarm_space_12"},
 	{"SectionLabel.kt", ".plabel", "padding", 1, "swarm_space_18"},
 	{"SectionLabel.kt", ".plabel", "padding", 2, "swarm_space_8"},
@@ -1609,6 +1637,12 @@ var s23DualQuantised = map[string]string{
 		"in a way a layout dimension is not.",
 	"PRESENCE_DOT_DP": "the same split again: setBounds takes the whole-pixel box, the drawable " +
 		"draws its own diameter.",
+	"CTA_BLOOM_DP": "GLOW_RADIUS_DP's split, on the other component that converts a CSS box-shadow. " +
+		"The bloom's ROOM -- the inflation of the button's box and the negative margin that gives " +
+		"it back -- is a layout dimension and is whole pixels; the value handed to " +
+		"Paint.setShadowLayer is a blur radius, which is meaningful below one pixel in a way a " +
+		"padding is not. The derivation table's status-dot row names the two conversions as one " +
+		"("+`"the same conversion as --p-cta-fx"`+"), so they answer to the same rule here too.",
 }
 
 // s23QuantisationFaults reports every constant rendered two ways without a reason on record.
@@ -1993,8 +2027,14 @@ var s23LiteralExemptions = map[string]string{
 		"design has no px for it because CSS expresses the same thing as `flex: 1`.",
 	"2": "`corePx + 2 * haloPx`: the halo sits on BOTH sides of the core, so the 2 is a count of " +
 		"sides. The dot's diameter and the halo's radius are both checked constants.",
-	"2f": "`diameterPx / 2f`: a radius is half a diameter, by the definition of a circle rather " +
-		"than by a decision anyone made.",
+	"2f": "half of a length the design states, at the TWO sites that take a half. `diameterPx / 2f` " +
+		"is the status dot's radius; `trackHeightPx / 2f` and `thumbPx / 2f` are the toggle's, " +
+		"where row 4 writes the exception out in those words -- \"radius = half the track (14) and " +
+		"half the thumb (12)\". A radius is half a diameter by the definition of a circle rather " +
+		"than by a decision anyone made, and row 4's pill is that definition applied to a capsule. " +
+		"BOTH SITES ARE NAMED rather than one being left to borrow the other's argument, because " +
+		"an exemption is a thing a reader has to agree with and a reader cannot agree with a use " +
+		"the row does not mention.",
 	"100": "Badge's overflow threshold. Three digits either overflow the 16 dp pill or push the " +
 		"type below PB-DS-12's 10 sp floor, so the count saturates at `99+`; the 16 dp is the " +
 		"checked constant and this is the consequence of it.",

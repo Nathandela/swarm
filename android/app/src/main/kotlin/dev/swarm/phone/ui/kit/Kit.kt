@@ -107,6 +107,51 @@ internal object Kit {
     private const val ATTENTION_BORDER_SHARE = 0.36f
 
     /**
+     * `.a2-no`'s fill: `color-mix(in srgb, --p-err 13%, transparent)`.
+     *
+     * A TINT OVER WHATEVER IS BEHIND IT, which is why it keeps its alpha rather than being flattened
+     * over a surface. The deny button sits on the sheet in one place and inside an approval card in
+     * another, and 13% of `--p-err` composited over `--p-elev` is not the same colour as 13% over
+     * `--p-card` -- resolving it against either would ship the wrong one at the other site.
+     */
+    fun denyFill(context: Context): Int = ColorMix.mix(
+        colour(context, R.color.swarm_state_error),
+        DENY_FILL_SHARE,
+        ColorMix.TRANSPARENT,
+    )
+
+    /**
+     * `--p-err`'s share of the deny button's fill, over transparent.
+     *
+     * origin: derivation deny-fill
+     */
+    private const val DENY_FILL_SHARE = 0.13f
+
+    /**
+     * The toggle's OFF track: `color-mix(in srgb, --p-ink3 40%, transparent)`.
+     *
+     * THE FIRST DERIVED COLOUR IN THIS KIT THAT SUBSTRATE DID NOT DRAW. The other four are
+     * `color-mix()` calls the artifact's own CSS makes; this one comes from
+     * `docs/design/substrate-components.md` row 4, for a component the artifact declares no rule
+     * for at all. It is consumed from `internal/design.Derivations()` like the rest rather than
+     * being resolved into a literal here, which is the whole of PB-TOK-7: a derived colour typed
+     * once is a copy of the palette that the token join is structurally blind to, because the
+     * resolved value is not any token's value and no row would ever have named it.
+     */
+    fun toggleTrackOff(context: Context): Int = ColorMix.mix(
+        colour(context, R.color.swarm_text_tertiary),
+        TOGGLE_TRACK_OFF_SHARE,
+        ColorMix.TRANSPARENT,
+    )
+
+    /**
+     * `--p-ink3`'s share of the toggle's off track, over transparent.
+     *
+     * origin: derivation toggle-track-off
+     */
+    private const val TOGGLE_TRACK_OFF_SHARE = 0.40f
+
+    /**
      * THE REBINDING. Substrate's demo phone labels the GREEN dot "Done"; B134 moves green to
      * ReadyForReview and gives Completed the recessive grey, because finished work should recede
      * on a triage surface rather than hold the most saturated colour on screen. Reading this off
@@ -199,6 +244,52 @@ internal object KitMetrics {
      * derived: docs/design/substrate-components.md #3 Badge { height }
      */
     const val BADGE_HEIGHT_DP = 16f
+
+    /**
+     * The toggle's thumb, which is also what its track is built out of.
+     *
+     * ROW 4 STATES FIVE NUMBERS AND ONLY TWO OF THEM ARE LEAVES. `track 46x28` is
+     * `thumb + travel + inset + inset` by `thumb + inset + inset`, and the inset is `space_2` off
+     * PB-DS-1's grid -- so the track is arithmetic over this constant, [TOGGLE_TRAVEL_DP] and a
+     * resource, and does not need a constant of its own. It could not have one anyway: the
+     * derivation-table reader parses `field <number>` and `track 46x28` matches nothing, which is
+     * the shape of citation that would have been a value nobody could check.
+     *
+     * derived: docs/design/substrate-components.md #4 Toggle { thumb }
+     */
+    const val TOGGLE_THUMB_DP = 24f
+
+    /**
+     * How far the toggle's thumb travels between its two rest positions.
+     *
+     * derived: docs/design/substrate-components.md #4 Toggle { travel }
+     */
+    const val TOGGLE_TRAVEL_DP = 18f
+
+    /**
+     * The CTA's bloom radius: `--p-cta-fx` is `0 0 18px rgba(83, 206, 124, 0.20)`.
+     *
+     * `effect` in `tokens.json`, so PB-TOK-6's converters produce no `<color>` and no `<dimen>` for
+     * it -- the same position `--p-card-fx` and `--p-workbar` are in, and the reason this object
+     * exists at all.
+     *
+     * origin: --p-cta-fx px
+     */
+    const val CTA_BLOOM_DP = 18f
+
+    /**
+     * The CTA bloom's alpha, the other half of the same token.
+     *
+     * THE RGB IS NOT HERE, and its absence is deliberate. `rgba(83, 206, 124, ...)` is `--p-cta-bg`
+     * to the digit, so the bloom is that resource at this alpha rather than a fourth place the
+     * phosphor green is written down -- exactly as `--p-card-fx`'s highlight is `Color.WHITE` at
+     * [KEY_LIGHT_ALPHA]. The alias is a fact about today's skin: `android/design-tokens.tsv` keeps
+     * `--p-cta-bg` on its own row precisely so a future skin can break it, and if one does, the
+     * appearance suite reads the expected bloom out of the effect token and notices.
+     *
+     * origin: --p-cta-fx alpha
+     */
+    const val CTA_BLOOM_ALPHA = 0.20f
 }
 
 /**
@@ -243,6 +334,16 @@ internal object KitTag {
 
     /** A single-line input. Named for the part: Substrate draws no composer and no form. */
     const val TEXT_FIELD = "text field"
+
+    /**
+     * The toggle's two parts.
+     *
+     * Named for the PART, like [SETTINGS_LABEL] and for the same reason: the shared Substrate block
+     * declares no `.toggle` rule, so a tag naming one would point a reader at a selector that does
+     * not exist. Row 4 is the whole specification and it calls them the track and the thumb.
+     */
+    const val TOGGLE_TRACK = "toggle track"
+    const val TOGGLE_THUMB = "toggle thumb"
 }
 
 /**
