@@ -5,12 +5,16 @@ GG-5 requires the failing-first run to be evidenced. What is recorded here is ac
 
 WHAT IS AND IS NOT IN THIS FILE
   - The Go gate lane (defects 3 and 4, plus the badge-padding join defect 2 asked for) is
-    recorded in full: the controls failing against the old fence, a perturbed claim failing
-    against the new one, and a five-mutation ledger over the fixed tree.
-  - The Robolectric lane (defects 1, 2, 5 and 6) is written and NOT run here. Another agent
-    holds the Gradle lane for the duration of this change and a concurrent ./gradlew would
-    collide with it. The tests, the commands and what each must report before the fix are at
-    the end of this file, and the lane owner sequences the run.
+    recorded in full, in sections 1 to 3: the controls failing against the old fence, a
+    perturbed claim failing against the new one, and a five-mutation ledger over the fixed
+    tree. Those were run by this file's author.
+  - The Robolectric lane (defects 1, 2, 5 and 6) is in two parts, and they are different
+    kinds of thing. Section 4 is a PREDICTION, written while another agent held the Gradle
+    lane -- what each suite must report against the shipped kit, with no run behind it.
+    Section 5 is the run, executed later by that lane's owner and relayed here with its
+    provenance. Section 4 is deliberately not replaced by section 5: its predicted strings
+    were later confirmed character for character against an independent mutation ledger, and
+    keeping both is what shows that a true prediction is still not a run.
 
 ===========================================================================================
 1. DEFECT 3 and 4 -- the metric fence, RED
@@ -121,8 +125,15 @@ FAIL	github.com/Nathandela/swarm/android/gate	0.700s
 FAIL
 
 ===========================================================================================
-4. The Robolectric lane -- written, run pending the Gradle lane owner
+4. The Robolectric lane -- A PREDICTION, written before the lane was run
 ===========================================================================================
+
+READ THIS SECTION AS A PREDICTION AND NOT AS A RESULT. It was written while another agent
+held the Gradle lane, and it says what each suite MUST report against the shipped kit. It is
+kept rather than replaced, for a reason that is the point of this whole file: a re-auditor
+later checked these predicted strings against an independent mutation ledger and found they
+matched character for character -- which shows the predictions were true, and equally that a
+true prediction is still not a run. Section 5 is the run.
 
 $ ./gradlew :app:testDebugUnitTest --tests 'dev.swarm.phone.ui.kit.*'
 
@@ -166,3 +177,109 @@ DEFECT 6 -- the accessibility defaults.
   "" rather than null. InboxRowTest.`the status dot announces the state when the screen names
   it` must fail on the shipped statusDot(), which takes no description at all -- it does not
   compile against the two-argument factory, which is the RED a missing parameter produces.
+
+===========================================================================================
+5. Subsequently run -- GREEN
+===========================================================================================
+
+PROVENANCE, which belongs here as much as the numbers do. This run was NOT executed by the
+author of this file: the Gradle lane was held by the agent working on PB-DS-8, who ran it and
+relayed the output through the team lead. It was run after a competing Gradle process exited
+and the Kotlin caches were cleared.
+
+  HEAD                                446f1cb
+  newest tracked file under android/  03:16:57
+  debug variant compile executed at   03:27:54
+
+The two timestamps are the load-bearing part. They are what says the run certifies THIS tree
+rather than an earlier one -- an earlier "306 green" was offered as validation of these suites
+and withdrawn precisely because it predated their landing, and a count with no provenance
+cannot tell those two cases apart.
+
+  DEBUG variant:   45 classes, 306 tests, 0 failures, 0 errors
+  RELEASE variant: 45 classes, 306 tests, 0 failures, 0 errors
+
+Per-class, for the suites section 4 predicted:
+
+  KitDensityTest      5/5   -- the qualifier guard passed under its own name,
+                               "the qualifier really put this suite at a fractional density",
+                               so @Config(qualifiers = "420dpi") took and the suite really did
+                               run at density 2.625 rather than silently at mdpi
+  InboxRowTest       12/12  -- shadowProbeFaults() did NOT fire: Robolectric's Skia rendered
+                               the shadow layer, and the glow test found blur pixels outside
+                               the dot's core. The halo reaches the layer.
+  InboxChromeTest    13/13
+  KitFoundationTest   9/9
+  TriageInboxTest     6/6
+  SessionDetailTest   6/6
+
+Green in the same run: go test ./android/gate/... -count=1, go build ./..., go vet ./android/...
+
+-------------------------------------------------------------------------------------------
+A CAVEAT THAT BEARS ON EVERY COUNT ABOVE, and on every count in every file like this one.
+
+Earlier the same day, two Gradle processes collided over android/app/build. Afterwards:
+
+  - compileDebugUnitTestKotlin restored FROM-CACHE with an EMPTY output,
+  - Gradle reported `testDebugUnitTest NO-SOURCE`,
+  - and the full `./gradlew test` exited 0 having executed ZERO debug tests.
+
+A successful-looking build that ran nothing. Clearing it needs app/build/tmp/kotlin-classes/
+debugUnitTest and --no-build-cache; deleting app/build/kotlin alone does not.
+
+This is the same failure class the assertions in this slice were written against, one layer
+up: `NO-SOURCE`, a FROM-CACHE compile with no output, a regexp that stopped matching, and a
+claim list that iterated zero times are all GREEN BECAUSE NOTHING RAN. The guard is the same
+in every case -- assert a non-zero executed count, never an exit code. Any count taken after
+a collision, without checking that the task actually executed, is worthless. The run recorded
+above was checked.
+
+================================================================================
+SECTION 4 WAS A PREDICTION. IT WAS SUBSEQUENTLY RUN, AND IT IS GREEN.
+================================================================================
+
+Everything above under section 4 was written BEFORE the Robolectric lane had been
+executed, because another agent held the Gradle lane at the time. It said so, and that
+disclosure was correct: a prediction is not a run, and GG-5 asks for a run.
+
+The prediction is deliberately NOT deleted. An independent re-auditor applied the same
+mutations in a throwaway worktree and found the predicted strings matched CHARACTER FOR
+CHARACTER (compare the four `KitDensityTest` lines above with their ledger). That is worth
+keeping, because it establishes both halves of the point at once: the predictions were
+true, AND a true prediction is still not evidence. Deleting it would erase the second half.
+
+PROVENANCE OF THE RUN. Executed after a competing Gradle process exited and the Kotlin
+caches were cleared. HEAD 446f1cb. The newest tracked file under android/ was 03:16:57 and
+the debug variant's compile executed at 03:27:54, so the run certifies THAT tree rather
+than an earlier one -- the distinction matters, and an earlier claim of "306 green" was
+withdrawn precisely because it predated these suites landing on disk.
+
+  DEBUG variant:   45 classes, 306 tests, 0 failures, 0 errors
+  RELEASE variant: 45 classes, 306 tests, 0 failures, 0 errors
+
+  KitDensityTest      5/5   qualifier guard passed under its own name:
+                            "the qualifier really put this suite at a fractional density"
+  InboxRowTest       12/12  shadowProbeFaults() did NOT fire -- Robolectric's Skia rendered
+                            the shadow layer and the glow test found blur pixels outside
+                            the dot core, so the probe was not the fault and no rework was
+                            needed
+  InboxChromeTest    13/13
+  KitFoundationTest   9/9
+  TriageInboxTest     6/6
+  SessionDetailTest   6/6
+
+  go test ./android/gate/... -count=1  ok
+  go build ./... ; go vet ./android/...  clean
+
+A CAVEAT THAT BEARS ON EVERY COUNT IN THIS FILE. After a concurrent-Gradle collision,
+`compileDebugUnitTestKotlin` restored FROM-CACHE with an EMPTY output, Gradle reported
+`:app:testDebugUnitTest NO-SOURCE`, and the full `./gradlew test` EXITED 0 HAVING RUN ZERO
+DEBUG TESTS. A successful-looking build that executed nothing. Clearing it requires
+`app/build/tmp/kotlin-classes/debugUnitTest` and `--no-build-cache`; deleting
+`app/build/kotlin` alone does not. Any count taken after a collision, without checking that
+the task actually ran, is worthless.
+
+That is the same failure class this slice spent its fences on -- a scan whose set is empty,
+a claim list that iterates zero times, a regexp that stopped matching -- one layer further
+down, at the build rather than the test, and with no guard on it. The fix is a check that
+asserts a non-zero EXECUTED test count rather than an exit code. Filed, not built.
