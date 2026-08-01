@@ -39,6 +39,13 @@ android/app/libs/
 # binary (ADR-007 B132 F1, residuals 4.7). Ignoring it is cheaper than the sixth.
 android/.kotlin/
 
+# internal/remote/relay/releaseprobe_test.go builds a throwaway package here (os.MkdirTemp with
+# this prefix, at the repo root so it is invisible to ./...). The test removes it, so it exists
+# only while that test runs -- which is exactly the window this repository keeps losing: a
+# `git add -A` fired during a concurrent test run commits it, and the sixth instance of that
+# class is already recorded (agents-tracker-62c). Observed untracked in a live status read.
+_releaseprobe-*/
+
 # PB-TOOL-3: release signing material is operator-supplied and never enters the repository.
 # local.properties additionally carries the machine's SDK path.
 *.jks
