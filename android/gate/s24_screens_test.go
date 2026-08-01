@@ -1087,6 +1087,28 @@ var s24ScreenComponents = map[string]map[string]string{
 		// title, in `Display.NavTitle` -- which is the style `navHeader` renders.
 		"navHeader": "C7 -- the step title, per derivation row 18",
 	},
+	"dev/swarm/phone/ui/screens/PeekPanelView.kt": {
+		"navHeaderDrill": "C3.1 `.navhead` -- the back control and the session title, per §4",
+		"monoWell":       "C3.2 `.term` -- the escape-filtered VT snapshot, in `terminal_peek.fg`",
+		"readOnlyNote":   "C3.3 `.ro-note` -- derivation row 22, and PB-INPUT-2's lease sentence",
+	},
+	// The launch form HAS NO SCREEN INVENTORY ENTRY. The eight screens the artifacts draw are the
+	// inbox, the session detail, the terminal peek, machines, activity, settings, pairing and the
+	// approval sheet; starting a session is PB-APP-6's requirement and the mock never drew it. So
+	// the role below cites the design rule the component answers to rather than an inventory
+	// section, which is the honest citation -- and `LaunchPanel`'s own KDoc says the same thing
+	// about its copy.
+	//
+	// THE LIST IS ONE ROW AND THE REST OF THE FORM IS SLOTS, which is `PairingPanelView`'s
+	// arrangement and for the same reason. The three fields hold what the user typed and are read
+	// back on submit, so they must survive a redraw; the submit control carries PB-SEC-12 clause
+	// 1's touch filter and the facade call. Both are `PhoneSurface`'s, and both are built out of
+	// the kit THERE -- `textField` and `ctaButton` -- which is what
+	// TestPBDS6_TheKitHasProductionCallSites reads. A screen that constructed them would be a
+	// screen owning a listener and a native call, which is not what a screen is.
+	"dev/swarm/phone/ui/screens/LaunchPanelView.kt": {
+		"sectionLabel": "`.plabel` -- the section the form sits under",
+	},
 }
 
 // s24ScreenKitFaults reports what one screen source owes the requirement and does not spend.

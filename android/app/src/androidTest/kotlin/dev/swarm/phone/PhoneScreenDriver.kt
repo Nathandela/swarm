@@ -80,16 +80,22 @@ object PhoneScreenDriver {
      * yielded a row, so an enabled Take control IS the phone having drawn the machine's roster.
      *
      * SEND LINE IS RAISED BY A DIFFERENT FACT and it is worth waiting on separately:
-     * `PhoneSurface.renderLease` enables it from `TerminalPeek.keyboardEnabled`, which is the
-     * lease the MACHINE confirmed and the link being up (PB-INPUT-2). So an enabled Send is the
-     * take_control having been answered, not the roster having a row.
+     * `PhoneSurface.setKeyboardEnabled` enables it from `TerminalPeek.keyboardEnabled`, which is
+     * the lease the MACHINE confirmed and the link being up (PB-INPUT-2). So an enabled Send is
+     * the take_control having been answered, not the roster having a row.
+     *
+     * TAKE CONTROL IS ALSO NO LONGER ON SCREEN AT ALL UNTIL THE ROSTER HAS A ROW, and that is a
+     * strengthening rather than a hazard for this wait: PB-DS-9 composes the terminal peek instead
+     * of showing and hiding it, so a session-less phone draws no peek and therefore no Take
+     * control. The wait already tolerates the control being absent -- it polls until it is
+     * pressable -- and what it now proves is one step stronger.
      */
     fun ActivityScenario<PhoneActivity>.awaitPressable(label: String, why: String) {
         val deadline = SystemClock.uptimeMillis() + PATIENCE_MILLIS
         var ready = false
         while (SystemClock.uptimeMillis() < deadline) {
             onActivity { activity ->
-                ready = activity.controls().filterIsInstance<Button>().any {
+                ready = activity.pressables().any {
                     it.text.toString() == label && it.visibility == View.VISIBLE && it.isEnabled
                 }
             }
@@ -103,7 +109,7 @@ object PhoneScreenDriver {
     fun ActivityScenario<PhoneActivity>.press(label: String) {
         var pressed = false
         onActivity { activity ->
-            val button = activity.controls().filterIsInstance<Button>()
+            val button = activity.pressables()
                 .firstOrNull { it.text.toString() == label && it.visibility == View.VISIBLE }
             if (button != null && button.isEnabled) {
                 button.performClick()
@@ -113,7 +119,7 @@ object PhoneScreenDriver {
         if (!pressed) {
             var seen = ""
             onActivity { activity ->
-                seen = activity.controls().filterIsInstance<Button>()
+                seen = activity.pressables()
                     .joinToString("\n") {
                         "${it.text} visible=${it.visibility == View.VISIBLE} enabled=${it.isEnabled}"
                     }
@@ -150,6 +156,23 @@ object PhoneScreenDriver {
 
     internal fun Activity.controls(): List<View> =
         findViewById<ViewGroup>(android.R.id.content).flatten()
+
+    /**
+     * Every control a person can press, by the words on it.
+     *
+     * IT IS NOT `filterIsInstance<Button>()` ANY MORE, and the widening is forced by the design
+     * system rather than chosen here. Derivation section 3's `.acts2 button` is a `TextView`: the
+     * kit builds its own layered surface and a `Button`'s background would fight it. Two of the
+     * controls this driver presses are that component now -- the peek's `Take control` (derivation
+     * row 22) and the launch form's submit -- so a driver that only knew about `Button` would
+     * report the exit demonstration's own actions as missing from a screen that draws them.
+     *
+     * `hasOnClickListeners` IS THE PROPERTY THAT MATTERS, not the class. What this driver needs is
+     * something a user can press; a label with no listener is a caption, whatever it subclasses.
+     */
+    internal fun Activity.pressables(): List<TextView> = controls()
+        .filterIsInstance<TextView>()
+        .filter { it is Button || it.hasOnClickListeners() }
 
     private fun View.flatten(): List<View> = when (this) {
         is ViewGroup -> listOf(this) + (0 until childCount).flatMap { getChildAt(it).flatten() }

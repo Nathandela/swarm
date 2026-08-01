@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- derived: docs/design/substrate-components.md, section 4, Drill-down nav header.
+
+     THIS PATH IS THE ONLY DRAWING IN THE APP WITH NO ARTIFACT BEHIND IT, and that is stated here
+     rather than left for someone to discover. The four tab glyphs are joined path-for-path to the
+     directions artifact because the artifact draws them. This one is not: the retired mock renders
+     its back control as the CHARACTER U+2039 in the documentation page's own amber, and section 2
+     retires every accent-text affordance in the mock ("every accent-text affordance becomes either
+     a bordered control or a plain [p-ink] glyph"). So section 4 asks for a 24 dp stroked chevron
+     that neither document ever drew, and the two segments below are this asset's own.
+
+     WHAT IS JOINED. The stroke weight is section 4's, and android/gate/s23_kit_test.go recomputes
+     it from that row; the box and the viewport are each one number, which is the mistake
+     `.ptabs svg` already paid for once - the drawn box and the coordinate space the path is
+     written in are different things and conflating them scales the glyph.
+
+     TOKEN NAMES ARE SPELLED [p-name] IN THIS FILE, not with the CSS double dash, and the same goes
+     for the repo's em-dash convention. An XML comment may not contain a double hyphen; it is a
+     parse error, not a lint, and it fails at aapt with no line of Kotlin involved. Every Go gate
+     over res/ reads these files as TEXT and so cannot see it. Recorded in ADR-007 B138 after the
+     second occurrence; android/gate/s25_resxml_test.go is the check that now catches the third.
+
+     NO COLOUR IS DECLARED BEYOND THE PLATFORM'S WHITE, for swarm_tab_inbox.xml's reason: section 4
+     says the glyph is [p-ink], which belongs to the component rather than to the drawing, so the
+     kit tints it and the stroke needs some opaque colour to be replaced. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M15 5l-7 7 7 7" />
+</vector>

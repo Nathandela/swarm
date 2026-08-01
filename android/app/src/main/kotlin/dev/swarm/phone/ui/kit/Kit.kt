@@ -344,6 +344,24 @@ internal object KitTag {
      */
     const val TOGGLE_TRACK = "toggle track"
     const val TOGGLE_THUMB = "toggle thumb"
+
+    /**
+     * The drill-down header's two parts.
+     *
+     * Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.navhead` is the retired
+     * mock's class and the shared Substrate block declares no drill-down header at all, so a tag
+     * naming that selector would point a reader at a rule that does not exist. §4 is the whole
+     * specification and it calls them the back control and the title.
+     *
+     * [DRILL_TITLE] is NOT [TITLE], and the difference is a type style. `.pnav .big` is 27 sp
+     * `Display.NavTitle`; §4's is 15.5 sp `Title.Sheet`. One tag over both would let an appearance
+     * test find either and assert the other's metrics.
+     */
+    const val DRILL_BACK = "drill back"
+    const val DRILL_TITLE = "drill title"
+
+    /** The centred sentence under a block that cannot be typed into. Row 22's, named for the part. */
+    const val READ_ONLY_NOTE = "read-only note"
 }
 
 /**

@@ -3,6 +3,7 @@ package dev.swarm.phone
 import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -20,13 +21,19 @@ import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
-import dev.swarm.phone.ui.LaunchResult
 import dev.swarm.phone.ui.LaunchScreen
-import dev.swarm.phone.ui.TerminalPeek
-import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.InboxScreen
+import dev.swarm.phone.ui.screens.LaunchFieldId
+import dev.swarm.phone.ui.screens.LaunchPanel
+import dev.swarm.phone.ui.screens.LaunchPanelScreen
+import dev.swarm.phone.ui.screens.PeekPanel
+import dev.swarm.phone.ui.screens.PeekPanelScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
+import dev.swarm.phone.ui.screens.launchPanelView
+import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
@@ -113,43 +120,32 @@ class PhoneSurface(
      * was computed on every launch and read by nobody.
      */
     private val notice = label()
-    private val peekTitle = label(heading = true)
-
-    /**
-     * The daemon-rendered grid, as the kit's mono well.
-     *
-     * PB-TOK-3, FINALLY APPLIED. `internal/design/tokens.json` pins `terminal_peek.fg` to
-     * `--p-hero` and `terminal_peek.font` to `--p-mono`, and PB-TOK-3 has enforced that against
-     * the JSON since S22 -- against the JSON. No Android code ever read it, so the phosphor green
-     * the skin is named for had never rendered on a handset: this was a `TextView` with
-     * `Typeface.MONOSPACE`, then one with `Mono.Code` and no colour and no surface at all.
-     * `monoWell(terminal = true)` is where the pin reaches a pixel, and the recessed `--p-well`
-     * fill and the hairline come with it.
-     *
-     * THE FACE IS LOAD-BEARING HERE and not decoration -- the snapshot is box-drawing glyphs and
-     * column-aligned output, so a proportional face turns a frame into ragged punctuation.
-     * `MonoBoxDrawingTest` is what checks the family behind `Mono.Code` actually covers U+2500.
-     */
-    private val peek = monoWell(activity, "", terminal = true)
     private val outcome = label()
 
     /**
-     * PB-INPUT-2's "VISIBLY confirmed", which is the requirement's own word and had no subject:
-     * the surface showed the same Take control button and the same live keyboard whether the
-     * machine had granted a lease or not, so a user could not tell until a keystroke vanished.
-     * The wording is chosen from [dev.swarm.phone.ui.TerminalPeek]'s verdict, never from the
-     * press.
-     */
-    private val lease = label()
-
-    /**
-     * The machine's answer to the launch this screen issued, on a line of its own.
+     * PB-DS-9: the terminal peek, rebuilt into a host of its own.
      *
-     * IT IS NOT [outcome]. That line is overwritten by every gated action, and a launch outcome
-     * arrives on a LATER draw -- the machine answers asynchronously and PB-SYNC-2 claims the
-     * answer by operation id -- so the two would erase each other.
+     * IT IS A HOST AND NOT A PANEL because the peek changes on a different clock from everything
+     * around it. The inbox is redrawn only when [InboxScreen] changes -- [renderInbox] argues why
+     * -- and a machine printing steadily changes the snapshot on every journal event. Composing
+     * the peek inside the inbox's tree would tie one to the other: either the peek would stop
+     * updating, or the list would be thrown back to the top under whoever was scrolling it.
+     *
+     * WHAT THE PEEK USED TO BE, so the size of the change is on the record: a heading `TextView`
+     * holding the session id, a mono well, and a lease sentence -- three loose children of the
+     * flat column below, with `renderLease` setting a visibility and two enabled flags over them.
+     * It is now [PeekPanel] and one composition (inventory C3, derivation §4 and row 22).
      */
-    private val launchStatus = label()
+    private val peekHost = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
+
+    /** PB-APP-6's form, hosted for [peekHost]'s reason: it is redrawn when its notice changes. */
+    private val launchHost = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
 
     private val pairing = PairingSurface(activity, runtime)
     private val settings = SettingsSurface(activity, runtime)
@@ -159,7 +155,7 @@ class PhoneSurface(
      * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
      * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
      */
-    private val takeControl = actionButton("Take control") { app, session ->
+    private val takeControl = ctaAction("Take control", CtaKind.MORE) { app, session ->
         app.takeControl(session).also { issued ->
             leaseOp = issued.operationID
             leaseSession = session
@@ -233,22 +229,25 @@ class PhoneSurface(
      * three fields; passing `""` for the third would be a literal standing in for something
      * nobody was asked.
      */
-    private val launchAgent = field("Which agent to start")
+    private val launchAgent = field(LaunchFieldId.AGENT)
 
-    private val launchCwd = field("Working directory on your machine")
+    private val launchCwd = field(LaunchFieldId.CWD)
 
-    private val launchPrompt = field("First message for the agent, if any")
+    private val launchPrompt = field(LaunchFieldId.PROMPT)
 
     /**
      * THE DRAFT IS REFUSED BEFORE IT IS SENT, by the model's own bar. A launch missing a required
      * field is refused at the machine too, but only after burning a durable command seq and a
      * signature on a request the phone could see was incomplete.
      */
-    private val launch = actionButton("Launch a session") { app, _ ->
+    private val launch = ctaAction("Launch a session", CtaKind.APPROVE) { app, _ ->
         draftOnScreen().let { draft ->
             when (val missing = launchScreen.missingField(draft)) {
-                null -> launchScreen.submit(draft, app.launch(specOf(draft)).operationID)
-                else -> launchStatus.text = missing
+                null -> {
+                    launchRefusal = ""
+                    launchScreen.submit(draft, app.launch(specOf(draft)).operationID)
+                }
+                else -> launchRefusal = missing
             }
         }
     }
@@ -278,6 +277,40 @@ class PhoneSurface(
 
     /** What the inbox last drew, so a redraw that changes nothing rebuilds nothing. */
     private var inboxDrawn: InboxScreen? = null
+
+    /**
+     * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
+     *
+     * THE LAUNCH FORM'S IS THE ONE THAT MATTERS TO A PERSON. The three fields are views this
+     * surface owns and hands to the composition; rebuilding the panel re-parents them, and a
+     * re-parented `EditText` loses focus. [render] runs on every resume, after every action AND on
+     * every journal event, so a form rebuilt unconditionally would take the keyboard away from
+     * somebody halfway through typing a working directory, at whatever rate their agents happen to
+     * be producing events. [LaunchPanel] is a data class, so "has anything on it changed" is one
+     * comparison, and the only thing that ever changes is the notice.
+     */
+    private var peekDrawn: PeekPanel? = null
+
+    private var launchDrawn: LaunchPanel? = null
+
+    /**
+     * The machine's answer to the launch this screen issued, or null while it has issued none.
+     *
+     * NULL IS NOT PENDING, which is [LaunchPanelScreen.of]'s own distinction: a form nobody has
+     * submitted is not waiting for anything, and saying it is would be a status about an operation
+     * that does not exist.
+     */
+    private var launchAnswer: LaunchRendering? = null
+
+    /**
+     * The form's OWN refusal -- a draft missing a required field, which never reached a machine.
+     *
+     * IT TAKES THE SAME LINE AS THE MACHINE'S ANSWER AND THE TWO CANNOT COLLIDE: a draft refused
+     * here was never sent, so there is no operation for an answer to arrive about, and a draft
+     * that was sent cleared this on its way out. There is one line because there is one thing to
+     * say -- what happened to the launch you asked for -- and [LaunchPanel.notice] is that line.
+     */
+    private var launchRefusal: String = ""
 
     /**
      * The take_control this surface issued, and the session it was issued for.
@@ -310,10 +343,17 @@ class PhoneSurface(
      *
      * THIS USED TO BE THE WHOLE APP: one flat `LinearLayout` holding twenty unstyled views under a
      * single 24 dp padding, which was the entire spatial output of the product. PB-DS-9 replaces
-     * it with real screens and puts the triage inbox first, so what is here now is the remainder
-     * -- the pairing panel, the peek, the session controls, the launch form and the settings
-     * panel, each of which is a screen of its own in the inventory (C7, C3, C2, C6) and none of
-     * which has a kit factory yet.
+     * it with real screens and puts the triage inbox first, so what is here now is the remainder.
+     *
+     * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
+     * [launchHost] are composed panels rather than loose views; the pairing panel and the settings
+     * panel compose themselves. What is genuinely unrecomposed is the status line, the capability
+     * notice, the outcome line, and the four SESSION CONTROLS -- the keyboard, Send, Kill session
+     * and the routed-error line. Those four are inventory C2's composer (derivation row 9's bar,
+     * its 26 dp glyphs and its stop control) and C2 is not built: the session-detail screen, its
+     * transcript, its tool cards and its quick-reply chips have no factory and no model. A field
+     * and two buttons standing in for that bar are the remainder, and they are here rather than
+     * pretending to be a screen.
      *
      * IT CARRIES NO PADDING OF ITS OWN ANY MORE. The 24 dp was the last thing on this surface
      * deciding a spatial value; the kit components above it carry theirs, and these views are
@@ -323,9 +363,8 @@ class PhoneSurface(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
-            status, notice, pairing.root, peekTitle, peek, lease,
-            takeControl, typed, send, kill, launchAgent, launchCwd, launchPrompt,
-            launch, launchStatus, revoke, settings.root, outcome,
+            status, notice, pairing.root, peekHost,
+            typed, send, kill, launchHost, revoke, settings.root, outcome,
         )) {
             addView(child)
         }
@@ -539,13 +578,18 @@ class PhoneSurface(
         status.text = startup.error.message
 
         notice.text = ""
-        peekTitle.text = ""
-        peek.text = ""
         session = ""
         setActionsEnabled(false)
-        renderLease(null)
-        // There is no phone to launch through either.
+        // NO PANEL RATHER THAN AN EMPTY ONE. A peek with no session is not a peek showing nothing
+        // -- there is no session to hold a lease on, so the screen says nothing about a lease
+        // rather than asserting the absence of one.
+        drawPeek(null)
+        setKeyboardEnabled(false)
+        // There is no phone to launch through either. The FORM still draws: it is the one thing on
+        // this branch a user could reasonably be reaching for, and a handset whose core refused
+        // needs to be able to see what it will be asked for once it has not.
         launch.isEnabled = false
+        drawLaunch()
         // AND NO INBOX. The roster comes from the phone core, so a handset whose core refused
         // construction has no sections to draw and no counts to state -- and a triage inbox
         // rendered over nothing would say "nothing is waiting on you", which is a claim about the
@@ -607,22 +651,26 @@ class PhoneSurface(
         // way to get its first session, which is section 1's "launches" with no subject again.
         launch.isEnabled = true
         renderLaunch(bridge)
+        drawLaunch()
 
         if (session.isEmpty()) {
-            peekTitle.text = ""
-            peek.text = ""
+            drawPeek(null)
             setActionsEnabled(false)
-            renderLease(null)
+            setKeyboardEnabled(false)
             return
         }
         // PB-INPUT-2: the lease is what the MACHINE answered this screen's own take_control with,
         // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
         // every user they held nothing while Send stayed live from a different fact entirely.
         val view = bridge.terminalPeek(session, leaseHeld = leaseConfirmedFor(session, bridge))
-        peekTitle.text = view.sessionId
-        peek.text = listOf(view.staleNotice, view.rendered).filter { it.isNotEmpty() }.joinToString("\n")
+        drawPeek(PeekPanelScreen.of(view))
         setActionsEnabled(true)
-        renderLease(view)
+        // EVERY ONE OF THE THREE PROPERTIES IS THE MODEL'S, which is what [PeekPanel] carries:
+        // `keyboardEnabled` is `leaseHeld && online`, and the second half is a separate clause --
+        // a lease cannot be live while the link is down. A surface that enabled the keyboard from
+        // its own lease flag would satisfy the requirement's first clause and drop the second,
+        // silently, while the model that states it stayed green and unread.
+        setKeyboardEnabled(view.keyboardEnabled)
     }
 
     // -----------------------------------------------------------------------
@@ -716,35 +764,83 @@ class PhoneSurface(
     }
 
     /**
-     * PB-INPUT-2, drawn: the keyboard follows the model's verdict and the screen SAYS which of
-     * the two states the user is in.
+     * PB-DS-9: the terminal peek, composed rather than shown and hidden.
      *
-     * EVERY ONE OF THE THREE PROPERTIES IS THE MODEL'S. `keyboardEnabled` is `leaseHeld &&
-     * online`, and the second half is a separate clause -- a lease cannot be live while the link
-     * is down -- so a surface that enabled the keyboard from its own lease flag would satisfy the
-     * requirement's first clause and drop the second, silently, while the model that states it
-     * stayed green and unread. That is what this file did until now.
+     * **THE VISIBILITY WRITES ARE GONE AND THAT IS THE POINT OF THIS FUNCTION.** What stood here
+     * was `renderLease`, which set `takeControl.visibility` from `showsTakeControl` and blanked
+     * two `TextView`s on the null branch -- a second, contradictable statement of what is on the
+     * screen, made three lines away from the composition that put it there. A view that is not on
+     * screen is now a view this did not add. `android/gate/s24_screens_test.go` fences the screen
+     * package against the pattern; the surface is where the last of it lived.
      *
-     * @param view null when there is no session to hold a lease ON -- an unavailable phone or an
-     *  empty roster. The keyboard shuts and the screen says nothing about a lease rather than
-     *  asserting the absence of one, because with no session there is no question.
+     * The Take control button is offered exactly while it is the step to take -- there is no
+     * Release beside it, because `App.ReleaseControl` is still ledgered unbound in
+     * `android/unbound-verbs.tsv` and a screen that hid the way in without offering a way out
+     * would be worse than one that never hid it. That condition is [PeekPanel.offersTakeControl]
+     * and the composition reads it.
+     *
+     * @param panel null when there is no session to hold a lease ON -- an unavailable phone or an
+     *  empty roster. Nothing is composed, because with no session there is no question.
      */
-    private fun renderLease(view: TerminalPeek?) {
-        if (view == null) {
-            lease.text = ""
-            takeControl.visibility = View.VISIBLE
-            send.isEnabled = false
-            typed.isEnabled = false
-            return
-        }
-        lease.text = if (view.showsRelease) LEASE_CONFIRMED else LEASE_NOT_CONFIRMED
-        // The control is offered exactly while it is the step to take. There is no Release beside
-        // it: `App.ReleaseControl` is still ledgered unbound in android/unbound-verbs.tsv, and a
-        // screen that hid the way in without offering a way out would be worse than one that
-        // never hid it.
-        takeControl.visibility = if (view.showsTakeControl) View.VISIBLE else View.GONE
-        send.isEnabled = view.keyboardEnabled
-        typed.isEnabled = view.keyboardEnabled
+    private fun drawPeek(panel: PeekPanel?) {
+        if (panel == peekDrawn) return
+        peekDrawn = panel
+        peekHost.removeAllViews()
+        if (panel == null) return
+        peekHost.addView(peekPanelView(activity, panel, takeControl))
+    }
+
+    /**
+     * The keyboard's two controls, which are NOT part of the peek.
+     *
+     * They are inventory C2's composer -- derivation row 9 specifies a translucent bar with a
+     * recessed field, a voice glyph and a stop control -- and C2 is unbuilt, so what is here is a
+     * field and a button standing in for it. They stay in the unrecomposed remainder rather than
+     * being composed into a panel that does not specify them.
+     */
+    private fun setKeyboardEnabled(enabled: Boolean) {
+        send.isEnabled = enabled
+        typed.isEnabled = enabled
+    }
+
+    /**
+     * PB-APP-6's form, composed. It draws on both branches -- see [renderUnavailable].
+     *
+     * IT REBUILDS ONLY WHEN THE PANEL CHANGES, and [launchDrawn] carries why: the three fields are
+     * views this surface owns, re-parenting an `EditText` takes the keyboard away from it, and
+     * this runs on every journal event.
+     */
+    private fun drawLaunch() {
+        val panel = launchPanelOnScreen()
+        if (panel == launchDrawn) return
+        launchDrawn = panel
+        launchHost.removeAllViews()
+        launchHost.addView(
+            launchPanelView(
+                context = activity,
+                panel = panel,
+                fieldFor = ::launchField,
+                submit = launch,
+            ),
+        )
+    }
+
+    /** The form as it stands: the machine's answer, or this form's own refusal to send one. */
+    private fun launchPanelOnScreen(): LaunchPanel {
+        val panel = LaunchPanelScreen.of(launchAnswer)
+        return if (launchRefusal.isEmpty()) panel else panel.copy(notice = launchRefusal)
+    }
+
+    /**
+     * The box for one field.
+     *
+     * The `when` is exhaustive over [LaunchFieldId], so a fourth field cannot be added to the
+     * model and silently reach a form with three boxes in it.
+     */
+    private fun launchField(id: LaunchFieldId): EditText = when (id) {
+        LaunchFieldId.AGENT -> launchAgent
+        LaunchFieldId.CWD -> launchCwd
+        LaunchFieldId.PROMPT -> launchPrompt
     }
 
     /**
@@ -782,21 +878,12 @@ class PhoneSurface(
             // Unresolved is the honest state, and the line already says so from the last draw.
             return
         }
-        launchStatus.text = launchNotice(launchScreen.resolve(answer))
-    }
-
-    /**
-     * The rendering in a sentence. The `when` is exhaustive so a result added later has to state
-     * its own wording rather than inheriting one, and `retryable` is the model's own distinction
-     * between a refusal that waiting fixes and one it does not.
-     */
-    private fun launchNotice(rendering: LaunchRendering): String = when (rendering.result) {
-        LaunchResult.PENDING -> LAUNCH_PENDING
-        LaunchResult.LAUNCHED -> LAUNCH_ACCEPTED
-        LaunchResult.REJECTED_BY_POLICY,
-        LaunchResult.REFUSED_TRANSIENTLY,
-        LaunchResult.REFUSED,
-        -> if (rendering.retryable) rendering.reason + LAUNCH_RETRYABLE else rendering.reason
+        // THE SENTENCE IS THE MODEL'S NOW. This file carried a private `when` over LaunchResult
+        // and three `const val`s beside it, which nothing could reach and nothing tested -- so the
+        // one branch that matters, a refusal the machine says is worth retrying against one it
+        // does not, had no test. It is `LaunchPanelScreen.noticeFor`, and `LaunchPanelScreenTest`
+        // is where both branches are asserted.
+        launchAnswer = launchScreen.resolve(answer)
     }
 
     /** What the user typed into the launch form, with nothing supplied on their behalf. */
@@ -812,7 +899,7 @@ class PhoneSurface(
      * COLS AND ROWS ARE LEFT AT ZERO DELIBERATELY, and `swarmmobile.LaunchSpec`'s own doc is why:
      * "the Android launch sheet has no terminal view to measure before the session exists, and a
      * refused launch is a worse answer than a conventional grid the user can resize". The peek
-     * here is a monospace TextView as wide as the phone, which is not the new session's grid.
+     * here is the kit's mono well as wide as the phone, which is not the new session's grid.
      */
     private fun specOf(draft: LaunchDraft) = LaunchSpec().apply {
         agent = draft.agent
@@ -824,9 +911,9 @@ class PhoneSurface(
      * The controls that act on the CHOSEN SESSION, raised once the triage inbox yielded a row.
      *
      * The keyboard is not among them any more and that is PB-INPUT-2: a session on screen was
-     * never the condition for typing into it, a CONFIRMED LEASE is, and [renderLease] is where
-     * that is decided. Launch is not among them either -- it starts a session rather than acting
-     * on one.
+     * never the condition for typing into it, a CONFIRMED LEASE is, and [setKeyboardEnabled] is
+     * where the model's verdict lands. Launch is not among them either -- it starts a session
+     * rather than acting on one.
      */
     private fun setActionsEnabled(enabled: Boolean) {
         // Revoke stays live: it is the panic action, and a phone whose session list is empty
@@ -863,6 +950,46 @@ class PhoneSurface(
         Button(activity).apply {
             this.text = text
             setOnClickListener { invoke(verb) }
+        },
+    )
+
+    /**
+     * The same control, as the design draws one.
+     *
+     * TWO FACTORIES AND NOT ONE, and the split is the SCREEN and not the verb. A control composed
+     * into a recomposed panel takes the shape the design gives that site -- derivation row 22 says
+     * the peek's `[Take control]` is `.a2-more`, and the launch form's submit is the primary
+     * action, so it is `.a2-ok` with its `--p-cta-fx` bloom. The four controls still sitting in
+     * the unrecomposed remainder have no design source at all: inventory C2 is unbuilt, and
+     * painting `.a2-ok` on a Kill session button because it happens to be a button would be
+     * choosing a variant for a site the design has not specified.
+     *
+     * TWO THINGS COME WITH [ctaButton] THAT A `Button` HAD FOR FREE, and both are handled here
+     * because the kit cannot: a `TextView` announces itself as text rather than as a button, and
+     * the kit has no click to hang the role on (`CtaButton`'s own KDoc records the gap). The role
+     * is set below. The other is the DISABLED APPEARANCE: `Button` dims itself and this does not,
+     * because derivation row 24 -- the disabled/stale CTA, `--p-hair` fill and `--p-ink3` ink --
+     * has no factory. `isEnabled` still refuses the tap; what is lost is that it looks refused.
+     * Recorded rather than approximated with an alpha nobody derived.
+     */
+    private fun ctaAction(
+        text: String,
+        kind: CtaKind,
+        verb: (App, String) -> Any?,
+    ): TextView = SecureWindow.gate(
+        ctaButton(activity, text, kind).apply {
+            setOnClickListener { invoke(verb) }
+            setAccessibilityDelegate(
+                object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfo,
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.className = Button::class.java.name
+                    }
+                },
+            )
         },
     )
 
@@ -905,28 +1032,24 @@ class PhoneSurface(
      */
     private fun field(hint: String): EditText = textField(activity, hint)
 
+    /**
+     * A launch field, by the words the SCREEN MODEL says belong in it.
+     *
+     * The three hints were `String` literals here and the same three strings in
+     * [LaunchPanelScreen], which carried them over verbatim -- two copies of one piece of copy,
+     * with nothing joining them. PB-DS-9 assigns copy to the screen, so the screen is asked.
+     */
+    private fun field(id: LaunchFieldId): EditText = field(LaunchPanelScreen.hintFor(id))
+
+    /**
+     * WHAT USED TO BE HERE WAS THE COPY OF FIVE SCREENS. This companion held PB-INPUT-2's two
+     * lease sentences and the launch form's three notices -- the words a user reads, in the file
+     * that also owns the transport, the lifecycle and six panels, reachable by nothing and
+     * asserted by nothing. PB-DS-9 assigns copy to the screen: they are [PeekPanelScreen]'s and
+     * [LaunchPanelScreen]'s now, unchanged to the character, and each has a test that says which
+     * sentence goes with which state.
+     */
     private companion object {
-
-        /**
-         * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because
-         * a shut keyboard with no reason beside it is the invisible suppression the requirement
-         * is against.
-         */
-        const val LEASE_CONFIRMED =
-            "Your machine has confirmed you have control of this session, so what you type is " +
-                "sent live."
-
-        const val LEASE_NOT_CONFIRMED =
-            "Your machine has not confirmed control of this session, so the keyboard stays shut " +
-                "-- anything typed would be dropped without a word. Take control first."
-
-        /** PB-SYNC-2: an unresolved launch is neither a success nor a failure. */
-        const val LAUNCH_PENDING = "Waiting for your machine to answer the launch."
-
-        const val LAUNCH_ACCEPTED = "Your machine started the session."
-
-        const val LAUNCH_RETRYABLE = " This one is worth trying again shortly."
-
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
     }

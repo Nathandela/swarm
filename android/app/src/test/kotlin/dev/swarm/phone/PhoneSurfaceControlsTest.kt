@@ -7,6 +7,7 @@ import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
+import dev.swarm.phone.ui.kit.CtaSurface
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -88,10 +89,18 @@ class PhoneSurfaceControlsTest {
     fun every_button_and_switch_on_screen_filters_obscured_touches() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
+                // `it.background is CtaSurface` IS THE THIRD CLAUSE AND IT IS DELIBERATELY NARROW.
+                // Derivation §3's `.acts2 button` is a TextView with a layered surface, so the two
+                // controls composed into the recomposed screens -- the peek's `[Take control]`
+                // (row 22) and the launch form's submit -- are no longer `Button`s and would have
+                // dropped out of this walk entirely. Widening to every clickable TextView instead
+                // would sweep in the scope-bar chips, which are neither destructive nor
+                // authorising; what this fence is for is the set an overlay attack is worth
+                // mounting against, and reading the KIT'S OWN CTA SURFACE names exactly that set.
                 val pressable = activity
                     .findViewById<ViewGroup>(android.R.id.content)
                     .flatten()
-                    .filter { it is Button || it is CompoundButton }
+                    .filter { it is Button || it is CompoundButton || it.background is CtaSurface }
                 assertTrue(
                     "PB-SEC-12: no pressable control on screen, so this assertion has no subject",
                     pressable.isNotEmpty(),

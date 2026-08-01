@@ -179,9 +179,12 @@ class PhoneLaunchSurfaceTest {
                 val hints = activity.fieldHints()
                 assertTrue(
                     "the walk found ${labels.size} pressable control(s) on the phone screen, " +
-                        "want at least $CONTROL_FLOOR. The surface has not shrunk; this test " +
-                        "has stopped reading the hierarchy, and every assertion above would " +
-                        "then fail as a missing launch screen rather than as a broken scan.\n" +
+                        "want at least $CONTROL_FLOOR. Either this test has stopped reading the " +
+                        "hierarchy -- in which case every assertion above would fail as a " +
+                        "missing launch screen rather than as a broken scan -- or a control " +
+                        "moved into a panel that is not open, which is what happened when the " +
+                        "terminal peek was composed. Read the labels below before touching the " +
+                        "floor: a scan that names the controls it did find is working.\n" +
                         describe("what it saw", labels),
                     labels.size >= CONTROL_FLOOR,
                 )
@@ -206,8 +209,23 @@ class PhoneLaunchSurfaceTest {
     private fun android.app.Activity.onScreen(): List<View> =
         findViewById<ViewGroup>(android.R.id.content).flatten()
 
+    /**
+     * Every control a person can press, by the words on it.
+     *
+     * IT IS NOT `filterIsInstance<Button>()` ANY MORE, and the widening is the point rather than a
+     * convenience. `ctaButton` -- derivation §3's `.acts2 button`, which is what the launch form's
+     * submit is now -- returns a `TextView`: the kit builds its own surface out of a `LayerDrawable`
+     * and a `Paint`, and `Button`'s own background would fight it. So the shape a launch control
+     * has on this screen is a clickable TextView, and a scan that only knew about `Button` would
+     * report the launch screen as missing on the day it started being drawn as designed.
+     *
+     * `hasOnClickListeners` IS THE PROPERTY THAT MATTERS, not the class. What every assertion here
+     * asks is whether a person can press something that starts a session; a label with no listener
+     * is a caption, whatever it is a subclass of.
+     */
     private fun android.app.Activity.controlLabels(): List<String> = onScreen()
-        .filterIsInstance<Button>()
+        .filterIsInstance<TextView>()
+        .filter { it is Button || it.hasOnClickListeners() }
         .map { it.text.toString().lowercase() }
 
     private fun android.app.Activity.fieldHints(): List<String> = onScreen()
@@ -223,6 +241,28 @@ class PhoneLaunchSurfaceTest {
     }
 
     private companion object {
-        const val CONTROL_FLOOR = 5
+        /**
+         * The number of pressable controls the surface carries WITH NO PANEL OPEN.
+         *
+         * It is 4 -- "send line", "kill session", "launch a session", "revoke this device" -- and
+         * it was 5 until the terminal peek became a composed panel. "Take control" was a loose
+         * `actionButton` attached to the surface for the whole life of the process; it now lives
+         * inside `peekPanelView`, which `peekHost` holds only while there is a peek to control.
+         * That is the product being corrected, not the scan breaking: offering "Take control" to
+         * someone who is not looking at a terminal was the old behaviour and it was wrong.
+         *
+         * LOWERED DELIBERATELY AND NOT TO MAKE A RED TEST GREEN. The distinction the floor exists
+         * to draw is between "the surface shrank" and "the walk stopped reading the window", and
+         * on the run that failed here the walk was reading perfectly -- it named all four controls,
+         * and every label assertion in this file passed. What was stale was this number and the
+         * sentence beside it, which claimed "nine or so" and was written before the screens were
+         * composed at all.
+         *
+         * The floor now has no headroom, which is the honest cost of counting: the next control
+         * that legitimately moves into a panel fails this test too. That is preferable to raising
+         * a ceiling nobody can justify -- and the label assertions above, not this count, are what
+         * actually pin the launch screen.
+         */
+        const val CONTROL_FLOOR = 4
     }
 }
