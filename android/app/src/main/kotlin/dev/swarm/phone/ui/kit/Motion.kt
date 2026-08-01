@@ -5,7 +5,6 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
 import android.provider.Settings
-import android.util.TypedValue
 import android.view.View
 import android.view.animation.Interpolator
 import androidx.core.view.animation.PathInterpolatorCompat
@@ -22,7 +21,7 @@ import androidx.core.view.animation.PathInterpolatorCompat
  *
  * ONLY THREE THINGS MOVE, and this is the exhaustive list:
  *   - the bottom sheet: `translateY` 100% -> 0
- *   - the push banner: `translateY` -130dp -> 0
+ *   - the push banner: `translateY` -(its own height + its top inset) -> 0
  *   - the streaming caret: a liveness signal reporting text is still arriving, not decoration
  *
  * The first two share [NAV_DURATION_MS] (350ms) and [NAV_EASE]
@@ -48,8 +47,18 @@ object Motion {
     /** 350ms -- the bottom sheet's and the push banner's shared duration. */
     const val NAV_DURATION_MS = 350L
 
-    /** `cubic-bezier(0.32, 0.72, 0, 1)`, the mock's one named easing curve. */
-    val NAV_EASE: Interpolator = PathInterpolatorCompat.create(0.32f, 0.72f, 0f, 1f)
+    /** `cubic-bezier(0.32, 0.72, 0, 1)`, the mock's one named easing curve, as the four control
+     * values it is built from. Named rather than inlined into [NAV_EASE] so a test can compare
+     * them against the curve the document declares: an [Interpolator] does not report the points
+     * it was built from, so the only other check available is sampling the curve. */
+    const val NAV_EASE_P1X = 0.32f
+    const val NAV_EASE_P1Y = 0.72f
+    const val NAV_EASE_P2X = 0f
+    const val NAV_EASE_P2Y = 1f
+
+    /** The mock's one named easing curve. */
+    val NAV_EASE: Interpolator =
+        PathInterpolatorCompat.create(NAV_EASE_P1X, NAV_EASE_P1Y, NAV_EASE_P2X, NAV_EASE_P2Y)
 
     /** 0.9s -- the streaming caret's full blink period. */
     const val CARET_PERIOD_MS = 900L
@@ -60,14 +69,18 @@ object Motion {
     /** 0.15s -- the toggle's background and thumb transitions (`.toggle`, `.toggle::after`). */
     const val TOGGLE_DURATION_MS = 150L
 
-    /** -130dp, the push banner's hidden position. Fixed, not size-relative: unlike the sheet's
-     * 100%-of-its-own-height, the mock states this one as a literal offset. */
-    private const val BANNER_HIDDEN_DP = -130f
-
     /**
      * True when the platform's global animator scale is 0 -- Settings > Accessibility > Remove
      * animations, or an equivalent MDM/test override. This is the ONE gate every builder below
-     * runs through; there is no second path that constructs an animator without it.
+     * runs through.
+     *
+     * "No second path constructs an animator without it" is a claim about the whole app, and it is
+     * android/gate/s23_motion_test.go that makes it true rather than this sentence: that gate
+     * exempts THIS FILE BY NAME and scans every other production Kotlin file, kit components
+     * included, for a raw ObjectAnimator/ValueAnimator/ViewPropertyAnimator/animate()/
+     * startAnimation()/TransitionManager. While the exemption was the ui/kit PACKAGE, any
+     * component beside this one could have bypassed [duration] and stayed green -- the claim was
+     * unenforced exactly where it was most likely to be broken.
      */
     fun isReducedMotion(context: Context): Boolean =
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
@@ -148,14 +161,41 @@ object Motion {
     // The push banner.
     // ------------------------------------------------------------------
 
-    fun pushBannerEnter(context: Context, banner: View): Animator =
-        translateY(context, banner, dpToPx(context, BANNER_HIDDEN_DP), 0f, NAV_DURATION_MS)
+    /**
+     * Where the banner sits while hidden: far enough above its resting position to clear its own
+     * height AND the inset it rests below -- `-(bannerHeightPx + topInsetPx)`.
+     *
+     * DERIVED, NOT THE MOCK'S LITERAL. docs/design/substrate-components.md row 2 states the rule as
+     * `translateY(-(own height + banner_top))` and calls the mock's own `-130px` a magic number.
+     * The two agree at the mock's dimensions -- a 70dp banner at `banner_top` 60 -- and nowhere
+     * else: a banner whose message wraps to a second line is taller, and a handset's real
+     * status-bar inset is not the iPhone notch constant the mock drew. A fixed -130 leaves such a
+     * banner partly on screen while "hidden", or slides it further than it needs to.
+     *
+     * BOTH INPUTS ARE THE CALLER'S TO MEASURE, as [bottomSheetEnter]'s height is: `banner.height
+     * .toFloat()` after layout, and the top inset from `WindowInsets.statusBars` plus `space_6`
+     * (row 19 makes the same point about `screen_top` 54 being a design-time preview value only).
+     */
+    fun pushBannerHiddenTranslation(bannerHeightPx: Float, topInsetPx: Float): Float =
+        -(bannerHeightPx + topInsetPx)
 
-    fun pushBannerExit(context: Context, banner: View): Animator =
-        translateY(context, banner, 0f, dpToPx(context, BANNER_HIDDEN_DP), NAV_DURATION_MS)
+    fun pushBannerEnter(context: Context, banner: View, bannerHeightPx: Float, topInsetPx: Float): Animator =
+        translateY(
+            context,
+            banner,
+            pushBannerHiddenTranslation(bannerHeightPx, topInsetPx),
+            0f,
+            NAV_DURATION_MS,
+        )
 
-    private fun dpToPx(context: Context, dp: Float): Float =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, context.resources.displayMetrics)
+    fun pushBannerExit(context: Context, banner: View, bannerHeightPx: Float, topInsetPx: Float): Animator =
+        translateY(
+            context,
+            banner,
+            0f,
+            pushBannerHiddenTranslation(bannerHeightPx, topInsetPx),
+            NAV_DURATION_MS,
+        )
 
     // ------------------------------------------------------------------
     // The streaming caret.
@@ -175,6 +215,18 @@ object Motion {
      * accessibility accommodation -- so reduced motion collapses [ValueAnimator.repeatCount] to
      * 0 alongside the duration, not only the duration.
      *
+     * AND THE UPDATE LISTENER IS NOT WIRED AT ALL when motion is reduced, which is the third
+     * collapse and the one that was missing. A zero-duration [ValueAnimator] is not inert: it
+     * still delivers ONE update, at `animatedFraction` 1.0, the moment it starts -- and
+     * [caretAlphaAt] returns the DIM state for that fraction. So a listener left attached turned
+     * "static and fully visible" into "static and dimmed to 0.35" on the first `start()`, while
+     * the animator's own properties (alpha 1, duration 0, repeatCount 0) all still read correctly
+     * beforehand. MotionTest's
+     * `streamingCaretBlink_leaves_the_caret_fully_visible_AFTER_IT_STARTS_when_motion_is_reduced`
+     * calls `start()` for exactly that reason, and
+     * `a_zero_duration_animator_still_delivers_one_update_at_a_full_fraction` measures the platform
+     * behaviour behind it rather than assuming it.
+     *
      * `ValueAnimator.INFINITE` is the correct repeat value on a real device; MotionTest's
      * `robolectric_translates_the_infinite_repeat_sentinel_on_readback` records that Robolectric's
      * test harness alone translates it on readback, and why that is a test-tool limitation to
@@ -186,7 +238,7 @@ object Motion {
         val animator = ValueAnimator.ofFloat(0f, 1f)
         animator.duration = if (reduced) 0L else CARET_PERIOD_MS
         animator.repeatCount = if (reduced) 0 else ValueAnimator.INFINITE
-        animator.addUpdateListener { caret.alpha = caretAlphaAt(it.animatedFraction) }
+        if (!reduced) animator.addUpdateListener { caret.alpha = caretAlphaAt(it.animatedFraction) }
         return animator
     }
 }

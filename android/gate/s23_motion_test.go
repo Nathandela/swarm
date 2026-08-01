@@ -2,9 +2,10 @@ package gate
 
 // FAILING-FIRST (TDD RED, GG-5) is demonstrated on SYNTHETIC sources for this file, not on the
 // repository: PB-DS-8's fence is preventative, and the repository has never contained an
-// animator construct outside dev.swarm.phone.ui.kit (verified by hand before this file was
-// written: `grep -rn 'ObjectAnimator\|ValueAnimator\|ViewPropertyAnimator\|\.animate(\|
-// startAnimation\|TransitionManager' android/app/src/main/kotlin/` finds nothing). A real-repo
+// animator construct outside dev/swarm/phone/ui/kit/Motion.kt (verified by hand, and re-verified
+// when the exemption was narrowed from the kit package to that one file: `grep -rn
+// 'ObjectAnimator\|ValueAnimator\|ViewPropertyAnimator\|\.animate(\|startAnimation\|
+// TransitionManager' android/app/src/main/kotlin/` finds nothing else). A real-repo
 // run can therefore only ever demonstrate ACCEPTANCE of a clean tree, the same limitation
 // pbsec3_logdiscrimination_test.go documents for the log scan -- so the guard's ability to
 // REJECT is proved here on sources built to contain the violation, in the style established
@@ -17,20 +18,31 @@ package gate
 // of them. A fence with no mechanical form would let a screen build its own ObjectAnimator
 // beside a call into Motion and skip that check silently; this is the mechanical form.
 //
-// SCOPED TO PRODUCTION KOTLIN under android/app/src/main/kotlin, and specifically EXCLUDING the
-// dev/swarm/phone/ui/kit package (any path segment "ui/kit"): that is where Motion.kt itself
-// lives, where its own KDoc names every one of the forbidden identifiers in prose, and where a
-// sibling component (a Toggle view, built concurrently and outside this file's ownership) is
-// expected to construct the animators [Motion]'s translateX/translateY/colorTransition return.
-// Excluding the whole package rather than only Motion.kt is deliberate: PB-DS-8's requirement is
-// "outside the kit", not "outside this one file".
+// SCOPED TO PRODUCTION KOTLIN under android/app/src/main/kotlin, and EXEMPTING EXACTLY ONE FILE
+// BY NAME: dev/swarm/phone/ui/kit/Motion.kt. That is where every animator this app runs is built,
+// and where the KDoc names all six forbidden identifiers in prose.
+//
+// THE EXEMPTION WAS PACKAGE-SCOPED ("any path segment pair ui/kit") AND THAT PERMITTED WHAT THE
+// FENCE EXISTS TO FORBID. Under it, any component beside Motion.kt could construct a raw
+// ObjectAnimator, bypass Motion.duration entirely and stay green -- while Motion.kt's own KDoc
+// claimed "there is no second path that constructs an animator without it". A sibling kit file is
+// the LIKELIEST place for that to happen, not the least likely: it is where the components that
+// need animation are written. The test asserting the package-wide exemption is now inverted
+// (TestPBDS8_ASiblingKitFileIsNotExempt), and TestPBDS8_MotionKtIsTheOneExemption is its control.
+//
+// WHAT A KIT COMPONENT DOES INSTEAD: call Motion's primitives (translateY, translateX,
+// colorTransition), which return the animators already carrying the reduced-motion duration, or
+// route a duration of its own through Motion.duration. A component that needs to name the returned
+// type spells it android.animation.Animator; naming ObjectAnimator or ValueAnimator is flagged,
+// which is a cost of matching bare identifiers and is accepted -- the alternative is a pattern that
+// tries to tell a construction from a type reference and gets it wrong in the permissive direction.
 //
 // KNOWN, NOT FIXED HERE: if a surface file (PhoneSurface.kt, SessionScreens.kt, TriageInbox.kt,
 // ...) is ever found constructing an animator directly, this gate must NOT grow a per-file
 // allowlist for it -- PB-DS-11 in S24 owns cleaning surface code, and an allowlist here is the
 // exact defect PB-DS-11 was reassigned away from S23 to avoid (docs/specifications/
 // remote-phaseB-requirements.md §6.20, S23/S24 row). At the time of writing no such violation
-// exists; see TestPBDS8_NoAnimatorIsConstructedOutsideTheKit's own comment for the measurement.
+// exists; see TestPBDS8_NoAnimatorIsConstructedOutsideMotion's own comment for the measurement.
 
 import (
 	"os"
@@ -69,24 +81,21 @@ type animatorConstruct struct {
 	Text string // the matched line, trimmed
 }
 
-// isKitPath reports whether a repo-relative Kotlin path is inside dev/swarm/phone/ui/kit --
-// checked as a path SEGMENT PAIR ("ui" immediately followed by "kit"), not a substring of the
-// whole path, so a hypothetical "ui/kitchen" or "toolkit/ui" elsewhere could not slip through by
-// sharing four letters with the package this gate exempts.
-func isKitPath(relPath string) bool {
-	parts := strings.Split(filepath.ToSlash(relPath), "/")
-	for i := 0; i+1 < len(parts); i++ {
-		if parts[i] == "ui" && parts[i+1] == "kit" {
-			return true
-		}
-	}
-	return false
+// motionFile is the ONE file the fence exempts, as a path relative to the scanned root.
+const motionFile = "dev/swarm/phone/ui/kit/Motion.kt"
+
+// isExemptFile reports whether a root-relative Kotlin path is that one file. WHOLE-PATH equality,
+// not a suffix or a substring: a "Motion.kt" in some other package, a "MotionExtras.kt" beside the
+// real one, or a "ui/kitchen/Motion.kt" would each be exempted by a looser test while being an
+// entirely different file from the one whose animators this gate trusts.
+func isExemptFile(relPath string) bool {
+	return filepath.ToSlash(relPath) == motionFile
 }
 
-// scanAnimatorConstructsIn walks root and reports every forbidden match in every .kt file NOT
-// under a ui/kit path segment pair. root is a parameter, exactly as scanLogSinksIn's roots are,
-// so the discrimination (kit is exempt, everything else is not) can be exercised on a SYNTHETIC
-// tree this file controls rather than only on whatever the repository happens to contain today.
+// scanAnimatorConstructsIn walks root and reports every forbidden match in every .kt file except
+// Motion.kt. root is a parameter, exactly as scanLogSinksIn's roots are, so the discrimination
+// (one file is exempt, everything else is not) can be exercised on a SYNTHETIC tree this file
+// controls rather than only on whatever the repository happens to contain today.
 func scanAnimatorConstructsIn(t *testing.T, root string) []animatorConstruct {
 	t.Helper()
 	var out []animatorConstruct
@@ -101,7 +110,7 @@ func scanAnimatorConstructsIn(t *testing.T, root string) []animatorConstruct {
 		if relErr != nil {
 			rel = path
 		}
-		if isKitPath(rel) {
+		if isExemptFile(rel) {
 			return nil
 		}
 		raw, rerr := os.ReadFile(path)
@@ -132,10 +141,10 @@ func scanAnimatorConstructsIn(t *testing.T, root string) []animatorConstruct {
 	return out
 }
 
-// countNonKitKotlinFiles is the sanity check behind TestPBDS8_NoAnimatorIsConstructedOutsideTheKit's
+// countScannedKotlinFiles is the sanity check behind TestPBDS8_NoAnimatorIsConstructedOutsideMotion's
 // zero-findings branch: a scan that walked no files reports the same "0 findings" as a scan that
 // walked hundreds and found nothing wrong, and only one of those is the requirement satisfied.
-func countNonKitKotlinFiles(t *testing.T, root string) int {
+func countScannedKotlinFiles(t *testing.T, root string) int {
 	t.Helper()
 	n := 0
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -149,7 +158,7 @@ func countNonKitKotlinFiles(t *testing.T, root string) int {
 		if relErr != nil {
 			rel = path
 		}
-		if !isKitPath(rel) {
+		if !isExemptFile(rel) {
 			n++
 		}
 		return nil
@@ -172,19 +181,20 @@ func productionKotlinRoot(t *testing.T) string {
 // PB-DS-8: the real-repo assertion.
 // ---------------------------------------------------------------------------
 
-// TestPBDS8_NoAnimatorIsConstructedOutsideTheKit is the requirement's mechanical form.
+// TestPBDS8_NoAnimatorIsConstructedOutsideMotion is the requirement's mechanical form.
 //
 // GREEN AT THE TIME OF WRITING, and that is the correct state to record rather than paper over:
 // `grep -rn 'ObjectAnimator\|ValueAnimator\|ViewPropertyAnimator\|\.animate(\|startAnimation\|
-// TransitionManager' android/app/src/main/kotlin/` found zero matches before Motion.kt existed,
-// so this test has never had a violation to catch in the repository itself. Its rejection power
-// is proved on synthetic sources below, exactly as PB-SEC-3's argument check is.
-func TestPBDS8_NoAnimatorIsConstructedOutsideTheKit(t *testing.T) {
+// TransitionManager' android/app/src/main/kotlin/` finds zero matches outside Motion.kt -- the
+// kit's other components included, re-measured when the exemption was narrowed from the package
+// to that one file. So this test has never had a violation to catch in the repository itself; its
+// rejection power is proved on synthetic sources below, exactly as PB-SEC-3's argument check is.
+func TestPBDS8_NoAnimatorIsConstructedOutsideMotion(t *testing.T) {
 	root := productionKotlinRoot(t)
-	if n := countNonKitKotlinFiles(t, root); n == 0 {
-		t.Fatalf("PB-DS-8: scanned zero non-kit .kt file(s) under %s; a zero-findings result "+
-			"below would be vacuous -- either the production tree moved or isKitPath is "+
-			"exempting more than the kit package", mustRel(t, root))
+	if n := countScannedKotlinFiles(t, root); n == 0 {
+		t.Fatalf("PB-DS-8: scanned zero .kt file(s) under %s; a zero-findings result below would "+
+			"be vacuous -- either the production tree moved or isExemptFile is exempting more "+
+			"than %s", mustRel(t, root), motionFile)
 	}
 
 	found := scanAnimatorConstructsIn(t, root)
@@ -195,13 +205,15 @@ func TestPBDS8_NoAnimatorIsConstructedOutsideTheKit(t *testing.T) {
 	for _, f := range found {
 		lines = append(lines, f.File+":"+itoa(f.Line)+": "+f.Text)
 	}
-	t.Errorf("PB-DS-8: %d animator construct(s) outside dev/swarm/phone/ui/kit. ADR-007 B134 "+
-		"decision 3 requires reduced motion to be checked at animator construction for every "+
-		"animation the app runs; an animator built outside dev.swarm.phone.ui.kit.Motion has no "+
-		"mechanism enforcing that check. If this fires against a SURFACE file (not a new kit "+
-		"component), do not allowlist it here -- PB-DS-11 in S24 owns cleaning surface code, and "+
-		"the requirement was reassigned away from S23 specifically because a per-violation "+
-		"allowlist is the defect it forbids:\n\t%s", len(found), strings.Join(lines, "\n\t"))
+	t.Errorf("PB-DS-8: %d animator construct(s) outside %s. ADR-007 B134 decision 3 requires "+
+		"reduced motion to be checked at animator construction for every animation the app runs; "+
+		"an animator built anywhere else has no mechanism enforcing that check. A KIT COMPONENT "+
+		"calls Motion's primitives (translateY, translateX, colorTransition) or routes its own "+
+		"duration through Motion.duration, and names the result android.animation.Animator rather "+
+		"than ObjectAnimator or ValueAnimator. If this fires against a SURFACE file, do not "+
+		"allowlist it here -- PB-DS-11 in S24 owns cleaning surface code, and the requirement was "+
+		"reassigned away from S23 specifically because a per-violation allowlist is the defect it "+
+		"forbids:\n\t%s", len(found), motionFile, strings.Join(lines, "\n\t"))
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +235,12 @@ func pbds8SyntheticTree(t *testing.T, relPath, source string) string {
 	return root
 }
 
-// TestPBDS8_EveryForbiddenConstructIsCaughtOutsideTheKit is the POSITIVE half: each of the six
-// named ways to build or drive a platform animation, planted in a file that is NOT under ui/kit,
-// must be found. Table-driven over the team's exact list so a pattern that stops matching (a
-// typo'd regex, an accidentally-deleted entry) shows up as a named failure rather than a general
-// "the count changed" assertion that does not say which construct went blind.
-func TestPBDS8_EveryForbiddenConstructIsCaughtOutsideTheKit(t *testing.T) {
+// TestPBDS8_EveryForbiddenConstructIsCaught is the POSITIVE half: each of the six named ways to
+// build or drive a platform animation, planted in a file that is not the exempt one, must be
+// found. Table-driven over the team's exact list so a pattern that stops matching (a typo'd
+// regex, an accidentally-deleted entry) shows up as a named failure rather than a general "the
+// count changed" assertion that does not say which construct went blind.
+func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		line string
@@ -247,18 +259,25 @@ func TestPBDS8_EveryForbiddenConstructIsCaughtOutsideTheKit(t *testing.T) {
 			if len(found) != 1 {
 				t.Fatalf("PB-DS-8: pattern %q: got %d finding(s) in a file planted with exactly "+
 					"one violation, want 1. The construct this pattern names is no longer "+
-					"detected outside the kit:\n\t%v", tc.name, len(found), found)
+					"detected:\n\t%v", tc.name, len(found), found)
 			}
 		})
 	}
 }
 
-// TestPBDS8_TheKitPackageIsExempt is the NEGATIVE control for the positive test above: the
-// identical violating line, planted under a ui/kit path this time, must NOT be found. Without
-// this, a scan that flagged EVERYTHING (including Motion.kt's own KDoc, which names every one
-// of these identifiers in prose) would still pass the positive test and would fail the build on
-// its own first run.
-func TestPBDS8_TheKitPackageIsExempt(t *testing.T) {
+// TestPBDS8_ASiblingKitFileIsNotExempt is the fence doing the one thing it exists to do.
+//
+// The exemption is ONE FILE, BY NAME. A package-scoped exemption -- which is what this test
+// asserted until the committee read it -- permitted precisely what the fence forbids: any kit
+// component could construct its own ObjectAnimator, bypass Motion.duration entirely, and stay
+// green, while Motion.kt's own KDoc claimed "there is no second path that constructs an animator
+// without it". A sibling kit file is the likeliest place for that to happen, not the least: it is
+// where the components that need animation are written.
+//
+// The prose in the planted source is deliberate: it names the same identifiers Motion.kt's KDoc
+// names, so this doubles as proof that the comment stripping applies inside the kit too -- only
+// the code line may be flagged.
+func TestPBDS8_ASiblingKitFileIsNotExempt(t *testing.T) {
 	source := "package dev.swarm.phone.ui.kit\n\n" +
 		"/** Mentions ObjectAnimator, ValueAnimator, ViewPropertyAnimator, TransitionManager, " +
 		"animate() and startAnimation() in prose, exactly as Motion.kt's own KDoc does. */\n" +
@@ -267,31 +286,58 @@ func TestPBDS8_TheKitPackageIsExempt(t *testing.T) {
 		"}\n"
 	root := pbds8SyntheticTree(t, "dev/swarm/phone/ui/kit/Toggle.kt", source)
 	found := scanAnimatorConstructsIn(t, root)
-	if len(found) != 0 {
-		t.Errorf("PB-DS-8: %d finding(s) inside a ui/kit path, want 0. The kit package is where "+
-			"Motion's own animators -- and a sibling component built on them -- are meant to be "+
-			"constructed; a scan that cannot tell that apart from a surface file flags the very "+
-			"code the requirement exists to keep unguarded elsewhere:\n\t%v", len(found), found)
+	if len(found) != 1 {
+		t.Fatalf("PB-DS-8: %d finding(s) for a raw animator in a kit file that is NOT Motion.kt, "+
+			"want 1. A component beside Motion.kt that builds its own animator has nothing "+
+			"enforcing the reduced-motion check -- it must route through Motion's primitives "+
+			"(translateY/translateX/colorTransition) or through Motion.duration:\n\t%v", len(found), found)
+	}
+	if found[0].Line != 5 {
+		t.Errorf("PB-DS-8: the one finding is at line %d, want line 5 (the actual construct); the "+
+			"KDoc naming the same identifiers in prose must not have been the source of this "+
+			"match", found[0].Line)
 	}
 }
 
-// TestPBDS8_KitExemptionIsPathScopedNotSubstringScoped guards isKitPath itself: a package that
-// merely CONTAINS the four letters "ui" and "kit" as a substring of some other name must not be
-// exempted by accident.
-func TestPBDS8_KitExemptionIsPathScopedNotSubstringScoped(t *testing.T) {
+// TestPBDS8_MotionKtIsTheOneExemption is the NEGATIVE control for the test above: the identical
+// violating line, planted in Motion.kt itself this time, must NOT be found. Motion.kt is where
+// every one of these animators is meant to be constructed, and a scan that flagged it would fail
+// the build on its own first run -- so the exemption exists, and it stops there.
+func TestPBDS8_MotionKtIsTheOneExemption(t *testing.T) {
+	source := "package dev.swarm.phone.ui.kit\n\n" +
+		"fun translateX() {\n" +
+		"    val a = ObjectAnimator.ofFloat(null, \"translationX\", 0f, 1f)\n" +
+		"}\n"
+	root := pbds8SyntheticTree(t, "dev/swarm/phone/ui/kit/Motion.kt", source)
+	found := scanAnimatorConstructsIn(t, root)
+	if len(found) != 0 {
+		t.Errorf("PB-DS-8: %d finding(s) in Motion.kt, want 0. Motion.kt is the file the fence "+
+			"exempts; flagging it would make the guard unsatisfiable:\n\t%v", len(found), found)
+	}
+}
+
+// TestPBDS8_TheExemptionIsOneWholePathNotASuffixOrASubstring guards isExemptFile itself. Every
+// entry below is a file a suffix match, a basename match or a package-segment match would wave
+// through, and not one of them is the file whose animators this gate trusts.
+func TestPBDS8_TheExemptionIsOneWholePathNotASuffixOrASubstring(t *testing.T) {
 	for _, relPath := range []string{
-		"dev/swarm/phone/uikit/Surface.kt",      // one path segment, not two
-		"dev/swarm/phone/toolkit/ui/Surface.kt", // "kit" then "ui", reversed
-		"dev/swarm/phone/ui/kitchen/Surface.kt", // "kit" is a prefix of the segment, not the segment
+		"dev/swarm/phone/ui/kit/MotionExtras.kt", // a sibling whose name merely starts with Motion
+		"dev/swarm/phone/ui/kit/ToggleMotion.kt", // ... and one whose name merely ends with it
+		"dev/swarm/phone/ui/kit/motion/Blink.kt", // a package named after the file
+		"dev/swarm/phone/ui/kitchen/Motion.kt",   // the right basename in the wrong package
+		"dev/swarm/phone/ui/kit/Toggle.kt",       // the sibling component the old exemption freed
+		"other/dev/swarm/phone/ui/kit/Motion.kt", // the right path with something before it
+		"dev/swarm/phone/ui/kit/Motion.kt.bak",   // the right path with something after it
 	} {
-		if isKitPath(relPath) {
-			t.Errorf("PB-DS-8: isKitPath(%q) = true; only an actual .../ui/kit/... path segment "+
-				"pair should be exempt from the fence", relPath)
+		if isExemptFile(relPath) {
+			t.Errorf("PB-DS-8: isExemptFile(%q) = true; only %s is exempt from the fence",
+				relPath, motionFile)
 		}
 	}
-	if !isKitPath("dev/swarm/phone/ui/kit/Motion.kt") {
-		t.Error("PB-DS-8: isKitPath did not recognise the real kit package; the exemption this " +
-			"test suite depends on would exempt nothing")
+	if !isExemptFile(motionFile) {
+		t.Errorf("PB-DS-8: isExemptFile did not recognise %s itself; the exemption every test in "+
+			"this file depends on would exempt nothing, and the gate would fail against the very "+
+			"file it is built around", motionFile)
 	}
 }
 

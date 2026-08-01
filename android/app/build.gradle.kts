@@ -128,6 +128,19 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // means the text half and the resolved half cannot be checking two different mappings.
     from(rootProject.layout.projectDirectory.dir("..").file("docs/research/remote-control-design-directions.html"))
     from(layout.projectDirectory.file("src/main/res/values/type.xml"))
+    // PB-DS-8 (S23): MOTION's origin, staged for the same reason and after the same defect.
+    //
+    // The five numbers dev.swarm.phone.ui.kit.Motion declares -- 350ms, cubic-bezier(0.32,0.72,0,1),
+    // 900ms, 150ms and the caret's 0.35 dim -- all come from THIS artifact, not from
+    // remote-control-design-directions.html above: the directions document declares no @keyframes,
+    // no transition and no animation anywhere, so it is the origin for the static skin and cannot
+    // be the origin for motion. Until this line, MotionTest asserted `assertEquals(350L,
+    // Motion.NAV_DURATION_MS)` -- literals transcribed from the implementation, compared against
+    // the implementation -- and nothing in the repository read the mock at all; it appeared only
+    // in comments. That is EXPECTED_DARK_COLORS recurring inside the slice built to eradicate it.
+    // Staged here, MotionTest.MockCss parses the durations, the easing control points, the
+    // keyframe alpha and the banner's own top/transform out of the CSS and asserts against them.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/research/remote-control-mock.html"))
     into(policyTestResourceDir)
 }
 
