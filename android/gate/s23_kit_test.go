@@ -70,6 +70,26 @@ type s23Component struct {
 // most components, and it is where the four-Group identity shows (PB-DS-9's own ordering).
 var s23Inbox = []s23Component{
 	{
+		Factory: "settingsRow",
+		File:    "SettingsRow.kt",
+		Derived: "#15 Settings row",
+		Why: "the Settings screen's only structural element. Substrate's directions page has no " +
+			"settings screen, so `.setrow` is the retired mock's class and row 15 is the whole " +
+			"specification. Its surface is cardSurface rather than a second derivation of the " +
+			"same four values -- §2's reuse rule, which is why the remaining components are " +
+			"tractable at all.",
+	},
+	{
+		Factory: "statusLabel",
+		File:    "SettingsRow.kt",
+		Derived: "#15 Settings row",
+		Why: "row 15's OTHER trailing form: a state the row reports rather than a control that " +
+			"changes it. Separate from settingsRow because the row would otherwise take two " +
+			"mutually exclusive arguments and a caller could pass both. It is `--p-hero` and not " +
+			"`--p-ok`: \"active\" is a liveness statement, and after B134 --p-ok carries " +
+			"ReadyForReview.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",
@@ -958,6 +978,14 @@ var s23DerivedSpacing = []struct {
 }{
 	{"Badge.kt", "#3 Badge", "padding-y", "swarm_space_2"},
 	{"Badge.kt", "#3 Badge", "padding-x", "swarm_space_6"},
+	// Row 15 states its padding in the shape this reader can express, so the settings row is
+	// joined to the table rather than to a transcription of it. EmptyState.kt is NOT here and
+	// cannot be: row 8 writes "padding 48 (2 x `space_24`) vertical", a MULTIPLE of a step rather
+	// than a step, which s23DocPadding does not match. That join lives in s24_screens_test.go
+	// with a reader of its own -- recorded here so the absence reads as a known limit rather than
+	// as a component nobody joined.
+	{"SettingsRow.kt", "#15 Settings row", "padding-y", "swarm_space_12"},
+	{"SettingsRow.kt", "#15 Settings row", "padding-x", "swarm_space_14"},
 }
 
 // s23DocPadding reads the "padding space_2 x space_6" cell out of a row -- vertical first and

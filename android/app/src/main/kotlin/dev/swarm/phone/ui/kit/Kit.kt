@@ -221,6 +221,22 @@ internal object KitTag {
     const val TAB_LABEL = ".ptabs div"
     const val TAB_ICON = ".ptabs svg"
     const val BADGE = "badge"
+
+    /**
+     * The settings row's three parts.
+     *
+     * They name the PART and not a CSS rule, because Substrate declares none -- `.setrow` is the
+     * retired mock's class, and a tag naming it would point a reader at a rule that does not
+     * exist. [BADGE] is the precedent: a derived component's tag says what it is.
+     *
+     * They do not cite "#15" either, and the literal-accounting fence is why. It blanks string
+     * contents before counting numbers, so a digit inside one is a number no fence can see --
+     * `("1" + "1").toFloat()` is 11f that nothing reads. A row number in a tag is harmless and
+     * indistinguishable from a metric hidden in copy, so the fence refuses both and it is right to.
+     */
+    const val SETTINGS_LABEL = "settings label"
+    const val SETTINGS_SUBLABEL = "settings sublabel"
+    const val SETTINGS_STATUS = "settings status"
 }
 
 /**
