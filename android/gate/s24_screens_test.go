@@ -1075,7 +1075,19 @@ var s24ScreenComponents = map[string]map[string]string{
 		"sectionLabel": "C1.3 `.plabel`",
 		"sessionList":  "C1.3 `.prows`",
 		"sessionRow":   "C1.3 `.prow`",
-		"tabBar":       "C1.4 `.ptabs`",
+	},
+	// C1.4 IS THE SCAFFOLD'S AND NOT THE INBOX'S, and the row moved here rather than being
+	// dropped. `tabBar` was claimed above while `triageInboxView` was the only screen that
+	// composed one -- which is precisely why the other three destinations could not be reached: a
+	// bar drawn inside one of four screens is a bar the other three do not have, so a tab that
+	// swapped the content would land the user on Machines with no way back. Derivation row 20 puts
+	// the bar under the scaffold's scrolling content ("bottom `screen_bottom` (or inset +
+	// `tabbar_height`)" -- the inset UNDER a bar that is `tabbar_height` tall), which is the
+	// composition this file now names. The claim is unchanged in strength: `tabBar` is still
+	// required of a named screen source, and it is still the only place in the app that composes
+	// one.
+	"dev/swarm/phone/ui/screens/PhoneScaffoldView.kt": {
+		"tabBar": "C1.4 `.ptabs` -- the four destinations, under whichever one is on screen",
 	},
 	"dev/swarm/phone/ui/screens/SettingsPanelView.kt": {
 		"navHeader":    "C6.1 -- the settings screen's own title",

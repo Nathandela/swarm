@@ -108,14 +108,21 @@ class TriageInboxViewTest {
             InboxTag.SCOPES to "C1.2 `.chips` -- the scope bar",
             InboxTag.SECTION_LABEL to "C1.3 `.plabel` -- one heading per Group",
             InboxTag.SECTION_ROWS to "C1.3 `.prows` -- the rows' container",
-            InboxTag.TABS to "C1.4 `.ptabs` -- the tab bar",
         ).forEach { (tag, what) ->
             assertNotNull("the inbox renders nothing for $what", root.kitFind(tag))
         }
     }
 
+    /**
+     * THE TAB BAR HALF OF THIS ASSERTION MOVED TO `PhoneScaffoldViewTest`, unchanged, along with
+     * the bar itself. The bar is the window's now -- one bar under whichever of the four
+     * destinations is on screen -- so "the tab bar is the last thing on screen" is a statement
+     * about the scaffold's composition, and asserting it here would ask the inbox to render
+     * something it no longer owns. The scaffold's suite walks this screen's own tags beside its
+     * own, so the two halves are still one statement about one screen.
+     */
     @Test
-    fun `the composition is in the recorded order and the tab bar is last`() {
+    fun `the composition is in the recorded order`() {
         val root = view(listOf(row("mbp/one", "working")))
         val order = mutableListOf<String>()
         fun walk(v: View) {
@@ -128,12 +135,6 @@ class TriageInboxViewTest {
             "the inbox's first two elements are not the nav header and the scope bar",
             listOf(InboxTag.NAV, InboxTag.SCOPES),
             order.take(2),
-        )
-        assertEquals(
-            "the tab bar is not the last thing on screen, so it is scrolling with the content " +
-                "rather than being the fixed bar the design draws",
-            InboxTag.TABS,
-            order.last(),
         )
     }
 
@@ -295,19 +296,10 @@ class TriageInboxViewTest {
         )
     }
 
-    @Test
-    fun `the tab badge appears only when a session needs the user`() {
-        val quiet = view(listOf(row("mbp/one", "working")))
-        val blocked = view(listOf(row("mbp/one", "needs_input"), row("mbp/two", "needs_input")))
-
-        assertNull(
-            "a badge was drawn over an inbox where nothing needs anybody",
-            quiet.kitRequire(InboxTag.TABS).kitFind(KitTag.BADGE),
-        )
-        val badge = blocked.kitRequire(InboxTag.TABS).kitRequire(KitTag.BADGE)
-        assertEquals("2", textOf(badge))
-        assertEquals("2 sessions need you", badge.contentDescription)
-    }
+    // `the tab badge appears only when a session needs the user` MOVED TO PhoneScaffoldViewTest,
+    // verbatim. The COUNT is still this screen's -- `InboxScreen.tabs` carries it and
+    // `TriageInboxScreen` decides the wording -- and the bar that draws it is the scaffold's, so
+    // the assertion belongs where the badge is rendered.
 
     @Test
     fun `the scope bar draws every machine in the roster`() {

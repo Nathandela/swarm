@@ -29,6 +29,23 @@ data class TabItem(
     /** Sessions in `needs_input`. Zero means no badge at all, not a badge reading "0". */
     val badgeCount: Int = 0,
     val badgeDescription: CharSequence? = null,
+    /**
+     * What pressing this tab does, and WITHOUT IT THE BAR WAS A PICTURE OF A BAR. Every field
+     * above describes how a tab looks; none of them made one do anything, so the app shipped four
+     * tabs a user could press with nothing behind them -- and two screens that are built, composed
+     * from this kit and covered by their own suites (`machinesPanelView`, `activityPanelView`) had
+     * zero production call sites, because nothing could navigate to them.
+     *
+     * IT IS THE ONLY BEHAVIOUR IN THE KIT AND THAT IS THE COMPONENT'S NATURE rather than an
+     * exception being carved out. A tab bar is a CONTROL: `.ptabs` is inventory C1.4 and the
+     * destinations are what it is for, so a factory that could not carry the press would leave
+     * every caller to find its own tab views and attach listeners by index -- which is the
+     * child-index coupling `KitTag` exists to prevent. The destination itself is the screen's:
+     * this carries a lambda and knows nothing about where it goes.
+     *
+     * Null is a tab that does not navigate, which is what a bar drawn for a screenshot is.
+     */
+    val onTap: (() -> Unit)? = null,
 )
 
 /**
@@ -166,6 +183,10 @@ private fun tab(context: Context, item: TabItem): View {
         clipChildren = false
         clipToPadding = false
         layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+        // THE WHOLE COLUMN IS THE TARGET, not the label inside it. A listener on the words would
+        // leave the glyph half of a 74 dp bar dead, and the label is the shorter half; this is
+        // also what makes the target the full `tabbar_height` that PB-DS-12's 48 dp floor needs.
+        item.onTap?.let { tap -> setOnClickListener { tap() } }
         addView(iconFrame)
         addView(
             TextView(context).apply {

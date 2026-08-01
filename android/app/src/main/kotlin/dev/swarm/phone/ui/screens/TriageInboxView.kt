@@ -4,8 +4,6 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.ScrollView
-import dev.swarm.phone.ui.kit.TabItem
 import dev.swarm.phone.ui.kit.chipRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.filterChip
@@ -13,7 +11,6 @@ import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 import dev.swarm.phone.ui.kit.sessionRow
-import dev.swarm.phone.ui.kit.tabBar
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the triage inbox, composed from the component kit.
@@ -63,15 +60,19 @@ object InboxTag {
     /** C1.3 `.prow`. */
     const val ROW = "inbox.row"
 
-    /** C1.4 `.ptabs`. */
-    const val TABS = "inbox.tabs"
-
     /**
      * The parts whose ON-SCREEN ORDER is the recorded composition. The section parts are not in it
-     * because they repeat; what this set pins is that the header comes first and the tab bar is
-     * last -- a tab bar that scrolled with the content would be a different screen.
+     * because they repeat; what this set pins is that the header comes first.
+     *
+     * C1.4 `.ptabs` IS NO LONGER IN IT AND IS NO LONGER THIS SCREEN'S. The tab bar was composed
+     * here, which is exactly why the other three destinations could not be reached: a bar drawn
+     * inside one of four screens is a bar the other three do not have, so a tab that swapped the
+     * content would land the user on Machines with nothing to come back with. It is
+     * [ScaffoldTag.TABS] now, and "the tab bar is the last thing on screen" is asserted there --
+     * over this screen's tags and the scaffold's together, so it is still one statement about one
+     * screen.
      */
-    val COMPOSITION: Set<String> = setOf(NAV, SCOPES, TABS)
+    val COMPOSITION: Set<String> = setOf(NAV, SCOPES)
 }
 
 /**
@@ -84,11 +85,11 @@ object InboxTag {
  * @param onSelectScope the machine a tapped chip names, or null for the "All machines" chip. A
  *  scope bar that did not narrow anything would be decoration, which is the same defect one
  *  indirection out.
- * @param below views this slice has NOT recomposed, hosted inside the inbox's own scroll so the
- *  app still has one window, one scrolling column and one tab bar. It is a parameter rather than
- *  something the caller wraps around this view because the alternative is a split screen -- an
- *  inbox in the top half and the old flat list in the bottom -- which would read as a design
- *  decision. Null is the finished shape, and every test below passes null.
+ * @param below views this slice has NOT recomposed, hosted under the sections so the app still has
+ *  one window and one scrolling column. It is a parameter rather than something the caller wraps
+ *  around this view because the alternative is a split screen -- an inbox in the top half and the
+ *  old flat list in the bottom -- which would read as a design decision. Null is the finished
+ *  shape, and every test below passes null.
  */
 fun triageInboxView(
     context: Context,
@@ -176,42 +177,11 @@ fun triageInboxView(
 
     below?.let { content.addView(it) }
 
-    val scroll = ScrollView(context).apply {
-        // The content is shorter than the screen on a quiet inbox, and without this the tab bar
-        // would ride up under the last section instead of sitting at the bottom.
-        isFillViewport = true
-        clipChildren = false
-        clipToPadding = false
-        // `scrollbar-width: none` (derivation row 20).
-        isVerticalScrollBarEnabled = false
-        // Weight 1: the list takes whatever is left after the fixed bar below it.
-        layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-        addView(content)
-    }
-
-    return LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        clipChildren = false
-        clipToPadding = false
-        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
-        addView(scroll)
-        addView(
-            tabBar(
-                context,
-                screen.tabs.map { tab ->
-                    TabItem(
-                        label = tab.label,
-                        // NO ICON ASSET EXISTS. `TabItem.icon` is nullable and the tab renders its
-                        // label alone; the four glyphs are drawables nobody has drawn, and a
-                        // placeholder would be worse than a gap because it would look finished.
-                        selected = tab.selected,
-                        badgeCount = tab.badgeCount,
-                        badgeDescription = tab.badgeDescription,
-                    )
-                },
-            ).apply { tag = InboxTag.TABS },
-        )
-    }
+    // THE COLUMN IS RETURNED BARE: no scroll of its own, and no tab bar. Both belong to
+    // [phoneScaffoldView], which hosts this screen and the other three above one shared bar
+    // (derivation row 20). A scroll here would be a second one inside the scaffold's, and the bar
+    // here was what left `machinesPanelView` and `activityPanelView` with no way in.
+    return content
 }
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT

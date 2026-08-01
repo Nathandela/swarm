@@ -166,6 +166,33 @@ data class PairedDeviceRow(
 
 object MachinesPanelScreen {
 
+    /**
+     * What the Machines DESTINATION says while this phone cannot build a [MachinesPanel] at all.
+     *
+     * IT IS PUBLIC AND IT IS THE ONE PIECE OF THIS SCREEN'S COPY THAT CANNOT RIDE THE PANEL, which
+     * is why it is a constant rather than a field. Every other string here reaches the view through
+     * [of]; this one is read when [of] cannot be called, so there is no instance to carry it. The
+     * surface spends it through the kit's `emptyState`, the same component the activity screen
+     * shows under a heading with nothing beneath it.
+     *
+     * WHY IT EXISTS: two of [MachinePane]'s fields have no honest source on this handset today.
+     * `presence` is `App.Presence`, a blocking relay round-trip that android/unbound-verbs.tsv
+     * forbids calling from a render driven by the event stream; `pairedDeviceName` has no bound
+     * accessor at all. Both are agents-tracker-xtj's, and neither may be invented (ADR-007 B135).
+     *
+     * THE SENTENCE IS BUILT THE WAY [ActivityPanelScreen]'s EMPTY COPY IS, and against the same
+     * three failure modes. It says what is true of THIS PHONE -- that it cannot read the details --
+     * rather than anything about the machine, because a phone that cannot ask has learned nothing:
+     * "no machines" and "your machine is unreachable" are both claims this handset is in no
+     * position to make, and the second is the one a user would otherwise infer from a bare empty
+     * screen. The clause after the comma is there to refuse that inference explicitly. It does not
+     * apologise and it promises no future version: a screen that says "coming soon" is making a
+     * commitment the code cannot keep, and one that says "sorry" has told the user nothing.
+     */
+    const val UNAVAILABLE_COPY =
+        "This phone cannot read your machine's details, so nothing here says whether it is " +
+            "reachable."
+
     /** Inventory C1.4 names the tab `Machines`; the root header carries the same word. */
     private const val TITLE = "Machines"
 

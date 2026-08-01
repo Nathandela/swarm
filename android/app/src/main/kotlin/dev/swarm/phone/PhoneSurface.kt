@@ -8,7 +8,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import dev.swarm.phone.runtime.ConnectivityPolicy
@@ -22,18 +21,27 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
+import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.ctaButton
+import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.textField
+import dev.swarm.phone.ui.screens.ActivityPanel
+import dev.swarm.phone.ui.screens.ActivityPanelScreen
+import dev.swarm.phone.ui.screens.Destination
 import dev.swarm.phone.ui.screens.InboxScreen
+import dev.swarm.phone.ui.screens.InboxTab
 import dev.swarm.phone.ui.screens.LaunchFieldId
 import dev.swarm.phone.ui.screens.LaunchPanel
 import dev.swarm.phone.ui.screens.LaunchPanelScreen
+import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PeekPanel
 import dev.swarm.phone.ui.screens.PeekPanelScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
+import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.peekPanelView
+import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
@@ -126,7 +134,7 @@ class PhoneSurface(
      * PB-DS-9: the terminal peek, rebuilt into a host of its own.
      *
      * IT IS A HOST AND NOT A PANEL because the peek changes on a different clock from everything
-     * around it. The inbox is redrawn only when [InboxScreen] changes -- [renderInbox] argues why
+     * around it. The inbox is redrawn only when [InboxScreen] changes -- [drawInbox] argues why
      * -- and a machine printing steadily changes the snapshot on every journal event. Composing
      * the peek inside the inbox's tree would tie one to the other: either the peek would stop
      * updating, or the list would be thrown back to the top under whoever was scrolling it.
@@ -279,6 +287,32 @@ class PhoneSurface(
     private var inboxDrawn: InboxScreen? = null
 
     /**
+     * Which of inventory C1.4's four destinations is on screen.
+     *
+     * IT IS THE SURFACE'S AND NOT THE INBOX MODEL'S. `InboxScreen.tabs` carries a `selected` flag,
+     * and it was written when the inbox was the only screen there was: it answers
+     * `label == "Inbox"` for every list it builds. Reading it here would tell a user standing on
+     * Machines that they are in the Inbox, so the selection is this field and
+     * [dev.swarm.phone.ui.screens.phoneScaffoldView] takes it as a parameter.
+     */
+    private var destination = Destination.INBOX
+
+    /** What the activity screen last drew, for [inboxDrawn]'s reason. */
+    private var activityDrawn: ActivityPanel? = null
+
+    /**
+     * The destination the content host currently holds.
+     *
+     * It is not the same question as [inboxDrawn] or [activityDrawn]: those ask whether a screen's
+     * DATA changed, and this asks whether the screen on screen is still the one the user chose. A
+     * tab tapped while the data is unchanged changes only this.
+     */
+    private var contentShows: Destination? = null
+
+    /** What the tab bar last drew: the tabs, and the destination they point at. */
+    private var barDrawn: Pair<List<InboxTab>, Destination>? = null
+
+    /**
      * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
      *
      * THE LAUNCH FORM'S IS THE ONE THAT MATTERS TO A PERSON. The three fields are views this
@@ -346,14 +380,18 @@ class PhoneSurface(
      * it with real screens and puts the triage inbox first, so what is here now is the remainder.
      *
      * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
-     * [launchHost] are composed panels rather than loose views; the pairing panel and the settings
-     * panel compose themselves. What is genuinely unrecomposed is the status line, the capability
-     * notice, the outcome line, and the four SESSION CONTROLS -- the keyboard, Send, Kill session
-     * and the routed-error line. Those four are inventory C2's composer (derivation row 9's bar,
-     * its 26 dp glyphs and its stop control) and C2 is not built: the session-detail screen, its
-     * transcript, its tool cards and its quick-reply chips have no factory and no model. A field
-     * and two buttons standing in for that bar are the remainder, and they are here rather than
-     * pretending to be a screen.
+     * [launchHost] are composed panels rather than loose views; the pairing panel composes itself.
+     * What is genuinely unrecomposed is the status line, the capability notice, the outcome line,
+     * and the four SESSION CONTROLS -- the keyboard, Send, Kill session and the routed-error line.
+     * Those four are inventory C2's composer (derivation row 9's bar, its 26 dp glyphs and its stop
+     * control) and C2 is not built: the session-detail screen, its transcript, its tool cards and
+     * its quick-reply chips have no factory and no model. A field and two buttons standing in for
+     * that bar are the remainder, and they are here rather than pretending to be a screen.
+     *
+     * THE SETTINGS PANEL HAS LEFT IT, and that is the tab bar becoming a control. C6 is a
+     * DESTINATION -- inventory C1.4's fourth tab -- and it was hosted here, halfway down a column
+     * under the inbox, because there was nothing to navigate with; it is now what the Settings tab
+     * shows and nothing else shows it. That is the whole of what the move is.
      *
      * IT CARRIES NO PADDING OF ITS OWN ANY MORE. The 24 dp was the last thing on this surface
      * deciding a spatial value; the kit components above it carry theirs, and these views are
@@ -364,22 +402,31 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
             status, notice, pairing.root, peekHost,
-            typed, send, kill, launchHost, revoke, settings.root, outcome,
+            typed, send, kill, launchHost, revoke, outcome,
         )) {
             addView(child)
         }
     }
 
-    /** Carries [unrecomposedControls] on the one branch that has no inbox to scroll them. */
-    private val controlsScroll = ScrollView(activity).apply {
-        isVerticalScrollBarEnabled = false
-        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+    /**
+     * The scaffold's content: the destination on screen, swapped when a tab is tapped.
+     *
+     * IT IS A HOST THE SURFACE OWNS rather than a view handed to the scaffold on each draw,
+     * because the two change on different clocks. The bar changes when the badge count or the
+     * destination does; the destination's own content changes whenever its data does -- and a
+     * scaffold rebuilt for one would re-parent the other, which takes the keyboard away from
+     * whoever is typing a working directory into the launch form.
+     */
+    private val contentHost = FrameLayout(activity).apply {
+        // A glowing dot is drawn outside its own view.
+        clipChildren = false
+        clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
     }
 
     /**
-     * The window's one child. The inbox is rebuilt into it whenever what it shows changes; on a
-     * phone that cannot start at all it holds the controls alone, because there is no roster to
-     * draw an inbox from.
+     * The window's one child: [dev.swarm.phone.ui.screens.phoneScaffoldView] -- the destination
+     * above the tab bar. The bar is rebuilt into it when the badge or the destination changes.
      */
     private val host = FrameLayout(activity).apply {
         // A glowing dot and the tab badge are drawn outside their own views.
@@ -594,7 +641,12 @@ class PhoneSurface(
         // construction has no sections to draw and no counts to state -- and a triage inbox
         // rendered over nothing would say "nothing is waiting on you", which is a claim about the
         // machine that this phone is in no position to make.
-        hostControlsAlone()
+        drawContent(bridge = null, inbox = null)
+        // THE BAR IS DRAWN ANYWAY, because it is the window's chrome and not the inbox's contents.
+        // A phone whose core refused still has four destinations, and the one that might get it
+        // out of that state -- the pairing panel, under the Inbox tab -- is reached by navigating
+        // like everything else. [chromeTabs] says what the bar can honestly carry here.
+        drawScaffold(chromeTabs())
     }
 
     private fun renderReady(startup: PhoneStartup.Ready) {
@@ -616,9 +668,11 @@ class PhoneSurface(
         // withholding the machine's frames leaves it reading "Connected to your machine." with
         // nothing behind it. The freshness notice is the only thing on this screen that comes
         // from the machine's own clock.
-        // PB-DS-9: the inbox is drawn BEFORE the status line is written, because the line now
+        // PB-DS-9: the inbox is built BEFORE the status line is written, because the line now
         // carries the roster's own PB-APP-8 verdict alongside the transport's.
-        val inbox = renderInbox(bridge)
+        val inbox = inboxScreen(bridge)
+        drawContent(bridge, inbox)
+        drawScaffold(inbox.tabs)
 
         status.text = listOfNotNull(
             bridge.connectionBanner().text,
@@ -677,64 +731,182 @@ class PhoneSurface(
     // PB-DS-9: the triage inbox.
     // -----------------------------------------------------------------------
 
+    /** The inbox's model. It is built on every draw because the tab badge is counted from it. */
+    private fun inboxScreen(bridge: FacadeBridge): InboxScreen = TriageInboxScreen.of(
+        inbox = bridge.triageInbox(),
+        scope = scope,
+        selectedSession = chosen.takeIf { it.isNotEmpty() },
+    )
+
     /**
-     * Build the inbox's model, and redraw it only if it has changed.
+     * The four tabs on a branch that has no roster to count one from.
+     *
+     * IT SPENDS `.tabs` AND NOTHING ELSE, which is why it is not the inbox [renderUnavailable]
+     * refuses to draw. The labels are inventory C1.4's chrome and say nothing about any machine;
+     * the badge over an empty roster is NO BADGE AT ALL rather than a zero (derivation table 1.4),
+     * so nothing here tells a user whose phone core refused that nothing is waiting on them --
+     * which is the claim that branch exists to withhold.
+     */
+    private fun chromeTabs(): List<InboxTab> =
+        TriageInboxScreen.of(TriageInbox.from(emptyList(), journalStale = false)).tabs
+
+    /**
+     * Draw the bar, and rebuild it only when what it says has changed.
+     *
+     * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason [inboxDrawn] records: [render]
+     * runs on every resume, after every action AND on every journal event, and the scaffold holds
+     * [contentHost] -- so a bar rebuilt unconditionally would re-parent the destination under
+     * whoever is using it, at whatever rate their agents happen to be producing events.
+     */
+    private fun drawScaffold(tabs: List<InboxTab>) {
+        val next = tabs to destination
+        if (next == barDrawn && host.childCount > 0) return
+        barDrawn = next
+        (contentHost.parent as? ViewGroup)?.removeView(contentHost)
+        host.removeAllViews()
+        host.addView(
+            phoneScaffoldView(
+                context = activity,
+                content = contentHost,
+                tabs = tabs,
+                destination = destination,
+                onSelectDestination = ::selectDestination,
+            ),
+        )
+    }
+
+    /**
+     * Draw the destination the user is on.
+     *
+     * @param bridge null on the branch where the phone core refused, which is the only reason
+     *  three of the four destinations can have nothing to draw.
+     * @param inbox null for the same reason.
+     */
+    private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
+        when (destination) {
+            Destination.INBOX -> drawInbox(inbox)
+            Destination.MACHINES -> drawMachines()
+            Destination.ACTIVITY -> drawActivity(bridge)
+            Destination.SETTINGS -> drawSettings()
+        }
+    }
+
+    /**
+     * PB-DS-9's triage inbox, redrawn only if it has changed.
      *
      * THE EQUALITY CHECK IS NOT AN OPTIMISATION. [render] runs on every resume, after every gated
      * action AND on every journal event, so rebuilding the view hierarchy each time would throw
      * the list back to the top under whoever was scrolling it -- while an agent working steadily
      * produces events steadily. [InboxScreen] is a data class of data classes, so "has anything a
      * user can see changed" is one comparison.
+     *
+     * @param screen null on the branch with no roster, where what is left under this tab is the
+     *  unrecomposed column alone -- the pairing panel above all, which is the one thing that might
+     *  get such a handset out of that state.
      */
-    private fun renderInbox(bridge: FacadeBridge): InboxScreen {
-        val next = TriageInboxScreen.of(
-            inbox = bridge.triageInbox(),
-            scope = scope,
-            selectedSession = chosen.takeIf { it.isNotEmpty() },
+    private fun drawInbox(screen: InboxScreen?) {
+        if (screen == inboxDrawn && contentShows == Destination.INBOX) return
+        inboxDrawn = screen
+        hostContent(
+            when (screen) {
+                null -> unrecomposedControls
+                else -> triageInboxView(
+                    context = activity,
+                    screen = screen,
+                    onSelectSession = ::selectSession,
+                    onSelectScope = ::selectScope,
+                    below = unrecomposedControls,
+                )
+            },
         )
-        if (next == inboxDrawn && host.childCount > 0) return next
-        inboxDrawn = next
-        detachControls()
-        host.removeAllViews()
-        host.addView(
-            triageInboxView(
-                context = activity,
-                screen = next,
-                onSelectSession = ::selectSession,
-                onSelectScope = ::selectScope,
-                below = unrecomposedControls,
-            ),
-        )
-        return next
     }
 
     /**
-     * The window with no inbox in it, for a phone that could not start.
+     * PB-APP-5's machines screen, and **it draws nothing, which is a report rather than an
+     * omission.** [dev.swarm.phone.ui.screens.machinesPanelView] is built, composed from the kit
+     * and covered by its own suite; what is missing is the two facts it renders, and neither can
+     * be supplied from here without inventing it:
      *
-     * IT SCROLLS, and that is not cosmetic: this is the state a handset reaches when its Keystore
-     * or state directory refuses, and the pairing panel -- the one thing that might get it out of
-     * that state -- is halfway down the column. When the inbox is drawn the scroll is the inbox's
-     * own; on this branch there is no inbox to lend one.
+     *  - **Presence.** `MachinesPanel` takes `MachinePane.presence`, which is `App.Presence` -- a
+     *    BLOCKING RELAY ROUND-TRIP with no timeout. android/unbound-verbs.tsv ledgers the verb
+     *    deliberately unbound in exactly these words: "this surface's render() is now driven by an
+     *    event stream -- so calling it per redraw would issue a relay RPC per journal record. It
+     *    needs a screen that polls it on its own cadence, off the main thread." [render] is that
+     *    render(), so wiring it here is the defect the ledger describes, spelled out in advance.
+     *  - **The paired device's name.** `MachinePane.pairedDeviceName` has NO bound accessor. The
+     *    string exists once, in Go (`mobile/pairing.go` sends `DeviceName: "swarm phone"`), and no
+     *    facade verb returns it. Typing it here would be a second copy of a Go constant rendered as
+     *    though the wire had carried it, which is ADR-007 B135's defect class and the one this
+     *    project has spent the most effort on.
+     *
+     * So the tab navigates, the bar stays, and the screen arrives with the two accessors.
+     *
+     * **WHAT IT DRAWS IN THE MEANTIME IS A SENTENCE, AND IT USED TO BE NOTHING.** A blank
+     * destination looked like the answer [SettingsSurface.render] and [renderUnavailable] give,
+     * and it is not the same case: those are ERROR BRANCHES, reached when something went wrong,
+     * while this is the STEADY STATE of a primary tab -- blank on every tap, for as long as the
+     * gap lasts. PB-DS-9 spends its longest argument on exactly that distinction and rules the
+     * other way: an empty section is still a section, because dropping it makes "there is nothing
+     * here" indistinguishable from "this failed to load". A blank primary destination reads as a
+     * crash. So the tab shows the kit's `emptyState` carrying [MachinesPanelScreen.UNAVAILABLE_COPY],
+     * which is the screen's own copy and says what is true of this phone without claiming anything
+     * about the machine.
      */
-    private fun hostControlsAlone() {
-        inboxDrawn = null
-        if (unrecomposedControls.parent === controlsScroll && controlsScroll.parent === host) return
-        detachControls()
-        controlsScroll.removeAllViews()
-        controlsScroll.addView(unrecomposedControls)
-        host.removeAllViews()
-        host.addView(controlsScroll)
+    private fun drawMachines() {
+        if (contentShows == Destination.MACHINES) return
+        hostContent(emptyState(activity, MachinesPanelScreen.UNAVAILABLE_COPY))
     }
 
     /**
-     * Take the controls out of whatever last held them.
+     * PB-APP-5's activity log, redrawn only when the journal has changed under it.
      *
-     * `removeAllViews` on the host detaches the INBOX, and the controls are two levels inside it
-     * -- so without this they arrive at their next `addView` still claiming a parent, and Android
-     * refuses that with "the specified child already has a parent".
+     * THE WHOLE RETAINED LOG IS READ, and both arguments say so rather than picking a page size
+     * this screen would have to paginate. `App.ReadJournal` walks entries AFTER a cursor and
+     * treats a non-positive limit as its own bound (`journalLogSize`), so [JOURNAL_FROM_THE_START]
+     * and [WHOLE_JOURNAL] ask for everything the phone is holding -- which is what a feed with no
+     * paging control can honestly show. [ActivityPanelScreen] puts it newest-first.
      */
-    private fun detachControls() {
-        (unrecomposedControls.parent as? ViewGroup)?.removeView(unrecomposedControls)
+    private fun drawActivity(bridge: FacadeBridge?) {
+        val panel = bridge?.let {
+            ActivityPanelScreen.of(it.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL))
+        }
+        if (panel == activityDrawn && contentShows == Destination.ACTIVITY) return
+        activityDrawn = panel
+        hostContent(panel?.let { activityPanelView(activity, it) })
+    }
+
+    /**
+     * PB-APP-7's settings, which is a DESTINATION and used to be a block halfway down the inbox.
+     *
+     * It is hosted once and never rebuilt here: [SettingsSurface] owns what is inside its own root
+     * and redraws it from [render], including emptying it on the branch where the phone core
+     * refused.
+     */
+    private fun drawSettings() {
+        if (contentShows == Destination.SETTINGS) return
+        hostContent(settings.root)
+    }
+
+    /** Put [view] under the bar, and record which destination it is. */
+    private fun hostContent(view: View?) {
+        contentShows = destination
+        detachHostedViews()
+        contentHost.removeAllViews()
+        view?.let { contentHost.addView(it) }
+    }
+
+    /**
+     * Take the surface's own long-lived views out of whatever last held them.
+     *
+     * `removeAllViews` on the content host detaches the INBOX, and the controls are two levels
+     * inside it -- so without this they arrive at their next `addView` still claiming a parent, and
+     * Android refuses that with "the specified child already has a parent". The settings root is
+     * here for the same reason now that it is a destination of its own.
+     */
+    private fun detachHostedViews() {
+        for (view in listOf(unrecomposedControls, settings.root)) {
+            (view.parent as? ViewGroup)?.removeView(view)
+        }
     }
 
     /**
@@ -760,6 +932,18 @@ class PhoneSurface(
         // A scope change can move the target off screen, so the choice is dropped with it rather
         // than left pointing at a session this scope does not show.
         chosen = ""
+        render()
+    }
+
+    /**
+     * Go to the destination a tapped tab names.
+     *
+     * IT KEEPS THE SESSION AND THE SCOPE. Navigating away from the inbox and back is not a change
+     * of mind about which session the controls act on, and dropping the choice would make the tab
+     * bar clear a selection the user still has on screen when they return.
+     */
+    private fun selectDestination(next: Destination) {
+        destination = next
         render()
     }
 
@@ -1052,5 +1236,14 @@ class PhoneSurface(
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+
+        /**
+         * The activity feed's read window: every record after the beginning, and as many as the
+         * core is holding. `App.ReadJournal` bounds the second itself (`limit <= 0` becomes
+         * `journalLogSize`), so asking for the whole log is one value rather than a page size this
+         * screen would then owe a paging control for.
+         */
+        const val JOURNAL_FROM_THE_START = 0L
+        const val WHOLE_JOURNAL = 0L
     }
 }

@@ -170,7 +170,7 @@ class SettingsSurface(
     /**
      * Draw the screen, and rebuild the view hierarchy only when what it shows has changed.
      *
-     * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason `PhoneSurface.renderInbox`
+     * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason `PhoneSurface.drawInbox`
      * records: [render] runs on every resume and after every switch press, and rebuilding on each
      * one would take the switch out from under the finger that just moved it. [SettingsPanel] is
      * a data class of data classes, so "has anything a user can see changed" is one comparison.

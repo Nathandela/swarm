@@ -1,0 +1,162 @@
+# S25 tab navigation: failing-first run (GG-5)
+
+Recorded before ui/screens/PhoneScaffoldView.kt existed and before TabItem carried a tap handler.
+Three runs, because the change has three failing halves and each one had to be red for its own
+reason rather than as a consequence of the others:
+
+  1. the HOSTED half -- the app the user opens has no tab bar on it at all, and no tab does
+     anything. Written against symbols that already existed, so it fails at RUNTIME rather than at
+     compilation: a missing-constant error would not have told us whether the bar was absent or
+     merely renamed.
+  2. the GATE half -- android/gate/s24_screens_test.go's composition table is where this project
+     records which file composes which component, so the `tabBar` row was moved off
+     TriageInboxView.kt and onto the scaffold BEFORE the scaffold existed.
+  3. the COMPONENT half -- the scaffold's own suite, against a factory nobody had written.
+
+THE THIRD RUN IS A COMPILATION FAILURE AND THAT IS WHAT A MISSING FACTORY IS. It is recorded as it
+came out rather than being converted into something that looks more like an assertion.
+
+HEAD b669af9, branch design-system-substrate, 2026-08-01T19:09Z
+
+
+## 1. The hosted half
+
+    cd android && ./gradlew --no-daemon testDebugUnitTest --tests "dev.swarm.phone.PhoneSurfaceNavigationTest"
+
+```
+PhoneSurfaceNavigationTest > tapping a tab swaps what is under the bar, and coming back restores it FAILED
+    java.lang.AssertionError at PhoneSurfaceNavigationTest.kt:153
+PhoneSurfaceNavigationTest > the bar survives on every destination it navigates to FAILED
+    java.lang.AssertionError at PhoneSurfaceNavigationTest.kt:153
+PhoneSurfaceNavigationTest > the window carries the tab bar, whatever is under it FAILED
+    java.lang.AssertionError at PhoneSurfaceNavigationTest.kt:67
+
+3 tests completed, 3 failed
+```
+
+with the messages, from app/build/test-results/testDebugUnitTest:
+
+```
+tapping a tab swaps what is under the bar, and coming back restores it
+java.lang.AssertionError: there is no tab labelled "Machines" on screen
+
+the bar survives on every destination it navigates to
+java.lang.AssertionError: there is no tab labelled "Inbox" on screen
+
+the window carries the tab bar, whatever is under it
+java.lang.AssertionError: the tab bar is not on the phone screen at all, so the four destinations
+inventory C1.4 names have no way in. It is composed inside `triageInboxView`, which is one
+destination among the four -- a bar that belongs to the inbox is a bar the other three screens do
+not have expected:<[Inbox, Machines, Activity, Settings]> but was:<[]>
+```
+
+THE EMPTY LIST IS THE WHOLE FINDING. Under Robolectric the phone core cannot load, so the surface
+takes its Unavailable branch -- and that branch drew the controls alone, with no inbox and
+therefore no tab bar, because the bar was composed inside the inbox view. Four destinations, no
+way into three of them, and on that branch no way into any.
+
+
+## 2. The gate half
+
+    go test ./android/gate/ -run "TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit|TestPBDS6_TheKitHasProductionCallSites" -v
+
+```
+=== RUN   TestPBDS6_TheKitHasProductionCallSites
+--- PASS: TestPBDS6_TheKitHasProductionCallSites (0.08s)
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1224: PB-DS-6: 1 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/PhoneScaffoldView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.322s
+```
+
+The `tabBar` claim MOVED rather than being dropped: it is required of the scaffold now and of no
+other file, so the fence is exactly as strong and points at the composition that actually draws
+the bar.
+
+
+## 3. The component half
+
+    cd android && ./gradlew --no-daemon testDebugUnitTest --tests "dev.swarm.phone.ui.screens.PhoneScaffoldViewTest"
+
+```
+e: PhoneScaffoldViewTest.kt:64:22 Unresolved reference 'Destination'.
+e: PhoneScaffoldViewTest.kt:66:31 Unresolved reference 'Destination'.
+e: PhoneScaffoldViewTest.kt:69:16 Unresolved reference 'phoneScaffoldView'.
+e: PhoneScaffoldViewTest.kt:111:26 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:115:26 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:125:57 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:136:13 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:156:30 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:158:40 Unresolved reference 'ScaffoldTag'.
+e: PhoneScaffoldViewTest.kt:169:13 Unresolved reference 'Destination'.
+...
+BUILD FAILED in 54s
+```
+
+(the list is 25 lines of the same three names; the tail is elided and the names are not)
+
+
+## 4. The Machines destination, after review: a blank primary tab
+
+Recorded after the three runs above were green. The Machines destination navigated and drew
+NOTHING, on the argument that its screen cannot be built honestly (App.Presence is a blocking relay
+round-trip the ledger forbids calling per redraw; pairedDeviceName has no bound accessor --
+agents-tracker-xtj). That part stands. What did not stand is what the user was left looking at: a
+blank area under the bar, on every tap, indistinguishable from a crash or a failed load. PB-DS-9
+rules the other way for exactly this case -- an empty section is still a section -- and the activity
+screen next door already obeys it.
+
+    cd android && ./gradlew --no-daemon testDebugUnitTest --tests "dev.swarm.phone.PhoneSurfaceNavigationTest"
+
+```
+PhoneSurfaceNavigationTest > the machines destination says something rather than nothing FAILED
+4 tests completed, 1 failed
+```
+
+```
+java.lang.AssertionError: the Machines destination puts NOTHING on screen: a user taps a primary
+tab and gets an empty area under the bar, which is indistinguishable from a crash, a failed load or
+a bug. PB-DS-9's own rule is that an empty section is still a section -- the Activity screen next
+door carries `emptyState` copy for exactly this reason
+```
+
+The other three tests in the file stayed green throughout, which is what says this run measured the
+new claim rather than a broken suite.
+
+THE SAME RED WAS THEN CAPTURED INDEPENDENTLY BY THE ORCHESTRATOR, on a clear lane with everything
+forced (`--rerun-tasks --no-build-cache`, results deleted first): 59/59 tasks executed, 74 classes,
+579 tests, exactly one failure -- the assertion above, verbatim. That record is theirs and is
+reproduced here on their instruction; the run was not mine and I did not observe it. It is the
+strongest form GG-5 evidence takes in this project: a red OBSERVED BY THE REVIEWER rather than
+reported to them, on a task where every other artifact in this file is the implementer's own
+account of their own run.
+
+Then the second half of the same test -- that the copy is the SCREEN MODEL'S and not a literal
+typed at the call site -- against a constant that did not exist yet:
+
+```
+e: PhoneSurfaceNavigationTest.kt:159:21 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: PhoneSurfaceNavigationTest.kt:159:48 Unresolved reference 'UNAVAILABLE_COPY'.
+> Task :app:compileDebugUnitTestKotlin FAILED
+```
+
+
+## Green
+
+    cd android && rm -rf app/build/test-results app/build/reports/tests
+    cd android && ./gradlew --no-daemon test --no-build-cache
+
+                                                      BUILD SUCCESSFUL, 579 tests, 0 failures,
+                                                      0 errors, in BOTH the debug and the release
+                                                      variant; no task FROM-CACHE, results written
+                                                      after the last source edit
+    go test ./android/gate/ -count=1                  ok
+
+THE CACHE IS OFF AND THE RESULTS ARE DELETED FIRST, DELIBERATELY. A plain `gradlew test` on this
+tree has twice reported BUILD SUCCESSFUL without running anything -- once with the test tasks
+UP-TO-DATE after a comment-only edit, once with `testReleaseUnitTest FROM-CACHE` -- and
+agents-tracker-4ok records a third shape where a Gradle collision leaves the compile output empty
+and the test task then runs zero tests while still exiting 0. A green is only a green if the task
+executed and the result count is non-zero.
