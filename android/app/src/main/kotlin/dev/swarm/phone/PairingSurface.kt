@@ -110,12 +110,24 @@ class PairingSurface(
      * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
      *
      * PB-DS-11: it was `textSize = SAS_TEXT_SP` with `SAS_TEXT_SP = 28f`, a size chosen at a call
-     * site. THE STYLE IT SHOULD TAKE DOES NOT EXIST YET: derivation row 7 specifies `Display.SAS`
-     * at 34 sp and §7 calls it "the one style this document adds to PB-DS-2's 18" --
+     * site. THE STYLE IT SHOULD TAKE DOES NOT EXIST: derivation row 7 specifies `Display.SAS` at
+     * 34 sp and §7 calls it "the one style this document adds to PB-DS-2's 18" --
      * res/values/type.xml carries the 18 and not the 19th. `Display.NavTitle` at 27 sp is the
-     * largest style the scale has, so what has happened here is that the raw literal is gone and
-     * the size is 7 sp under the design's. That is a recorded approximation, not a fix; closing it
-     * is one entry in type.xml, and it belongs to whoever owns that file.
+     * largest style the scale has, so the raw literal is gone and the size is 7 sp under the
+     * design's. **That is a recorded approximation and not a fix.**
+     *
+     * IT IS NOT "ONE ENTRY IN type.xml", WHICH IS WHAT THIS COMMENT USED TO SAY, and the
+     * correction matters because the cheap-sounding version invites someone to try it and get
+     * stuck. `android/gate/s22b_type_test.go` joins the two sides bidirectionally and BY COUNT:
+     * it asserts the design source declares 18 text styles, that type.xml defines 18, that every
+     * style names an `origin:` selector which IS a text style in the design source, and that no
+     * design rule is left unclaimed. `.sas` is absent from the shared CSS block entirely -- it is
+     * a derived addition, which is the whole of §7's point -- so a 19th style would fail on the
+     * count from both directions AND on an origin that resolves to nothing. Making it pass means
+     * teaching that join the difference between a transcribed rule and a derived one, which is
+     * rebuilding the join. `docs/design/substrate-components.md:333` already records that the
+     * gate "must fail until it exists" and does not; a round-3 finding says the same. Closing
+     * this belongs with that finding, not with a screens slice.
      */
     private val sasDisplay = label().apply {
         setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
