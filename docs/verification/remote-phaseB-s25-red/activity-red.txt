@@ -1,0 +1,82 @@
+# S25 activity feed: failing-first run (GG-5)
+
+Recorded before ui/kit/ActivityRow.kt, ui/screens/ActivityPanel.kt and
+ui/screens/ActivityPanelView.kt existed. The gate rows that name them were written first --
+one s23Inbox row, two s23DerivedSpacing rows and one s24ScreenComponents entry -- and this is
+what they said with nothing behind them.
+
+## Command
+
+    go test ./android/gate/ -run "TestPBDS6_EveryInboxComponentIsAKitFactory|TestPBDS7_EveryDerivedSpacingIsTheRowsStep|TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit" -v
+
+    HEAD 7f17a8a, branch design-system-substrate, 2026-08-01T16:27:41Z
+
+## Output
+
+```
+=== RUN   TestPBDS6_EveryInboxComponentIsAKitFactory
+    s23_kit_test.go:405: PB-DS-6: the kit has no ActivityRow.kt, which is where activityRow() lives.
+        	the activity feed's only structural element, and the machine pane's audit log -- one factory for both, which is why it takes a body and an optional emphasis rather than a JournalRow. Substrate's demo phone renders the inbox and nothing else, so `.arow` is the retired mock's class and §4 is the whole specification. Its card geometry is `.prow`'s and is spent through cardSurface -- §2's reuse rule again, and the reason the mock's radius 12 and 11/13 padding are not here. The mock's fixed 52 px timestamp gutter is dropped with NOTHING replacing it: 52 is not on the spacing scale, and `HH:MM` in a monospace face is constant width by construction. That dropped column is also what lets the timestamp be optional, which it has to be -- see the note on s23DerivedSpacing below.
+--- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.02s)
+=== RUN   TestPBDS7_EveryDerivedSpacingIsTheRowsStep
+    s23_kit_test.go:1157: PB-DS-7: ActivityRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:1157: PB-DS-7: ActivityRow.kt does not exist, so its spacing cannot be checked
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1186: PB-DS-6: 1 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/ActivityPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.02s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.902s
+FAIL
+```
+
+(The two `TestPBDS7_EveryDerivedSpacingIsTheRowsStep` lines are the padding-y and padding-x
+rows; the reader reports the missing FILE before it can name the edge.)
+
+## What changed after this run, and why the run still stands
+
+The three gate rows above cited `§4 Activity row`. They now cite `#14 Activity row`, and the
+`Why:` text quoted in the output no longer matches the file it was read from. The output is left
+verbatim rather than rewritten, because it is a record of what was executed and not a description
+of the current source.
+
+WHAT MOVED. `docs/design/substrate-components.md` carried the activity row TWICE -- numbered row
+14 in §3, and a later `Activity row` entry in §4 -- and the two disagreed: row 14 states the body
+as `Body.Message` / `--p-ink` and the §4 entry stated `--p-ink2`. Row 14 is the authority and the
+§4 duplicate has been deleted. Three things followed: the citation moved to `#14 Activity row`,
+the body ink moved from `--p-ink2` to `--p-ink`, and the justification for the wrap-content
+timestamp column became row 14's own -- a fixed column CLIPS at the 1.3x font scale PB-DS-12
+requires -- which is a better reason than the one the §4 entry gave.
+
+WHY THE FAILING-FIRST PROPERTY IS UNAFFECTED. Every fault above is `ActivityRow.kt does not
+exist` or `ActivityPanelView.kt does not exist`. None of them is about a citation, an ink or a
+row number, so none of them would have read differently under the corrected rows. What this file
+evidences is that the gate rows were written before their subjects and failed for the absence of
+those subjects, and that is as true of the corrected rows as of the ones that ran.
+
+WHAT THIS FILE CANNOT EVIDENCE is a red run of the CORRECTED rows, because by the time the
+correction arrived the subjects existed. Recording that limit rather than reconstructing a run
+that did not happen.
+
+## What is NOT in this file, and why
+
+The KOTLIN lane's red run. Four suites were written before their subjects existed --
+ActivityRowTest, ActivityPanelTest and ActivityPanelViewTest -- and their failing-first state is
+a COMPILE failure (`unresolved reference: activityRow`), not a test report. Capturing it needs
+`./gradlew`, which this agent was told not to run: the Android lane is sequenced by whoever holds
+it, because concurrent Gradle runs corrupt the Kotlin incremental caches. The JVM half of this
+slice's evidence is theirs to record.
+
+Recorded as an absence rather than as a run that happened. What is above is the whole of what was
+executed here. This is the same split, for the same reason, that
+`docs/verification/remote-phaseB-s24-red/lastscreens-red.txt` records.
+
+## The one thing the gate CANNOT say about this screen
+
+Neither lane can fail because a screen renders a fact the journal does not carry. The Go gate
+compares files; the Robolectric lane compares a view against the design. Nothing in either would
+have noticed the mock's `While you were away` / `Informative` split being reproduced over a
+`swarmmobile.JournalEntry` that carries no seen-ness, or an `HH:MM` gutter filled with a
+formatted cursor. That verdict is argued in `ActivityPanel`'s own KDoc and held by
+`ActivityPanelTest`, and it is recorded here because a reader looking for where the honesty of
+this screen is enforced will not find it in the design fences.

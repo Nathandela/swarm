@@ -1082,6 +1082,24 @@ var s24ScreenComponents = map[string]map[string]string{
 		"sectionLabel": "C6.2 `.seclabel` -- one per section",
 		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
 	},
+	// C4 -- the machines screen, whose three rows are derivation rows 11, 12 and 13. THE MACHINE
+	// ROW IS A `settingsRow`, and that is a reuse rather than an approximation: row 11 states
+	// `--p-card`, 1 dp `--p-hair`, `--p-card-r`, `padding space_12 x space_14`, `Title.Row` over
+	// `Body.Secondary` -- which is row 15's four values and two type roles exactly. What row 11
+	// has that this screen does not draw is the mono `endpoint id`, and the reason is that the
+	// product has ONE identifier for a machine rather than two (see MachinesPanel).
+	//
+	// Its AUDIT LOG is deliberately absent from this list and from the screen: the activity row is
+	// row 14, it has no factory yet, it is being built beside this one, and a second one raised
+	// here would be the copy of a component §2's reuse rule exists to prevent. The section arrives
+	// with the row, not before it.
+	"dev/swarm/phone/ui/screens/MachinesPanelView.kt": {
+		"navHeader":    "C4.1 -- the root header, title `Machines`, no live counter",
+		"presenceDot":  "C4.2 -- row 11's 7 dp presence mark, flat in both states",
+		"settingsRow":  "C4.2/3/4 -- the machine (row 11), remote access (row 12) and the device (row 13)",
+		"sectionLabel": "C4.4 `.seclabel` -- `Paired devices`",
+		"ctaButton":    "C4.4 -- Revoke, which is row 13's `.a2-no` treatment: DENY",
+	},
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen
 		// title, in `Display.NavTitle` -- which is the style `navHeader` renders.
@@ -1108,6 +1126,26 @@ var s24ScreenComponents = map[string]map[string]string{
 	// screen owning a listener and a native call, which is not what a screen is.
 	"dev/swarm/phone/ui/screens/LaunchPanelView.kt": {
 		"sectionLabel": "`.plabel` -- the section the form sits under",
+	},
+	// THE ACTIVITY SCREEN HAS ONE SECTION AND THE MOCK DRAWS TWO. `renderActivity()` splits its
+	// rows under `While you were away` and `Informative`, and NOTHING ON THE WIRE SUPPORTS THAT
+	// SPLIT: swarmmobile.JournalEntry is (Cursor, SessionID, Type, Group) and carries no
+	// seen-ness, no acknowledgement and no salience. Reproducing the two headings would be a
+	// grouping invented to match a drawing, so the panel renders one section and says so in its
+	// own KDoc. The claim below is therefore `sectionLabel` once, which is what a screen that
+	// tells the truth about this journal composes.
+	"dev/swarm/phone/ui/screens/ActivityPanelView.kt": {
+		"navHeader":    "the activity tab's own `.pnav` title -- the mock's `.navhead`, retitled",
+		"sectionLabel": "`.plabel` -- the one section the journal actually supports",
+		"activityRow":  "`.arow` -- one per journal record, derivation row 14",
+		// `.cards` is `.prows` with different numbers (0 14px/gap 8 against 0 12px/gap 7), and §6
+		// is where that difference is already settled: every mock geometry in this app moves onto
+		// Substrate's, which is why row 14 puts the activity row itself on `--p-card-r` 9. So the
+		// container is a REUSE of sessionList and not a second factory -- §2's rule -- and it is
+		// claimed here because a screen that dropped it would type the side padding and the gap
+		// itself, which is the PB-DS-6 violation the kit exists to prevent.
+		"sessionList": "`.prows` -- the rows' container, carrying the gap and the side padding",
+		"emptyState":  "derivation row 8 -- a heading over nothing is a section that lies",
 	},
 }
 

@@ -148,6 +148,21 @@ var s23Inbox = []s23Component{
 			"a boolean, and a boolean is what a screen would then be choosing type with.",
 	},
 	{
+		Factory: "activityRow",
+		File:    "ActivityRow.kt",
+		Derived: "#14 Activity row",
+		Why: "the activity feed's only structural element, and the machine pane's audit log -- one " +
+			"factory for both, which is why it takes a body and an optional emphasis rather than a " +
+			"JournalRow. Substrate's demo phone renders the inbox and nothing else, so `.arow` is " +
+			"the retired mock's class and row 14 is the whole specification. Its surface and its " +
+			"padding are the session row's four values, spent through cardSurface -- §2's reuse " +
+			"rule, and the reason the mock's radius 12 and 11/13 padding are not here. Row 14's " +
+			"one correction to the mock is that the timestamp column is WRAP-CONTENT and not a " +
+			"fixed 52 dp, because a fixed column clips at the 1.3x font scale PB-DS-12 requires. " +
+			"That column is also what lets the timestamp be absent at no cost, which it has to be: " +
+			"swarmmobile.JournalEntry carries no time at all.",
+	},
+	{
 		Factory: "readOnlyNote",
 		File:    "ReadOnlyNote.kt",
 		Derived: "#22 Read-only note",
@@ -168,6 +183,25 @@ var s23Inbox = []s23Component{
 			"becomes indistinguishable from \"that section scrolled away\". A heading over " +
 			"nothing is the same defect wearing a heading. Substrate never drew this block; the " +
 			"derivation table specifies it and row 8 says so.",
+	},
+	{
+		Factory: "presenceDot",
+		File:    "PresenceDot.kt",
+		Derived: "#11 Machine row",
+		Why: "the machine row's 7 dp mark: row 11's `online --p-ok, offline --p-ink3`, flat in " +
+			"both states because a reachable machine is not a running agent. It is a SEPARATE " +
+			"FACTORY FROM statusDot rather than a fifth key in the Group table, and the reason is " +
+			"that the cheap implementation renders correctly. Those two tokens are the ones " +
+			"`ready_for_review` and `completed` already carry, so " +
+			"`statusDot(context, if (online) \"ready_for_review\" else \"completed\")` paints this " +
+			"mark pixel-for-pixel and is the phone INVENTING a status.Group for a machine. " +
+			"TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping refuses any bound name absent from " +
+			"android/group-tokens.tsv precisely so that cannot be done quietly: the Group is " +
+			"derived once on the server and rendered verbatim (PB-TOK-8), and machine presence is " +
+			"not one -- it is `App.Presence`, the RELAY's opinion, and it has three values where a " +
+			"Group has four. So the drawable, the 7 dp and the flat treatment are shared with " +
+			"statusDot and the BINDING is not: this one takes a boolean, and the Group fence stays " +
+			"exactly as strict as it was.",
 	},
 	{
 		Factory: "statusDot",
@@ -574,13 +608,51 @@ func s23FindRow(doc, ref string) (string, bool) {
 	default:
 		return "", false
 	}
-	for _, line := range strings.Split(doc, "\n") {
-		if strings.Contains(line, marker) {
-			return line, true
+	// A `§4 Name` REFERENCE IS SEARCHED IN §4 ONLY, and this is not tidiness.
+	//
+	// §4's marker is `| Name |`, and a §3 row reads `| 14 | Name | ...` -- which CONTAINS it. So an
+	// unscoped search resolved every `§4 Name` citation against the numbered row of the same name
+	// whenever one existed, in a different section, with different values. It was live: after the
+	// duplicate §4 rows were deleted, `ActivityRow.kt` went on citing `§4 Activity row` and this
+	// reader kept answering with §3 row 14. The citation test reported nothing, because it asks
+	// whether a row was FOUND and one was.
+	//
+	// PresenceDot.kt is the only reason it was noticed at all -- `Machine presence dot` had no
+	// numbered twin, so that one citation failed while its neighbour passed for the wrong reason.
+	// A fence that resolves an ambiguous reference by taking the first hit reports agreement
+	// between a component and a row that nobody chose.
+	body := doc
+	if strings.HasPrefix(ref, "§4 ") {
+		start := strings.Index(doc, s23Section4Heading)
+		if start < 0 {
+			return "", false
+		}
+		body = doc[start:]
+		if end := strings.Index(body, "\n## "); end >= 0 {
+			body = body[:end]
 		}
 	}
-	return "", false
+
+	// AMBIGUITY IS A MISS, NOT A CHOICE. Two rows matching one marker means the component's
+	// specification is in two places and this reader cannot say which one it paints to; returning
+	// either is how a value edited in one row and not the other stays green.
+	var found string
+	hits := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, marker) {
+			hits++
+			found = line
+		}
+	}
+	if hits != 1 {
+		return "", false
+	}
+	return found, true
 }
+
+// s23Section4Heading anchors the scoped search above. It is the literal heading, so renaming the
+// section fails every §4 citation loudly rather than widening the search back to the whole file.
+const s23Section4Heading = "## 4. Adjacent derivations the same screens need"
 
 func s23IsNumberedRef(ref string) bool {
 	n, _, ok := strings.Cut(strings.TrimPrefix(ref, "#"), " ")
@@ -1084,6 +1156,14 @@ var s23DerivedSpacing = []struct {
 	// silently check the bar's padding against the field's component.
 	{"TextField.kt", "#9 Composer", "padding-y", "swarm_space_8"},
 	{"TextField.kt", "#9 Composer", "padding-x", "swarm_space_14"},
+	// Row 14 states the same two steps the session row spends, which is the point rather than a
+	// coincidence: the activity row's card IS `.prow`'s, so `cardSurface` paints it and this join
+	// is what stops the padding beside it being retyped. These rows cited `§4 Activity row` for
+	// part of a day, while the derivation table carried the activity row twice; the §4 duplicate
+	// is deleted and row 14 is the authority, which is also the reference s23FindRow can resolve
+	// unambiguously -- see the scoping note on that function.
+	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_10"},
+	{"ActivityRow.kt", "#14 Activity row", "padding-x", "swarm_space_12"},
 }
 
 // s23DocPadding reads the "padding space_2 x space_6" cell out of a row -- vertical first and

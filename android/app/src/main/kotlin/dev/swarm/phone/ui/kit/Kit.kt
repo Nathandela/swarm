@@ -305,6 +305,18 @@ internal object KitTag {
     const val AGENT = ".prow .ag"
     const val NEED = ".prow .ln"
     const val DOT = ".pdot"
+
+    /**
+     * The machine mark, named for the PART rather than for `.pdot`.
+     *
+     * It is a SEPARATE TAG FROM [DOT] and not a second name for it, for [DRILL_TITLE]'s reason one
+     * component over: the two marks are the same drawable at the same 7 dp and they answer to
+     * different authorities -- [DOT] to the four-Group binding `group-tokens.tsv` fences, this one
+     * to row 11's `--p-ok` / `--p-ink3` boolean. One tag over both would let a test find either and
+     * assert the other's binding, which is exactly the confusion the separate factory exists to
+     * prevent.
+     */
+    const val PRESENCE_DOT = "presence dot"
     const val WORKBAR = ".workbar"
     const val LINE = ".prow .t"
     const val TITLE = ".pnav .big"
@@ -362,6 +374,20 @@ internal object KitTag {
 
     /** The centred sentence under a block that cannot be typed into. Row 22's, named for the part. */
     const val READ_ONLY_NOTE = "read-only note"
+
+    /**
+     * The activity row's two parts.
+     *
+     * Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.arow` is the retired mock's
+     * class and the shared Substrate block declares no activity row at all, so a tag naming that
+     * selector would point a reader at a rule that does not exist.
+     *
+     * THERE IS NO TAG FOR THE EMPHASIS, and that is a fact about what it is rather than an
+     * omission. `.ln b` is an inline SPAN inside the body, not a view, so it has no `tag` to carry
+     * -- what an appearance test finds it by is the span range on [ACTIVITY_BODY]'s text.
+     */
+    const val ACTIVITY_TIME = "activity time"
+    const val ACTIVITY_BODY = "activity body"
 }
 
 /**
