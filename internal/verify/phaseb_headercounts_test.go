@@ -171,14 +171,14 @@ const traceFixture = "# Phase B requirement traceability\n\n" +
 	"purpose, which is this project's largest measured blind spot.\n\n" +
 	"## Every requirement\n\n" +
 	"| Requirement | Slice | Status | Derivation | Evidence |\n|---|---|---|---|---|\n" +
-	"| PB-NET-1 | S1 | shipped | **DERIVED** — the guard removed -> the fence fails | `there.md` |\n" +
-	"| PB-NET-2 | S1 | shipped | not derived | `gone.md` |\n" +
+	"| PB-NET-1 | S1 | shipped | **DERIVED** — the guard removed -> the fence fails | `docs/verification/there.md` |\n" +
+	"| PB-NET-2 | S1 | shipped | not derived | `docs/verification/gone.md` |\n" +
 	"| PB-NET-3 | S2 | **NOT MET** | not derived | the reason it is unmet |\n"
 
-// traceFixtureDisk is the fixture's filesystem: `there.md` exists, `gone.md` does not, so
+// traceFixtureDisk is the fixture's filesystem: `docs/verification/there.md` exists, `docs/verification/gone.md` does not, so
 // "Evidenced" and "Shipped with NO evidence file" are both non-zero and cannot be right by
 // accident.
-func traceFixtureDisk(rel string) bool { return rel == "there.md" }
+func traceFixtureDisk(rel string) bool { return rel == "docs/verification/there.md" }
 
 func TestPBDOC2_TheCountRulesAcceptADocumentThatAgreesWithItself(t *testing.T) {
 	tl := tallyTraceRows(traceFixture, traceFixtureDisk)
@@ -292,6 +292,37 @@ func TestPBDOC2_ABulletThatMiscountsItsOwnListIsReported(t *testing.T) {
 	}
 }
 
+// TestPBDOC2_EvidenceIsAVerificationFileBesideNarrative pins the rule that lets a row carry
+// its verification narrative in the Evidence cell without ceasing to be evidenced.
+//
+// The three rows are the three cases that decide the rule. Narrative beside a real evidence
+// file is evidenced; the ADR is evidenced because one slice designates it; narrative citing
+// only an implementation file is NOT, and that last one is the whole reason the rule is
+// scoped to a directory rather than to "names a file that exists" -- these narratives cite
+// implementation files constantly.
+func TestPBDOC2_EvidenceIsAVerificationFileBesideNarrative(t *testing.T) {
+	const doc = "## Every requirement\n\n" +
+		"| Requirement | Slice | Status | Derivation | Evidence |\n|---|---|---|---|---|\n" +
+		"| PB-NET-1 | S1 | shipped | not derived | `res/values/dimens.xml:32-41` carries the scale " +
+		"— verified. `docs/verification/e.md` |\n" +
+		"| PB-DOC-1 | S0 | shipped | not derived | `docs/adr/ADR-007-remote-access.md` |\n" +
+		"| PB-NET-2 | S1 | shipped | not derived | verified by reading `res/values/dimens.xml:32-41` |\n"
+
+	// Every path named above exists; only the directory decides.
+	disk := func(rel string) bool { return true }
+	tl := tallyTraceRows(doc, disk)
+
+	if tl.shipped != 3 {
+		t.Fatalf("shipped = %d, want 3; the fixture is not being parsed", tl.shipped)
+	}
+	if tl.evidenced != 2 || tl.noEvidence != 1 {
+		t.Errorf("evidenced = %d, no-evidence = %d; want 2 and 1. A row whose Evidence cell names "+
+			"a real verification file beside its narrative IS evidenced by the header's own "+
+			"definition, and a row citing only an implementation file is NOT",
+			tl.evidenced, tl.noEvidence)
+	}
+}
+
 // TestPBDOC2_AnUnknownStatusIsNotSilentlyDropped guards the tally's own blind spot. A row
 // whose Status is neither shipped, NOT MET nor pending must be reported, not ignored --
 // otherwise a new status word would shrink every count at once and the header would look
@@ -317,8 +348,8 @@ func TestPBDOC2_AnUnknownStatusIsNotSilentlyDropped(t *testing.T) {
 // Evidence and quietly undercount "Evidenced (measured on disk)" by thirteen.
 func TestPBDOC2_APipeInsideACodeSpanDoesNotCorruptARow(t *testing.T) {
 	doc := strings.Replace(traceFixture,
-		"| PB-NET-1 | S1 | shipped | **DERIVED** — the guard removed -> the fence fails | `there.md` |",
-		"| PB-NET-1 | S1 | shipped | **DERIVED** — `git show HEAD:f | grep x` returns nothing | `there.md` |",
+		"| PB-NET-1 | S1 | shipped | **DERIVED** — the guard removed -> the fence fails | `docs/verification/there.md` |",
+		"| PB-NET-1 | S1 | shipped | **DERIVED** — `git show HEAD:f | grep x` returns nothing | `docs/verification/there.md` |",
 		1)
 	if doc == traceFixture {
 		t.Fatal("the fixture no longer contains the row this control rewrites")
@@ -352,22 +383,63 @@ const traceBulletHeading = "## Evidence files carrying a dated correction"
 //
 // THE FOURTH GROUP IS DELIBERATELY GREEDY AND UNSPLIT. Requirement, Slice and Status are
 // pipe-free by construction, so the first three cells can be taken exactly. The remainder
-// -- Derivation and Evidence -- CANNOT be split on every pipe, because twelve rows in the
-// live document carry an EXTRA CELL: the sixteen design-system and token rows were added by
-// hand rather than by the generator, and twelve of them put their verification narrative in
-// a sixth cell between Derivation and Evidence, where the header declares five columns
-// (agents-tracker-brc). Two more rows carried a pipe that was never a cell boundary at all
-// -- PB-DS-6 quoting `git show ... | grep PhoneScaffoldView` inside a code span, PB-DS-2
-// quoting another document's table inside a sentence -- and those are now escaped as \|.
-// Reading any of these rows cell-by-cell would take a fragment of the narrative as the
+// -- Derivation and Evidence -- is NOT split on every pipe, because a pipe in these rows is
+// not reliably a cell boundary. Every requirement row carries exactly five cells today
+// (agents-tracker-brc), but getting there took two different repairs: twelve of the sixteen
+// hand-added design-system and token rows had put their verification narrative in a SIXTH
+// cell, which is now merged back into Evidence; and two rows carried a pipe that was never a
+// boundary at all -- PB-DS-6 quoting `git show ... | grep PhoneScaffoldView` inside a code
+// span, PB-DS-2 quoting another document's table inside a sentence -- which are now escaped
+// as \|. Nothing enforces either convention, so a hand-written row can reintroduce a stray
+// pipe at any time; reading cell-by-cell would then take a fragment of the narrative as the
 // Evidence path and undercount "Evidenced (measured on disk)" with no visible symptom.
 // Evidence is therefore taken as the text after the LAST pipe, which is where the generator
 // puts it, and Derivation is recognised by its leading marker rather than by position.
 var traceReqRow = regexp.MustCompile(`^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|([^|]*)\|([^|]*)\|(.*)\|\s*$`)
 
-// traceEvidencePath matches an Evidence cell that names a file, as opposed to one holding
-// the prose reason a NOT MET row carries instead, or the em dash a pending row carries.
-var traceEvidencePath = regexp.MustCompile("^`([^`]+)`$")
+// traceCodeSpan matches every backticked path in an Evidence cell. Every one is considered,
+// rather than requiring the cell to be a path and nothing else, because twelve rows carry
+// their verification narrative in that cell beside the file.
+var traceCodeSpan = regexp.MustCompile("`([^`]+)`")
+
+// traceADREvidence is the ONE evidence file outside docs/verification/, and it is deliberate
+// rather than a stray: S0 is the ADR slice, so the decision record IS its deliverable.
+// scripts/phaseb-traceability.py has an explicit branch saying so -- "S0 is the ADR itself"
+// -- and there is no remote-phaseB-s0-evidence.md to point at instead. Minting one whose
+// whole content is a pointer to the ADR would be a second copy of a decision record, which
+// is the drift this project spends its time fighting one level up.
+const traceADREvidence = "docs/adr/ADR-007-remote-access.md"
+
+// traceNamesEvidence decides "Evidenced (measured on disk)" the way the header defines it:
+// the evidence FILE is on disk.
+//
+// WHY IT IS SCOPED TO A DIRECTORY. The obvious relaxation -- "the cell names some file that
+// exists" -- is far too weak, because the narratives cite implementation files constantly
+// (`res/values/dimens.xml`, `ui/kit/Motion.kt`). Under that rule a shipped row could read as
+// evidenced on the strength of citing a source file, with no evidence file at all. So a
+// candidate must live under docs/verification/, or be the ADR above.
+//
+// THE RESIDUAL THIS LEAVES, written here rather than left to be rediscovered: a shipped row
+// whose narrative mentions SOME OTHER slice's evidence file in passing would count as
+// evidenced without evidence of its own. The tighter rule that would close it -- "cites the
+// canonical remote-phaseB-<slice>-evidence.md for its OWN slice" -- was measured and does
+// not fit the documents that exist. Four shipped rows legitimately cite something else:
+// PB-DOC-1 the ADR, PB-DS-7 and PB-DS-8 a shared `remote-phaseB-s23-head-evidence.md`, and
+// PB-DS-11 a `remote-phaseB-s24-red/` directory of red-state captures. The directory rule is
+// the tightest one those documents admit. Nothing exploits the gap today: all 143 shipped
+// rows name a genuine evidence path of their own.
+func traceNamesEvidence(cell string, onDisk func(string) bool) bool {
+	for _, m := range traceCodeSpan.FindAllStringSubmatch(cell, -1) {
+		path := m[1]
+		if !strings.HasPrefix(path, "docs/verification/") && path != traceADREvidence {
+			continue
+		}
+		if onDisk(path) {
+			return true
+		}
+	}
+	return false
+}
 
 type traceTally struct {
 	requirements int
@@ -412,7 +484,7 @@ func tallyTraceRows(doc string, onDisk func(rel string) bool) traceTally {
 			if i := strings.LastIndex(evidence, "|"); i >= 0 {
 				evidence = strings.TrimSpace(evidence[i+1:])
 			}
-			if p := traceEvidencePath.FindStringSubmatch(evidence); p != nil && onDisk(p[1]) {
+			if traceNamesEvidence(evidence, onDisk) {
 				tl.evidenced++
 			} else {
 				tl.noEvidence++
