@@ -8,7 +8,7 @@
      together with the parameter that follows them, so it reads as `1`, `1`, `0`. Android's
      PathParser takes an arc's seven parameters as seven plain numbers and does not implement that
      rule, so the artifact's own spelling would parse here as a large-arc flag of 110 and a sweep
-     flag of 8 -- drawing a different shape, silently, with no error anywhere. The gate compares
+     flag of 8 - drawing a different shape, silently, with no error anywhere. The gate compares
      the two spellings as token streams under the SVG rule, so this file is provably the
      artifact's drawing rather than a hand-adjusted lookalike. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

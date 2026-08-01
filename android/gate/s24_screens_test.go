@@ -1061,12 +1061,12 @@ var s24BuildsViews = regexp.MustCompile(`import\s+android\.(?:view|widget)\.`)
 // the kit already ships and the element of the screen inventory it renders, so a screen that
 // quietly stops rendering one fails here rather than looking like a tidier screen.
 //
-// THE LISTS ARE SHORT BECAUSE THE KIT IS SHORT, and that is recorded rather than hidden: the kit
-// ships the inbox's twelve components and nothing else, so the settings and pairing screens can
-// reach only `navHeader` and `sectionLabel`. Derivation rows 4 (toggle), 9 (text field), 10 (CTA
-// buttons), 15 (settings row) and 18 (mono well) have no factory, and until they do these screens
-// take those views as parameters from their surface. Every one of them belongs in this table the
-// day it exists.
+// THE LISTS ARE SHORT BECAUSE THE KIT IS SHORT, and what is missing is recorded rather than
+// hidden. Derivation rows 15 (settings row), 9 (text field) and 18 (the mono well) landed while
+// this slice was running and are spent -- the settings row here, the field and the well from the
+// surfaces, which is where the views they replace are built. Row 4 (toggle) and row 10 (the three
+// CTA variants) still have no factory, so the toggle and the seven pairing controls arrive at
+// these screens as parameters. Both belong in this table the day they exist.
 var s24ScreenComponents = map[string]map[string]string{
 	"dev/swarm/phone/ui/screens/TriageInboxView.kt": {
 		"navHeader":    "C1.1 `.pnav`",
@@ -1080,6 +1080,7 @@ var s24ScreenComponents = map[string]map[string]string{
 	"dev/swarm/phone/ui/screens/SettingsPanelView.kt": {
 		"navHeader":    "C6.1 -- the settings screen's own title",
 		"sectionLabel": "C6.2 `.seclabel` -- one per section",
+		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
 	},
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen

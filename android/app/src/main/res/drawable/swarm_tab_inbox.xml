@@ -7,8 +7,8 @@
 
      NO COLOUR IS DECLARED BEYOND THE PLATFORM'S WHITE. The artifact says `stroke: currentColor`,
      which means the ink belongs to the tab and not to the drawing: the kit tints this with
-     `--p-ink3` or `--p-hero` depending on selection. A tint replaces the rendered pixels, so the
-     stroke needs some opaque colour to be replaced -- and PB-DS-11 refuses an ARGB literal in
+     `p-ink3` or `p-hero` depending on selection. A tint replaces the rendered pixels, so the
+     stroke needs some opaque colour to be replaced - and PB-DS-11 refuses an ARGB literal in
      surface code for a value that is discarded, which is the argument ic_swarm_wake.xml already
      answered by taking the platform's own resource. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

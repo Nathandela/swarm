@@ -274,16 +274,30 @@ synthetic sources and are independent of the tree.
 4. WHAT IS NOT EVIDENCED HERE
 ===============================================================================
 
-- `SettingsPanelView.kt` and `PairingPanelView.kt` have NOT been run. They are Android views
-  and need the Gradle lane. What has been verified without Gradle is that they TYPE-CHECK:
-  both compile against android.jar with the two kit signatures they call (`navHeader`,
-  `sectionLabel`) declared exactly as ui/kit declares them. Whether they put the right things
-  on screen in the right order is unanswered, and there is no Robolectric suite for either --
-  that is a gap, not an omission I expect a reader to overlook.
+- `SettingsPanelViewTest` and `PairingPanelViewTest` have NOT been run. They are Robolectric
+  and need the Gradle lane, which another agent sequences. They exist, they assert the
+  composition, the order, the copy and -- in the pairing case -- that the two SAS answers
+  cannot swap places, and NOTHING HAS EXECUTED THEM. That is the largest hole in this
+  evidence and it is stated first rather than last.
+
+  What has been verified about the two views without Gradle is that they TYPE-CHECK: both
+  compile against android.jar with the two kit signatures they call (`navHeader`,
+  `sectionLabel`) declared exactly as ui/kit declares them. That says the calls are shaped
+  right. It does not say the screen is.
 - `SettingsSurface` and `PairingSurface` have not been compiled at all. They import
   `swarmmobile`, which is the gomobile AAR, and it cannot be built on this JVM harness.
-- No screen here is fully PIXELED. The kit ships the triage inbox's components and no others,
-  so derivation rows 4 (toggle), 9 (text field), 10 (CTA buttons), 15 (settings row) and 18
-  (mono well) have no factory, and the views those rows specify arrive at both screens as
-  parameters from their surface, unstyled or carrying only the text appearance the surface may
-  legally spend. PB-TOK-3's `terminal_peek` binding is untouched for the same reason.
+- No screen here is fully PIXELED, though less is missing than when these tests were written.
+  Derivation rows 15 (settings row), 9 (text field) and 18 (the mono well) landed in ui/kit
+  while this slice was running and are now spent: the settings rows are `settingsRow`, the
+  launch and pairing fields are `textField`, the pairing destination and the terminal peek are
+  `monoWell` -- and the peek's `terminal = true` is the first time PB-TOK-3's
+  `terminal_peek.fg = --p-hero` has reached a pixel on a handset.
+
+  Row 4 (toggle) and row 10 (the three CTA variants) still have no factory. So the settings
+  toggle is a bare `SwitchCompat` and the pairing screen's seven controls are bare `Button`s,
+  and both arrive at their screen as parameters. Nothing here asserts their appearance,
+  because there is none to assert.
+
+- The two model suites above were captured BEFORE those three components landed, and they are
+  unaffected by them: both are pure models with no view in them. The two view suites were
+  written against the hand-built settings row and updated to the kit's; neither has run.

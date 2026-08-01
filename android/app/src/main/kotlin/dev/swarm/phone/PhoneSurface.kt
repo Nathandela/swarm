@@ -23,6 +23,8 @@ import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchResult
 import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.TerminalPeek
+import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.InboxScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.triageInboxView
@@ -114,17 +116,21 @@ class PhoneSurface(
     private val peekTitle = label(heading = true)
 
     /**
-     * The daemon-rendered grid, in the design's code face.
+     * The daemon-rendered grid, as the kit's mono well.
      *
-     * PB-DS-11: it was `typeface = Typeface.MONOSPACE`. THE FACE IS LOAD-BEARING HERE and not
-     * decoration -- the snapshot is box-drawing glyphs and column-aligned output, so a
-     * proportional face turns a frame into ragged punctuation. `Mono.Code` is the style every mono
-     * block in this app takes (derivation row 18), and `MonoBoxDrawingTest` is what checks the
-     * family behind it actually covers U+2500.
+     * PB-TOK-3, FINALLY APPLIED. `internal/design/tokens.json` pins `terminal_peek.fg` to
+     * `--p-hero` and `terminal_peek.font` to `--p-mono`, and PB-TOK-3 has enforced that against
+     * the JSON since S22 -- against the JSON. No Android code ever read it, so the phosphor green
+     * the skin is named for had never rendered on a handset: this was a `TextView` with
+     * `Typeface.MONOSPACE`, then one with `Mono.Code` and no colour and no surface at all.
+     * `monoWell(terminal = true)` is where the pin reaches a pixel, and the recessed `--p-well`
+     * fill and the hairline come with it.
+     *
+     * THE FACE IS LOAD-BEARING HERE and not decoration -- the snapshot is box-drawing glyphs and
+     * column-aligned output, so a proportional face turns a frame into ragged punctuation.
+     * `MonoBoxDrawingTest` is what checks the family behind `Mono.Code` actually covers U+2500.
      */
-    private val peek = label().apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
-    }
+    private val peek = monoWell(activity, "", terminal = true)
     private val outcome = label()
 
     /**
@@ -890,11 +896,14 @@ class PhoneSurface(
      * A text field, by the words that say what belongs in it. The hint IS the label on this
      * surface -- there are no XML layouts here -- so a field added without one is a box a user
      * cannot identify, and android/app/src/test/.../PhoneLaunchSurfaceTest reads exactly these.
+     *
+     * IT IS THE KIT'S NOW. It was a bare `EditText` with a hint and nothing else -- the platform
+     * default underline on the platform default background -- and derivation row 9 specifies a
+     * recessed `--p-well` field with the card radius, `Body.Message` ink and, deliberately, an
+     * `--p-ink2` placeholder rather than `--p-ink3`: the hint is this surface's only label, so it
+     * is text a user is actively trying to read and the 3.50:1 tertiary fails the body floor.
      */
-    private fun field(hint: String) = EditText(activity).apply {
-        this.hint = hint
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    private fun field(hint: String): EditText = textField(activity, hint)
 
     private companion object {
 

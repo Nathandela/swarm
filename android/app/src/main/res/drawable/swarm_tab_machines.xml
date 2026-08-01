@@ -4,7 +4,7 @@
 
      THE ARTIFACT'S PATH, NOT THE MOCK'S. The retired mock draws this glyph with a third stroke
      (`M12 15v4`, the monitor's stand); Substrate's is the two-element form below. The gate reads
-     the Substrate artifact, so taking the richer drawing would fail it -- which is the intended
+     the Substrate artifact, so taking the richer drawing would fail it - which is the intended
      behaviour rather than an obstacle: the two artifacts disagree and PB-TOK-2 chose one. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="22dp"

@@ -12,7 +12,6 @@ import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -27,6 +26,8 @@ import dev.swarm.phone.ui.SasAnswer
 import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
+import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.PairingControl
 import dev.swarm.phone.ui.screens.PairingPanel
 import dev.swarm.phone.ui.screens.PairingPanelScreen
@@ -96,16 +97,14 @@ class PairingSurface(
     /**
      * The destination the user is being asked to join, in the design's code face.
      *
-     * PB-DS-11: it was `typeface = Typeface.MONOSPACE`. `Mono.Code` is the style every mono block
-     * in this app takes (derivation row 18: "so every mono block in the app is one component"),
-     * and it carries the size and the tracking with the family rather than leaving them at
-     * whatever the platform default happens to be. A relay URL is exactly the string a
-     * proportional face makes hard to compare character by character, which is what this step
-     * asks a person to do.
+     * PB-DS-11: it was `typeface = Typeface.MONOSPACE`, then `Mono.Code` applied here. It is now
+     * the KIT'S mono well -- derivation row 18's own instruction is that the pairing command line
+     * "reuses the `.cmd` mono well verbatim ... so every mono block in the app is one component",
+     * and this is that component. It brings the recessed `--p-well` fill and the hairline with the
+     * face. A relay URL is exactly the string a proportional face makes hard to compare character
+     * by character, which is what this step asks a person to do.
      */
-    private val destination = label().apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
-    }
+    private val destination = monoWell(activity, "")
 
     private val outcome = label()
 
@@ -180,10 +179,7 @@ class PairingSurface(
      * Separate fields would be a second wire encoding, and they would arrive as something the
      * user asserted rather than as a destination the phone must show them.
      */
-    private val typedPayload = EditText(activity).apply {
-        hint = "Paste the pairing code your machine printed"
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    private val typedPayload = textField(activity, "Paste the pairing code your machine printed")
 
     private val useTypedPayload = touchFilteredButton("Use this code") {
         acceptScannedPayload(typedPayload.text.toString().trim())

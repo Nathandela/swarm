@@ -5,31 +5,31 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.sectionLabel
+import dev.swarm.phone.ui.kit.settingsRow
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the settings screen, composed from the component kit.
  *
- * WHAT IT COMPOSES AND WHAT IT CANNOT. Inventory C6 is a nav header, a section label and a stack
- * of rows. The kit ships the first two and this file spends both. It does NOT ship the third:
- * derivation table row 15 (settings row) and row 4 (toggle) have no factory, and PB-DS-6 assigns
- * every visual decision to `ui/kit`. Building either here would contradict the requirement in the
- * same breath as claiming it, and `android/gate/s24_screens_test.go` fences this package to
- * exactly that -- an `R.color`, an `R.dimen`, an `R.style`, a `setTextAppearance`, a `setPadding`
- * or a `background =` fails the build.
+ * WHAT IT COMPOSES. Inventory C6 is a nav header, a section label and a stack of rows, and the
+ * kit ships all three: `navHeader`, `sectionLabel` and `settingsRow`. This file spends them and
+ * decides nothing about how any of them looks -- `android/gate/s24_screens_test.go` fences this
+ * package to exactly that, so an `R.color`, an `R.dimen`, an `R.style`, a `setTextAppearance`, a
+ * `setPadding` or a `background =` here fails the build.
  *
- * SO THE ROW ARRIVES AS A PARAMETER. [rowFor] is supplied by `SettingsSurface`, which owns the
- * switch anyway: the listener, the touch filter PB-SEC-12 clause 1 requires, and the fact that
- * the same control has to survive a redraw. That keeps the gap VISIBLE -- a missing component is
- * a parameter in a signature rather than a lookalike hand-built where nothing checks it -- and it
- * is the same seam `triageInboxView` already uses for `below`.
+ * WHAT IT STILL CANNOT COMPOSE IS THE TOGGLE. Derivation row 4 has no factory, so the trailing
+ * control arrives as a parameter: [rowFor] is supplied by `SettingsSurface`, which owns the switch
+ * anyway -- the listener, the touch filter PB-SEC-12 clause 1 requires, and the fact that the same
+ * control has to survive a redraw. `settingsRow` takes a trailing `View` rather than a `Boolean`
+ * precisely so a caller can place one it did not build, which is what makes the gap a parameter in
+ * a signature rather than a lookalike hand-built where nothing checks it.
  *
- * WHAT IS UNSTYLED, SAID PLAINLY. The label, the sublabel and the notice lines below are bare
- * `TextView`s. They carry the recorded copy and no appearance at all, so they render at whatever
- * the theme's default is. That is not a design decision made here; it is the absence of one,
- * waiting for rows 15 and 4. The alternative -- reaching for `Title.Row` and `Body.Secondary`
- * directly -- is a screen choosing type, which is the thing this package is fenced against.
+ * THE NOTICE LINES ARE STILL BARE `TextView`s. There is no notice or body-copy component -- row 8's
+ * empty state is centred with 48 dp of vertical padding and is a different thing -- so they carry
+ * the model's copy and no appearance at all. That is the absence of a decision rather than one
+ * made here; reaching for `Body.Secondary` directly would be a screen choosing type.
  */
 object SettingsTag {
     /** C6.1 `.pnav`. */
@@ -38,14 +38,12 @@ object SettingsTag {
     /** C6.2 `.seclabel` -- one per section. */
     const val SECTION_LABEL = "settings.section.label"
 
-    /** One `.setrow`: its copy, and the control the surface supplied. */
+    /**
+     * One `.setrow`. The row's own parts are the kit's and carry `KitTag.SETTINGS_*`; this tag is
+     * the screen's handle on the whole row, which is what the accessibility consolidation below
+     * needs a subject for.
+     */
     const val ROW = "settings.row"
-
-    /** `.setrow .sl` -- the row's own line. */
-    const val ROW_LABEL = "settings.row.label"
-
-    /** `.setrow .sl span` -- the qualifier under it. */
-    const val ROW_SUBLABEL = "settings.row.sublabel"
 
     /** What the panel says about switches that are inert or unconfirmed. */
     const val NOTICE = "settings.notice"
@@ -84,7 +82,16 @@ fun settingsPanelView(
         column.addView(
             sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
         )
-        section.rows.forEach { row -> column.addView(rowView(context, row, rowFor(row))) }
+        section.rows.forEach { row ->
+            column.addView(
+                settingsRow(
+                    context = context,
+                    label = row.label,
+                    sublabel = row.sublabel,
+                    trailing = rowFor(row),
+                ).apply { announceAsOneRow(row) },
+            )
+        }
     }
 
     panel.notices.forEach { notice ->
@@ -102,46 +109,41 @@ fun settingsPanelView(
 }
 
 /**
- * One row: its two lines, then the control.
+ * Make the row ONE accessibility node, which is derivation row 15's "the whole row is one >=48 dp
+ * target when it carries a toggle" expressed where it can be.
  *
- * THE ROW IS ONE ACCESSIBILITY NODE AND THE TWO LINES ARE NONE, which is derivation row 15's
- * "the whole row is one >=48 dp target" expressed in the only way this package can express it.
- * Left alone, a screen reader reads four things per row -- the label, the sublabel, the switch,
- * and nothing tying them together. With the description on the row and the two `TextView`s
- * excluded, it reads the row's words once and then the switch's state, which is two nodes and
- * the right two.
+ * Left alone a screen reader reads four things per row -- the label, the sublabel, the switch, and
+ * nothing tying them together. With the description on the row and the kit's two lines excluded it
+ * reads the row's words once and then the switch's state, which is two nodes and the right two.
+ *
+ * IT IS NOT A VISUAL DECISION AND SO IT IS NOT THE KIT'S. `importantForAccessibility` says nothing
+ * about how anything looks; what it needs is the row's own [SettingsRow.description], which is copy
+ * -- and copy is the screen's. `settingsRow` could not write this without being told the sentence.
  */
-private fun rowView(context: Context, row: SettingsRow, control: View): View =
-    LinearLayout(context).apply {
-        tag = SettingsTag.ROW
-        orientation = LinearLayout.HORIZONTAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-        isFocusable = true
-        contentDescription = row.description
-
-        addView(
-            LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                // Weight 1: the copy takes whatever is left beside the control.
-                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-                addView(
-                    TextView(context).apply {
-                        tag = SettingsTag.ROW_LABEL
-                        text = row.label
-                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                    },
-                )
-                addView(
-                    TextView(context).apply {
-                        tag = SettingsTag.ROW_SUBLABEL
-                        text = row.sublabel
-                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                    },
-                )
-            },
-        )
-        addView(control)
+private fun View.announceAsOneRow(row: SettingsRow) {
+    tag = SettingsTag.ROW
+    isFocusable = true
+    contentDescription = row.description
+    listOf(KitTag.SETTINGS_LABEL, KitTag.SETTINGS_SUBLABEL).forEach { part ->
+        findTagged(part)?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
+}
+
+/**
+ * The descendant the kit tagged with [tag], or null.
+ *
+ * It is not `kitFind`: that one lives in the TEST source set, and a production file cannot reach
+ * it. Four lines rather than promoting it, because promoting a test helper into `ui/kit` is a
+ * change to a package this slice may not touch.
+ */
+private fun View.findTagged(tag: String): View? {
+    if (this.tag == tag) return this
+    if (this !is ViewGroup) return null
+    for (i in 0 until childCount) {
+        getChildAt(i).findTagged(tag)?.let { return it }
+    }
+    return null
+}
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
