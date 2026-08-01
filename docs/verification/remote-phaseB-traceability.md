@@ -1,7 +1,9 @@
 # Phase B requirement traceability
 
 **GENERATED — do not edit by hand.** Regenerate with
-`python3 scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md`.
+`python3 scripts/phaseb-traceability.py docs/verification/remote-phaseB-traceability.md`
+— the path is an argument, not a `>` redirect, which would truncate this file before
+the script could refuse to overwrite curated rows (agents-tracker-6g9).
 
 The final audit validates against every REQUIREMENT, not every slice. This is the per-row
 view: owner, whether that owner has shipped, and where the evidence is.

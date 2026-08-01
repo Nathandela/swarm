@@ -101,9 +101,14 @@ func TestDerivation_TheGeneratedColumnSaysWhatTheMarkersSay(t *testing.T) {
 		}
 		if tableSaysDerived != markers[req] {
 			t.Errorf("%s: the traceability table says derived=%v, the evidence markers say %v. "+
-				"The column is generated from those markers, so a disagreement means the table "+
-				"was hand-edited or the generator was not re-run: `python3 "+
-				"scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md`",
+				"The column is generated from those markers, so a disagreement means the table was "+
+				"hand-edited or the generator has not been run since the marker moved.\n"+
+				"DO NOT REGENERATE TO RESOLVE THIS. scripts/phaseb-traceability.py carries a "+
+				"hand-maintained shipped list that stops at S20, so running it today reverts 18 "+
+				"requirements to pending and drops the 16 design-system rows added by hand -- and "+
+				"every gate STAYS GREEN afterwards, because it rewrites the header counts to match "+
+				"its own rows. Correct the marker or the row by hand, and read agents-tracker-6g9 "+
+				"before regenerating anything.",
 				req, tableSaysDerived, markers[req])
 		}
 	}

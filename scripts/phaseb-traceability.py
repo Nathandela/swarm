@@ -8,7 +8,15 @@ it shows up as a run of requirements whose only record is a commit message. It h
 already caught one requirement that was reported shipped because its owning SLICE
 had shipped, while the requirement itself was not met (PB-TOK-1).
 
-Regenerate with:  python3 scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md
+Regenerate with:  python3 scripts/phaseb-traceability.py docs/verification/remote-phaseB-traceability.md
+
+THE OUTPUT PATH IS AN ARGUMENT, NOT A SHELL REDIRECT, AND THAT IS DELIBERATE
+(agents-tracker-6g9). This script used to document `... > <the document>`, where the
+shell opens and TRUNCATES the target before the interpreter starts. Every guard below
+would then be deciding whether to overwrite a file that had already been emptied. Owning
+the file is what lets a refusal actually protect it, so the path is passed in and the
+write is atomic (temp file, then replace).
+
 Checked by scripts/check-phaseb-manifest.py for ownership; this script does not
 re-verify ownership, it reports status.
 """
@@ -307,7 +315,85 @@ def scan_derivation():
     return verdicts, malformed
 
 
-def main():
+# ---------------------------------------------------------------------------
+# THE DEMOTION GUARD (agents-tracker-6g9).
+#
+# SHIPPED and NOT_MET above are hand-maintained, and the report says so where it is read.
+# What the report could not say is what happens when they fall BEHIND the manifest, which
+# is the state they were found in: the list stopped at S20 while the manifest owned
+# requirements to S24, so regenerating would have moved eighteen rows from shipped or
+# NOT MET back to `pending` and dropped sixteen hand-written rows with them.
+#
+# The reason that needed a guard rather than a note is that the result is SELF-CONSISTENT.
+# This script rewrites the header counts from the rows it just emitted, so the document it
+# produces agrees with itself perfectly and every gate over it stays green. Nobody
+# investigates a green lane. The loss is invisible until an auditor asks why a shipped
+# slice reads as not started.
+#
+# So the rule is narrow and one-directional: a row may be PROMOTED freely, and may never
+# be silently DEMOTED to pending. A legitimate demotion -- un-shipping a slice on purpose
+# -- is still possible with --force, which is a different thing from a person running the
+# documented command and losing a day's curation without being told.
+TRACE_ROW = re.compile(r"^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|[^|]*\|([^|]*)\|")
+
+
+def existing_statuses(path):
+    """Requirement -> Status, read from the document this run would replace."""
+    out = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                m = TRACE_ROW.match(line)
+                if m:
+                    out[m.group(1)] = m.group(2).strip()
+    except OSError:
+        return {}
+    return out
+
+
+def demotions(path, rows, shipped):
+    """Rows the run would move from shipped or NOT MET back to pending."""
+    was = existing_statuses(path)
+    out = []
+    for req, sl in rows:
+        before = was.get(req)
+        if before is None or before == "pending":
+            continue
+        if req in NOT_MET or sl in shipped:
+            continue  # this run still reports it as shipped or NOT MET
+        out.append((req, sl, before))
+    return out
+
+
+def main(argv):
+    global ROOT, MANIFEST, VERIF
+
+    args, out_path, force = list(argv[1:]), None, False
+    while args:
+        arg = args.pop(0)
+        if arg == "--root" and args:
+            ROOT = os.path.abspath(args.pop(0))
+            MANIFEST = os.path.join(ROOT, "docs/specifications/remote-phaseB-manifest.tsv")
+            VERIF = os.path.join(ROOT, "docs/verification")
+        elif arg == "--force":
+            force = True
+        elif not arg.startswith("-") and out_path is None:
+            out_path = arg
+        else:
+            sys.stderr.write("usage: phaseb-traceability.py [--root DIR] [--force] OUTPUT\n")
+            return 2
+
+    if out_path is None:
+        sys.stderr.write(
+            "phaseb-traceability.py: no OUTPUT path given.\n"
+            "usage: phaseb-traceability.py [--root DIR] [--force] OUTPUT\n"
+            "\n"
+            "This script writes the file itself rather than printing to stdout. A shell\n"
+            "redirect truncates the target before python starts, so a redirected run cannot\n"
+            "be refused -- by the time this code is reached the document is already gone.\n"
+        )
+        return 2
+
     rows = []
     with open(MANIFEST, encoding="utf-8") as fh:
         for line in fh:
@@ -323,12 +409,37 @@ def main():
     n_derived = sum(1 for r, _ in rows if verdicts.get(r, (False,))[0])
 
     shipped = set(SHIPPED)
+
+    lost = demotions(out_path, rows, shipped)
+    if lost and not force:
+        slices = sorted({sl for _, sl, _ in lost}, key=lambda s: (len(s), s))
+        sys.stderr.write(
+            "phaseb-traceability.py: REFUSING to write %s.\n\n"
+            "%d requirement(s) it already reports as shipped or NOT MET would be demoted to\n"
+            "pending by this run, because SHIPPED in this script does not name their slice:\n"
+            "  %s\n\n"
+            "Nothing has been written; the document on disk is untouched. This is not a\n"
+            "formatting disagreement -- the run would produce a document that AGREES WITH\n"
+            "ITSELF, header counts and all, so no gate would report the loss.\n\n"
+            "Add the slice(s) to SHIPPED if they have landed and gated, or re-run with\n"
+            "--force if you have read the diff and intend the demotion.\n"
+            % (out_path, len(lost), ", ".join(slices))
+        )
+        for req, sl, before in lost[:12]:
+            sys.stderr.write("    %-12s %-5s %s -> pending\n" % (req, sl, before))
+        if len(lost) > 12:
+            sys.stderr.write("    ... and %d more\n" % (len(lost) - 12))
+        return 2
+
     by_slice = {}
     for req, sl in rows:
         by_slice.setdefault(sl, []).append(req)
 
     n_shipped = sum(1 for r, sl in rows if sl in shipped and r not in NOT_MET)
     n_not_met = sum(1 for r, _ in rows if r in NOT_MET)
+    # A VOID row sits in the not-met bucket for a mechanical reason -- one override dict --
+    # and is counted apart so the summary sentence below can be derived rather than typed.
+    n_void = sum(1 for r, _ in rows if r in NOT_MET and "VOID" in NOT_MET[r])
     no_evidence = sorted(
         {sl for _, sl in rows if sl in shipped and evidence_path(sl) is None},
         key=lambda s: (len(s), s),
@@ -337,10 +448,13 @@ def main():
         1 for _, sl in rows if sl in shipped and evidence_path(sl) is None
     )
 
-    out = sys.stdout.write
+    buf = []
+    out = buf.append
     out("# Phase B requirement traceability\n\n")
     out("**GENERATED — do not edit by hand.** Regenerate with\n")
-    out("`python3 scripts/phaseb-traceability.py > docs/verification/remote-phaseB-traceability.md`.\n\n")
+    out("`python3 scripts/phaseb-traceability.py docs/verification/remote-phaseB-traceability.md`\n")
+    out("— the path is an argument, not a `>` redirect, which would truncate this file before\n")
+    out("the script could refuse to overwrite curated rows (agents-tracker-6g9).\n\n")
     out("The final audit validates against every REQUIREMENT, not every slice. This is the per-row\n")
     out("view: owner, whether that owner has shipped, and where the evidence is.\n\n")
     out("**READ THE TWO COUNTS BELOW DIFFERENTLY — they have different provenance.** *Shipped* is\n")
@@ -364,7 +478,11 @@ def main():
     out("(ADR-007 B133, 2026-07-31). PB-SEC-2's subject -- the phone-side biometric gate -- left\n")
     out("the product, so the requirement is void: nothing is owed on it and no later slice may\n")
     out("reopen it as unfinished work. It is counted here only because this report has a single\n")
-    out("override dict, so the honest reading of the number above is **10 not met + 1 void**. The\n")
+    # COMPUTED, not written down. This sentence was a hardcoded "10 not met + 1 void" and was
+    # therefore right only by coincidence -- the document's own prose gate reads it, so a stale
+    # literal makes this script emit a claim that contradicts the rows it emitted beside it.
+    out("override dict, so the honest reading of the number above is **%d not met + %d void**. The\n"
+        % (n_not_met - n_void, n_void))
     out("row stays in the manifest and in the spec, marked VOID, so the id is never reused.\n\n")
 
     stale = sorted(
@@ -442,8 +560,14 @@ def main():
             deriv = "not derived"
         out("| %s | %s | %s | %s | %s |\n" % (req, sl, status, deriv, ev))
 
+    # Written through a temp file in the same directory and then replaced, so an
+    # interrupted run leaves the previous document intact rather than half of a new one.
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("".join(buf))
+    os.replace(tmp, out_path)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))
