@@ -41,8 +41,14 @@ wider denylist for a closed class.
 PART 2 -- the allowlist the section above deferred.  Agent: fences.  2026-08-01.
 ===========================================================================================
 
+WHOSE RECORDS ARE WHOSE, since this file now has two authors. Everything ABOVE this banner
+is the team lead's, recorded behind commits 60ab20c and 5ed6599. Everything BELOW it is the
+`fences` agent's, behind 05c813c. The two were written in parallel by accident -- the lead's
+liveness check for this agent misfired and the items were done twice -- so Part 2 builds on
+Part 1 and reverts none of it. Where Part 2 corrects Part 1 it says so in place.
+
 Part 1 closed the INSTANCES and named the class it was leaving open. This is that class,
-closed. Three findings, three RED runs.
+closed. Three findings, three RED runs, plus one correction to a claim in Part 1's work.
 
 Findings 1 and 2 are the class defects Part 1 recorded. Because Part 1 closed their
 instances, a plain run of the new controls against the tree is GREEN -- and a green run
@@ -178,7 +184,8 @@ reason written out. HAIRLINE_DP describes one quantity, so it has no row and the
 RED 4 -- the hold now has a mechanical consequence (mutation proof)
 ===========================================================================
 
-Part 1's sibling commit (60ab20c) made the CONTESTED hold real for the two rebound Groups:
+Part 1's sibling commit (60ab20c, same author) made the CONTESTED hold real for the two
+rebound Groups:
 Substrate's original binding is legal, so a revert stays green. What it did not do is join
 that allowance to the ADR marker that justifies it. s23ContestedBindings WIDENS a fence, and
 if the CONTESTED block is ever edited away -- by a ruling, or by a tidy-up -- the widening
@@ -202,8 +209,14 @@ ADR restored, `git diff docs/adr/` empty, package green again.
 The allowance is also GATED on the same read: with the marker gone the fence is strict again,
 so a ruling in either direction leaves exactly one legal answer rather than two.
 
-VISIBILITY, MEASURED RATHER THAN CLAIMED. The hold prints a five-line notice to stderr on
-GREEN, because the passing state is the one that makes a contested decision look settled.
+VISIBILITY -- THE ONE PLACE PART 2 CORRECTS PART 1, measured rather than claimed. Part 1
+described the hold as "build-visible"; it was not. It announced itself with `t.Logf`, which
+`go test` shows only under `-v` or on failure, so the notice was invisible in the run anyone
+actually performs. The claim was overstated rather than wrong in intent, and the correction
+is below.
+
+The hold now prints a five-line notice to stderr on GREEN, because the passing state is the
+one that makes a contested decision look settled.
 `go test` DISCARDS a passing package's output in non-verbose mode, so a bare
 `go test ./android/gate/...` prints `ok` and the notice goes nowhere; it is visible under
 `-v` (how every file in docs/verification is captured) and on any failure in the package.
