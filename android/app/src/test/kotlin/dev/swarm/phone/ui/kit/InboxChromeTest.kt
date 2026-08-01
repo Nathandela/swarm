@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.util.TypedValue
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
@@ -285,7 +286,15 @@ class InboxChromeTest {
             mismatches(
                 listOf(
                     Claim("`.ptabs` height", dimenPx("swarm_tabbar_height"), bar.layoutParams.height),
-                    Claim("`.ptabs` padding-bottom", dimenPx("swarm_space_14"), bar.paddingBottom),
+                    // THE BAR SPENDS NO BOTTOM PADDING, and the zero is the assertion rather than
+                    // the absence of one. It used to spend `space_14` -- the mock's iPhone home
+                    // indicator, reserved inside the bar's own 74 px box -- while
+                    // `PhoneActivity.insetTheSystemBars` applied the real navigation inset under
+                    // the whole surface, so the bar's bottom air was the design's constant PLUS a
+                    // platform measurement of the same thing. Derivation row 20 puts the inset
+                    // under a bar that is `tabbar_height` tall; row 19 has already ruled that an
+                    // iPhone frame constant yields to the platform's own measurement.
+                    Claim("`.ptabs` bottom air is the window's, not the mock's", 0, bar.paddingBottom),
                     Claim("--p-tabbg fill", KitOrigin.rgbaToken("--p-tabbg"), surface!!.fill),
                     Claim("`.ptabs` border-top colour", KitOrigin.cssColour(".ptabs", "border-top"), surface.rule),
                     Claim("`.ptabs` border-top width", px(KitOrigin.cssFirstPx(".ptabs", "border-top")), surface.rulePx),
@@ -325,6 +334,61 @@ class InboxChromeTest {
         )
         assertEquals(emptyList<String>(), mismatches(claims))
     }
+
+    /**
+     * `.ptabs svg`: the four glyphs, which this bar did not draw at all.
+     *
+     * `TabItem.icon` was null at every call site and the icon frame held an `ImageView` with no
+     * drawable in it, so the bar rendered four bare labels under four empty 22 dp boxes. The
+     * glyphs were never missing from the design -- they are in the artifact, inside each tab's own
+     * element -- they were missing from the app, and the screen that called the kit recorded it as
+     * "drawables nobody has drawn".
+     *
+     * WHAT THE GO GATE CANNOT SEE IS ASSERTED HERE. `android/gate/tabbar_test.go` proves the four
+     * drawables are the artifact's paths and that the kit names each one beside its label; what it
+     * cannot see is whether a glyph reaches the view. Those are different failures: a drawable
+     * that is perfect and unreferenced ships an empty box, which is exactly the state this test
+     * was written against.
+     *
+     * THE INK IS THE ITEM'S, WHICH IS WHAT `stroke: currentColor` MEANS. The drawable carries the
+     * platform's white so the tint has something to replace; if the tint were dropped the glyph
+     * would render white on every tab and the selected one would stop being distinguishable.
+     */
+    @Test
+    fun `every tab draws the glyph the artifact pairs with its label`() {
+        val bar = tabs()
+        val labels = listOf("Inbox", "Machines", "Activity", "Settings")
+        labels.forEachIndexed { index, label ->
+            val image = tabGlyphView(bar, index)
+            assertNotNull(
+                "the $label tab draws no glyph. The artifact puts one inside that tab's own " +
+                    "element, so a null drawable here is a 22dp empty box on the bar.",
+                image.drawable,
+            )
+        }
+
+        val claims = labels.indices.map { index ->
+            Claim(
+                "`.ptabs div${if (index == 0) ".on" else ""}` glyph ink",
+                KitOrigin.cssColour(if (index == 0) ".ptabs div.on" else ".ptabs div", "color"),
+                tabGlyphView(bar, index).imageTintList?.defaultColor,
+            )
+        }
+        assertEquals(emptyList<String>(), mismatches(claims))
+
+        // THE CONTROL, through the same lookup the four assertions above go through. A bar that
+        // drew SOMETHING for every label -- a placeholder, a shared fallback -- would satisfy all
+        // four and would satisfy them for a tab the design has no glyph for.
+        val unknown = tabBar(context, listOf(TabItem("Terminal")))
+        assertNull(
+            "a tab the artifact draws no glyph for still gets one, so the assertions above are " +
+                "about a drawable being present rather than about the design's own pairing",
+            tabGlyphView(unknown, 0).drawable,
+        )
+    }
+
+    private fun tabGlyphView(bar: LinearLayout, index: Int): ImageView =
+        (bar.getChildAt(index).kitRequire(KitTag.TAB_ICON) as ViewGroup).getChildAt(0) as ImageView
 
     /** The badge is anchored to a tab and shows only when something needs the user. */
     @Test

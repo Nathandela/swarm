@@ -17,6 +17,10 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.screens.SettingsPanel
+import dev.swarm.phone.ui.screens.SettingsPanelScreen
+import dev.swarm.phone.ui.screens.SettingsRow
+import dev.swarm.phone.ui.screens.settingsPanelView
 import swarmmobile.App
 import swarmmobile.PushPreference
 
@@ -54,13 +58,18 @@ class SettingsSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val title = label(heading = true).apply { text = "Notifications" }
-    private val blocked = label()
-    private val pending = label()
+    /**
+     * The error line, which is NOT part of inventory C6 and is hosted under the panel rather than
+     * inside it. C6 draws sections of rows; a routed facade refusal is the same class of thing as
+     * `PhoneSurface`'s outcome line and belongs on the same seam.
+     */
     private val outcome = label()
 
     private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
     private val finished = touchFilteredSwitch(PushToggle.SECOND)
+
+    /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
+    private var drawn: SettingsPanel? = null
 
     /**
      * What the screen last drew. Held so a switch press has something to derive the next value
@@ -77,13 +86,20 @@ class SettingsSurface(
     /** True while a redraw is writing the switches, so the listener does not re-issue a command. */
     private var drawing = false
 
-    val root: View = LinearLayout(activity).apply {
+    /**
+     * The panel is rebuilt into this whenever what it shows changes.
+     *
+     * IT WAS A FLAT COLUMN OF SIX UNSTYLED VIEWS -- a bold "Notifications" heading, two bare
+     * switches and three loose lines of text -- built once in the constructor and mutated in
+     * place. PB-DS-9 replaces that with the screen inventory C6 records, composed from the kit by
+     * [settingsPanelView]; what this holds now is whatever that composition currently is.
+     */
+    private val host = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
-        for (child in listOf(title, needsInput, finished, blocked, pending, outcome)) {
-            addView(child)
-        }
     }
+
+    val root: View = host
 
     /** PB-SEC-12 clause 1: a switch that stops notifications is worth an overlay. */
     val touchFilteredActions: List<View> = listOf(needsInput, finished)
@@ -91,10 +107,14 @@ class SettingsSurface(
     fun render() {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> {
+                // NOTHING, rather than an empty settings screen. `PhoneSurface` renders the routed
+                // startup failure; a panel of switches over a phone that could not start would
+                // offer preferences nothing can carry to a machine.
                 screen = null
-                for (view in listOf(title, needsInput, finished, blocked, pending, outcome)) {
-                    view.visibility = View.GONE
-                }
+                drawn = null
+                detachControls()
+                host.removeAllViews()
+                outcome.visibility = View.GONE
             }
 
             is PhoneStartup.Ready -> draw(read(startup.app))
@@ -147,22 +167,56 @@ class SettingsSurface(
         return answered
     }
 
+    /**
+     * Draw the screen, and rebuild the view hierarchy only when what it shows has changed.
+     *
+     * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason `PhoneSurface.renderInbox`
+     * records: [render] runs on every resume and after every switch press, and rebuilding on each
+     * one would take the switch out from under the finger that just moved it. [SettingsPanel] is
+     * a data class of data classes, so "has anything a user can see changed" is one comparison.
+     */
     private fun draw(next: SettingsScreen) {
         screen = next
-        drawing = true
-        needsInput.isChecked = next.alerts
-        finished.isChecked = next.mentions
-        drawing = false
-
-        for (view in listOf(title, needsInput, finished)) view.visibility = View.VISIBLE
-        needsInput.isEnabled = !next.togglesDisabled
-        finished.isEnabled = !next.togglesDisabled
-
-        blocked.text = next.notificationsBlockedNotice
-        pending.text = next.pendingNotice
-        blocked.visibility = if (blocked.text.isEmpty()) View.GONE else View.VISIBLE
-        pending.visibility = if (pending.text.isEmpty()) View.GONE else View.VISIBLE
+        val panel = SettingsPanelScreen.of(next)
         outcome.visibility = if (outcome.text.isEmpty()) View.GONE else View.VISIBLE
+        if (panel == drawn && host.childCount > 0) return
+        drawn = panel
+        detachControls()
+        host.removeAllViews()
+        host.addView(settingsPanelView(activity, panel, ::controlFor, outcome))
+    }
+
+    /**
+     * The trailing control for one row: the switch this surface owns, carrying the row's state.
+     *
+     * IT IS THE SAME SwitchCompat EVERY DRAW rather than a fresh one, and that is what makes
+     * [touchFilteredActions] a true statement: PB-SEC-12 clause 1's overlay defence is applied at
+     * construction, and a control rebuilt on each draw would be a different view from the one the
+     * assertion holds. It is also what keeps the listener from being re-registered.
+     *
+     * THE SWITCH CARRIES NO TEXT. Its words are the row's -- [SettingsPanel] holds the recorded
+     * copy and [settingsPanelView] renders it -- so a label on the control too would say
+     * everything twice, once in the screen's copy and once in a string typed here.
+     */
+    private fun controlFor(row: SettingsRow): View {
+        val control = when (row.toggle) {
+            PushToggle.FIRST -> needsInput
+            PushToggle.SECOND -> finished
+        }
+        // The panel it was last in has been discarded, but a discarded parent is still a parent
+        // and Android refuses "the specified child already has a parent".
+        (control.parent as? ViewGroup)?.removeView(control)
+        drawing = true
+        control.isChecked = row.checked
+        drawing = false
+        control.isEnabled = row.enabled
+        return control
+    }
+
+    private fun detachControls() {
+        for (control in listOf(needsInput, finished, outcome)) {
+            (control.parent as? ViewGroup)?.removeView(control)
+        }
     }
 
     private fun onToggled(toggle: PushToggle, value: Boolean) {
@@ -206,11 +260,7 @@ class SettingsSurface(
 
     private fun touchFilteredSwitch(toggle: PushToggle): SwitchCompat = SecureWindow.gate(
         SwitchCompat(activity).apply {
-            text = when (toggle) {
-                PushToggle.FIRST -> "Tell me when an agent is waiting on me"
-                PushToggle.SECOND -> "Tell me when an agent has finished"
-            }
-            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
             setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
                 onToggled(toggle, checked)
             }
@@ -218,21 +268,16 @@ class SettingsSurface(
     )
 
     /**
-     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface.
+     * The routed-error line.
      *
-     * It was `setTypeface(typeface, Typeface.BOLD)` -- a font weight chosen at a call site, which
-     * is the defect the requirement names ("a font name appearing in surface code is the defect,
-     * independent of whether its value is currently correct"). `Title.Row` is the design's own
-     * style for a row heading and it carries the family, the size, the weight and the tracking
-     * together, so the four cannot drift apart.
-     *
-     * THIS PANEL IS NOT RECOMPOSED ON THE KIT and this line is not a claim that it is. PB-DS-9
-     * puts the triage inbox first; what has happened here is that the one visual constant this
-     * file typed has been removed. A settings row is derivation table row 15 and has no kit
-     * factory yet.
+     * IT CARRIES NO TEXT APPEARANCE, and that is a statement about what is missing rather than a
+     * regression. It used to be `setTypeface(typeface, Typeface.BOLD)`, then
+     * `R.style.TextAppearance_Swarm_Title_Row` on a heading this panel no longer has -- the
+     * heading is now [dev.swarm.phone.ui.kit.navHeader]'s. What is left is one line of body copy,
+     * and the component that would style it is derivation row 15's neighbour: there is no
+     * notice or body-copy factory in the kit, so it renders at the theme's default until there is.
      */
-    private fun label(heading: Boolean = false) = TextView(activity).apply {
-        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+    private fun label() = TextView(activity).apply {
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 

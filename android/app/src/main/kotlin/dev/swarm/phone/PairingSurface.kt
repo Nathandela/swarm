@@ -27,6 +27,11 @@ import dev.swarm.phone.ui.SasAnswer
 import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
+import dev.swarm.phone.ui.screens.PairingControl
+import dev.swarm.phone.ui.screens.PairingPanel
+import dev.swarm.phone.ui.screens.PairingPanelScreen
+import dev.swarm.phone.ui.screens.PairingSlots
+import dev.swarm.phone.ui.screens.pairingPanelView
 import swarmmobile.Pairing
 
 /**
@@ -85,7 +90,7 @@ class PairingSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val message = label(heading = true)
+    private val message = label()
     private val notice = label()
 
     /**
@@ -159,7 +164,7 @@ class PairingSurface(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         // HIDDEN UNTIL A SCAN STARTS. It was VISIBLE from construction, which is a View's
-        // default, and `renderScanStep` only ever asks it to STAY visible
+        // default, and the draw only ever asked it to STAY visible
         // (`scanning && scannerHost.visibility == View.VISIBLE`) -- so a freshly opened app drew
         // an empty viewfinder-sized hole with no camera behind it. Invisible while it was 720 raw
         // pixels at the bottom of a scrolling column; not invisible now that the pairing panel
@@ -219,17 +224,53 @@ class PairingSurface(
 
     private val poller = Handler(Looper.getMainLooper())
 
-    val root: View = LinearLayout(activity).apply {
+    /**
+     * The views inventory C7's scaffold is composed FROM, handed to
+     * [dev.swarm.phone.ui.screens.pairingPanelView].
+     *
+     * They are built here rather than in the screen package because they must be: `SecureWindow`
+     * applies PB-SEC-12 clause 1's touch filter at construction, the listeners are this file's own
+     * verbs, and [touchFilteredActions] has to name the views that are actually on screen. The two
+     * that carry a text appearance are here for a second reason -- the screen package is fenced
+     * against `setTextAppearance`, so moving them would cost the destination its `Mono.Code` and
+     * the symbols their size while derivation rows 18 and 7 are unbuilt.
+     */
+    private val slots = PairingSlots(
+        body = message,
+        notice = notice,
+        destination = destination,
+        sas = sasDisplay,
+        sasInstruction = sasInstruction,
+        scanner = scannerHost,
+        controls = mapOf(
+            PairingControl.SCAN to startScan,
+            PairingControl.TYPED_PAYLOAD to typedPayload,
+            PairingControl.USE_TYPED_PAYLOAD to useTypedPayload,
+            PairingControl.OPEN_SYSTEM_SETTINGS to openSystemSettings,
+            PairingControl.CONFIRM_DESTINATION to confirmDestination,
+            PairingControl.CODES_MATCH to codesMatch,
+            PairingControl.CODES_DO_NOT_MATCH to codesDoNotMatch,
+            PairingControl.STOP to stopPairing,
+        ),
+    )
+
+    /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
+    private var drawn: PairingPanel? = null
+
+    /**
+     * The panel is rebuilt into this whenever the step changes.
+     *
+     * IT WAS A FLAT COLUMN OF FIFTEEN VIEWS, all of them added once and each shown or hidden by
+     * one of three `render*Step` functions. PB-DS-9 replaces that with the screen inventory C7
+     * records: [PairingPanelScreen] decides which of the eight controls the step offers and this
+     * holds whatever [pairingPanelView] composed from that.
+     */
+    private val host = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
-        for (child in listOf(
-            message, notice, scannerHost, startScan, typedPayload, useTypedPayload,
-            openSystemSettings, destination, confirmDestination, sasDisplay, sasInstruction,
-            codesMatch, codesDoNotMatch, stopPairing, outcome,
-        )) {
-            addView(child)
-        }
     }
+
+    val root: View = host
 
     /** PB-SEC-12 clause 1: every control here authorises something. */
     val touchFilteredActions: List<View> = listOf(
@@ -385,13 +426,11 @@ class PairingSurface(
 
     private fun renderUnavailable() {
         // PhoneSurface renders the routed startup failure; a second copy here would be the same
-        // sentence twice. What this panel owes is to offer nothing it cannot perform.
-        message.text = ""
-        notice.text = ""
-        destination.text = ""
-        sasDisplay.text = ""
-        sasInstruction.text = ""
-        for (view in root.children()) show(view, false)
+        // sentence twice. What this panel owes is to offer nothing it cannot perform -- so it
+        // draws NOTHING rather than a scaffold whose every control would refuse.
+        drawn = null
+        (outcome.parent as? ViewGroup)?.removeView(outcome)
+        host.removeAllViews()
         stopScanning()
     }
 
@@ -427,13 +466,18 @@ class PairingSurface(
 
         val current = attempt.step
         val holding = handle != null
-        message.text = PairingFlow.messageFor(current)
 
-        renderScanStep(holding)
-        renderDestinationStep(current, holding)
-        renderSasStep(current, sas, holding)
-
-        show(stopPairing, holding && !PairingFlow.isTerminal(current))
+        draw(
+            PairingPanelScreen.of(
+                attempt = attempt,
+                // The camera is asked ONLY while there is no live attempt. Asking it mid-handshake
+                // would be a permission check about a control the step does not offer.
+                scanner = if (holding) ScannerState.SCANNING else scannerState(),
+                sas = sas?.let { SasStep(it) },
+                holding = holding,
+                machine = machineOf(startup),
+            ),
+        )
         show(outcome, outcome.text.isNotEmpty())
 
         if (holding && !PairingFlow.isTerminal(current)) {
@@ -453,59 +497,37 @@ class PairingSurface(
     }
 
     /**
-     * The scanner is offered exactly when there is no live attempt in THIS process.
+     * Draw the step, and rebuild the view hierarchy only when what it shows has changed.
      *
-     * PB-PAIR-4's resumed step is the interesting case. A relaunch mid-handshake comes back
-     * with the recorded step and no handle -- the goroutine died with the process -- so the
-     * screen says what was interrupted ([PairingFlow.messageFor] plus the notice below) and
-     * offers the one action that can still be taken. Offering NOTHING would be the dead end:
-     * `Pairing` is a process-local handle, so there is no verb left to resolve the recorded
-     * attempt, and a fresh `BeginPairing` is what overwrites the record -- succeeding, or
-     * failing legibly through PB-APP-9 if the machine has this device registered (PB-STATE-10).
+     * IT REPLACED THREE FUNCTIONS THAT SET `View.visibility`. `renderScanStep`,
+     * `renderDestinationStep` and `renderSasStep` each re-derived their own conditions and each
+     * wrote the same `notice` view -- the second overwrote the first, harmlessly, because the two
+     * conditions happen to be disjoint. Nothing checked that they were. [PairingPanelScreen] now
+     * decides once, and `PairingPanelScreenTest` is where the decision is checked.
+     *
+     * PB-PAIR-4's resumed step is the interesting case and it still reads the same: a relaunch
+     * mid-handshake comes back with the recorded step and no handle, so the panel says what was
+     * interrupted and offers the one action that can still be taken. Offering NOTHING would be the
+     * dead end -- `Pairing` is a process-local handle, so there is no verb left to resolve the
+     * recorded attempt, and a fresh `BeginPairing` is what overwrites the record.
      */
-    private fun renderScanStep(holding: Boolean) {
-        val scanning = !holding
-        val state = if (scanning) scannerState() else ScannerState.SCANNING
-        notice.text = if (scanning && attempt.explainsInterruptedAttempt) {
-            "This pairing was interrupted before it finished. Nothing was joined."
-        } else {
-            ""
-        }
-        show(notice, notice.text.isNotEmpty())
-        show(startScan, scanning && state == ScannerState.SCANNING)
-        show(scannerHost, scanning && scannerHost.visibility == View.VISIBLE)
-        // PB-PAIR-2: a denied camera must not be a dead end, and only a PERMANENT denial is a
-        // trip to system settings -- an ordinary one is re-askable and Settings is a detour.
-        show(typedPayload, scanning && PairingFlow.offersManualEntry(state))
-        show(useTypedPayload, scanning && PairingFlow.offersManualEntry(state))
-        show(openSystemSettings, scanning && PairingFlow.routesToSystemSettings(state))
-    }
+    private fun draw(panel: PairingPanel) {
+        message.text = panel.body
+        notice.text = panel.notice
+        destination.text = panel.destination
+        // Three spaces, so the six symbols read as six things rather than one word. The
+        // separator is the screen's, and the alphabet is the shared Go core's -- never Kotlin's.
+        sasDisplay.text = panel.sas.joinToString("   ")
+        sasInstruction.text = panel.sasInstruction
+        // The preview closes with the step that offers it. It never OPENS here: a camera is
+        // started by someone pressing Scan, not by a redraw.
+        if (PairingControl.SCAN !in panel.controls) scannerHost.visibility = View.GONE
 
-    private fun renderDestinationStep(step: PairingStep, holding: Boolean) {
-        val confirming = holding && step == PairingStep.CONFIRM_DESTINATION
-        if (confirming) {
-            destination.text = attempt.originShown
-            notice.text = attempt.destinationNotice
-        }
-        show(destination, confirming)
-        show(notice, notice.text.isNotEmpty())
-        show(confirmDestination, confirming)
-    }
-
-    private fun renderSasStep(step: PairingStep, sas: String?, holding: Boolean) {
-        val comparing = holding && step == PairingStep.COMPARING_CODES && sas != null
-        if (comparing) {
-            val code = SasStep(checkNotNull(sas))
-            sasDisplay.text = code.symbols.joinToString("   ")
-            sasInstruction.text = code.instruction
-        } else {
-            sasDisplay.text = ""
-            sasInstruction.text = ""
-        }
-        show(sasDisplay, comparing)
-        show(sasInstruction, comparing)
-        show(codesMatch, comparing)
-        show(codesDoNotMatch, comparing)
+        if (panel == drawn && host.childCount > 0) return
+        drawn = panel
+        (outcome.parent as? ViewGroup)?.removeView(outcome)
+        host.removeAllViews()
+        host.addView(pairingPanelView(activity, panel, slots, outcome))
     }
 
     // -----------------------------------------------------------------------
@@ -533,6 +555,19 @@ class PairingSurface(
         startup.app.stateSummary().machine.isNotEmpty()
     } catch (unreadable: Exception) {
         false
+    }
+
+    /**
+     * The machine this phone is pinned to, for the one heading inventory C7 gives a name to.
+     *
+     * Empty rather than a placeholder where the state cannot be read: [PairingPanelScreen] renders
+     * `Paired` for an empty machine rather than the dangling `Paired with ` a naive interpolation
+     * produces.
+     */
+    private fun machineOf(startup: PhoneStartup.Ready): String = try {
+        startup.app.stateSummary().machine
+    } catch (unreadable: Exception) {
+        ""
     }
 
     /** The SAS, or null while the handshake has not derived one. Erroring IS the "not yet". */
@@ -626,9 +661,6 @@ class PairingSurface(
 
     private fun routed(failure: Exception) = ErrorRouter.route(failure.message.orEmpty()).message
 
-    private fun View.children(): List<View> =
-        if (this is ViewGroup) (0 until childCount).map { getChildAt(it) } else emptyList()
-
     private fun show(view: View, visible: Boolean) {
         view.visibility = if (visible) View.VISIBLE else View.GONE
     }
@@ -651,15 +683,15 @@ class PairingSurface(
         )
 
     /**
-     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. See [SettingsSurface.label]
-     * for the argument; the same two lines were in all three surface files.
+     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. The same two lines were in
+     * all three surface files.
      *
-     * THIS PANEL IS NOT RECOMPOSED ON THE KIT. Derivation row 18 specifies the pairing scaffold
-     * and there is no factory for it; PB-DS-9 puts the triage inbox first. What has changed here
-     * is that the visual constants this file typed are gone.
+     * THE HEADING IS NO LONGER THIS FILE'S. [dev.swarm.phone.ui.kit.navHeader] draws the step
+     * title now, in `Display.NavTitle`, which is what derivation row 18 specifies for it. What
+     * this factory still produces is body copy, and the kit has no component for that -- so the
+     * `heading` parameter is gone with the heading and the rest render at the theme's default.
      */
-    private fun label(heading: Boolean = false) = TextView(activity).apply {
-        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+    private fun label() = TextView(activity).apply {
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 

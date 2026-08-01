@@ -77,6 +77,13 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 		{"deny-fill", "#21FF6369"},
 		{"needs-input-dot-glow", "#B3F1A10D"},
 		{"working-dot-glow", "#8C00C2D7"},
+		// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row. Substrate
+		// draws no toggle; docs/design/substrate-components.md row 4 specifies one and states its
+		// off track as `--p-ink3` at 40%, quoting the resolved value `#6662666D`. So what is
+		// recorded here is the DERIVATION TABLE's number rather than a rendering of the HTML, and
+		// the assertion is the same either way: the blend this package computes has to equal the
+		// value the authority states, or a consumer would have to transcribe one of them.
+		{"toggle-track-off", "#6662666D"},
 	}
 
 	byName := map[string]Derivation{}

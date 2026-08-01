@@ -163,7 +163,11 @@ class KitDensityTest {
                     Claim("`.plabel` padding-x", dimenPx("swarm_space_18"), label.paddingStart),
                     Claim("`.plabel` padding-bottom", dimenPx("swarm_space_8"), label.paddingBottom),
                     Claim("`.pnav` padding-top", dimenPx("swarm_space_4"), header.paddingTop),
-                    Claim("`.ptabs` padding-bottom", dimenPx("swarm_space_14"), bar.paddingBottom),
+                    // `.ptabs { padding-bottom }` is not here because the bar no longer spends
+                    // one: that 14 px is the mock's home indicator and the real inset comes from
+                    // `PhoneActivity.insetTheSystemBars`. There is no rounding to check in a
+                    // padding that does not exist, and the bar's bottom air is asserted where the
+                    // rest of its chrome is, in InboxChromeTest.
                     Claim("`.ptabs` height", dimenPx("swarm_tabbar_height"), bar.layoutParams.height),
                     Claim("badge padding-y", dimenPx("swarm_space_2"), pill.paddingTop),
                     Claim("badge padding-x", dimenPx("swarm_space_6"), pill.paddingStart),

@@ -11,7 +11,17 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.R
 
-/** One tab. The icon is the caller's asset; everything else about it is the design's. */
+/**
+ * One tab.
+ *
+ * [icon] OVERRIDES THE DESIGN'S OWN GLYPH RATHER THAN SUPPLYING IT. It used to be the only source
+ * of one, and it was null at every call site, so the bar rendered four bare labels -- the four
+ * glyphs the artifact draws were "drawables nobody has drawn", and the tab bar shipped without the
+ * half of itself that a person recognises at a glance. They are `res/drawable/swarm_tab_*.xml`
+ * now, joined path-for-path to the artifact, and [tabGlyph] finds a tab's own by its label because
+ * that is the pairing the artifact itself makes: each glyph is inside the div that carries the
+ * label. A caller that has a reason to draw something else still can.
+ */
 data class TabItem(
     val label: CharSequence,
     val icon: Drawable? = null,
@@ -20,6 +30,28 @@ data class TabItem(
     val badgeCount: Int = 0,
     val badgeDescription: CharSequence? = null,
 )
+
+/**
+ * origin: .ptabs div
+ *
+ * The artifact's own glyph-to-label pairing, which is the only one there is: `.ptabs` holds four
+ * divs and each carries its `<svg>` and its text together.
+ *
+ * A LABEL IS A WEAK KEY AND IT IS THE RIGHT ONE HERE. The alternative is an identity on [TabItem]
+ * that every call site would have to set, which is the arrangement that just shipped four empty
+ * icon frames. The screen's tabs are the four literals the artifact names and the app has no
+ * translations, so the miss below is unreachable today; when it stops being unreachable the tab
+ * renders as it does now, without its glyph, rather than crashing on a screen a person is holding.
+ */
+private val TAB_GLYPHS: Map<String, Int> = mapOf(
+    "Inbox" to R.drawable.swarm_tab_inbox,
+    "Machines" to R.drawable.swarm_tab_machines,
+    "Activity" to R.drawable.swarm_tab_activity,
+    "Settings" to R.drawable.swarm_tab_settings,
+)
+
+private fun tabGlyph(context: Context, label: CharSequence): Drawable? =
+    TAB_GLYPHS[label.toString()]?.let { context.getDrawable(it) }
 
 /**
  * origin: .ptabs
@@ -64,10 +96,20 @@ fun tabBar(context: Context, items: List<TabItem>): LinearLayout = LinearLayout(
         // separating the bar from the content scrolling under it.
         rulePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(),
     )
-    // `padding-bottom: 14px` is the home-indicator inset in a 386x812 mock. On a handset the real
-    // one comes from WindowInsets and belongs to the screen scaffold (S24); this is the design's
-    // value, which is the right default and the right preview.
-    setPaddingRelative(0, 0, 0, Kit.dimenPx(context, R.dimen.swarm_space_14))
+    // THE BAR SPENDS NO PADDING OF ITS OWN, and the 14 dp it used to spend was the double this
+    // comment used to describe as a default. `.ptabs { padding-bottom: 14px }` reserves the iPhone
+    // home indicator INSIDE the bar's own 74 px box; `PhoneActivity.insetTheSystemBars` already
+    // pads the whole surface by the real `WindowInsets.systemBars` bottom, which on a handset is
+    // roughly 24 dp under gesture navigation and roughly 48 under three buttons. Both were
+    // applied, so the bar sat 14 dp above where the design puts it on every device.
+    //
+    // Derivation row 19 has already ruled on this class of constant: "`screen_top` 54 is an iPhone
+    // notch constant -- on Android it must come from `WindowInsets.statusBars`, with 54 as the
+    // design-time preview value only. `screen_bottom` 76 is the same problem against the
+    // gesture-nav inset." Row 20 says where the bottom one lands: the scaffold's padding is
+    // "bottom `screen_bottom` (or inset + `tabbar_height`)" -- the inset UNDER a bar that is
+    // `tabbar_height` tall, not inside it. So the platform's measurement replaces the mock's, and
+    // the bar keeps exactly the one box the design gives it.
     layoutParams = LinearLayout.LayoutParams(
         MATCH,
         Kit.dimenPx(context, R.dimen.swarm_tabbar_height),
@@ -90,8 +132,9 @@ private fun tab(context: Context, item: TabItem): View {
     }
     iconFrame.addView(
         ImageView(context).apply {
-            setImageDrawable(item.icon)
-            // `stroke: currentColor` -- the glyph is the item's ink, selected or not.
+            setImageDrawable(item.icon ?: tabGlyph(context, item.label))
+            // `stroke: currentColor` -- the glyph is the item's ink, selected or not. The drawable
+            // carries the platform's white so there is something for the tint to replace.
             imageTintList = ColorStateList.valueOf(ink)
             layoutParams = FrameLayout.LayoutParams(iconPx, iconPx)
         },

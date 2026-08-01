@@ -1032,3 +1032,244 @@ func TestPBDS9_TheSectionTableReaderSeesAMissingGroup(t *testing.T) {
 			"headings=%v empties=%v", headings, empties)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PB-DS-6 / PB-DS-9 over the screens S24 recomposed AFTER the triage inbox.
+//
+// WHY THE TWO CHECKS ABOVE ARE NOT ENOUGH. `TestPBDS6_TheKitHasProductionCallSites` asks whether
+// the kit is reached AT ALL and names the inbox's seven components; a second screen added beside
+// it that composed nothing would leave that test green, because the inbox still reaches all seven.
+// `TestPBDS6_TheScreenPackageIsFencedToComponentCallsPlusLayout` asks whether a screen names a
+// colour, which a screen that hand-builds unstyled views does not. So a hand-built screen dropped
+// into this package passes both -- and "the kit is the only way a screen is built" is exactly the
+// claim that would then be false.
+// ---------------------------------------------------------------------------
+
+// s24BuildsViews recognises a screen source that puts things ON SCREEN, as opposed to one that is
+// a pure model.
+//
+// THE DISTINCTION IS LOAD-BEARING AND IT IS WHY THIS IS NOT "every file in the package".
+// `TriageInboxScreen.kt`, `SettingsPanel.kt` and `PairingPanel.kt` are data and copy with no
+// Android import at all -- that is what makes them checkable on a plain JVM -- and requiring them
+// to call a component factory would require them to stop being models.
+var s24BuildsViews = regexp.MustCompile(`import\s+android\.(?:view|widget)\.`)
+
+// s24ScreenComponents is the claim, per recomposed screen: which kit factories its recorded
+// composition is made of.
+//
+// IT IS A CLAIM AND NOT A SURVEY, the same way s24InboxComponents is. Each entry names a factory
+// the kit already ships and the element of the screen inventory it renders, so a screen that
+// quietly stops rendering one fails here rather than looking like a tidier screen.
+//
+// THE LISTS ARE SHORT BECAUSE THE KIT IS SHORT, and that is recorded rather than hidden: the kit
+// ships the inbox's twelve components and nothing else, so the settings and pairing screens can
+// reach only `navHeader` and `sectionLabel`. Derivation rows 4 (toggle), 9 (text field), 10 (CTA
+// buttons), 15 (settings row) and 18 (mono well) have no factory, and until they do these screens
+// take those views as parameters from their surface. Every one of them belongs in this table the
+// day it exists.
+var s24ScreenComponents = map[string]map[string]string{
+	"dev/swarm/phone/ui/screens/TriageInboxView.kt": {
+		"navHeader":    "C1.1 `.pnav`",
+		"chipRow":      "C1.2 `.chips`",
+		"filterChip":   "C1.2 `.chips` -- one scope",
+		"sectionLabel": "C1.3 `.plabel`",
+		"sessionList":  "C1.3 `.prows`",
+		"sessionRow":   "C1.3 `.prow`",
+		"tabBar":       "C1.4 `.ptabs`",
+	},
+	"dev/swarm/phone/ui/screens/SettingsPanelView.kt": {
+		"navHeader":    "C6.1 -- the settings screen's own title",
+		"sectionLabel": "C6.2 `.seclabel` -- one per section",
+	},
+	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
+		// Derivation row 18: the pairing step has no nav header, so its title IS the screen
+		// title, in `Display.NavTitle` -- which is the style `navHeader` renders.
+		"navHeader": "C7 -- the step title, per derivation row 18",
+	},
+}
+
+// s24ScreenKitFaults reports what one screen source owes the requirement and does not spend.
+//
+// @return one line per fault, sorted, empty when the source is composed as claimed.
+func s24ScreenKitFaults(name, src string, required map[string]string) []string {
+	code := kotlinCodeOnly(src)
+	if !s24BuildsViews.MatchString(code) {
+		// A pure model. It composes nothing because it renders nothing.
+		return nil
+	}
+
+	var faults []string
+	spent := 0
+	for _, m := range s24KitImport.FindAllStringSubmatch(code, -1) {
+		if s24Spends(code, m[1]) {
+			spent++
+		}
+	}
+	if spent == 0 {
+		faults = append(faults, name+": builds views and calls no kit factory at all, so this "+
+			"screen is hand-built -- which is the state PB-DS-6 was recorded NOT MET in, with a "+
+			"second screen beside the one that fixed it")
+	}
+	for factory, role := range required {
+		if !s24Spends(code, factory) {
+			faults = append(faults, name+": does not reach `"+factory+"` -- "+role)
+		}
+	}
+	sort.Strings(faults)
+	return faults
+}
+
+// TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit is the fence.
+func TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit(t *testing.T) {
+	screens := s24ScreenSources(t)
+	if len(screens) == 0 {
+		t.Fatalf("PB-DS-6: there is no screen under %s", s24ScreenPackage)
+	}
+
+	var faults []string
+	views := 0
+	for name, src := range screens {
+		if s24BuildsViews.MatchString(kotlinCodeOnly(src)) {
+			views++
+		}
+		faults = append(faults, s24ScreenKitFaults(name, src, s24ScreenComponents[name])...)
+	}
+	// A package of models and no views would report every screen composed, vacuously.
+	if views == 0 {
+		t.Fatalf("PB-DS-6: no file under %s builds a view, so nothing a user sees is composed "+
+			"from the kit and every claim below is about nothing", s24ScreenPackage)
+	}
+	for claimed := range s24ScreenComponents {
+		if _, ok := screens[claimed]; !ok {
+			faults = append(faults, claimed+": the composition table claims this screen and the "+
+				"file does not exist, so its components are checked against nothing")
+		}
+	}
+	sort.Strings(faults)
+	if len(faults) > 0 {
+		t.Errorf("PB-DS-6: %d screens are not built out of the kit:\n%s", len(faults),
+			strings.Join(faults, "\n"))
+	}
+}
+
+// TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation is that fence's negative control.
+//
+// It feeds perturbed sources to the SAME function the assertion calls, which is this package's
+// standing rule: a control that rebuilds the comparison inline proves something about the copy.
+func TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation(t *testing.T) {
+	required := map[string]string{"navHeader": "the screen title"}
+
+	handBuilt := `import android.widget.LinearLayout
+
+fun screenView(context: Context): View = LinearLayout(context).apply {
+    addView(TextView(context).apply { text = "Settings" })
+}`
+	if got := s24ScreenKitFaults("perturbed.kt", handBuilt, required); len(got) == 0 {
+		t.Error("the check is blind to a screen that builds views and reaches no kit factory, " +
+			"which is a second hand-built screen beside the one that closed PB-DS-6")
+	}
+
+	// The subtler one: it composes SOMETHING, so the "calls nothing" clause is satisfied, and it
+	// has quietly stopped drawing the element its recorded composition names.
+	partial := `import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.sectionLabel
+
+fun screenView(context: Context): View = LinearLayout(context).apply {
+    addView(sectionLabel(context, "NOTIFICATIONS"))
+}`
+	got := s24ScreenKitFaults("perturbed.kt", partial, required)
+	if len(got) != 1 || !strings.Contains(got[0], "navHeader") {
+		t.Errorf("the check does not notice a screen that drops one component of its recorded "+
+			"composition while still reaching the kit; it reported %v", got)
+	}
+
+	// An import is not a call site here either.
+	mentioned := `import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.navHeader
+
+fun screenView(context: Context): View = LinearLayout(context)`
+	if got := s24ScreenKitFaults("perturbed.kt", mentioned, required); len(got) == 0 {
+		t.Error("a screen that imports navHeader and never calls it reads as composed")
+	}
+
+	// And the two shapes that MUST pass, or the package cannot hold a model or a screen.
+	model := `package dev.swarm.phone.ui.screens
+
+data class SettingsPanel(val title: String)`
+	if got := s24ScreenKitFaults("model.kt", model, nil); len(got) > 0 {
+		t.Errorf("the check rejects a pure screen model, which builds no views by design:\n%s",
+			strings.Join(got, "\n"))
+	}
+	composed := `import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.navHeader
+
+fun screenView(context: Context): View = LinearLayout(context).apply {
+    addView(navHeader(context, panel.title, null))
+}`
+	if got := s24ScreenKitFaults("allowed.kt", composed, required); len(got) > 0 {
+		t.Errorf("the check rejects a screen composed exactly as claimed:\n%s",
+			strings.Join(got, "\n"))
+	}
+}
+
+// s24VisibilityWrite is a screen deciding what is on screen by HIDING it.
+var s24VisibilityWrite = regexp.MustCompile(`\b(?:setVisibility\s*\(|visibility\s*=)`)
+
+// TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot fences the pattern this slice
+// deleted.
+//
+// WHAT WAS THERE BEFORE. `PairingSurface` decided its fifteen steps with three functions that
+// each called `show(view, condition)` -- eight controls, three re-derivations of the same three
+// modes, and two of those controls are the SAS answers, which after ADR-007 B133 are the only
+// human-in-the-loop security check left in the product. A transposed condition in that shape is
+// invisible in review and invisible on screen until the step it governs is reached.
+//
+// A COMPOSED SCREEN CANNOT HAVE THAT BUG, because a view that is not on screen is a view the
+// composition did not add -- there is no second, contradictable statement of the same fact. This
+// keeps the screen package that way. It is NOT a rule about the surfaces: a surface owns controls
+// whose visibility is genuinely a fact about the device rather than about the step (the camera
+// preview is the standing example), and it is fenced by PB-DS-11 rather than by this.
+func TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot(t *testing.T) {
+	screens := s24ScreenSources(t)
+	if len(screens) == 0 {
+		t.Fatalf("PB-DS-9: there is no screen under %s", s24ScreenPackage)
+	}
+	var faults []string
+	for name, src := range screens {
+		for _, m := range s24VisibilityWrite.FindAllString(kotlinCodeOnly(src), -1) {
+			faults = append(faults, name+": writes `"+strings.TrimSpace(m)+"`. A screen states "+
+				"what is on it by composing it; a second statement that hides what it just added "+
+				"is the shape three `render*Step` functions had, where a transposed condition was "+
+				"invisible until the step it governed was reached.")
+		}
+	}
+	sort.Strings(faults)
+	if len(faults) > 0 {
+		t.Errorf("PB-DS-9: %d visibility writes in the screen package:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+}
+
+// TestPBDS9_TheVisibilityCheckSeesBothSpellings is that fence's negative control, in both
+// directions -- a fence that fails on everything is as useless as one that fails on nothing.
+func TestPBDS9_TheVisibilityCheckSeesBothSpellings(t *testing.T) {
+	for _, dirty := range []string{
+		`view.visibility = View.GONE`,
+		`view.setVisibility(View.VISIBLE)`,
+		`show(startScan, scanning && state == ScannerState.SCANNING)
+		 confirmDestination.visibility = if (confirming) View.VISIBLE else View.GONE`,
+	} {
+		if !s24VisibilityWrite.MatchString(kotlinCodeOnly(dirty)) {
+			t.Errorf("the visibility check is blind to `%s`", dirty)
+		}
+	}
+	for _, clean := range []string{
+		`if (section.rows.isEmpty()) content.addView(emptyState(context, section.emptyCopy))`,
+		`// It used to be ` + "`view.visibility = View.GONE`" + `, set from three places.`,
+		`val visible = panel.controls`,
+	} {
+		if s24VisibilityWrite.MatchString(kotlinCodeOnly(clean)) {
+			t.Errorf("the visibility check rejects composition itself: `%s`", clean)
+		}
+	}
+}

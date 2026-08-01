@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- origin: .ptabs svg, the Inbox tab's own path.
+
+     The box is `.ptabs svg`'s 22 px; the viewport is the artifact's 24x24 viewBox, which is the
+     coordinate space the path is written in. Those are different numbers and conflating them
+     scales the glyph by 24/22.
+
+     NO COLOUR IS DECLARED BEYOND THE PLATFORM'S WHITE. The artifact says `stroke: currentColor`,
+     which means the ink belongs to the tab and not to the drawing: the kit tints this with
+     `--p-ink3` or `--p-hero` depending on selection. A tint replaces the rendered pixels, so the
+     stroke needs some opaque colour to be replaced -- and PB-DS-11 refuses an ARGB literal in
+     surface code for a value that is discarded, which is the argument ic_swarm_wake.xml already
+     answered by taking the platform's own resource. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M4 12l8-8 8 8M6 10v10h12V10" />
+</vector>

@@ -1,9 +1,15 @@
-// PB-TOK-7: the four colours the design artifact COMPUTES rather than declares.
+// PB-TOK-7: the colours this product COMPUTES rather than declares.
 //
 // docs/research/remote-control-design-directions.html resolves four values with
 // `color-mix(in srgb, ...)`: the attention row's border, the deny button's fill, and the two
 // status-dot glows. They are not tokens -- they are functions of tokens -- so every consumer that
 // wants one has, until now, had exactly one option: type the resolved hex.
+//
+// THERE IS NOW A FIFTH AND IT IS NOT THE ARTIFACT'S. `toggle-track-off` comes from
+// docs/design/substrate-components.md row 4, for a component Substrate never drew. This sentence
+// used to say "four" throughout and was left saying it when the fifth landed, which is the small
+// way a file starts describing a thing it no longer is; [Derivations] carries the argument for
+// admitting it.
 //
 // THAT IS THE DEFECT PB-TOK-1 EXISTS TO CATCH, ONE INDIRECTION FURTHER OUT. The PB-TOK-1 join
 // pairs a token NAME with a resource name and compares their values, so it sees a palette copied
@@ -11,7 +17,7 @@
 // token's value and no row would ever have named it. A derived colour transcribed once is a
 // fourth copy of the palette that the existing fence is structurally blind to.
 //
-// So the four live here, as data plus one blend function, and android/gate/s22_derived_test.go
+// So they live here, as data plus one blend function, and android/gate/s22_derived_test.go
 // asserts that no Kotlin or XML literal anywhere equals what this file computes.
 package design
 
@@ -200,13 +206,19 @@ func (d Derivation) Resolve(tokens map[string]string) (RGBA, error) {
 	return Mix(base, float64(d.Percent)/100, over), nil
 }
 
-// Derivations is every colour the Substrate artifact resolves with color-mix.
+// Derivations is every colour this product computes with color-mix rather than declares.
 //
-// SCOPE. These four are the ones the artifact's own CSS declares. Requirements section 6.13 also
-// names a destructive-outline and an approval-card tint; those are read off the RETIRED iOS mock,
-// not off Substrate, and ADR-007 B134 assigns authoring them to PB-DS-7. They belong in this
-// table the moment a Substrate spec exists for them -- the blend function already covers their
-// form, which is `X P%, transparent`.
+// SCOPE, AND IT IS NO LONGER ONE SOURCE. The first four are the ones the artifact's own CSS
+// declares. The fifth, `toggle-track-off`, is the first whose authority is
+// docs/design/substrate-components.md instead -- Substrate draws no toggle, so row 4 is the whole
+// specification for one. That is this paragraph's own invitation being taken rather than the rule
+// being widened: it used to say the mock-derived values "belong in this table the moment a
+// Substrate spec exists for them", and row 4 is that spec.
+//
+// WHAT IS STILL OUTSIDE. Requirements section 6.13 also names a destructive-outline and an
+// approval-card tint; those are read off the RETIRED iOS mock and have no derivation-table row of
+// their own yet. Same door, same key: a row that specifies one is what lets it in. The blend
+// function already covers their form, which is `X P%, transparent`.
 func Derivations() []Derivation {
 	return []Derivation{
 		{
@@ -252,25 +264,6 @@ func Derivations() []Derivation {
 			Percent: 55,
 			Over:    Transparent,
 			Site:    ".pdot.wrk box-shadow 0 0 9px -- the Working status dot's halo",
-		},
-		{
-			Name:    "toggle-track-off",
-			Base:    "--p-ink3",
-			Percent: 40,
-			Over:    Transparent,
-			Site: ".toggle track, off state -- the FIRST entry whose authority is the derivation " +
-				"table rather than the artifact's own CSS, taking the invitation the paragraph " +
-				"above leaves open. Substrate draws no toggle; docs/design/substrate-components.md " +
-				"row 4 specifies one, and its off track is --p-ink3 at 40%. The value had nowhere " +
-				"else to come from: the kit's metric grammar reads `field <number>` out of a row " +
-				"and row 4 states the share as prose (\"at 40%\"), the toggle is not in " +
-				"tokens.json, and PB-TOK-7 forbids resolving the alpha into a literal. The only " +
-				"citation that would have fitted was `{ at }` -- a preposition -- which is how a " +
-				"join stops meaning anything. It is also the component that sits in two documents' " +
-				"blind spots at once: the artifact's own prefers-reduced-motion selector list " +
-				"omits the toggle, and ADR-007 B134 decision 3 reads that as an omission rather " +
-				"than a considered exclusion, which is why Motion.kt exposes the primitives a " +
-				"toggle's thumb-slide and track crossfade are built from.",
 		},
 	}
 }

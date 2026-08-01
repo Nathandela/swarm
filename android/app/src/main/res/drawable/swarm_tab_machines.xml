@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- origin: .ptabs svg, the Machines tab's own path. See swarm_tab_inbox.xml for the box, the
+     viewport and why the stroke is the platform's white.
+
+     THE ARTIFACT'S PATH, NOT THE MOCK'S. The retired mock draws this glyph with a third stroke
+     (`M12 15v4`, the monitor's stand); Substrate's is the two-element form below. The gate reads
+     the Substrate artifact, so taking the richer drawing would fail it -- which is the intended
+     behaviour rather than an obstacle: the two artifacts disagree and PB-TOK-2 chose one. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M3 5h18v10H3zM8 19h8" />
+</vector>
