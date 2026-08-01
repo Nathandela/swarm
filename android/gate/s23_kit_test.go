@@ -812,14 +812,14 @@ var s23DerivedSpacing = []struct {
 	{"Badge.kt", "#3 Badge", "padding-x", "swarm_space_6"},
 }
 
-// s23DocPadding reads “padding `space_2` x `space_6``` out of a row: vertical first and then
-// horizontal, which is the CSS shorthand's own order and the order the table writes it in.
+// s23DocPadding reads the "padding space_2 x space_6" cell out of a row -- vertical first and
+// then horizontal, which is the CSS shorthand's own order and the order the table writes it in.
 var s23DocPadding = regexp.MustCompile("padding `space_([0-9]+)` x `space_([0-9]+)`")
 
 func s23RowPadding(row, edge string) (string, error) {
 	m := s23DocPadding.FindStringSubmatch(row)
 	if m == nil {
-		return "", fmt.Errorf("the row states no ``padding `space_N` x `space_N```")
+		return "", fmt.Errorf("the row states no padding of the form `space_N` x `space_N`")
 	}
 	switch edge {
 	case "padding-y":
@@ -873,7 +873,7 @@ func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
 	}
 	moved := strings.Replace(row, "padding `space_2`", "padding `space_4`", 1)
 	if moved == row {
-		t.Fatal("PB-DS-7: row 3 no longer states ``padding `space_2```, so the control below " +
+		t.Fatal("PB-DS-7: row 3 no longer spends space_2 on its padding, so the control below " +
 			"perturbs nothing")
 	}
 	got, err := s23RowPadding(moved, "padding-y")

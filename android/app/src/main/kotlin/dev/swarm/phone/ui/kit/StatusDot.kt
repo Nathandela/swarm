@@ -70,11 +70,11 @@ internal class StatusDotDrawable(
  * row and its line both do, and which a test asserted) cannot help: it governs the parent's clip,
  * not the layer's. The shipped dot had a correct Paint, a correct shadow radius, a correct layer
  * type and no visible glow on two of the four Groups, which is half of everything Substrate does
- * with an effect. So the view is inflated by the halo's own radius on every side and gives exactly
- * that back as a NEGATIVE MARGIN: a CSS `box-shadow` does not participate in layout, and the
- * inflation must not either. `dot.layoutParams.width` is therefore no longer 7 dp, and the
- * measurement that stayed 7 dp is the one the design actually fixes -- what the mark occupies,
- * which is `width + marginStart + marginEnd`.
+ * with an effect. So a dot THAT GLOWS is inflated by the halo's own radius on every side and gives
+ * exactly that back as a NEGATIVE MARGIN: a CSS `box-shadow` does not participate in layout, and
+ * the inflation must not either. `dot.layoutParams.width` is therefore no longer 7 dp on those
+ * two, and the measurement that stayed 7 dp on all four is the one the design actually fixes --
+ * what the mark occupies, which is `width + marginStart + marginEnd`.
  *
  * The inflation is the design's own 9 dp, so a Gaussian's outermost tail is still clipped: Skia
  * spreads a blur further than its stated radius. What is inside 9 dp is the halo the design

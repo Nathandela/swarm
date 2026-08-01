@@ -190,6 +190,12 @@ class InboxRowTest {
      * into a bitmap of exactly the view's size reproduces that faithfully, which is why this
      * probe can tell a halo that renders from one that does not.
      *
+     * THE LAYER IS MODELLED RATHER THAN EXERCISED, DELIBERATELY. Drawing the dot through a parent
+     * would not reproduce it: a layer bitmap is what the platform allocates when it composites a
+     * view onto a HARDWARE canvas, and a JVM test has no hardware canvas to obtain -- the halo
+     * would render unclipped here and be clipped on a device, which is the failure this test
+     * exists to prevent, inverted. A bitmap of exactly the view's bounds is what that layer is.
+     *
      * WHAT IT CANNOT SEE is the layer TYPE. A canvas over a `Bitmap` is a software canvas, so the
      * shadow renders here whether or not the view asked for a layer -- and on a device it would
      * not, because `setShadowLayer` is ignored under hardware acceleration. That half stays where
@@ -232,9 +238,9 @@ class InboxRowTest {
      * Both the real assertion and its control feed this the same rendering, so the control
      * exercises the check rather than a copy of it.
      */
-    private fun haloFaults(render: DotRender): List<String> {
+    private fun haloFaults(render: DotRender, glowDp: Float): List<String> {
         val faults = mutableListOf<String>()
-        val glowPx = px(KitOrigin.cssFirstPx(".pdot.att", "box-shadow")).roundToInt()
+        val glowPx = px(glowDp).roundToInt()
         val need = corePx + 2 * glowPx
         if (render.core == 0) {
             faults += "the dot painted nothing at all into its layer, so this probe is measuring " +
@@ -313,11 +319,14 @@ class InboxRowTest {
 
         val roomForAHalo = corePx + 2 * px(KitOrigin.cssFirstPx(".pdot.att", "box-shadow")).roundToInt()
         KitOrigin.groupTokens().forEach { (group, token) ->
-            if (KitOrigin.dotGlow(token) != null) {
+            val glow = KitOrigin.dotGlow(token)
+            if (glow != null) {
                 assertEquals(
                     "the $group dot's halo does not render",
                     emptyList<String>(),
-                    haloFaults(renderDot(statusDot(context, group))),
+                    // Its OWN variant's blur radius: the two live Groups declare the same 9px
+                    // today, and reading one for the other would be a join that happens to hold.
+                    haloFaults(renderDot(statusDot(context, group)), glow.radiusDp),
                 )
             } else {
                 // MEASURED IN A LAYER THE SIZE A GLOWING DOT'S IS, which is the only way this
@@ -350,13 +359,14 @@ class InboxRowTest {
      */
     @Test
     fun `the pixel probe rejects the geometry that clipped the glow`() {
+        val glow = requireNotNull(KitOrigin.dotGlow(KitOrigin.groupToken("needs_input")))
         val clipped = View(context).apply {
             // The kit's own drawable, unchanged: only the geometry is put back the way it was.
             background = statusDot(context, "needs_input").background
             layoutParams = LinearLayout.LayoutParams(corePx, corePx)
             setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         }
-        val faults = haloFaults(renderDot(clipped))
+        val faults = haloFaults(renderDot(clipped), glow.radiusDp)
         assertTrue(
             "a dot whose software layer is exactly its 7dp core passes the halo check, so the " +
                 "check would not have caught the defect it exists for",
