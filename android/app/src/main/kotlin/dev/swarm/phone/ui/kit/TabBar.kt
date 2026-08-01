@@ -26,10 +26,15 @@ data class TabItem(
  *
  * The bottom bar: four tabs, a 1 dp hairline along the top, and `--p-tabbg` behind them.
  *
- * `--p-tabbg` IS COMPUTED RATHER THAN SPENT. It is a token -- `rgba(8,9,10,0.88)` -- but
- * `tokens.json` declares it `effect`, so PB-TOK-6's converters produce no `<color>` for it and
- * there is nothing in `colors.xml` to read. [Kit.tabBarFill] derives it from `--p-bg` at the
- * token's own alpha, which keeps it downstream of the origin.
+ * `--p-tabbg` IS SPENT AS A RESOURCE, AND IT WAS NOT. The token was typed `effect` in
+ * `tokens.json` -- so PB-TOK-6's converters produced no `<color>` and there was nothing to read --
+ * and this bar composed the fill instead, as `--p-bg` at the token's own alpha. That joined the
+ * ALPHA to the origin and quietly assumed the RGB: `--p-tabbg` and `--p-bg` share a value today,
+ * which is the value-alias hazard the `--p-cta-bg` / `--p-hero` assertion exists to catch, one
+ * indirection further down. An audit committee found that the `effect` typing was itself a
+ * workaround for a parser that could not read `rgba()`, so the token now converts and
+ * `R.color.swarm_tabbar_background` is a real resource with a row in `android/design-tokens.tsv`.
+ * Reading it is one hop to the origin instead of two-thirds of one.
  *
  * **THE BACKDROP BLUR IS NOT IMPLEMENTED, AND THE OMISSION IS DELIBERATE.** The design pairs
  * `--p-tabbg` with `backdrop-filter: blur(16px)`, and the recorded conversion for it --
@@ -48,7 +53,7 @@ fun tabBar(context: Context, items: List<TabItem>): LinearLayout = LinearLayout(
     clipChildren = false
     clipToPadding = false
     background = TopRule(
-        fill = Kit.tabBarFill(context),
+        fill = Kit.colour(context, R.color.swarm_tabbar_background),
         rule = Kit.colour(context, R.color.swarm_hairline),
         rulePx = Kit.dp(context, KitMetrics.HAIRLINE_DP),
     )

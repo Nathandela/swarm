@@ -141,6 +141,16 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // Staged here, MotionTest.MockCss parses the durations, the easing control points, the
     // keyframe alpha and the banner's own top/transform out of the CSS and asserts against them.
     from(rootProject.layout.projectDirectory.dir("..").file("docs/research/remote-control-mock.html"))
+    // PB-DS-7 (S23), requested by the kit work: the DERIVATION TABLE itself.
+    //
+    // The two artifacts above are the design as DRAWN; this one is the design as DECIDED, and the
+    // difference is the whole of §2 and §3 -- the mock's 95% fills go opaque, its 12px radii become
+    // the 9dp card step, its `#ff453a` badge is retired for `--p-att`. A Robolectric assertion about
+    // a component that reads the mock alone would be checking the app against a drawing the
+    // document deliberately overrides; joined from here, the expected value comes from the row that
+    // states it. Staged for the same reason as everything above it: read from the classpath, never
+    // by relative path, so the test does not depend on Gradle's working directory.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/design/substrate-components.md"))
     into(policyTestResourceDir)
 }
 

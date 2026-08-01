@@ -23,9 +23,9 @@ import kotlin.math.roundToInt
  *
  * WHAT [KitMetrics] IS FOR, since the sentence above says everything comes from the theme. Six
  * numbers the design states cannot be resources: a 7 dp status dot and a 9 dp glow radius are not
- * spacing (a 2 dp grid has nothing to say about a dot's diameter) and not radii, and `--p-card-fx`,
- * `--p-tabbg` and `--p-workbar` are declared `effect` in `tokens.json`, so PB-TOK-6's converters
- * produce no `<color>` or `<dimen>` for them at all. They are named constants carrying a
+ * spacing (a 2 dp grid has nothing to say about a dot's diameter) and not radii, and `--p-card-fx`
+ * and `--p-workbar` are declared `effect` in `tokens.json`, so PB-TOK-6's converters produce no
+ * `<color>` or `<dimen>` for them at all. They are named constants carrying a
  * machine-read `origin:` annotation, and the Go gate recomputes every one of them from the design
  * source. A constant here with no annotation fails rather than being skipped -- which is the
  * difference between a small checked set and somewhere to put numbers.
@@ -98,17 +98,6 @@ internal object Kit {
         ATTENTION_BORDER_SHARE,
         colour(context, R.color.swarm_hairline),
     )
-
-    /**
-     * `--p-tabbg`, which is `rgba(8, 9, 10, 0.88)` -- `--p-bg` at 88%.
-     *
-     * It is a token, and it is declared `effect`, so PB-TOK-5 landed no `<color>` for it and there
-     * is nothing to spend. Computing it from `--p-bg` at the token's own alpha keeps the value
-     * downstream of the origin: change `--p-bg` and this follows, which a transcribed `#E008090A`
-     * would not.
-     */
-    fun tabBarFill(context: Context): Int =
-        ColorMix.withAlpha(colour(context, R.color.swarm_background), KitMetrics.TABBAR_ALPHA)
 
     /**
      * `--p-att`'s share of `.prow.attention`'s border, over `--p-hair`.
@@ -202,9 +191,6 @@ internal object KitMetrics {
 
     /** origin: --p-workbar stop */
     const val WORKBAR_FADE_STOP = 0.85f
-
-    /** origin: --p-tabbg alpha */
-    const val TABBAR_ALPHA = 0.88f
 
     /**
      * The badge's box. `--p-chip-r` is 8 dp, so a 16 dp box renders a pill -- the derivation is

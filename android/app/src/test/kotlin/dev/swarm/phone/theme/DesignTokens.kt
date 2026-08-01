@@ -25,7 +25,13 @@ object DesignTokens {
 
     /** `"--p-bg": "#08090a"` and nothing else: a value that is not a hex colour is not matched. */
     private val COLOUR_TOKEN =
-        Regex("\"(--[A-Za-z0-9-]+)\"\\s*:\\s*\"(#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8})\"")
+        Regex(
+            "\"(--[A-Za-z0-9-]+)\"\\s*:\\s*\"(#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|" +
+                "rgba\\([^\")]*\\))\"",
+        )
+
+    private val RGBA_VALUE =
+        Regex("rgba\\(\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(0|1|0?\\.\\d+)\\s*\\)")
 
     /** Every COLOUR token the origin declares, token name -> its literal value. */
     fun colourTokens(): Map<String, String> {
@@ -85,7 +91,22 @@ object DesignTokens {
      */
     fun toArgb(value: String): Int {
         val v = value.trim()
-        require(v.startsWith("#")) { "$value is not a hex colour" }
+        // CSS rgba(), which the skin uses for --p-tabbg. This reader was hex-only, which is one
+        // of the two parsers that forced that token to be typed `effect` -- and typing it
+        // `effect` is what made "every colour token reaches the app" true by leaving out the
+        // colour nobody could read. Widened 2026-08-01 with the Go side, deliberately together:
+        // a join whose two ends disagree about what a colour IS cannot check anything.
+        RGBA_VALUE.matchEntire(v)?.let { m ->
+            val ch = (1..3).map { i ->
+                m.groupValues[i].toInt().also {
+                    require(it in 0..255) { "$value: channel ${m.groupValues[i]} is not 0-255" }
+                }
+            }
+            val alpha = Math.round(m.groupValues[4].toDouble() * 255.0).toInt()
+            require(alpha in 0..255) { "$value: alpha is not a fraction" }
+            return (alpha shl 24) or (ch[0] shl 16) or (ch[1] shl 8) or ch[2]
+        }
+        require(v.startsWith("#")) { "$value is not a hex or rgba() colour" }
         val hex = when (v.length) {
             7 -> "FF" + v.substring(1)
             9 -> v.substring(1)

@@ -1085,10 +1085,15 @@ func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]s
 //
 // WHY THESE CONSTANTS EXIST AT ALL, since PB-DS-11's whole point is that no visual constant may
 // enter the app except through the theme. The 7dp status dot, the 9dp glow radius, the 3dp
-// workbar, the 2dp attention rail, the 1dp hairline and the 0.88 tab-bar alpha are values the
-// design states and the RESOURCES cannot carry: they are not spacing (a 2dp grid has nothing to
-// say about a dot's diameter), not radii, and --p-tabbg / --p-card-fx / --p-workbar are declared
-// `effect` in tokens.json, so PB-TOK-6's converters produce no <color> or <dimen> for them.
+// workbar, the 2dp attention rail and the 1dp hairline are values the design states and the
+// RESOURCES cannot carry: they are not spacing (a 2dp grid has nothing to say about a dot's
+// diameter), not radii, and --p-card-fx / --p-workbar are declared `effect` in tokens.json, so
+// PB-TOK-6's converters produce no <color> or <dimen> for them.
+//
+// THE SET SHRINKS WHEN THE ORIGIN CAN CARRY A VALUE AFTER ALL. The 0.88 tab-bar alpha was one of
+// these until --p-tabbg turned out to be typed `effect` only because no parser could read
+// `rgba()`; it has a <color> now, so TabBar.kt spends R.color.swarm_tabbar_background and the
+// constant is gone. A number here is the last resort, not a category.
 //
 // So they are named constants with a machine-read origin, and this test is what makes that
 // survivable: every one of them is COMPUTED from the design source or from the token it names,

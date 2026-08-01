@@ -266,10 +266,13 @@ class InboxChromeTest {
     /**
      * `.ptabs`: the frame constant, the translucent fill and the 1dp top rule.
      *
-     * The fill is `--p-tabbg`, which is declared `effect` in the token origin and therefore has NO
-     * colour resource -- PB-TOK-6's converters produce none for that kind. So the kit computes it
-     * from `--p-bg` at the token's own alpha, and the expectation here is read straight out of the
-     * token's `rgba()`, which is the only way to catch a component that used the opaque ground.
+     * THE EXPECTATION IS READ OUT OF THE TOKEN'S OWN `rgba()`, ALL FOUR CHANNELS OF IT. The bar
+     * used to compose its fill as `--p-bg` at `--p-tabbg`'s alpha, because the token was typed
+     * `effect` and had no `<color>` to spend -- which joined the ALPHA to the origin and assumed
+     * the RGB. `--p-tabbg` and `--p-bg` share a value today, so the difference was invisible: the
+     * same value-alias hazard the `--p-cta-bg` / `--p-hero` assertion exists to catch. The token
+     * converts now and `R.color.swarm_tabbar_background` is what the bar spends; this claim reads
+     * the origin's rgba() and so fails on the opaque ground AND on a drifted RGB.
      */
     @Test
     fun `the tab bar is the design's translucent bar with a hairline rule`() {
