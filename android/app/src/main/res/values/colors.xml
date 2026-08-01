@@ -51,4 +51,5 @@
     -->
     <color name="swarm_cta_background">#FF53CE7C</color>    <!-- p-cta-bg -->
     <color name="swarm_cta_ink">#FF06150C</color>           <!-- p-cta-ink -->
+    <color name="swarm_tabbar_background">#E008090A</color> <!-- p-tabbg -->
 </resources>

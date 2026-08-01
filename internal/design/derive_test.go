@@ -367,7 +367,15 @@ func TestPBTOK7_TheColourCodecRoundTrips(t *testing.T) {
 			got, "#21FF6369")
 	}
 
-	for _, bad := range []string{"", "#fff", "0x08090a", "#08090", "rgba(8,9,10,0.88)", "#zzzzzz"} {
+	// rgba(8,9,10,0.88) is NOT in this list. It used to be, and that was the defect: the skin
+	// writes --p-tabbg in rgba() notation, so a parser that refused it forced the token to be
+	// typed `effect`, which in turn made PB-TOK-5's "all the colours reach the app" true by
+	// construction. An audit committee found it. The parser reads the notation now; the
+	// round-trip is asserted just below, and strictness is unchanged for everything else.
+	if c, err := ParseColor("rgba(8,9,10,0.88)"); err != nil || c.Hex() != "#E008090A" {
+		t.Errorf("ParseColor(rgba(8,9,10,0.88)) = %v, %v; want #E008090A", c.Hex(), err)
+	}
+	for _, bad := range []string{"", "#fff", "0x08090a", "#08090", "rgba(8,9,10)", "rgba(8,9,300,0.5)", "#zzzzzz"} {
 		if c, err := ParseColor(bad); err == nil {
 			t.Errorf("ParseColor(%q) accepted the value and returned %s; a lenient colour parser "+
 				"is how a non-colour token gets a colour conversion invented for it", bad, c.Hex())

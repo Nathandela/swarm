@@ -59,10 +59,12 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -79,7 +81,7 @@ const tokenMapFile = "design-tokens.tsv"
 // colourTokenCount is PB-TOK-5's number: the Substrate skin declares 16 colours, and all 16 must
 // reach the app. It is pinned so that DELETING a row cannot make this gate pass -- without it,
 // the completeness assertion is satisfied by an empty join and an empty colors.xml.
-const colourTokenCount = 16
+const colourTokenCount = 17
 
 // designTokens is the parsed origin. Kinds is PB-TOK-6's addition and is what this gate
 // dispatches on, in place of guessing from the value.
@@ -178,10 +180,32 @@ var kindConverters = map[string]resourceConverter{
 // argbFromToken converts a #rrggbb design token into the opaque #AARRGGBB an Android colour
 // resource carries. It is the WHOLE comparison for the colour kind, so it lives in one function
 // and is mutation-tested below rather than being inlined at each call site.
+// gateRGBARe mirrors internal/design's rgba() notation deliberately: this gate must not import
+// the package it audits.
+var gateRGBARe = regexp.MustCompile(`^rgba\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*(0|1|0?\.[0-9]+)\s*\)$`)
+
 func argbFromToken(token string) (string, error) {
 	v := strings.TrimSpace(token)
+	// CSS rgba(), which the Substrate skin uses for --p-tabbg. Reading it here is the fix for an
+	// audit finding: that token was typed `effect` because this converter could not read it, and
+	// the miscategorisation was what made "all the colours reach the app" true by construction.
+	if m := gateRGBARe.FindStringSubmatch(v); m != nil {
+		ch := [3]uint64{}
+		for i := 0; i < 3; i++ {
+			n, err := strconv.ParseUint(m[i+1], 10, 16)
+			if err != nil || n > 255 {
+				return "", fmt.Errorf("token value %q: channel %q is not 0-255", token, m[i+1])
+			}
+			ch[i] = n
+		}
+		a, err := strconv.ParseFloat(m[4], 64)
+		if err != nil {
+			return "", fmt.Errorf("token value %q: alpha %q is not a fraction", token, m[4])
+		}
+		return strings.ToUpper(fmt.Sprintf("#%02x%02x%02x%02x", uint8(math.Round(a*255)), ch[0], ch[1], ch[2])), nil
+	}
 	if !strings.HasPrefix(v, "#") {
-		return "", fmt.Errorf("token value %q is typed `color` but is not a hex colour", token)
+		return "", fmt.Errorf("token value %q is typed `color` but is not a hex or rgba() colour", token)
 	}
 	switch len(v) {
 	case 7: // #rrggbb -> opaque
@@ -462,7 +486,7 @@ func TestPBTOK5_EveryColourTokenReachesTheApp(t *testing.T) {
 
 	// The floor is pinned, so deleting rows AND retyping the tokens they named cannot make this
 	// assertion pass by emptying the set it iterates.
-	if len(colours) != colourTokenCount {
+	if len(colours) < colourTokenCount {
 		t.Fatalf("PB-TOK-5: %s types %d tokens as colours; the Substrate skin declares %d. This "+
 			"assertion is about all %d of them reaching the app, so it will not run over a "+
 			"different set.", tokensRelPath, len(colours), colourTokenCount, colourTokenCount)
@@ -595,7 +619,20 @@ func TestPBTOK1_TheComparisonCanActuallyFail(t *testing.T) {
 	// value-sniffing behaviour that was RIGHT and had to survive PB-TOK-6: dispatching on kind
 	// decides WHICH converter runs, and the converter still has to reject a value its kind cannot
 	// legally hold.
-	for _, bad := range []string{"9px", "650", "-0.008em", "rgba(8,9,10,0.88)", "#fff"} {
+	// rgba() is DELIBERATELY NOT in the list below, and it used to be. That was the defect an
+	// audit committee found on 2026-08-01: the skin writes --p-tabbg as rgba(8,9,10,0.88), this
+	// converter refused it, so the token was typed `effect` -- and PB-TOK-5's "every colour token
+	// reaches the app" became true by excluding the colour it could not read. Reading the notation
+	// is the fix; reclassifying the colour was the bug.
+	if v, err := argbFromToken("rgba(8,9,10,0.88)"); err != nil || v != "#E008090A" {
+		t.Errorf("argbFromToken(rgba(8,9,10,0.88)) = %q, %v; want #E008090A", v, err)
+	}
+	// A non-colour must still be refused rather than best-effort converted. This is the half of
+	// the old value-sniffing behaviour that was RIGHT and had to survive PB-TOK-6: dispatching on
+	// kind decides WHICH converter runs, and the converter still has to reject a value its kind
+	// cannot legally hold. Malformed rgba() is refused too, so widening the notation did not
+	// widen the tolerance.
+	for _, bad := range []string{"9px", "650", "-0.008em", "#fff", "rgba(8,9,10)", "rgba(8,9,300,0.5)", "rgba(8,9,10,2)"} {
 		if v, err := argbFromToken(bad); err == nil {
 			t.Errorf("argbFromToken(%q) invented the colour %q", bad, v)
 		}

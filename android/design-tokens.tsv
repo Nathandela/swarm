@@ -47,3 +47,4 @@
 --p-err	swarm_state_error	color	Error and deny. Also diff deletions and the composer's stop button.
 --p-cta-bg	swarm_cta_background	color	CTA fill. Value-aliases --p-hero TODAY and keeps its own row and its own resource on purpose: a future skin can break the alias, and a join that deduplicated by value would not notice it had.
 --p-cta-ink	swarm_cta_ink	color	CTA ink. Value-aliases --p-hero-ink, same reasoning as the row above.
+--p-tabbg	swarm_tabbar_background	color	The tab bar's translucent fill. Typed `effect` until 2026-08-01 because it is paired with a backdrop blur -- but the blur is the effect and this is the FILL, and an audit committee found the miscategorisation was what made the "all 16 colours reach the app" claim true. rgba(8,9,10,0.88) -> #E008090A.

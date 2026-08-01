@@ -679,6 +679,31 @@ checks, TLS renewal automation, resource limits, and cross-version compatibility
 
 ### 6.20 PB-DS — the design system (NEW 2026-07-31; ADR-007 B134)
 
+> **STATUS 2026-08-01, after an adversarial audit committee (GPT-5.6 sol, opus, sonnet).
+> Verdict: REVISE. Four requirements below were claimed MET and are PARTIAL.**
+>
+> | ID | Claimed | Actual | Why |
+> |---|---|---|---|
+> | PB-DS-1 | MET | **PARTIAL** | The scale exists and the raw-pixel `PADDING` is gone, but `PairingSurface.kt:598` still carries `SCANNER_HEIGHT = 720` raw pixels — a worse instance of the exact defect this requirement names, and one the S22 evidence's own count of five surviving literals missed. |
+> | PB-DS-2 | MET | **PARTIAL** | 18 styles ship, but one (`Label.StatusBar`, origin `.ptime`) is the mock's *simulated* iOS status-bar clock, which `substrate-components.md:230,343` classifies as platform-owned and says "pretending [a token] applies would be an invention". It has zero call sites. Meanwhile `substrate-components.md:333` already calls for a 19th style, `Display.SAS`, and says the gate must fail until it exists — it does not fail, because the gate joins only against the skin CSS and not against the derived spec. |
+> | PB-DS-6 | MET | **NOT MET** | "The kit is the only way a screen is built." The kit has **zero production call sites**. `PhoneSurface.kt`, `PairingSurface.kt` and `SettingsSurface.kt` import nothing from it. Across ~11.6k inserted lines the only user-visible change is one padding moving from 24px to 24dp. The gate also narrows "every component" to 11 hand-listed Inbox factories against the family's own 38, with no amendment recording the narrowing. |
+> | PB-DS-10 | MET | **PARTIAL** | Real self-comparisons survive (`InboxRowTest.kt:108` uses `Kit.groupGlow` as both expected and actual; `InboxChromeTest.kt:349` resolves `R.dimen.swarm_space_2` on both sides), and the recorded negative controls in `remote-phaseB-s23-red/negative-controls.txt` contain stale or mispasted output for four mutations — which is the whole basis for claiming the assertions can fail. |
+>
+> **PB-DS-5 remains owned by S22 and unmet on both counts**: no grain raster exists, and the
+> tab-bar blur has no implementation because `RenderEffect` blurs the view it is set on rather
+> than the content behind it — CSS `backdrop-filter` has no Android equivalent at any API level,
+> so ADR-007 B134's claim that `minSdk 33` retires that fallback was wrong. Corrected in the ADR.
+>
+> **The structural finding, which is about how this section was written rather than about any one
+> row.** The committee observed that the rigour here is inversely proportional to how much was
+> invented: values *transcribed* from Substrate are graded by computed equality against a
+> machine-read origin, while values this effort *authored* — all 24 derived components, every
+> `derived:` constant, all of the motion work — are graded on the presence of a citation.
+> PB-DS-7's criterion ("no cell is a bare hex") grades a document's **shape**, and it is the
+> acceptance criterion for the single largest piece of design authoring in the family. That is
+> backwards from where the risk actually is, and it is the honest answer to the question of
+> whether these requirements were written to describe what was convenient to build.
+
 The Substrate skin is chosen (PB-TOK-2), its 31 tokens are pinned and drift-guarded, and **none of
 it renders**. `android/app/src/main/kotlin/` contains no `setTextColor`, no `R.color` reference and
 no `R.dimen` reference at all; the entire visual output of the app is `setPadding(24)` in raw pixels,

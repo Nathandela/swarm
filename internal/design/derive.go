@@ -18,6 +18,7 @@ package design
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -42,7 +43,13 @@ func (c RGBA) Hex() string {
 	return fmt.Sprintf("#%02X%02X%02X%02X", c.A, c.R, c.G, c.B)
 }
 
-// ParseColor reads #rrggbb, #aarrggbb or the keyword `transparent`.
+// rgbaRe is CSS rgba(): three integer channels and a fractional alpha. The Substrate skin uses
+// it for exactly one token, --p-tabbg, and typing that token `effect` because this parser could
+// not read it is what made PB-TOK-5's "all 16 colours reach the app" true by construction. An
+// audit committee found it; the fix is to read the notation, not to reclassify the colour.
+var rgbaRe = regexp.MustCompile(`^rgba\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*(0|1|0?\.[0-9]+)\s*\)$`)
+
+// ParseColor reads #rrggbb, #aarrggbb, CSS rgba(), or the keyword `transparent`.
 //
 // It is deliberately strict, and refuses the three-digit shorthand, a missing #, and anything
 // with a non-hex digit. A lenient colour parser is how a token that is not a colour -- a font
@@ -53,8 +60,23 @@ func ParseColor(s string) (RGBA, error) {
 	if v == Transparent {
 		return RGBA{}, nil
 	}
+	if m := rgbaRe.FindStringSubmatch(v); m != nil {
+		ch := [3]uint8{}
+		for i := 0; i < 3; i++ {
+			n, err := strconv.ParseUint(m[i+1], 10, 16)
+			if err != nil || n > 255 {
+				return RGBA{}, fmt.Errorf("%q: channel %q is not 0-255", s, m[i+1])
+			}
+			ch[i] = uint8(n)
+		}
+		a, err := strconv.ParseFloat(m[4], 64)
+		if err != nil {
+			return RGBA{}, fmt.Errorf("%q: alpha %q is not a fraction", s, m[4])
+		}
+		return RGBA{R: ch[0], G: ch[1], B: ch[2], A: round8(a * 255)}, nil
+	}
 	if !strings.HasPrefix(v, "#") {
-		return RGBA{}, fmt.Errorf("%q is not a hex colour or the keyword %q", s, Transparent)
+		return RGBA{}, fmt.Errorf("%q is not a hex colour, an rgba() colour, or the keyword %q", s, Transparent)
 	}
 	digits := v[1:]
 	switch len(digits) {
