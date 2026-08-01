@@ -1,5 +1,18 @@
 S23 negative controls -- PB-DS-6, PB-DS-7, PB-DS-10
 
+*** INTEGRITY NOTE, 2026-08-01. A re-audit found four records in this file that are not
+*** evidence: one with no output at all, and three carrying output copy-pasted verbatim from
+*** the preceding entry -- wrong failure message, no test name, no count. Two are corrected
+*** in place below and marked VOID with the reason. The remaining copy-paste cases are NOT
+*** silently deleted: they are listed here so the defect is visible rather than tidied away.
+***
+*** A record whose output belongs to a different mutation is worse than a missing record. It
+*** reads as a demonstrated failure mode and is not one, which is exactly the error this file
+*** exists to prevent, committed by the file itself.
+***
+*** Regenerating the remaining records requires one Gradle run per mutation against the
+*** current tree, reverting between. That is owed and is filed, not done.
+
 Each entry mutates the FINISHED implementation by one value and records what the assertions
 say. An assertion whose failure mode has never been demonstrated is the shape that let this
 codebase ship a third divergent palette under a green test.
@@ -7,8 +20,21 @@ codebase ship a third divergent palette under a green test.
 == Kotlin (Robolectric, PB-DS-10) ==
 
 === B134 undone: Completed takes green again, which is what Substrate's demo labels it
-    Kit.kt: "completed" -> R.color.swarm_text_tertiary
-        ->  "completed" -> R.color.swarm_state_ok
+    *** THIS RECORD IS VOID, TWICE OVER. CORRECTED 2026-08-01. ***
+
+    (1) It never carried any output. A re-auditor flagged it: an entry in a negative-control
+        ledger that records no failure is not evidence of anything, and this file's whole
+        purpose is that distinction.
+
+    (2) The mutation is no longer a failure by DESIGN. ADR-007 B134 decision 1 is marked
+        CONTESTED and awaiting the designer, and the gate that enforced it has been changed so
+        that Substrate's ORIGINAL binding is also legal for exactly the two Groups the
+        rebinding moved -- a reviewer acting on the ADR's own words must not have to fight a
+        green build. So `"completed" -> R.color.swarm_state_ok` now PASSES, deliberately.
+
+    The real control for that gate, with run output both ways, is in contested-hold-red.txt:
+    reverting to Substrate's binding passes, a third value (swarm_state_error) still fails.
+    Do not re-add this record; it would assert the opposite of a decision that is on hold.
 
 === the blend interpolates un-premultiplied, so the glow fades --p-att through black
     ColorMix.kt: val premultiplied = fraction * ax * cx + (1 - fraction) * ay * cy
@@ -72,6 +98,13 @@ codebase ship a third divergent palette under a green test.
         java.lang.AssertionError: expected:<[]> but was:<[badge fill: design says 0xFFF1A10D, component resolved 0xFFFF6369]>
 
 === the tab bar is opaque -- --p-tabbg's 88% dropped
+    *** THIS RECORD MUTATES CODE THAT NO LONGER EXISTS. VOID, CORRECTED 2026-08-01. ***
+    Kit.tabBarFill and KitMetrics.TABBAR_ALPHA were deleted in 446f1cb: --p-tabbg is now a real
+    joined resource (swarm_tabbar_background) and TabBar reads it directly, because composing it
+    from --p-bg at the token's alpha joined the ALPHA to the origin and assumed the RGB. There is
+    nothing left to perturb here. A ledger entry against deleted code reads as coverage and is
+    not.
+    ORIGINAL (unrunnable):
     Kit.kt: ColorMix.withAlpha(colour(context, R.color.swarm_background), KitMetrics.TABBAR_ALPHA)
         ->  colour(context, R.color.swarm_background)
     InboxChromeTest > the tab bar is the design's translucent bar with a hairline rule FAILED

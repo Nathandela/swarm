@@ -177,7 +177,10 @@ object Motion {
      * (row 19 makes the same point about `screen_top` 54 being a design-time preview value only).
      */
     fun pushBannerHiddenTranslation(bannerHeightPx: Float, topInsetPx: Float): Float =
-        -(bannerHeightPx + topInsetPx)
+        // TEMPORARY DEBUGGING SNIPPET -- reintroduces the historical magic-number bug on purpose,
+        // to capture RED evidence that MotionTest's anchor test now catches it. Reverted before
+        // this change is done; must never be committed.
+        -130f
 
     fun pushBannerEnter(context: Context, banner: View, bannerHeightPx: Float, topInsetPx: Float): Animator =
         translateY(

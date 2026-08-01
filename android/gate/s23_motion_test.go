@@ -20,7 +20,7 @@ package gate
 //
 // SCOPED TO PRODUCTION KOTLIN under android/app/src/main/kotlin, and EXEMPTING EXACTLY ONE FILE
 // BY NAME: dev/swarm/phone/ui/kit/Motion.kt. That is where every animator this app runs is built,
-// and where the KDoc names all six forbidden identifiers in prose.
+// and where the KDoc names the forbidden identifiers in prose.
 //
 // THE EXEMPTION WAS PACKAGE-SCOPED ("any path segment pair ui/kit") AND THAT PERMITTED WHAT THE
 // FENCE EXISTS TO FORBID. Under it, any component beside Motion.kt could construct a raw
@@ -36,6 +36,9 @@ package gate
 // type spells it android.animation.Animator; naming ObjectAnimator or ValueAnimator is flagged,
 // which is a cost of matching bare identifiers and is accepted -- the alternative is a pattern that
 // tries to tell a construction from a type reference and gets it wrong in the permissive direction.
+//
+// THE SIX-NAME DENYLIST THIS FILE USED TO CARRY IS GONE; see animatorVocabulary for what replaced
+// it and why a longer list of names was not the repair.
 //
 // KNOWN, NOT FIXED HERE: if a surface file (PhoneSurface.kt, SessionScreens.kt, TriageInbox.kt,
 // ...) is ever found constructing an animator directly, this gate must NOT grow a per-file
@@ -54,45 +57,134 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// The denylist.
+// The fence: an allowlist over the platform's animation vocabulary.
 // ---------------------------------------------------------------------------
 
-// animatorConstructPatterns are every way production Kotlin can build or drive a platform
-// animation, per the team's exact list: ObjectAnimator, ValueAnimator, ViewPropertyAnimator,
-// View.animate(), View.startAnimation(...) and TransitionManager. Matched against
-// COMMENT-STRIPPED source (kotlinCodeOnly) -- unlike the PB-SEC-3 log scan, there is no
-// fail-open hazard in stripping here: every pattern below requires an identifier immediately
-// followed by `(` or a bare type reference, which prose mentioning the same word without
-// exercising the API does not produce, and Motion.kt's own KDoc names all six identifiers in
-// running text.
-var animatorConstructPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\bObjectAnimator\b`),
-	regexp.MustCompile(`\bValueAnimator\b`),
-	// ADDED 2026-08-01. A reviewer showed the six-string list was an allowlist of APIs, not of
-	// behaviour: `AnimatorInflater.loadAnimator(ctx, id).start()` and
-	// `SpringAnimation(view, DynamicAnimation.ALPHA).start()` both construct an animation that
-	// never passes Motion.duration(), and both walked the fence. PB-DS-8's text is that NO
-	// animator is constructed outside the kit, so the list has to cover the platform's other
-	// entry points rather than the six that happened to be in use.
-	regexp.MustCompile(`\bAnimatorInflater\b`),
-	regexp.MustCompile(`\bAnimatorSet\b`),
-	regexp.MustCompile(`\bSpringAnimation\b`),
-	regexp.MustCompile(`\bFlingAnimation\b`),
-	regexp.MustCompile(`\bDynamicAnimation\b`),
-	regexp.MustCompile(`\bAlphaAnimation\b`),
-	regexp.MustCompile(`\bTranslateAnimation\b`),
-	regexp.MustCompile(`\bAnimationUtils\b`),
-	regexp.MustCompile(`\bViewPropertyAnimator\b`),
-	regexp.MustCompile(`\.animate\s*\(`),
-	regexp.MustCompile(`\bstartAnimation\s*\(`),
-	regexp.MustCompile(`\bTransitionManager\b`),
+// WHY THIS IS NOT A LIST OF FORBIDDEN NAMES, WHICH IS WHAT IT WAS TWICE.
+//
+// It held six regexps -- ObjectAnimator, ValueAnimator, ViewPropertyAnimator, `.animate(`,
+// `startAnimation(`, TransitionManager -- described here as "the team's exact list". Two APIs that
+// do precisely what PB-DS-8 forbids walked straight through it:
+//
+//	AnimatorInflater.loadAnimator(context, R.animator.slide).start()
+//	SpringAnimation(view, DynamicAnimation.ALPHA).start()
+//
+// Both construct an animation outside Motion.kt, and neither consults ANIMATOR_DURATION_SCALE --
+// which is the single thing the requirement asks this fence to guarantee. The first repair was to
+// add those two names and seven of their neighbours. THAT REPAIR IS THE DEFECT REPEATING: it fixes
+// the two spellings a reviewer happened to name and leaves the class exactly where it was, because
+// a denylist of names fails open on every name nobody thought of, and "nobody thought of it" is
+// the normal case for a platform carrying three animation frameworks at once (android.animation,
+// android.view.animation, androidx.dynamicanimation) with a fourth arriving on some future
+// release. TimeAnimator, ViewAnimationUtils.createCircularReveal, setStateListAnimator,
+// AnimatedVectorDrawable and AnimationDrawable were all still missing from the widened list.
+//
+// SO THE RULE IS INVERTED, and this is the choice the review asked to see argued. The forbidden
+// side becomes a VOCABULARY rather than a list -- any identifier spelled with `animat` or
+// `transition` in it, in any case -- and the PERMITTED side is enumerated instead, because unlike
+// the forbidden side it is small, stable and knowable in advance:
+//
+//   - `Animator`: the one type this file's own text says a component may name, for the value
+//     Motion hands back (`android.animation.Animator`).
+//   - `animation`: the package segment that type lives in. Permitting the segment costs nothing,
+//     because every forbidden member of `android.animation` carries its own forbidden type name on
+//     the same line -- `import android.animation.ObjectAnimator` is caught by `ObjectAnimator`.
+//   - anything reached THROUGH `Motion.`: `Motion.duration`, `Motion.translateY`,
+//     `Motion.colorTransition`. Writing the exemption as "immediately preceded by `Motion.`"
+//     rather than as a list of primitive names is deliberate: Motion.kt belongs to another slice,
+//     and a primitive renamed or added there must neither unfence this file nor break it.
+//
+// WHAT THE INVERSION TRADES. The failure mode moves from a silent pass on an unlisted API to a
+// false positive on some future identifier that merely READS as animation. That cost is one
+// reviewed line in the permitted set, paid by whoever hits it, in the open. The old cost was a
+// component animating outside the reduced-motion check with a green build, discoverable only by
+// someone re-deriving the list from the platform. Those are not comparable, which is what makes
+// the noise worth buying.
+//
+// Matched against COMMENT-STRIPPED source (kotlinCodeOnly). Prose is what carries these words most
+// often -- Motion.kt's own KDoc names every one of them, WorkingBar.kt's explains why the mock's
+// pulse is not implemented -- so stripping is what makes a vocabulary rule usable at all.
+var animatorVocabulary = regexp.MustCompile(`(?i)animat|transition`)
+
+// animatorIdentifier splits a line into the identifiers the rule above judges.
+//
+// SPLITTING FIRST IS WHAT MAKES THE EXEMPTION EXPRESSIBLE. `ObjectAnimator` and `Animator` both
+// contain `Animator`, so a vocabulary matched against the whole line could never permit the second
+// without permitting the first; only a rule that sees them as separate tokens can.
+var animatorIdentifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+// animatorAlwaysForbidden are the frame-driving APIs that animate without being spelled like it.
+//
+// `Choreographer.postFrameCallback` is a hand-rolled animation loop: it moves a view over time, it
+// is not built by Motion, and nothing in it consults ANIMATOR_DURATION_SCALE. It is listed BY NAME
+// because no vocabulary rule reaches it -- so this list inherits the very weakness the inversion
+// above exists to remove, and it is therefore held to the one entry there is evidence for rather
+// than grown speculatively. Anything added here is an admission, not a feature.
+var animatorAlwaysForbidden = []string{"Choreographer"}
+
+// animatorFault returns the identifier on one COMMENT-STRIPPED line that PB-DS-8 forbids, or "".
+//
+// The SCAN AND THE JUDGEMENT ARE ONE FUNCTION so that every control in this file feeds its probe
+// to the same one the repository assertion calls, rather than to a copy of it.
+func animatorFault(line string) string {
+	for _, loc := range animatorIdentifier.FindAllStringIndex(line, -1) {
+		id := line[loc[0]:loc[1]]
+		if animatorContains(animatorAlwaysForbidden, id) {
+			return id
+		}
+		if !animatorVocabulary.MatchString(id) {
+			continue
+		}
+		if animatorPermitted(line, loc[0], id) {
+			continue
+		}
+		return id
+	}
+	return ""
+}
+
+// animatorPermitted is the allowlist, applied to one identifier in the context it appears in.
+func animatorPermitted(line string, at int, id string) bool {
+	// The one type a component may name, and the package segment it lives in.
+	if id == "Animator" || id == "animation" {
+		return true
+	}
+	// Reached through Motion, which is the routing PB-DS-8 asks for. Checked on the text BEFORE
+	// the identifier rather than by a regexp over the line, so `Motion.colorTransition` is
+	// permitted and a bare `colorTransition` -- a local copy of the primitive, which is the thing
+	// that would bypass the reduced-motion check -- is not.
+	//
+	// THE RECEIVER MUST BE THE WHOLE WORD `Motion`. A plain suffix test also permits
+	// `MyMotion.colorTransition`, which is a different object with the same method name and no
+	// reduced-motion check in it -- one character of difference in review, and the exemption
+	// handed to whoever writes it. A `.` before it is fine: that is the fully-qualified spelling.
+	prefix := line[:at]
+	if !strings.HasSuffix(prefix, "Motion.") {
+		return false
+	}
+	before := strings.TrimSuffix(prefix, "Motion.")
+	if before == "" {
+		return true
+	}
+	c := before[len(before)-1]
+	return !(c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9'))
+}
+
+func animatorContains(haystack []string, want string) bool {
+	for _, v := range haystack {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // animatorConstruct is one forbidden match.
 type animatorConstruct struct {
-	File string // repo-relative
-	Line int
-	Text string // the matched line, trimmed
+	File       string // repo-relative
+	Line       int
+	Identifier string // the forbidden identifier, which is what the reader has to act on
+	Text       string // the matched line, trimmed
 }
 
 // motionFile is the ONE file the fence exempts, as a path relative to the scanned root.
@@ -134,11 +226,13 @@ func scanAnimatorConstructsIn(t *testing.T, root string) []animatorConstruct {
 		stripped := kotlinCodeOnly(string(raw))
 		lines := strings.Split(stripped, "\n")
 		for i, line := range lines {
-			for _, p := range animatorConstructPatterns {
-				if p.MatchString(line) {
-					out = append(out, animatorConstruct{File: rel, Line: i + 1, Text: strings.TrimSpace(line)})
-					break
-				}
+			if id := animatorFault(line); id != "" {
+				out = append(out, animatorConstruct{
+					File:       rel,
+					Line:       i + 1,
+					Identifier: id,
+					Text:       strings.TrimSpace(line),
+				})
 			}
 		}
 		return nil
@@ -217,7 +311,7 @@ func TestPBDS8_NoAnimatorIsConstructedOutsideMotion(t *testing.T) {
 	}
 	var lines []string
 	for _, f := range found {
-		lines = append(lines, f.File+":"+itoa(f.Line)+": "+f.Text)
+		lines = append(lines, f.File+":"+itoa(f.Line)+": `"+f.Identifier+"` in: "+f.Text)
 	}
 	t.Errorf("PB-DS-8: %d animator construct(s) outside %s. ADR-007 B134 decision 3 requires "+
 		"reduced motion to be checked at animator construction for every animation the app runs; "+
@@ -227,7 +321,10 @@ func TestPBDS8_NoAnimatorIsConstructedOutsideMotion(t *testing.T) {
 		"than ObjectAnimator or ValueAnimator. If this fires against a SURFACE file, do not "+
 		"allowlist it here -- PB-DS-11 in S24 owns cleaning surface code, and the requirement was "+
 		"reassigned away from S23 specifically because a per-violation allowlist is the defect it "+
-		"forbids:\n\t%s", len(found), motionFile, strings.Join(lines, "\n\t"))
+		"forbids. If the identifier merely READS as animation and animates nothing, that is the "+
+		"false positive animatorVocabulary trades for, and the fix is one reviewed line in "+
+		"animatorPermitted -- not a hole in the vocabulary:\n\t%s",
+		len(found), motionFile, strings.Join(lines, "\n\t"))
 }
 
 // ---------------------------------------------------------------------------
@@ -249,11 +346,16 @@ func pbds8SyntheticTree(t *testing.T, relPath, source string) string {
 	return root
 }
 
-// TestPBDS8_EveryForbiddenConstructIsCaught is the POSITIVE half: each of the six named ways to
-// build or drive a platform animation, planted in a file that is not the exempt one, must be
-// found. Table-driven over the team's exact list so a pattern that stops matching (a typo'd
-// regex, an accidentally-deleted entry) shows up as a named failure rather than a general "the
-// count changed" assertion that does not say which construct went blind.
+// TestPBDS8_EveryForbiddenConstructIsCaught is the POSITIVE half: each named way to build or drive
+// a platform animation, planted in a file that is not the exempt one, must be found. Table-driven
+// so a rule that stops matching shows up as a named failure rather than as a general "the count
+// changed" assertion that does not say which construct went blind.
+//
+// THE TABLE IS EVIDENCE, NOT THE RULE. Every row here is covered by animatorVocabulary rather than
+// by an entry of its own, which is the point: the first six were the fence's whole definition and
+// the next nine are APIs that walked through it -- the two a reviewer named
+// (AnimatorInflater, SpringAnimation) and seven more found by reading the platform rather than the
+// review. Under a denylist each of those needed someone to notice it first.
 func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -265,6 +367,19 @@ func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 		{"animate()", `view.animate().alpha(0f).start()`},
 		{"startAnimation", `view.startAnimation(anim)`},
 		{"TransitionManager", `TransitionManager.beginDelayedTransition(root)`},
+		// The two the review named, verbatim.
+		{"AnimatorInflater", `AnimatorInflater.loadAnimator(context, id).start()`},
+		{"SpringAnimation", `SpringAnimation(view, DynamicAnimation.ALPHA).start()`},
+		// And the ones no review named, which is the half that matters.
+		{"AnimatorSet", `AnimatorSet().apply { playTogether(a, b) }.start()`},
+		{"TimeAnimator", `TimeAnimator().apply { setTimeListener(l) }.start()`},
+		{"AnimationUtils", `view.startAnimation(AnimationUtils.loadAnimation(context, id))`},
+		{"createCircularReveal", `ViewAnimationUtils.createCircularReveal(view, 0, 0, 0f, 1f).start()`},
+		{"stateListAnimator", `view.stateListAnimator = inflated`},
+		{"AnimatedVectorDrawable", `(drawable as AnimatedVectorDrawable).start()`},
+		{"AnimationDrawable", `(view.background as AnimationDrawable).start()`},
+		{"import of a forbidden type", `import androidx.dynamicanimation.animation.SpringAnimation`},
+		{"Choreographer", `Choreographer.getInstance().postFrameCallback(callback)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := "package dev.swarm.phone.ui\n\nfun build() {\n    " + tc.line + "\n}\n"
@@ -276,6 +391,71 @@ func TestPBDS8_EveryForbiddenConstructIsCaught(t *testing.T) {
 					"detected:\n\t%v", tc.name, len(found), found)
 			}
 		})
+	}
+}
+
+// TestPBDS8_TheFenceCatchesConstructsNobodyListed is the control the inversion exists to make
+// possible, and the one a denylist could never pass.
+//
+// Every identifier below is invented. None appears in this file's rules, in the platform, or in
+// any review; each is what "the API nobody thought of" looks like from inside the fence. A list of
+// names scores zero here by construction, and that is precisely the defect the review named: a
+// fence whose failure mode is "a spelling nobody listed" is not a fence, it is an inventory of
+// past mistakes.
+func TestPBDS8_TheFenceCatchesConstructsNobodyListed(t *testing.T) {
+	for _, line := range []string{
+		`val a = FooAnimator.ofFloat(view, "alpha", 0f, 1f)`,
+		`BarAnimation(view).start()`,
+		`val t = QuuxTransition(root)`,
+		`import android.gizmo.HolographicAnimator`,
+		`view.applyAnimated(spec)`,
+		`val d = context.getSystemService(GIZMO_ANIMATION_SERVICE)`,
+	} {
+		if id := animatorFault(line); id == "" {
+			t.Errorf("PB-DS-8: the fence passes %q. Nothing in this file names that identifier, "+
+				"which is the whole point of the probe -- an unlisted animation API must fail on "+
+				"its SPELLING, not on someone having met it before.", line)
+		}
+	}
+}
+
+// TestPBDS8_ThePermittedConstructsAreNotFlagged is the other half, and without it the test above
+// is satisfied by a fence that refuses everything.
+//
+// A vocabulary rule earns its keep only if the four things a correct component actually writes go
+// through it untouched. If this fails, the fence is unsatisfiable and the next person to hit it
+// will widen the permitted set past the point where it means anything -- which is how an
+// over-strict guard becomes a disabled one.
+func TestPBDS8_ThePermittedConstructsAreNotFlagged(t *testing.T) {
+	for _, line := range []string{
+		`import android.animation.Animator`,
+		`fun slideIn(view: View): Animator = Motion.translateY(context, view, 0f, 1f, 350L)`,
+		`val fade: Animator = Motion.colorTransition(context, view, from, to)`,
+		`val ms = Motion.duration(context, 350L)`,
+		`val a = dev.swarm.phone.ui.kit.Motion.bottomSheetEnter(context, sheet, h)`,
+		`setPaddingRelative(0, 0, 0, Kit.dimenPx(context, R.dimen.swarm_space_14))`,
+		`val translationPx = Kit.dp(context, KitMetrics.DOT_DP)`,
+	} {
+		if id := animatorFault(line); id != "" {
+			t.Errorf("PB-DS-8: the fence flags %q on the identifier %q. That is what a correct "+
+				"component writes: the type Motion hands back, or a primitive reached through "+
+				"Motion. A guard that refuses the documented right answer gets widened until it "+
+				"refuses nothing.", line, id)
+		}
+	}
+
+	// The exemption is `Motion.` AND NOTHING LOOSER. A local copy of a primitive is exactly the
+	// thing that would bypass the reduced-motion check, and it is spelled almost identically.
+	for _, line := range []string{
+		`val fade = colorTransition(view, from, to)`,
+		`val fade = MyMotion.colorTransition(view, from, to)`,
+		`val fade = motion.colorTransition(view, from, to)`,
+	} {
+		if id := animatorFault(line); id == "" {
+			t.Errorf("PB-DS-8: the fence passes %q. Only `Motion.` routes through the reduced-motion "+
+				"check; a bare or differently-receivered call of the same name does not, and the two "+
+				"differ by one word in review.", line)
+		}
 	}
 }
 

@@ -29,8 +29,26 @@ import kotlin.math.roundToLong
  * read once, AT ANIMATOR CONSTRUCTION, and it covers every animator [Motion] builds, including
  * the toggle's, which the artifact's own `prefers-reduced-motion` selector list omits.
  *
- * EVERY NUMBER IS READ FROM THE DOCUMENT THAT DECLARES IT, through [MockCss]. Not one of them is
- * transcribed here -- see [MockCss]'s own note for what that replaced and why.
+ * EVERY NUMBER THE IMPLEMENTATION IS CHECKED AGAINST IS READ FROM THE DOCUMENT THAT DECLARES
+ * IT: the three durations, the four cubic-bezier control points, the keyframe opacity and
+ * `steps(2)` through [MockCss] against `remote-control-mock.html`; the push banner's
+ * `-(own height + banner_top)` rule through [MockDoc] against `substrate-components.md`, the one
+ * place that states it -- `.banner`'s own CSS declares no `height` to read. See each object's own
+ * note for what hand-transcription it replaced and why.
+ *
+ * LITERALS DO APPEAR HERE, AND THEY ARE CONTROL OR FIXTURE INPUTS, NOT EXPECTATIONS. A negative
+ * control needs a value the document does NOT contain -- a perturbed duration, a perturbed
+ * opacity, a perturbed control point, a banner height and inset chosen to be different from the
+ * mock's -- so that feeding it through the same function the real assertion calls demonstrates
+ * the assertion can fail. A fixture input is the other kind: a sheet height, toggle endpoints,
+ * sample colours -- values the design specifies no absolute figure for at all (CSS's `100%` is
+ * relative to a height the caller measures), so they prove a primitive passes an arbitrary input
+ * through rather than matching anything written down. An earlier version of this comment claimed
+ * "not one of them is transcribed here", which a re-auditor correctly falsified by pointing at
+ * both kinds. The claim was wrong, not the literals: what matters is that no EXPECTATION is
+ * transcribed, and a reader checking this file should hold it to that narrower sentence -- which
+ * is also why the two assertions that WERE expectations copied from the document (a working-dot
+ * period, a step count) were removed below rather than kept and excused.
  *
  * EVERY REDUCED-MOTION ASSERTION HAS A SIBLING that leaves the platform setting alone and
  * expects the FULL duration. That sibling is the negative control: without it, an
@@ -173,9 +191,10 @@ class MotionTest {
     fun caret_period_is_not_the_working_dots_period() {
         // NEGATIVE CONTROL, and the one perturbation the document supplies itself: `.g-work` runs
         // the SAME @keyframes at a different duration. ADR-007 B134 decision 3 does not implement
-        // that animation at all, and a caret that read the wrong rule would take its period.
+        // that animation at all, and a caret that read the wrong rule would take its period. No
+        // literal duration is asserted here -- `workingDot` is read from the document exactly as
+        // the caret's own period is, and only their INEQUALITY is the claim.
         val workingDot = MockCss.millis(MockCss.declaration(".g-work", "animation"))
-        assertEquals(1600L, workingDot)
         assertNotEquals(workingDot, Motion.CARET_PERIOD_MS)
     }
 
@@ -260,10 +279,12 @@ class MotionTest {
     // ------------------------------------------------------------------
     // Push banner: translateY -(own height + top inset) -> 0, same duration and curve.
     //
-    // docs/design/substrate-components.md row 2 states that derivation and calls the mock's own
-    // -130px a magic number. The two agree AT THE MOCK'S DIMENSIONS and nowhere else, so the tests
-    // below pin both halves: the mock's figure is reproduced from the mock's own height and inset,
-    // and the offset moves when the banner does.
+    // docs/design/substrate-components.md row 2 states that derivation, read structurally by
+    // [MockDoc] rather than paraphrased in Kotlin, and calls the mock's own -130px a magic number.
+    // The two agree AT THE MOCK'S DIMENSIONS and nowhere else, so the tests below pin three
+    // things: the row's rule is a sum of exactly these two named operands, the mock's figure is
+    // reproduced from the mock's own height and inset through the real animator, and the offset
+    // moves -- through both the pure function and that same animator -- when the banner does.
     // ------------------------------------------------------------------
 
     /** The `top` the mock rests the banner at -- `banner_top` in the component doc. */
@@ -297,10 +318,11 @@ class MotionTest {
     fun the_banners_hidden_offset_moves_with_both_of_its_inputs() {
         // NEGATIVE CONTROL for the two tests either side of this one, through
         // Motion.pushBannerHiddenTranslation -- the same function pushBannerEnter calls. The
-        // mock's own -130 satisfies the "at the mock's dimensions" test below by construction, so
-        // the only thing that tells a derivation from a constant is perturbing each input and
-        // requiring the result to follow. It must follow BOTH: an implementation that tracked the
-        // height and ignored the inset would pass a one-sided version of this.
+        // mock's own -130 satisfies the "at the mock's dimensions" test below by construction at
+        // that ONE point, so perturbing each input here -- and again, through the real animator,
+        // in that same test below -- is what tells a derivation from a constant. It must follow
+        // BOTH: an implementation that tracked the height and ignored the inset would pass a
+        // one-sided version of this.
         val top = mockBannerTopDp()
         val height = mockBannerHeightDp()
         assertEquals(mockBannerHiddenDp(), Motion.pushBannerHiddenTranslation(height, top), 0f)
@@ -310,9 +332,18 @@ class MotionTest {
 
     @Test
     fun pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions() {
+        // The row's own rule, READ rather than assumed: `translateY(-(A + B))` over exactly these
+        // two named operands. A row edited to a different shape -- a third operand, a product
+        // instead of a sum -- fails here before either numeric assertion below runs.
+        assertEquals(
+            "substrate-components.md's Push banner row must combine the banner's own height " +
+                "and its top inset",
+            listOf("own height", "banner_top"),
+            MockDoc.pushBannerHiddenOperands(),
+        )
+
         // The spec's example, kept as an anchor: at the mock's own height and `banner_top`, the
-        // derivation must land exactly on the -130px the mock hardcodes. The magic number is
-        // rejected as a CONSTANT, not as a value.
+        // derivation must land exactly on the -130px the mock hardcodes.
         val banner = View(context)
         val animator = Motion.pushBannerEnter(
             context,
@@ -327,6 +358,23 @@ class MotionTest {
         assertEquals(dp(mockBannerHiddenDp()), banner.translationY, 0f)
         animator.setCurrentFraction(1f)
         assertEquals(0f, banner.translationY, 0f)
+
+        // CAPABLE OF FAILING: at the mock's own dimensions alone, `mockBannerHeightDp()` is
+        // DEFINED as `-mockBannerHiddenDp() - mockBannerTopDp()`, so the assertion above holds
+        // for any `pushBannerEnter` of the form `-(h + t)` by construction -- including a
+        // `pushBannerEnter` that ignored its arguments and always returned the mock's own
+        // -130px, the exact bug this derivation replaced. Rebuilt at a taller banner, through the
+        // SAME public entry point rather than the pure function above, the offset must move off
+        // -130px, or this test could never tell that bug from a correct one.
+        val tallerBanner = View(context)
+        val tallerAnimator = Motion.pushBannerEnter(
+            context,
+            tallerBanner,
+            bannerHeightPx = dp(mockBannerHeightDp() + 24f),
+            topInsetPx = dp(mockBannerTopDp()),
+        ) as ObjectAnimator
+        tallerAnimator.setCurrentFraction(0f)
+        assertEquals(dp(mockBannerHiddenDp() - 24f), tallerBanner.translationY, 0f)
     }
 
     @Test
@@ -443,7 +491,6 @@ class MotionTest {
         // is what tells a step function from a fade -- and the count is the document's own
         // `steps(2)`, not a 2 typed here.
         val steps = MockCss.steps(MockCss.declaration(".stream-caret", "animation"))
-        assertEquals(2, steps)
         val seen = (0..100).map { Motion.caretAlphaAt(it / 100f) }.toSet()
         assertEquals(steps, seen.size)
         assertEquals(setOf(1f, mockCaretDimAlpha()), seen)
@@ -713,5 +760,59 @@ private object MockCss {
                 "$name is not on the unit-test classpath. app/build.gradle.kts must stage it as a " +
                     "unit-test resource so these assertions read the design itself rather than a " +
                     "number copied out of the implementation they are checking",
+            )
+}
+
+/**
+ * `docs/design/substrate-components.md`'s derivation table, PARSED -- the push banner's hiding
+ * rule read as a document instead of paraphrased into [Motion]'s KDoc and re-paraphrased into
+ * this file's assertions. [MockCss] reads the artifact the design's numbers originate in; this
+ * reads the one place that states the DERIVATION `.banner`'s own CSS cannot carry -- there is no
+ * `height` in `.banner`'s rule (see [MockCss]), which is exactly why row 2 exists.
+ *
+ * WHY IT EXISTS. `Motion.pushBannerHiddenTranslation`'s KDoc paraphrases row 2's rule as
+ * `-(bannerHeightPx + topInsetPx)`, and until now MotionTest matched that paraphrase with
+ * hand-written Kotlin arithmetic of the identical shape -- so a row edited to a different shape
+ * (a third operand, a product instead of a sum) would still be "matched" by a test that never
+ * looked at the row again. [pushBannerHiddenOperands] reads the row's own `translateY(-(A + B))`
+ * text and returns A and B by name, so the SHAPE, not only its two inputs' values, is joined to
+ * the document on every run.
+ */
+private object MockDoc {
+
+    private const val RESOURCE = "substrate-components.md"
+
+    /** `translateY(-(own height + banner_top))` -- an outer negation of exactly one sum, its two
+     * operands captured by name. Matching literally on `-(` and a single `+` means a row rewritten
+     * to a different shape fails to match at all, rather than silently binding to the wrong text. */
+    private val HIDDEN_TRANSLATION_RULE = Regex("""translateY\(-\(([^+()]+)\+([^+()]+)\)\)""")
+
+    /** The derivation table's row for [component] -- its `States, motion, notes` cell, the last
+     * column before the row's closing `|`. Fails loudly rather than returning null: a formula read
+     * from nowhere says nothing about the document. */
+    private fun notes(component: String): String {
+        val cells = readResource(RESOURCE).lineSequence()
+            .firstOrNull { it.startsWith("|") && it.split("|").getOrNull(2)?.trim() == component }
+            ?.split("|")
+            ?: error("$RESOURCE's derivation table declares no row for `$component`")
+        return cells[cells.size - 2].trim()
+    }
+
+    /** The push banner row's two named operands, in the order the row writes them, backticks
+     * stripped -- `listOf("own height", "banner_top")` today. */
+    fun pushBannerHiddenOperands(): List<String> {
+        val row = notes("Push banner")
+        val m = requireNotNull(HIDDEN_TRANSLATION_RULE.find(row)) {
+            "$RESOURCE's Push banner row states no `translateY(-(A + B))` rule"
+        }
+        return listOf(m.groupValues[1], m.groupValues[2]).map { it.trim().trim('`') }
+    }
+
+    private fun readResource(name: String): String =
+        javaClass.classLoader?.getResourceAsStream(name)?.bufferedReader()?.use { it.readText() }
+            ?: error(
+                "$name is not on the unit-test classpath. app/build.gradle.kts must stage it as a " +
+                    "unit-test resource so this assertion reads the design itself rather than a " +
+                    "shape assumed in Kotlin",
             )
 }

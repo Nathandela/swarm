@@ -891,25 +891,51 @@ func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
 // PB-DS-7: the numbers the scale does not govern.
 // ---------------------------------------------------------------------------
 
-// s23MetricConst matches `const val NAME = 7f` (or 0.045f), which is the only shape a kit
-// constant may take: a named Float in KitMetrics.
+// s23MetricConst matches a property declaration that binds a NUMERIC LITERAL.
 //
-// EVERY MODIFIER IS OPTIONAL, AND THAT IS THE WHOLE POINT OF THE ALTERNATION. This read
-// `(?:internal\s+)?const` and therefore accepted `internal` while rejecting `private`, so
-// `private const val ATTENTION_BORDER_SHARE = 0.36f` was never matched, never joined to anything,
-// and the `origin:` line above it was decoration. `private` is the modifier a number acquires the
-// moment someone decides it is an implementation detail -- which is exactly the moment it stops
-// being reviewed, so it is the last spelling a fence can afford to miss. `const` and the type
-// annotation are optional for the same reason: `private val NAME: Float = 7f` is the same number
-// wearing different clothes.
+// THIS WAS AN ALLOWLIST OF SPELLINGS TWICE, AND IT IS NOW INVERTED. Round one read
+// `(?:internal\s+)?const`, which accepted `internal` while rejecting `private`, so
+// `private const val ATTENTION_BORDER_SHARE = 0.36f` was never matched and its `origin:` line was
+// decoration. Round two added `private`, `protected`, `@JvmField`, `[fF]` and a camelCase name.
+// Both repairs fixed the spellings someone had just named and left the CLASS exactly where it
+// was, because the failure mode of a spelling list is the spelling that is not on it -- and after
+// round two these were still invisible:
+//
+//	@JvmStatic val DOT_DP = 7f          -- a second annotation
+//	var dotDp = 7f                      -- `var`, which the pattern never mentioned
+//	const val DOT_DP: Double = 7.0      -- a type that is not Float, a literal with no suffix
+//	val badgeHeightDp = 16f,            -- a trailing comma (a constructor property)
+//	const val DOT_DP = 7f /* design */  -- a trailing BLOCK comment; only `//` was handled
+//
+// A declaration this pattern misses is not refused, it is INVISIBLE -- it carries no origin, is
+// compared to nothing, and fails no assertion in this gate however wrong its value is. So the
+// question the review posed, whether an allowlist of PERMITTED constructs beats a denylist of
+// forbidden ones, is answered here in the permitted direction, and this is the argument:
+//
+// THE PERMITTED CONSTRUCT IS "AN ANNOTATED DECLARATION", AND THE RECOGNISER IS DELIBERATELY
+// MAXIMAL. Any annotations, any modifiers in any order, `val` or `var`, any identifier, any
+// optional type, any numeric literal in any Kotlin spelling, any trailing comma or semicolon.
+// Widening the RECOGNISER while narrowing the REQUIREMENT is what turns the fence around: every
+// declaration that binds a number is now SEEN, and being seen means being required to cite an
+// origin (s23CheckMetric). There is no spelling left that escapes by not being listed -- what
+// escapes is not a property declaration at all.
+//
+// COMMENTS ARE STRIPPED BEFORE THIS PATTERN IS APPLIED, which is why it can keep a hard `$`
+// anchor. Round two handled the trailing comment inside the pattern (`(?://.*)?$`) and thereby
+// handled exactly one comment syntax; s23ScanMetrics now matches against a kotlinCodeOnly view
+// instead, so every comment form is gone before the anchor is reached and the anchor still means
+// "the declaration ends here" rather than "the line ends here".
+//
+// WHAT REMAINS OUTSIDE IT, stated rather than implied: a number that never becomes a property.
+// `Kit.dp(context, 7f)` types a metric straight into a call site and no declaration recogniser of
+// any width can see it. That is closed separately and mechanically by
+// TestPBDS7_NoMetricIsTypedAtADpCallSite, because widening this pattern further could not reach it.
 var s23MetricConst = regexp.MustCompile(
-	// WIDENED 2026-08-01. Two reviewers found this independently: the pattern was an allowlist
-	// of SPELLINGS, so `= 7F`, a camelCase name, a trailing `// comment` and `@JvmField` each
-	// walked a metric straight past the origin requirement. The exact round-1 defect (`private`)
-	// was closed and the CLASS was not. A fence whose failure mode is "a spelling nobody listed"
-	// is the defect, so every Kotlin form that can hold a dp/alpha literal is matched here, and
-	// TestPBDS7_TheMetricScanCatchesEverySpelling enumerates them.
-	`^\s*(?:@JvmField\s+)?(?:(?:private|internal|public|protected)\s+)?(?:const\s+)?val\s+([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*Float\s*)?=\s*(-?[0-9.]+)[fF]\s*(?://.*)?$`)
+	`^\s*(?:@[A-Za-z][A-Za-z0-9_]*(?:\([^)]*\))?\s+)*` +
+		`(?:(?:private|internal|public|protected|const|open|override|final|actual|expect|lateinit)\s+)*` +
+		`(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*` +
+		`(?::\s*[A-Za-z][A-Za-z0-9_.]*\??\s*)?` +
+		`=\s*(-?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?)[fFdDL]?\s*[,;]?\s*$`)
 
 // s23MetricCSSOrigin is `origin: .pdot { width }` -- a declaration in the shared block.
 var s23MetricCSSOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(\S.*?)\s*\{\s*([a-z-]+)\s*\}\s*(?:\*/)?\s*$`)
@@ -979,10 +1005,33 @@ type s23Metric struct {
 }
 
 // s23ScanMetrics reads one source into the constants it declares and the origins they cite.
+//
+// IT READS TWO VIEWS OF THE SAME FILE, and the split is load-bearing rather than fussy. The
+// `origin:` annotations ARE comments, so they can only be read from the raw source; the
+// DECLARATION must not be, because a trailing comment defeated the pattern's end anchor and made
+//
+//	const val DOT_DP = 7f // the design's dot
+//
+// invisible to this entire gate. kotlinCodeOnly preserves newlines precisely so the stripped view
+// indexes the same lines as the raw one, which is what lets the annotation come from `raw[i]` and
+// the declaration from `code[i]`. s23ScanAlignmentFault asserts that invariant rather than
+// trusting it -- if the two views ever drift by a line, every constant in the kit would silently
+// acquire the annotation belonging to its neighbour.
 func s23ScanMetrics(src string) []s23Metric {
 	var out []s23Metric
 	pending := s23Metric{}
-	for i, line := range strings.Split(src, "\n") {
+	raw := strings.Split(src, "\n")
+	code := strings.Split(kotlinCodeOnly(src), "\n")
+	for i, line := range raw {
+		if i < len(code) {
+			if m := s23MetricConst.FindStringSubmatch(code[i]); m != nil {
+				pending.Name, pending.Line = m[1], i+1
+				pending.Raw = strings.ReplaceAll(m[2], "_", "")
+				out = append(out, pending)
+				pending = s23Metric{}
+				continue
+			}
+		}
 		if m := s23MetricDerivationOrigin.FindStringSubmatch(line); m != nil {
 			pending = s23Metric{Kind: "derivation", First: m[1]}
 			continue
@@ -1000,15 +1049,27 @@ func s23ScanMetrics(src string) []s23Metric {
 			pending = s23Metric{Kind: "derived", First: ref, Second: field}
 			continue
 		}
-		m := s23MetricConst.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		pending.Name, pending.Line, pending.Raw = m[1], i+1, m[2]
-		out = append(out, pending)
-		pending = s23Metric{}
 	}
 	return out
+}
+
+// s23ScanAlignmentFault reports the invariant [s23ScanMetrics] depends on: the comment-stripped
+// view of a source has the same number of lines as the raw one.
+//
+// It is a function rather than a comment because the consequence of it being false is silent and
+// total -- every constant in the kit would be paired with a neighbour's `origin:` annotation, and
+// a gate that checks the dot's diameter against the glow's radius fails for a reason nobody could
+// read off the message. kotlinCodeOnly is another slice's helper; this is what makes the coupling
+// checkable from here.
+func s23ScanAlignmentFault(src string) string {
+	raw := strings.Split(src, "\n")
+	code := strings.Split(kotlinCodeOnly(src), "\n")
+	if len(raw) != len(code) {
+		return fmt.Sprintf("the raw source has %d line(s) and the comment-stripped view has %d, so "+
+			"the two indexes disagree and every constant would be joined to the wrong annotation",
+			len(raw), len(code))
+	}
+	return ""
 }
 
 // s23CheckMetric recomputes one constant from the design authority it cites.
@@ -1079,10 +1140,19 @@ func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]s
 				"drifts from it drifts from everything.", m.Name, got, ref, m.Second, want)
 		}
 	default:
-		return fmt.Sprintf("`const val %s` carries no `origin:` annotation. A number in this file "+
+		// ZERO IS THE ONE UNANNOTATED NUMBER, for the reason the spacing scan already gives: a zero
+		// has no unit, so 0 px and 0 dp are the same distance and there is no design value for it
+		// to disagree with. This exemption is what lets the recogniser above be maximal without
+		// demanding a design origin for `const val TRANSPARENT: Int = 0` or for a component
+		// property defaulted to none -- the alternative was to keep those spellings out of the
+		// pattern, which is how the pattern became a list of spellings in the first place.
+		if got == 0 {
+			return ""
+		}
+		return fmt.Sprintf("`val %s = %s` carries no `origin:` annotation. A number in this file "+
 			"with no design behind it is exactly the thing the kit exists to stop reaching the "+
 			"screens -- and it is invisible in review, because a plausible dp value looks like "+
-			"every other plausible dp value.", m.Name)
+			"every other plausible dp value.", m.Name, m.Raw)
 	}
 	return ""
 }
