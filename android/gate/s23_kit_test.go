@@ -70,6 +70,17 @@ type s23Component struct {
 // most components, and it is where the four-Group identity shows (PB-DS-9's own ordering).
 var s23Inbox = []s23Component{
 	{
+		Factory: "emptyState",
+		File:    "EmptyState.kt",
+		Derived: "#8 Empty state",
+		Why: "PB-DS-9's most-argued clause. An empty section is still a section and says so -- " +
+			"dropping it is the obvious implementation and it is wrong for a triage surface, " +
+			"because the sections then move under the user and \"nothing is waiting on me\" " +
+			"becomes indistinguishable from \"that section scrolled away\". A heading over " +
+			"nothing is the same defect wearing a heading. Substrate never drew this block; the " +
+			"derivation table specifies it and row 8 says so.",
+	},
+	{
 		Factory: "statusDot",
 		File:    "StatusDot.kt",
 		Origin:  ".pdot",
