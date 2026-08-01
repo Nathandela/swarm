@@ -9,12 +9,14 @@ import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.GraphicsMode
+import kotlin.math.roundToInt
 
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-DS-10 over the inbox's chrome: the scope chips, the
@@ -53,6 +55,13 @@ class InboxChromeTest {
         return context.resources.getDimension(id)
     }
 
+    /**
+     * A scale step in whole pixels, ROUNDED -- which is what `getDimensionPixelSize` does and
+     * therefore what a component that spends the step correctly resolves to. [KitDensityTest] is
+     * the suite that runs at a density where rounding and truncation differ.
+     */
+    private fun dimenPx(name: String): Int = dimen(name).roundToInt()
+
     // ---- filter chip ------------------------------------------------------
 
     /** `.chip` and `.chip.on`: two fills, two inks, one set of metrics. */
@@ -62,10 +71,10 @@ class InboxChromeTest {
         val on = filterChip(context, "All machines", selected = true, present = null)
 
         val claims = mutableListOf(
-            Claim("`.chip` padding-y (top)", dimen("swarm_space_8").toInt(), off.paddingTop),
-            Claim("`.chip` padding-y (bottom)", dimen("swarm_space_8").toInt(), off.paddingBottom),
-            Claim("`.chip` padding-x (start)", dimen("swarm_space_10").toInt(), off.paddingStart),
-            Claim("`.chip` padding-x (end)", dimen("swarm_space_10").toInt(), off.paddingEnd),
+            Claim("`.chip` padding-y (top)", dimenPx("swarm_space_8"), off.paddingTop),
+            Claim("`.chip` padding-y (bottom)", dimenPx("swarm_space_8"), off.paddingBottom),
+            Claim("`.chip` padding-x (start)", dimenPx("swarm_space_10"), off.paddingStart),
+            Claim("`.chip` padding-x (end)", dimenPx("swarm_space_10"), off.paddingEnd),
             Claim("`.chip` fill", KitOrigin.cssColour(".chip", "background"), (off.background as SubstrateSurface).spec.fill),
             Claim("`.chip.on` fill", KitOrigin.cssColour(".chip.on", "background"), (on.background as SubstrateSurface).spec.fill),
         )
@@ -106,7 +115,7 @@ class InboxChromeTest {
             none.compoundDrawablesRelative[0],
         )
 
-        val size = px(KitOrigin.cssDp(".chip .pd", "width")).toInt()
+        val size = px(KitOrigin.cssDp(".chip .pd", "width")).roundToInt()
         assertEquals(
             emptyList<String>(),
             mismatches(
@@ -119,7 +128,7 @@ class InboxChromeTest {
                     Claim("`.chip .pd` height", size, onlineDot.bounds.height()),
                     Claim(
                         "`.chip .pd` margin-right",
-                        dimen("swarm_space_4").toInt(),
+                        dimenPx("swarm_space_4"),
                         online.compoundDrawablePadding,
                     ),
                 ),
@@ -138,9 +147,9 @@ class InboxChromeTest {
             emptyList<String>(),
             mismatches(
                 listOf(
-                    Claim("`.chips` padding-x (start)", dimen("swarm_space_18").toInt(), row.paddingStart),
-                    Claim("`.chips` padding-x (end)", dimen("swarm_space_18").toInt(), row.paddingEnd),
-                    Claim("`.chips` padding-bottom", dimen("swarm_space_12").toInt(), row.paddingBottom),
+                    Claim("`.chips` padding-x (start)", dimenPx("swarm_space_18"), row.paddingStart),
+                    Claim("`.chips` padding-x (end)", dimenPx("swarm_space_18"), row.paddingEnd),
+                    Claim("`.chips` padding-bottom", dimenPx("swarm_space_12"), row.paddingBottom),
                     Claim(
                         "no gap before the first chip",
                         0,
@@ -148,7 +157,7 @@ class InboxChromeTest {
                     ),
                     Claim(
                         "`.chips` gap before the second chip",
-                        dimen("swarm_space_8").toInt(),
+                        dimenPx("swarm_space_8"),
                         (row.getChildAt(1).layoutParams as ViewGroup.MarginLayoutParams).marginStart,
                     ),
                 ),
@@ -170,10 +179,10 @@ class InboxChromeTest {
     fun `the section label is the design's mono uppercase heading`() {
         val label = sectionLabel(context, "Needs you")
         val claims = mutableListOf(
-            Claim("`.plabel` padding-top", dimen("swarm_space_12").toInt(), label.paddingTop),
-            Claim("`.plabel` padding-x (start)", dimen("swarm_space_18").toInt(), label.paddingStart),
-            Claim("`.plabel` padding-x (end)", dimen("swarm_space_18").toInt(), label.paddingEnd),
-            Claim("`.plabel` padding-bottom", dimen("swarm_space_8").toInt(), label.paddingBottom),
+            Claim("`.plabel` padding-top", dimenPx("swarm_space_12"), label.paddingTop),
+            Claim("`.plabel` padding-x (start)", dimenPx("swarm_space_18"), label.paddingStart),
+            Claim("`.plabel` padding-x (end)", dimenPx("swarm_space_18"), label.paddingEnd),
+            Claim("`.plabel` padding-bottom", dimenPx("swarm_space_8"), label.paddingBottom),
             Claim("`.plabel` text-transform", true, label.isAllCaps),
             Claim("the copy is not uppercased in place", "Needs you", label.text.toString()),
         )
@@ -191,10 +200,10 @@ class InboxChromeTest {
         val live = header.kitRequire(KitTag.LIVE) as TextView
 
         val claims = mutableListOf(
-            Claim("`.pnav` padding-top", dimen("swarm_space_4").toInt(), header.paddingTop),
-            Claim("`.pnav` padding-x (start)", dimen("swarm_space_18").toInt(), header.paddingStart),
-            Claim("`.pnav` padding-x (end)", dimen("swarm_space_18").toInt(), header.paddingEnd),
-            Claim("`.pnav` padding-bottom", dimen("swarm_space_10").toInt(), header.paddingBottom),
+            Claim("`.pnav` padding-top", dimenPx("swarm_space_4"), header.paddingTop),
+            Claim("`.pnav` padding-x (start)", dimenPx("swarm_space_18"), header.paddingStart),
+            Claim("`.pnav` padding-x (end)", dimenPx("swarm_space_18"), header.paddingEnd),
+            Claim("`.pnav` padding-bottom", dimenPx("swarm_space_10"), header.paddingBottom),
             // `align-items: baseline`. LinearLayout aligns baselines only when asked, and the
             // 27sp title beside a 10sp counter is exactly the pair that looks wrong without it.
             Claim("`.pnav` baseline alignment", true, header.isBaselineAligned),
@@ -205,7 +214,7 @@ class InboxChromeTest {
             ),
             Claim(
                 "`.pnav` gap",
-                dimen("swarm_space_10").toInt(),
+                dimenPx("swarm_space_10"),
                 (live.layoutParams as ViewGroup.MarginLayoutParams).marginStart,
             ),
         )
@@ -272,8 +281,8 @@ class InboxChromeTest {
             emptyList<String>(),
             mismatches(
                 listOf(
-                    Claim("`.ptabs` height", dimen("swarm_tabbar_height").toInt(), bar.layoutParams.height),
-                    Claim("`.ptabs` padding-bottom", dimen("swarm_space_14").toInt(), bar.paddingBottom),
+                    Claim("`.ptabs` height", dimenPx("swarm_tabbar_height"), bar.layoutParams.height),
+                    Claim("`.ptabs` padding-bottom", dimenPx("swarm_space_14"), bar.paddingBottom),
                     Claim("--p-tabbg fill", KitOrigin.rgbaToken("--p-tabbg"), surface!!.fill),
                     Claim("`.ptabs` border-top colour", KitOrigin.cssColour(".ptabs", "border-top"), surface.rule),
                     Claim("`.ptabs` border-top width", px(KitOrigin.cssFirstPx(".ptabs", "border-top")), surface.rulePx),
@@ -302,12 +311,12 @@ class InboxChromeTest {
         claims += listOf(
             Claim(
                 "`.ptabs div` gap between icon and label",
-                dimen("swarm_space_4").toInt(),
+                dimenPx("swarm_space_4"),
                 (selected.layoutParams as ViewGroup.MarginLayoutParams).topMargin,
             ),
             Claim(
                 "`.ptabs svg` size",
-                px(KitOrigin.cssDp(".ptabs svg", "width")).toInt(),
+                px(KitOrigin.cssDp(".ptabs svg", "width")).roundToInt(),
                 bar.getChildAt(0).kitRequire(KitTag.TAB_ICON).layoutParams.width,
             ),
         )
@@ -346,8 +355,18 @@ class InboxChromeTest {
 
         val claims = mutableListOf(
             Claim("badge fill", KitOrigin.token("--p-att"), surface!!.spec.fill),
-            Claim("badge padding-y (top)", dimen("swarm_space_2").toInt(), badge.paddingTop),
-            Claim("badge padding-x (start)", dimen("swarm_space_6").toInt(), badge.paddingStart),
+            // WHICH STEP THESE ARE IS ROW 3'S, AND IT IS CHECKED WHERE THE ROW CAN BE READ.
+            // Substrate draws no badge, so there is no `.badge` rule for PB-DS-1's ledger to
+            // absorb and no CSS these two can be computed from -- the authority is the sentence
+            // "padding `space_2` x `space_6`" in the derivation table, which is a file this suite
+            // has no access to (it is not staged on the unit-test classpath). So the join lives in
+            // android/gate/s23_kit_test.go, TestPBDS7_EveryDerivedSpacingIsTheRowsStep: it reads
+            // the steps out of row 3 and requires Badge.kt to spend them. What is left here is the
+            // other half, which only a running resource table can answer -- that the step resolves
+            // to the pixels the component actually spent. Read alone, this claim has
+            // R.dimen.swarm_space_2 on both sides of it and certifies nothing about the design.
+            Claim("badge padding-y (top)", dimenPx("swarm_space_2"), badge.paddingTop),
+            Claim("badge padding-x (start)", dimenPx("swarm_space_6"), badge.paddingStart),
             Claim("badge height", dimen("swarm_radius_chip") * 2f, badge.layoutParams.height.toFloat()),
             Claim("badge radius", dimen("swarm_radius_chip"), surface.spec.radiusPx),
             Claim("badge has no border", 0, android.graphics.Color.alpha(surface.spec.stroke)),
@@ -375,6 +394,77 @@ class InboxChromeTest {
         assertEquals("99", badge(context, 99, "99 sessions need you").text.toString())
     }
 
+    /**
+     * THE BADGE IS NEVER SILENCED, which is what `?: ""` did.
+     *
+     * The tab bar filled a missing description with the empty string. A non-null content
+     * description is what a screen reader reads INSTEAD of a view's own text, so an empty one is a
+     * request to say nothing at all -- on the one signal this product promises means something,
+     * and on a badge whose text is the count itself. `null` is the value that means "no words of
+     * my own, read what is on me", which leaves the count announceable.
+     *
+     * Both spellings are invisible in a diff and only one of them can be heard.
+     */
+    @Test
+    fun `the tab badge is announceable whether or not the screen gives it words`() {
+        val described = tabs(badgeCount = 3).getChildAt(0).kitRequire(KitTag.BADGE) as TextView
+        assertEquals("needs you", described.contentDescription)
+
+        val bare = tabBar(context, listOf(TabItem("Inbox", selected = true, badgeCount = 3)))
+            .getChildAt(0).kitRequire(KitTag.BADGE) as TextView
+        assertNull(
+            "a tab that named no description gives its badge the EMPTY one, which asks a screen " +
+                "reader to skip the view rather than to read the count on it. Passing the absent " +
+                "description through is what leaves \"3\" announceable.",
+            bare.contentDescription,
+        )
+        assertNull(announcementFault(bare.contentDescription, bare.text))
+        assertNull(announcementFault(described.contentDescription, described.text))
+
+        // The control, through the same function: the value the kit used to construct.
+        assertNotNull(
+            "an empty content description passes the announcement check, so the shipped defect " +
+                "would pass it too",
+            announcementFault("", bare.text),
+        )
+        assertNotNull(
+            "a view with neither words nor text passes the announcement check",
+            announcementFault(null, ""),
+        )
+    }
+
+    /**
+     * The presence dot is a compound drawable, and a drawable cannot carry a description.
+     *
+     * `.chip .pd` is a 5dp mark whose colour is the machine's entire online/offline state, and it
+     * is drawn INTO the chip rather than beside it -- so the only view that can speak for it is
+     * the chip. The kit does not compose that sentence: copy is the screen's (PB-DS-9), and
+     * "nathans-mbp, online" is copy. What it does is take one, and take `null` rather than an
+     * empty string when there is none, so the chip's own label is still read.
+     */
+    @Test
+    fun `the chip can speak for the presence dot drawn inside it`() {
+        val bare = filterChip(context, "nathans-mbp", selected = false, present = true)
+        assertNull(
+            "a chip with no supplied description carries an empty one, which silences the label " +
+                "as well as the dot",
+            bare.contentDescription,
+        )
+        assertNull(announcementFault(bare.contentDescription, bare.text))
+
+        val spoken = filterChip(
+            context, "nathans-mbp", selected = false, present = true,
+            contentDescription = "nathans-mbp, online",
+        )
+        assertEquals("nathans-mbp, online", spoken.contentDescription)
+        assertEquals(
+            "the chip's visible label changed with its description; the description is what a " +
+                "screen reader hears, not what the scope bar shows",
+            "nathans-mbp",
+            spoken.text.toString(),
+        )
+    }
+
     /** The negative control PB-DS-10 requires for this suite. */
     @Test
     fun `the chrome assertions can actually fail`() {
@@ -387,7 +477,7 @@ class InboxChromeTest {
         assertTrue(
             "a chip padded with the wrong scale step passes the comparison",
             mismatches(
-                listOf(Claim("padding", dimen("swarm_space_8").toInt(), dimen("swarm_space_10").toInt())),
+                listOf(Claim("padding", dimenPx("swarm_space_8"), dimenPx("swarm_space_10"))),
             ).isNotEmpty(),
         )
         assertTrue(

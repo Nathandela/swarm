@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import androidx.annotation.ColorRes
 import androidx.annotation.DimenRes
 import dev.swarm.phone.R
+import kotlin.math.roundToInt
 
 /**
  * PB-DS-6: the component kit's foundation -- the only place the kit reads the design system from.
@@ -35,8 +36,32 @@ internal object Kit {
 
     fun dimen(context: Context, @DimenRes id: Int): Float = context.resources.getDimension(id)
 
+    /**
+     * A scale step as a whole number of pixels -- a padding, a margin, a laid-out size.
+     *
+     * IT IS NOT `dimen(...).toInt()`, AND THE DIFFERENCE IS A PIXEL WHEREVER DENSITY IS
+     * FRACTIONAL. A cast truncates; `getDimensionPixelSize` rounds half away from zero, which is
+     * what the platform itself does everywhere a dimension becomes a pixel -- `View.setPadding`
+     * from XML, `TextView`'s own text size, every `getDimensionPixelSize` in the framework. On a
+     * 2.625x handset a 4 dp step is 10.5 px: this kit spent 10 where the platform spends 11, on
+     * every gap, in one direction, invisibly. One call rather than an arithmetic rule of our own,
+     * because the platform's rule is the whole specification.
+     */
+    fun dimenPx(context: Context, @DimenRes id: Int): Int =
+        context.resources.getDimensionPixelSize(id)
+
     /** Design px is Android dp at 1:1 -- the artifact is a 386x812 frame at device scale. */
     fun dp(context: Context, value: Float): Float = value * context.resources.displayMetrics.density
+
+    /**
+     * A [KitMetrics] constant as a whole number of pixels, quantised the way [dimenPx] is.
+     *
+     * The six numbers the resource table cannot carry are spent at the same call sites as the
+     * steps that can -- a dot's size beside a row's padding -- so they have to reach the layout
+     * through the same arithmetic. `roundToInt` is `getDimensionPixelSize`'s rule for the positive
+     * lengths a design states.
+     */
+    fun dpPx(context: Context, value: Float): Int = dp(context, value).roundToInt()
 
     /**
      * PB-TOK-8 / ADR-007 B134 decision 1: the colour a `status.Group` IS.
@@ -85,7 +110,11 @@ internal object Kit {
     fun tabBarFill(context: Context): Int =
         ColorMix.withAlpha(colour(context, R.color.swarm_background), KitMetrics.TABBAR_ALPHA)
 
-    /** origin: --p-att 36%, --p-hair -- `internal/design.Derivations()["attention-row-border"]`. */
+    /**
+     * `--p-att`'s share of `.prow.attention`'s border, over `--p-hair`.
+     *
+     * origin: derivation attention-row-border
+     */
     private const val ATTENTION_BORDER_SHARE = 0.36f
 
     /**
@@ -107,12 +136,27 @@ internal object Kit {
         )
     }
 
-    /** The share of its own colour a live Group's glow carries. Null means the design has none. */
+    /**
+     * The share of its own colour a live Group's glow carries. Null means the design has none.
+     *
+     * THE TWO NUMBERS ARE NAMED RATHER THAN INLINE, and the reason is a gate rather than taste: a
+     * literal in a `when` branch could only be checked by a regexp that recognised the branch's
+     * syntax, and a fence that depends on the shape of an expression stops matching the first
+     * time the expression is rewritten -- silently, and while still passing. Behind a name each
+     * share carries an `origin:` annotation, which is the same join every other number in this
+     * package answers to.
+     */
     private fun glowShare(group: String): Float? = when (group) {
-        "needs_input" -> 0.70f
-        "working" -> 0.55f
+        "needs_input" -> NEEDS_INPUT_GLOW_SHARE
+        "working" -> WORKING_GLOW_SHARE
         else -> null
     }
+
+    /** origin: derivation needs-input-dot-glow */
+    private const val NEEDS_INPUT_GLOW_SHARE = 0.70f
+
+    /** origin: derivation working-dot-glow */
+    private const val WORKING_GLOW_SHARE = 0.55f
 }
 
 /**
@@ -166,7 +210,7 @@ internal object KitMetrics {
      * The badge's box. `--p-chip-r` is 8 dp, so a 16 dp box renders a pill -- the derivation is
      * the row's, and the pill is a consequence rather than a fifth radius.
      *
-     * derived: docs/design/substrate-components.md #3 Badge
+     * derived: docs/design/substrate-components.md #3 Badge { height }
      */
     const val BADGE_HEIGHT_DP = 16f
 }

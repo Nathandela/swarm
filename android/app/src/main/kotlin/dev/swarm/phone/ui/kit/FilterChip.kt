@@ -31,24 +31,35 @@ fun filterChip(
     selected: Boolean,
     /** null when the chip names no machine -- the "All machines" scope has no presence. */
     present: Boolean?,
+    /**
+     * What a screen reader should say instead of [label], for the presence the dot carries.
+     *
+     * The dot is a COMPOUND DRAWABLE and a drawable cannot be described: the chip is the only view
+     * that can speak for it, and "nathans-mbp, online" is copy, which is the screen's (PB-DS-9).
+     * With none the label is read on its own, which is what happens today; what the kit must not
+     * do is substitute the empty string, which silences the label as well as the dot.
+     */
+    contentDescription: CharSequence? = null,
 ): TextView = TextView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(
         Kit.colour(context, if (selected) R.color.swarm_hero_ink else R.color.swarm_text_secondary),
     )
     text = label
+    this.contentDescription = contentDescription
     background = chipSurface(context, selected)
     gravity = Gravity.CENTER_VERTICAL
     setPaddingRelative(
-        Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_8).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_8).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_10),
+        Kit.dimenPx(context, R.dimen.swarm_space_8),
+        Kit.dimenPx(context, R.dimen.swarm_space_10),
+        Kit.dimenPx(context, R.dimen.swarm_space_8),
     )
     layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
 
     if (present != null) {
         val size = Kit.dp(context, KitMetrics.PRESENCE_DOT_DP)
+        val sizePx = Kit.dpPx(context, KitMetrics.PRESENCE_DOT_DP)
         // `display: inline-block` before the label. A compound drawable is the platform's inline
         // leading mark, and `margin-right: 5px` is its drawable padding.
         val dot = StatusDotDrawable(
@@ -59,9 +70,9 @@ fun filterChip(
             glow = null,
             diameterPx = size,
             glowRadiusPx = 0f,
-        ).apply { setBounds(0, 0, size.toInt(), size.toInt()) }
+        ).apply { setBounds(0, 0, sizePx, sizePx) }
         setCompoundDrawablesRelative(dot, null, null, null)
-        compoundDrawablePadding = Kit.dimen(context, R.dimen.swarm_space_4).toInt()
+        compoundDrawablePadding = Kit.dimenPx(context, R.dimen.swarm_space_4)
     }
 }
 
@@ -75,12 +86,12 @@ fun filterChip(
 fun chipRow(context: Context): LinearLayout = KitStack(
     context,
     LinearLayout.HORIZONTAL,
-    Kit.dimen(context, R.dimen.swarm_space_8).toInt(),
+    Kit.dimenPx(context, R.dimen.swarm_space_8),
 ).apply {
     setPaddingRelative(
-        Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_18),
         0,
-        Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_18),
+        Kit.dimenPx(context, R.dimen.swarm_space_12),
     )
 }

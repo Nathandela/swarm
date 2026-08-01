@@ -11,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.GraphicsMode
+import kotlin.math.roundToInt
 
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-DS-10 over the kit's FOUNDATION: the Group bindings, the
@@ -87,17 +88,7 @@ class KitFoundationTest {
         )
 
         val claims = KitOrigin.groupTokens().map { (group, token) ->
-            val fill = KitOrigin.token(token)
-            val variant = variants.entries.firstOrNull { (selector, _) ->
-                KitOrigin.cssColour(selector, "background") == fill
-            }
-            val shadow = variant?.value?.get("box-shadow")
-            val want = if (shadow == null || shadow == "none") {
-                null
-            } else {
-                KitOrigin.overTransparent(fill, KitOrigin.cssPercent(variant.key, "box-shadow"))
-            }
-            Claim("$group ($token) glow", want, Kit.groupGlow(context, group))
+            Claim("$group ($token) glow", KitOrigin.dotGlow(token)?.colour, Kit.groupGlow(context, group))
         }
         assertEquals(2, claims.count { it.want != null })
         assertEquals(emptyList<String>(), mismatches(claims))
@@ -186,7 +177,12 @@ class KitFoundationTest {
                 listOf(
                     Claim("`.prow` fill", KitOrigin.cssColour(".prow", "background"), surface.spec.fill),
                     Claim("`.prow` border colour", KitOrigin.cssColour(".prow", "border"), surface.spec.stroke),
-                    Claim("`.prow` border width", px(KitOrigin.cssFirstPx(".prow", "border")), surface.spec.strokeWidthPx),
+                    // WHOLE PIXELS, ROUNDED. The stroke reaches GradientDrawable as an int, and
+                    // truncating it renders a 1dp hairline 2px wide on a 2.625x handset where the
+                    // platform's own getDimensionPixelSize gives 3 -- a third of the element
+                    // Substrate leans on for depth, lost to a cast. KitDensityTest is where that
+                    // is visible; here it is only asserted to be the design's own number.
+                    Claim("`.prow` border width", px(KitOrigin.cssFirstPx(".prow", "border")).roundToInt(), surface.spec.strokeWidthPx),
                     Claim("`.prow` radius", px(KitOrigin.cssDp(".prow", "border-radius")), surface.spec.radiusPx),
                     Claim("--p-card-fx colour", KitOrigin.rgbaToken("--p-card-fx"), surface.spec.keyLight),
                     Claim("--p-card-fx band", px(1f), surface.spec.keyLightPx),

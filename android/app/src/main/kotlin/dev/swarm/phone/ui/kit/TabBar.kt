@@ -55,10 +55,10 @@ fun tabBar(context: Context, items: List<TabItem>): LinearLayout = LinearLayout(
     // `padding-bottom: 14px` is the home-indicator inset in a 386x812 mock. On a handset the real
     // one comes from WindowInsets and belongs to the screen scaffold (S24); this is the design's
     // value, which is the right default and the right preview.
-    setPaddingRelative(0, 0, 0, Kit.dimen(context, R.dimen.swarm_space_14).toInt())
+    setPaddingRelative(0, 0, 0, Kit.dimenPx(context, R.dimen.swarm_space_14))
     layoutParams = LinearLayout.LayoutParams(
         MATCH,
-        Kit.dimen(context, R.dimen.swarm_tabbar_height).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_tabbar_height),
     )
     items.forEach { addView(tab(context, it)) }
 }
@@ -68,7 +68,7 @@ private fun tab(context: Context, item: TabItem): View {
         context,
         if (item.selected) R.color.swarm_hero else R.color.swarm_text_tertiary,
     )
-    val iconPx = Kit.dp(context, KitMetrics.TAB_ICON_DP).toInt()
+    val iconPx = Kit.dpPx(context, KitMetrics.TAB_ICON_DP)
 
     val iconFrame = FrameLayout(context).apply {
         clipChildren = false
@@ -86,16 +86,20 @@ private fun tab(context: Context, item: TabItem): View {
     )
     if (item.badgeCount > 0) {
         iconFrame.addView(
-            badge(context, item.badgeCount, item.badgeDescription ?: "").apply {
+            // The description is passed through AS IT ARRIVES, including absent. `?: ""` was the
+            // defensive spelling and it is the harmful one: an empty content description is what
+            // a decorative view carries, so it asks a screen reader to skip the badge rather than
+            // to read the count on it. Absent means "no words of its own", which leaves the count.
+            badge(context, item.badgeCount, item.badgeDescription).apply {
                 tag = KitTag.BADGE
                 layoutParams = FrameLayout.LayoutParams(
                     WRAP,
-                    Kit.dp(context, KitMetrics.BADGE_HEIGHT_DP).toInt(),
+                    Kit.dpPx(context, KitMetrics.BADGE_HEIGHT_DP),
                     Gravity.END or Gravity.TOP,
                 ).apply {
                     // The mock anchors this at `right: 24%`, which moves under font scaling.
-                    marginEnd = -Kit.dimen(context, R.dimen.swarm_space_6).toInt()
-                    topMargin = -Kit.dimen(context, R.dimen.swarm_space_4).toInt()
+                    marginEnd = -Kit.dimenPx(context, R.dimen.swarm_space_6)
+                    topMargin = -Kit.dimenPx(context, R.dimen.swarm_space_4)
                 }
             },
         )
@@ -115,7 +119,7 @@ private fun tab(context: Context, item: TabItem): View {
                 text = item.label
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply {
-                    topMargin = Kit.dimen(context, R.dimen.swarm_space_4).toInt()
+                    topMargin = Kit.dimenPx(context, R.dimen.swarm_space_4)
                 }
                 tag = KitTag.TAB_LABEL
             },

@@ -29,8 +29,8 @@ fun workingBar(context: Context): View {
         )
         layoutParams = LinearLayout.LayoutParams(
             MATCH,
-            Kit.dp(context, KitMetrics.WORKBAR_HEIGHT_DP).toInt(),
-        ).apply { topMargin = Kit.dimen(context, R.dimen.swarm_space_2).toInt() }
+            Kit.dpPx(context, KitMetrics.WORKBAR_HEIGHT_DP),
+        ).apply { topMargin = Kit.dimenPx(context, R.dimen.swarm_space_2) }
         tag = KitTag.WORKBAR
     }
 }

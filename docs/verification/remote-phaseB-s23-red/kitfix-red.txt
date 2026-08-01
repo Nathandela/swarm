@@ -1,0 +1,168 @@
+S23 kit-fix RED evidence -- the six defects an adversarial audit committee found in the
+component kit, and the runs that show each fence failing before the fix.
+
+GG-5 requires the failing-first run to be evidenced. What is recorded here is actual output.
+
+WHAT IS AND IS NOT IN THIS FILE
+  - The Go gate lane (defects 3 and 4, plus the badge-padding join defect 2 asked for) is
+    recorded in full: the controls failing against the old fence, a perturbed claim failing
+    against the new one, and a five-mutation ledger over the fixed tree.
+  - The Robolectric lane (defects 1, 2, 5 and 6) is written and NOT run here. Another agent
+    holds the Gradle lane for the duration of this change and a concurrent ./gradlew would
+    collide with it. The tests, the commands and what each must report before the fix are at
+    the end of this file, and the lane owner sequences the run.
+
+===========================================================================================
+1. DEFECT 3 and 4 -- the metric fence, RED
+===========================================================================================
+
+The controls below were written first and run against the fence as it shipped: `private` was
+not one of the modifiers s23MetricConst accepted, there was no annotation form for a share
+whose authority is internal/design's derivation table, and a `derived:` citation was checked
+for existence and never for value.
+
+$ go test ./android/gate/ -run 'TestPBDS7_TheMetricScanCanActuallyFail' -v
+
+=== RUN   TestPBDS7_TheMetricScanCanActuallyFail
+    s23_kit_test.go:1349: PB-DS-7: the metric scan does not see "    private const val DOT_DP = 7f", so a number written that way carries no origin, is checked against nothing, and fails no assertion in this gate. The shipped defect was exactly this: `private` was not in the pattern.
+    s23_kit_test.go:1349: PB-DS-7: the metric scan does not see "    private val DOT_DP: Float = 7f", so a number written that way carries no origin, is checked against nothing, and fails no assertion in this gate. The shipped defect was exactly this: `private` was not in the pattern.
+    s23_kit_test.go:1370: PB-DS-7: a share annotated `origin: derivation attention-row-border` passes at 0.5 while internal/design declares 36%. The citation is being taken on trust, which is the same defect as a derived citation nobody follows into its row.
+    s23_kit_test.go:1375: PB-DS-7: a share citing a derivation internal/design does not declare passes. A citation of nothing is a value with no authority behind it.
+    s23_kit_test.go:1386: PB-DS-7: BADGE_HEIGHT_DP passes at 20f against a row that states `height 16`. The citation resolves to a row and the number is never compared to it, so the one constant in this kit whose authority is prose is the one nothing checks.
+    s23_kit_test.go:1391: PB-DS-7: a constant citing a row but naming no field of it passes. `#3 Badge` identifies a row with a dozen numbers in it; without a field there is nothing to compare and the annotation asserts only that the row exists.
+    s23_kit_test.go:1396: PB-DS-7: a constant citing a field row 3 does not state passes, so a renamed cell would leave the value checked against nothing
+--- FAIL: TestPBDS7_TheMetricScanCanActuallyFail (0.02s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.090s
+FAIL
+
+-------------------------------------------------------------------------------------------
+Seven failures, and what each says:
+
+  - `private const val DOT_DP = 7f` is not seen by the scan at all. This is the shipped
+    defect: Kit.kt:89 `private const val ATTENTION_BORDER_SHARE = 0.36f` was never matched,
+    so the `origin:` line above it was decoration and its 0.36 was joined to nothing.
+  - `private val DOT_DP: Float = 7f` likewise -- the same number wearing different clothes.
+  - a share citing `derivation attention-row-border` passes at 0.5 while internal/design
+    declares 36%, and a share citing a derivation that does not exist passes as well.
+  - BADGE_HEIGHT_DP passes at 20f against a row that states `height 16`; so does a citation
+    that names no field of the row, and one that names a field the row does not state.
+
+===========================================================================================
+2. DEFECT 2 (badge padding) -- the derived-spacing fence, RED
+===========================================================================================
+
+The badge's padding had no authority outside the code: PB-DS-1's ledger cannot absorb a
+`.badge` rule because Substrate draws no badge, and the Robolectric claim that looked like it
+checked the step,
+
+    Claim("badge padding-y", dimen("swarm_space_2").toInt(), badge.paddingTop)
+
+has R.dimen.swarm_space_2 on both sides of it. TestPBDS7_EveryDerivedSpacingIsTheRowsStep
+reads the step out of row 3 of the derivation table instead. Run here with the claim
+perturbed to swarm_space_4, which is what a fence that reads the row must reject:
+
+$ go test ./android/gate/ -run 'TestPBDS7_EveryDerivedSpacingIsTheRowsStep' -v
+=== RUN   TestPBDS7_EveryDerivedSpacingIsTheRowsStep
+    s23_kit_test.go:837: PB-DS-7: `#3 Badge` states swarm_space_2 for Badge.kt's padding-y, and the s23DerivedSpacing row spends swarm_space_4. The table is the authority for a component the design source never drew.
+--- FAIL: TestPBDS7_EveryDerivedSpacingIsTheRowsStep (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.926s
+FAIL
+
+===========================================================================================
+3. The mutation ledger over the FIXED tree
+===========================================================================================
+
+Five mutations of the values the new fences are responsible for. Each is applied to Kit.kt on
+its own, the gate is run, and the tree is restored.
+
+$ # MUTATION: KitMetrics.BADGE_HEIGHT_DP 16f -> 20f (the derived: citation is now value-checked)
+$ go test ./android/gate/ -run 'TestPBDS7_'
+--- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.01s)
+    s23_kit_test.go:1121: PB-DS-7: Kit.kt:215: BADGE_HEIGHT_DP = 20, and `#3 Badge` states height 16. The design source never drew this component, so that row is the only place its numbers exist -- a constant that drifts from it drifts from everything.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.849s
+FAIL
+
+$ # MUTATION: Kit.ATTENTION_BORDER_SHARE 0.36f -> 0.5f (a private const is now scanned at all)
+$ go test ./android/gate/ -run 'TestPBDS7_'
+--- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.02s)
+    s23_kit_test.go:1121: PB-DS-7: Kit.kt:118: ATTENTION_BORDER_SHARE = 0.5, and internal/design declares the attention-row-border derivation at 0.36. The kit carries the SHARE because the resolved colour may not be typed; a share that disagrees with the table produces a colour no fence can recognise as wrong.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.703s
+FAIL
+
+$ # MUTATION: Kit.ATTENTION_BORDER_SHARE loses its origin annotation
+$ go test ./android/gate/ -run 'TestPBDS7_'
+--- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.01s)
+    s23_kit_test.go:1121: PB-DS-7: Kit.kt:117: `const val ATTENTION_BORDER_SHARE` carries no `origin:` annotation. A number in this file with no design behind it is exactly the thing the kit exists to stop reaching the screens -- and it is invisible in review, because a plausible dp value looks like every other plausible dp value.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.697s
+FAIL
+
+$ # MUTATION: Kit.NEEDS_INPUT_GLOW_SHARE 0.70f -> 0.60f
+$ go test ./android/gate/ -run 'TestPBDS7_'
+--- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.02s)
+    s23_kit_test.go:1121: PB-DS-7: Kit.kt:156: NEEDS_INPUT_GLOW_SHARE = 0.6, and internal/design declares the needs-input-dot-glow derivation at 0.7. The kit carries the SHARE because the resolved colour may not be typed; a share that disagrees with the table produces a colour no fence can recognise as wrong.
+--- FAIL: TestPBDS7_TheDotGlowsAreTheDeclaredDerivations (0.00s)
+    s23_kit_test.go:1349: PB-DS-7: group needs_input (--p-att) must glow at 0.7 of its own colour -- the derivation internal/design declares for `.pdot` -- and the kit declares 0.6. The glow is `Paint.setShadowLayer(9dp, 0, 0, blend)` on a software layer; the blend itself may not be typed (PB-TOK-7), so the share is what the kit carries.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.704s
+FAIL
+
+$ # MUTATION: the working glow branch names a constant nothing declares
+$ go test ./android/gate/ -run 'TestPBDS7_'
+--- FAIL: TestPBDS7_TheDotGlowsAreTheDeclaredDerivations (0.00s)
+    s23_kit_test.go:1337: PB-DS-7: group working takes the share UNDECLARED_SHARE, which this file declares no `const val` for -- so the value it glows at is somewhere this gate cannot follow
+    s23_kit_test.go:1349: PB-DS-7: group working (--p-work) must glow at 0.55 of its own colour -- the derivation internal/design declares for `.pdot` -- and the kit declares 0. The glow is `Paint.setShadowLayer(9dp, 0, 0, blend)` on a software layer; the blend itself may not be typed (PB-TOK-7), so the share is what the kit carries.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.700s
+FAIL
+
+===========================================================================================
+4. The Robolectric lane -- written, run pending the Gradle lane owner
+===========================================================================================
+
+$ ./gradlew :app:testDebugUnitTest --tests 'dev.swarm.phone.ui.kit.*'
+
+DEFECT 1 -- the status dot's glow does not render.
+  New: InboxRowTest.`the live Groups' glow survives into the layer, and the flat Groups paint
+  no halo` draws the dot into a bitmap the size of its own layer and counts painted pixels
+  outside the 7dp core. Against the shipped geometry it must report:
+
+      the layer is 7px and a 7px core with a 9px halo needs 25px. A software layer's bitmap
+      IS the view's bounds, so the halo is clipped inside the layer -- before clipChildren on
+      any parent is consulted, and with the Paint, the shadow radius and the layer type all
+      correct.
+
+  and InboxRowTest.`the status dot is the design's 7dp mark in its Group's colour` must fail
+  on the footprint claim, because the shipped view was 7dp with no compensation.
+  The control, `the pixel probe rejects the geometry that clipped the glow`, rebuilds that
+  geometry from the kit's own drawable and requires the same haloFaults() to object -- it
+  must PASS both before and after the fix, and it is what says the probe was not written to
+  agree with whatever the kit does.
+
+DEFECT 2 -- the self-comparisons.
+  InboxRowTest.`only the live Groups glow, and only they are on a software layer` now takes
+  the colour, the radius and WHICH Groups glow from KitOrigin.dotGlow(token), which reads the
+  `.pdot.*` variant whose fill is the Group's token. Perturbation to check the new expectation
+  is not the old one: change Kit.glowShare's needs_input branch to 0.60f and this test must
+  fail; before the change it passed, because the expected value was the same call.
+
+DEFECT 5 -- truncation where the platform rounds.
+  New suite KitDensityTest, @Config(qualifiers = "420dpi") (density 2.625). Against the
+  shipped kit its four tests must report, among others:
+      `.prow` hairline: design says 3, component resolved 2
+      `.prow` padding-x: design says 32, component resolved 31
+      `.workbar` height: design says 8, component resolved 7
+      `.ptabs svg` size: design says 58, component resolved 57
+  Its first test asserts the qualifier took, so a Robolectric that ignored it fails loudly
+  rather than passing at mdpi where truncation and rounding coincide.
+
+DEFECT 6 -- the accessibility defaults.
+  InboxChromeTest.`the tab badge is announceable whether or not the screen gives it words`
+  must fail on the shipped `item.badgeDescription ?: ""` with the badge's description being
+  "" rather than null. InboxRowTest.`the status dot announces the state when the screen names
+  it` must fail on the shipped statusDot(), which takes no description at all -- it does not
+  compile against the two-argument factory, which is the RED a missing parameter produces.

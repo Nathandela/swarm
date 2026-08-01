@@ -99,6 +99,35 @@ object KitOrigin {
     fun dotVariants(): Map<String, Map<String, String>> =
         DesignScale.sharedCss().filterKeys { it.startsWith(".pdot.") }
 
+    /**
+     * The halo the DESIGN gives the dot whose fill is [token], or null where it declares none.
+     *
+     * THIS EXISTS SO THE GLOW ASSERTIONS ARE NOT SELF-COMPARISONS. They were: the expected value
+     * was `Kit.groupGlow(context, group)` and the resolved value was the drawable's glow, which
+     * the same call had just populated -- so the claim certified that the kit agrees with itself
+     * and would have accepted any colour at all. Worse, WHICH Groups glow was read the same way,
+     * so a kit that glowed on all four would have been checked against its own opinion.
+     *
+     * The variant is found by its FILL rather than by its selector name, because the selector
+     * says nothing about which `status.Group` it belongs to: `.pdot.ok` is green, and after B134
+     * green is ReadyForReview rather than Completed. Following the fill through group-tokens.tsv
+     * is the join that survives the rebinding.
+     */
+    fun dotGlow(token: String): DotGlow? {
+        val fill = token(token)
+        val variant = dotVariants().entries.firstOrNull { (selector, _) ->
+            cssColour(selector, "background") == fill
+        } ?: return null
+        val shadow = variant.value["box-shadow"]?.trim()
+        // `.pdot.ok` says `box-shadow: none` and `--p-ink3` has no `.pdot` rule at all. Both mean
+        // the same thing: the design gives that Group no halo.
+        if (shadow == null || shadow == "none") return null
+        return DotGlow(
+            colour = overTransparent(fill, cssPercent(variant.key, "box-shadow")),
+            radiusDp = cssFirstPx(variant.key, "box-shadow"),
+        )
+    }
+
     /** True when the design declares that rule inherits its colour rather than stating one. */
     fun inheritsColour(selector: String): Boolean = DesignScale.rule(selector)["color"] == null
 
@@ -280,6 +309,34 @@ object KitOrigin {
     private val RGBA = Regex(
         "rgba\\(\\s*([0-9.]+)\\s*,\\s*([0-9.]+)\\s*,\\s*([0-9.]+)\\s*,\\s*([0-9.]+)\\s*\\)",
     )
+}
+
+/** The halo one `.pdot` variant declares: the blended colour, and the blur radius in design px. */
+data class DotGlow(val colour: Int, val radiusDp: Float)
+
+/**
+ * The reason a screen reader would announce nothing useful for a view, or null when it has
+ * something to say.
+ *
+ * `contentDescription = ""` IS NOT "NO DESCRIPTION". It is the platform's idiom for a decorative
+ * view: a non-null description is what a screen reader reads INSTEAD of the view's own text, and
+ * an empty one is therefore a request to say nothing. `null` is the value that means "I have no
+ * words of my own, read what is written on me" -- so on a badge whose entire purpose is to be
+ * announced, the empty string is strictly worse than the absent one. `item.badgeDescription ?: ""`
+ * shipped exactly that.
+ *
+ * It takes the two values rather than the view so the negative control can feed it the shipped
+ * one directly, through the same function the real assertion calls.
+ */
+fun announcementFault(description: CharSequence?, text: CharSequence?): String? = when {
+    description != null && description.isBlank() ->
+        "the content description is the empty string, which asks a screen reader to skip the " +
+            "view rather than to read what is on it. `null` is the value that means \"no words " +
+            "of my own\"."
+    description == null && text.isNullOrBlank() ->
+        "the view carries neither a content description nor any text, so a screen reader has " +
+            "nothing at all to announce for it"
+    else -> null
 }
 
 /**

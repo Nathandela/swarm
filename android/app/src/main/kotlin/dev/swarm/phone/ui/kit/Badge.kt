@@ -24,8 +24,14 @@ import dev.swarm.phone.R
  *
  * The content description is the CALLER'S, because it is copy and copy is the screen's (PB-DS-9).
  * Row 3 states the form: "N sessions need you".
+ *
+ * NULL IS A DESCRIPTION AND THE EMPTY STRING IS NOT. A non-null content description is what a
+ * screen reader reads INSTEAD of a view's own text, so `""` asks it to say nothing -- on the one
+ * signal this product promises means something, and on a view whose text is already the count.
+ * `null` leaves "3" announceable. The tab bar filled a missing description with `""`, which is why
+ * this parameter is nullable rather than defensive.
  */
-fun badge(context: Context, count: Int, description: CharSequence): TextView =
+fun badge(context: Context, count: Int, description: CharSequence?): TextView =
     TextView(context).apply {
         setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
         setTextColor(Kit.colour(context, R.color.swarm_hero_ink))
@@ -36,13 +42,13 @@ fun badge(context: Context, count: Int, description: CharSequence): TextView =
         background = pillSurface(context, Kit.colour(context, R.color.swarm_state_attention))
         gravity = Gravity.CENTER
         setPaddingRelative(
-            Kit.dimen(context, R.dimen.swarm_space_6).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_2).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_6).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_2).toInt(),
+            Kit.dimenPx(context, R.dimen.swarm_space_6),
+            Kit.dimenPx(context, R.dimen.swarm_space_2),
+            Kit.dimenPx(context, R.dimen.swarm_space_6),
+            Kit.dimenPx(context, R.dimen.swarm_space_2),
         )
         layoutParams = LinearLayout.LayoutParams(
             WRAP,
-            Kit.dp(context, KitMetrics.BADGE_HEIGHT_DP).toInt(),
+            Kit.dpPx(context, KitMetrics.BADGE_HEIGHT_DP),
         )
     }

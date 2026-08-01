@@ -22,6 +22,10 @@ import dev.swarm.phone.R
  * server derives it once and the phone renders it, so this component looks it up rather than
  * deciding anything. The strings are the screen's (PB-DS-9); what is decided here is what they
  * look like.
+ *
+ * @param stateDescription what a screen reader should say about the Group's dot, which is the
+ * only thing on the row carrying the state. It is copy, so it is the screen's; with none, the dot
+ * is marked decorative rather than announced as an unlabelled view.
  */
 fun sessionRow(
     context: Context,
@@ -29,23 +33,29 @@ fun sessionRow(
     agent: CharSequence,
     need: CharSequence,
     group: String,
+    stateDescription: CharSequence? = null,
 ): View {
-    val gap = Kit.dimen(context, R.dimen.swarm_space_8).toInt()
+    val gap = Kit.dimenPx(context, R.dimen.swarm_space_8)
 
     val line = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = android.view.Gravity.CENTER_VERTICAL
-        // The glow is drawn OUTSIDE the 7 dp dot -- 9 dp of blur in every direction -- and a
-        // ViewGroup clips its children to their own bounds by default. Without this the Paint is
-        // right, the layer type is right, and the halo does not render.
+        // The dot's view is inflated by its halo and pulled back with negative margins, so it
+        // extends past this line's bounds on every side. Necessary and NOT sufficient: this
+        // governs the parent's clip and can do nothing about a software layer sized to the child,
+        // which is what was actually cutting the halo off (see statusDot).
         clipChildren = false
         clipToPadding = false
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         tag = KitTag.LINE
     }
     line.addView(
-        statusDot(context, group).apply {
-            (layoutParams as LinearLayout.LayoutParams).marginEnd = gap
+        statusDot(context, group, stateDescription).apply {
+            // ADDED TO, NOT REPLACING. A glowing dot's margins already carry the negative
+            // compensation for its halo -- the view is inflated so the software layer has room,
+            // and the inflation is given back so the mark still occupies the design's 7 dp.
+            // Assigning the gap here would spend that compensation and shift the dot 9 dp right.
+            (layoutParams as LinearLayout.LayoutParams).marginEnd += gap
         },
     )
     line.addView(
@@ -75,10 +85,10 @@ fun sessionRow(
         clipToPadding = false
         background = cardSurface(context, attention = group == "needs_input")
         setPaddingRelative(
-            Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
+            Kit.dimenPx(context, R.dimen.swarm_space_12),
+            Kit.dimenPx(context, R.dimen.swarm_space_10),
+            Kit.dimenPx(context, R.dimen.swarm_space_12),
+            Kit.dimenPx(context, R.dimen.swarm_space_10),
         )
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
@@ -89,7 +99,7 @@ fun sessionRow(
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = need
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {
-                topMargin = Kit.dimen(context, R.dimen.swarm_space_4).toInt()
+                topMargin = Kit.dimenPx(context, R.dimen.swarm_space_4)
             }
             tag = KitTag.NEED
         },
@@ -108,14 +118,14 @@ fun sessionRow(
 fun sessionList(context: Context): LinearLayout = KitStack(
     context,
     LinearLayout.VERTICAL,
-    Kit.dimen(context, R.dimen.swarm_space_8).toInt(),
+    Kit.dimenPx(context, R.dimen.swarm_space_8),
 ).apply {
     clipChildren = false
     clipToPadding = false
     setPaddingRelative(
-        Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_12),
         0,
-        Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_12),
         0,
     )
 }

@@ -277,7 +277,7 @@ func TestPBDS6_EveryKitFactoryIsAnInboxComponent(t *testing.T) {
 		}
 	}
 	if found == 0 {
-		t.Fatalf("PB-DS-6: no top-level factories found in the files s23Inbox names; this "+
+		t.Fatalf("PB-DS-6: no top-level factories found in the files s23Inbox names; this " +
 			"direction passed over an empty set and says nothing")
 	}
 }
@@ -290,7 +290,10 @@ func TestPBDS7_EveryDerivationCitationResolvesToARow(t *testing.T) {
 
 	cited := 0
 	for file, src := range sources {
-		for _, raw := range s23Annotations(src)["derived"] {
+		for _, annotation := range s23Annotations(src)["derived"] {
+			// A constant's citation carries a `{ field }` naming the cell its value comes from;
+			// a component's names the row and stops there. Both resolve to the same row.
+			raw, _ := s23ParseDerived(annotation)
 			ref := strings.TrimSpace(strings.TrimPrefix(raw, s23ComponentsDoc))
 			if ref == raw {
 				t.Errorf("PB-DS-7: %s cites %q, which does not name %s. The derivation table is "+
@@ -313,25 +316,91 @@ func TestPBDS7_EveryDerivationCitationResolvesToARow(t *testing.T) {
 	}
 }
 
-// s23RowExists finds `#3 Badge` or `§4 Status dots, B134 mapping` in the table.
+// s23FindRow returns the table row `#3 Badge` or `§4 Status dots, B134 mapping` names.
 //
 // The two forms are different tables. §3 is numbered, one row per PB-DS-7 component; §4's
 // "adjacent derivations" are not numbered because they are not in PB-DS-7's list of 24 -- they
-// are the things the eight screens cannot be built without. Both are checked by their leading
+// are the things the eight screens cannot be built without. Both are found by their leading
 // cell, which is the cell that identifies the row.
+//
+// It returns the ROW rather than a boolean because a citation that resolves to a row and stops
+// there checks only that someone wrote a heading: the values in the row are what the constants
+// citing it have to agree with.
+func s23FindRow(doc, ref string) (string, bool) {
+	marker := ""
+	switch {
+	case s23IsNumberedRef(ref):
+		n, name, _ := strings.Cut(strings.TrimPrefix(ref, "#"), " ")
+		marker = "| " + n + " | " + name + " |"
+	case strings.HasPrefix(ref, "§4 "):
+		marker = "| " + strings.TrimPrefix(ref, "§4 ") + " |"
+	default:
+		return "", false
+	}
+	for _, line := range strings.Split(doc, "\n") {
+		if strings.Contains(line, marker) {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+func s23IsNumberedRef(ref string) bool {
+	n, _, ok := strings.Cut(strings.TrimPrefix(ref, "#"), " ")
+	return ok && s23IsNumber(n)
+}
+
 func s23RowExists(doc, ref string) bool {
-	if n, name, ok := strings.Cut(strings.TrimPrefix(ref, "#"), " "); ok && s23IsNumber(n) {
-		return strings.Contains(doc, "| "+n+" | "+name+" |")
+	_, ok := s23FindRow(doc, ref)
+	return ok
+}
+
+// s23DocMetric reads one named number out of a derivation-table row: `height 16` for the field
+// `height`.
+//
+// EVERY OCCURRENCE MUST AGREE. A row is prose in a table cell and a value can be restated in it
+// ("`--p-chip-r` 8 = half the 16 dp height"); taking the first match would make the check depend
+// on the order someone wrote a sentence in, and taking any match would let a contradiction pass.
+func s23DocMetric(row, field string) (float64, error) {
+	re, err := regexp.Compile(`\b` + regexp.QuoteMeta(field) + `\s+([0-9]*\.?[0-9]+)\b`)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a field name", field)
 	}
-	if name, ok := strings.CutPrefix(ref, "§4 "); ok {
-		return strings.Contains(doc, "| "+name+" |")
+	matches := re.FindAllStringSubmatch(row, -1)
+	if matches == nil {
+		return 0, fmt.Errorf("the row states no `%s <number>`", field)
 	}
-	return false
+	var first float64
+	for i, m := range matches {
+		v, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			return 0, err
+		}
+		if i == 0 {
+			first = v
+			continue
+		}
+		if v != first {
+			return 0, fmt.Errorf("the row states %s twice and disagrees with itself: %g and %g",
+				field, first, v)
+		}
+	}
+	return first, nil
 }
 
 func s23IsNumber(s string) bool {
 	_, err := strconv.Atoi(s)
 	return err == nil
+}
+
+// s23DerivationShare is the fraction internal/design declares for one named derivation.
+func s23DerivationShare(name string) (float64, bool) {
+	for _, d := range design.Derivations() {
+		if d.Name == name {
+			return float64(d.Percent) / 100, true
+		}
+	}
+	return 0, false
 }
 
 func s23DerivedCount() int {
@@ -719,24 +788,162 @@ func TestPBDS6_EveryKitSpacingIsTheLedgersStep(t *testing.T) {
 	}
 }
 
+// s23DerivedSpacing binds a component Substrate never drew to the scale steps ITS ROW in the
+// derivation table names.
+//
+// PB-DS-1's ledger has nothing to say about the badge: there is no `.badge` rule in the design
+// source to absorb, because the artifact ships no badge at all (§1.4 adds it beside the live
+// counter). Row 3 is the entire authority for its padding -- and until this fence, nothing read
+// that row. The Robolectric claim that looked like it did,
+//
+//	Claim("badge padding-y", dimen("swarm_space_2").toInt(), badge.paddingTop)
+//
+// has R.dimen.swarm_space_2 on BOTH sides of it: the component spends the step and the assertion
+// re-reads the same step, so it certifies that the badge spends whatever the badge spends. The
+// step comes from the row here; what the resource table resolves it to is the Robolectric
+// suite's, and the two halves now start from different places.
+var s23DerivedSpacing = []struct {
+	File  string
+	Row   string
+	Edge  string
+	Dimen string
+}{
+	{"Badge.kt", "#3 Badge", "padding-y", "swarm_space_2"},
+	{"Badge.kt", "#3 Badge", "padding-x", "swarm_space_6"},
+}
+
+// s23DocPadding reads “padding `space_2` x `space_6``` out of a row: vertical first and then
+// horizontal, which is the CSS shorthand's own order and the order the table writes it in.
+var s23DocPadding = regexp.MustCompile("padding `space_([0-9]+)` x `space_([0-9]+)`")
+
+func s23RowPadding(row, edge string) (string, error) {
+	m := s23DocPadding.FindStringSubmatch(row)
+	if m == nil {
+		return "", fmt.Errorf("the row states no ``padding `space_N` x `space_N```")
+	}
+	switch edge {
+	case "padding-y":
+		return "swarm_space_" + m[1], nil
+	case "padding-x":
+		return "swarm_space_" + m[2], nil
+	}
+	return "", fmt.Errorf("%q is not an edge this reader knows", edge)
+}
+
+func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	sources := s23KitSources(t)
+
+	for _, s := range s23DerivedSpacing {
+		row, ok := s23FindRow(doc, s.Row)
+		if !ok {
+			t.Errorf("PB-DS-7: the %s row claims `%s` states its %s, and %s has no such row",
+				s.File, s.Row, s.Edge, s23ComponentsDoc)
+			continue
+		}
+		want, err := s23RowPadding(row, s.Edge)
+		if err != nil {
+			t.Errorf("PB-DS-7: `%s`: %v", s.Row, err)
+			continue
+		}
+		if want != s.Dimen {
+			t.Errorf("PB-DS-7: `%s` states %s for %s's %s, and the s23DerivedSpacing row spends "+
+				"%s. The table is the authority for a component the design source never drew.",
+				s.Row, want, s.File, s.Edge, s.Dimen)
+			continue
+		}
+		src, ok := sources[s.File]
+		if !ok {
+			t.Errorf("PB-DS-7: %s does not exist, so its spacing cannot be checked", s.File)
+			continue
+		}
+		if !strings.Contains(kotlinCodeOnly(src), "R.dimen."+want) {
+			t.Errorf("PB-DS-7: %s never references R.dimen.%s, which is the step `%s` states for "+
+				"its %s. A component whose only specification is prose in a table is the one whose "+
+				"spacing has to be read out of that table rather than out of itself.",
+				s.File, want, s.Row, s.Edge)
+		}
+	}
+
+	// The reader must read the ROW, not echo the claim. Perturbing the row it is given has to
+	// move its answer, or the loop above is comparing s23DerivedSpacing with itself.
+	row, ok := s23FindRow(doc, "#3 Badge")
+	if !ok {
+		t.Fatal("PB-DS-7: the derivation table has no row 3, so the control below says nothing")
+	}
+	moved := strings.Replace(row, "padding `space_2`", "padding `space_4`", 1)
+	if moved == row {
+		t.Fatal("PB-DS-7: row 3 no longer states ``padding `space_2```, so the control below " +
+			"perturbs nothing")
+	}
+	got, err := s23RowPadding(moved, "padding-y")
+	if err != nil || got != "swarm_space_4" {
+		t.Errorf("PB-DS-7: the row reader answers %q (%v) for a row stating space_4, so it is not "+
+			"reading the row and every comparison above holds against a constant", got, err)
+	}
+	if _, err := s23RowPadding("| 3 | Badge | no padding cell |", "padding-y"); err == nil {
+		t.Error("PB-DS-7: the row reader found a padding in a row that states none, so a row that " +
+			"lost its spacing cell would leave the badge's padding checked against nothing")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PB-DS-7: the numbers the scale does not govern.
 // ---------------------------------------------------------------------------
 
 // s23MetricConst matches `const val NAME = 7f` (or 0.045f), which is the only shape a kit
 // constant may take: a named Float in KitMetrics.
-var s23MetricConst = regexp.MustCompile(`^\s*(?:internal\s+)?const\s+val\s+([A-Z][A-Z0-9_]*)\s*=\s*(-?[0-9.]+)f\s*$`)
+//
+// EVERY MODIFIER IS OPTIONAL, AND THAT IS THE WHOLE POINT OF THE ALTERNATION. This read
+// `(?:internal\s+)?const` and therefore accepted `internal` while rejecting `private`, so
+// `private const val ATTENTION_BORDER_SHARE = 0.36f` was never matched, never joined to anything,
+// and the `origin:` line above it was decoration. `private` is the modifier a number acquires the
+// moment someone decides it is an implementation detail -- which is exactly the moment it stops
+// being reviewed, so it is the last spelling a fence can afford to miss. `const` and the type
+// annotation are optional for the same reason: `private val NAME: Float = 7f` is the same number
+// wearing different clothes.
+var s23MetricConst = regexp.MustCompile(
+	`^\s*(?:(?:private|internal|public)\s+)?(?:const\s+)?val\s+([A-Z][A-Z0-9_]*)\s*(?::\s*Float\s*)?=\s*(-?[0-9.]+)f\s*$`)
 
 // s23MetricCSSOrigin is `origin: .pdot { width }` -- a declaration in the shared block.
 var s23MetricCSSOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(\S.*?)\s*\{\s*([a-z-]+)\s*\}\s*(?:\*/)?\s*$`)
 
-// s23MetricDerivedOrigin is `derived: docs/design/substrate-components.md #3 Badge` -- the escape
-// hatch for a constant the design source cannot supply because Substrate never specified the
-// component. It is checked for CITATION rather than for value: TestPBDS7_EveryDerivationCitation-
-// ResolvesToARow follows it into the table, and the arithmetic that number has to satisfy is
-// asserted where it is observable, on the running resource table (the badge's radius is half its
-// height, so --p-chip-r renders a pill).
+// s23MetricDerivationOrigin is `origin: derivation attention-row-border` -- a share whose
+// authority is internal/design's derivation table rather than a declaration in the design source.
+//
+// The three shares this kit carries are inputs to a `color-mix` PB-TOK-7 forbids resolving into a
+// literal, so the SHARE is what the kit holds and that table is where it comes from. Naming the
+// derivation makes the join machine-read, the same way `origin: .pdot { width }` does for a CSS
+// declaration -- and it retires the shape-specific regexp that used to recognise the two glow
+// shares by the syntax of the `when` branch they sat in.
+var s23MetricDerivationOrigin = regexp.MustCompile(
+	`^(?:\s|\*|/)*origin:\s*derivation\s+([a-z0-9-]+)\s*(?:\*/)?\s*$`)
+
+// s23MetricDerivedOrigin is `derived: docs/design/substrate-components.md #3 Badge { height }` --
+// the escape hatch for a constant the design source cannot supply because Substrate never
+// specified the component.
+//
+// THE `{ field }` IS WHAT MAKES IT A VALUE CHECK RATHER THAN A CITATION CHECK. Without it the
+// annotation asserted only that the cited ROW exists: BADGE_HEIGHT_DP could become 20f and stay
+// green, because nothing followed the citation into row 3 to read the `height 16` it states. The
+// field names the cell entry, and s23DocMetric reads it.
 var s23MetricDerivedOrigin = regexp.MustCompile(`^(?:\s|\*|/)*derived:\s*(\S.*?)\s*(?:\*/)?\s*$`)
+
+// s23DerivedField splits the optional `{ field }` off the end of a derivation citation.
+var s23DerivedField = regexp.MustCompile(`^(.*?)\s*\{\s*([a-z-]+)\s*\}$`)
+
+// s23ParseDerived splits `docs/... #3 Badge { height }` into the row citation and the cell field.
+//
+// A citation with no field names a row and nothing in it, which is what a COMPONENT annotation
+// does -- Badge.kt cites row 3 as its specification, and the row has no single number that is
+// "the badge". A CONSTANT with no field is refused by s23CheckMetric, because a constant is one
+// number and the row it cites has a dozen.
+func s23ParseDerived(raw string) (ref, field string) {
+	if m := s23DerivedField.FindStringSubmatch(raw); m != nil {
+		return m[1], m[2]
+	}
+	return raw, ""
+}
 
 // s23MetricTokenOrigin is `origin: --p-card-fx alpha` -- a part of a token's value, for the four
 // effect tokens that have no colour resource and no CSS rule of their own.
@@ -745,6 +952,134 @@ var s23MetricTokenOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(--[a-z0-9
 var s23PxRe = regexp.MustCompile(`([0-9]*\.?[0-9]+)px`)
 var s23RGBARe = regexp.MustCompile(`rgba\(\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\s*,\s*([0-9]*\.?[0-9]+)\s*\)`)
 var s23StopRe = regexp.MustCompile(`([0-9]*\.?[0-9]+)%`)
+
+// s23Metric is one constant the kit declares, paired with the origin annotation above it.
+//
+// THE SCAN AND THE CHECK ARE SEPARATE FUNCTIONS SO THE NEGATIVE CONTROL CAN DRIVE THE SAME ONES.
+// They were one loop inside the test, and a control for a loop has to be a copy of that loop --
+// which proves the copy works and says nothing about the fence. Every probe in
+// TestPBDS7_TheMetricScanCanActuallyFail goes through [s23ScanMetrics] and [s23CheckMetric], the
+// two functions the real assertion calls.
+type s23Metric struct {
+	Name string
+	Line int
+	// Raw is the literal as written, parsed by the check so the scan stays a reader.
+	Raw string
+	// Kind is the annotation form above the constant: "css", "token", "derivation", "derived",
+	// or "" for a constant carrying no origin at all.
+	Kind   string
+	First  string
+	Second string
+}
+
+// s23ScanMetrics reads one source into the constants it declares and the origins they cite.
+func s23ScanMetrics(src string) []s23Metric {
+	var out []s23Metric
+	pending := s23Metric{}
+	for i, line := range strings.Split(src, "\n") {
+		if m := s23MetricDerivationOrigin.FindStringSubmatch(line); m != nil {
+			pending = s23Metric{Kind: "derivation", First: m[1]}
+			continue
+		}
+		if m := s23MetricTokenOrigin.FindStringSubmatch(line); m != nil {
+			pending = s23Metric{Kind: "token", First: m[1], Second: m[2]}
+			continue
+		}
+		if m := s23MetricCSSOrigin.FindStringSubmatch(line); m != nil {
+			pending = s23Metric{Kind: "css", First: m[1], Second: m[2]}
+			continue
+		}
+		if m := s23MetricDerivedOrigin.FindStringSubmatch(line); m != nil {
+			ref, field := s23ParseDerived(m[1])
+			pending = s23Metric{Kind: "derived", First: ref, Second: field}
+			continue
+		}
+		m := s23MetricConst.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		pending.Name, pending.Line, pending.Raw = m[1], i+1, m[2]
+		out = append(out, pending)
+		pending = s23Metric{}
+	}
+	return out
+}
+
+// s23CheckMetric recomputes one constant from the design authority it cites.
+//
+// @return the disagreement, or "" when the constant is the design's own number. The caller adds
+// the file and line, so this reads as one sentence about the value.
+func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]string, doc string) string {
+	got, err := strconv.ParseFloat(m.Raw, 64)
+	if err != nil {
+		return fmt.Sprintf("%s = %sf is not a number", m.Name, m.Raw)
+	}
+	switch m.Kind {
+	case "css":
+		want, err := s23CSSMetric(css, m.First, m.Second)
+		if err != nil {
+			return fmt.Sprintf("%s cites `%s { %s }`: %v", m.Name, m.First, m.Second, err)
+		}
+		if want != got {
+			return fmt.Sprintf("%s = %g, but the design's `%s { %s }` is %g. The design's px is "+
+				"Android dp at 1:1, so this is a transcription error and nothing else.",
+				m.Name, got, m.First, m.Second, want)
+		}
+	case "token":
+		want, err := s23TokenMetric(tokens, m.First, m.Second)
+		if err != nil {
+			return fmt.Sprintf("%s cites `%s %s`: %v", m.Name, m.First, m.Second, err)
+		}
+		if want != got {
+			return fmt.Sprintf("%s = %g, but %s declares %s = %g in the token origin",
+				m.Name, got, m.First, m.Second, want)
+		}
+	case "derivation":
+		want, ok := s23DerivationShare(m.First)
+		if !ok {
+			return fmt.Sprintf("%s cites the derivation %q, and internal/design.Derivations() "+
+				"declares no such name. A share with no derivation behind it is a colour-mix "+
+				"input nobody agreed to, which is PB-TOK-7's defect one indirection out.",
+				m.Name, m.First)
+		}
+		if want != got {
+			return fmt.Sprintf("%s = %g, and internal/design declares the %s derivation at %g. "+
+				"The kit carries the SHARE because the resolved colour may not be typed; a share "+
+				"that disagrees with the table produces a colour no fence can recognise as wrong.",
+				m.Name, got, m.First, want)
+		}
+	case "derived":
+		if m.Second == "" {
+			return fmt.Sprintf("`%s` cites `%s` and names no field of it. The row states a dozen "+
+				"numbers; without a `{ field }` there is nothing to compare and the annotation "+
+				"asserts only that someone wrote a heading. Cite it as `%s { height }`.",
+				m.Name, m.First, m.First)
+		}
+		ref := strings.TrimSpace(strings.TrimPrefix(m.First, s23ComponentsDoc))
+		if ref == m.First {
+			return fmt.Sprintf("%s cites %q, which does not name %s", m.Name, m.First, s23ComponentsDoc)
+		}
+		row, ok := s23FindRow(doc, ref)
+		if !ok {
+			return fmt.Sprintf("%s cites `%s`, and no such row exists in %s", m.Name, ref, s23ComponentsDoc)
+		}
+		want, err := s23DocMetric(row, m.Second)
+		if err != nil {
+			return fmt.Sprintf("%s cites `%s { %s }`: %v", m.Name, ref, m.Second, err)
+		}
+		if want != got {
+			return fmt.Sprintf("%s = %g, and `%s` states %s %g. The design source never drew this "+
+				"component, so that row is the only place its numbers exist -- a constant that "+
+				"drifts from it drifts from everything.", m.Name, got, ref, m.Second, want)
+		}
+	default:
+		return fmt.Sprintf("`const val %s` carries no `origin:` annotation. A number in this file "+
+			"with no design behind it is exactly the thing the kit exists to stop reaching the "+
+			"screens -- and it is invisible in review, because a plausible dp value looks like "+
+			"every other plausible dp value.", m.Name)
+	}
+	return ""
+}
 
 // TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber joins KitMetrics to the design.
 //
@@ -773,81 +1108,25 @@ func TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber(t *testing.T) {
 		owned[c.File] = true
 	}
 
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+
 	checked := 0
 	for file, src := range sources {
 		if !owned[file] {
 			continue
 		}
-		pendingCSS := ""
-		pendingProp := ""
-		pendingToken := ""
-		pendingPart := ""
-		pendingDerived := ""
-		for i, line := range strings.Split(src, "\n") {
-			if m := s23MetricTokenOrigin.FindStringSubmatch(line); m != nil {
-				pendingToken, pendingPart = m[1], m[2]
-				pendingCSS, pendingProp, pendingDerived = "", "", ""
-				continue
+		for _, m := range s23ScanMetrics(src) {
+			checked++
+			if fault := s23CheckMetric(m, css, tokens, doc); fault != "" {
+				t.Errorf("PB-DS-7: %s:%d: %s", file, m.Line, fault)
 			}
-			if m := s23MetricCSSOrigin.FindStringSubmatch(line); m != nil {
-				pendingCSS, pendingProp = m[1], m[2]
-				pendingToken, pendingPart, pendingDerived = "", "", ""
-				continue
-			}
-			if m := s23MetricDerivedOrigin.FindStringSubmatch(line); m != nil {
-				pendingDerived = m[1]
-				pendingCSS, pendingProp, pendingToken, pendingPart = "", "", "", ""
-				continue
-			}
-			m := s23MetricConst.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			name, raw := m[1], m[2]
-			got, err := strconv.ParseFloat(raw, 64)
-			if err != nil {
-				t.Errorf("%s:%d: %s = %sf is not a number", file, i+1, name, raw)
-				continue
-			}
-
-			switch {
-			case pendingCSS != "":
-				want, err := s23CSSMetric(css, pendingCSS, pendingProp)
-				if err != nil {
-					t.Errorf("PB-DS-7: %s:%d: %s cites `%s { %s }`: %v",
-						file, i+1, name, pendingCSS, pendingProp, err)
-				} else if want != got {
-					t.Errorf("PB-DS-7: %s:%d: %s = %g, but the design's `%s { %s }` is %g. The "+
-						"design's px is Android dp at 1:1, so this is a transcription error and "+
-						"nothing else.", file, i+1, name, got, pendingCSS, pendingProp, want)
-				}
-				checked++
-			case pendingToken != "":
-				want, err := s23TokenMetric(tokens, pendingToken, pendingPart)
-				if err != nil {
-					t.Errorf("PB-DS-7: %s:%d: %s cites `%s %s`: %v",
-						file, i+1, name, pendingToken, pendingPart, err)
-				} else if want != got {
-					t.Errorf("PB-DS-7: %s:%d: %s = %g, but %s declares %s = %g in the token origin",
-						file, i+1, name, got, pendingToken, pendingPart, want)
-				}
-				checked++
-			case pendingDerived != "":
-				// The citation itself is checked by TestPBDS7_EveryDerivationCitationResolvesToARow.
-				checked++
-			default:
-				t.Errorf("PB-DS-7: %s:%d: `const val %s` carries no `origin:` annotation. A number "+
-					"in this file with no design behind it is exactly the thing the kit exists to "+
-					"stop reaching the screens -- and it is invisible in review, because a "+
-					"plausible dp value looks like every other plausible dp value.", file, i+1, name)
-			}
-			pendingCSS, pendingProp, pendingToken, pendingPart, pendingDerived = "", "", "", "", ""
 		}
 	}
 	if checked == 0 {
-		t.Error("PB-DS-7: no annotated metric constant was checked against the design; either the " +
-			"kit declares none (and every component's fixed sizes came from somewhere unstated) " +
-			"or the annotation parser stopped matching")
+		t.Error("PB-DS-7: no metric constant was scanned at all; either the kit declares none (and " +
+			"every component's fixed sizes came from somewhere unstated) or the constant pattern " +
+			"stopped matching -- which is the shape of the defect this scan already shipped once, " +
+			"when `private` was not one of the modifiers it recognised")
 	}
 }
 
@@ -904,7 +1183,57 @@ func s23TokenMetric(tokens map[string]string, token, part string) (float64, erro
 // ---------------------------------------------------------------------------
 
 var s23GroupBinding = regexp.MustCompile(`"([a-z_]+)"\s*->\s*R\.color\.([a-z_]+)`)
-var s23GroupShare = regexp.MustCompile(`"([a-z_]+)"\s*->\s*([0-9]*\.?[0-9]+)f`)
+
+// s23GroupShare is a `when` branch binding a Group to its glow share, in either spelling: the
+// named constant the kit carries, or a literal.
+//
+// IT READS THE BINDING, NOT THE VALUE. The literal spelling was all this recognised, which made
+// the check a hostage to the syntax of one `when` branch -- move the two numbers behind names,
+// the innocuous refactor that puts them under an `origin:` annotation, and the regexp silently
+// matches nothing while the test goes on passing. So the branch says WHICH share a Group takes
+// and s23ResolveShares turns a name into a number through the constant scan; the number itself is
+// joined to internal/design by the annotation on the constant.
+// The branch's value ENDS THE LINE, which is what keeps this off the four colour branches in the
+// same file: `"needs_input" -> R.color.swarm_state_attention` offers `R` to the name alternative
+// and then has a `.` where the line was required to end.
+var s23GroupShare = regexp.MustCompile(`(?m)"([a-z_]+)"\s*->\s*([A-Z][A-Z0-9_]*|[0-9]*\.?[0-9]+f)\s*$`)
+
+// s23ResolveShares reads the Group -> share table out of Kit.kt, following a named constant to
+// the value declared for it in the same file.
+//
+// @return the shares by Group, and one line per branch naming something the file does not declare
+// -- which is a binding pointing at nothing, not a Group that does not glow.
+func s23ResolveShares(src string) (map[string]float64, []string) {
+	declared := map[string]string{}
+	for _, m := range s23ScanMetrics(src) {
+		declared[m.Name] = m.Raw
+	}
+	out := map[string]float64{}
+	var faults []string
+	for _, m := range s23GroupShare.FindAllStringSubmatch(kotlinCodeOnly(src), -1) {
+		raw := strings.TrimSuffix(m[2], "f")
+		if named, ok := declared[m[2]]; ok {
+			raw = named
+		} else if !s23LooksNumeric(raw) {
+			faults = append(faults, fmt.Sprintf("group %s takes the share %s, which this file "+
+				"declares no `const val` for -- so the value it glows at is somewhere this gate "+
+				"cannot follow", m[1], m[2]))
+			continue
+		}
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			faults = append(faults, fmt.Sprintf("group %s takes the share %q, which is not a number", m[1], raw))
+			continue
+		}
+		out[m[1]] = v
+	}
+	return out, faults
+}
+
+func s23LooksNumeric(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
 
 // TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping joins the kit's Group table THROUGH the two
 // checked-in joins to the origin: group-tokens.tsv says which token a Group is, and
@@ -984,7 +1313,6 @@ func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 	if !ok {
 		t.Fatal("PB-DS-7: the kit has no Kit.kt")
 	}
-	code := kotlinCodeOnly(src)
 
 	tokenOf := map[string]string{}
 	for _, row := range loadGroupTokenMap(t) {
@@ -1004,13 +1332,14 @@ func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 			"require the kit to glow nowhere and pass over an empty set")
 	}
 
-	got := map[string]float64{}
-	for _, m := range s23GroupShare.FindAllStringSubmatch(code, -1) {
-		v, err := strconv.ParseFloat(m[2], 64)
-		if err != nil {
-			continue
-		}
-		got[m[1]] = v
+	got, faults := s23ResolveShares(src)
+	for _, fault := range faults {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+	if len(got) == 0 {
+		t.Fatal("PB-DS-7: no Group -> share binding was read out of Kit.kt at all. Every " +
+			"comparison below would then report each live Group as glowing at 0, which is a " +
+			"reader that stopped matching wearing the costume of a kit that stopped glowing.")
 	}
 
 	for group, token := range tokenOf {
@@ -1029,6 +1358,38 @@ func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 				"neither is. `.pdot.ok` sets `box-shadow: none` explicitly.",
 				group, token, got[group])
 		}
+	}
+
+	// The reader must follow a NAME to its value, must object to a name that leads nowhere, and
+	// must not mistake a colour branch for a share. The regexp this replaced did none of the
+	// three: it matched a bare literal and nothing else, so moving the two numbers behind names --
+	// the refactor that puts them under an `origin:` annotation -- would have left it matching
+	// nothing while this test went on passing over an empty map.
+	probe := strings.Join([]string{
+		`    private const val NEEDS_INPUT_GLOW_SHARE = 0.70f`,
+		`        "needs_input" -> NEEDS_INPUT_GLOW_SHARE`,
+		`        "working" -> 0.55f`,
+		`        "ready_for_review" -> MISSING_SHARE`,
+		`        "completed" -> R.color.swarm_text_tertiary`,
+	}, "\n")
+	shares, probeFaults := s23ResolveShares(probe)
+	if shares["needs_input"] != 0.70 {
+		t.Errorf("the share reader answers %g for a Group bound to a named constant declared at "+
+			"0.70 in the same file, so a kit that moved its shares behind names would be checked "+
+			"against nothing", shares["needs_input"])
+	}
+	if shares["working"] != 0.55 {
+		t.Errorf("the share reader answers %g for a Group bound to the literal 0.55f", shares["working"])
+	}
+	if _, ok := shares["ready_for_review"]; ok || len(probeFaults) != 1 {
+		t.Errorf("the share reader accepted a branch naming a constant the file does not declare: "+
+			"%v, faults %v. A binding that points at nothing is not a Group that does not glow.",
+			shares, probeFaults)
+	}
+	if _, ok := shares["completed"]; ok {
+		t.Errorf("the share reader read the COLOUR branch `-> R.color.swarm_text_tertiary` as a "+
+			"share: %v. Both tables are `when (group)` blocks in one file, and reading the wrong "+
+			"one would report every Group as glowing at a colour resource.", shares)
 	}
 }
 
@@ -1113,6 +1474,103 @@ func TestPBDS7_TheMetricJoinCanActuallyFail(t *testing.T) {
 	}
 	if _, err := s23TokenMetric(tokens, "--p-card-fx", "stop"); err == nil {
 		t.Error("the token metric reader found a gradient stop in a box-shadow")
+	}
+}
+
+// TestPBDS7_TheMetricScanCanActuallyFail is the control over the OTHER half of the metric join:
+// not the arithmetic, but whether a constant is seen at all and whether its citation is followed
+// far enough to compare a number.
+//
+// Three ways TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber was green over a value nobody checked,
+// all three found by an audit committee rather than by this file:
+//
+//   - THE FENCE HAD A VISIBILITY MODIFIER IN IT. `private const val ATTENTION_BORDER_SHARE` was
+//     never matched, so its `origin:` annotation was decoration and its 0.36 was unchecked.
+//     `private` is the modifier a number acquires the moment someone decides it is an
+//     implementation detail, which is exactly when it stops being reviewed.
+//   - A `derived:` CITATION WAS CHECKED FOR EXISTENCE, NEVER FOR VALUE. BADGE_HEIGHT_DP could
+//     become 20f and stay green, because nothing followed the citation into row 3 and read the
+//     `height 16` the row states.
+//   - THE THREE color-mix SHARES HAD NO ANNOTATION FORM AT ALL, so they were checked by a
+//     shape-specific regexp elsewhere in this file that an innocuous refactor would silently
+//     stop matching.
+//
+// Every probe below goes through [s23ScanMetrics] and [s23CheckMetric] -- the functions the real
+// assertion calls -- rather than through a copy of them.
+func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
+	css := s22bSharedCSS(t)
+	tokens := s22bTokenValues(t)
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+
+	check := func(src string) []string {
+		var faults []string
+		for _, m := range s23ScanMetrics(src) {
+			if fault := s23CheckMetric(m, css, tokens, doc); fault != "" {
+				faults = append(faults, fault)
+			}
+		}
+		return faults
+	}
+
+	// 1. Every spelling of a constant is SEEN. A constant the scan does not reach is one the
+	//    gate cannot fail on, however wrong its value is.
+	for _, spelling := range []string{
+		"    const val DOT_DP = 7f",
+		"    internal const val DOT_DP = 7f",
+		"    private const val DOT_DP = 7f",
+		"    private val DOT_DP: Float = 7f",
+	} {
+		found := s23ScanMetrics(spelling)
+		if len(found) != 1 {
+			t.Errorf("PB-DS-7: the metric scan does not see %q, so a number written that way "+
+				"carries no origin, is checked against nothing, and fails no assertion in this "+
+				"gate. The shipped defect was exactly this: `private` was not in the pattern.",
+				spelling)
+			continue
+		}
+		if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
+			t.Errorf("PB-DS-7: a constant with NO origin annotation, written %q, passes the "+
+				"check. An unannotated number is the thing this gate exists to refuse.", spelling)
+		}
+	}
+
+	// 2. A share cites internal/design's derivation table, and the VALUE is recomputed from it.
+	//    The two glow shares and the attention border are colour-mix inputs: PB-TOK-7 forbids
+	//    typing the resolved colour, so the share is what the kit holds and the table is where
+	//    it comes from.
+	if faults := check("/** origin: derivation attention-row-border */\nprivate const val S = 0.36f"); len(faults) != 0 {
+		t.Errorf("PB-DS-7: a share annotated `origin: derivation attention-row-border` and equal "+
+			"to the 36%% internal/design declares is reported as a fault: %v", faults)
+	}
+	if faults := check("/** origin: derivation attention-row-border */\nprivate const val S = 0.5f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a share annotated `origin: derivation attention-row-border` passes at " +
+			"0.5 while internal/design declares 36%. The citation is being taken on trust, which " +
+			"is the same defect as a derived citation nobody follows into its row.")
+	}
+	if faults := check("/** origin: derivation no-such-derivation */\nprivate const val S = 0.36f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a share citing a derivation internal/design does not declare passes. A " +
+			"citation of nothing is a value with no authority behind it.")
+	}
+
+	// 3. A `derived:` citation names a FIELD of the row, and the field's value is compared.
+	badge := "/** derived: " + s23ComponentsDoc + " #3 Badge { height } */\n    const val BADGE_HEIGHT_DP = "
+	if faults := check(badge + "16f"); len(faults) != 0 {
+		t.Errorf("PB-DS-7: the badge height annotated against row 3 and equal to the 16 the row "+
+			"states is reported as a fault: %v", faults)
+	}
+	if faults := check(badge + "20f"); len(faults) == 0 {
+		t.Error("PB-DS-7: BADGE_HEIGHT_DP passes at 20f against a row that states `height 16`. " +
+			"The citation resolves to a row and the number is never compared to it, so the one " +
+			"constant in this kit whose authority is prose is the one nothing checks.")
+	}
+	if faults := check("/** derived: " + s23ComponentsDoc + " #3 Badge */\n    const val BADGE_HEIGHT_DP = 16f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a constant citing a row but naming no field of it passes. `#3 Badge` " +
+			"identifies a row with a dozen numbers in it; without a field there is nothing to " +
+			"compare and the annotation asserts only that the row exists.")
+	}
+	if faults := check("/** derived: " + s23ComponentsDoc + " #3 Badge { no-such-field } */\n    const val X = 16f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a constant citing a field row 3 does not state passes, so a renamed " +
+			"cell would leave the value checked against nothing")
 	}
 }
 

@@ -25,10 +25,10 @@ fun sectionLabel(context: Context, text: CharSequence): TextView = TextView(cont
     isAllCaps = true
     this.text = text
     setPaddingRelative(
-        Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
-        Kit.dimen(context, R.dimen.swarm_space_8).toInt(),
+        Kit.dimenPx(context, R.dimen.swarm_space_18),
+        Kit.dimenPx(context, R.dimen.swarm_space_12),
+        Kit.dimenPx(context, R.dimen.swarm_space_18),
+        Kit.dimenPx(context, R.dimen.swarm_space_8),
     )
     layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 }

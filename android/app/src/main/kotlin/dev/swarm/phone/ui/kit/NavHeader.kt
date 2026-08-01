@@ -23,10 +23,10 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
         orientation = LinearLayout.HORIZONTAL
         isBaselineAligned = true
         setPaddingRelative(
-            Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_4).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_18).toInt(),
-            Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
+            Kit.dimenPx(context, R.dimen.swarm_space_18),
+            Kit.dimenPx(context, R.dimen.swarm_space_4),
+            Kit.dimenPx(context, R.dimen.swarm_space_18),
+            Kit.dimenPx(context, R.dimen.swarm_space_10),
         )
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 
@@ -44,7 +44,7 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
             addView(
                 liveCounter(context, live).apply {
                     (layoutParams as LinearLayout.LayoutParams).marginStart =
-                        Kit.dimen(context, R.dimen.swarm_space_10).toInt()
+                        Kit.dimenPx(context, R.dimen.swarm_space_10)
                 },
             )
         }

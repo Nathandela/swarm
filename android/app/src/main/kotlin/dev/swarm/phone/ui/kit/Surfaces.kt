@@ -36,7 +36,15 @@ import dev.swarm.phone.R
 internal data class SurfaceSpec(
     val fill: Int,
     val stroke: Int,
-    val strokeWidthPx: Float,
+    /**
+     * WHOLE PIXELS, because `GradientDrawable.setStroke` takes an int and the conversion has to
+     * happen somewhere it can be reviewed. It used to happen at the call to that setter, as
+     * `strokeWidthPx.toInt()` -- and a cast truncates where the platform rounds, so the design's
+     * 1 dp hairline rendered 2 px on a 2.625x handset instead of 3. Substrate bans drop shadows,
+     * which makes this line the only depth cue every card, chip and row has; losing a third of it
+     * is not a rounding detail. Held as the spent value so an appearance test can read it.
+     */
+    val strokeWidthPx: Int,
     val radiusPx: Float,
     /** `--p-card-fx`, or null on the surfaces the design gives no `box-shadow`. */
     val keyLight: Int?,
@@ -203,7 +211,7 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
         } else {
             Kit.colour(context, R.color.swarm_hairline)
         },
-        strokeWidthPx = Kit.dp(context, KitMetrics.HAIRLINE_DP),
+        strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
         // rgba(255, 255, 255, 0.045). The white is `--p-card-fx`'s own RGB -- the token IS a
         // translucent white -- and the alpha comes from KitMetrics, which the Go gate recomputes
@@ -229,7 +237,7 @@ internal fun chipSurface(context: Context, selected: Boolean): SubstrateSurface 
         ),
         // `.chip.on { border-color: transparent }` -- the fill carries the state on its own.
         stroke = if (selected) ColorMix.TRANSPARENT else Kit.colour(context, R.color.swarm_hairline),
-        strokeWidthPx = if (selected) 0f else Kit.dp(context, KitMetrics.HAIRLINE_DP),
+        strokeWidthPx = if (selected) 0 else Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_chip),
         keyLight = null,
         keyLightPx = 0f,
@@ -248,7 +256,7 @@ internal fun pillSurface(context: Context, fill: Int): SubstrateSurface = surfac
     SurfaceSpec(
         fill = fill,
         stroke = ColorMix.TRANSPARENT,
-        strokeWidthPx = 0f,
+        strokeWidthPx = 0,
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_chip),
         keyLight = null,
         keyLightPx = 0f,
@@ -263,7 +271,7 @@ private fun surface(spec: SurfaceSpec): SubstrateSurface {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = spec.radiusPx
             setColor(spec.fill)
-            setStroke(spec.strokeWidthPx.toInt(), spec.stroke)
+            setStroke(spec.strokeWidthPx, spec.stroke)
         },
     )
     spec.keyLight?.let { layers += EdgeHighlight(it, spec.keyLightPx, spec.radiusPx) }
