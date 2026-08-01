@@ -352,11 +352,15 @@ const traceBulletHeading = "## Evidence files carrying a dated correction"
 //
 // THE FOURTH GROUP IS DELIBERATELY GREEDY AND UNSPLIT. Requirement, Slice and Status are
 // pipe-free by construction, so the first three cells can be taken exactly. The remainder
-// -- Derivation and Evidence -- CANNOT be split on every pipe, because thirteen rows in the
-// live document carry a pipe inside a backticked code span (PB-DS-6 quotes
-// `git show ... | grep PhoneScaffoldView`, PB-APP-8 an inlined boolean expression). Reading
-// those rows cell-by-cell would take a fragment of the Derivation text as the Evidence path
-// and undercount "Evidenced (measured on disk)" by thirteen without any visible symptom.
+// -- Derivation and Evidence -- CANNOT be split on every pipe, because twelve rows in the
+// live document carry an EXTRA CELL: the sixteen design-system and token rows were added by
+// hand rather than by the generator, and twelve of them put their verification narrative in
+// a sixth cell between Derivation and Evidence, where the header declares five columns
+// (agents-tracker-brc). Two more rows carried a pipe that was never a cell boundary at all
+// -- PB-DS-6 quoting `git show ... | grep PhoneScaffoldView` inside a code span, PB-DS-2
+// quoting another document's table inside a sentence -- and those are now escaped as \|.
+// Reading any of these rows cell-by-cell would take a fragment of the narrative as the
+// Evidence path and undercount "Evidenced (measured on disk)" with no visible symptom.
 // Evidence is therefore taken as the text after the LAST pipe, which is where the generator
 // puts it, and Derivation is recognised by its leading marker rather than by position.
 var traceReqRow = regexp.MustCompile(`^\|\s*(PB-[A-Z0-9]+-\d+)\s*\|([^|]*)\|([^|]*)\|(.*)\|\s*$`)
