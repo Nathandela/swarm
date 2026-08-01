@@ -7946,20 +7946,39 @@ implementer would otherwise invent each one silently.
 
 ### 1. `ReadyForReview` takes `--p-ok`, and `Completed` takes `--p-ink3`
 
-> **CONTESTED 2026-08-01 by the audit committee, on three independent grounds. This decision is
-> NOT settled and must not be treated as such; it awaits the designer.** (a) The premise below is
-> overstated: Substrate does bind the token this decision moves — `design-directions.html:80`,
-> `.pdot.ok { background: var(--p-ok); box-shadow: none; }`, under the section labelled *Done*. So
-> this is not gap-filling, it is overriding an explicit binding and then filling the hole that
-> creates with grey. (b) It redefines a token against its author's stated meaning:
-> `design-directions.html:315` says *"hero is brand, CTA and live glow, success is a small flat
-> dot"* — `--p-ok` **is** success. (c) The consistency warrant is half-false. The shipped TUI
-> (`internal/tui/tui.go:407-410`) is red / blue / green / grey, so it supports the review and
-> completed rows and **refutes** NeedsInput, which is red on the desktop and amber on the phone for
-> the same session. The committee's recommendation — mint a 32nd token and leave `--p-ok` as
-> success — is cheaper to reverse than what was built, because this decision was hardened into a
-> checked-in table, a bidirectional gate and a Kotlin lookup that `error()`s, all before any human
-> reviewed it. Tracked as a beads issue.
+> **RULED 2026-08-01 by Nathan, who owns this design. The rebinding stands as written below, the
+> question is closed, and the hold that made Substrate's original binding equally legal is deleted
+> with it — see B137 for what that cost and what it did not settle.**
+>
+> The audit committee contested this on 2026-08-01 on three independent grounds, and the record of
+> them stays here because two of the three were right and the paragraph below is only correct once
+> you have read them. (a) **The premise below is overstated.** Substrate does bind the token this
+> decision moves — `design-directions.html:80`, `.pdot.ok { background: var(--p-ok); box-shadow:
+> none; }`, under the section labelled *Done*. So this is not pure gap-filling; it overrides an
+> explicit binding and fills the hole that creates with grey. (b) **It redefines a token against
+> its author's stated meaning**: `design-directions.html:315` says *"hero is brand, CTA and live
+> glow, success is a small flat dot"* — `--p-ok` **is** success. (c) The consistency warrant is
+> half-false: the shipped TUI (`internal/tui/tui.go:407-410`) is red / blue / green / grey, so it
+> supports the review and completed rows and **refutes** NeedsInput, which is red on the desktop
+> and amber on the phone for the same session.
+>
+> **What the ruling turns on.** Ground (a) is true and weaker than it reads, for the reason B136
+> found and neither side had raised: Substrate's demo phone renders **three** sections — Needs you,
+> Working, Done — and `ReadyForReview` is absent from it entirely. `.pdot.ok = Done` was therefore
+> bound in a drawing that never had to place four Groups on one screen. It is a three-way
+> assignment that happens to use the word *Done*, not the considered four-way assignment the
+> objection treats it as. Ground (b) survives intact and is the real cost, priced in B137. Ground
+> (c) is noted and changes nothing: the desktop's own mapping is not this decision's warrant, and
+> the NeedsInput divergence it correctly identifies is a separate question about a different Group.
+> The committee's alternative — mint a 32nd token — buys token purity with a colour Substrate never
+> chose, on a palette whose entire argument is that it is closed. The four Groups need four
+> distinguishable treatments; `--p-err` is denial, failure and destruction and cannot carry *your
+> work is ready*; att / work / ok / ink3 is the only assignment that spends no invented colour and
+> keeps all four distinct.
+>
+> **What this ruling does not settle:** `--p-ok` now means both *ReadyForReview* and
+> *machine-online* on the same screen (`agents-tracker-k9k`, open). That collision is created by
+> this decision and is not resolved by it.
 
 **The largest hole in the design.** `ReadyForReview` is a server-derived first-class `status.Group`
 that the phone renders verbatim and never re-derives. Substrate gives it **no token**. The mock
@@ -8137,3 +8156,67 @@ turns the widening off when it goes.
 AGAINST - change `android/group-tokens.tsv` and `Kit.kt` to the new mapping first. The gate's ruling
 verbs (`RULED`, `SETTLED`, `RESOLVED`, `no longer CONTESTED`) fire on the marker, so the ADR edit and
 the gate edit have to land together or the build goes red - which is the hold working, not a defect.
+
+> **EXECUTED 2026-08-01 in B137.** The recommendation above was put to Nathan, who ruled for the
+> rebinding; the marker, the allowance and the whole hold machinery are gone. The paragraph above
+> is left standing rather than edited because it is the reason the hold survived one more session,
+> and the recipe it gives is the one B137 followed.
+
+---
+
+## B137. ReadyForReview: ruled for the rebinding, and the hold deleted (2026-08-01)
+
+Nathan ruled for the rebinding. B134 decision 1's blockquote now carries the ruling instead of the
+CONTESTED marker, and the hold that made both bindings legal is gone from the gate. This entry
+records what was removed and what the ruling costs, because the removal deletes the machinery that
+was carrying both facts.
+
+### What was deleted
+
+`android/gate/s23_kit_test.go` loses 207 lines: `s23ContestedBindings`, `s23HoldMarker`,
+`s23HoldEntry`, `s23HoldDecision`, `s23HoldRulingVerbs`, `s23ContestedHoldFaults`, `s23AnnounceHold`
+and its once-per-binary latch, `TestPBDS7_TheContestedHoldIsStillOpen` with its three negative
+controls, the `holdOpen` computation, and the allowance branch inside
+`TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping`.
+
+**The fence is strict again in both directions, which is the whole point of ruling.** While the hold
+stood, `completed` painted `swarm_state_ok` and stayed green — a revert was a one-line edit that
+cost nothing. It is now a build failure with a message that names the decision. That is a real
+tightening and it is deliberate: the allowance existed to keep a revert cheap *while the question
+was open*, and the question is closed.
+
+### What the ruling costs, stated rather than absorbed
+
+**Ground (b) of the committee's objection survives the ruling intact.**
+`design-directions.html:315` defines `--p-ok` as *success* — *"hero is brand, CTA and live glow,
+success is a small flat dot"* — and this product now paints it on a state that is not success.
+`--p-ok` in swarm means *ReadyForReview*, and that is a permanent, deliberate divergence from the
+token's author. It is recorded here because the gate can no longer say it: the hold was the only
+place in the machinery where the disagreement was written down, and deleting it deletes the
+disagreement from everything a reader runs.
+
+What the ruling rests on is B136's finding, which is a fact about the artifact rather than a
+preference: **Substrate's demo phone renders three sections.** `.pdot.ok = Done` was never a
+four-way assignment, so overriding it is not overriding a decision the designer made about this
+screen — the designer never had this screen. Against that, minting a 32nd token spends a colour
+Substrate did not choose on a palette whose argument is that it is closed.
+
+### What is still open
+
+`--p-ok` now carries two meanings on the Inbox at once: *ReadyForReview* on a 7 dp row dot, and
+*machine-online* on a 5 dp chip dot (`agents-tracker-k9k`, P2, open). **That collision is created by
+this decision and is not resolved by it.** Re-binding presence to `--p-hero` does not help; hero and
+ok are neighbours in the same green family. It stays open, and this ruling is the reason it exists.
+
+`agents-tracker-ipr` (designer sign-off) and `agents-tracker-4np` (the hold having no mechanical
+consequence) are closed by this entry: the first has its sign-off, and the second's mechanism is
+deleted rather than fixed, which is the correct end for machinery whose only job was to expire.
+
+### The shape worth keeping
+
+The hold worked exactly as built and its value was almost entirely in the four days it existed. It
+made a green build stop claiming agreement nobody had given, it survived three audit rounds that
+tried to defeat it with prose, and it cost one line to revert the whole decision the day the ruling
+went the other way. **A hold is cheap while a question is open and a lie the day after it closes** —
+so it is deleted with the question, in the same commit, which is the one property B136 refused to
+compromise on.

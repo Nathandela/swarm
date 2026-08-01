@@ -135,6 +135,30 @@ var s23Inbox = []s23Component{
 			"variant drops its `--p-cta-fx` bloom inside a card, because the card clips it.",
 	},
 	{
+		Factory: "navHeaderDrill",
+		File:    "NavHeaderDrill.kt",
+		Derived: "§4 Drill-down nav header",
+		Why: "the header a screen BELOW a root screen carries, which is a different component " +
+			"from `.pnav` rather than a variant of it: the artifact draws the root header and " +
+			"nothing else, so §4 is the whole specification -- a chevron glyph and its label in " +
+			"place of the display title, `Title.Sheet` in place of `Display.NavTitle`, and a " +
+			"padding that is three different steps rather than `.pnav`'s two. It is a separate " +
+			"file from NavHeader.kt for the reason liveCounter is a separate factory: sharing one " +
+			"function between them would make the root header's 27 sp title and this one's 15.5 sp " +
+			"a boolean, and a boolean is what a screen would then be choosing type with.",
+	},
+	{
+		Factory: "readOnlyNote",
+		File:    "ReadOnlyNote.kt",
+		Derived: "#22 Read-only note",
+		Why: "the sentence under the terminal peek that says the snapshot cannot be typed into. " +
+			"Substrate draws no `.ro-note` rule -- it is the retired mock's class -- so row 22 is " +
+			"the whole specification. Its `[Take control]` is deliberately NOT part of this " +
+			"factory: row 22 turns that inline span into a standalone tertiary button, which is " +
+			"`ctaButton(kind = MORE)` unchanged, and building a second one inside this note would " +
+			"be the copy of `.a2-more` the reuse rule exists to prevent.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",
@@ -1137,6 +1161,189 @@ func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
 	}
 }
 
+// s23DerivedEdge is the same join for the rows that state their spacing PER EDGE rather than as a
+// CSS shorthand.
+//
+// IT EXISTS BECAUSE s23RowPadding CANNOT READ THESE ROWS AND SHOULD NOT BE TAUGHT TO. That reader
+// matches "padding `space_N` x `space_N`", which is a two-value shorthand -- vertical then
+// horizontal. §4's drill-down header states THREE different vertical/horizontal steps ("`space_6`
+// top / `space_18` sides / `space_12` bottom"), and row 22 states a margin rather than a padding
+// and only two of its four edges. Widening the shorthand reader to cover both would make it match
+// a shape neither row writes and stop reporting a row that lost its cell, which is the one thing
+// it is for. Two readers, each of which fails loudly on the form it does not know.
+//
+// EmptyState.kt IS STILL ABSENT FROM BOTH, for the reason s23DerivedSpacing already records: row 8
+// writes a MULTIPLE of a step and that join lives in s24_screens_test.go.
+var s23DerivedEdge = []struct {
+	File  string
+	Row   string
+	Edge  string
+	Dimen string
+}{
+	{"NavHeaderDrill.kt", "§4 Drill-down nav header", "top", "swarm_space_6"},
+	{"NavHeaderDrill.kt", "§4 Drill-down nav header", "sides", "swarm_space_18"},
+	{"NavHeaderDrill.kt", "§4 Drill-down nav header", "bottom", "swarm_space_12"},
+	{"NavHeaderDrill.kt", "§4 Drill-down nav header", "gap", "swarm_space_10"},
+	{"ReadOnlyNote.kt", "#22 Read-only note", "top", "swarm_space_10"},
+	{"ReadOnlyNote.kt", "#22 Read-only note", "sides", "swarm_space_18"},
+}
+
+// s23DocEdgeStep reads one edge's step out of a row.
+//
+// The two spellings are the two the table actually uses: a step FOLLOWED by the edge it applies to
+// ("`space_6` top"), and `gap` FOLLOWED by its step ("gap `space_10`"). Both are anchored on the
+// backticked `space_N`, so a sentence that merely mentions an edge word cannot answer.
+func s23DocEdgeStep(row, edge string) (string, error) {
+	pattern := "`space_([0-9]+)`\\s+" + regexp.QuoteMeta(edge)
+	if edge == "gap" {
+		pattern = "gap\\s+`space_([0-9]+)`"
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("%q is not an edge this reader knows", edge)
+	}
+	matches := re.FindAllStringSubmatch(row, -1)
+	if matches == nil {
+		return "", fmt.Errorf("the row states no step for the %s edge", edge)
+	}
+	// Every occurrence must agree, for s23DocMetric's reason: a row is prose and a value can be
+	// restated in it, so taking the first match would make the answer depend on sentence order.
+	first := matches[0][1]
+	for _, m := range matches[1:] {
+		if m[1] != first {
+			return "", fmt.Errorf("the row states the %s edge twice and disagrees with itself: "+
+				"space_%s and space_%s", edge, first, m[1])
+		}
+	}
+	return "swarm_space_" + first, nil
+}
+
+func TestPBDS7_EveryPerEdgeSpacingIsTheRowsStep(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	sources := s23KitSources(t)
+
+	for _, s := range s23DerivedEdge {
+		row, ok := s23FindRow(doc, s.Row)
+		if !ok {
+			t.Errorf("PB-DS-7: the %s row claims `%s` states its %s edge, and %s has no such row",
+				s.File, s.Row, s.Edge, s23ComponentsDoc)
+			continue
+		}
+		want, err := s23DocEdgeStep(row, s.Edge)
+		if err != nil {
+			t.Errorf("PB-DS-7: `%s`: %v", s.Row, err)
+			continue
+		}
+		if want != s.Dimen {
+			t.Errorf("PB-DS-7: `%s` states %s for %s's %s edge, and the s23DerivedEdge row spends "+
+				"%s. The table is the authority for a component the design source never drew.",
+				s.Row, want, s.File, s.Edge, s.Dimen)
+			continue
+		}
+		src, ok := sources[s.File]
+		if !ok {
+			t.Errorf("PB-DS-7: %s does not exist, so its %s edge cannot be checked", s.File, s.Edge)
+			continue
+		}
+		if !strings.Contains(kotlinCodeOnly(src), "R.dimen."+want) {
+			t.Errorf("PB-DS-7: %s never references R.dimen.%s, which is the step `%s` states for "+
+				"its %s edge. A component whose only specification is prose in a table is the one "+
+				"whose spacing has to be read out of that table rather than out of itself.",
+				s.File, want, s.Row, s.Edge)
+		}
+	}
+}
+
+// TestPBDS7_ThePerEdgeReaderReadsTheRow is that join's negative control, fed to the SAME function
+// the assertion calls.
+func TestPBDS7_ThePerEdgeReaderReadsTheRow(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	row, ok := s23FindRow(doc, "§4 Drill-down nav header")
+	if !ok {
+		t.Fatal("PB-DS-7: §4 has no drill-down nav header row, so the control below says nothing")
+	}
+
+	moved := strings.Replace(row, "`space_6` top", "`space_4` top", 1)
+	if moved == row {
+		t.Fatal("PB-DS-7: the §4 header row no longer states `space_6` top, so this control " +
+			"perturbs nothing")
+	}
+	if got, err := s23DocEdgeStep(moved, "top"); err != nil || got != "swarm_space_4" {
+		t.Errorf("PB-DS-7: the edge reader answers %q (%v) for a row stating space_4, so it is not "+
+			"reading the row and every comparison above holds against a constant", got, err)
+	}
+
+	// A row that lost its cell must be reported rather than answered.
+	if _, err := s23DocEdgeStep("| Drill-down nav header | no spacing cell |", "top"); err == nil {
+		t.Error("PB-DS-7: the edge reader found a step in a row that states none, so a row that " +
+			"lost its spacing cell would leave the header's padding checked against nothing")
+	}
+	// And a row that contradicts itself must not be silently resolved to its first occurrence.
+	if _, err := s23DocEdgeStep("margin `space_10` top and also `space_14` top", "top"); err == nil {
+		t.Error("PB-DS-7: the edge reader resolved a row that states two different steps for one " +
+			"edge, so a contradiction in the table would be answered rather than reported")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PB-DS-7: the one glyph §4 asks for that the artifacts do not draw.
+// ---------------------------------------------------------------------------
+
+// s23BackGlyph is the drill-down header's chevron.
+//
+// **ITS PATH HAS NO SOURCE AND THAT IS RECORDED RATHER THAN CHECKED.** The four tab glyphs are
+// joined path-for-path to the artifact because the artifact draws them; `.navhead .back` in the
+// retired mock is the CHARACTER U+2039 in accent text, and §2 retires accent-text affordances
+// wholesale ("every accent-text affordance in the mock becomes either a bordered control or a
+// plain `--p-ink` glyph"). So §4 asks for a stroked chevron that neither document draws. What CAN
+// be joined is everything §4 does state -- the stroke weight, and that the asset declares one box
+// rather than two -- and that is what this checks. The path itself is the implementation's, and
+// the drawable says so in its own comment.
+const s23BackGlyph = "swarm_nav_back.xml"
+
+func TestPBDS7_TheBackGlyphIsTheStrokeSection4States(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	row, ok := s23FindRow(doc, "§4 Drill-down nav header")
+	if !ok {
+		t.Fatal("PB-DS-7: §4 has no drill-down nav header row to read the chevron's stroke from")
+	}
+	want, err := s23DocMetric(row, "stroke")
+	if err != nil {
+		t.Fatalf("PB-DS-7: `§4 Drill-down nav header`: %v", err)
+	}
+
+	file := filepath.Join(tabbarDrawableDir(t), s23BackGlyph)
+	raw, readErr := os.ReadFile(file)
+	if readErr != nil {
+		t.Fatalf("PB-DS-7: §4 gives the drill-down header a chevron glyph and %s does not exist, "+
+			"so the back control renders as a bare label: %v", mustRel(t, file), readErr)
+	}
+	attrs := tabbarAttrs(tabbarPathElemRe.FindString(string(raw)))
+	got, parseErr := strconv.ParseFloat(attrs["strokeWidth"], 64)
+	if parseErr != nil {
+		t.Fatalf("PB-DS-7: %s declares android:strokeWidth=%q, which is not a number: %v",
+			mustRel(t, file), attrs["strokeWidth"], parseErr)
+	}
+	if got != want {
+		t.Errorf("PB-DS-7: %s strokes the chevron at %g and `§4 Drill-down nav header` states "+
+			"stroke %g. The path is this asset's own -- neither artifact draws one -- so the "+
+			"weight is the only thing about it §4 can be held to.", mustRel(t, file), got, want)
+	}
+
+	// The box is one number, not two. `.ptabs svg` taught this the expensive way: the box and the
+	// viewBox are different coordinate spaces and conflating them scales the glyph.
+	box := tabbarAttrs(tabbarVectorElemRe.FindString(string(raw)))
+	if box["width"] != box["height"] {
+		t.Errorf("PB-DS-7: %s is %s x %s. A chevron in a non-square box is a chevron that leans; "+
+			"§4 states one number for the glyph.", mustRel(t, file), box["width"], box["height"])
+	}
+	if box["viewportWidth"] != box["viewportHeight"] {
+		t.Errorf("PB-DS-7: %s has a %s x %s viewport, so the path's coordinate space is not square "+
+			"and the stroke is a different weight on each axis",
+			mustRel(t, file), box["viewportWidth"], box["viewportHeight"])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PB-DS-7: the numbers the scale does not govern.
 // ---------------------------------------------------------------------------
@@ -1642,7 +1849,7 @@ var s23DualQuantised = map[string]string{
 		"it back -- is a layout dimension and is whole pixels; the value handed to " +
 		"Paint.setShadowLayer is a blur radius, which is meaningful below one pixel in a way a " +
 		"padding is not. The derivation table's status-dot row names the two conversions as one " +
-		"("+`"the same conversion as --p-cta-fx"`+"), so they answer to the same rule here too.",
+		"(" + `"the same conversion as --p-cta-fx"` + "), so they answer to the same rule here too.",
 }
 
 // s23QuantisationFaults reports every constant rendered two ways without a reason on record.
@@ -2469,172 +2676,6 @@ func s23LooksNumeric(s string) bool {
 // Completed to ReadyForReview and gave Completed the recessive grey; an implementer reading only
 // Substrate's artifact would paint the green dot "Done", because that is what the artifact's demo
 // phone labels it.
-// s23ContestedBindings names the Groups whose token binding ADR-007 B134 decision 1 moved, and
-// the binding Substrate itself carries for each -- the value a reviewer reverts TO.
-//
-// `completed` is the concrete half: design-directions.html:80 binds `.pdot.ok` to --p-ok under the
-// section labelled Done, which design-tokens.tsv maps to swarm_state_ok. `ready_for_review` is the
-// half Substrate never coloured at all, which is what the rebinding was written to solve; the
-// committee's recommendation is a 32nd token, so a reverter lands on whatever that token maps to
-// and this table cannot name it in advance. It is listed with an empty alternative so the entry is
-// visible to a reader rather than silently absent -- an empty string matches no resource, so the
-// row grants nothing today and documents the asymmetry honestly.
-var s23ContestedBindings = map[string]string{
-	"completed":        "swarm_state_ok",
-	"ready_for_review": "",
-}
-
-// s23HoldMarker is the sentence in ADR-007 that makes the allowance above legal.
-//
-// THE ALLOWANCE IS A HOLD, AND A HOLD THAT OUTLIVES ITS QUESTION IS JUST A HOLE. s23ContestedBindings
-// widens a fence -- for two of the four Groups the kit may paint a colour the checked-in table does
-// not bind -- and the entire justification for that widening is one CONTESTED block in the ADR. If
-// that block is edited away, whether because the designer ruled or because someone tidied, the
-// allowance silently becomes a permanent exemption and the two Groups whose colour IS the disputed
-// decision are the two nothing checks. So the widening is joined to the marker rather than
-// described by a comment beside it, and s23ContestedHoldFaults is the join.
-const s23HoldMarker = "CONTESTED"
-
-// s23HoldSection is the ADR subsection whose marker governs the allowance.
-const (
-	s23HoldEntry    = "## B134."
-	s23HoldDecision = "### 1. `ReadyForReview` takes `--p-ok`, and `Completed` takes `--p-ink3`"
-)
-
-// s23ContestedHoldFaults reports why the hold is not in the state s23ContestedBindings assumes.
-//
-// @return empty when the ADR still marks decision 1 CONTESTED, which is the only state in which
-// widening the binding fence is legitimate.
-// s23HoldRulingVerbs are the words that mean the question is closed. Any of them inside the
-// decision block vetoes the CONTESTED marker, because the failure round 4 found was a marker
-// surviving inside prose that rules against it.
-var s23HoldRulingVerbs = []string{"RULED", "SETTLED", "RESOLVED", "no longer CONTESTED"}
-
-func s23ContestedHoldFaults(adr string) []string {
-	start := strings.Index(adr, s23HoldEntry)
-	if start < 0 {
-		return []string{fmt.Sprintf("%s has no %q entry at all, and it is the whole authority for "+
-			"the Group bindings -- s23ContestedBindings is widening a fence on the strength of a "+
-			"decision record that is not there", adrRelPath, strings.TrimSpace(s23HoldEntry))}
-	}
-	section := adr[start:]
-	if next := strings.Index(section[len(s23HoldEntry):], "\n## "); next >= 0 {
-		section = section[:len(s23HoldEntry)+next]
-	}
-	at := strings.Index(section, s23HoldDecision)
-	if at < 0 {
-		return []string{fmt.Sprintf("ADR-007 B134 no longer carries the subsection %q. The hold "+
-			"s23ContestedBindings executes is recorded there and nowhere else.", s23HoldDecision)}
-	}
-	decision := section[at:]
-	if next := strings.Index(decision[len(s23HoldDecision):], "\n### "); next >= 0 {
-		decision = decision[:len(s23HoldDecision)+next]
-	}
-	// THE MARKER IS ANCHORED, AND A RULING VERB VETOES IT. Round 4 defeated the previous
-	// `strings.Contains(decision, "CONTESTED")` with the three spellings a designer closing this
-	// question would most plausibly write: "**RULED** ... **no longer CONTESTED**", "**RESOLVED**.
-	// The historical `CONTESTED` note follows.", and "~~CONTESTED~~ **SETTLED** ... Formerly
-	// CONTESTED". All three left the widening ON, because the word survives in prose that says the
-	// opposite. A substring is not a state.
-	//
-	// So the marker must OPEN the decision's blockquote -- a line beginning `> **CONTESTED` -- and
-	// any ruling verb anywhere in the decision vetoes it regardless. The veto is what makes the
-	// third spelling fail: a struck-through marker plus a settlement is not a hold, and the reader
-	// must not be able to find the corpse of one.
-	marked := false
-	for _, line := range strings.Split(decision, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "> **"+s23HoldMarker) {
-			marked = true
-			break
-		}
-	}
-	for _, verb := range s23HoldRulingVerbs {
-		if strings.Contains(decision, verb) {
-			return []string{fmt.Sprintf("ADR-007 B134 decision 1 carries both a %s marker and the "+
-				"word %q. A decision cannot be simultaneously open and ruled, and the widening in "+
-				"s23ContestedBindings is granted on the strength of it being open. Whichever is "+
-				"true, make the block say only that -- and if it is ruled, delete "+
-				"s23ContestedBindings with it.", s23HoldMarker, verb)}
-		}
-	}
-	if !marked {
-		return []string{fmt.Sprintf("ADR-007 B134 decision 1 no longer carries a %s marker, so the "+
-			"question is closed -- and s23ContestedBindings is still open, which makes it a "+
-			"permanent widening of the one fence that guards the colour the argument was about.\n"+
-			"\tIf the designer RULED FOR the rebinding: delete s23ContestedBindings and this hold "+
-			"machinery, and the fence goes back to strict.\n"+
-			"\tIf the designer RULED AGAINST it: change android/group-tokens.tsv and Kit.kt to the "+
-			"ruling, then delete s23ContestedBindings -- the allowance exists to keep a revert "+
-			"cheap, not to make two answers permanently equal.\n"+
-			"\tIf the marker was removed by a tidy-up: put it back. A contested decision that "+
-			"stops being marked contested is how it becomes a settled one without anyone deciding.",
-			s23HoldMarker)}
-	}
-	return nil
-}
-
-// s23HoldAnnounced makes the notice print once per test binary rather than once per test.
-var s23HoldAnnounced bool
-
-// s23AnnounceHold writes the hold to STDERR, unconditionally, whether or not anything failed.
-//
-// WHY IT IS ANNOUNCED ON GREEN. The state that needs saying out loud is the PASSING one: a green
-// build over a contested decision is exactly what makes the decision look settled, and this gate
-// enforcing a rebinding the ADR marks unsettled is the thing a reader has to be told. A message
-// that only appears on failure says nothing in the case that matters.
-//
-// AND HERE IS THE LIMIT OF IT, measured rather than assumed. `go test` DISCARDS a passing
-// package's output in non-verbose mode, so a bare `go test ./android/gate/...` prints `ok` and
-// this notice goes nowhere. Stderr buys visibility under `-v` -- which is how every verification
-// evidence file in docs/verification is captured -- and on any failure anywhere in the package.
-// That is the ceiling: Go has no pending state and no channel that survives a silent pass, so the
-// honest claim is "visible wherever the output is read at all", not "visible always".
-//
-// The mechanical half of the hold does not depend on this notice. TestPBDS7_TheContestedHoldIsStillOpen
-// FAILS the build when the marker disappears, and that is what a reader cannot miss.
-func s23AnnounceHold(groups []string) {
-	if s23HoldAnnounced {
-		return
-	}
-	s23HoldAnnounced = true
-	fmt.Fprintf(os.Stderr,
-		"\n"+
-			"    HOLD: ADR-007 B134 decision 1 is marked %s and awaits the designer.\n"+
-			"    The status-dot rebinding (green from Completed to ReadyForReview) is ENFORCED by\n"+
-			"    this gate while unsettled. For %s the checked-in binding and\n"+
-			"    Substrate's original are BOTH legal here, so a revert stays green. Green below is\n"+
-			"    not agreement -- see %s.\n\n",
-		s23HoldMarker, strings.Join(groups, " and "), adrRelPath)
-}
-
-// TestPBDS7_TheContestedHoldIsStillOpen is what keeps the allowance honest.
-//
-// s23ContestedBindings widens a fence. This is the only thing that can close it again, and it
-// closes it by failing the build the moment the ADR stops saying the question is open.
-func TestPBDS7_TheContestedHoldIsStillOpen(t *testing.T) {
-	adr := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(adrRelPath)), "PB-DS-7")
-	for _, fault := range s23ContestedHoldFaults(adr) {
-		t.Errorf("PB-DS-7: %s", fault)
-	}
-
-	// The reader must actually READ the marker. Perturbing the ADR it is given has to move its
-	// answer, or the check above holds against a constant and the hold could vanish unnoticed.
-	if faults := s23ContestedHoldFaults(strings.Replace(adr, s23HoldMarker, "SETTLED", 1)); len(faults) == 0 {
-		t.Errorf("PB-DS-7: the hold reader reports no fault for an ADR whose %s marker has been "+
-			"replaced, so s23ContestedBindings is widening the binding fence on the strength of a "+
-			"sentence nothing checks -- which is the defect the hold was built to answer, one "+
-			"indirection out.", s23HoldMarker)
-	}
-	if faults := s23ContestedHoldFaults(strings.Replace(adr, s23HoldDecision, "### 1. Something else", 1)); len(faults) == 0 {
-		t.Error("PB-DS-7: the hold reader accepts an ADR whose decision-1 subsection has been " +
-			"renamed, so it is finding the marker somewhere else in B134 -- decisions 2, 3 and 4 " +
-			"are not under hold and must not be able to satisfy this.")
-	}
-	if faults := s23ContestedHoldFaults("no ADR at all"); len(faults) == 0 {
-		t.Error("PB-DS-7: the hold reader accepts an ADR with no B134 entry in it")
-	}
-}
-
 func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 	sources := s23KitSources(t)
 	src, ok := sources["Kit.kt"]
@@ -2656,18 +2697,6 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 			"pass over nothing")
 	}
 
-	// THE ALLOWANCE BELOW IS LEGAL ONLY WHILE THE ADR SAYS THE QUESTION IS OPEN, and that is read
-	// here rather than assumed. If the marker is gone the allowance does not apply and this fence
-	// is strict again -- which is the correct behaviour in both directions a ruling could go, and
-	// which TestPBDS7_TheContestedHoldIsStillOpen turns into a build failure so nobody has to
-	// notice the difference in a diff.
-	holdOpen := len(s23ContestedHoldFaults(
-		readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(adrRelPath)), "PB-DS-7"),
-	)) == 0
-	if holdOpen {
-		s23AnnounceHold(s23SortedKeys(s23ContestedBindings))
-	}
-
 	bound := map[string]string{}
 	for _, m := range s23GroupBinding.FindAllStringSubmatch(code, -1) {
 		bound[m[1]] = m[2]
@@ -2687,34 +2716,6 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 			continue
 		}
 		if got != want {
-			// THE HOLD ON A CONTESTED DECISION HAS TO BE MECHANICAL, NOT ANNOTATED.
-			//
-			// ADR-007 B134 decision 1 is marked CONTESTED and awaiting the designer: an audit
-			// committee established that Substrate DOES bind the token the rebinding moves
-			// (design-directions.html:80, `.pdot.ok`, under the section labelled Done) and that
-			// the designer's own rationale calls --p-ok success. The ADR says the decision is not
-			// settled. This gate then enforced it bidirectionally, so a reviewer acting on the
-			// ADR's own words had to fight a green build -- the annotation said "unsettled" and
-			// the fence said "settled", and the fence is what runs.
-			//
-			// So for exactly the two Groups the rebinding moved, Substrate's ORIGINAL binding is
-			// also legal. Reverting is a one-line edit that stays green; anything that is neither
-			// the rebinding nor the original still fails. The two Groups the rebinding did not
-			// touch stay strict, because nothing about them is in dispute.
-			//
-			// Delete this allowance the day the designer rules, in either direction. It is a hold,
-			// not a permanent widening, and it should not outlive the question -- which is why it
-			// is gated on `holdOpen` rather than standing on its own. A hold whose expiry nothing
-			// reads is indistinguishable from a permanent exemption after the first tidy-up.
-			if alt, contested := s23ContestedBindings[group]; holdOpen && contested && got == alt {
-				s23AnnounceHold(s23SortedKeys(s23ContestedBindings))
-				t.Logf("PB-DS-7: group %s is painted R.color.%s, Substrate's original binding, "+
-					"rather than R.color.%s, which ADR-007 B134 decision 1 rebinds it to. That "+
-					"decision is marked CONTESTED and awaiting the designer, so BOTH are legal "+
-					"here and this is not a failure. If the designer has now ruled, delete this "+
-					"allowance and pin the answer.", group, got, want)
-				continue
-			}
 			t.Errorf("PB-DS-7: the kit paints group %s with R.color.%s, but PB-TOK-8 binds it to "+
 				"%s = R.color.%s. ADR-007 B134 decision 1 is the rebinding -- green moved to "+
 				"ReadyForReview and Completed took the recessive grey -- and Substrate's own demo "+
