@@ -55,7 +55,14 @@ fun tabBar(context: Context, items: List<TabItem>): LinearLayout = LinearLayout(
     background = TopRule(
         fill = Kit.colour(context, R.color.swarm_tabbar_background),
         rule = Kit.colour(context, R.color.swarm_hairline),
-        rulePx = Kit.dp(context, KitMetrics.HAIRLINE_DP),
+        // `Kit.dpPx`, NOT `Kit.dp`, AND THE DIFFERENCE IS A THIRD OF THIS LINE. `cardSurface` and
+        // `chipSurface` spend the same constant through `dpPx`, which is the platform's own
+        // rounding; this bar spent it through `dp`, which is exact. At density 2.625 that is 3 px
+        // against 2.625 -- one design value, the 1 dp `--p-hair` rule, rendered two ways on one
+        // screen, and a hairline that lands on a fraction of a pixel is antialiased into a smear
+        // rather than drawn. Substrate bans drop shadows, so this line is the ONLY thing
+        // separating the bar from the content scrolling under it.
+        rulePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(),
     )
     // `padding-bottom: 14px` is the home-indicator inset in a 386x812 mock. On a handset the real
     // one comes from WindowInsets and belongs to the screen scaffold (S24); this is the design's

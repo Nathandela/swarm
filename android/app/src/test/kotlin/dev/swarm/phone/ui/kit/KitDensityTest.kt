@@ -94,6 +94,13 @@ class KitDensityTest {
         val hairline = px(KitOrigin.cssFirstPx(".prow", "border"))
         val card = cardSurface(context, attention = false)
         val chip = chipSurface(context, selected = false)
+        // THE THIRD SITE, WHICH THIS SUITE DID NOT COVER AND WHICH WAS THE ONE THAT WAS WRONG.
+        // `--p-hair` at 1 dp is drawn in three places: the card's border, the chip's border and
+        // the bar's top rule. The first two were asserted here; the third was not, and it was the
+        // only one still spending `Kit.dp` -- a Float, 2.625 px at this density, against the 3 px
+        // the other two spend. The gap in the coverage was exactly the shape of the defect: the
+        // one path nothing looked at is the one path that drifted.
+        val rule = tabBar(context, listOf(TabItem("Inbox"))).background as TopRule
 
         assertEquals(
             emptyList<String>(),
@@ -101,6 +108,7 @@ class KitDensityTest {
                 listOf(
                     Claim("`.prow` hairline", hairline.roundToInt(), card.spec.strokeWidthPx),
                     Claim("`.chip` hairline", hairline.roundToInt(), chip.spec.strokeWidthPx),
+                    Claim("`.ptabs` top rule", hairline.roundToInt().toFloat(), rule.rulePx),
                 ),
             ),
         )
@@ -117,6 +125,19 @@ class KitDensityTest {
                 "${hairline.roundToInt()}px the platform spends",
             mismatches(
                 listOf(Claim("hairline", hairline.roundToInt(), hairline.toInt())),
+            ).isNotEmpty(),
+        )
+        // And the control for the rule claim, which compares Floats and therefore goes through
+        // [mismatches]'s 0.01 tolerance rather than through equality. The unrounded value is the
+        // one the bar actually shipped, so this is the shipped defect fed to the same function the
+        // assertion above calls -- a tolerance wide enough to swallow 2.625 against 3 would leave
+        // that claim certifying nothing.
+        assertTrue(
+            "the top rule at its exact ${hairline}px passes the comparison against the " +
+                "${hairline.roundToInt()}px the card and the chip spend, so the claim above " +
+                "cannot tell the two renderings apart",
+            mismatches(
+                listOf(Claim("`.ptabs` top rule", hairline.roundToInt().toFloat(), hairline)),
             ).isNotEmpty(),
         )
     }

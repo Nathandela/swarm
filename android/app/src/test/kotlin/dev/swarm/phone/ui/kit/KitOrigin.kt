@@ -110,8 +110,22 @@ object KitOrigin {
      *
      * The variant is found by its FILL rather than by its selector name, because the selector
      * says nothing about which `status.Group` it belongs to: `.pdot.ok` is green, and after B134
-     * green is ReadyForReview rather than Completed. Following the fill through group-tokens.tsv
-     * is the join that survives the rebinding.
+     * green is ReadyForReview rather than Completed.
+     *
+     * THAT PROPERTY IS A CONSEQUENCE, NOT A VIRTUE, AND THIS KDOC USED TO SELL IT AS ONE. It read
+     * "following the fill through group-tokens.tsv is the join that survives the rebinding", which
+     * is true and is exactly the wrong thing to be pleased about: ADR-007 B134 decision 1 is marked
+     * CONTESTED and awaiting the designer, and a suite built so that no test can object to a
+     * contested decision has taken a side by making the other one unfalsifiable. Written that way,
+     * the phrase reads as a design goal met.
+     *
+     * The indifference is kept, because the alternative is worse -- keying on the selector name
+     * would hard-code Substrate's *Done* label as this suite's expected answer, which is the
+     * disputed half of the decision, asserted by a file that has no business asserting it. What has
+     * changed is that the hold is now carried somewhere it has mechanical force instead:
+     * `s23ContestedHoldFaults` in `android/gate/s23_kit_test.go` fails the build the moment the ADR
+     * stops marking the question open, and `s23ContestedBindings` keeps a revert cheap while it is.
+     * This function is silent on the rebinding; that gate is not.
      */
     fun dotGlow(token: String): DotGlow? {
         val fill = token(token)

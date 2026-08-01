@@ -29,8 +29,10 @@ package gate
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1260,6 +1262,193 @@ func s23TokenMetric(tokens map[string]string, token, part string) (float64, erro
 }
 
 // ---------------------------------------------------------------------------
+// PB-DS-6: one token, one rendering. The dp call sites.
+// ---------------------------------------------------------------------------
+
+// s23DpSpend is one `Kit.dp(...)` or `Kit.dpPx(...)` call: which KitMetrics constant it spends,
+// and which of the two quantisations it spends it through.
+type s23DpSpend struct {
+	File     string
+	Line     int
+	Accessor string // "dp" (Float, exact) or "dpPx" (Int, rounded the way the platform rounds)
+	Metric   string // the KitMetrics constant, or "" when the argument is not one
+	Argument string
+}
+
+var s23DpCall = regexp.MustCompile(`\bKit\.(dp|dpPx)\s*\(`)
+
+var s23MetricRef = regexp.MustCompile(`^KitMetrics\.([A-Za-z_][A-Za-z0-9_]*)$`)
+
+// s23ScanDpSpends reads every dp call site out of one COMMENT-STRIPPED source.
+//
+// It reuses s23CallArguments rather than a regexp for the same reason
+// TestPBDS6_NoRawDimensionIsTypedInTheKit does: `Kit.dp(context, KitMetrics.DOT_DP)` is the short
+// case and `Kit.dpPx(context, KitMetrics.GLOW_RADIUS_DP)` inside a larger call is the normal one,
+// and `[^)]*` stops at the first close paren, which is inside the wrong call.
+func s23ScanDpSpends(file, code string) []s23DpSpend {
+	var out []s23DpSpend
+	for _, loc := range s23DpCall.FindAllStringSubmatchIndex(code, -1) {
+		spend := s23DpSpend{
+			File:     file,
+			Line:     strings.Count(code[:loc[0]], "\n") + 1,
+			Accessor: code[loc[2]:loc[3]],
+		}
+		args := s23CallArguments(code, loc[1]-1)
+		if len(args) >= 2 {
+			spend.Argument = args[1]
+			if m := s23MetricRef.FindStringSubmatch(args[1]); m != nil {
+				spend.Metric = m[1]
+			}
+		}
+		out = append(out, spend)
+	}
+	return out
+}
+
+// s23DpLiteralFaults reports every dp call site whose value is not a named KitMetrics constant.
+//
+// THIS IS THE HOLE NO DECLARATION RECOGNISER CAN REACH. s23MetricConst was widened until every
+// spelling of a DECLARED number is seen, and `Kit.dp(context, 7f)` declares nothing at all -- the
+// metric never becomes a property, so it never acquires an `origin:` line, and the fence that
+// exists to join every number in this kit to the design never gets a chance to look at it. It is
+// also the shortest way to write the mistake, which is what makes it the likely one.
+func s23DpLiteralFaults(spends []s23DpSpend) []string {
+	var faults []string
+	for _, s := range spends {
+		if s.Metric != "" {
+			continue
+		}
+		faults = append(faults, fmt.Sprintf("%s:%d: Kit.%s(..., %s) spends a value that is not a "+
+			"KitMetrics constant. A number typed at a dp call site never becomes a property, so it "+
+			"never carries an `origin:` annotation and nothing in this gate can join it to the "+
+			"design -- it is the one shape of metric that no declaration scan, at any width, can "+
+			"see.", s.File, s.Line, s.Accessor, s.Argument))
+	}
+	return faults
+}
+
+// s23DualQuantised names the constants a component legitimately spends BOTH ways, and why.
+//
+// Kit.dp is exact and Kit.dpPx is the platform's own rounding, and for most constants exactly one
+// of those is right. For three of them both are, because the constant describes two different
+// quantities that happen to share a number -- and a fence that simply banned the float form would
+// be wrong about all three. So the claim is written down, per constant, and the fence requires the
+// claim rather than inferring it: a constant that acquires a second quantisation without a row
+// here is the "same token, two renderings" defect, which is what this table exists to catch.
+var s23DualQuantised = map[string]string{
+	"DOT_DP": "the dot is LAID OUT at whole pixels (Kit.dpPx into LayoutParams) and DRAWN as a " +
+		"circle whose diameter is a float on a canvas. The layout box and the ink are two " +
+		"quantities, and rounding the ink would move the mark off the centre of its own box.",
+	"GLOW_RADIUS_DP": "the same split: the halo's ROOM in the layout box is whole pixels, its blur " +
+		"radius is Paint.setShadowLayer's float, and a blur radius is meaningful below one pixel " +
+		"in a way a layout dimension is not.",
+	"PRESENCE_DOT_DP": "the same split again: setBounds takes the whole-pixel box, the drawable " +
+		"draws its own diameter.",
+}
+
+// s23QuantisationFaults reports every constant rendered two ways without a reason on record.
+func s23QuantisationFaults(spends []s23DpSpend) []string {
+	accessors := map[string]map[string][]string{}
+	for _, s := range spends {
+		if s.Metric == "" {
+			continue
+		}
+		if accessors[s.Metric] == nil {
+			accessors[s.Metric] = map[string][]string{}
+		}
+		accessors[s.Metric][s.Accessor] = append(accessors[s.Metric][s.Accessor],
+			fmt.Sprintf("%s:%d", s.File, s.Line))
+	}
+
+	var faults []string
+	for _, metric := range s23SortedKeys(accessors) {
+		if len(accessors[metric]) < 2 {
+			continue
+		}
+		if _, declared := s23DualQuantised[metric]; declared {
+			continue
+		}
+		faults = append(faults, fmt.Sprintf("KitMetrics.%s is spent through Kit.dp (exact: %s) AND "+
+			"through Kit.dpPx (rounded: %s). One design value, two renderings -- at density 2.625 a "+
+			"1dp length is 2.625px one way and 3px the other, so the same rule paints differently in "+
+			"two places on one screen. Either spend it one way, or add a row to s23DualQuantised "+
+			"saying which two quantities it describes.",
+			metric,
+			strings.Join(accessors[metric]["dp"], ", "),
+			strings.Join(accessors[metric]["dpPx"], ", ")))
+	}
+
+	// And the table must not outlive its reason. A row for a constant that is no longer spent both
+	// ways is a standing permission nobody is using, which is how the next dual spend gets waved
+	// through without anyone arguing for it.
+	for _, metric := range s23SortedKeys(s23DualQuantised) {
+		if _, spent := accessors[metric]; !spent {
+			continue
+		}
+		if len(accessors[metric]) < 2 {
+			faults = append(faults, fmt.Sprintf("s23DualQuantised permits KitMetrics.%s to be "+
+				"rendered two ways, and the kit now spends it only through Kit.%s. Delete the row: "+
+				"a permission nobody uses is one the next dual spend inherits without argument.",
+				metric, s23SortedKeys(accessors[metric])[0]))
+		}
+	}
+	return faults
+}
+
+func s23SortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// s23KitDpSpends reads every dp call site in the files this slice owns.
+func s23KitDpSpends(t *testing.T) []s23DpSpend {
+	t.Helper()
+	owned := map[string]bool{"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true}
+	for _, c := range s23Inbox {
+		owned[c.File] = true
+	}
+	sources := s23KitSources(t)
+	var out []s23DpSpend
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		out = append(out, s23ScanDpSpends(file, kotlinCodeOnly(sources[file]))...)
+	}
+	return out
+}
+
+// TestPBDS7_NoMetricIsTypedAtADpCallSite closes the one hole the declaration scan cannot reach.
+func TestPBDS7_NoMetricIsTypedAtADpCallSite(t *testing.T) {
+	spends := s23KitDpSpends(t)
+	if len(spends) == 0 {
+		t.Fatal("PB-DS-7: the kit makes no Kit.dp or Kit.dpPx call at all, so this scan says " +
+			"nothing -- and the six numbers the resource table cannot carry reach the screen " +
+			"through those two functions and nowhere else")
+	}
+	for _, fault := range s23DpLiteralFaults(spends) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+}
+
+// TestPBDS6_EveryKitMetricIsRenderedOneWay is "one token, one rendering".
+//
+// THE DEFECT IT WAS WRITTEN FOR. `cardSurface` and `chipSurface` spend KitMetrics.HAIRLINE_DP
+// through Kit.dpPx, which is 3px on a 420dpi handset; TabBar.kt spent the same constant through
+// Kit.dp, which is 2.625. Three 1dp hairlines drawn from one token -- the card's border, the
+// chip's border and the tab bar's top rule -- rendered at two different widths on the same screen,
+// and the only depth cue Substrate has is that line.
+func TestPBDS6_EveryKitMetricIsRenderedOneWay(t *testing.T) {
+	for _, fault := range s23QuantisationFaults(s23KitDpSpends(t)) {
+		t.Errorf("PB-DS-6: %s", fault)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // PB-DS-7 / PB-TOK-8: the four Groups, and which two of them glow.
 // ---------------------------------------------------------------------------
 
@@ -1339,6 +1528,125 @@ var s23ContestedBindings = map[string]string{
 	"ready_for_review": "",
 }
 
+// s23HoldMarker is the sentence in ADR-007 that makes the allowance above legal.
+//
+// THE ALLOWANCE IS A HOLD, AND A HOLD THAT OUTLIVES ITS QUESTION IS JUST A HOLE. s23ContestedBindings
+// widens a fence -- for two of the four Groups the kit may paint a colour the checked-in table does
+// not bind -- and the entire justification for that widening is one CONTESTED block in the ADR. If
+// that block is edited away, whether because the designer ruled or because someone tidied, the
+// allowance silently becomes a permanent exemption and the two Groups whose colour IS the disputed
+// decision are the two nothing checks. So the widening is joined to the marker rather than
+// described by a comment beside it, and s23ContestedHoldFaults is the join.
+const s23HoldMarker = "CONTESTED"
+
+// s23HoldSection is the ADR subsection whose marker governs the allowance.
+const (
+	s23HoldEntry    = "## B134."
+	s23HoldDecision = "### 1. `ReadyForReview` takes `--p-ok`, and `Completed` takes `--p-ink3`"
+)
+
+// s23ContestedHoldFaults reports why the hold is not in the state s23ContestedBindings assumes.
+//
+// @return empty when the ADR still marks decision 1 CONTESTED, which is the only state in which
+// widening the binding fence is legitimate.
+func s23ContestedHoldFaults(adr string) []string {
+	start := strings.Index(adr, s23HoldEntry)
+	if start < 0 {
+		return []string{fmt.Sprintf("%s has no %q entry at all, and it is the whole authority for "+
+			"the Group bindings -- s23ContestedBindings is widening a fence on the strength of a "+
+			"decision record that is not there", adrRelPath, strings.TrimSpace(s23HoldEntry))}
+	}
+	section := adr[start:]
+	if next := strings.Index(section[len(s23HoldEntry):], "\n## "); next >= 0 {
+		section = section[:len(s23HoldEntry)+next]
+	}
+	at := strings.Index(section, s23HoldDecision)
+	if at < 0 {
+		return []string{fmt.Sprintf("ADR-007 B134 no longer carries the subsection %q. The hold "+
+			"s23ContestedBindings executes is recorded there and nowhere else.", s23HoldDecision)}
+	}
+	decision := section[at:]
+	if next := strings.Index(decision[len(s23HoldDecision):], "\n### "); next >= 0 {
+		decision = decision[:len(s23HoldDecision)+next]
+	}
+	if !strings.Contains(decision, s23HoldMarker) {
+		return []string{fmt.Sprintf("ADR-007 B134 decision 1 no longer carries a %s marker, so the "+
+			"question is closed -- and s23ContestedBindings is still open, which makes it a "+
+			"permanent widening of the one fence that guards the colour the argument was about.\n"+
+			"\tIf the designer RULED FOR the rebinding: delete s23ContestedBindings and this hold "+
+			"machinery, and the fence goes back to strict.\n"+
+			"\tIf the designer RULED AGAINST it: change android/group-tokens.tsv and Kit.kt to the "+
+			"ruling, then delete s23ContestedBindings -- the allowance exists to keep a revert "+
+			"cheap, not to make two answers permanently equal.\n"+
+			"\tIf the marker was removed by a tidy-up: put it back. A contested decision that "+
+			"stops being marked contested is how it becomes a settled one without anyone deciding.",
+			s23HoldMarker)}
+	}
+	return nil
+}
+
+// s23HoldAnnounced makes the notice print once per test binary rather than once per test.
+var s23HoldAnnounced bool
+
+// s23AnnounceHold writes the hold to STDERR, unconditionally, whether or not anything failed.
+//
+// WHY IT IS ANNOUNCED ON GREEN. The state that needs saying out loud is the PASSING one: a green
+// build over a contested decision is exactly what makes the decision look settled, and this gate
+// enforcing a rebinding the ADR marks unsettled is the thing a reader has to be told. A message
+// that only appears on failure says nothing in the case that matters.
+//
+// AND HERE IS THE LIMIT OF IT, measured rather than assumed. `go test` DISCARDS a passing
+// package's output in non-verbose mode, so a bare `go test ./android/gate/...` prints `ok` and
+// this notice goes nowhere. Stderr buys visibility under `-v` -- which is how every verification
+// evidence file in docs/verification is captured -- and on any failure anywhere in the package.
+// That is the ceiling: Go has no pending state and no channel that survives a silent pass, so the
+// honest claim is "visible wherever the output is read at all", not "visible always".
+//
+// The mechanical half of the hold does not depend on this notice. TestPBDS7_TheContestedHoldIsStillOpen
+// FAILS the build when the marker disappears, and that is what a reader cannot miss.
+func s23AnnounceHold(groups []string) {
+	if s23HoldAnnounced {
+		return
+	}
+	s23HoldAnnounced = true
+	fmt.Fprintf(os.Stderr,
+		"\n"+
+			"    HOLD: ADR-007 B134 decision 1 is marked %s and awaits the designer.\n"+
+			"    The status-dot rebinding (green from Completed to ReadyForReview) is ENFORCED by\n"+
+			"    this gate while unsettled. For %s the checked-in binding and\n"+
+			"    Substrate's original are BOTH legal here, so a revert stays green. Green below is\n"+
+			"    not agreement -- see %s.\n\n",
+		s23HoldMarker, strings.Join(groups, " and "), adrRelPath)
+}
+
+// TestPBDS7_TheContestedHoldIsStillOpen is what keeps the allowance honest.
+//
+// s23ContestedBindings widens a fence. This is the only thing that can close it again, and it
+// closes it by failing the build the moment the ADR stops saying the question is open.
+func TestPBDS7_TheContestedHoldIsStillOpen(t *testing.T) {
+	adr := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(adrRelPath)), "PB-DS-7")
+	for _, fault := range s23ContestedHoldFaults(adr) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+
+	// The reader must actually READ the marker. Perturbing the ADR it is given has to move its
+	// answer, or the check above holds against a constant and the hold could vanish unnoticed.
+	if faults := s23ContestedHoldFaults(strings.Replace(adr, s23HoldMarker, "SETTLED", 1)); len(faults) == 0 {
+		t.Errorf("PB-DS-7: the hold reader reports no fault for an ADR whose %s marker has been "+
+			"replaced, so s23ContestedBindings is widening the binding fence on the strength of a "+
+			"sentence nothing checks -- which is the defect the hold was built to answer, one "+
+			"indirection out.", s23HoldMarker)
+	}
+	if faults := s23ContestedHoldFaults(strings.Replace(adr, s23HoldDecision, "### 1. Something else", 1)); len(faults) == 0 {
+		t.Error("PB-DS-7: the hold reader accepts an ADR whose decision-1 subsection has been " +
+			"renamed, so it is finding the marker somewhere else in B134 -- decisions 2, 3 and 4 " +
+			"are not under hold and must not be able to satisfy this.")
+	}
+	if faults := s23ContestedHoldFaults("no ADR at all"); len(faults) == 0 {
+		t.Error("PB-DS-7: the hold reader accepts an ADR with no B134 entry in it")
+	}
+}
+
 func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 	sources := s23KitSources(t)
 	src, ok := sources["Kit.kt"]
@@ -1358,6 +1666,18 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 	if len(tokenOf) == 0 || len(resourceOf) == 0 {
 		t.Fatal("PB-DS-7: one of the two checked-in joins read empty; the comparison below would " +
 			"pass over nothing")
+	}
+
+	// THE ALLOWANCE BELOW IS LEGAL ONLY WHILE THE ADR SAYS THE QUESTION IS OPEN, and that is read
+	// here rather than assumed. If the marker is gone the allowance does not apply and this fence
+	// is strict again -- which is the correct behaviour in both directions a ruling could go, and
+	// which TestPBDS7_TheContestedHoldIsStillOpen turns into a build failure so nobody has to
+	// notice the difference in a diff.
+	holdOpen := len(s23ContestedHoldFaults(
+		readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(adrRelPath)), "PB-DS-7"),
+	)) == 0
+	if holdOpen {
+		s23AnnounceHold(s23SortedKeys(s23ContestedBindings))
 	}
 
 	bound := map[string]string{}
@@ -1395,8 +1715,11 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 			// touch stay strict, because nothing about them is in dispute.
 			//
 			// Delete this allowance the day the designer rules, in either direction. It is a hold,
-			// not a permanent widening, and it should not outlive the question.
-			if alt, contested := s23ContestedBindings[group]; contested && got == alt {
+			// not a permanent widening, and it should not outlive the question -- which is why it
+			// is gated on `holdOpen` rather than standing on its own. A hold whose expiry nothing
+			// reads is indistinguishable from a permanent exemption after the first tidy-up.
+			if alt, contested := s23ContestedBindings[group]; holdOpen && contested && got == alt {
+				s23AnnounceHold(s23SortedKeys(s23ContestedBindings))
 				t.Logf("PB-DS-7: group %s is painted R.color.%s, Substrate's original binding, "+
 					"rather than R.color.%s, which ADR-007 B134 decision 1 rebinds it to. That "+
 					"decision is marked CONTESTED and awaiting the designer, so BOTH are legal "+
@@ -1635,23 +1958,88 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 
 	// 1. Every spelling of a constant is SEEN. A constant the scan does not reach is one the
 	//    gate cannot fail on, however wrong its value is.
-	for _, spelling := range []string{
-		"    const val DOT_DP = 7f",
-		"    internal const val DOT_DP = 7f",
-		"    private const val DOT_DP = 7f",
-		"    private val DOT_DP: Float = 7f",
-	} {
-		found := s23ScanMetrics(spelling)
-		if len(found) != 1 {
-			t.Errorf("PB-DS-7: the metric scan does not see %q, so a number written that way "+
-				"carries no origin, is checked against nothing, and fails no assertion in this "+
-				"gate. The shipped defect was exactly this: `private` was not in the pattern.",
-				spelling)
-			continue
+	//
+	//    THE MATRIX IS GENERATED, NOT CURATED, AND THAT IS THE POINT OF IT. This was four
+	//    hand-picked forms -- `const val`, `internal const val`, `private const val`,
+	//    `private val ...: Float` -- and it passed on the day `= 7F`, `@JvmField`, `var`, a
+	//    camelCase name and a trailing comment all walked through the pattern, because a control
+	//    made of examples can only ever confirm the examples someone thought of. That is the same
+	//    defect as the fence it is checking, one level up.
+	//
+	//    So the axes are crossed instead: every combination of annotation, visibility, `const`,
+	//    keyword, name shape, type annotation, literal form and trailing punctuation. A failure
+	//    ENUMERATES the combinations the scan rejected rather than naming one, so what a reader
+	//    gets is the shape of the hole and not a single instance of it.
+	var missed []string
+	for _, annotation := range []string{"", "@JvmField ", "@JvmStatic ", `@Suppress("unused") `} {
+		for _, visibility := range []string{"", "private ", "internal ", "public ", "protected "} {
+			for _, constness := range []string{"", "const "} {
+				for _, keyword := range []string{"val", "var"} {
+					if constness != "" && keyword == "var" {
+						continue // `const var` is not Kotlin.
+					}
+					for _, name := range []string{"DOT_DP", "dotDp", "dot_dp", "_dotDp"} {
+						for _, typed := range []string{"", ": Float", ": Double", ": Number"} {
+							for _, literal := range []string{"7f", "7F", "7.0f", "7.0", "7", "7e0f", "0.045f"} {
+								for _, trailing := range []string{"", ",", ";", "   ", " // the design's dot", " /* the design's dot */"} {
+									spelling := "    " + annotation + visibility + constness +
+										keyword + " " + name + typed + " = " + literal + trailing
+									found := s23ScanMetrics(spelling)
+									if len(found) != 1 {
+										missed = append(missed, spelling)
+										continue
+									}
+									if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
+										missed = append(missed, spelling+"   [seen, but passes with NO origin]")
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
-		if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
-			t.Errorf("PB-DS-7: a constant with NO origin annotation, written %q, passes the "+
-				"check. An unannotated number is the thing this gate exists to refuse.", spelling)
+	}
+	if len(missed) > 0 {
+		shown := missed
+		if len(shown) > 12 {
+			shown = shown[:12]
+		}
+		t.Errorf("PB-DS-7: the metric scan does not refuse %d of the generated spellings. A number "+
+			"written any of these ways carries no origin, is checked against nothing, and fails no "+
+			"assertion in this gate however wrong its value is -- which is the defect this fence has "+
+			"now shipped twice, each time as \"a spelling nobody listed\". First %d:\n\t%s",
+			len(missed), len(shown), strings.Join(shown, "\n\t"))
+	}
+
+	// The two views s23ScanMetrics indexes in parallel must stay line-for-line aligned, or every
+	// constant silently acquires its neighbour's annotation.
+	for _, src := range []string{
+		"/** origin: .pdot { width } */\nconst val DOT_DP = 7f\n",
+		"/**\n * origin: .pdot { width }\n */\nconst val DOT_DP = 7f // trailing\n",
+		"// a line comment\n/* a block\n   comment */\nconst val DOT_DP = 7f\n",
+		`val s = "a string with /* not a comment */ in it"` + "\nconst val DOT_DP = 7f\n",
+	} {
+		if fault := s23ScanAlignmentFault(src); fault != "" {
+			t.Errorf("PB-DS-7: %s\n\tsource: %q", fault, src)
+		}
+	}
+
+	// And the recogniser must not have widened into matching things that are not declarations.
+	// A pattern that matched everything would satisfy the matrix above and refuse nothing real.
+	for _, notADeclaration := range []string{
+		"    val size = Kit.dp(context, KitMetrics.PRESENCE_DOT_DP)",
+		"    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)",
+		"    val gap = if (indexOfChild(child) == 0) 0 else gapPx",
+		"    marginEnd = -Kit.dimenPx(context, R.dimen.swarm_space_6)",
+		"    const val TAG = \"7f\"",
+		"    fun dp(context: Context, value: Float): Float = value * 2f",
+	} {
+		if found := s23ScanMetrics(notADeclaration); len(found) != 0 {
+			t.Errorf("PB-DS-7: the metric scan reads %q as a constant declaration (%v). A "+
+				"recogniser that matches ordinary kit code would report a fault on every correct "+
+				"line, and the fence would be switched off by whoever hit it first.",
+				notADeclaration, found)
 		}
 	}
 
@@ -1692,6 +2080,100 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	if faults := check("/** derived: " + s23ComponentsDoc + " #3 Badge { no-such-field } */\n    const val X = 16f"); len(faults) == 0 {
 		t.Error("PB-DS-7: a constant citing a field row 3 does not state passes, so a renamed " +
 			"cell would leave the value checked against nothing")
+	}
+}
+
+// TestPBDS6_TheDpScanCanActuallyFail is the control for the two assertions above, and every probe
+// goes through s23ScanDpSpends, s23DpLiteralFaults and s23QuantisationFaults -- the three
+// functions the real assertions call -- rather than through a copy of them.
+//
+// Both assertions are currently GREEN against the kit, which is exactly the state in which a
+// broken scan is indistinguishable from a clean tree: a scanner that read zero call sites, or a
+// fault function that returned nothing, would report the same silence.
+func TestPBDS6_TheDpScanCanActuallyFail(t *testing.T) {
+	// The scan reads the accessor, the constant and the line, through a nested call -- which is
+	// the normal shape here, and the shape a regexp-bounded argument list gets wrong.
+	source := strings.Join([]string{
+		`fun tabBar(context: Context) {`,
+		`    background = TopRule(`,
+		`        rulePx = Kit.dp(context, KitMetrics.HAIRLINE_DP),`,
+		`    )`,
+		`    val strokePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP)`,
+		`    val iconPx = Kit.dpPx(context, KitMetrics.TAB_ICON_DP)`,
+		`}`,
+	}, "\n")
+	spends := s23ScanDpSpends("Probe.kt", source)
+	if len(spends) != 3 {
+		t.Fatalf("PB-DS-6: the dp scan found %d call site(s) in a source with three: %+v. A scan "+
+			"that reads fewer call sites than exist reports the same clean result as a kit with "+
+			"nothing wrong in it.", len(spends), spends)
+	}
+	if spends[0].Accessor != "dp" || spends[0].Metric != "HAIRLINE_DP" || spends[0].Line != 3 {
+		t.Errorf("PB-DS-6: the dp scan read the first call site as %+v, want Kit.dp of "+
+			"HAIRLINE_DP at line 3. Every fault message below names the accessor, the constant "+
+			"and the line, and all three come from here.", spends[0])
+	}
+
+	// The quantisation fault fires on a constant rendered two ways, and NOT on one rendered one
+	// way. HAIRLINE_DP is above in both spellings; TAB_ICON_DP is in only one.
+	faults := s23QuantisationFaults(spends)
+	if len(faults) != 1 || !strings.Contains(faults[0], "HAIRLINE_DP") {
+		t.Errorf("PB-DS-6: a source spending HAIRLINE_DP through both Kit.dp and Kit.dpPx, and "+
+			"TAB_ICON_DP through one, produces %d fault(s): %v. Want exactly one, naming "+
+			"HAIRLINE_DP -- this is the shipped defect verbatim, and if the check cannot see it "+
+			"here it did not see it in TabBar.kt either.", len(faults), faults)
+	}
+	if faults := s23QuantisationFaults(s23ScanDpSpends("Probe.kt",
+		`val a = Kit.dpPx(context, KitMetrics.HAIRLINE_DP)`+"\n"+
+			`val b = Kit.dpPx(context, KitMetrics.HAIRLINE_DP)`)); len(faults) != 0 {
+		t.Errorf("PB-DS-6: a constant spent TWICE through the same accessor is reported as two "+
+			"renderings: %v. The fault is one token rendered two ways, not one token spent twice.",
+			faults)
+	}
+
+	// A constant listed in s23DualQuantised is permitted both ways -- and the permission is read
+	// from the table, not from the check agreeing with itself.
+	dual := s23ScanDpSpends("Probe.kt",
+		`val corePx = Kit.dpPx(context, KitMetrics.DOT_DP)`+"\n"+
+			`val diameterPx = Kit.dp(context, KitMetrics.DOT_DP)`)
+	if faults := s23QuantisationFaults(dual); len(faults) != 0 {
+		t.Errorf("PB-DS-6: DOT_DP is on s23DualQuantised with its reason, and spending it both "+
+			"ways is reported as a fault anyway: %v", faults)
+	}
+	if _, listed := s23DualQuantised["HAIRLINE_DP"]; listed {
+		t.Error("PB-DS-6: HAIRLINE_DP is on s23DualQuantised. It describes ONE quantity -- the " +
+			"width of a 1dp rule -- drawn by the card, the chip and the tab bar, so a row here " +
+			"would restore the defect the table exists to prevent by permitting it.")
+	}
+
+	// The table must not outlive its reason either. A row for a constant the kit now spends ONE
+	// way is a standing permission nobody is using, and the next dual spend inherits it without
+	// anyone arguing for it -- which is how a justified exception becomes an unexamined one.
+	stale := s23QuantisationFaults(s23ScanDpSpends("Probe.kt",
+		`val corePx = Kit.dpPx(context, KitMetrics.DOT_DP)`))
+	if len(stale) != 1 || !strings.Contains(stale[0], "Delete the row") {
+		t.Errorf("PB-DS-6: DOT_DP is on s23DualQuantised and a source spending it through only "+
+			"Kit.dpPx produces %d fault(s): %v. Want exactly one telling the reader to delete the "+
+			"row. A permission that survives the reason for it is the next defect's excuse.",
+			len(stale), stale)
+	}
+	if faults := s23QuantisationFaults(s23ScanDpSpends("Probe.kt",
+		`val iconPx = Kit.dpPx(context, KitMetrics.TAB_ICON_DP)`)); len(faults) != 0 {
+		t.Errorf("PB-DS-6: TAB_ICON_DP is NOT on s23DualQuantised and is spent one way, which is "+
+			"the ordinary correct case, and it is reported as a fault: %v", faults)
+	}
+
+	// And the literal fault fires on a metric typed at the call site rather than named.
+	literal := s23ScanDpSpends("Probe.kt", `val px = Kit.dp(context, 7f)`)
+	if faults := s23DpLiteralFaults(literal); len(faults) != 1 {
+		t.Errorf("PB-DS-6: `Kit.dp(context, 7f)` produces %d fault(s), want 1. A number typed at "+
+			"the call site never becomes a property and never acquires an origin, so no "+
+			"declaration scan can reach it.", len(faults))
+	}
+	if faults := s23DpLiteralFaults(s23ScanDpSpends("Probe.kt",
+		`val px = Kit.dp(context, KitMetrics.DOT_DP)`)); len(faults) != 0 {
+		t.Errorf("PB-DS-6: the correct spelling is reported as a literal: %v. A check that fails "+
+			"on the right answer as readily as on the wrong one gets deleted.", faults)
 	}
 }
 
