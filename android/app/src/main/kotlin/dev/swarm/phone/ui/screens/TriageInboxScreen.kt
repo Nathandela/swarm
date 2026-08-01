@@ -156,5 +156,139 @@ object TriageInboxScreen {
         inbox: TriageInbox,
         scope: String? = null,
         selectedSession: String? = null,
-    ): InboxScreen = TODO("S24: the triage inbox is not composed yet")
+    ): InboxScreen {
+        val sections = inbox.sections.map { section ->
+            InboxSection(
+                group = section.group,
+                heading = headingOf(section.group),
+                emptyCopy = emptyCopyOf(section.group),
+                rows = section.rows
+                    .filter { scope == null || machineOf(it.id) == scope }
+                    .map { row ->
+                        InboxRow(
+                            id = row.id,
+                            project = row.title,
+                            agent = "",
+                            need = row.need,
+                            group = row.group,
+                            stateDescription = headingOf(section.group),
+                            selected = row.id == selectedSession,
+                        )
+                    },
+            )
+        }
+        val inFlight = sections.filter { it.group in IN_FLIGHT }.sumOf { it.rows.size }
+        val blocked = sections.filter { it.group == BLOCKED }.sumOf { it.rows.size }
+        return InboxScreen(
+            title = TITLE,
+            live = if (inFlight == 0) null else "$inFlight LIVE",
+            scopes = scopesOf(inbox, scope),
+            sections = sections,
+            tabs = tabsOf(blocked),
+            staleNotice = inbox.staleNotice,
+        )
+    }
+
+    /**
+     * The machine a session belongs to, or null when its id does not name one.
+     *
+     * `mobile/app.go` derives a session's display title by cutting the id at the first "/" and
+     * falling back to the whole id when there is none, so the namespaced form is the wire's own
+     * and this reads the half that one throws away. It is a PARSE OF AN IDENTIFIER, not a
+     * derivation of state: the Group is never derived on-device (TriageInbox says why), and this
+     * is not a Group.
+     */
+    private fun machineOf(sessionId: String): String? =
+        sessionId.substringBefore('/', "").takeIf { it.isNotEmpty() }
+
+    /**
+     * The scope bar: "All machines", then every machine the roster names, ALPHABETICALLY.
+     *
+     * THE ORDER IS SORTED RATHER THAN THE ROSTER'S, and that is the same argument PB-DS-9 makes
+     * about empty sections. [TriageInbox] groups the roster before this screen sees it, so
+     * "roster order" here would really be "order of first appearance walking the Groups" -- and
+     * the chips would then swap places when a session changed group, under the finger of someone
+     * reaching for one. Inventory C1 draws two chips in the mock's declaration order and states no
+     * rule; a stable order is the one property a filter control actually needs.
+     *
+     * A machine's presence is true when ANY of its sessions reports the machine reachable.
+     * `Session.Present` is a fact about the MACHINE carried on each of its rows, so they agree;
+     * the fold is there so a roster in mid-update cannot report a machine offline because one
+     * stale row says so.
+     */
+    private fun scopesOf(inbox: TriageInbox, scope: String?): List<ScopeChip> {
+        val machines = sortedMapOf<String, Boolean>()
+        inbox.sections.asSequence().flatMap { it.rows.asSequence() }.forEach { row ->
+            val machine = machineOf(row.id) ?: return@forEach
+            machines[machine] = (machines[machine] ?: false) || row.present
+        }
+        val all = ScopeChip(
+            machine = null,
+            label = ALL_MACHINES,
+            present = null,
+            selected = scope == null,
+            // No dot, so nothing the label does not already say. A non-null description would be
+            // read INSTEAD of the label, which would silence it.
+            description = null,
+        )
+        return listOf(all) + machines.map { (machine, present) ->
+            ScopeChip(
+                machine = machine,
+                label = machine,
+                present = present,
+                selected = machine == scope,
+                description = "$machine, ${if (present) "online" else "offline"}",
+            )
+        }
+    }
+
+    private fun tabsOf(blocked: Int): List<InboxTab> = TAB_LABELS.map { label ->
+        InboxTab(
+            label = label,
+            selected = label == INBOX_TAB,
+            // Derivation table 1.4: the badge is the CROSS-SCREEN attention carrier and it counts
+            // NeedsInput only, which is what keeps it a different instrument from the header's
+            // in-flight counter. It rides the Inbox tab because that is where the list is.
+            badgeCount = if (label == INBOX_TAB) blocked else 0,
+            badgeDescription = if (label == INBOX_TAB && blocked > 0) announcement(blocked) else null,
+        )
+    }
+
+    /**
+     * Derivation table row 3 states the form: "N sessions need you".
+     *
+     * THE SINGULAR IS WRITTEN OUT rather than left to the recorded plural. "1 sessions need you"
+     * is what the recorded form produces at the count this badge spends most of its life at, and
+     * it is the one string in this product that a screen reader user hears in place of a number
+     * whose whole job is to be understood.
+     */
+    private fun announcement(count: Int): String =
+        if (count == 1) "1 session needs you" else "$count sessions need you"
+
+    /**
+     * @throws IllegalStateException on a Group with no copy. LOUD, and for the reason
+     *  [TriageInbox.from] gives about the same class of gap: a section rendered with a blank
+     *  heading is a section the user cannot name, and silence here would be indistinguishable
+     *  from a design decision.
+     */
+    private fun headingOf(group: String): String = checkNotNull(SECTION_HEADINGS[group]) {
+        "PB-DS-9: no section heading for the status.Group $group. TriageInbox.TRIAGE_ORDER places " +
+            "it and this screen cannot name it, so it would render as an unlabelled block of rows."
+    }
+
+    private fun emptyCopyOf(group: String): String = checkNotNull(EMPTY_SECTION_COPY[group]) {
+        "PB-DS-9: no empty copy for the status.Group $group. An empty section is still a section " +
+            "and says so; without copy it is a heading over nothing."
+    }
+
+    /**
+     * What the live counter counts. Derivation table 8.1: the artifact renders `3 LIVE` over 1
+     * NeedsInput + 2 Working + 1 Done and omits ReadyForReview entirely, so its recommendation --
+     * NeedsInput + Working -- reproduces the artifact's own arithmetic. A session waiting on a
+     * human is not running, and a finished one is not either.
+     */
+    private val IN_FLIGHT: Set<String> = setOf("needs_input", "working")
+
+    /** The Group the tab badge counts, and the only one it counts. */
+    private const val BLOCKED = "needs_input"
 }

@@ -139,12 +139,20 @@ class PairingSurface(
      * scanning one.
      */
     private val scannerHost = object : LinearLayout(activity) {
+        /** The height IS the width: the second spec is deliberately the first one. */
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             super.onMeasure(widthMeasureSpec, widthMeasureSpec)
         }
     }.apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        // HIDDEN UNTIL A SCAN STARTS. It was VISIBLE from construction, which is a View's
+        // default, and `renderScanStep` only ever asks it to STAY visible
+        // (`scanning && scannerHost.visibility == View.VISIBLE`) -- so a freshly opened app drew
+        // an empty viewfinder-sized hole with no camera behind it. Invisible while it was 720 raw
+        // pixels at the bottom of a scrolling column; not invisible now that the pairing panel
+        // hangs under a real screen.
+        visibility = View.GONE
     }
 
     private val startScan = touchFilteredButton("Scan the code on your machine") { beginScanning() }

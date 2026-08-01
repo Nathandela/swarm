@@ -695,30 +695,32 @@ func TestPBDS9_EveryTriageGroupHasASectionHeadingAndEmptyCopy(t *testing.T) {
 	}
 }
 
+// s24TableDeclaration finds a named table's DECLARATION -- `NAME: Map<..> = mapOf(` -- and not
+// merely the first place the name is mentioned.
+//
+// THE OBVIOUS SPELLING IS WRONG HERE, which is why this is a regexp rather than a `strings.Index`
+// on the name. A lookup (`SECTION_HEADINGS[group]`) mentions the identifier too, and if one of
+// those came first the reader would take the `(` after it and parse an unrelated argument list --
+// reporting a table with no rows, which the coverage check below would read as "no heading for any
+// Group" or, worse, as a partial table if the mentions happened to line up. Matching the
+// declaration form makes the subject unambiguous.
+var s24TableDeclaration = regexp.MustCompile(
+	`\b(SECTION_HEADINGS|EMPTY_SECTION_COPY)\b\s*(?::\s*Map<[^>]*>)?\s*=\s*mapOf\s*\(`)
+
 // s24SplitLabelTables reads the screen's two Group-keyed tables. They are found by the names the
 // screen gives them rather than by position, so reordering the file changes nothing here.
 func s24SplitLabelTables(code string) (headings, empties map[string]string, ok bool) {
 	headings = map[string]string{}
 	empties = map[string]string{}
-	for _, table := range []struct {
-		marker string
-		into   map[string]string
-	}{
-		{"SECTION_HEADINGS", headings},
-		{"EMPTY_SECTION_COPY", empties},
-	} {
-		start := strings.Index(code, table.marker)
-		if start < 0 {
-			continue
+	for _, loc := range s24TableDeclaration.FindAllStringSubmatchIndex(code, -1) {
+		into := headings
+		if code[loc[2]:loc[3]] == "EMPTY_SECTION_COPY" {
+			into = empties
 		}
-		open := strings.Index(code[start:], "(")
-		if open < 0 {
-			continue
-		}
-		args := s23CallArguments(code[start:], open)
-		for _, arg := range args {
+		// loc[1] is one past the `(` the pattern ends on.
+		for _, arg := range s23CallArguments(code, loc[1]-1) {
 			if m := s24GroupLabelRow.FindStringSubmatch(arg); m != nil {
-				table.into[m[1]] = m[2]
+				into[m[1]] = m[2]
 				ok = true
 			}
 		}
@@ -763,5 +765,16 @@ func TestPBDS9_TheSectionTableReaderSeesAMissingGroup(t *testing.T) {
 	if headings["working"] != "" {
 		t.Errorf("the table reader still reports a heading for `working` after the row was "+
 			"deleted, so the coverage check above would pass over a dropped section: %v", headings)
+	}
+
+	// And the reader must find the DECLARATION rather than the first mention. A lookup placed
+	// above it is the arrangement that would make a `strings.Index` on the name parse an unrelated
+	// argument list and report an empty table -- which reads as "the screen covers no Group".
+	mentionFirst := `fun headingFor(g: String) = SECTION_HEADINGS[g]
+	` + full
+	headings, empties, ok = s24SplitLabelTables(mentionFirst)
+	if !ok || len(headings) != 4 || len(empties) != 4 {
+		t.Errorf("a lookup written above the declaration defeats the table reader: "+
+			"headings=%v empties=%v", headings, empties)
 	}
 }

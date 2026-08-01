@@ -237,6 +237,16 @@ class TriageInboxScreenTest {
     }
 
     @Test
+    fun `one session blocked is announced in the singular`() {
+        val screen = screenOf(listOf(row("mbp/blocked", "needs_input")))
+
+        // The recorded form is "N sessions need you", and at the count this badge spends most of
+        // its life at that produces "1 sessions need you" -- read aloud, in place of a number
+        // whose whole job is to be understood.
+        assertEquals("1 session needs you", screen.tabs.single { it.selected }.badgeDescription)
+    }
+
+    @Test
     fun `no session needs anyone and there is no badge`() {
         val screen = screenOf(listOf(row("mbp/busy", "working")))
 
@@ -274,8 +284,12 @@ class TriageInboxScreenTest {
             ),
         )
 
+        // Sorted, not roster order. TriageInbox has already grouped the roster by the time this
+        // screen sees it, so "roster order" would really be "order of first appearance walking
+        // the Groups" -- and the chips would swap places when a session changed group, under the
+        // finger of whoever was reaching for one.
         assertEquals(
-            listOf("All machines", "nathans-mbp", "mac-studio"),
+            listOf("All machines", "mac-studio", "nathans-mbp"),
             screen.scopes.map { it.label },
         )
         assertEquals(
@@ -284,6 +298,20 @@ class TriageInboxScreenTest {
             screen.scopes.first().present,
         )
         assertEquals(listOf(true, false, false), screen.scopes.map { it.selected })
+    }
+
+    @Test
+    fun `the chips keep their places when a session changes group`() {
+        val before = screenOf(
+            listOf(row("nathans-mbp/one", "working"), row("mac-studio/two", "needs_input")),
+        )
+        // The same two machines, with the two sessions' Groups swapped -- which is the ordinary
+        // event on this screen and must not move a filter control.
+        val after = screenOf(
+            listOf(row("nathans-mbp/one", "needs_input"), row("mac-studio/two", "working")),
+        )
+
+        assertEquals(before.scopes.map { it.label }, after.scopes.map { it.label })
     }
 
     @Test
@@ -333,7 +361,7 @@ class TriageInboxScreenTest {
             TriageInbox.TRIAGE_ORDER,
             screen.sections.map { it.group },
         )
-        assertEquals(listOf(false, false, true), screen.scopes.map { it.selected })
+        assertEquals(listOf(false, true, false), screen.scopes.map { it.selected })
     }
 
     @Test

@@ -317,7 +317,7 @@ class TriageInboxViewTest {
         val chips = (root.kitRequire(InboxTag.SCOPES) as ViewGroup)
 
         assertEquals(
-            listOf("All machines", "nathans-mbp", "mac-studio"),
+            listOf("All machines", "mac-studio", "nathans-mbp"),
             (0 until chips.childCount).map { textOf(chips.getChildAt(it)) },
         )
     }
@@ -351,7 +351,7 @@ class TriageInboxViewTest {
         )
         val chips = root.kitRequire(InboxTag.SCOPES) as ViewGroup
 
-        chips.getChildAt(2).performClick()
+        chips.getChildAt(1).performClick()
         assertEquals("mac-studio", chosen)
 
         chips.getChildAt(0).performClick()

@@ -1,0 +1,11 @@
+S24 GREEN -- the same 23 assertions against the implementation, same harness as
+screens-model-red.txt. Recompiled from the working tree immediately before capture.
+
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.TriageInboxScreenTest
+
+JUnit version 4.13.2
+.......................
+Time: 0.161
+
+OK (23 tests)
+

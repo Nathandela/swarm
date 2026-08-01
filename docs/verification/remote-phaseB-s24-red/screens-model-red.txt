@@ -1,0 +1,156 @@
+S24 RED -- the triage inbox's SCREEN MODEL, run against the TODO() stub.
+
+HOW THIS WAS PRODUCED, exactly. The Kotlin lane is sequenced by another agent and this
+slice may not invoke ./gradlew, so the suite was compiled and run on a plain JVM with the
+kotlin-compiler-embeddable and junit jars the Gradle cache already holds. TriageInboxScreen
+and TriageInbox are pure Kotlin -- no Android import, no resources -- so the run is the same
+code the Gradle lane will execute. TriageInboxViewTest is Robolectric and is NOT here; it
+needs the Android lane.
+
+The implementation under test is the stub as committed at a8d644e: every signature present,
+the copy tables real, and of() a single TODO(). So the failures below are missing behaviour
+rather than unresolved references, which is what makes them evidence.
+
+$ kotlinc ui/TriageInbox.kt <a8d644e stub> ui/screens/TriageInboxScreenTest.kt
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.TriageInboxScreenTest
+
+JUnit version 4.13.2
+.E.E.E.E..E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.E
+Time: 0.144
+There were 22 failures:
+1) the selected session is the one the screen was told about(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the selected session is the one the screen was told about(TriageInboxScreenTest.kt:183)
+2) the tab bar is the recorded four, with the inbox selected(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the tab bar is the recorded four, with the inbox selected(TriageInboxScreenTest.kt:266)
+3) a session lands in its own group's section and nowhere else(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a session lands in its own group's section and nowhere else(TriageInboxScreenTest.kt:130)
+4) a machine chip reports the presence the wire gave its sessions(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a machine chip reports the presence the wire gave its sessions(TriageInboxScreenTest.kt:319)
+5) a row carries the wire's own words and invents nothing(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a row carries the wire's own words and invents nothing(TriageInboxScreenTest.kt:154)
+6) every triage group is a section, in the model's own order(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.every triage group is a section, in the model's own order(TriageInboxScreenTest.kt:63)
+7) the headings are the recorded copy(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the headings are the recorded copy(TriageInboxScreenTest.kt:112)
+8) the counters follow the scope(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the counters follow the scope(TriageInboxScreenTest.kt:375)
+9) nothing in flight shows no counter at all(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.nothing in flight shows no counter at all(TriageInboxScreenTest.kt:215)
+10) the live counter counts needs_input plus working(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the live counter counts needs_input plus working(TriageInboxScreenTest.kt:200)
+11) the scope bar is All machines plus one chip per machine in the roster(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the scope bar is All machines plus one chip per machine in the roster(TriageInboxScreenTest.kt:279)
+12) the badge counts needs_input only(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the badge counts needs_input only(TriageInboxScreenTest.kt:222)
+13) choosing a machine narrows the rows and keeps every section(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.choosing a machine narrows the rows and keeps every section(TriageInboxScreenTest.kt:352)
+14) the chips keep their places when a session changes group(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the chips keep their places when a session changes group(TriageInboxScreenTest.kt:305)
+15) a session with no machine in its id contributes no chip(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a session with no machine in its id contributes no chip(TriageInboxScreenTest.kt:385)
+16) an empty section is still a section and says so(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.an empty section is still a section and says so(TriageInboxScreenTest.kt:77)
+17) a holed journal is reported in the model's own words(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a holed journal is reported in the model's own words(TriageInboxScreenTest.kt:399)
+18) an empty roster still renders all four sections(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.an empty roster still renders all four sections(TriageInboxScreenTest.kt:100)
+19) the dot's announcement is the section's own heading(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.the dot's announcement is the section's own heading(TriageInboxScreenTest.kt:173)
+20) no session needs anyone and there is no badge(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.no session needs anyone and there is no badge(TriageInboxScreenTest.kt:251)
+21) a machine chip announces its presence, which a dot cannot(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.a machine chip announces its presence, which a dot cannot(TriageInboxScreenTest.kt:332)
+22) one session blocked is announced in the singular(dev.swarm.phone.ui.screens.TriageInboxScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the triage inbox is not composed yet
+	at dev.swarm.phone.ui.screens.TriageInboxScreen.of(TriageInboxScreen.kt:159)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf(TriageInboxScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.screenOf$default(TriageInboxScreenTest.kt:48)
+	at dev.swarm.phone.ui.screens.TriageInboxScreenTest.one session blocked is announced in the singular(TriageInboxScreenTest.kt:241)
+
+FAILURES!!!
+Tests run: 23,  Failures: 22
+

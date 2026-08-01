@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -22,6 +23,9 @@ import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchResult
 import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.TerminalPeek
+import dev.swarm.phone.ui.screens.InboxScreen
+import dev.swarm.phone.ui.screens.TriageInboxScreen
+import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
 import swarmmobile.LaunchSpec
@@ -36,6 +40,15 @@ import swarmmobile.LaunchSpec
  * names, and no more. What is here is a real window with real controls reaching real facade
  * verbs; what is not here is navigation, a session picker, a keyboard, or anything else
  * PB-APP-1..8 will eventually ask for.
+ *
+ * S24 REPLACED THE TOP OF THAT SCOPE WITH A REAL SCREEN (PB-DS-6, PB-DS-9). This surface was one
+ * flat `LinearLayout` of twenty unstyled views under a single 24 dp padding, and it consumed
+ * `TriageInbox` -- four Groups, sections, empty states, the whole triage design -- as
+ * `.flatMap{}.firstOrNull()?.id`, a session picker that discarded every section, row, label and
+ * grouping the model had just built. The root of the window is now
+ * [dev.swarm.phone.ui.screens.triageInboxView], composed entirely from `ui/kit`, and the
+ * remaining controls hang below it as [unrecomposedControls] until they have components of their
+ * own. The session picker exists: rows are tappable and the scope bar narrows the list.
  *
  * IT WIRES S16'S SCREEN MODELS, IT DOES NOT REIMPLEMENT THEM. Every string on screen comes from
  * [PairingFlow], [dev.swarm.phone.ui.ConnectionBanner], [dev.swarm.phone.ui.TerminalPeek] or
@@ -81,9 +94,9 @@ import swarmmobile.LaunchSpec
  * ledger said the launch screen did not exist, the traceability table said PB-APP-6 was shipped,
  * and nothing anywhere joined the two. Section 1's binding exit criterion is a phone that
  * "pairs, observes, LAUNCHES, and types into a real session", so the fields and the control that
- * start a session are below. What is still not here is a machine pane and a session picker: the
- * peek and the session controls act on the first row of the triage inbox, and the launch form
- * needs no picker because the session it starts does not exist yet.
+ * start a session are below. What is still not here is a machine pane; the session picker
+ * arrived with S24's inbox, and the launch form needs none because the session it starts does not
+ * exist yet.
  */
 class PhoneSurface(
     private val activity: AppCompatActivity,
@@ -245,6 +258,22 @@ class PhoneSurface(
     private var session: String = ""
 
     /**
+     * The session the USER tapped, which is not the same fact as [session].
+     *
+     * [session] is what the controls act on and always resolves to something while the roster has
+     * anything in it; this is a choice, and it is empty until somebody makes one. Keeping them
+     * apart is what lets a tapped session that has since gone away fall back to the first row
+     * without the screen claiming the user chose that.
+     */
+    private var chosen: String = ""
+
+    /** The machine the scope bar has been narrowed to, or null for all of them. */
+    private var scope: String? = null
+
+    /** What the inbox last drew, so a redraw that changes nothing rebuilds nothing. */
+    private var inboxDrawn: InboxScreen? = null
+
+    /**
      * The take_control this surface issued, and the session it was issued for.
      *
      * BOTH, because the target is re-derived from the triage inbox on every draw: a lease
@@ -269,27 +298,52 @@ class PhoneSurface(
     /** True once this surface installed its listener and started journal delivery. */
     private var observing = false
 
-    val root: View = ScrollView(activity).apply {
-        addView(
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                // PB-DS-1. This was `setPadding(PADDING, ...)` with `PADDING = 24` -- raw PIXELS,
-                // which is ~8dp on a 3x handset, and it was the ENTIRE spatial output of the app.
-                // The scale in res/values/dimens.xml is the only place a spacing value comes from
-                // now; 24dp is its top step.
-                val pad = resources.getDimensionPixelSize(R.dimen.swarm_space_24)
-                setPadding(pad, pad, pad, pad)
-                layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
-                for (child in listOf(
-                    status, notice, pairing.root, peekTitle, peek, lease,
-                    takeControl, typed, send, kill, launchAgent, launchCwd, launchPrompt,
-                    launch, launchStatus, revoke, settings.root, outcome,
-                )) {
-                    addView(child)
-                }
-            },
-        )
+    /**
+     * The controls S24 has NOT recomposed, kept together so what is left to do is one object
+     * rather than eighteen loose children.
+     *
+     * THIS USED TO BE THE WHOLE APP: one flat `LinearLayout` holding twenty unstyled views under a
+     * single 24 dp padding, which was the entire spatial output of the product. PB-DS-9 replaces
+     * it with real screens and puts the triage inbox first, so what is here now is the remainder
+     * -- the pairing panel, the peek, the session controls, the launch form and the settings
+     * panel, each of which is a screen of its own in the inventory (C7, C3, C2, C6) and none of
+     * which has a kit factory yet.
+     *
+     * IT CARRIES NO PADDING OF ITS OWN ANY MORE. The 24 dp was the last thing on this surface
+     * deciding a spatial value; the kit components above it carry theirs, and these views are
+     * unstyled while they wait for the components that will style them.
+     */
+    private val unrecomposedControls = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        for (child in listOf(
+            status, notice, pairing.root, peekTitle, peek, lease,
+            takeControl, typed, send, kill, launchAgent, launchCwd, launchPrompt,
+            launch, launchStatus, revoke, settings.root, outcome,
+        )) {
+            addView(child)
+        }
     }
+
+    /** Carries [unrecomposedControls] on the one branch that has no inbox to scroll them. */
+    private val controlsScroll = ScrollView(activity).apply {
+        isVerticalScrollBarEnabled = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+    }
+
+    /**
+     * The window's one child. The inbox is rebuilt into it whenever what it shows changes; on a
+     * phone that cannot start at all it holds the controls alone, because there is no roster to
+     * draw an inbox from.
+     */
+    private val host = FrameLayout(activity).apply {
+        // A glowing dot and the tab badge are drawn outside their own views.
+        clipChildren = false
+        clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+    }
+
+    val root: View = host
 
     /**
      * The controls PB-SEC-12 clause 1 is about, exposed so the assertion has a named subject
@@ -486,6 +540,11 @@ class PhoneSurface(
         renderLease(null)
         // There is no phone to launch through either.
         launch.isEnabled = false
+        // AND NO INBOX. The roster comes from the phone core, so a handset whose core refused
+        // construction has no sections to draw and no counts to state -- and a triage inbox
+        // rendered over nothing would say "nothing is waiting on you", which is a claim about the
+        // machine that this phone is in no position to make.
+        hostControlsAlone()
     }
 
     private fun renderReady(startup: PhoneStartup.Ready) {
@@ -507,22 +566,30 @@ class PhoneSurface(
         // withholding the machine's frames leaves it reading "Connected to your machine." with
         // nothing behind it. The freshness notice is the only thing on this screen that comes
         // from the machine's own clock.
+        // PB-DS-9: the inbox is drawn BEFORE the status line is written, because the line now
+        // carries the roster's own PB-APP-8 verdict alongside the transport's.
+        val inbox = renderInbox(bridge)
+
         status.text = listOfNotNull(
             bridge.connectionBanner().text,
             bridge.machineFreshness().notice { millis ->
                 DateFormat.getTimeFormat(status.context).format(Date(millis))
             },
+            // PB-APP-8 for the roster. `TriageInbox.staleNotice` decided the wording in S16 and
+            // reached no user until now: a list drawn from a holed journal may be missing a
+            // session, an exit or a needs_input, and the one screen that must never present that
+            // as live is the one a person triages from.
+            inbox.staleNotice,
         ).filter { it.isNotEmpty() }.joinToString(" ")
         notice.text = CapabilityNotice.of(startup.anomalies)
 
-        // No navigation on this surface, so the target is the first row of the triage inbox --
-        // the order TriageInbox already decided is what a user must act on first. Inventing a
-        // picker here would be building the app rather than the window.
-        session = bridge.triageInbox().sections
-            .flatMap { it.rows }
-            .firstOrNull()
-            ?.id
-            .orEmpty()
+        // THE TARGET IS THE ROW ON SCREEN. It used to be
+        // `triageInbox().sections.flatMap{}.firstOrNull()?.id` -- a session picker that discarded
+        // every section, row, label and grouping the model had just built. The rows are now
+        // rendered and tappable, so the session the controls act on is the one somebody chose,
+        // falling back to the first row in triage order while nobody has: an unchosen target has
+        // to be something, and TriageInbox already decided what a user must act on first.
+        session = targetOf(inbox)
 
         // Before the peek is read, and on the empty branch too: a session that has gone away
         // still leaves a watch open on the machine.
@@ -550,6 +617,96 @@ class PhoneSurface(
         peek.text = listOf(view.staleNotice, view.rendered).filter { it.isNotEmpty() }.joinToString("\n")
         setActionsEnabled(true)
         renderLease(view)
+    }
+
+    // -----------------------------------------------------------------------
+    // PB-DS-9: the triage inbox.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Build the inbox's model, and redraw it only if it has changed.
+     *
+     * THE EQUALITY CHECK IS NOT AN OPTIMISATION. [render] runs on every resume, after every gated
+     * action AND on every journal event, so rebuilding the view hierarchy each time would throw
+     * the list back to the top under whoever was scrolling it -- while an agent working steadily
+     * produces events steadily. [InboxScreen] is a data class of data classes, so "has anything a
+     * user can see changed" is one comparison.
+     */
+    private fun renderInbox(bridge: FacadeBridge): InboxScreen {
+        val next = TriageInboxScreen.of(
+            inbox = bridge.triageInbox(),
+            scope = scope,
+            selectedSession = chosen.takeIf { it.isNotEmpty() },
+        )
+        if (next == inboxDrawn && host.childCount > 0) return next
+        inboxDrawn = next
+        detachControls()
+        host.removeAllViews()
+        host.addView(
+            triageInboxView(
+                context = activity,
+                screen = next,
+                onSelectSession = ::selectSession,
+                onSelectScope = ::selectScope,
+                below = unrecomposedControls,
+            ),
+        )
+        return next
+    }
+
+    /**
+     * The window with no inbox in it, for a phone that could not start.
+     *
+     * IT SCROLLS, and that is not cosmetic: this is the state a handset reaches when its Keystore
+     * or state directory refuses, and the pairing panel -- the one thing that might get it out of
+     * that state -- is halfway down the column. When the inbox is drawn the scroll is the inbox's
+     * own; on this branch there is no inbox to lend one.
+     */
+    private fun hostControlsAlone() {
+        inboxDrawn = null
+        if (unrecomposedControls.parent === controlsScroll && controlsScroll.parent === host) return
+        detachControls()
+        controlsScroll.removeAllViews()
+        controlsScroll.addView(unrecomposedControls)
+        host.removeAllViews()
+        host.addView(controlsScroll)
+    }
+
+    /**
+     * Take the controls out of whatever last held them.
+     *
+     * `removeAllViews` on the host detaches the INBOX, and the controls are two levels inside it
+     * -- so without this they arrive at their next `addView` still claiming a parent, and Android
+     * refuses that with "the specified child already has a parent".
+     */
+    private fun detachControls() {
+        (unrecomposedControls.parent as? ViewGroup)?.removeView(unrecomposedControls)
+    }
+
+    /**
+     * The session the controls act on: the one somebody tapped, or the first row in triage order.
+     *
+     * A CHOSEN SESSION THAT IS NOT ON SCREEN IS NOT A TARGET. It may have exited, or the scope may
+     * have moved off its machine, and acting on a session the user can no longer see is the
+     * proximity error PB-SYNC-2 exists to forbid one level up. The fall-back is the rule this
+     * surface has always used, which [TriageInbox.TRIAGE_ORDER] already decided.
+     */
+    private fun targetOf(screen: InboxScreen): String {
+        val rows = screen.sections.flatMap { it.rows }
+        return (rows.firstOrNull { it.selected } ?: rows.firstOrNull())?.id.orEmpty()
+    }
+
+    private fun selectSession(id: String) {
+        chosen = id
+        render()
+    }
+
+    private fun selectScope(machine: String?) {
+        scope = machine
+        // A scope change can move the target off screen, so the choice is dropped with it rather
+        // than left pointing at a session this scope does not show.
+        chosen = ""
+        render()
     }
 
     /**
