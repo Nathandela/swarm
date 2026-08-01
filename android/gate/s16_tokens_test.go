@@ -34,7 +34,7 @@ package gate
 // ---------------------------------------------------------------------------------------------
 //
 // PB-TOK-5: the join was correct and UNDER-FED. It ran three tokens (--p-bg, --p-ink, --p-ink2)
-// through a fence built for the whole palette, so 13 of 16 colours stayed pinned against a design
+// through a fence built for the whole palette, so 14 of 17 colours stayed pinned against a design
 // source no screen could consume. Widening the table is the entire fix; nothing about the
 // comparison changed, which is the point -- a fence that needed rebuilding to carry more rows was
 // never the fence it claimed to be. Note --p-cta-bg and --p-cta-ink are byte-identical to
@@ -78,7 +78,7 @@ const tokensRelPath = "internal/design/tokens.json"
 // expressed as a naming convention is a mapping nobody can review.
 const tokenMapFile = "design-tokens.tsv"
 
-// colourTokenCount is PB-TOK-5's number: the Substrate skin declares 16 colours, and all 16 must
+// colourTokenCount is PB-TOK-5's number: the skin declares 17 colour-typed tokens, and all 17 must
 // reach the app. It is pinned so that DELETING a row cannot make this gate pass -- without it,
 // the completeness assertion is satisfied by an empty join and an empty colors.xml.
 const colourTokenCount = 17
@@ -488,8 +488,10 @@ func TestPBTOK5_EveryColourTokenReachesTheApp(t *testing.T) {
 	// assertion pass by emptying the set it iterates.
 	if len(colours) < colourTokenCount {
 		t.Fatalf("PB-TOK-5: %s types %d tokens as colours; the Substrate skin declares %d. This "+
-			"assertion is about all %d of them reaching the app, so it will not run over a "+
-			"different set.", tokensRelPath, len(colours), colourTokenCount, colourTokenCount)
+			"assertion is about all of them reaching the app. This is a FLOOR, not an equality: "+
+			"it will run over a LARGER set, which is how --p-tabbg was added after an audit found "+
+			"it excluded. What it refuses is a SMALLER one, so retyping a colour away cannot make "+
+			"this pass by emptying the set it iterates.", tokensRelPath, len(colours), colourTokenCount)
 	}
 
 	var missing []string

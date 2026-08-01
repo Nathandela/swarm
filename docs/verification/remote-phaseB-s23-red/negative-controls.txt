@@ -3,8 +3,14 @@ S23 negative controls -- PB-DS-6, PB-DS-7, PB-DS-10
 *** INTEGRITY NOTE, 2026-08-01. A re-audit found four records in this file that are not
 *** evidence: one with no output at all, and three carrying output copy-pasted verbatim from
 *** the preceding entry -- wrong failure message, no test name, no count. Two are corrected
-*** in place below and marked VOID with the reason. The remaining copy-paste cases are NOT
-*** silently deleted: they are listed here so the defect is visible rather than tidied away.
+*** in place below and marked VOID with the reason, and the three COPY-PASTE records are now
+*** marked VOID individually too.
+***
+*** CORRECTION 2026-08-01: an earlier version of this note claimed the copy-paste cases were
+*** "listed here". They were not -- the note asserted a marking it had not performed, in a file
+*** whose subject is records that assert what they have not demonstrated. That is the same
+*** error one level up, and it is fixed by the per-record markers below rather than by
+*** rewording this paragraph.
 ***
 *** A record whose output belongs to a different mutation is worse than a missing record. It
 *** reads as a demonstrated failure mode and is not one, which is exactly the error this file
@@ -48,6 +54,10 @@ codebase ship a third divergent palette under a green test.
         java.lang.AssertionError: expected:<[]> but was:<[--p-att 70.0% over transparent: design says 0xB3F1A10D, component resolved 0xB3A97109]>
 
 === the key light is dropped -- the card renders flat, as it would under an elevation shadow
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a glow-blend failure). `keyLight = null` cannot produce it.
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
     Surfaces.kt: keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
         ->  keyLight = null,
         java.lang.AssertionError: expected:<[]> but was:<[needs_input (--p-att) glow: design says 0xB3F1A10D, component resolved 0xB3A97109, working (--p-work) glow: design says 0x8C00C2D7, component resolved 0x8C006B76]>
@@ -79,6 +89,10 @@ codebase ship a third divergent palette under a green test.
         java.lang.AssertionError: expected:<[]> but was:<[needs_input layer type: design says 0x00000001, component resolved 0x00000000, working layer type: design says 0x00000001, component resolved 0x00000000]>
 
 === the row spends the wrong scale step: 12dp vertical padding where the ledger says 10
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a layer-type failure).
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
     SessionRow.kt: Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
             Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
         ->  Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
@@ -93,6 +107,10 @@ codebase ship a third divergent palette under a green test.
         java.lang.AssertionError: expected:<[]> but was:<[badge fill: design says 0xFFF1A10D, component resolved 0xFFFF6369]>
 
 === the section label uppercases its copy instead of transforming it
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a badge-fill failure).
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
     SectionLabel.kt: isAllCaps = true
         ->  isAllCaps = false
         java.lang.AssertionError: expected:<[]> but was:<[badge fill: design says 0xFFF1A10D, component resolved 0xFFFF6369]>

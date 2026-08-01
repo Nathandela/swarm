@@ -163,7 +163,7 @@ func TestPBTOK7_NoShippedLiteralIsADerivationsOutput(t *testing.T) {
 
 	// NON-VACUITY, first. A scan that found nothing would report "no transcriptions" forever,
 	// which is the exact shape of a green fence looking at an empty set. colors.xml alone carries
-	// the 16 colours PB-TOK-5 landed, so the floor is real and not a guess.
+	// the 17 colour-typed tokens PB-TOK-5 landed, so the floor is real and not a guess.
 	if len(literals) < colourTokenCount {
 		t.Fatalf("PB-TOK-7: the scan found %d colour literal(s) across the app's production "+
 			"sources. colors.xml alone declares %d, so the scan is not reaching the files it "+
