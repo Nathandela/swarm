@@ -24,6 +24,17 @@ package dev.swarm.phone.ui
 /** One journal record, as the wire describes it. Serves the detail screen and [MachinePane]. */
 data class JournalRow(
     val cursor: Long,
+    /**
+     * `swarmmobile.JournalEntry.SessionID`, verbatim.
+     *
+     * IT HAS NO DEFAULT ON PURPOSE. The facade has always carried this field (mobile/types.go) and
+     * [FacadeBridge.journal] did not read it, so the activity feed could report that a session
+     * launched and not which one -- and the emphasised span the design gives every activity row,
+     * which is the project name in the drawing, had nothing real to be. A default value here would
+     * have made the field optional at nine construction sites and it would have gone unpopulated
+     * at whichever one nobody revisited, which is how it was lost the first time.
+     */
+    val sessionId: String,
     /** `swarmmobile.JournalEntry.Type`, verbatim. */
     val type: String,
     /** `swarmmobile.JournalEntry.Group`, verbatim. */

@@ -49,7 +49,7 @@ class MachinePaneTest {
 
     @Test
     fun `the pane shows presence, the paired device and the activity log`() {
-        val p = pane(activity = listOf(JournalRow(cursor = 3, type = "launch", group = "working")))
+        val p = pane(activity = listOf(JournalRow(cursor = 3, sessionId = "swarm", type = "launch", group = "working")))
         assertEquals("online", p.presence)
         assertEquals("swarm phone", p.pairedDeviceName)
         assertEquals(1, p.activity.size)

@@ -71,6 +71,7 @@ class FacadeBridge(private val app: App) {
                 val entry = page.at(index)
                 JournalRow(
                     cursor = entry.getCursor(),
+                    sessionId = entry.getSessionID(),
                     type = entry.getType(),
                     group = entry.getGroup(),
                 )

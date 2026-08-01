@@ -49,7 +49,7 @@ class SessionDetailTest {
     @Test
     fun `the detail screen shows journal events and a snapshot card with a persistent stop`() {
         val d = detail(
-            journal = listOf(JournalRow(cursor = 7, type = "tool_use", group = "working")),
+            journal = listOf(JournalRow(cursor = 7, sessionId = "naef", type = "tool_use", group = "working")),
             snapshotText = "$ ls\nREADME.md",
         )
         assertEquals(1, d.journal.size)

@@ -105,12 +105,18 @@ data class ActivityEntry(
     /**
      * The span of [body] that takes `.ln b`, or null where the record has nothing to emphasise.
      *
-     * IT IS THE `Group` AND NOT AN INVENTED HIGHLIGHT. The mock emphasises the project name;
-     * that field never reaches this screen (class comment), and the Group is the one identifier a
-     * record actually carries beyond its type. It also suits the role: `.ln b` is MONOSPACE, and
-     * a wire token is what a monospace emphasis is for -- an English phrase set in mono reads as a
-     * mistake. Null on the five record types that carry no Group, rather than emphasising the type
-     * for want of anything better, which would put the eye on the one word every row shares.
+     * IT IS THE SESSION AND NOT AN INVENTED HIGHLIGHT. The mock emphasises the project name --
+     * the thing each row is ABOUT -- and `SessionID` is the identifier this product has for that.
+     * It reaches the screen as of the `JournalRow.sessionId` fix; before it, this was the `Group`,
+     * because the facade carried the session and `FacadeBridge.journal` dropped it, so the feed
+     * could say a session launched and not which one.
+     *
+     * It suits the role: `.ln b` is MONOSPACE, and a wire token is what a monospace emphasis is
+     * for -- an English phrase set in mono reads as a mistake.
+     *
+     * Falls back to the `Group` where a record carries no session, and to null where it carries
+     * neither, rather than promoting the type for want of anything better -- which would put the
+     * eye on the one word every row shares.
      */
     val emphasis: String?,
 )
@@ -181,11 +187,15 @@ object ActivityPanelScreen {
      * the sentence it marks, not two pieces to glue.
      */
     private fun entryFor(row: JournalRow): ActivityEntry {
+        val session = row.sessionId.ifEmpty { null }
         val group = row.group.ifEmpty { null }
         return ActivityEntry(
             cursor = row.cursor,
-            body = if (group == null) row.type else row.type + FIELD_SEPARATOR + group,
-            emphasis = group,
+            body = listOfNotNull(session, row.type, group).joinToString(FIELD_SEPARATOR),
+            // The SESSION, now that one reaches this screen. It is what the mock emphasises -- the
+            // thing the row is about -- and it falls back to the Group only where the record
+            // carries no session, so the eye still lands on a wire token rather than on a type.
+            emphasis = session ?: group,
         )
     }
 }

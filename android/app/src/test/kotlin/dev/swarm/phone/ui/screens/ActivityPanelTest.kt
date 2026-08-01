@@ -28,9 +28,9 @@ class ActivityPanelTest {
 
     private fun page(
         rows: List<JournalRow> = listOf(
-            JournalRow(cursor = 1, type = "launched", group = ""),
-            JournalRow(cursor = 2, type = "group_transition", group = "working"),
-            JournalRow(cursor = 3, type = "group_transition", group = "needs_input"),
+            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = ""),
+            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "working"),
+            JournalRow(cursor = 3, sessionId = "swarm", type = "group_transition", group = "needs_input"),
         ),
         stale: Boolean = false,
     ) = JournalPageView(rows = rows, nextCursor = rows.maxOfOrNull { it.cursor } ?: 0, stale = stale)
@@ -91,35 +91,53 @@ class ActivityPanelTest {
     }
 
     /**
-     * The mock's emphasised project name.
+     * The mock's emphasised project name, which is now the session.
      *
-     * `swarmmobile.JournalEntry` DOES carry `SessionID` and `FacadeBridge.journal` drops it on the
-     * way into `JournalRow`, so the emphasis has no project to be. What it is instead is the
-     * Group, verbatim -- and on the records that carry no Group it is nothing, rather than the
-     * type promoted for want of anything better.
+     * This test asserted the `Group` until `JournalRow` grew `sessionId`. The facade always
+     * carried `SessionID` and `FacadeBridge.journal` dropped it, so the feed could report that a
+     * session launched and not WHICH -- and the emphasis had no subject to be, only the Group
+     * standing in for one. It has a subject now.
+     *
+     * The fallback chain is asserted rather than assumed, because each step means something
+     * different: a record with a session emphasises it; a record with only a Group emphasises
+     * that, so the eye still lands on a wire token in a monospace span; a record with neither
+     * emphasises NOTHING, rather than promoting the type and putting the eye on the one word
+     * every row shares.
      */
     @Test
-    fun `the emphasis is the record's own Group, or nothing`() {
+    fun `the emphasis is the session, then the Group, then nothing`() {
         val rows = panel().only.rows.associateBy { it.cursor }
 
-        assertEquals("needs_input", rows.getValue(3L).emphasis)
-        assertEquals("working", rows.getValue(2L).emphasis)
+        assertEquals(
+            "a record carrying a session did not emphasise it. This is the whole point of the " +
+                "sessionId field: without it the row cannot say which session it is about",
+            "swarm",
+            rows.getValue(3L).emphasis,
+        )
+        assertEquals("blog", rows.getValue(2L).emphasis)
+        assertEquals(
+            "a record with a Group and no session must fall back to the Group, not to nothing",
+            "working",
+            panel(rows = listOf(JournalRow(cursor = 9, sessionId = "", type = "x", group = "working")))
+                .only.rows.single().emphasis,
+        )
         assertNull(
-            "a record with no Group was emphasised anyway. The five record types that carry no " +
-                "Group have nothing to put the eye on, and emphasising the type would put it on " +
-                "the one word every row shares",
-            rows.getValue(1L).emphasis,
+            "a record with neither a session nor a Group was emphasised anyway. There is nothing " +
+                "on it to put the eye on, and emphasising the type would put it on the one word " +
+                "every row shares",
+            panel(rows = listOf(JournalRow(cursor = 8, sessionId = "", type = "x", group = "")))
+                .only.rows.single().emphasis,
         )
     }
 
     // ---- what it does render ---------------------------------------------------
 
     @Test
-    fun `each row is its record's Type and Group, verbatim`() {
+    fun `each row is its record's SessionID, Type and Group, verbatim`() {
         val rows = panel().only.rows.associateBy { it.cursor }
 
-        assertEquals("launched", rows.getValue(1L).body)
-        assertEquals("group_transition · needs_input", rows.getValue(3L).body)
+        assertEquals("quanthome · launched", rows.getValue(1L).body)
+        assertEquals("swarm · group_transition · needs_input", rows.getValue(3L).body)
     }
 
     /**

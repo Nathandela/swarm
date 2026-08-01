@@ -41,8 +41,8 @@ class ActivityPanelViewTest {
 
     private fun panel(
         rows: List<JournalRow> = listOf(
-            JournalRow(cursor = 1, type = "launched", group = ""),
-            JournalRow(cursor = 2, type = "group_transition", group = "needs_input"),
+            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = ""),
+            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "needs_input"),
         ),
         stale: Boolean = false,
     ) = ActivityPanelScreen.of(
