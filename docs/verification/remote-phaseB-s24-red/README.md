@@ -7,18 +7,40 @@ claim that it happened.
 
 | File | What it is |
 |---|---|
-| `screens-gate-red.txt` | `go test ./android/gate/ -run "TestPBDS11_\|TestPBDS6_TheKit\|TestPBDS6_TheScreen\|TestPBDS9_" -v` before any of it was fixed. 4 failing of 8. |
+| `screens-gate-red.txt` | The gate's ten assertions run against the tree at `650ea35`, before any of it was fixed. 4 failing. |
 | `screens-model-red.txt` | `TriageInboxScreenTest`'s 23 assertions against the `TODO()` stub committed at `a8d644e`. 22 failing. |
 | `screens-model-green.txt` | The same 23 assertions, same harness, against the implementation. |
 
-## What the gate run found that was not asked for
+The gate run is a **re-run of the final assertions** against the pre-fix tree: `650ea35` exported
+with `git archive`, the shipped `s24_screens_test.go` dropped into it, and `go test` run there. So
+what is recorded is the wording and the strength the gate ships with, not an earlier draft's. The
+first draft of that gate reported eleven violations; the shipped one reports **thirteen** on the
+same tree, and the difference is the subject of the next section.
 
-The brief named ten PB-DS-11 violations. The scan found **eleven**: the eleventh is
+## What the gate found that was not asked for, and what it missed the first time
+
+The brief named ten PB-DS-11 violations. The first scan found **eleven**: the eleventh is
 `res/drawable/ic_swarm_wake.xml`, which carried the ARGB literal `#FFFFFFFF` under a comment
 arguing that the platform masks a notification icon to its own tint and discards the value. That
 is the argument the requirement refuses in as many words — "independent of whether its value is
 currently correct" — so the fill became `@android:color/white`, a platform resource reference.
 Nothing rendered changes.
+
+**It missed two, and the two it missed were the two the brief named as the interesting ones.**
+`SCANNER_HEIGHT = 720` and `SAS_TEXT_SP = 28f` are not literals at their call sites — they are
+`const val`s spent as `LayoutParams(MATCH, SCANNER_HEIGHT)` and `textSize = SAS_TEXT_SP`, one hop
+behind a name. A scan that reads only call-site literals reports both files clean, which means the
+first version of this gate would have gone green over a fixed tree while remaining unable to catch
+the defect coming back. Every violation this slice removed had that shape, including the `PADDING
+= 24` that PB-DS-1 removed before it: the obvious way to write a raw dimension is also the way that
+hides it from a regexp. `s24FileConstants` now resolves a file-local `val NAME = <number>` one hop,
+and three of the negative-control cases are those exact three constants.
+
+The other hole self-review found was in `TestPBDS6_TheKitHasProductionCallSites`: it counted
+IMPORTS. PB-DS-6 was recorded NOT MET over a kit with zero call sites, and the cheapest way to make
+that finding disappear without changing anything a user sees is to add import lines. It now
+requires the symbol to be spent, and `TestPBDS6_AnImportIsNotACallSite` is the control that shows
+the two can be told apart.
 
 The scan also has to be readable by the people it fences. Its first run after that fix reported the
 file *still* dirty: the commit message and the comment explaining the replacement both quoted the

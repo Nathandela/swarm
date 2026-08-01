@@ -196,9 +196,42 @@ var s24AssignedDimension = []*regexp.Regexp{
 	regexp.MustCompile(`\b(?:cornerRadius|strokeWidth|letterSpacing)\s*=\s*(-?[0-9.]+f?)\b`),
 }
 
+// s24AssignedName is the same set of assignments with a NAME on the right instead of a number --
+// `textSize = SAS_TEXT_SP`, which is how the one this slice deleted was actually written. The
+// capture is the identifier, resolved through [s24FileConstants].
+var s24AssignedName = []*regexp.Regexp{
+	regexp.MustCompile(`\btextSize\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b`),
+	regexp.MustCompile(`\b(?:topMargin|bottomMargin|marginStart|marginEnd|leftMargin|rightMargin)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b`),
+	regexp.MustCompile(`\b(?:cornerRadius|strokeWidth|letterSpacing)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b`),
+}
+
 // s24LiteralNumber is a whole argument that is nothing but a number -- `24`, `28f`, `-3`.
 // Applied to one already-split, already-trimmed top-level argument.
 var s24LiteralNumber = regexp.MustCompile(`^-?[0-9]+(?:\.[0-9]+)?[fF]?$`)
+
+// s24NamedNumber is a file-local constant whose value is a bare number.
+//
+// EVERY VIOLATION THIS SLICE FIXED WAS ONE HOP BEHIND A NAME, and a fence that only reads literals
+// at the call site would have found none of them. `PADDING = 24`, `SCANNER_HEIGHT = 720` and
+// `SAS_TEXT_SP = 28f` were all `const val`s in a companion object, spent as
+// `setPadding(pad, ...)`, `LayoutParams(MATCH, SCANNER_HEIGHT)` and `textSize = SAS_TEXT_SP` --
+// which is to say the obvious way to write a raw dimension is also the way that hides it. So an
+// identifier argument is resolved against this table before it is passed over.
+//
+// ONE HOP AND NO MORE. A constant defined in another file, or computed, is not followed: that
+// needs a type checker, and a heuristic that guessed would fail in both directions. What is
+// covered is the shape all three defects had.
+var s24NamedNumber = regexp.MustCompile(
+	`(?m)^\s*(?:private\s+|internal\s+)?(?:const\s+)?val\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z]+\s*)?=\s*(-?[0-9]+(?:\.[0-9]+)?[fF]?)\s*$`)
+
+// s24FileConstants maps a source's file-local numeric constants to their values.
+func s24FileConstants(code string) map[string]string {
+	out := map[string]string{}
+	for _, m := range s24NamedNumber.FindAllStringSubmatch(code, -1) {
+		out[m[1]] = m[2]
+	}
+	return out
+}
 
 // s24IsZero recognises the one literal the requirement allows anywhere a length is spent.
 //
@@ -287,6 +320,7 @@ func s24VisualConstantFaults(name, src string, kotlin bool) []string {
 		return faults
 	}
 
+	constants := s24FileConstants(code)
 	for _, loc := range s24DimensionCall.FindAllStringSubmatchIndex(code, -1) {
 		call := code[loc[2]:loc[3]]
 		args := s23CallArguments(code, loc[1]-1)
@@ -300,10 +334,23 @@ func s24VisualConstantFaults(name, src string, kotlin bool) []string {
 			args = args[:2]
 		}
 		for i, arg := range args {
-			if !s24LiteralNumber.MatchString(arg) || s24IsZero(arg) {
+			value, named := arg, false
+			if !s24LiteralNumber.MatchString(arg) {
+				// One hop: an identifier standing for a number declared in this file.
+				resolved, ok := constants[arg]
+				if !ok {
+					continue
+				}
+				value, named = resolved, true
+			}
+			if s24IsZero(value) {
 				continue
 			}
-			faults = append(faults, name+": raw dimension `"+arg+"` in argument "+
+			spelling := "raw dimension `" + value + "`"
+			if named {
+				spelling = "raw dimension `" + arg + " = " + value + "`"
+			}
+			faults = append(faults, name+": "+spelling+" in argument "+
 				strconv.Itoa(i)+" of `"+call+"(...)` -- a length may only come from R.dimen, the "+
 				"design scale, or a window inset")
 		}
@@ -315,6 +362,17 @@ func s24VisualConstantFaults(name, src string, kotlin bool) []string {
 			}
 			faults = append(faults, name+": raw dimension `"+strings.TrimSpace(m[0])+
 				"` -- a length may only come from R.dimen or the design scale")
+		}
+	}
+	for _, re := range s24AssignedName {
+		for _, m := range re.FindAllStringSubmatch(code, -1) {
+			value, ok := constants[m[1]]
+			if !ok || s24IsZero(value) {
+				continue
+			}
+			faults = append(faults, name+": raw dimension `"+strings.TrimSpace(m[0])+
+				"`, where "+m[1]+" = "+value+" -- a length may only come from R.dimen or the "+
+				"design scale")
 		}
 	}
 
@@ -370,6 +428,20 @@ func TestPBDS11_TheScanSeesEachClassOfViolation(t *testing.T) {
 		{"a raw height beside a constant", `LinearLayout.LayoutParams(MATCH, 720)`},
 		{"a raw margin assignment", `params.topMargin = 12`},
 		{"a raw radius assignment", `shape.cornerRadius = 9f`},
+		// The three this slice actually deleted, each one hop behind a name. A fence that read
+		// only call-site literals would have reported all three clean.
+		{
+			"a padding behind a constant",
+			"private const val PADDING = 24\nfun f() { setPadding(PADDING, PADDING, PADDING, PADDING) }",
+		},
+		{
+			"a layout height behind a constant",
+			"private const val SCANNER_HEIGHT = 720\nval p = LinearLayout.LayoutParams(MATCH, SCANNER_HEIGHT)",
+		},
+		{
+			"a text size behind a constant",
+			"private const val SAS_TEXT_SP = 28f\nval v = label().apply { textSize = SAS_TEXT_SP }",
+		},
 	}
 	for _, c := range cases {
 		if got := s24VisualConstantFaults("perturbed.kt", c.src, true); len(got) == 0 {
@@ -435,6 +507,13 @@ func TestPBDS11_TheScanAcceptsWhatTheRequirementAllows(t *testing.T) {
 		{"a window inset", `view.setPadding(bars.left, bars.top, bars.right, bars.bottom)`},
 		{"a resource text appearance", `setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)`},
 		{"a documented literal in a comment", "// This was `setPadding(24, 24, 24, 24)` in raw pixels."},
+		// A name that stands for something other than a number must pass: the constant table only
+		// resolves file-local `val NAME = <number>`, so a layout constant is not a dimension.
+		{
+			"a layout constant behind a name",
+			"const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT\nval p = LinearLayout.LayoutParams(MATCH, MATCH)",
+		},
+		{"a duration behind a constant", "const val POLL_MILLIS = 400L\npoller.postDelayed({}, POLL_MILLIS)"},
 	}
 	for _, c := range cases {
 		if got := s24VisualConstantFaults("allowed.kt", c.src, true); len(got) > 0 {
@@ -467,6 +546,21 @@ var s24InboxComponents = map[string]string{
 	"tabBar":       "C1.4 `.ptabs` -- the four tabs and the NeedsInput badge",
 }
 
+// s24Spends reports whether [symbol] is CALLED or CONSTRUCTED somewhere in [code], as opposed to
+// merely imported. The import line itself is excluded, which is the whole point.
+func s24Spends(code, symbol string) bool {
+	call := regexp.MustCompile(`\b` + regexp.QuoteMeta(symbol) + `\s*\(`)
+	for _, line := range strings.Split(code, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "import ") {
+			continue
+		}
+		if call.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
 // s24ScreenSources returns the recomposed screens, repo-relative path -> source.
 func s24ScreenSources(t *testing.T) map[string]string {
 	t.Helper()
@@ -490,11 +584,18 @@ func TestPBDS6_TheKitHasProductionCallSites(t *testing.T) {
 	for name, src := range s24ProductionKotlin(t) {
 		code := kotlinCodeOnly(src)
 		for _, m := range s24KitImport.FindAllStringSubmatch(code, -1) {
+			// AN IMPORT IS NOT A CALL SITE, and the difference is this requirement's whole
+			// subject. `import dev.swarm.phone.ui.kit.sessionRow` with no `sessionRow(` under it
+			// is a file that MENTIONS the kit, which is exactly as much use to a user as the zero
+			// call sites PB-DS-6 was marked NOT MET over. The symbol has to be spent.
+			if !s24Spends(code, m[1]) {
+				continue
+			}
 			reached[m[1]] = append(reached[m[1]], name)
 		}
 	}
 	if len(reached) == 0 {
-		t.Fatalf("PB-DS-6: no production Kotlin outside ui/kit/ imports a single kit symbol, so " +
+		t.Fatalf("PB-DS-6: no production Kotlin outside ui/kit/ calls a single kit factory, so " +
 			"the kit has ZERO production call sites and nothing a user sees is built from it. " +
 			"This is the state the requirement was recorded NOT MET in.")
 	}
@@ -511,6 +612,37 @@ func TestPBDS6_TheKitHasProductionCallSites(t *testing.T) {
 			"recorded composition is made of:\n%s\n\nA screen that composes some of the kit and "+
 			"hand-builds the rest is the copy-paste drift the requirement exists to prevent.",
 			len(missing), strings.Join(missing, "\n"))
+	}
+}
+
+// TestPBDS6_AnImportIsNotACallSite is the control on the distinction the requirement turns on.
+//
+// PB-DS-6 was recorded NOT MET over a kit with ZERO CALL SITES, and the cheapest way to make that
+// finding go away without changing anything a user sees is to import the symbols. So the check
+// must be able to tell the two apart, and this is where that is demonstrated rather than assumed.
+func TestPBDS6_AnImportIsNotACallSite(t *testing.T) {
+	const mentioned = `import dev.swarm.phone.ui.kit.sessionRow
+
+class Screen {
+    fun draw() {
+        // sessionRow(context, ...) would go here
+    }
+}`
+	if s24Spends(kotlinCodeOnly(mentioned), "sessionRow") {
+		t.Error("a file that imports sessionRow and never calls it reads as a call site, so the " +
+			"kit's zero-call-site defect could be closed by adding import lines")
+	}
+
+	const spent = `import dev.swarm.phone.ui.kit.sessionRow
+
+class Screen {
+    fun draw() {
+        root.addView(sessionRow(context, project, agent, need, group))
+    }
+}`
+	if !s24Spends(kotlinCodeOnly(spent), "sessionRow") {
+		t.Error("a real call is not recognised, so the check would report a screen built entirely " +
+			"out of the kit as reaching none of it")
 	}
 }
 
@@ -537,6 +669,11 @@ var s24ScreenForbidden = []struct {
 	{regexp.MustCompile(`\bbackground\s*=`), "a background"},
 	{regexp.MustCompile(`\bGradientDrawable\b`), "a shape"},
 	{regexp.MustCompile(`\bPaint\b`), "a paint"},
+	// The three ways to reach a length without naming a resource. Without them a screen could
+	// convert its own dp to px and every check above would stay green.
+	{regexp.MustCompile(`\bresources\.getDimension`), "a dimension"},
+	{regexp.MustCompile(`\bTypedValue\b`), "a unit conversion"},
+	{regexp.MustCompile(`\bdisplayMetrics\b`), "the screen density"},
 }
 
 // s24ScreenFenceFaults reports every visual decision a screen source makes for itself.
@@ -584,6 +721,8 @@ func TestPBDS6_TheScreenFenceSeesEachClassOfViolation(t *testing.T) {
 		{"a type style chosen by the screen", `label.setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)`},
 		{"a dimension read by the screen", `val pad = resources.getDimensionPixelSize(R.dimen.swarm_space_24)`},
 		{"a background built by the screen", `view.background = GradientDrawable()`},
+		{"a density conversion", `val px = 12f * context.resources.displayMetrics.density`},
+		{"a unit conversion", `TypedValue.applyDimension(COMPLEX_UNIT_DIP, 12f, metrics)`},
 	}
 	for _, c := range cases {
 		if got := s24ScreenFenceFaults("perturbed.kt", c.src); len(got) == 0 {
