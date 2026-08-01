@@ -1,0 +1,146 @@
+PB-DS-8 MOTIONTEST RE-AUDIT FIXES -- FAILING-FIRST (TDD RED, GG-5)
+============================================================
+
+Two defects a re-audit found in MotionTest.kt after motionfix-red.txt's four fixes landed. Both
+are about the file's own honesty, not about Motion.kt's behaviour: a false claim in the header,
+and an anchor test that could not fail.
+
+Branch: design-system-substrate. Files: android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt,
+android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Motion.kt.
+
+
+------------------------------------------------------------------------------
+DEFECT 1 -- the header's "not one of them is transcribed" claim was false
+------------------------------------------------------------------------------
+
+MotionTest.kt:32-33 claimed "EVERY NUMBER IS READ FROM THE DOCUMENT ... Not one of them is
+transcribed here." A re-auditor pointed at seven literals: 500L, 250L, 1600L, "50%", 1f, 640f
+(x2) and 2. Most are legitimate negative-control inputs -- a control needs a value the document
+does NOT contain -- but two were not controls at all:
+
+  - `assertEquals(1600L, workingDot)` in caret_period_is_not_the_working_dots_period compared a
+    value READ from the document (`.g-work`'s real duration, via MockCss) against a hand-typed
+    copy of that same fact. Not a control -- an expectation transcribed from the document, the
+    exact pattern this file exists to eliminate.
+  - `assertEquals(2, steps)` in caretAlphaAt_takes_exactly_as_many_states_as_the_mocks_steps_declares
+    directly contradicted its own comment two lines above it ("the count is the document's own
+    steps(2), not a 2 typed here") by typing the 2 anyway.
+
+This is a textual claim, not a runtime assertion, so there is no RED/GREEN pair to run for it.
+FIX: both literals were REMOVED. Nothing they checked was lost -- in the first case the
+following `assertNotEquals(workingDot, Motion.CARET_PERIOD_MS)` is the actual negative control and
+does not need workingDot's value restated; in the second, `steps` (the parsed value, not the
+literal) already drives `assertEquals(steps, seen.size)` two lines later. The header now names
+three kinds of literal that remain -- document-read, negative-control, fixture -- instead of
+denying any exist.
+
+
+------------------------------------------------------------------------------
+DEFECT 2 -- the banner rule was transcribed, and its anchor test was a tautology
+------------------------------------------------------------------------------
+
+Two related findings:
+
+(a) docs/design/substrate-components.md row 2's `-(own height + banner_top)` rule was paraphrased
+into Motion.pushBannerHiddenTranslation's KDoc and re-paraphrased into MotionTest's Kotlin
+arithmetic. Nothing read the row itself at test time, even though 446f1cb staged
+substrate-components.md on the unit-test classpath (app/build.gradle.kts's policyTestResources).
+A row edited to a different shape (a third operand, a product instead of a sum) would still be
+"matched" by hand-written arithmetic that never looked at it again.
+
+(b) pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions is satisfied by
+the -130 constant BY CONSTRUCTION: mockBannerHeightDp() is DEFINED as
+`-mockBannerHiddenDp() - mockBannerTopDp()`, so for ANY pushBannerHiddenTranslation of the form
+`-(h + t)` -- including one that ignores both arguments and always returns -130f -- plugging that
+height back in reproduces -130 exactly. motionfix-red.txt's own DEFECT 4 section already recorded
+this ("satisfied by the -130 constant BY CONSTRUCTION, so it cannot be the test that catches
+this") and assigned catching the constant bug entirely to the two-input control,
+the_banners_hidden_offset_moves_with_both_of_its_inputs. The anchor test had no discriminating
+power of its own; it was decoration.
+
+FIX: MockDoc, a new object mirroring MockCss, reads substrate-components.md's Push banner row
+(line 213: 11 pipe-delimited cells, notes in cell index 9) and returns the rule's two named
+operands by parsing `translateY(-(A + B))` structurally -- matching literally on the outer
+negation and the single `+`, so a row rewritten to a different shape fails to match at all rather
+than silently binding to the wrong text. The anchor test now asserts that join first
+(`MockDoc.pushBannerHiddenOperands() == listOf("own height", "banner_top")`). Then, after the
+original mock-dimensions checks, it rebuilds a SECOND pushBannerEnter animator at a perturbed
+height (mock height + 24dp) through the same public entry point -- not the pure function, which
+is already covered by the_banners_hidden_offset_moves_with_both_of_its_inputs -- and requires the
+offset to move off -130dp.
+
+RED -- captured by reintroducing the exact historical bug
+(`pushBannerHiddenTranslation(bannerHeightPx, topInsetPx) = -130f`, ignoring both arguments) and
+running the full class. The team lead ran it (I do not run ./gradlew myself on this lane):
+
+    ./gradlew :app:testDebugUnitTest --tests "dev.swarm.phone.ui.kit.MotionTest"
+
+    MotionTest > pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions FAILED
+    MotionTest > pushBannerEnter_hides_by_the_banners_own_height_plus_the_top_inset FAILED
+    MotionTest > the_banners_hidden_offset_moves_with_both_of_its_inputs FAILED
+    37 tests completed, 3 failed
+
+    From the result XML (the per-test name field was offset for these three records -- correct
+    values filed under the wrong names -- so the identities above are read from the console output
+    and the values below are read from the XML separately; the two lists are not presented as one
+    observed mapping):
+
+        expected:<-200.0> but was:<-130.0>
+        expected:<-154.0> but was:<-130.0>
+        expected:<-154.0> but was:<-130.0>
+
+    Which value belongs to which test is DERIVED here from each test's own arithmetic, not read
+    off the mislabelled XML field -- and the three derived values account for the reported set
+    exactly, which is how this mapping is checked rather than assumed:
+      - pushBannerEnter_hides_by_the_banners_own_height_plus_the_top_inset: tallBanner =
+        mockBannerHeightDp() * 2 = 140, top = mockBannerTopDp() = 60 -> expected -(140+60) =
+        -200.0. Pre-existing test (motionfix-red.txt DEFECT 4), unaffected by this change --
+        it was already capable of failing, and still is.
+      - the_banners_hidden_offset_moves_with_both_of_its_inputs: its SECOND assertEquals is
+        `mockBannerHiddenDp() - 24f` = -130 - 24 = -154.0, against
+        `pushBannerHiddenTranslation(height + 24f, top)`. JUnit stops at a method's first failing
+        assertion, so this is the only value this pre-existing test contributes here; its first
+        assertEquals (at the unperturbed height/top) still passes, because -130f matches there too.
+      - pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions: the NEW block
+        this fix added, height + 24 / same top -> expected `dp(mockBannerHiddenDp() - 24f)` =
+        -154.0. THIS is the value the fix exists to produce: before it, this test's only
+        assertions were the ones satisfied by -130 BY CONSTRUCTION (verified separately -- with
+        the fix reverted to its pre-audit form and the same -130f mutation applied, this test
+        reports 0 failures, which is the tautology stated as a number).
+
+    All three values are exactly what a pushBannerHiddenTranslation that ignores both arguments
+    and always returns -130 would produce -- consistent with the mutation actually applied.
+
+NEGATIVE CONTROL for the join itself, checked independently of the Kotlin test run: a Python
+re-parse of the live docs/design/substrate-components.md (splitting row 213 on `|`, 11 cells,
+notes in cell index 9, then the same `translateY\(-\(([^+()]+)\+([^+()]+)\)\)` pattern
+MockDoc.HIDDEN_TRANSLATION_RULE uses) returns `('own height', 'banner_top')`, matching the
+assertion in the fixed test exactly.
+
+
+------------------------------------------------------------------------------
+GREEN
+------------------------------------------------------------------------------
+
+    ./gradlew :app:testDebugUnitTest --tests "dev.swarm.phone.ui.kit.MotionTest"
+    (pushBannerHiddenTranslation reverted to -(bannerHeightPx + topInsetPx))
+
+Team lead reports: full Kotlin lane green, testDebugUnitTest verified to have actually executed
+(not merely exit 0 -- a collision on the shared tree can make Gradle report NO-SOURCE and exit 0
+having run nothing, which is why that distinction is stated rather than assumed). HEAD at that
+point: 0ca1935.
+
+
+------------------------------------------------------------------------------
+PROCESS NOTE
+------------------------------------------------------------------------------
+
+The historical-bug mutation used for the RED above was applied directly to Motion.kt in the
+shared working tree, commented TEMPORARY DEBUGGING SNIPPET / "must never be committed" per
+CLAUDE.md's rule on debugging code. A concurrent `git add -A` (commit 55d4e2a) captured it anyway
+and pushed it to origin/design-system-substrate: the comment named the risk and did not prevent
+it, because nothing in that commit path read comments. The team lead caught it, reverted it
+(0ca1935), and ran the GREEN confirmation above against the corrected tree. Filed by the team
+lead as a process defect on the commit path (a pre-commit check, not more care) rather than
+repeated here as a defect in this change, since neither Motion.kt nor MotionTest.kt was wrong at
+any point a reviewer could see either file in isolation.
