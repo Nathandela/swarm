@@ -8049,3 +8049,91 @@ is design authoring, not transcription. Two need genuine invention rather than s
 focus ring**, which today uses the documentation chrome's `#e2a33b` and is undefined for the product,
 and **the scrim and grab handle**, which have no near token. Those land as a reviewable table, one
 row per component, no cell a bare hex.
+
+---
+
+## B135. Three settings rows the design draws and the product will not ship (2026-08-01)
+
+`docs/research/remote-control-mock.html` C6 draws five settings rows. The product ships two. This
+entry records why the other three are not deferred work but decided absences, because a row that is
+merely unimplemented invites the next reader to implement it.
+
+### Quiet hours: NOT SHIPPED, and not owed
+
+The mock draws `Quiet hours` / `23:00 - 07:30`. Nothing behind it exists: `PushPreference` carries no
+such field, and adding one is a facade and protocol change rather than a screen change. **Decision:
+the product does not have quiet hours.** Not "not yet" - the row comes off the design, and if the
+feature is ever wanted it arrives as a requirement with a wire change behind it, not as a control
+someone wires to a preference that was added to satisfy a drawing.
+
+### Require Face ID to approve: VOID, and the design is stale
+
+B133 removed phone-side user authentication on the grounds that the trust boundary is the wire, and
+deleted its code. PB-SEC-2 is VOID. The mock predates that entry and still draws the toggle.
+**Decision: the row is deleted from the design, not only from the code.** A design that keeps drawing
+a control the product deliberately removed will eventually be read as a gap by someone who was not
+here for B133, and rebuilt.
+
+### End-to-end encryption: the status row must state what the code does, or nothing
+
+The mock draws `End-to-end encryption` with a static `active` in green, subtitled
+`Noise XX - relay sees ciphertext only`. Nothing reads a live value; the word is printed
+unconditionally.
+
+**Decision: a security claim is only displayed if something computes it.** An unconditional `active`
+is not a status, it is a decoration that looks like a status, and it is the one place in the product
+where that distinction is dangerous: a user checking whether their session is encrypted would be
+reading a string literal. The row ships when a real check backs it and not before. `statusLabel`
+exists in the kit for exactly that moment.
+
+**And the claim it makes must be narrowed when it does ship.** The property that actually holds is
+**phone to computer**: the Noise session runs handset to gateway and the relay sees ciphertext.
+"End-to-end encryption" without that qualifier invites the reading that the agent's own traffic, or
+the daemon's storage, is covered. Neither is in scope. The row says what the wire does.
+
+### The pattern under all three
+
+Two of these rows have no data and one has data nobody computes, and all three would have rendered
+correctly. That is the shape worth naming: **a screen can be pixel-accurate to its design and still
+be lying**, and every one of these would have been a green test over a value the product does not
+possess. The kit's fences catch a colour that entered without provenance; nothing catches a *claim*
+that entered without one. These three are that class, caught by reading rather than by a gate.
+
+---
+
+## B136. ReadyForReview: the recommendation, and why the hold stays mechanical for now (2026-08-01)
+
+B134 decision 1 is marked CONTESTED. An audit committee showed my premise was wrong - Substrate DOES
+bind `.pdot.ok`, at `design-directions.html:80`, under the section labelled Done - and recommended
+minting a 32nd token and restoring `--p-ok` to success.
+
+**There is an argument neither the committee nor I made, and it changes the weight: Substrate's demo
+phone renders THREE sections.** Needs you, Working, Done. `ReadyForReview` is absent from it
+entirely. So `.pdot.ok = Done` was bound in a drawing that never had to place four Groups on one
+screen, and it is not the considered four-way assignment the committee's objection treats it as. It
+is a three-way assignment that happens to use the word Done.
+
+That does not make the rebinding right. It makes the conflict weaker than "the implementer overrode
+the designer": the designer never faced this screen. What survives of the objection is the stronger
+half - `design-directions.html:315` defines `--p-ok` as *success*, and a token whose meaning depends
+on which mapping you are reading is ambiguous by definition.
+
+**RECOMMENDATION, not a ruling: keep the rebinding.** The four Groups need four distinguishable
+treatments; Substrate offers `--p-att`, `--p-work`, `--p-ok` and `--p-err`, and `--p-err` is denial,
+failure and destruction, so it cannot carry a state that means "your work is ready". That leaves
+three state colours for four states, and the assignment att / work / ok / ink3 is the only one that
+spends no invented colour while keeping all four distinct - with the recessive grey on Completed,
+which is what a triage surface wants anyway.
+
+**THE HOLD IS DELIBERATELY NOT LIFTED HERE.** Ruling means deleting `s23ContestedBindings`, and this
+entry is written at the end of a long session with little context left to verify that carefully. A
+half-executed ruling - an ADR that says settled and a gate that still widens - is precisely the
+contradiction B134's own hold was built to remove, and I am not going to introduce it while
+correcting it. The allowance stays; reverting remains one line that stays green; the marker still
+turns the widening off when it goes.
+
+**To execute either way, in a fresh context:** replace the CONTESTED marker with the ruling, delete
+`s23ContestedBindings` and its allowance branch in `android/gate/s23_kit_test.go`, and - if ruling
+AGAINST - change `android/group-tokens.tsv` and `Kit.kt` to the new mapping first. The gate's ruling
+verbs (`RULED`, `SETTLED`, `RESOLVED`, `no longer CONTESTED`) fire on the marker, so the ADR edit and
+the gate edit have to land together or the build goes red - which is the hold working, not a defect.
