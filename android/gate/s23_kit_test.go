@@ -70,6 +70,17 @@ type s23Component struct {
 // most components, and it is where the four-Group identity shows (PB-DS-9's own ordering).
 var s23Inbox = []s23Component{
 	{
+		Factory: "textField",
+		File:    "TextField.kt",
+		Derived: "#9 Composer",
+		Why: "the pairing code field and the launch form's three. Substrate draws no composer " +
+			"and no form, so row 9 is the whole specification. It shares wellSurface with the " +
+			"mono well because row 9 is explicit that the field INVERTS the mock's lighter fill " +
+			"-- --p-well is the token for recessed input. Its placeholder is --p-ink2 and not " +
+			"--p-ink3: on this surface the tertiary ink is 3.50:1, under the text floor, and a " +
+			"hint IS the field's label on a surface with no XML layouts to carry one.",
+	},
+	{
 		Factory: "monoWell",
 		File:    "MonoWell.kt",
 		Origin:  ".sheet2 .cmd",
@@ -904,7 +915,18 @@ var s23Spacing = []struct {
 	{"NavHeader.kt", ".pnav", "padding", 1, "swarm_space_18"},
 	{"NavHeader.kt", ".pnav", "padding", 2, "swarm_space_10"},
 	{"NavHeader.kt", ".pnav", "gap", 0, "swarm_space_10"},
-	{"TabBar.kt", ".ptabs", "padding-bottom", 0, "swarm_space_14"},
+	// `.ptabs { padding-bottom: 14px }` is DELIBERATELY NOT LEDGERED, and the absence is the
+	// decision. That 14 px reserves the iPhone home indicator INSIDE the bar's own box, and the
+	// design has already ruled on this class of constant twice: derivation row 19 calls
+	// `screen_top` 54 an iPhone notch constant that on Android must come from
+	// `WindowInsets.statusBars`, with 54 as a design-time preview value only, and says
+	// `screen_bottom` 76 is the same problem against the gesture-nav inset. Row 20 says where the
+	// bottom one lands: the scaffold spends "bottom `screen_bottom` (or inset + `tabbar_height`)"
+	// -- the real inset UNDER a bar that is `tabbar_height` tall, not a constant inside it.
+	//
+	// So the bar spends `tabbar_height` and nothing else, and `PhoneActivity.insetTheSystemBars`
+	// puts the measured inset below it. Ledgering the 14 here would have required the bar to keep
+	// spending it, and the two together double the bar's bottom air on every handset.
 	{"TabBar.kt", ".ptabs div", "gap", 0, "swarm_space_4"},
 }
 
@@ -1004,6 +1026,12 @@ var s23DerivedSpacing = []struct {
 	// as a component nobody joined.
 	{"SettingsRow.kt", "#15 Settings row", "padding-y", "swarm_space_12"},
 	{"SettingsRow.kt", "#15 Settings row", "padding-x", "swarm_space_14"},
+	// Row 9 states its padding TWICE -- once for the composer bar and once for the field -- and
+	// both are `space_8` x `space_14`. This reader takes the first match, which is the bar's, so
+	// the join holds only while the two agree. Recorded because if they ever diverge this would
+	// silently check the bar's padding against the field's component.
+	{"TextField.kt", "#9 Composer", "padding-y", "swarm_space_8"},
+	{"TextField.kt", "#9 Composer", "padding-x", "swarm_space_14"},
 }
 
 // s23DocPadding reads the "padding space_2 x space_6" cell out of a row -- vertical first and

@@ -240,6 +240,9 @@ internal object KitTag {
 
     /** The recessed mono block: a pairing command line, or the terminal peek. */
     const val MONO_WELL = ".sheet2 .cmd"
+
+    /** A single-line input. Named for the part: Substrate draws no composer and no form. */
+    const val TEXT_FIELD = "text field"
 }
 
 /**
