@@ -1118,6 +1118,29 @@ var s24ScreenComponents = map[string]map[string]string{
 		// title, in `Display.NavTitle` -- which is the style `navHeader` renders.
 		"navHeader": "C7 -- the step title, per derivation row 18",
 	},
+	// C2 -- the session detail, and IT WAS UNFENCED UNTIL THIS ROW EXISTED. The file had no entry,
+	// so `s24ScreenComponents[name]` returned an empty requirement and the loop above found nothing
+	// to check: the screen passed because nothing was asked of it, which reads identical to
+	// passing. It is the last screen the inventory names and the one with the most kit in it.
+	//
+	// TWO OF ITS COMPONENTS ARE REUSED RATHER THAN MINTED, which is §2's rule. `monoWell` is C3's
+	// terminal well -- a session's grid and the peek's grid are the same object -- and `activityRow`
+	// is the activity feed's row, already documented as taking a body and an optional emphasis
+	// "rather than a JournalRow" precisely so a third caller like this one costs no second type.
+	//
+	// THE TWO CONTROLS ARE ABSENT FROM THIS LIST AND THAT IS `PairingPanelView`'s ARRANGEMENT.
+	// Stop and Kill reach facade verbs, carry PB-SEC-12 clause 1's touch filter and must survive a
+	// redraw, so `PhoneSurface` builds and owns them and the screen only places them. The composer
+	// is absent for a different reason: derivation row 9's bar has no kit factory at all, and it
+	// ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
+	"dev/swarm/phone/ui/screens/SessionDetailView.kt": {
+		"navHeaderDrill": "C2.1 `.navhead` -- the chevron and the session it names, per §4",
+		"monoWell":       "C2.2 `.term` -- the daemon-rendered grid, reused from C3",
+		"sectionLabel":   "C2.3 `.plabel` -- the heading over the session's own journal",
+		"activityRow":    "C2.3 -- one record, derivation row 14 reused from the activity feed",
+		"sessionList":    "C2.3 `.prows` -- the rows' container, carrying the gap and side padding",
+		"emptyState":     "derivation row 8 -- a heading over no records is a section that lies",
+	},
 	"dev/swarm/phone/ui/screens/PeekPanelView.kt": {
 		"navHeaderDrill": "C3.1 `.navhead` -- the back control and the session title, per §4",
 		"monoWell":       "C3.2 `.term` -- the escape-filtered VT snapshot, in `terminal_peek.fg`",
@@ -1223,6 +1246,60 @@ func TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit(t *testing.T) {
 	if len(faults) > 0 {
 		t.Errorf("PB-DS-6: %d screens are not built out of the kit:\n%s", len(faults),
 			strings.Join(faults, "\n"))
+	}
+}
+
+// TestPBAPP3_TheSessionDetailIsReachedFromTheApp is the composition fence's missing half, for the
+// one screen that had no way in.
+//
+// WHY IT IS NEEDED AND WHY ONLY HERE. Every other assertion in this file asks how a screen is
+// BUILT; none asks whether anything renders it, because the runtime half of that question is
+// `PhoneSurfaceNavigationTest` -- it launches the real Activity, taps a real tab and reads what
+// lands under the bar. That test reaches the machines and activity screens and CANNOT reach this
+// one: the session detail is a drill-down opened by tapping a session ROW, and a row exists only
+// on the branch where the phone core built. The core is a gomobile AAR of .so files cross-compiled
+// for Android ABIs, so `PhoneRuntime.phone()` answers Unavailable on every JVM run and the whole
+// drill-down is out of reach there (the argument in full is
+// android/gate/pbapp6_pbinput2_surface_test.go's). A source scan is what is left, and one fence is
+// better than the none this screen had.
+//
+// WHAT IT ASSERTS IS THE DEFECT PB-DS-6 WAS RECORDED NOT MET OVER, one level up: a component
+// library nothing renders is not a design system, and a SCREEN nothing navigates to is worth
+// exactly as much. `sessionDetailView` landed composed from the kit, covered by eight tests, and
+// reachable by nothing -- which is also the state `navHeaderDrill`'s chevron shipped in
+// (agents-tracker-2yb: "the chevron therefore looks like a control and does not act").
+//
+// WHAT IT CANNOT SEE, stated rather than left to be assumed away: a call site is not
+// REACHABILITY. A `sessionDetailView(...)` inside a function nothing invokes satisfies this, the
+// same limit android/gate/boundverbledger_test.go records about its own name matching. It is
+// scoped to this ONE screen deliberately -- `machinesPanelView` is legitimately unrendered today
+// and its reason is agents-tracker-xtj's to spend, so a blanket fence would need an exemption
+// table, and a table of screens allowed to be unreachable is a place for screens to go and stay.
+//
+// The comparison itself is `s24Spends`, whose negative control is TestPBDS6_AnImportIsNotACallSite
+// -- an import of the screen factory with no call under it must not read as a call site, which is
+// the cheapest possible way to make this finding go away without changing what a user can reach.
+func TestPBAPP3_TheSessionDetailIsReachedFromTheApp(t *testing.T) {
+	const detail = "sessionDetailView"
+
+	var reachedBy []string
+	for name, src := range s24ProductionKotlin(t) {
+		// The screen package is EXCLUDED, and that is the whole assertion. The detail composing
+		// itself, or a sibling screen composing it, says nothing about whether the app the user
+		// opens can get there.
+		if strings.HasPrefix(name, s24ScreenPackage+"/") {
+			continue
+		}
+		if s24Spends(kotlinCodeOnly(src), detail) {
+			reachedBy = append(reachedBy, name)
+		}
+	}
+	if len(reachedBy) == 0 {
+		t.Errorf("PB-APP-3: no production Kotlin outside %s calls `%s`, so inventory C2 is a "+
+			"screen the app cannot navigate to. It is composed from the kit and covered by its "+
+			"own suite, and a user tapping a session row does not arrive at it -- which is the "+
+			"defect PB-DS-6 was recorded NOT MET over ('the kit has ZERO production call sites'), "+
+			"one level up.", s24ScreenPackage, detail)
 	}
 }
 

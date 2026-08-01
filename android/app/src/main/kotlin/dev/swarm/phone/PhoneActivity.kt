@@ -3,6 +3,7 @@ package dev.swarm.phone
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 
 /**
@@ -40,12 +41,39 @@ class PhoneActivity : AppCompatActivity() {
 
     private lateinit var surface: PhoneSurface
 
+    /**
+     * The system back gesture, and the ONE screen state it is allowed to touch.
+     *
+     * WHY IT EXISTS. The session detail is a drill-down reached by tapping a row, and without this
+     * the gesture every Android user reaches for to go back one step would instead leave the app --
+     * from a screen they got to by tapping something, which is the moment back is most expected to
+     * work. It is disabled by default and armed only while a session is open, so on the inbox it
+     * does not exist and the gesture leaves the app exactly as it always has.
+     *
+     * ITS BOUNDARY IS PB-SEC-11 AND IT IS HARD. It may clear LOCAL SCREEN STATE and nothing else:
+     * no facade verb, no key custody, nothing reaching the Go core. This class is exported with a
+     * LAUNCHER filter, so anything on the device can start it -- and a back callback that reached a
+     * verb would be session-acting code on the single most reachable surface this app has.
+     * [PhoneSurface.closeSessionDetail] sets a nullable String and redraws;
+     * android/gate/s18_sec11_exported_test.go scans this file by name for every session verb.
+     */
+    private val backOutOfTheSessionDetail = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            surface.closeSessionDetail()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Nothing is set on the window. ADR-007 B65 withdrew PB-SEC-4: screenshots, screen
         // recording and the recents thumbnail are all allowed, and the gate that used to
         // require the secure-window flag here now requires its absence. See [SecureWindow].
         surface = PhoneSurface(this, (application as SwarmApplication).phoneRuntime)
+        // The surface PUSHES rather than being asked. The drill-down opens when a row is tapped,
+        // which is between resumes -- so a callback armed from onResume would be armed at the one
+        // moment there is nothing to pop and never again.
+        surface.onDrillDownChanged = { open -> backOutOfTheSessionDetail.isEnabled = open }
+        onBackPressedDispatcher.addCallback(this, backOutOfTheSessionDetail)
         setContentView(surface.root)
         insetTheSystemBars()
     }

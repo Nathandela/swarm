@@ -61,12 +61,14 @@ class SessionDetailViewTest {
 
     private fun view(
         panel: SessionDetailPanel = panel(),
+        outcome: String = "",
         onBack: () -> Unit = {},
     ): View = sessionDetailView(
         context = context,
         panel = panel,
         stop = TextView(context).apply { text = panel.stopLabel },
         kill = TextView(context).apply { text = panel.killLabel },
+        outcome = outcome,
         onBack = onBack,
     )
 
@@ -182,5 +184,68 @@ class SessionDetailViewTest {
 
         assertNull(whole.kitFind(DetailTag.STALE))
         assertTrue(textOf(holed.kitFind(DetailTag.STALE)).isNotEmpty())
+    }
+
+    /**
+     * FAILING-FIRST for PB-APP-9 on the two controls this screen is the only home of.
+     *
+     * WHY IT IS THIS SCREEN'S PROBLEM AND NOT THE SURFACE'S. `PhoneSurface` reports every verb's
+     * refusal on one routed line, and that line is a child of the unrecomposed column under the
+     * INBOX -- so the moment the drill-down replaces the list, Stop and Kill are two controls that
+     * reach a machine with nowhere on screen to say what it answered. That is the exact failure the
+     * surface's own words name: "the user presses a control, something refuses, and the screen
+     * looks identical either way".
+     *
+     * IT IS A SLOT FOR THE SAME REASON THE NOTICES ARE ONE, and not a second copy of the line: the
+     * surface holds the routed sentence and hands it in, so the two renderings are never both on
+     * screen and never disagree.
+     */
+    @Test
+    fun `what the machine answered the screen's own controls is on the screen`() {
+        val refused = view(outcome = "Your machine refused that.")
+
+        assertEquals(
+            "PB-APP-9: the session detail renders nothing for what Stop or Kill was answered, so " +
+                "the two controls this screen is the only home of refuse in silence -- the " +
+                "surface's routed line is a child of the inbox column, which is the view this " +
+                "screen replaces",
+            "Your machine refused that.",
+            textOf(refused.kitRequire(DetailTag.OUTCOME)),
+        )
+    }
+
+    @Test
+    fun `a screen whose controls have answered nothing draws no line about it`() {
+        assertNull(
+            "an empty routed line is drawn as a blank notice, which is a report nobody wrote -- " +
+                "the same call the stale and not-sent notices already make",
+            view(outcome = "").kitFind(DetailTag.OUTCOME),
+        )
+    }
+
+    /**
+     * The ON-SCREEN ORDER, which is what [DetailTag.COMPOSITION] records and what nothing read.
+     *
+     * THE OUTCOME SITS WITH THE CONTROLS AND NOT WITH THE NOTICES. Every other notice on this
+     * screen qualifies the CONTENT above which it is drawn -- the stale line qualifies the
+     * transcript, the not-sent line qualifies what was typed -- and this one qualifies the two
+     * controls, so it belongs immediately above them. A routed refusal at the top of a scrolling
+     * transcript is a report the person who pressed the button is not looking at.
+     */
+    @Test
+    fun `the parts are drawn in the order the recorded composition names`() {
+        val root = view(
+            panel = panel(journalStale = true, online = false),
+            outcome = "Your machine refused that.",
+        )
+
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let { if (it in DetailTag.COMPOSITION) order += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+
+        assertEquals(DetailTag.COMPOSITION.toList(), order)
     }
 }

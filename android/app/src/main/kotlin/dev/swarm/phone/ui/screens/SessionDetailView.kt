@@ -25,7 +25,8 @@ import dev.swarm.phone.ui.kit.sessionList
  * WHAT IT COMPOSES: the drill header (§4), the snapshot in the terminal mono well (C3's component,
  * reused here because a session's grid and the peek's grid are the same object), a `sectionLabel`
  * over the session's own journal, an `activityRow` per record -- or row 8's `emptyState` when there
- * are none -- and the two controls the surface owns. It decides nothing about how any of them
+ * are none -- PB-APP-9's routed line for what the machine last answered, and the two controls the
+ * surface owns. It decides nothing about how any of them
  * looks: `android/gate/s24_screens_test.go` fences this package, so an `R.color`, an `R.dimen`, an
  * `R.style`, a `setTextAppearance`, a `setPadding` or a `background =` here fails the build.
  *
@@ -53,12 +54,12 @@ import dev.swarm.phone.ui.kit.sessionList
  * arguments, no result. There is nothing on the wire to build a card out of. Same reason as the
  * chips, recorded beside them so both absences are explained in one place.
  *
- * ## HANDOFF: this screen is composed and is reached by nothing yet
+ * ## How this screen is reached, and how it is left
  *
  * WRITTEN HERE RATHER THAN ONLY IN A MESSAGE, because the reasoning below was ruled on by review
- * and is the expensive part; a comment in the file the next agent opens cannot cross in flight.
- * What remains is the NAVIGATION into and out of this view, and it was designed before it was
- * deferred:
+ * and is the expensive part. It was a HANDOFF while the navigation was outstanding; the navigation
+ * is now in [dev.swarm.phone.PhoneSurface] and [dev.swarm.phone.PhoneActivity], and the paragraphs
+ * stand unchanged as the record of WHY it is shaped that way:
  *
  * **The detail is a SUB-STATE of the Inbox destination, not a fifth one.** `PhoneSurface` gains
  * `detail: String?`; `Destination.INBOX` renders the inbox list when it is null and this view when
@@ -122,6 +123,18 @@ object DetailTag {
     /** Row 8's block, under a heading whose session has no records yet. */
     const val EMPTY = "detail.empty"
 
+    /**
+     * PB-APP-9: what the machine answered the two controls below.
+     *
+     * IT IS ON THIS SCREEN BECAUSE THIS SCREEN REPLACES THE ONE THAT CARRIED IT. `PhoneSurface`
+     * reports every verb's refusal on a single routed line, and that line is a child of the
+     * unrecomposed column under the INBOX -- so a drill-down that pushed over the list would leave
+     * Stop and Kill reaching a machine with nowhere to say what came back, which is the surface's
+     * own recorded failure: "the user presses a control, something refuses, and the screen looks
+     * identical either way".
+     */
+    const val OUTCOME = "detail.outcome"
+
     /** PB-APP-3's persistent Stop, supplied by the surface that owns the verb. */
     const val STOP = "detail.stop"
 
@@ -129,7 +142,8 @@ object DetailTag {
     const val KILL = "detail.kill"
 
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
-    val COMPOSITION: Set<String> = setOf(NAV, STALE, NOT_SENT, SNAPSHOT, SECTION_LABEL, ROW, STOP)
+    val COMPOSITION: Set<String> =
+        setOf(NAV, STALE, NOT_SENT, SNAPSHOT, SECTION_LABEL, ROW, OUTCOME, STOP)
 }
 
 /**
@@ -141,6 +155,10 @@ object DetailTag {
  *  the one control that tells them what to do next.
  * @param kill the escalation. The confirmation is the surface's, because it is a dialog rather than
  *  a part of this composition.
+ * @param outcome PB-APP-9's routed sentence for whatever [stop] or [kill] last asked the machine,
+ *  empty when they have asked nothing or the answer was yes. It is a STRING and not a slot for the
+ *  reason the notices are strings: the surface holds the one routed line the whole app reports on,
+ *  and handing the VIEW in would take it out of the column it belongs to and never give it back.
  * @param onBack where §4's chevron goes: back to the list this session was opened from.
  */
 fun sessionDetailView(
@@ -148,6 +166,7 @@ fun sessionDetailView(
     panel: SessionDetailPanel,
     stop: View,
     kill: View,
+    outcome: String,
     onBack: () -> Unit,
 ): View {
     val column = LinearLayout(context).apply {
@@ -210,6 +229,13 @@ fun sessionDetailView(
             },
         )
     }
+
+    // IT SITS WITH THE CONTROLS RATHER THAN WITH THE OTHER NOTICES, and the placement is the same
+    // rule they follow: a notice goes above what it qualifies. The stale line qualifies the
+    // transcript and the not-sent line qualifies what was typed; this one qualifies the two
+    // controls, and a refusal drawn at the top of a scrolling transcript is a report the person who
+    // pressed the button is no longer looking at.
+    if (outcome.isNotEmpty()) column.addView(notice(context, outcome, DetailTag.OUTCOME))
 
     column.addView(stop.tagged(DetailTag.STOP))
     column.addView(kill.tagged(DetailTag.KILL))

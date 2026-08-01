@@ -9,6 +9,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import dev.swarm.phone.runtime.ConnectivityPolicy
 import dev.swarm.phone.runtime.LifecycleConvergence
@@ -21,6 +22,8 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
+import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.ctaButton
@@ -37,11 +40,14 @@ import dev.swarm.phone.ui.screens.LaunchPanelScreen
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PeekPanel
 import dev.swarm.phone.ui.screens.PeekPanelScreen
+import dev.swarm.phone.ui.screens.SessionDetailPanel
+import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
+import dev.swarm.phone.ui.screens.sessionDetailView
 import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
@@ -163,14 +169,45 @@ class PhoneSurface(
      * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
      * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
      */
-    private val takeControl = ctaAction("Take control", CtaKind.MORE) { app, session ->
-        app.takeControl(session).also { issued ->
-            leaseOp = issued.operationID
-            leaseSession = session
+    private val takeControl = ctaAction("Take control", CtaKind.MORE, verb = ::takeControlOf)
+
+    /**
+     * PB-APP-3's persistent Stop, and the one control on this surface whose PRESS DOES TWO
+     * DIFFERENT THINGS -- because [SessionDetail.stop] says so, not because this file chose it.
+     * Without a lease the model refuses the keystroke and offers the step that would make it work,
+     * which is take_control; with one it asks first and then interrupts.
+     *
+     * IT INTERRUPTS THROUGH `App.Interrupt` AND NOT THROUGH `sendInput(0x03)`, which is the same
+     * decision one hop down: `mobile/commands.go` sends the interrupt byte itself and returns an Op
+     * naming the action, so a phone that wrote the byte here would be a second implementation of
+     * an interrupt and would leave the bound verb unreachable. [SessionDetail.interruptBytes] is
+     * the phone-side statement of the constant and is consumed by its own unit test, not by this.
+     */
+    private val stop = actionButton(SLOT_LABEL, ask = ::stopQuestion) { app, session ->
+        when (detailDrawn?.confirmedStopAction) {
+            StopAction.SEND_INTERRUPT -> app.interrupt(session)
+            StopAction.ACQUIRE_LEASE_FIRST -> takeControlOf(app, session)
+            // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
+            // D7). Nothing is sent and nothing is said HERE, because the screen already says it --
+            // `SessionDetail.notSentNotice` is on it for exactly this state.
+            else -> null
         }
     }
 
-    private val kill = actionButton("Kill session") { app, session ->
+    /**
+     * The escalation, and it is the SAME BUTTON that used to sit loose under the inbox.
+     *
+     * WHAT CHANGED IS THAT IT ASKS. `SessionDetail.killRequiresConfirmation` has been `true` since
+     * S16 and reached nothing: a control that ends a session outright was one tap away for anyone
+     * holding the phone. [SessionDetailPanel.killConfirmation] is the question, and it states the
+     * CONSEQUENCE rather than the action precisely so it does not read like Stop's -- a
+     * confirmation that read the same for both would train the user to dismiss the one that
+     * matters.
+     */
+    private val kill = actionButton(
+        SLOT_LABEL,
+        ask = { detailDrawn?.killConfirmation.orEmpty() },
+    ) { app, session ->
         app.kill(session)
     }
 
@@ -283,8 +320,68 @@ class PhoneSurface(
     /** The machine the scope bar has been narrowed to, or null for all of them. */
     private var scope: String? = null
 
+    /**
+     * The session whose DETAIL is open, or null while the Inbox tab is showing its list.
+     *
+     * IT IS A SUB-STATE OF [Destination.INBOX] AND NOT A FIFTH DESTINATION, which is structural
+     * rather than aesthetic: the bar draws exactly four tabs from the labels `TriageInboxScreen`
+     * records and `Destination.forLabel` THROWS on a label it cannot place, so a fifth value would
+     * be a destination the bar cannot express and the lookup cannot produce. It also keeps the
+     * Inbox tab reading as selected while you are inside it, which is where you are.
+     *
+     * SWITCHING TABS PRESERVES IT. A user who checks the activity feed mid-session should come back
+     * to the session they were in, and the drill-down is state inside the Inbox tab rather than a
+     * place they left.
+     *
+     * The setter is what the SYSTEM BACK GESTURE hangs off -- see [onDrillDownChanged].
+     */
+    private var detail: String? = null
+        set(value) {
+            field = value
+            onDrillDownChanged(value != null)
+        }
+
+    /**
+     * Told whether the drill-down is open, so [PhoneActivity] can arm the system back gesture
+     * against it and disarm it again.
+     *
+     * IT PUSHES AND IS NOT POLLED. The Activity draws on resume and nothing else; the drill-down
+     * opens when a row is tapped, which is between resumes -- so an Activity that read this state
+     * would arm its callback at the one moment it is never needed and never again.
+     *
+     * WHAT CROSSES IS A BOOLEAN ABOUT LOCAL SCREEN STATE AND NOTHING ELSE, which is PB-SEC-11 and
+     * not style: [PhoneActivity] is exported with a LAUNCHER filter, so a back callback that could
+     * reach a verb would put session-acting code on the one surface any app on the device can
+     * start.
+     */
+    internal var onDrillDownChanged: (Boolean) -> Unit = {}
+
     /** What the inbox last drew, so a redraw that changes nothing rebuilds nothing. */
     private var inboxDrawn: InboxScreen? = null
+
+    /**
+     * What the drill-down last drew, and null while the Inbox tab is showing its list.
+     *
+     * IT ANSWERS TWO QUESTIONS AND BOTH ARE LOAD-BEARING. The first is [inboxDrawn]'s: a panel
+     * that has not changed is not rebuilt, so a session printing steadily does not throw its own
+     * transcript back to the top. The second is which of the two things the Inbox destination can
+     * show is currently on screen -- without it, backing out to a list whose DATA is unchanged
+     * would take the early return in [drawInbox] and leave the detail up.
+     *
+     * The two controls read it as well, because what Stop does and what Kill asks are the panel's
+     * and belong to the panel the user is actually looking at.
+     */
+    private var detailDrawn: SessionDetailPanel? = null
+
+    /**
+     * The routed line the drill-down last drew, which is NOT derivable from [detailDrawn].
+     *
+     * A REFUSAL CHANGES NOTHING ABOUT THE SESSION. Press Stop, have the machine refuse it, and the
+     * journal, the grid, the lease and every sentence on the panel are exactly what they were --
+     * so a redraw guarded on the panel alone takes its early return and the answer never reaches
+     * the screen, which is the silence [drawDetail] hands the line in to prevent.
+     */
+    private var detailOutcomeDrawn: String = ""
 
     /**
      * Which of inventory C1.4's four destinations is on screen.
@@ -382,11 +479,21 @@ class PhoneSurface(
      * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
      * [launchHost] are composed panels rather than loose views; the pairing panel composes itself.
      * What is genuinely unrecomposed is the status line, the capability notice, the outcome line,
-     * and the four SESSION CONTROLS -- the keyboard, Send, Kill session and the routed-error line.
-     * Those four are inventory C2's composer (derivation row 9's bar, its 26 dp glyphs and its stop
-     * control) and C2 is not built: the session-detail screen, its transcript, its tool cards and
-     * its quick-reply chips have no factory and no model. A field and two buttons standing in for
-     * that bar are the remainder, and they are here rather than pretending to be a screen.
+     * and the KEYBOARD -- the field and Send.
+     *
+     * KILL SESSION HAS LEFT IT, and inventory C2 is where it went. It was a loose button acting on
+     * whichever session the surface happened to be targeting, one tap from ending it; it is now the
+     * session detail's escalation, behind [SessionDetailPanel.killConfirmation], on the screen that
+     * names the session it ends. PB-APP-3's Stop is beside it and is new.
+     *
+     * WHAT IS LEFT IS THE COMPOSER AND ONLY THE COMPOSER. The field and Send are derivation row 9's
+     * bar -- its 26 dp glyphs, its recessed field and its stop control -- and that component does
+     * not exist. It ships WITH PB-INPUT-1's undelivered-input ledger or not at all
+     * (agents-tracker-hxv): the ledger is what stops an input path losing keystrokes with nothing
+     * on screen saying so, so a composer delivered without it reintroduces exactly the defect the
+     * ledger exists to prevent. Until then a field and a button stand in for it here, rather than a
+     * composer-shaped affordance drawn on the detail screen promising an input path that is not
+     * wired.
      *
      * THE SETTINGS PANEL HAS LEFT IT, and that is the tab bar becoming a control. C6 is a
      * DESTINATION -- inventory C1.4's fourth tab -- and it was hosted here, halfway down a column
@@ -402,7 +509,7 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
             status, notice, pairing.root, peekHost,
-            typed, send, kill, launchHost, revoke, outcome,
+            typed, send, launchHost, revoke, outcome,
         )) {
             addView(child)
         }
@@ -452,7 +559,7 @@ class PhoneSurface(
      * being remembered about.
      */
     val touchFilteredActions: List<View> =
-        listOf(takeControl, send, kill, launch, revoke) +
+        listOf(takeControl, send, stop, kill, launch, revoke) +
             pairing.touchFilteredActions + settings.touchFilteredActions
 
     /**
@@ -626,6 +733,10 @@ class PhoneSurface(
 
         notice.text = ""
         session = ""
+        // AND NO DRILL-DOWN. The detail is read from the phone core, so a handset whose core
+        // refused has nothing to fill one with -- and leaving it open would leave the back gesture
+        // armed against a screen that is not there.
+        detail = null
         setActionsEnabled(false)
         // NO PANEL RATHER THAN AN EMPTY ONE. A peek with no session is not a peek showing nothing
         // -- there is no session to hold a lease on, so the screen says nothing about a lease
@@ -693,7 +804,13 @@ class PhoneSurface(
         // rendered and tappable, so the session the controls act on is the one somebody chose,
         // falling back to the first row in triage order while nobody has: an unchosen target has
         // to be something, and TriageInbox already decided what a user must act on first.
-        session = targetOf(inbox)
+        // THE DRILL-DOWN WINS WHEN IT IS OPEN, and that is not a preference. [targetOf] falls back
+        // to the first row in triage order when the chosen one is no longer on screen -- which is
+        // right for a list and catastrophic for a detail: Stop would interrupt whichever session
+        // happens to be first while the user is reading a different one, the proximity error
+        // PB-SYNC-2 exists to forbid. While a session is open, it IS the target, and [watch] below
+        // follows it so the grid on screen is that session's.
+        session = detail ?: targetOf(inbox)
 
         // Before the peek is read, and on the empty branch too: a session that has gone away
         // still leaves a watch open on the machine.
@@ -784,7 +901,10 @@ class PhoneSurface(
      */
     private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
         when (destination) {
-            Destination.INBOX -> drawInbox(inbox)
+            Destination.INBOX -> when (val open = detailPanel(bridge)) {
+                null -> drawInbox(inbox)
+                else -> drawDetail(open)
+            }
             Destination.MACHINES -> drawMachines()
             Destination.ACTIVITY -> drawActivity(bridge)
             Destination.SETTINGS -> drawSettings()
@@ -805,8 +925,12 @@ class PhoneSurface(
      *  get such a handset out of that state.
      */
     private fun drawInbox(screen: InboxScreen?) {
-        if (screen == inboxDrawn && contentShows == Destination.INBOX) return
+        // `detailDrawn == null` IS THE THIRD CLAUSE AND IT IS NOT AN OPTIMISATION EITHER. Backing
+        // out of a session lands here with the list's data unchanged, so without it the early
+        // return fires and the drill-down stays on screen over a tab that thinks it popped.
+        if (screen == inboxDrawn && detailDrawn == null && contentShows == Destination.INBOX) return
         inboxDrawn = screen
+        detailDrawn = null
         hostContent(
             when (screen) {
                 null -> unrecomposedControls
@@ -818,6 +942,80 @@ class PhoneSurface(
                     below = unrecomposedControls,
                 )
             },
+        )
+    }
+
+    /**
+     * PB-APP-3's session detail, as the model of it, or null when no session is drilled into.
+     *
+     * IT READS THE SAME TWO FACADE CALLS THE REST OF THE SCREEN ALREADY MAKES, which is why
+     * opening a session costs no new traffic: the journal page is the whole retained log
+     * [drawActivity] already reads, narrowed here to one session by `JournalRow.sessionId`, and the
+     * grid is the peek [renderReady] already reads for the watched session.
+     *
+     * THE SNAPSHOT MAY BE EMPTY ON THE FIRST DRAW AND THAT IS HONEST. `App.Peek` is a cache the
+     * MACHINE fills, and only for a session this phone has WATCHED -- [watch] follows [detail] one
+     * line below this in [renderReady], so the frame arrives on a later event.
+     * [SessionDetailPanel.hasSnapshot] draws no card at all until it does, which says "we have not
+     * heard from this session" rather than "this session's screen is blank".
+     *
+     * @param bridge null on the branch where the phone core refused, where there is no detail to
+     *  read. [renderUnavailable] closes the drill-down on that branch rather than leaving a user
+     *  inside a screen nothing can fill.
+     */
+    private fun detailPanel(bridge: FacadeBridge?): SessionDetailPanel? {
+        val open = detail ?: return null
+        if (bridge == null) return null
+        val lease = leaseConfirmedFor(open, bridge)
+        val grid = bridge.terminalPeek(open, leaseHeld = lease)
+        val log = bridge.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        return SessionDetailScreen.of(
+            SessionDetail(
+                sessionId = open,
+                journal = log.rows.filter { it.sessionId == open },
+                snapshotText = grid.text,
+                leaseHeld = lease,
+                // ONLINE IS THE PEEK'S AND NOT A SECOND OPINION. `TerminalPeek.online` is the
+                // transport fact `FacadeBridge` already derived, and it is the clause that decides
+                // whether a confirmed Stop is sent or discarded.
+                online = grid.online,
+                journalStale = log.stale,
+            ),
+        )
+    }
+
+    /**
+     * Draw the drill-down, redrawn only when the panel has changed under it -- [drawInbox]'s
+     * reason, and sharper here: the transcript grows while the user is reading it.
+     *
+     * THE LABELS ARE THE PANEL'S AND ARE WRITTEN NOWHERE ELSE. The two controls are built with no
+     * words on them at all (see [SLOT_LABEL]); what Stop reads changes with the lease, and a second
+     * copy of either sentence in this file is the defect PB-DS-9's "copy belongs to the screen"
+     * exists to prevent.
+     */
+    private fun drawDetail(panel: SessionDetailPanel) {
+        val routed = outcome.text.toString()
+        if (panel == detailDrawn && routed == detailOutcomeDrawn &&
+            contentShows == Destination.INBOX
+        ) {
+            return
+        }
+        detailDrawn = panel
+        detailOutcomeDrawn = routed
+        stop.text = panel.stopLabel
+        kill.text = panel.killLabel
+        hostContent(
+            sessionDetailView(
+                context = activity,
+                panel = panel,
+                stop = stop,
+                kill = kill,
+                // PB-APP-9's routed line, which is a child of the column this screen replaces. It
+                // is handed in rather than left behind, because Stop and Kill reach a machine from
+                // here and a refusal with nowhere to land is a control that fails silently.
+                outcome = routed,
+                onBack = ::closeSessionDetail,
+            ),
         )
     }
 
@@ -922,8 +1120,29 @@ class PhoneSurface(
         return (rows.firstOrNull { it.selected } ?: rows.firstOrNull())?.id.orEmpty()
     }
 
+    /**
+     * Open a session, which is what tapping a row now MEANS.
+     *
+     * IT USED TO ONLY RETARGET THE COLUMN BELOW. A tap set [chosen] and the loose controls started
+     * acting on a different session, several screens further down, with nothing between the row and
+     * them saying so -- a selection the user could not see they had made. It is a destination now,
+     * and inventory C2 is what is on the other side of it.
+     */
     private fun selectSession(id: String) {
         chosen = id
+        detail = id
+        render()
+    }
+
+    /**
+     * Leave the drill-down: §4's chevron, and the system back gesture through [PhoneActivity].
+     *
+     * It clears LOCAL SCREEN STATE and nothing else, which is the boundary PB-SEC-11 draws around
+     * the exported component that reaches it. [chosen] deliberately survives, so the row the user
+     * came back from is still the selected one on the list they came back to.
+     */
+    internal fun closeSessionDetail() {
+        detail = null
         render()
     }
 
@@ -940,9 +1159,18 @@ class PhoneSurface(
      *
      * IT KEEPS THE SESSION AND THE SCOPE. Navigating away from the inbox and back is not a change
      * of mind about which session the controls act on, and dropping the choice would make the tab
-     * bar clear a selection the user still has on screen when they return.
+     * bar clear a selection the user still has on screen when they return. The DRILL-DOWN is kept
+     * for the same reason: a user who checks the activity feed mid-session comes back to it.
+     *
+     * TAPPING THE TAB YOU ARE ALREADY ON POPS IT, AND THE DESIGN IS SILENT ON THAT. It is the
+     * platform convention, adopted deliberately rather than derived: a tab that does nothing when
+     * tapped reads as dead, and it is the only way back for a user who does not use the gesture and
+     * has scrolled the chevron off the top. It is navigation behaviour rather than a fact about the
+     * machine, which is the line the "never render what the wire does not carry" rule actually
+     * draws.
      */
     private fun selectDestination(next: Destination) {
+        if (next == destination) detail = null
         destination = next
         render()
     }
@@ -1028,6 +1256,35 @@ class PhoneSurface(
     }
 
     /**
+     * Ask for the lease, and REMEMBER THE OPERATION, which is what makes PB-INPUT-2's lease a fact
+     * rather than a literal. The lease is not on any snapshot: it is the outcome of THIS
+     * take_control, claimed by operation id, and [leaseConfirmedFor] is what asks the machine
+     * about it.
+     *
+     * IT IS A FUNCTION AND NOT A LAMBDA ON ONE BUTTON because the peek's `[Take control]` is no
+     * longer the only way in: the session detail's Stop offers the same step to an observer, in the
+     * words [SessionDetailPanel.stopLabel] chooses, and a second copy of these three lines is a
+     * second place for the operation id to be forgotten.
+     */
+    private fun takeControlOf(app: App, session: String) =
+        app.takeControl(session).also { issued ->
+            leaseOp = issued.operationID
+            leaseSession = session
+        }
+
+    /**
+     * What Stop asks before it acts, which is nothing at all for an observer.
+     *
+     * [SessionDetail.stop] resolves to CONFIRM only once the lease is held; without one the press
+     * is the take_control the label offers, and a confirmation over "shall I take control" would
+     * be a question about a step the user just chose by reading the button.
+     */
+    private fun stopQuestion(): String = detailDrawn
+        ?.takeIf { it.stopAction == StopAction.CONFIRM }
+        ?.stopConfirmation
+        .orEmpty()
+
+    /**
      * Whether the MACHINE has confirmed a control lease for [session].
      *
      * IT ASKS ABOUT ONE OPERATION -- the take_control this surface issued -- and refuses to
@@ -1105,6 +1362,10 @@ class PhoneSurface(
         // dropPushToken persists before it speaks to the relay, so an offline revoke still
         // deletes the token that would otherwise let a machine wake a disowned handset.
         takeControl.isEnabled = enabled
+        // The session detail's two, which cannot in fact be on screen while this is false -- an
+        // open drill-down IS the target, so the roster cannot be empty under one. They are here
+        // because they act on the chosen session, which is what this function is about.
+        stop.isEnabled = enabled
         kill.isEnabled = enabled
     }
 
@@ -1126,16 +1387,48 @@ class PhoneSurface(
      * The verb's outcome goes on screen. An action that reports nothing is the failure PB-APP-9
      * exists to prevent: the user presses a control, something refuses, and the screen looks
      * identical either way.
+     *
+     * @param ask what to ASK before the verb runs, or the empty string for a control that acts on
+     *  the press. The question is a function rather than a string because the two controls that use
+     *  one are the session detail's, and what they ask is the panel on screen's.
      */
     private fun actionButton(
         text: String,
+        ask: () -> String = { "" },
         verb: (App, String) -> Any?,
     ): Button = SecureWindow.gate(
         Button(activity).apply {
             this.text = text
-            setOnClickListener { invoke(verb) }
+            setOnClickListener { confirmThenInvoke(ask(), verb) }
         },
     )
+
+    /**
+     * Put the question the screen wrote in front of the user, and act only if they answer it.
+     *
+     * IT IS A DIALOG AND NOT A PART OF ANY COMPOSITION, which is `sessionDetailView`'s own ruling:
+     * a confirmation is a second window over the screen rather than a row inside it, so it is built
+     * here and the screen never learns it happened.
+     *
+     * THE TWO BUTTON WORDS ARE THE PLATFORM'S AND THE QUESTION IS THE SCREEN'S. PB-DS-9 assigns
+     * copy to the screen and [SessionDetailPanel] writes both questions; `ok` and `cancel` are
+     * Android's own localised strings, so answering yes reads in the user's language rather than in
+     * a third copy of "Confirm" typed at this call site.
+     *
+     * WHAT IT DOES NOT CARRY IS PB-SEC-12 CLAUSE 1, and that is a limit rather than an oversight.
+     * The tap that OPENS the dialog is filtered; the dialog's own buttons live in a window this
+     * surface does not own and `filterTouchesWhenObscured` is a property of a View in it. What the
+     * confirmation buys against an overlay is different and still real: a tap the user could not
+     * see now has to be followed by a second one on a window that was not there before.
+     */
+    private fun confirmThenInvoke(question: String, verb: (App, String) -> Any?) {
+        if (question.isEmpty()) return invoke(verb)
+        AlertDialog.Builder(activity)
+            .setMessage(question)
+            .setPositiveButton(android.R.string.ok) { _, _ -> invoke(verb) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
     /**
      * The same control, as the design draws one.
@@ -1245,5 +1538,16 @@ class PhoneSurface(
          */
         const val JOURNAL_FROM_THE_START = 0L
         const val WHOLE_JOURNAL = 0L
+
+        /**
+         * What a control built as a SLOT is labelled before the screen that places it has said.
+         *
+         * The session detail's Stop and Kill are built once and live for the process, and both read
+         * as their panel says: Stop's wording differs for an observer -- [SessionDetailPanel] picks
+         * between two sentences on the lease -- and typing either of them here would be a second
+         * copy of a screen's copy, which is what PB-DS-9 assigns to the screen. Neither control is
+         * ever on screen without a panel to fill it, so the blank is never read by anybody.
+         */
+        const val SLOT_LABEL = ""
     }
 }

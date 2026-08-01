@@ -45,7 +45,6 @@
 #symbol	reason
 App.ClearUndeliveredInputs	PB-INPUT-1's undelivered-input ledger has no screen. The acknowledgement half cannot be wired before the list it acknowledges, and neither exists on the minimal surface. Pairs with App.UndeliveredInputs.
 App.UndeliveredInputs	PB-INPUT-1's "and that the UX state appears": input is live-only, so nothing is ever retried and the user must be TOLD what did not reach the machine. The surface has a keyboard and no place to show the backlog. A real product gap, not a retired verb.
-App.Interrupt	PB-APP-3's persistent Stop. The surface has Take control, Send line and Kill, and no Stop control; SessionDetail.confirmStop is the model that would drive it and has no screen either. The escalation to Kill is wired, the SIGINT step is not.
 App.Paste	PB-INPUT-6's atomic paste -- a clipboard paste or an IME COMMIT as ONE event rather than a keystroke stream. The keyboard is an EditText plus Send line, which is the coalesced keystroke path; nothing on the surface offers a paste action.
 App.Resize	Nothing on this surface can change the terminal geometry: the peek is a monospace TextView showing the daemon-rendered grid byte for byte, with no cols/rows the user chooses. Legitimately unbound until a screen owns a viewport.
 App.IsRunning	Legitimately unbound: it is a redundant read. App.Start is idempotent and PhoneSurface.converge decides from LifecycleConvergence plus App.StateSummary, so asking whether the app is running would be a second source for a fact the plan already settles.

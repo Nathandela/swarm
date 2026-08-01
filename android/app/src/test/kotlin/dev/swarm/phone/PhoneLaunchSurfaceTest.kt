@@ -244,25 +244,30 @@ class PhoneLaunchSurfaceTest {
         /**
          * The number of pressable controls the surface carries WITH NO PANEL OPEN.
          *
-         * It is 4 -- "send line", "kill session", "launch a session", "revoke this device" -- and
-         * it was 5 until the terminal peek became a composed panel. "Take control" was a loose
-         * `actionButton` attached to the surface for the whole life of the process; it now lives
-         * inside `peekPanelView`, which `peekHost` holds only while there is a peek to control.
-         * That is the product being corrected, not the scan breaking: offering "Take control" to
-         * someone who is not looking at a terminal was the old behaviour and it was wrong.
+         * It is 3 -- "send line", "launch a session", "revoke this device" -- and the file's
+         * standing rule is that this number never moves without NAMING the control that moved and
+         * saying where it went. Twice now:
          *
-         * LOWERED DELIBERATELY AND NOT TO MAKE A RED TEST GREEN. The distinction the floor exists
-         * to draw is between "the surface shrank" and "the walk stopped reading the window", and
-         * on the run that failed here the walk was reading perfectly -- it named all four controls,
-         * and every label assertion in this file passed. What was stale was this number and the
-         * sentence beside it, which claimed "nine or so" and was written before the screens were
-         * composed at all.
+         *  - 5 -> 4: **Take control** left, into `peekPanelView`, which `peekHost` holds only while
+         *    there is a peek to control. Offering it to someone who is not looking at a terminal
+         *    was the old behaviour and it was wrong.
+         *  - 4 -> 3: **Kill session** left, into `sessionDetailView`, which the Inbox destination
+         *    holds only while a session is drilled into. It was a loose button ending whichever
+         *    session the surface happened to be targeting, one tap away, with the model's
+         *    `killRequiresConfirmation` reaching nothing; it is now on the screen that names the
+         *    session it ends, behind that confirmation. PB-APP-3's **Stop** landed beside it and
+         *    does NOT raise this number, because it is on the same screen and is never loose.
          *
-         * The floor now has no headroom, which is the honest cost of counting: the next control
-         * that legitimately moves into a panel fails this test too. That is preferable to raising
-         * a ceiling nobody can justify -- and the label assertions above, not this count, are what
+         * BOTH MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
+         * floor exists to draw is between "the surface shrank" and "the walk stopped reading the
+         * window", and on each run that failed here the walk was reading perfectly -- it named
+         * every control it found, and every label assertion in this file passed.
+         *
+         * The floor has no headroom, which is the honest cost of counting: the next control that
+         * legitimately moves into a panel fails this test too. That is preferable to raising a
+         * ceiling nobody can justify -- and the label assertions above, not this count, are what
          * actually pin the launch screen.
          */
-        const val CONTROL_FLOOR = 4
+        const val CONTROL_FLOOR = 3
     }
 }
