@@ -797,6 +797,7 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 		ID:      cs.SessionID,
 		Title:   title,
 		Group:   string(cs.Group),
+		Agent:   cs.Agent,
 		Need:    need,
 		Present: cs.Present,
 	}

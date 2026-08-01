@@ -8266,3 +8266,101 @@ requirement fenced*, which is a different question from *is every file readable*
 Token names inside `res/` comments are now spelled `[p-name]`. The convention is stated in
 `swarm_nav_back.xml`'s own comment rather than only here, because the next person to write a
 drawable will be reading a drawable.
+
+## B139. The session agent crosses the wire: one field, two producers, and a schema version that did not move (2026-08-01)
+
+The Substrate session row has always drawn the agent name. `docs/research/remote-control-design-directions.html`
+— the origin artifact for the whole skin — renders it on **every** session row: lines 241, 248 and
+253 carry `<span class="ag">claude</span>` and line 261 `<span class="ag">codex</span>`. The design
+system gave it a dedicated type style, `Mono.Agent` 10/600
+(`docs/design/substrate-components.md:329`). The product could not compute it. This entry records
+closing that, and it is the fourth instance of the B135 class — the design draws something the
+product cannot produce — resolved in the other direction, by building the missing value rather than
+deleting the drawn element.
+
+### Where the chain was broken
+
+Every session row the phone renders is folded from journal records, and the agent was absent from
+all five hops: `internal/journal.Record`, the daemon's two record constructors, `toWireJournalRecord`,
+`schema.JournalRecord`, and `phonecore.CachedSession`. The daemon knew the answer the whole time —
+`persist.Meta.AgentType` sits in the same variable each constructor reads `SessionID` out of — and
+nothing read it. `mobile/agentseam_test.go` had stood as a deliberate TDD red over exactly this
+since `f99aaf4`, which is the only reason the gap was a tracked defect rather than a missing feature
+nobody had noticed.
+
+### What changed
+
+`journal.Record` gains `Agent string`. Both daemon constructors in `journal.go` populate it from
+`persist.Meta.AgentType`: `rosterSnapshotLocked`'s roster literal, and **all four** branches of
+`journalRecordFor` (launched, exited, lost, group_transition). The one other session-bearing
+record, `deleted` (`lifecycle.go`), deliberately carries none: it removes the session from the
+phone's model, and an agent name on a tombstone would describe nothing.
+`toWireJournalRecord` copies it to
+`schema.JournalRecord`, `SessionCache.applyLocked` folds it into `CachedSession` under Group's rule,
+and `swarmmobile.Session` exposes it.
+
+Two things are deliberate. **The value is `persist.Meta.AgentType` verbatim, never derived.** The
+phone has no other source: `schema.SessionView` carries an agent but backs the local `swarm status`
+view and is never imported by `phonecore`, and `LaunchSpec.Agent` is outbound intent, not a running
+session's identity. Anything computed on-device would be a guess wearing a fact's clothes, which is
+the same failure mode as deriving a status Group on the phone (R-PHC.3 forbids that for the same
+reason). **An empty agent means no agent.** The field is `omitempty` at every hop and the fold
+guard is `if rec.Agent != ""`, matching Group's, because most record types do not carry one and an
+unguarded assignment would blank a known agent every time a session merely changed state.
+
+All four branches of `journalRecordFor` are covered by their own assertions
+(`internal/daemon/agentrecord_test.go`) rather than by whichever branch a broader test happens to
+fire. The type change alone makes every reflection-based guard in the chain go green whether or not
+either constructor ever writes the field — precisely the shape `android/gate/boundverbledger_test.go`
+catalogues six shipped instances of — so the constructors are pinned separately.
+
+### The durable-format question, answered rather than assumed
+
+`journal.Record` is not only a wire shape: it is the daemon's own on-disk journal, one JSON line per
+record, carrying a `SchemaVersion` whose purpose is to make a field-set change fail loudly (R-JRN.1).
+So this is a format change and owed three answers, each now pinned by a test in
+`internal/journal/agentfield_test.go` rather than asserted here.
+
+**Does this build read pre-Agent records?** Yes. An absent key decodes to `""`, which is exactly the
+seam's meaning for "this record carries no agent". Pinned against a literal pre-Agent journal line,
+not against something this build re-encoded.
+
+**Does a build predating the field read records carrying one?** Yes. `encoding/json` ignores the
+unknown key. Pinned by decoding into the `Record` shape that build had.
+
+**Does `SchemaVersion` bump?** **No, and bumping would be strictly worse.** `DecodeRecord` rejects
+any record whose `schema_version` exceeds the build's own, so a bump would make every pre-bump daemon
+refuse every post-bump record outright — the entire journal, not just the agent — to gain nothing
+over what the two answers above already give for free. The constant stays at 1, and
+`TestAgentAdditionDidNotBumpTheSchema` fails on purpose if a later change moves it, so that decision
+has to be taken deliberately instead of riding along with a field addition. `omitempty` also keeps
+the agentless on-disk form byte-identical, so installed journal segments are unchanged by the
+upgrade.
+
+### What the relay can see, stated at its real strength
+
+**Nothing new in plaintext.** The first draft of this entry claimed the agent name was new
+plaintext-in-the-envelope surface. That was wrong and is corrected here rather than quietly dropped.
+`RelaySink.forwardLocked` marshals the whole `JournalRecord` and seals that single blob with
+`crypto.SealMailbox` — XChaCha20-Poly1305 under the epoch content key, envelope header as AAD — so
+`Agent` sits inside the same ciphertext as `Cursor`/`SessionID`/`Type`/`Group`, under the same key,
+covered by the same authentication tag, ordered by the same per-bucket seq replay guard. The source
+says so in both directions: `internal/remotegw/relaysink.go:66` ("so the relay sees only ciphertext")
+and `internal/remotegw/relaysink_test.go:6` ("The relay never sees plaintext"). At rest on the phone
+it lands in `purgeableContainer` via `CachedSession`, so it is sealed with the other decrypted caches
+and dropped by PB-KEY-7's purge along with them.
+
+What is true, and worth exactly one sentence: the sealed envelope grows by the length of the agent
+string on every session-bearing record, and envelope **length** is metadata the untrusted relay can
+observe. Agent names come from a small closed set, so this is a weak signal rather than a disclosure,
+and it is the same class of leak the existing fields already carry.
+
+### What this does not do
+
+The Kotlin side does not consume `Session.Agent` yet, so the `.ag` span still does not render. No
+gate demands it: `android/gate/boundverbledger_test.go` scans exported *methods* and excludes bound
+struct fields by name, and `mobile/facadesource_test.go`'s `entryPoints` filters to func/method, so a
+bound field needs no Kotlin caller. The work is tracked as `agents-tracker-7tc` and sequenced
+separately because the Gradle lane is single-occupancy. Until it lands, this is a value that arrives
+correctly and is not yet drawn — which is the honest half of the B135 class, and the opposite of
+drawing something that cannot arrive.

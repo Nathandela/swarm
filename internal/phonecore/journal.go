@@ -86,16 +86,22 @@ func (r *JournalReceiver) SeedHighWater(sender [8]byte, epoch uint32, seq uint64
 	r.recv.SeedHighWater(sender, epoch, seq)
 }
 
-// CachedSession is the phone's view of one session. Group is verbatim from the wire.
+// CachedSession is the phone's view of one session. Group and Agent are verbatim from
+// the wire.
 type CachedSession struct {
 	SessionID string
 	Group     status.Group
-	Present   bool
+	// Agent is the session's agent identity as the machine reported it. The phone never
+	// derives it: a session whose records carry no agent has none, and the empty string
+	// is that absence rather than an agent.
+	Agent   string
+	Present bool
 }
 
 // SessionCache is the phone's merged session model (R-PHC.3), keyed by namespaced
-// session id. Group is applied VERBATIM from each record (roster snapshots and
-// group_transition events carry it); the phone never derives a Group on-device.
+// session id. Group and Agent are applied VERBATIM from each record (roster snapshots and
+// group_transition events carry the Group; the roster carries the Agent); the phone never
+// derives either on-device.
 type SessionCache struct {
 	mu       sync.Mutex
 	sessions map[string]CachedSession
@@ -108,8 +114,8 @@ func NewSessionCache() *SessionCache {
 }
 
 // Apply folds one journal record into the cache and reports whether it mutated. A record
-// with a SessionID ensures the session exists (present); a non-empty Group updates it
-// verbatim; a deleted record removes it. The cursor advances to the highest applied
+// with a SessionID ensures the session exists (present); a non-empty Group or Agent updates
+// it verbatim; a deleted record removes it. The cursor advances to the highest applied
 // record cursor. A record whose Cursor is STRICTLY LESS than the highest applied cursor
 // is a stale replay/reorder (defense in depth behind the JournalReceiver seq guard): it
 // mutates nothing and returns false. An equal cursor still applies -- a roster snapshot
@@ -143,6 +149,9 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	cs.Present = true
 	if rec.Group != "" {
 		cs.Group = rec.Group // verbatim from the wire (R-PHC.3)
+	}
+	if rec.Agent != "" {
+		cs.Agent = rec.Agent // verbatim from the wire, same rule as Group
 	}
 	c.sessions[rec.SessionID] = cs
 	return true

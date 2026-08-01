@@ -50,13 +50,18 @@ type Event struct {
 	Dropped   int
 }
 
-// Session is one row of the roster. Group is VERBATIM from the wire (the phone never
-// derives a status group on-device); Need is the verbatim journal record type that last
-// touched the session; Title is the display name derived from the namespaced id.
+// Session is one row of the roster. Group and Agent are VERBATIM from the wire (the phone
+// never derives a status group or an agent on-device); Need is the verbatim journal record
+// type that last touched the session; Title is the display name derived from the
+// namespaced id.
 type Session struct {
-	ID      string
-	Title   string
-	Group   string
+	ID    string
+	Title string
+	Group string
+	// Agent is the agent identity the machine reported for this session, verbatim from
+	// the wire. Unlike Title it is never derived on-device: an empty Agent means the
+	// session's records carried none.
+	Agent   string
 	Need    string
 	Present bool
 }

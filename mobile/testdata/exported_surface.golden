@@ -53,6 +53,7 @@ field PushPreference.Mentions bool
 field QRPayload.HasStaticPub bool
 field QRPayload.RelayURL string
 field QRPayload.RendezvousID string
+field Session.Agent string
 field Session.Group string
 field Session.ID string
 field Session.Need string

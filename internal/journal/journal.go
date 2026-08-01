@@ -55,8 +55,23 @@ type Record struct {
 	TS            time.Time       `json:"ts"`
 	SessionID     string          `json:"session_id"`
 	Type          RecordType      `json:"type"`
-	Group         status.Group    `json:"group,omitempty"`   // set on group_transition
-	Payload       json.RawMessage `json:"payload,omitempty"` // opaque per-type extra
+	Group         status.Group    `json:"group,omitempty"` // set on group_transition
+	// Agent is the session's agent identity (persist.Meta.AgentType), so the phone can label
+	// a session with the CLI running it. The daemon sets it on the roster snapshot and on all
+	// four journalworthy transitions (internal/daemon/journal.go); the `deleted` record
+	// (lifecycle.go) deliberately carries none, because it REMOVES the session from the
+	// phone's model and an agent name on a tombstone would describe nothing.
+	//
+	// It is omitempty and its ABSENCE IS MEANINGFUL: a record with no agent carries no
+	// agent, and readers must never read "" as an agent by that name.
+	//
+	// Adding it did NOT bump SchemaVersion, and internal/journal/agentfield_test.go pins
+	// why in both directions: this build reads pre-Agent lines (an absent key decodes to
+	// ""), and a build predating the field reads records carrying one (encoding/json
+	// ignores the unknown key). A bump would instead make every older daemon reject every
+	// record this build writes, costing them the whole journal to gain nothing.
+	Agent   string          `json:"agent,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"` // opaque per-type extra
 }
 
 // Resume is the atomic result of ReadFrom: the snapshot roster as of the read

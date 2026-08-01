@@ -34,6 +34,12 @@ type JournalRecord struct {
 	SessionID string       `json:"session_id"`
 	Type      string       `json:"type"`
 	Group     status.Group `json:"group,omitempty"`
+	// Agent is the session's agent identity (persist.Meta.AgentType), carried so the
+	// phone can label a session with the CLI running it. Like Group it is omitempty
+	// because most record types do not carry it: the roster snapshot does, and a bare
+	// event may not. An absent agent means the record does not carry one -- readers must
+	// not read the empty string as an agent named "".
+	Agent string `json:"agent,omitempty"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They
