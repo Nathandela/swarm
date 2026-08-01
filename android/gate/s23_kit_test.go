@@ -176,6 +176,16 @@ func s23KitSources(t *testing.T) map[string]string {
 	return out
 }
 
+// s23OwnedFiles is the set of kit sources this slice fences: the foundation plus the files
+// s23Inbox names. Motion.kt is PB-DS-8's, for the reason the package comment gives.
+func s23OwnedFiles() map[string]bool {
+	owned := map[string]bool{"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true}
+	for _, c := range s23Inbox {
+		owned[c.File] = true
+	}
+	return owned
+}
+
 // s23TopLevelFun matches a top-level factory declaration. Indented `fun` is a method and is not
 // part of the kit's surface.
 var s23TopLevelFun = regexp.MustCompile(`(?m)^(?:internal\s+)?fun\s+([A-Za-z][A-Za-z0-9]*)\s*\(`)
@@ -895,32 +905,50 @@ func TestPBDS7_EveryDerivedSpacingIsTheRowsStep(t *testing.T) {
 
 // s23MetricConst matches a property declaration that binds a NUMERIC LITERAL.
 //
-// THIS WAS AN ALLOWLIST OF SPELLINGS TWICE, AND IT IS NOW INVERTED. Round one read
+// THIS PATTERN WAS WIDENED THREE TIMES AND EACH WIDENING WAS CALLED AN INVERSION. Round one read
 // `(?:internal\s+)?const`, which accepted `internal` while rejecting `private`, so
 // `private const val ATTENTION_BORDER_SHARE = 0.36f` was never matched and its `origin:` line was
 // decoration. Round two added `private`, `protected`, `@JvmField`, `[fF]` and a camelCase name.
-// Both repairs fixed the spellings someone had just named and left the CLASS exactly where it
-// was, because the failure mode of a spelling list is the spelling that is not on it -- and after
-// round two these were still invisible:
+// Round three added `var`, a second annotation, any type, a trailing comma and a stripped comment
+// view, and the comment here then claimed "there is no spelling left that escapes by not being
+// listed". A fourth reviewer falsified that claim in one paste:
 //
-//	@JvmStatic val DOT_DP = 7f          -- a second annotation
-//	var dotDp = 7f                      -- `var`, which the pattern never mentioned
-//	const val DOT_DP: Double = 7.0      -- a type that is not Float, a literal with no suffix
-//	val badgeHeightDp = 16f,            -- a trailing comma (a constructor property)
-//	const val DOT_DP = 7f /* design */  -- a trailing BLOCK comment; only `//` was handled
+//	const val EXTRA_PAD_DP =
+//	    11f                             -- the standard ktlint wrap; this pattern is line-anchored
+//	val gutterDp: Float get() = 13f     -- a `get()` accessor, which has no `=` where it wants one
+//	const val SHADE = 0x1F4             -- a hex literal, which the decimal alternation cannot read
 //
-// A declaration this pattern misses is not refused, it is INVISIBLE -- it carries no origin, is
-// compared to nothing, and fails no assertion in this gate however wrong its value is. So the
-// question the review posed, whether an allowlist of PERMITTED constructs beats a denylist of
-// forbidden ones, is answered here in the permitted direction, and this is the argument:
+// and the whole gate reported ok. It also misses expression initialisers (`7f * 2`), two
+// declarations on one line, use-site targets (`@get:JvmName`) and `7uL`. THE CLAIM WAS FALSE AND
+// A FOURTH WIDENING WOULD MAKE IT FALSE AGAIN, because a regexp over declaration syntax has no
+// spelling-complete form and the failure mode of a spelling list is the spelling not on it.
 //
-// THE PERMITTED CONSTRUCT IS "AN ANNOTATED DECLARATION", AND THE RECOGNISER IS DELIBERATELY
-// MAXIMAL. Any annotations, any modifiers in any order, `val` or `var`, any identifier, any
-// optional type, any numeric literal in any Kotlin spelling, any trailing comma or semicolon.
-// Widening the RECOGNISER while narrowing the REQUIREMENT is what turns the fence around: every
-// declaration that binds a number is now SEEN, and being seen means being required to cite an
-// origin (s23CheckMetric). There is no spelling left that escapes by not being listed -- what
-// escapes is not a property declaration at all.
+// SO THE COMPLETENESS CLAIM NO LONGER LIVES HERE. This is a RECOGNISER -- deliberately wide: any
+// annotations, any modifiers in any order, `val` or `var`, any identifier, any optional type, any
+// decimal literal, any trailing comma or semicolon -- and what it recognises is required to cite
+// an origin and is recomputed from it (s23CheckMetric). What it does NOT recognise is caught by
+// two cross-checks that never look at declaration syntax:
+//
+//	TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw -- every `KitMetrics.<ident>` the
+//	kit spends must be a name this scan RETURNED, so a declaration written in a spelling missed
+//	here is a DANGLING REFERENCE and fails.
+//	TestPBDS7_EveryNumberInTheKitIsAccountedFor -- every numeric literal token in the fenced files
+//	must be either the value of a recognised declaration or one of nine exempt bare literals (and
+//	inside object KitMetrics not even that), so a declaration missed here leaves its number
+//	UNACCOUNTED FOR and fails.
+//
+// Both are indifferent to how the declaration is written, which is the property a widening can
+// never have. All three constructs above now fail the gate while still being invisible to THIS
+// pattern -- that is the difference between lengthening the list and inverting the fence.
+//
+// WHAT THE PAIR STILL DOES NOT REACH, stated rather than implied, because the last three claims
+// here were of completeness and two were false. Outside object KitMetrics -- in the ten component
+// files -- an unrecognised declaration escapes both checks if its value is one of the nine exempt
+// literals AND nothing spends it through a `KitMetrics.` reference: `private val pad =\n    2f` in
+// Surfaces.kt is invisible. Inside the object, which is where a metric belongs and where all three
+// injections were placed, there is no such gap. A spend written without the `KitMetrics.` prefix
+// (a member import, or a reference from inside the object itself) is also not seen by the spend
+// check, though its declaration still faces the literal accounting.
 //
 // COMMENTS ARE STRIPPED BEFORE THIS PATTERN IS APPLIED, which is why it can keep a hard `$`
 // anchor. Round two handled the trailing comment inside the pattern (`(?://.*)?$`) and thereby
@@ -1050,6 +1078,20 @@ func s23ScanMetrics(src string) []s23Metric {
 			ref, field := s23ParseDerived(m[1])
 			pending = s23Metric{Kind: "derived", First: ref, Second: field}
 			continue
+		}
+		// A PENDING ANNOTATION DOES NOT SURVIVE A LINE OF CODE, or the next declaration inherits
+		// an origin that was written for something else. The wrapped form
+		//
+		//	/** origin: .pdot { width } */
+		//	const val DOT_DP =
+		//	    7f
+		//	const val NEXT_DP = 7f
+		//
+		// left `.pdot { width }` pending across two unmatched lines and handed it to NEXT_DP, which
+		// then passed at 7 on an authority naming the dot. Comment lines are BLANK in the stripped
+		// view, so a KDoc block between the annotation and its declaration still carries.
+		if i < len(code) && strings.TrimSpace(code[i]) != "" {
+			pending = s23Metric{}
 		}
 	}
 	return out
@@ -1186,10 +1228,7 @@ func TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber(t *testing.T) {
 	css := s22bSharedCSS(t)
 	tokens := s22bTokenValues(t)
 
-	owned := map[string]bool{"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true}
-	for _, c := range s23Inbox {
-		owned[c.File] = true
-	}
+	owned := s23OwnedFiles()
 
 	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
 
@@ -1407,10 +1446,7 @@ func s23SortedKeys[V any](m map[string]V) []string {
 // s23KitDpSpends reads every dp call site in the files this slice owns.
 func s23KitDpSpends(t *testing.T) []s23DpSpend {
 	t.Helper()
-	owned := map[string]bool{"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true}
-	for _, c := range s23Inbox {
-		owned[c.File] = true
-	}
+	owned := s23OwnedFiles()
 	sources := s23KitSources(t)
 	var out []s23DpSpend
 	for _, file := range s23SortedKeys(sources) {
@@ -1445,6 +1481,460 @@ func TestPBDS7_NoMetricIsTypedAtADpCallSite(t *testing.T) {
 func TestPBDS6_EveryKitMetricIsRenderedOneWay(t *testing.T) {
 	for _, fault := range s23QuantisationFaults(s23KitDpSpends(t)) {
 		t.Errorf("PB-DS-6: %s", fault)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PB-DS-7: the two cross-checks that make an UNRECOGNISED declaration visible.
+// ---------------------------------------------------------------------------
+//
+// WHY THIS SECTION EXISTS. s23MetricConst is a regexp, so there will always be a way to declare a
+// number that it does not match, and for three rounds the consequence of that was SILENCE: the
+// declaration carried no origin, was compared to nothing, and failed no assertion however wrong
+// its value was. Each round the repair was to widen the pattern and claim the widened version was
+// complete; each round the next reviewer wrote a spelling nobody had listed.
+//
+// Neither check below looks at declaration syntax. They ask what happens to the number afterwards
+// -- it is spent, or it is a token in a fenced file -- and an unrecognised declaration fails them
+// for the same reason whatever it is spelled like: it is not in the set s23ScanMetrics returned.
+// That is the property a widening can never have, because a widening is a longer list.
+
+// s23MetricsObject is the object a SPEND must resolve into.
+//
+// THE SCOPE IS LOAD-BEARING. s23ScanMetrics also sees `ColorMix.TRANSPARENT` and TabBar's
+// `badgeCount`, and taking the union of every declaration in the package as the resolvable set
+// would let a local `val EXTRA_PAD_DP = 11f` in any file satisfy `KitMetrics.EXTRA_PAD_DP` --
+// which is the fence checking that some name exists somewhere rather than that THIS constant was
+// seen where it is declared.
+const s23MetricsObject = "KitMetrics"
+
+var s23MetricsObjectHead = regexp.MustCompile(`\bobject\s+` + s23MetricsObject + `\s*\{`)
+
+// s23ObjectLines returns the 1-based line span of `object KitMetrics { ... }` in a
+// comment-stripped, string-blanked source. ok is false when the source does not declare it.
+func s23ObjectLines(code string) (lo, hi int, ok bool) {
+	head := s23MetricsObjectHead.FindStringIndex(code)
+	if head == nil {
+		return 0, 0, false
+	}
+	lo = strings.Count(code[:head[0]], "\n") + 1
+	depth := 0
+	for i := head[1] - 1; i < len(code); i++ {
+		switch code[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return lo, strings.Count(code[:i], "\n") + 1, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// s23SeenMetricNames is the set of constants s23ScanMetrics RECOGNISED inside object KitMetrics.
+//
+// @return the set, and the reason it could not be built. A missing object is fatal rather than an
+// empty set: an empty set makes every spend dangle, which reads as a hundred faults for one cause.
+func s23SeenMetricNames(sources map[string]string, owned map[string]bool) (map[string]bool, string) {
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		lo, hi, ok := s23ObjectLines(s23CodeNoStrings(kotlinCodeOnly(sources[file])))
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, m := range s23ScanMetrics(sources[file]) {
+			if m.Line >= lo && m.Line <= hi {
+				seen[m.Name] = true
+			}
+		}
+		return seen, ""
+	}
+	return nil, fmt.Sprintf("no kit source this slice owns declares `object %s`, so there is no set "+
+		"of recognised constants for a spend to resolve into and this cross-check would pass by "+
+		"having nothing to say", s23MetricsObject)
+}
+
+// s23MetricSpend is one `KitMetrics.<ident>` reference, wherever it appears.
+//
+// NOT ONLY AT dp CALL SITES. `fadeStop = KitMetrics.WORKBAR_FADE_STOP` and
+// `ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA)` spend a constant without going
+// near Kit.dp, and a scan bounded by dp calls would miss the two constants that are not lengths.
+type s23MetricSpend struct {
+	File string
+	Line int
+	Name string
+}
+
+var s23MetricSpendRe = regexp.MustCompile(`\b` + s23MetricsObject + `\.([A-Za-z_][A-Za-z0-9_]*)`)
+
+// s23ScanMetricSpends reads every KitMetrics reference out of one source that has already had its
+// comments stripped and its string contents blanked -- see s23KitMetricSpends for why both.
+func s23ScanMetricSpends(file, code string) []s23MetricSpend {
+	var out []s23MetricSpend
+	for _, loc := range s23MetricSpendRe.FindAllStringSubmatchIndex(code, -1) {
+		out = append(out, s23MetricSpend{
+			File: file,
+			Line: strings.Count(code[:loc[0]], "\n") + 1,
+			Name: code[loc[2]:loc[3]],
+		})
+	}
+	return out
+}
+
+// s23DanglingSpendFaults reports every spend of a constant the scan did not recognise.
+//
+// IT IS NOT THE COMPILER'S CHECK, and the distinction is the whole point. kotlinc resolves
+// `KitMetrics.EXTRA_PAD_DP` perfectly well when the constant is declared across two lines; what
+// this reports is that THE GATE cannot see the declaration, and therefore that the number behind
+// a name the app is already spending has no design authority anyone has checked. A dangling
+// reference here means "the scan is blind here", which is the fact that was silent three times.
+func s23DanglingSpendFaults(spends []s23MetricSpend, seen map[string]bool) []string {
+	var faults []string
+	for _, s := range spends {
+		if seen[s.Name] {
+			continue
+		}
+		faults = append(faults, fmt.Sprintf("%s:%d: %s.%s is spent here, and s23ScanMetrics "+
+			"recognised no declaration of %s inside `object %s`. Either it is not declared at all "+
+			"(the Kotlin compiler will say so first) or -- far more likely -- it IS declared, in a "+
+			"spelling s23MetricConst does not match: a wrapped initialiser, a `get()` accessor, a "+
+			"hex literal, an expression. A declaration the scan cannot see carries no `origin:`, is "+
+			"compared to nothing and fails no other assertion, so its value reaches the screen "+
+			"unchecked. Write it in a form the scan reads, or widen s23MetricConst to read this one.",
+			s.File, s.Line, s23MetricsObject, s.Name, s.Name, s23MetricsObject))
+	}
+	return faults
+}
+
+// s23KitMetricSpends reads every KitMetrics reference in the files this slice owns.
+//
+// COMMENTS AND STRING CONTENTS ARE BOTH GONE FIRST. A KDoc naming `KitMetrics.DOT_DP` in a
+// sentence is not a spend, and neither is a string that happens to quote one -- reporting either
+// as a dangling reference would be this fence failing on its own documentation, which is the
+// defect kotlinCodeOnly was written for.
+func s23KitMetricSpends(sources map[string]string, owned map[string]bool) []s23MetricSpend {
+	var out []s23MetricSpend
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		out = append(out, s23ScanMetricSpends(file, s23CodeNoStrings(kotlinCodeOnly(sources[file])))...)
+	}
+	return out
+}
+
+// s23Literal is one numeric literal token as it appears in the kit's code.
+type s23Literal struct {
+	File string
+	Line int
+	Text string
+}
+
+// s23NumberToken matches a Kotlin numeric literal at the START of the string it is given.
+// s23ScanLiterals does the token boundary itself, because Go's regexp has no lookbehind and
+// `R.dimen.swarm_space_14` must not read as the number 14.
+var s23NumberToken = regexp.MustCompile(
+	`^(?:0[xXbB][0-9a-fA-F_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?)[uU]?[lLfF]?`)
+
+// s23CodeNoStrings blanks the CONTENTS of string and character literals, keeping the quotes and
+// every newline, so a source stays line-for-line addressable.
+//
+// kotlinCodeOnly deliberately leaves strings intact -- a fence that a comment can satisfy is the
+// defect it was written for, and a string is code. For counting NUMBERS the opposite is true:
+// `text = if (count >= 100) "99+" else ...` holds one number and one piece of copy, and reading
+// the copy as a metric would put `99` on the exemption table for no reason.
+func s23CodeNoStrings(code string) string {
+	var out strings.Builder
+	out.Grow(len(code))
+	var quote byte
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case quote == 0 && (c == '"' || c == '\''):
+			quote = c
+			out.WriteByte(c)
+		case quote != 0 && c == '\\' && i+1 < len(code):
+			out.WriteString("  ")
+			i++
+		case quote != 0 && c == quote:
+			quote = 0
+			out.WriteByte(c)
+		case quote != 0:
+			if c == '\n' {
+				out.WriteByte(c)
+			} else {
+				out.WriteByte(' ')
+			}
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
+}
+
+// s23ScanLiterals reads every numeric literal token out of a comment-stripped, string-blanked
+// source. A digit preceded by an identifier character is part of a name, not a number.
+func s23ScanLiterals(file, code string) []s23Literal {
+	var out []s23Literal
+	line := 1
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if c == '\n' {
+			line++
+			continue
+		}
+		if c < '0' || c > '9' {
+			continue
+		}
+		if i > 0 && (code[i-1] == '.' || code[i-1] == '_' || s23IsIdentByte(code[i-1])) {
+			continue
+		}
+		text := s23NumberToken.FindString(code[i:])
+		if text == "" {
+			continue
+		}
+		out = append(out, s23Literal{File: file, Line: line, Text: text})
+		i += len(text) - 1
+	}
+	return out
+}
+
+func s23IsIdentByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// s23NormaliseLiteral reduces a literal token to the digits s23MetricConst captures: underscores
+// gone, type suffix gone. A hex or binary literal keeps its prefix, because no recognised
+// declaration can produce one and it must never compare equal to a decimal.
+func s23NormaliseLiteral(text string) string {
+	text = strings.ReplaceAll(text, "_", "")
+	if len(text) > 1 && (text[1] == 'x' || text[1] == 'X' || text[1] == 'b' || text[1] == 'B') {
+		return text
+	}
+	return strings.TrimRight(strings.TrimRight(text, "fFdDlL"), "uU")
+}
+
+func s23LiteralKey(file string, line int, value string) string {
+	return fmt.Sprintf("%s:%d:%s", file, line, value)
+}
+
+// s23BoundLiterals is every literal that IS the value of a declaration the scan recognised, keyed
+// by where it is. Position rather than value, so `2f` being a checked constant on one line does
+// not excuse a `2f` typed on another.
+func s23BoundLiterals(sources map[string]string, owned map[string]bool) map[string]bool {
+	bound := map[string]bool{}
+	for file, src := range sources {
+		if !owned[file] {
+			continue
+		}
+		for _, m := range s23ScanMetrics(src) {
+			bound[s23LiteralKey(file, m.Line, strings.TrimPrefix(m.Raw, "-"))] = true
+		}
+	}
+	return bound
+}
+
+// s23LiteralExemptions is every bare number the kit is allowed to type without a design origin,
+// and why each one is not a design value.
+//
+// THIS IS THE SMALL LIST THE OTHER CHECK NEEDS, and it is small because the kit was written to
+// make it small: sixty-two literal tokens across the eleven fenced files, seventeen of them the
+// values of checked constants and the rest these nine spellings. Keyed by the literal AS WRITTEN
+// rather than by value, so `0` and `0f` and `2` and `2f` are separate permissions -- an exemption
+// is a thing a reader has to agree with, and "2 sides of a core" and "half a diameter" are two
+// different arguments that happen to share a digit.
+//
+// WHAT AN EXEMPTION COSTS, AND WHERE IT IS NOT PAID. A row here is a value the fence stops
+// reading -- `2f` is exempt because a radius is half a diameter, and the price is that a 2dp inset
+// typed as a bare `2f` in a drawing routine is exempt too. That price is bounded three ways: by
+// the other fences (a metric typed at a dp call site is TestPBDS7_NoMetricIsTypedAtADpCallSite's,
+// a spacing value is TestPBDS6_NoRawDimensionIsTypedInTheKit's), by the list being nine rows
+// rather than thirty, and by s23StrictLines -- INSIDE object KitMetrics no exemption is consulted
+// at all, so the one place a metric is supposed to live pays nothing for this table's existence.
+var s23LiteralExemptions = map[string]string{
+	"0": "zero has no unit, so 0 px and 0 dp are the same distance and there is no design value " +
+		"for it to disagree with. Used for a weighted width, a suppressed border, a zero padding.",
+	"0f": "the same, as a Float: a zero shadow offset, a suppressed key light, a gradient's first " +
+		"stop.",
+	"1": "`1 - fraction` in ColorMix: the complement of a share. It is arithmetic on a ratio and " +
+		"there is no length in it.",
+	"1f": "a LinearLayout weight. Weight is a proportion between siblings, not a dimension -- the " +
+		"design has no px for it because CSS expresses the same thing as `flex: 1`.",
+	"2": "`corePx + 2 * haloPx`: the halo sits on BOTH sides of the core, so the 2 is a count of " +
+		"sides. The dot's diameter and the halo's radius are both checked constants.",
+	"2f": "`diameterPx / 2f`: a radius is half a diameter, by the definition of a circle rather " +
+		"than by a decision anyone made.",
+	"100": "Badge's overflow threshold. Three digits either overflow the 16 dp pill or push the " +
+		"type below PB-DS-12's 10 sp floor, so the count saturates at `99+`; the 16 dp is the " +
+		"checked constant and this is the consequence of it.",
+	"255": "the top of the 8-bit channel range Color.argb takes. It is the platform's encoding of " +
+		"a colour, not a number the design chose.",
+	"255f": "the same range in the float arithmetic that produces it.",
+}
+
+// s23UnaccountedLiteralFaults reports every number in the kit that is neither the value of a
+// recognised declaration nor an exempt bare literal.
+//
+// THIS IS THE HALF OF THE INVERSION THAT DOES NOT NEED THE NUMBER TO BE SPENT. A constant
+// declared in a spelling the scan misses and never referenced -- `const val SHADE = 0x1F4` -- is
+// invisible to the spend cross-check and to s23CheckMetric alike, because nothing resolves it and
+// nothing recognised it. Its LITERAL is still a token in a fenced file, and that is the one
+// property no declaration syntax can take away from it.
+//
+// NO EXEMPTION APPLIES INSIDE object KitMetrics, and that closes the one case the value-keyed
+// table would otherwise leave open. `const val QUIET_PAD_DP =\n    2f` is unrecognised (so no
+// origin is required), unspent (so nothing dangles) and its literal is on the table (so the
+// accounting passed it) -- three fences, all silent, for a number sitting in the middle of the
+// object every fence exists to police. Inside that object the exemptions are simply not
+// consulted: every number in it is a design metric by construction, which is what the object is.
+func s23UnaccountedLiteralFaults(lits []s23Literal, bound, strict map[string]bool) []string {
+	var faults []string
+	for _, l := range lits {
+		if bound[s23LiteralKey(l.File, l.Line, s23NormaliseLiteral(l.Text))] {
+			continue
+		}
+		inObject := strict[fmt.Sprintf("%s:%d", l.File, l.Line)]
+		_, exempt := s23LiteralExemptions[l.Text]
+		if exempt && !inObject {
+			continue
+		}
+		where := "and it is not one of the nine bare literals on s23LiteralExemptions"
+		if inObject {
+			where = fmt.Sprintf("and it is inside `object %s`, where s23LiteralExemptions does not "+
+				"apply -- every number in that object is a design metric, which is the whole of what "+
+				"the object is for", s23MetricsObject)
+		}
+		faults = append(faults, fmt.Sprintf("%s:%d: the number `%s` is typed here and nothing "+
+			"accounts for it. It is not the value of a declaration s23ScanMetrics recognised, so no "+
+			"`origin:` annotation is being required of it and no design value is being compared to "+
+			"it; %s. If it is a design metric, declare it in object %s with an `origin:` line. If it "+
+			"is not, add a row to s23LiteralExemptions saying what it is instead.",
+			l.File, l.Line, l.Text, where, s23MetricsObject))
+	}
+	return faults
+}
+
+// s23StrictLines is every line inside object KitMetrics, keyed `file:line`. A number there is a
+// design metric or it is a fault; there is no third answer, so no exemption is consulted.
+func s23StrictLines(sources map[string]string, owned map[string]bool) map[string]bool {
+	strict := map[string]bool{}
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		lo, hi, ok := s23ObjectLines(s23CodeNoStrings(kotlinCodeOnly(sources[file])))
+		if !ok {
+			continue
+		}
+		for line := lo; line <= hi; line++ {
+			strict[fmt.Sprintf("%s:%d", file, line)] = true
+		}
+	}
+	return strict
+}
+
+// s23DeadExemptionFaults reports rows the kit no longer uses, for the reason s23DualQuantised
+// gives: a permission nobody is exercising is one the next bare number inherits without argument.
+func s23DeadExemptionFaults(lits []s23Literal) []string {
+	used := map[string]bool{}
+	for _, l := range lits {
+		used[l.Text] = true
+	}
+	var faults []string
+	for _, text := range s23SortedKeys(s23LiteralExemptions) {
+		if !used[text] {
+			faults = append(faults, fmt.Sprintf("s23LiteralExemptions permits the bare literal `%s` "+
+				"and the kit types it nowhere. Delete the row: an exemption nobody uses is one the "+
+				"next number of that value inherits without anyone arguing for it.", text))
+		}
+	}
+	return faults
+}
+
+// s23KitLiterals reads every numeric literal in the files this slice owns.
+func s23KitLiterals(t *testing.T, sources map[string]string, owned map[string]bool) []s23Literal {
+	t.Helper()
+	var out []s23Literal
+	for _, file := range s23SortedKeys(sources) {
+		if !owned[file] {
+			continue
+		}
+		if strings.Contains(sources[file], `"""`) {
+			t.Fatalf("PB-DS-7: %s contains a raw string, and s23CodeNoStrings reads only `\"` and "+
+				"`'` literals. Every number inside that raw string would be counted as a metric and "+
+				"every number after it could be missed -- this fence fails loudly rather than "+
+				"reporting on a source it is misreading.", file)
+		}
+		out = append(out, s23ScanLiterals(file, s23CodeNoStrings(kotlinCodeOnly(sources[file])))...)
+	}
+	return out
+}
+
+// TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw is the cross-check between the two
+// scans this file already had, and it is what makes s23MetricConst's blind spots FAIL.
+//
+// THE DEFECT IT WAS WRITTEN FOR, found by the third audit committee round. Injected into
+// object KitMetrics:
+//
+//	const val EXTRA_PAD_DP =
+//	    11f
+//
+// plus `Kit.dpPx(context, KitMetrics.EXTRA_PAD_DP)` in Badge.kt, and the whole gate reported ok.
+// s23ScanMetrics is line-anchored, so it saw no declaration; s23DpLiteralFaults accepted the
+// argument because it MATCHED `KitMetrics.<ident>` and never asked whether that name was one the
+// other scan had returned. Two scans of the same file, each satisfied, and between them a number
+// with no design origin reaching a live call site.
+func TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw(t *testing.T) {
+	sources := s23KitSources(t)
+	owned := s23OwnedFiles()
+
+	seen, fault := s23SeenMetricNames(sources, owned)
+	if fault != "" {
+		t.Fatalf("PB-DS-7: %s", fault)
+	}
+
+	spends := s23KitMetricSpends(sources, owned)
+	if len(spends) == 0 {
+		t.Fatal("PB-DS-7: the kit spends no KitMetrics constant at all, so this cross-check has " +
+			"nothing to resolve and would pass over any declaration whatsoever")
+	}
+	for _, fault := range s23DanglingSpendFaults(spends, seen) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+}
+
+// TestPBDS7_EveryNumberInTheKitIsAccountedFor closes the case the spend cross-check cannot: a
+// number declared in an unrecognised spelling that nothing references.
+//
+// THE DEFECT IT WAS WRITTEN FOR, from the same review: `val gutterDp: Float get() = 13f` and
+// `const val SHADE = 0x1F4` in object KitMetrics, unreferenced, gate green. Neither is a
+// declaration s23MetricConst matches -- an accessor has no `=` where the pattern wants one, and a
+// hex literal is not the decimal it reads for -- so neither was required to cite anything.
+func TestPBDS7_EveryNumberInTheKitIsAccountedFor(t *testing.T) {
+	sources := s23KitSources(t)
+	owned := s23OwnedFiles()
+
+	lits := s23KitLiterals(t, sources, owned)
+	if len(lits) == 0 {
+		t.Fatal("PB-DS-7: the literal scan found no number anywhere in the kit, which cannot be " +
+			"true of eleven files that draw dots, rails and hairlines -- the scan is broken and " +
+			"every number in the package is passing through it unseen")
+	}
+	strict := s23StrictLines(sources, owned)
+	if len(strict) == 0 {
+		t.Fatalf("PB-DS-7: no owned kit source declares `object %s`, so the strict zone is empty and "+
+			"an exemption would apply inside the very object this fence polices", s23MetricsObject)
+	}
+	for _, fault := range s23UnaccountedLiteralFaults(lits, s23BoundLiterals(sources, owned), strict) {
+		t.Errorf("PB-DS-7: %s", fault)
+	}
+	for _, fault := range s23DeadExemptionFaults(lits) {
+		t.Errorf("PB-DS-7: %s", fault)
 	}
 }
 
@@ -2043,6 +2533,20 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 		}
 	}
 
+	// An annotation must not outlive the declaration it was written for. A wrapped initialiser
+	// leaves the pattern unmatched on two lines, and the origin stayed pending across them: the
+	// NEXT constant inherited it and passed on an authority naming a different quantity.
+	stolen := "/** origin: .pdot { width } */\nconst val WRAPPED_DP =\n    7f\nconst val NEXT_DP = 7f\n"
+	if found := s23ScanMetrics(stolen); len(found) != 1 || found[0].Name != "NEXT_DP" {
+		t.Errorf("PB-DS-7: the metric scan reads %v out of a wrapped declaration followed by a "+
+			"plain one; it should see exactly NEXT_DP, and the wrapped one is the cross-checks'", found)
+	} else if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
+		t.Error("PB-DS-7: a constant declared after an UNMATCHED wrapped declaration inherits that " +
+			"declaration's `origin:` line and passes on it. `.pdot { width }` is 7, so NEXT_DP = 7f " +
+			"is green against an authority that names the status dot's diameter and was never " +
+			"written about NEXT_DP at all.")
+	}
+
 	// 2. A share cites internal/design's derivation table, and the VALUE is recomputed from it.
 	//    The two glow shares and the attention border are colour-mix inputs: PB-TOK-7 forbids
 	//    typing the resolved colour, so the share is what the kit holds and the table is where
@@ -2080,6 +2584,198 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	if faults := check("/** derived: " + s23ComponentsDoc + " #3 Badge { no-such-field } */\n    const val X = 16f"); len(faults) == 0 {
 		t.Error("PB-DS-7: a constant citing a field row 3 does not state passes, so a renamed " +
 			"cell would leave the value checked against nothing")
+	}
+}
+
+// TestPBDS7_TheCrossChecksCanActuallyFail is the control over the two cross-checks, and it is
+// deliberately NOT a matrix of spellings.
+//
+// WHY NOT A MATRIX. TestPBDS7_TheMetricScanCanActuallyFail generates 53760 spellings across eight
+// axes, and the fourth review said what that proves: every axis is a construct s23MetricConst
+// already enumerates, and every axis is single-line. So the matrix confirms the enumeration and
+// is silent about everything outside it -- "a control made of examples confirms only the examples
+// someone thought of", which was round one's finding about the FENCE, reproduced one level up at
+// the axis level. Adding a multi-line axis and a hex axis would reproduce it a third time, and
+// the axis after that would be the one nobody thought of.
+//
+// WHAT IS CONTROLLED INSTEAD IS THE CHANNEL. An unrecognised declaration -- any spelling, including
+// spellings nobody has written yet -- reaches these two functions through exactly one observable
+// state, because the scan's output is the only thing either function is told about the source:
+//
+//	its NAME is absent from the set s23ScanMetrics returned, and
+//	its LITERAL is absent from the positions s23BoundLiterals bound.
+//
+// So the control puts both functions in exactly that state, over the REAL kit, one name and one
+// literal at a time. That is not a sample of the spelling axis; it is the complete image of the
+// spelling axis under the only functions that can observe it, and it stays complete when someone
+// invents a spelling next year. The four constructs the review injected are then run end to end
+// as regressions -- they are the instances that falsified the old claim, not the argument for the
+// new one.
+func TestPBDS7_TheCrossChecksCanActuallyFail(t *testing.T) {
+	sources := s23KitSources(t)
+	owned := s23OwnedFiles()
+
+	seen, fault := s23SeenMetricNames(sources, owned)
+	if fault != "" {
+		t.Fatalf("PB-DS-7: %s", fault)
+	}
+	spends := s23KitMetricSpends(sources, owned)
+	if len(seen) == 0 || len(spends) == 0 {
+		t.Fatalf("PB-DS-7: the scan returned %d recognised constant(s) and %d spend(s); with either "+
+			"at zero every probe below is vacuous", len(seen), len(spends))
+	}
+	if faults := s23DanglingSpendFaults(spends, seen); len(faults) != 0 {
+		t.Fatalf("PB-DS-7: the spend cross-check already reports %d fault(s) against the kit as it "+
+			"stands, so nothing below can tell a working fence from a broken one: %v",
+			len(faults), faults)
+	}
+
+	// THE SCOPING IS REAL. If every declaration the scan sees anywhere in the kit were also inside
+	// object KitMetrics, s23SeenMetricNames would be an identity function and a local
+	// `val EXTRA_PAD_DP = 11f` in any file would resolve a KitMetrics spend.
+	all := map[string]bool{}
+	for file, src := range sources {
+		if !owned[file] {
+			continue
+		}
+		for _, m := range s23ScanMetrics(src) {
+			all[m.Name] = true
+		}
+	}
+	if len(all) <= len(seen) {
+		t.Errorf("PB-DS-7: the scan sees %d declaration(s) across the kit and %d of them are inside "+
+			"object %s, so the scoping in s23SeenMetricNames is not narrowing anything and a "+
+			"declaration in any other file would resolve a spend", len(all), len(seen), s23MetricsObject)
+	}
+
+	// 1. For every constant the kit actually spends: make the scan blind to that ONE name -- which
+	//    is what every unrecognised spelling of its declaration looks like from here -- and the
+	//    spend must become a dangling reference that names it.
+	spent := map[string]bool{}
+	for _, s := range spends {
+		spent[s.Name] = true
+	}
+	for _, name := range s23SortedKeys(seen) {
+		if !spent[name] {
+			continue // declared and never referenced; that case is the literal accounting's.
+		}
+		blind := map[string]bool{}
+		for k, v := range seen {
+			blind[k] = v
+		}
+		delete(blind, name)
+		named := 0
+		for _, f := range s23DanglingSpendFaults(spends, blind) {
+			if strings.Contains(f, s23MetricsObject+"."+name) {
+				named++
+			}
+		}
+		if named == 0 {
+			t.Errorf("PB-DS-7: %s.%s is spent by the kit, and the spend cross-check reports nothing "+
+				"about it when the scan does not return that name. Absence from that set is the ONLY "+
+				"form an unrecognised declaration takes here, so a fence silent about it is silent "+
+				"about every spelling s23MetricConst misses -- now and in future.",
+				s23MetricsObject, name)
+		}
+	}
+
+	// 2. The same, for the literal accounting: unbind ONE literal -- which is what an unrecognised
+	//    declaration does to its own number -- and it must become unaccounted for, UNLESS its text
+	//    is exempt AND it sits outside object KitMetrics. Both directions are asserted, because
+	//    that exception is the residual this pair does not close and it must not quietly widen.
+	lits := s23KitLiterals(t, sources, owned)
+	bound := s23BoundLiterals(sources, owned)
+	strict := s23StrictLines(sources, owned)
+	if faults := s23UnaccountedLiteralFaults(lits, bound, strict); len(faults) != 0 {
+		t.Fatalf("PB-DS-7: the literal accounting already reports %d fault(s) against the kit as it "+
+			"stands: %v", len(faults), faults)
+	}
+	textAt := map[string]string{}
+	at := map[string]string{}
+	for _, l := range lits {
+		key := s23LiteralKey(l.File, l.Line, s23NormaliseLiteral(l.Text))
+		textAt[key] = l.Text
+		at[key] = fmt.Sprintf("%s:%d", l.File, l.Line)
+	}
+	for _, key := range s23SortedKeys(bound) {
+		blind := map[string]bool{}
+		for k := range bound {
+			blind[k] = true
+		}
+		delete(blind, key)
+		reported := len(s23UnaccountedLiteralFaults(lits, blind, strict)) > 0
+		_, exempt := s23LiteralExemptions[textAt[key]]
+		excused := exempt && !strict[at[key]]
+		if reported == excused {
+			t.Errorf("PB-DS-7: unbinding the literal at %s (written `%s`) reports=%v excused=%v. The "+
+				"rule is that a number stops being accounted for the moment the scan stops "+
+				"recognising its declaration, and the one exception is an exempt value OUTSIDE object "+
+				"%s -- if those two disagree, either the fence is silent about a real number or the "+
+				"exemption has reached inside the object it is not supposed to reach into.",
+				key, textAt[key], reported, excused, s23MetricsObject)
+		}
+	}
+
+	// 3. And the exemption table must be capable of reporting a dead row.
+	if len(s23DeadExemptionFaults(nil)) != len(s23LiteralExemptions) {
+		t.Errorf("PB-DS-7: against a kit with no literals at all, the dead-exemption check reports "+
+			"%d of %d rows. A permission nobody uses has to be visible, or the table only grows.",
+			len(s23DeadExemptionFaults(nil)), len(s23LiteralExemptions))
+	}
+
+	// 4. The constructs the third audit round injected, verbatim, end to end, plus the one the
+	//    strict zone was added for. Each is still invisible to s23MetricConst -- that is asserted,
+	//    not assumed, because a probe the recogniser has since learned to read would be controlling
+	//    nothing -- and each must now fail through a cross-check instead.
+	for _, probe := range []struct {
+		what  string
+		decl  string
+		spend string
+	}{
+		{"a wrapped initialiser", "    const val EXTRA_PAD_DP =\n        11f\n", "EXTRA_PAD_DP"},
+		{"a get() accessor", "    val gutterDp: Float get() = 13f\n", ""},
+		{"a hex literal", "    const val SHADE = 0x1F4\n", ""},
+		{"a wrapped initialiser holding a WRONG value", "    const val DOT_DP =\n        13f\n", "DOT_DP"},
+		// Unrecognised, unspent, AND holding a value the exemption table permits: the case all
+		// three fences were silent about until s23StrictLines stopped exempting anything inside
+		// the metrics object.
+		{"an unrecognised declaration holding an exempt value", "    const val QUIET_PAD_DP =\n        2f\n", ""},
+	} {
+		src := "internal object " + s23MetricsObject + " {\n" + probe.decl + "}\n"
+		files := map[string]string{"Probe.kt": src}
+		only := map[string]bool{"Probe.kt": true}
+
+		if found := s23ScanMetrics(src); len(found) != 0 {
+			t.Errorf("PB-DS-7: %s is now recognised by s23MetricConst (%v), so this probe no longer "+
+				"reaches the cross-checks. Replace it with a construct the recogniser still misses; "+
+				"the point of the probe is the blind spot, not the constant.", probe.what, found)
+			continue
+		}
+		probeLits := s23ScanLiterals("Probe.kt", s23CodeNoStrings(kotlinCodeOnly(src)))
+		probeStrict := s23StrictLines(files, only)
+		if len(probeStrict) == 0 {
+			t.Errorf("PB-DS-7: %s: the probe declares object %s and s23StrictLines found no span in "+
+				"it, so the strict zone is not being exercised", probe.what, s23MetricsObject)
+			continue
+		}
+		if faults := s23UnaccountedLiteralFaults(probeLits, s23BoundLiterals(files, only), probeStrict); len(faults) == 0 {
+			t.Errorf("PB-DS-7: %s declares a number s23MetricConst does not see, and the literal "+
+				"accounting reports nothing about it:\n\t%s", probe.what, strings.TrimSpace(probe.decl))
+		}
+		if probe.spend == "" {
+			continue
+		}
+		probeSeen, fault := s23SeenMetricNames(files, only)
+		if fault != "" {
+			t.Errorf("PB-DS-7: %s: %s", probe.what, fault)
+			continue
+		}
+		use := s23ScanMetricSpends("Use.kt", "    Kit.dpPx(context, "+s23MetricsObject+"."+probe.spend+")\n")
+		if faults := s23DanglingSpendFaults(use, probeSeen); len(faults) == 0 {
+			t.Errorf("PB-DS-7: %s is spent at a live call site and the spend cross-check reports "+
+				"nothing. This is the injection the third review used to falsify the fence:\n\t%s",
+				probe.what, strings.TrimSpace(probe.decl))
+		}
 	}
 }
 
