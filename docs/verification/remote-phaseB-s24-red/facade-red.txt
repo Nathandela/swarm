@@ -1,0 +1,108 @@
+AGENT-FACADE RED EVIDENCE -- the Substrate session row's agent slot has no wire source
+========================================================================================
+
+GG-5 requires the failing-first run to be evidenced. Everything below is actual output,
+pasted from the run that produced it. Nothing here is predicted or reconstructed.
+
+Repo /Users/Nathan/Code/swarm, branch design-system-substrate, HEAD a1c9b96 (started from
+1217e36; other agents on this branch advanced it while this task ran).
+File added: mobile/agentseam_test.go (new test file; no other file touched).
+Command: `go test ./mobile/... -run TestSessionAgentHasNoWireSource -v -count=1`.
+
+TASK: the Substrate design's session row has an agent slot (.prow .ag: mono, 10sp,
+--p-ink3, "claude" / "codex"). The Android screen passes it the empty string today
+because swarmmobile.Session (mobile/types.go) carries ID/Title/Group/Need/Present and
+nothing names the agent. The assignment: find the field that already carries the agent
+identity to the phone and wire it into the facade, OR establish that none does and stop
+rather than invent a derivation.
+
+FINDING: none does. Traced end to end, five layers deep, every one of them outside
+mobile/ and therefore outside this slice's file ownership:
+
+  1. internal/journal.Record (the daemon's own durable journal, internal/journal/journal.go:52)
+     is SchemaVersion/Cursor/TS/SessionID/Type/Group/Payload. No Agent.
+  2. internal/daemon/journal.go builds every Record the phone can ever see. Both
+     constructors -- journalRecordFor (launch/exit/lost/group_transition, line 103) and
+     rosterSnapshotLocked (the roster snapshot, line 48) -- write SessionID/Type/Group
+     literals only. The daemon already knows the agent right there: persist.Meta carries
+     AgentType (internal/persist/persist.go:40). Nothing reads it into the record.
+  3. internal/skeleton/api.go:500 toWireJournalRecord converts the daemon Record to the
+     wire schema.JournalRecord, and says so in its own doc comment: "only the fields the
+     phone needs" -- Cursor/SessionID/Type/Group. Agent is excluded by name, not oversight.
+  4. internal/protocol/schema.JournalRecord (internal/protocol/schema/remote.go:32), the
+     actual bytes the relay carries to the phone, is therefore Cursor/SessionID/Type/Group.
+  5. internal/phonecore.CachedSession (internal/phonecore/journal.go:90), the phone's
+     merged session model that mobile/app.go's session() reads, is SessionID/Group/Present
+     -- folded straight from step 4, so it inherits the gap.
+
+schema.SessionView (internal/protocol/schema/schema.go:114) DOES carry Agent, but that
+type backs the LOCAL `swarm status` general view (V-4); phonecore never imports it --
+confirmed by grep, zero references in internal/phonecore or mobile. The one "Agent" the
+phone side already has is LaunchSpec.Agent (mobile/types.go:252), which is OUTBOUND (what
+to launch), not a running session's identity.
+
+Closing this is a protocol change across internal/journal, internal/daemon,
+internal/protocol/schema and internal/phonecore -- four packages this slice may not
+touch (FORBIDDEN: everything under internal/) -- and a wire-shape change of the kind that
+gets its own ADR rather than riding in under a mobile field addition. So mobile/types.go
+and mobile/app.go are UNCHANGED: no Session.Agent field was added, because it would carry
+nothing but "" forever, which is a guess in a field's clothing rather than data.
+
+RED RUN:
+
+    $ go test ./mobile/... -run TestSessionAgentHasNoWireSource -v -count=1
+    === RUN   TestSessionAgentHasNoWireSource
+        agentseam_test.go:73: schema.JournalRecord carries no Agent: the wire type the phone's
+        journal stream decodes (remote.go) has nowhere to put a session's agent identity.
+        internal/skeleton/api.go's toWireJournalRecord converts only Cursor/SessionID/Type/Group
+        -- by its own comment, 'only the fields the phone needs' -- so even though the daemon
+        knows the agent locally (persist.Meta.AgentType), nothing copies it onto the record that
+        reaches the relay
+        agentseam_test.go:81: phonecore.CachedSession carries no Agent: the phone's merged
+        session model (journal.go) is folded from schema.JournalRecord and inherits its gap, so
+        mobile/app.go's session() has no verbatim-from-the-wire value to assign a
+        swarmmobile.Session.Agent field the way it already does for Group
+    --- FAIL: TestSessionAgentHasNoWireSource (0.00s)
+    FAIL
+    FAIL	github.com/Nathandela/swarm/mobile	1.046s
+
+This RED is permanent by design, the same idiom mobile/state_seam_test.go already uses
+for PB-STATE-1's three missing durable-state coordinates: it fails until the upstream
+seam exists, and it is not this slice's job to build that seam. Once a future protocol
+slice threads Agent through the five layers above, mobile/app.go's session() gains one
+line (Agent: string(cs.Agent), the same verbatim-from-the-wire pattern Group already
+uses) and this test starts passing instead of erroring.
+
+VERIFICATION, whole-package and whole-module, after the test file was added:
+
+    $ go vet ./...
+    (clean, no output)
+
+    $ go test ./mobile/... -count=1
+    --- FAIL: TestSessionAgentHasNoWireSource (0.00s)
+        (as above)
+    --- FAIL: TestB45_OnlyThePairingDialMayUseTheUnverifiedPolicy (2.05s)
+        b45_pairingscope_test.go:95: .claude/worktrees/agent-a298385437f4fb4df/mobile/pairing.go:360
+        constructs relay.PairingSecurity, which accepts ANY certificate. [... three more
+        worktree paths ...]
+    FAIL	github.com/Nathandela/swarm/mobile	20.714s
+    ok  	github.com/Nathandela/swarm/mobile/conformance	190.570s
+
+The b45 failure is PRE-EXISTING NOISE, not caused by this change: that guard
+(mobile/b45_pairingscope_test.go:45) does a filepath.WalkDir from the repo root, so it
+scans every mobile/pairing.go under .claude/worktrees/* too -- the isolated checkouts of
+other agents concurrently live on this branch. mobile/agentseam_test.go touches no
+pairing code and shares no symbol with that guard; the failure is those other agents'
+in-progress worktree content being walked, not anything this slice added. Reported to the
+team lead rather than silently worked around, since fixing it would mean touching another
+agent's worktree, which is out of scope and forbidden here regardless.
+
+git status --porcelain, confirming the only change under this agent's ownership:
+
+    $ git status --porcelain
+     M android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Kit.kt        (another agent, kit/)
+     M android/gate/s23_kit_test.go                                     (another agent, android/)
+    ?? android/app/src/main/kotlin/dev/swarm/phone/ui/kit/SettingsRow.kt (another agent)
+    ?? android/app/src/main/kotlin/dev/swarm/phone/ui/screens/SettingsPanel.kt (another agent)
+    ?? android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelScreenTest.kt (another agent)
+    ?? mobile/agentseam_test.go                                         (this task, the only file it created)
