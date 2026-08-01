@@ -1248,6 +1248,21 @@ func s23LooksNumeric(s string) bool {
 // Completed to ReadyForReview and gave Completed the recessive grey; an implementer reading only
 // Substrate's artifact would paint the green dot "Done", because that is what the artifact's demo
 // phone labels it.
+// s23ContestedBindings names the Groups whose token binding ADR-007 B134 decision 1 moved, and
+// the binding Substrate itself carries for each -- the value a reviewer reverts TO.
+//
+// `completed` is the concrete half: design-directions.html:80 binds `.pdot.ok` to --p-ok under the
+// section labelled Done, which design-tokens.tsv maps to swarm_state_ok. `ready_for_review` is the
+// half Substrate never coloured at all, which is what the rebinding was written to solve; the
+// committee's recommendation is a 32nd token, so a reverter lands on whatever that token maps to
+// and this table cannot name it in advance. It is listed with an empty alternative so the entry is
+// visible to a reader rather than silently absent -- an empty string matches no resource, so the
+// row grants nothing today and documents the asymmetry honestly.
+var s23ContestedBindings = map[string]string{
+	"completed":        "swarm_state_ok",
+	"ready_for_review": "",
+}
+
 func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 	sources := s23KitSources(t)
 	src, ok := sources["Kit.kt"]
@@ -1288,6 +1303,31 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 			continue
 		}
 		if got != want {
+			// THE HOLD ON A CONTESTED DECISION HAS TO BE MECHANICAL, NOT ANNOTATED.
+			//
+			// ADR-007 B134 decision 1 is marked CONTESTED and awaiting the designer: an audit
+			// committee established that Substrate DOES bind the token the rebinding moves
+			// (design-directions.html:80, `.pdot.ok`, under the section labelled Done) and that
+			// the designer's own rationale calls --p-ok success. The ADR says the decision is not
+			// settled. This gate then enforced it bidirectionally, so a reviewer acting on the
+			// ADR's own words had to fight a green build -- the annotation said "unsettled" and
+			// the fence said "settled", and the fence is what runs.
+			//
+			// So for exactly the two Groups the rebinding moved, Substrate's ORIGINAL binding is
+			// also legal. Reverting is a one-line edit that stays green; anything that is neither
+			// the rebinding nor the original still fails. The two Groups the rebinding did not
+			// touch stay strict, because nothing about them is in dispute.
+			//
+			// Delete this allowance the day the designer rules, in either direction. It is a hold,
+			// not a permanent widening, and it should not outlive the question.
+			if alt, contested := s23ContestedBindings[group]; contested && got == alt {
+				t.Logf("PB-DS-7: group %s is painted R.color.%s, Substrate's original binding, "+
+					"rather than R.color.%s, which ADR-007 B134 decision 1 rebinds it to. That "+
+					"decision is marked CONTESTED and awaiting the designer, so BOTH are legal "+
+					"here and this is not a failure. If the designer has now ruled, delete this "+
+					"allowance and pin the answer.", group, got, want)
+				continue
+			}
 			t.Errorf("PB-DS-7: the kit paints group %s with R.color.%s, but PB-TOK-8 binds it to "+
 				"%s = R.color.%s. ADR-007 B134 decision 1 is the rebinding -- green moved to "+
 				"ReadyForReview and Completed took the recessive grey -- and Substrate's own demo "+
