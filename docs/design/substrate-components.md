@@ -355,7 +355,11 @@ arithmetic exactly and matches the plain reading of "live" as work in flight. A 
 human is not running. If Ready is included, the header count and the tab badge start overlapping in a
 second place and the §1.4 separation weakens.
 
-**8.2 `--p-ok` now means two things on the Inbox screen.** B134 moved `ReadyForReview` to `--p-ok`,
+**8.2 `--p-ok` now means two things on the Inbox screen. STILL OPEN, and now permanent unless someone
+acts.** B134 decision 1 was ruled FOR the rebinding on 2026-08-01 (ADR-007 B137), so the collision
+below is no longer a side effect of a contested decision — it is a property of the shipped palette,
+tracked as `agents-tracker-k9k`. The ruling records it as a cost it did not settle. B134 moved
+`ReadyForReview` to `--p-ok`,
 and Substrate's `.chip .pd` machine-presence dot was already `--p-ok`. On the Inbox both are visible
 at once: a green 5 dp dot inside a scope chip (machine online) and a green 7 dp dot at the head of a
 row (ready for review). *Assessment:* low risk — different sizes, different containers, and the chip
@@ -395,11 +399,28 @@ visual lifetime is shorter than a TalkBack announcement of its longest copy
 (`Controller lease taken - generation 7 to 8`); the announcement must be a live region with a
 lifetime of its own, not a side effect of the view being visible.
 
-**8.8 One row of copy is probably void.** The settings row `Require Face ID to approve` /
-`Biometric gate on every approval sheet` post-dates its own deletion: ADR-007 B133 removed phone-side
-user auth on the grounds that the trust boundary is the wire. The row is specified above because it is
-in the mock, but it should be deleted or re-copied before it becomes a requirement. Not a design
-decision — flagging it because this document is where someone will next read that copy.
+**8.8 One row of copy is void. CLOSED 2026-08-01 — it is deleted, not deferred.** The settings row
+`Require Face ID to approve` / `Biometric gate on every approval sheet` post-dated its own deletion:
+ADR-007 B133 removed phone-side user auth on the grounds that the trust boundary is the wire. **ADR-007
+B135 deletes the row from this design, not only from the code.** A design that keeps drawing a control
+the product removed reads as a gap, and the next person to build the settings screen would rebuild it —
+which is how a deleted feature comes back with no one deciding to bring it back.
+
+Two other settings rows go with it, for reasons that are not the same and are worth keeping apart:
+
+- **Quiet hours is not deferred — it is not a feature.** There is no such preference anywhere in the
+  product and none is planned. The row comes off the design rather than waiting for a field someone
+  adds to satisfy a drawing.
+- **The encryption-status row ships only when something computes it,** and its claim is narrowed to
+  **phone to computer** — the Noise session runs handset to gateway and the relay sees ciphertext.
+  Unqualified "end-to-end" invites the reading that the agent's own traffic or the daemon's storage is
+  covered. Neither is.
+
+**The class, because this document is where it will be read next: a screen can be pixel-accurate to
+its design and still be lying.** All three of these would have rendered correctly and every one would
+have been a green test over a value the product does not possess. The fences in `android/gate/` catch
+a colour that entered without provenance; nothing catches a *claim* that entered without one. These
+were caught by reading.
 
 ---
 
