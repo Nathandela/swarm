@@ -1,0 +1,51 @@
+# Resource XML well-formedness: failing-first run (GG-5)
+
+The gate was written AFTER the defect was observed, so the failing-first run is recorded by
+restoring the exact spelling that broke the build and running the new check against it. The
+aapt failure it answers is quoted below the Go output.
+
+    go test ./android/gate/ -run TestResourceXML -v
+    HEAD 7f57b73, branch design-system-substrate, 2026-08-01T15:55:13Z
+
+## Output
+
+```
+=== RUN   TestResourceXMLIsWellFormed
+    resxml_test.go:48: resource XML: android/app/src/main/res/drawable/swarm_nav_back.xml is not well-formed and will fail resource compilation before any test runs: XML syntax error on line 9: invalid sequence "--" not allowed in comments
+        	If this is a double hyphen in a comment, it is almost certainly a CSS token name or this repo's em-dash convention. Spell tokens [p-name] inside res/ comments.
+    resxml_test.go:63: resource XML: 15 files parsed
+--- FAIL: TestResourceXMLIsWellFormed (0.01s)
+=== RUN   TestResourceXMLReaderRejectsTheKnownFault
+--- PASS: TestResourceXMLReaderRejectsTheKnownFault (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.765s
+FAIL
+```
+
+## The build failure it answers
+
+Second occurrence. The first was commit `680bc84` ("Tab glyph drawables: XML comments cannot
+contain a double hyphen"); this one is `swarm_nav_back.xml`, written by a different agent in the
+same slice, with the same cause and no gate in between.
+
+```
+> Task :app:mergeDebugResources FAILED
+> Task :app:parseDebugLocalResources FAILED
+[Fatal Error] swarm_nav_back.xml:9:38: The string "--" is not permitted within comments.
+
+Resource compilation failed (Failed to compile resource file:
+  android/app/src/main/res/drawable/swarm_nav_back.xml: .
+  Cause: javax.xml.stream.XMLStreamException: ParseError at [row,col]:[9,38]
+  Message: The string "--" is not permitted within comments.)
+
+BUILD FAILED in 42s
+```
+
+## Why no existing gate saw it
+
+Every check over `res/` in `android/gate/` reads those files as text: it greps for a token name, a
+stroke width, a colour reference. `s23_kit_test.go` reads this very drawable -- it recomputes the
+chevron's stroke weight from the design row and compares it to `android:strokeWidth` -- and it read
+the file successfully, because a regular expression over a byte slice does not care whether the
+document parses. Fifteen resource files were being checked in detail by a package that could not
+tell whether any of them was XML.

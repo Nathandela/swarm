@@ -8220,3 +8220,49 @@ tried to defeat it with prose, and it cost one line to revert the whole decision
 went the other way. **A hold is cheap while a question is open and a lie the day after it closes** —
 so it is deleted with the question, in the same commit, which is the one property B136 refused to
 compromise on.
+
+---
+
+## B138. Resource XML is parsed, not grepped (2026-08-01)
+
+Twice now the Android build has been broken by the same one-character fault, and both times every
+check in `android/gate/` was green.
+
+A comment in a vector drawable cited a design token by its real name — `--p-ink3` — or used this
+repo's `--` em-dash convention. **An XML comment may not contain a double hyphen.** It is a parse
+error in the XML specification, not a style rule, so `aapt` refuses the file outright:
+`The string "--" is not permitted within comments`. No Kotlin is involved and no test runs; the
+resource merge fails first. First occurrence `680bc84` (the four tab glyphs), second
+`swarm_nav_back.xml` in the commit before this one, written by a different agent, with a gate
+between them that could not see it.
+
+### Why the gates were blind, which is the part worth keeping
+
+**Every check over `res/` in this package reads those files as text.** `s23_kit_test.go` reads
+`swarm_nav_back.xml` in detail — it recomputes the chevron's stroke weight out of the derivation
+row and compares it to `android:strokeWidth`, and it refuses a non-square viewport. It read the
+broken file successfully, because a regular expression over a byte slice does not care whether the
+document parses. Fifteen resource files were being checked closely by a package that could not tell
+whether any of them was XML.
+
+That is a general shape and not an Android quirk: **a fence built out of pattern matching cannot
+report that its subject is malformed, only that a pattern is absent.** The tab-glyph gate compares
+SVG path token streams precisely *because* string comparison was wrong there; the same package then
+read a whole file class with no parser at all.
+
+### The check
+
+`android/gate/resxml_test.go` decodes every `.xml` under `android/app/src/main/res` with
+`encoding/xml` and fails on the first error. Go's decoder rejects the double hyphen for the same
+reason aapt does, so the check is the whole class rather than the one instance — an unclosed tag, a
+bad entity or a stray `<` fails here too, at `go test` speed, with no JDK and no Android SDK on the
+machine. Its negative control is fed the exact comment that broke the build twice.
+
+**It is deliberately joined to no PB-* requirement.** Nothing in the specification asks for
+well-formed XML; it is a precondition of the resources existing at all, and that is precisely why it
+went unchecked while 162 requirements were owned exactly once. The manifest answers *is every
+requirement fenced*, which is a different question from *is every file readable*.
+
+Token names inside `res/` comments are now spelled `[p-name]`. The convention is stated in
+`swarm_nav_back.xml`'s own comment rather than only here, because the next person to write a
+drawable will be reading a drawable.
