@@ -86,10 +86,26 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 		}
 		byName[d.Name] = d
 	}
-	if len(byName) != len(cases) {
-		t.Fatalf("PB-TOK-7: the artifact resolves %d colours with color-mix and Derivations() "+
-			"returns %d; a derivation that is not in the table is one a consumer must transcribe",
-			len(cases), len(byName))
+	// THE ARTIFACT'S OWN color-mix CALLS MUST ALL BE HERE. The reverse is deliberately NOT
+	// asserted, and the asymmetry is the point: `docs/design/substrate-components.md` derives
+	// components Substrate never drew, and their blends have nowhere else to live. The first is
+	// `toggle-track-off` -- row 4's "track off `--p-ink3` at 40%", for a component the artifact
+	// does not contain. Requiring an artifact CSS rule for every entry would force such a blend
+	// to be typed into the component instead, which is precisely the transcription this table
+	// exists to prevent, so the check runs one way: every artifact derivation is present, and a
+	// derived-table entry is allowed alongside it.
+	for name := range func() map[string]bool {
+		want := map[string]bool{}
+		for _, tc := range cases {
+			want[tc.name] = true
+		}
+		return want
+	}() {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("PB-TOK-7: the artifact resolves %q with color-mix and Derivations() does "+
+				"not carry it; a derivation that is not in the table is one a consumer must "+
+				"transcribe", name)
+		}
 	}
 
 	for _, tc := range cases {

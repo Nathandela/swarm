@@ -231,11 +231,46 @@ func Derivations() []Derivation {
 			Site:    ".pdot.att box-shadow 0 0 9px -- the NeedsInput status dot's halo",
 		},
 		{
+			Name:    "toggle-track-off",
+			Base:    "--p-ink3",
+			Percent: 40,
+			Over:    Transparent,
+			Site: ".toggle track, off state -- derivation row 4. THE FIRST ENTRY HERE THAT SUBSTRATE " +
+				"DID NOT DRAW. The four above are color-mix() calls the artifact's own CSS makes; " +
+				"row 4 derives this one, and this table's header says such entries belong here the " +
+				"moment a spec exists for them. It is added rather than typed into the component " +
+				"because the alternatives all fail honestly: the doc-metric grammar reads " +
+				"`field <number>` and the only match for \"at 40%\" cites a preposition, the toggle " +
+				"is not in tokens.json, and PB-TOK-7 forbids resolving --p-ink3 at 40% into a " +
+				"literal resource. The toggle is also the component the artifact's own " +
+				"prefers-reduced-motion list omits, so it now sits in two documents' blind spots " +
+				"and is the better for being named in both.",
+		},
+		{
 			Name:    "working-dot-glow",
 			Base:    "--p-work",
 			Percent: 55,
 			Over:    Transparent,
 			Site:    ".pdot.wrk box-shadow 0 0 9px -- the Working status dot's halo",
+		},
+		{
+			Name:    "toggle-track-off",
+			Base:    "--p-ink3",
+			Percent: 40,
+			Over:    Transparent,
+			Site: ".toggle track, off state -- the FIRST entry whose authority is the derivation " +
+				"table rather than the artifact's own CSS, taking the invitation the paragraph " +
+				"above leaves open. Substrate draws no toggle; docs/design/substrate-components.md " +
+				"row 4 specifies one, and its off track is --p-ink3 at 40%. The value had nowhere " +
+				"else to come from: the kit's metric grammar reads `field <number>` out of a row " +
+				"and row 4 states the share as prose (\"at 40%\"), the toggle is not in " +
+				"tokens.json, and PB-TOK-7 forbids resolving the alpha into a literal. The only " +
+				"citation that would have fitted was `{ at }` -- a preposition -- which is how a " +
+				"join stops meaning anything. It is also the component that sits in two documents' " +
+				"blind spots at once: the artifact's own prefers-reduced-motion selector list " +
+				"omits the toggle, and ADR-007 B134 decision 3 reads that as an omission rather " +
+				"than a considered exclusion, which is why Motion.kt exposes the primitives a " +
+				"toggle's thumb-slide and track crossfade are built from.",
 		},
 	}
 }
