@@ -70,6 +70,17 @@ type s23Component struct {
 // most components, and it is where the four-Group identity shows (PB-DS-9's own ordering).
 var s23Inbox = []s23Component{
 	{
+		Factory: "monoWell",
+		File:    "MonoWell.kt",
+		Origin:  ".sheet2 .cmd",
+		Why: "every mono block in the app is ONE component, which is row 18's own instruction -- " +
+			"the pairing command line and the terminal peek are the same well with one ink " +
+			"between them. The terminal variant is where tokens.json's terminal_peek.fg pin " +
+			"finally reaches a pixel: PB-TOK-3 has enforced it against the JSON since S22 and no " +
+			"Android code ever read it, so the phosphor green the skin is named for has never " +
+			"rendered on a handset.",
+	},
+	{
 		Factory: "settingsRow",
 		File:    "SettingsRow.kt",
 		Derived: "#15 Settings row",
@@ -866,6 +877,13 @@ var s23Spacing = []struct {
 	Index    int
 	Dimen    string
 }{
+	// `.sheet2 .cmd { padding: 10px 11px }`. The horizontal edge is the interesting one: the
+	// design declares 11px and PB-DS-1's ledger absorbs it into `space_10`, while derivation row
+	// 18 transcribes the same cell as `space_12` -- which no rounding rule produces from 11.
+	// Substrate DREW this component, so the source plus the ledger are the authority and the row
+	// is a transcription of them. Reported as a documentation defect rather than followed.
+	{"MonoWell.kt", ".sheet2 .cmd", "padding", 0, "swarm_space_10"},
+	{"MonoWell.kt", ".sheet2 .cmd", "padding", 1, "swarm_space_10"},
 	{"SessionRow.kt", ".prow", "padding", 0, "swarm_space_10"},
 	{"SessionRow.kt", ".prow", "padding", 1, "swarm_space_12"},
 	{"SessionRow.kt", ".prow .t", "gap", 0, "swarm_space_8"},
@@ -2137,6 +2155,11 @@ var s23TextLiteralExemptions = map[string]string{
 	`"PB-TOK-8: $group is not a status.Group this kit can colour. The phone renders the "`: "the " +
 		"requirement ID in a failure message. It names a row in the requirements table, which is " +
 		"the one place a digit in this kit is an identifier rather than a length.",
+	`".sheet2 .cmd"`: "a CSS SELECTOR, carried as a KitTag so the mono well says which rule it " +
+		"renders. The 2 is part of Substrate's own class name -- `.sheet2` is the directions " +
+		"page's inline sheet -- and no arithmetic can reach it. Every other KitTag names a " +
+		"selector too; this is the first one whose selector happens to contain a digit, which is " +
+		"why the table did not need this row until now.",
 }
 
 // s23TextLiteralFaults reports every string or char literal that could be carrying a number.

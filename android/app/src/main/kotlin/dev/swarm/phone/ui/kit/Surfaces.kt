@@ -247,6 +247,27 @@ internal fun chipSurface(context: Context, selected: Boolean): SubstrateSurface 
 )
 
 /**
+ * `.sheet2 .cmd`: the recessed well a mono block sits in.
+ *
+ * NO KEY LIGHT, and the reason is the same one `chipSurface` gives: the design gives
+ * `box-shadow: var(--p-card-fx)` to `.prow`, `.sheet2` and `.tcard` and to nothing else. A well is
+ * the opposite gesture anyway -- `--p-well` is DARKER than the ground, so a highlight along its
+ * top edge would light the one surface in the skin that is meant to read as cut into the page.
+ */
+internal fun wellSurface(context: Context): SubstrateSurface = surface(
+    SurfaceSpec(
+        fill = Kit.colour(context, R.color.swarm_surface_well),
+        stroke = Kit.colour(context, R.color.swarm_hairline),
+        strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        keyLight = null,
+        keyLightPx = 0f,
+        rail = null,
+        railPx = 0f,
+    ),
+)
+
+/**
  * The badge: a saturated fill, no border, `--p-chip-r` on a 16 dp box so it renders a pill.
  *
  * There is no fifth radius. The pill is a consequence of `2 x 8 >= 16` -- the same degeneracy

@@ -237,6 +237,9 @@ internal object KitTag {
     const val SETTINGS_LABEL = "settings label"
     const val SETTINGS_SUBLABEL = "settings sublabel"
     const val SETTINGS_STATUS = "settings status"
+
+    /** The recessed mono block: a pairing command line, or the terminal peek. */
+    const val MONO_WELL = ".sheet2 .cmd"
 }
 
 /**
