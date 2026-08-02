@@ -581,7 +581,9 @@ sentence — do not copy it from here.**
   decline this permission and still use the app. No image is stored or transmitted.
 - **Notifications** — to alert you when a session needs your attention.
 - **Internet** — to reach the relay.
-- **Run at startup** — to restore your sessions after a reboot.
+- **Run at startup** — declared so the app can reconnect to your computer on its own after a
+  reboot. This is not implemented yet: the app currently does nothing when your phone restarts,
+  and you open it yourself.
 
 ## Third parties
 
