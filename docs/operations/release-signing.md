@@ -41,9 +41,9 @@ relying on an update landing on schedule.
 - A JDK providing `keytool` and `jarsigner` — this project already pins JDK 17
   (`android/toolchain.env`'s `SWARM_JDK_MAJOR`), and both tools ship with any JDK, so sourcing that
   file is enough; no separate install.
-- A password of your own choosing for the keystore itself and, separately, for the key inside it
-  (they may be the same value or different; `build.gradle.kts` reads them as two independent
-  settings either way — see §4).
+- **One** password of your own choosing. `build.gradle.kts` reads the keystore password and the key
+  password as two independent settings (§4), but you must set **both to the same value** — see the
+  warning under §2, which is a property of the keystore format and not a convention.
 
 ## 2. Generate the upload keystore
 
@@ -59,6 +59,26 @@ keytool -genkeypair -v \
 `keytool` prompts interactively for the keystore password, the key password, and the certificate's
 distinguished-name fields (name, org, locale) — none of those need to be accurate identities, Play
 does not check them, they only need to be *something* so the certificate is well-formed.
+
+**Give the key the same password as the keystore. Press RETURN at the key-password prompt, which
+is what that prompt's "(RETURN if same as keystore password)" offers.** Despite the `.jks`
+filename, JDK 9 and later produce a **PKCS12** keystore here, and PKCS12 has no per-entry password:
+if you type a different one, `keytool` does not fail, it discards it and tells you so —
+
+```
+Warning:  Different store and key passwords not supported for PKCS12 KeyStores. Ignoring user-specified -keypass value.
+```
+
+— leaving the key openable only by the *store* password. Verified against this project's pinned
+JDK 17; `keytool -list` on the result reports `Keystore type: PKCS12`. If you then set
+`SWARM_RELEASE_KEY_PASSWORD` (§4) to the value you chose, Gradle asks the keystore for the key with
+a password it does not have and `bundleRelease` fails — after the keystore exists and has been
+backed up, which is the worst moment to discover it. Setting both settings to the one password
+avoids this entirely.
+
+(If you genuinely need two distinct passwords, add `-storetype JKS` to the command above. That
+selects the older proprietary format, which supports them and which `keytool` warns about on every
+use. Nothing in this project needs it.)
 
 - **`-keysize 4096`**: stronger than the 2048-bit figure Android's own sample commands use, and
   well within what every JDK/Android verifier supports. There is no reason to prefer a smaller key
@@ -97,7 +117,7 @@ variable is used:
 | `SWARM_RELEASE_KEYSTORE` | Absolute path to the `.jks` file |
 | `SWARM_RELEASE_KEYSTORE_PASSWORD` | The keystore's own password |
 | `SWARM_RELEASE_KEY_ALIAS` | The `-alias` value from §2 (`swarm-upload` above) |
-| `SWARM_RELEASE_KEY_PASSWORD` | The key's password inside the keystore |
+| `SWARM_RELEASE_KEY_PASSWORD` | The key's password inside the keystore — **the same value as `SWARM_RELEASE_KEYSTORE_PASSWORD`**, for the PKCS12 reason in §2 |
 
 Any release build missing `SWARM_RELEASE_KEYSTORE` fails outright — `requireReleaseSigning`
 (`build.gradle.kts:48-59`) is wired as a dependency of `assembleRelease`/`bundleRelease`
@@ -111,9 +131,9 @@ unsigned artifact.
 
   ```bash
   export SWARM_RELEASE_KEYSTORE="$HOME/.keystores/swarm-upload.jks"
-  export SWARM_RELEASE_KEYSTORE_PASSWORD='<your keystore password>'
+  export SWARM_RELEASE_KEYSTORE_PASSWORD='<your password>'
   export SWARM_RELEASE_KEY_ALIAS='swarm-upload'
-  export SWARM_RELEASE_KEY_PASSWORD='<your key password>'
+  export SWARM_RELEASE_KEY_PASSWORD='<the same password again>'
   ```
 
 - **`~/.gradle/gradle.properties`** — Gradle's *global*, per-machine properties file in your home
@@ -150,6 +170,11 @@ The signed bundle lands at:
 ```
 android/app/build/outputs/bundle/release/app-release.aab
 ```
+
+If this fails on the signing step with a message about recovering the key, or the keystore password
+being incorrect, the cause is almost always the PKCS12 password rule in §2: set
+`SWARM_RELEASE_KEY_PASSWORD` to the same value as `SWARM_RELEASE_KEYSTORE_PASSWORD` and rerun. The
+keystore is fine and does not need regenerating.
 
 ## 6. Verify the AAB is actually signed
 
