@@ -94,6 +94,27 @@ reason to revisit before fronting genuinely independent clients through this sam
 sudo chmod 0644 /etc/swarm-relay/relay.config
 ```
 
+`0644` is deliberate and safe **for this file**: it holds addresses, timeouts and quotas, no
+secret. Leave `push_credentials` empty, as shipped, unless you have provisioned your own FCM
+service account.
+
+**If you do set `push_credentials`, the file it points at is a private key and must not be
+world-readable.** It is a Google service-account document; anyone who can read it can send push
+messages as your project. `ProtectSystem=strict` (§5) keeps the relay from writing to `/etc`, but
+it does nothing to stop another local user reading a `0644` file there. Install it owned by root,
+readable only by the service's group:
+
+```bash
+sudo install -o root -g swarm-relay -m 0640 /tmp/push-credentials.json \
+  /etc/swarm-relay/push-credentials.json
+shred -u /tmp/push-credentials.json    # the copy you scp'd up, which landed 0644
+```
+
+Then point `push_credentials` at `/etc/swarm-relay/push-credentials.json`. The relay reads it once
+at boot as the `swarm-relay` user, so group-read is all it needs. A path that is set but unreadable
+fails the boot on purpose (`cmd/swarm-relay/main.go`, `pushOptions`) — so a permissions mistake here
+is loud at `systemctl start`, not a silent loss of push weeks later.
+
 ## 5. Install the systemd unit and start the relay
 
 Copy `deploy/relay/swarm-relay.service` to `/etc/systemd/system/swarm-relay.service`, then:
@@ -245,12 +266,38 @@ re-pin: you would be pinning the attacker. Investigate the VPS and the network p
 **Step 2 — re-pin the machine.** Recompute and rewrite the pin with the §11 command; `swarm remote
 init` overwrites `<stateDir>/remote/relay.json` in place.
 
-**Step 3 — re-pair the phone.** This step is not optional and cannot be skipped by editing anything
-on the phone. **A pin reaches a handset through the pairing exchange (msg2) and through no other
-channel** — the pairing QR has no field for one, so there is no way to hand a phone a corrected pin
-short of pairing again. Run `swarm remote pair` on the machine and scan the QR. The phone's banner
-above already names this remedy, and the phone deliberately keeps retrying while a pairing is in
-flight so the recovery is not cut off midway.
+**Step 3 — clear the old registration, then re-pair the phone.** This step is not optional and
+cannot be skipped by editing anything on the phone. **A pin reaches a handset through the pairing
+exchange (msg2) and through no other channel** — the pairing QR has no field for one, so there is
+no way to hand a phone a corrected pin short of pairing again.
+
+`swarm remote pair` on its own is **refused** here, because the phone you are recovering is still
+registered: it answers *"a device is already paired (single-device v1); run `swarm remote devices`
+to see its id, then `swarm remote revoke <device-id>` to unregister it, and pair again"*
+(`internal/skeleton/pairing.go`). So the sequence is three commands, not one:
+
+```bash
+swarm remote devices            # find the stale device id
+swarm remote revoke <device-id> # unregister it — needs the relay, hence step 2 first
+swarm remote pair               # then scan the new QR on the phone
+```
+
+**Step 2 is a prerequisite of this step, not merely earlier in the list.** `swarm remote revoke`
+reaches the relay over the CLI's own short-lived owner connection, which is pinned exactly like
+every other machine dial path (`relay-runbook.md` §8b), so a machine still holding the stale pin
+cannot revoke anything.
+
+**And do not re-pair before step 2 for a second reason: it accuses the relay of an attack.** A
+machine still holding the old pin puts that old pin in msg2, while the phone's pairing dial — which
+is the dial that *fetches* the pin and therefore cannot itself be pinned — observes the new
+certificate. The phone compares the two and refuses:
+
+> the relay presented a certificate the machine did not pin; the pairing connection is being
+> intercepted
+
+(`mobile/relay.go`, reported as a failed pairing). That message is accurate about what the phone
+observed and wrong about the cause, and read alongside step 1 it would send you hunting an
+interception that is not happening. Re-pin the machine first and it does not appear.
 
 **Step 4 — prevent the next one.** Confirm `tls { reuse_private_keys }` is present in
 `/etc/caddy/Caddyfile`, `sudo systemctl reload caddy`, and re-run §9 to record the new baseline
