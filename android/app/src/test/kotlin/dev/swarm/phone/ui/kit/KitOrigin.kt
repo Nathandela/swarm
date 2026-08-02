@@ -185,6 +185,56 @@ object KitOrigin {
         return m.groupValues[1].toFloat() / 100f
     }
 
+    /**
+     * The token a derivation row binds to one named part: `--p-hair` for row 24's `fill`.
+     *
+     * IT IS THE ROW AND NOT A CONSTANT, which is the whole reason this function exists rather than
+     * a pair of token names written into a test. `docs/design/substrate-components.md` is the only
+     * place a non-Substrate component is specified -- the artifact draws no disabled CTA at all --
+     * so a suite that transcribed `--p-hair` here would agree with itself forever and say nothing
+     * about the document. Read this way, a row edited to a different token fails the component that
+     * paints the old one.
+     *
+     * EVERY OCCURRENCE MUST AGREE, for `s23DocMetric`'s reason one lane over: a row is prose in a
+     * table cell and a token can be restated in it, so taking the first match would make the
+     * expected value depend on the order someone wrote a sentence in.
+     */
+    fun rowToken(component: String, field: String): String {
+        val row = derivationRow(component)
+        val matches = Regex("\\b${Regex.escape(field)}\\s+`(--p-[a-z0-9-]+)`").findAll(row)
+            .map { it.groupValues[1] }
+            .toList()
+        require(matches.isNotEmpty()) {
+            "the `$component` row states no `$field <token>`, so there is nothing to paint it with"
+        }
+        require(matches.distinct().size == 1) {
+            "the `$component` row states $field twice and disagrees with itself: $matches"
+        }
+        return matches.first()
+    }
+
+    /**
+     * One row of the derivation table, found by its leading component cell.
+     *
+     * Fails loudly rather than returning null or the empty string: a value read out of a row that
+     * is not there is a value read out of nothing, and every assertion over it would pass.
+     */
+    fun derivationRow(component: String): String =
+        readResource(COMPONENTS_DOC).lineSequence()
+            .firstOrNull { it.startsWith("|") && it.split("|").getOrNull(2)?.trim() == component }
+            ?: error("$COMPONENTS_DOC's derivation table declares no row for `$component`")
+
+    private fun readResource(name: String): String =
+        javaClass.classLoader?.getResourceAsStream(name)?.bufferedReader()?.use { it.readText() }
+            ?: error(
+                "$name is not on the unit-test classpath. app/build.gradle.kts must stage it as a " +
+                    "unit-test resource so these assertions read the design itself rather than a " +
+                    "value copied out of the implementation they are checking",
+            )
+
+    /** PB-DS-7's derivation table: the design as DECIDED, for the components Substrate never drew. */
+    private const val COMPONENTS_DOC = "substrate-components.md"
+
     /** PB-TOK-8's join: which design token a `status.Group` IS. */
     fun groupToken(group: String): String = groupTokens()[group]
         ?: error("$GROUP_TOKENS binds no token to the status.Group $group")

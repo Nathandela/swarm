@@ -2396,7 +2396,10 @@ var s23LiteralExemptions = map[string]string{
 		"type below PB-DS-12's 10 sp floor, so the count saturates at `99+`; the 16 dp is the " +
 		"checked constant and this is the consequence of it.",
 	"255": "the top of the 8-bit channel range Color.argb takes. It is the platform's encoding of " +
-		"a colour, not a number the design chose.",
+		"a colour, not a number the design chose. THE SECOND SITE IS NAMED for the reason `2f` " +
+		"gives: Drawable.setAlpha takes the same range, and CtaSurface spends it to stop the CTA's " +
+		"halo painting when derivation row 24 removes `--p-cta-fx` from a dead button. A reader " +
+		"cannot agree with a use the row does not mention.",
 	"255f": "the same range in the float arithmetic that produces it.",
 }
 

@@ -1475,13 +1475,17 @@ class PhoneSurface(
      * painting `.a2-ok` on a Kill session button because it happens to be a button would be
      * choosing a variant for a site the design has not specified.
      *
-     * TWO THINGS COME WITH [ctaButton] THAT A `Button` HAD FOR FREE, and both are handled here
-     * because the kit cannot: a `TextView` announces itself as text rather than as a button, and
-     * the kit has no click to hang the role on (`CtaButton`'s own KDoc records the gap). The role
-     * is set below. The other is the DISABLED APPEARANCE: `Button` dims itself and this does not,
-     * because derivation row 24 -- the disabled/stale CTA, `--p-hair` fill and `--p-ink3` ink --
-     * has no factory. `isEnabled` still refuses the tap; what is lost is that it looks refused.
-     * Recorded rather than approximated with an alpha nobody derived.
+     * ONE THING COMES WITH [ctaButton] THAT A `Button` HAD FOR FREE, and it is handled here because
+     * the kit cannot: a `TextView` announces itself as text rather than as a button, and the kit has
+     * no click to hang the role on (`CtaButton`'s own KDoc records the gap). The role is set below.
+     *
+     * THE DISABLED APPEARANCE WAS THE SECOND AND IS NOW THE KIT'S. It used to be recorded here as a
+     * deliberate omission -- `Button` dims itself, this did not, and derivation row 24 had no
+     * implementation -- so [launch] refused the tap while drawing full-strength phosphor green with
+     * its bloom, which is a dead control that looks pressable. [ctaButton] now paints row 24's pair
+     * (`--p-hair` fill, `--p-ink3` ink, no bloom) off the view's own drawable state, so every
+     * `isEnabled = false` below both refuses the tap and looks refused, with nothing to remember at
+     * this call site.
      */
     private fun ctaAction(
         text: String,

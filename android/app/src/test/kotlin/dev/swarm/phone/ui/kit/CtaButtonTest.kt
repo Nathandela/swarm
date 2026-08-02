@@ -1,8 +1,11 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.os.Looper
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import androidx.test.core.app.ApplicationProvider
@@ -10,12 +13,14 @@ import dev.swarm.phone.theme.DesignScale
 import dev.swarm.phone.theme.SwarmTheme
 import dev.swarm.phone.theme.TypeScale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.GraphicsMode
 import kotlin.math.roundToInt
 
@@ -77,7 +82,47 @@ class CtaButtonTest {
 
     private fun more() = ctaButton(context, "View session first", CtaKind.MORE)
 
+    /** The spec the surface is painting, which is what a state change moves. */
     private fun specOf(button: View) = (button.background as CtaSurface).spec
+
+    /**
+     * Does a finger landing on this button begin an interaction with it?
+     *
+     * IT IS THE PRESS AND NOT THE CLICK, and the reason is a property of `View` rather than a
+     * preference. `onTouchEvent` POSTS the click (`if (!post(mPerformClick)) performClick()`), and a
+     * view that is not attached to a window queues that action until it is -- so a listener claim
+     * here would be about attachment rather than about the control. The press is the platform's own
+     * synchronous fork: a DISABLED view returns from `onTouchEvent` before it sets `PFLAG_PRESSED`,
+     * so a control that never presses is one no tap can ever complete on. `performClick` is not
+     * used at all: it invokes the listener whatever the view's state and would report a dead control
+     * as live.
+     *
+     * IT LAYS THE BUTTON OUT FIRST, and that is not ceremony. An unmeasured view is 0x0 and a touch
+     * inside it lands nowhere, which would report every button in this file as dead.
+     */
+    private fun pressedByTouch(button: View): Boolean {
+        val unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        button.measure(unspecified, unspecified)
+        button.layout(0, 0, button.measuredWidth, button.measuredHeight)
+        assertTrue(
+            "the button laid out at zero size, so a touch lands outside it and no control could " +
+                "be reported as live",
+            button.width > 0 && button.height > 0,
+        )
+        val now = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(
+            now, now, MotionEvent.ACTION_DOWN, button.width / 2f, button.height / 2f, 0,
+        )
+        button.dispatchTouchEvent(down)
+        down.recycle()
+        // A press inside a scrolling container is DELAYED rather than immediate, so the answer is
+        // read after the pending tap callback rather than before it.
+        shadowOf(Looper.getMainLooper()).idle()
+        return button.isPressed
+    }
+
+    /** Row 24's leading cell, the citation `CtaButton.kt` carries. */
+    private val ROW_24 = "Disabled / stale CTA"
 
     /** `.a2-ok`, `.a2-no`, `.a2-more`: three fills, each read from the rule that declares it. */
     @Test
@@ -338,6 +383,144 @@ class CtaButtonTest {
     }
 
     /**
+     * Derivation row 24, the state Substrate never drew: `--p-hair` fill, `--p-ink3` ink, no bloom.
+     *
+     * THE TWO TOKENS ARE READ OUT OF THE ROW AND NOT WRITTEN HERE. The artifact draws no disabled
+     * CTA at all -- `.sheet.stale .a-ok` is the retired mock's class -- so that row is the only
+     * place this state is specified, and a suite that transcribed `--p-hair` into itself would
+     * agree with itself forever. [KitOrigin.rowToken] follows the row; edit it to name a different
+     * token and this fails on the component that still paints the old one.
+     */
+    @Test
+    fun `the disabled CTA is the pair row 24 states`() {
+        val fill = KitOrigin.token(KitOrigin.rowToken(ROW_24, "fill"))
+        val ink = KitOrigin.token(KitOrigin.rowToken(ROW_24, "ink"))
+
+        val claims = CtaKind.entries.flatMap { kind ->
+            val button = ctaButton(context, "Approve once", kind).apply { isEnabled = false }
+            listOf(
+                Claim("row 24 fill on $kind", fill, specOf(button).fill),
+                Claim("row 24 ink on $kind", ink, button.currentTextColor),
+                // "`--p-cta-fx` removed -- nothing glows unless it is alive." The bloom is the
+                // load-bearing half of §1.3: a dead button keeping its 18 dp phosphor halo would
+                // contradict the skin's one explicit rule about light.
+                Claim("row 24 bloom on $kind", null, specOf(button).bloom),
+            )
+        }
+
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
+     * The half of row 24 that is BEHAVIOUR: "Not clickable, not focusable, so WCAG 1.4.3's
+     * inactive-control exemption applies".
+     *
+     * IT IS WHAT LICENSES THE CONTRAST. The pair resolves to 2.66:1, below the 3:1 UI floor, and
+     * §1.3 says by intent -- the exemption is for INACTIVE controls, so a disabled CTA that still
+     * took focus or still fired would be a control below the floor rather than an exempt one. The
+     * tap is sent as a touch rather than through `performClick`, which fires a listener whatever
+     * the view's state: what is asked here is what a finger gets.
+     */
+    @Test
+    fun `the disabled CTA takes no focus and no touch`() {
+        // BOTH ARE MARKED FOCUSABLE, and that is the point rather than setup. Row 23's ring
+        // "applies to every focusable", so the day a screen or the kit marks this control
+        // focusable is the day row 24's "not focusable" can be broken -- and a test that relied on
+        // the kit not setting the flag would pass by asserting that no CTA is reachable at all.
+        // What is asked here is what happens when it IS: `isEnabled = false` has to win.
+        val live = ctaButton(context, "Approve once", CtaKind.APPROVE).apply {
+            setOnClickListener { }
+            // In touch mode a view is refused focus unless it asks for it there too, and a unit
+            // test has no window to leave touch mode with. Both halves carry the flag, so what
+            // separates them is the one property under test.
+            isFocusableInTouchMode = true
+        }
+        val dead = ctaButton(context, "Approve once", CtaKind.APPROVE).apply {
+            setOnClickListener { }
+            isFocusableInTouchMode = true
+            isEnabled = false
+        }
+
+        // The live half is the control on both claims. Without it "the dead one refuses" is
+        // satisfied by a button nothing can reach in either state, which is a suite asserting that
+        // this component does not work.
+        assertTrue(
+            "a live CTA does not respond to a touch either, so the refusal below is about nothing",
+            pressedByTouch(live),
+        )
+        assertFalse(
+            "a disabled CTA began an interaction, so the control is dead in paint only",
+            pressedByTouch(dead),
+        )
+
+        assertTrue("a live CTA cannot take focus, so the refusal below is about nothing", live.requestFocus())
+        assertFalse(
+            "a disabled CTA took focus. Row 24's contrast is 2.66:1 and §1.3 licenses it on WCAG " +
+                "1.4.3's INACTIVE-control exemption -- a focusable one is a live control below " +
+                "the floor instead.",
+            dead.requestFocus(),
+        )
+    }
+
+    /**
+     * §1.3's own check: "The check that matters is the one against its neighbours."
+     *
+     * The rejected alternative was ink `--p-ink2` (4.72:1) -- legible, and close enough to the
+     * tertiary `View session first` button below it to read as merely another enabled control. So
+     * the assertion is not that the disabled button differs from ITSELF enabled, which any alpha
+     * would satisfy, but that it differs from the live control it sits next to.
+     */
+    @Test
+    fun `the dead CTA is distinguishable from the live control beside it`() {
+        val dead = ctaButton(context, "Approve once", CtaKind.APPROVE).apply { isEnabled = false }
+        val tertiary = more()
+
+        assertNotEquals(
+            "the disabled fill is the tertiary action's, so a dead primary and a live secondary " +
+                "are the same surface in the same stack",
+            specOf(tertiary).fill,
+            specOf(dead).fill,
+        )
+        assertNotEquals(
+            "the disabled ink is the tertiary action's `--p-ink`, which is §1.3's whole point: " +
+                "dead and alive have to be far apart in one stack, not merely different",
+            tertiary.currentTextColor,
+            dead.currentTextColor,
+        )
+        assertNotEquals(
+            "a disabled CTA is the enabled fill, so `isEnabled = false` refuses the tap and " +
+                "nothing on screen says so -- the defect this state exists to fix",
+            specOf(approve()).fill,
+            specOf(dead).fill,
+        )
+    }
+
+    /**
+     * The button does not MOVE when it dies, which is why row 24 restates the geometry it shares.
+     *
+     * Row 24 gives the disabled state `--p-btn-r` 9 and `padding space_12` -- the enabled CTA's own
+     * radius and padding -- so only the fill, the ink and the bloom change. A state that also
+     * changed the box would reflow the sheet under the user at the moment the request expired.
+     */
+    @Test
+    fun `the disabled state changes what is painted and not where`() {
+        val button = approve()
+        val alive = specOf(button)
+        val padding = button.paddingTop
+        button.isEnabled = false
+        val dead = specOf(button)
+
+        val claims = listOf(
+            Claim("radius", alive.radiusPx, dead.radiusPx),
+            Claim("halo room", alive.insetPx, dead.insetPx),
+            Claim("padding-top", padding, button.paddingTop),
+            Claim("stroke width", alive.strokeWidthPx, dead.strokeWidthPx),
+        )
+
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
      * The negative control PB-DS-10 requires, through the SAME comparison the assertions above use.
      *
      * A control that rebuilt the comparison inline would prove the copy works. Every claim above
@@ -386,6 +569,28 @@ class CtaButtonTest {
                 "the effect token rather than out of the fill would notice nothing",
             KitOrigin.token("--p-cta-bg"),
             KitOrigin.rgbaToken("--p-cta-fx"),
+        )
+
+        // Row 24's own controls. The first two say the reader is reading the ROW: it resolves the
+        // two tokens the row states, and they are not the ones the enabled button paints -- so a
+        // component that never changed its fill fails rather than passing on a coincidence.
+        assertEquals(
+            "the row 24 reader no longer resolves the fill the row states, so every claim it " +
+                "feeds is about whatever it returned instead",
+            "--p-hair",
+            KitOrigin.rowToken(ROW_24, "fill"),
+        )
+        assertEquals("--p-ink3", KitOrigin.rowToken(ROW_24, "ink"))
+        assertNotEquals(
+            "row 24's fill is the enabled CTA's, so a button that ignored `isEnabled` would pass " +
+                "the disabled-appearance claim",
+            KitOrigin.token(KitOrigin.rowToken(ROW_24, "fill")),
+            fill,
+        )
+        assertTrue(
+            "a bloom that survived the disabled state passes the comparison, which is the skin's " +
+                "one explicit rule about light broken on the one control that is definitely dead",
+            mismatches(listOf(Claim("row 24 bloom", null, fill))).isNotEmpty(),
         )
     }
 }
