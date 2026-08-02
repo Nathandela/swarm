@@ -95,6 +95,20 @@ universal_binaries:
     replace: true
     name_template: swarm
 
+  # swarm-remote MUST get the same treatment, and the reason is the archive below,
+  # not symmetry. That archive carries BOTH binaries, and `replace: true` above
+  # deletes the darwin single-arch `swarm` builds -- so without this block the
+  # darwin_all archive would hold one binary (swarm) while the linux archives hold
+  # two, which goreleaser rejects outright: "archive has different count of binaries
+  # for each platform". The two lines met for the first time in the 2026-08-02 merge
+  # (universal binaries came from the v0.4.0 Rosetta fix on main, the second binary
+  # from the remote-control line) and neither was wrong on its own.
+  - id: swarm-remote
+    ids:
+      - swarm-remote
+    replace: true
+    name_template: swarm-remote
+
 archives:
   - id: swarm
     ids:
