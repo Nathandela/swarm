@@ -167,6 +167,23 @@ Pairing from here is `swarm remote init` then `swarm remote pair` on the machine
 `docs/operations/operator-runbook.md` §1-§3. The handset needs to reach a relay: LAN setup is
 `docs/operations/relay-runbook.md`, public is `docs/operations/relay-vps-deploy.md`.
 
+### Build the machine side from THIS branch too, not from a release
+
+An installed `swarm` — a Homebrew cask, or anything built before this branch — is not enough, and
+the way it fails is silent. The fix for `agents-tracker-r3p` (typing a line and pressing Enter, and
+having the agent never see it) is in two halves, and only one of them ships in the APK:
+
+- the phone half, splitting the submit off the text it follows, is `internal/phonecore`, which IS
+  in the AAR's dependency tree;
+- the machine half, holding that submit 150 ms off the text so the two do not land in one PTY read
+  tick, is `internal/remotegw` — reached by `cmd/swarm-remote`, and **not in the AAR's tree at
+  all**.
+
+A new handset against an old gateway therefore sends two frames the relay's batched delivery
+recombines into one read tick, which is the case the CLI reads as a paste. You get the original bug
+back, from a phone that contains the fix. Build all three binaries from this branch first
+(`docs/operations/operator-runbook.md` §1) and put them on `PATH` before `swarm remote init`.
+
 ---
 
 ## 6. Troubleshooting the first launch
