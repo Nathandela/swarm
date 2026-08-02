@@ -167,18 +167,53 @@ pin change.
 | Foreground services | **none declared** | manifest — by design (ADR-007 B16) |
 | Analytics / crash reporting | **none** | `android/dependency-inventory.tsv`, gate-enforced |
 
-**Permissions requested** (all four, nothing else):
+**Permissions requested — the MERGED set, which is eight.** Play receives the merged manifest,
+not the four lines in `app/src/main/AndroidManifest.xml`. This section listed those four until
+2026-08-02, which understated it by half. Each row below names the manifest that actually
+contributes the line, read out of the merger's own attribution file
+(`app/build/intermediates/manifest_merge_blame_file/release/processReleaseMainManifest/manifest-merger-blame-release-report.txt`)
+rather than inferred from the dependency list:
 
-- `android.permission.INTERNET`
-- `android.permission.CAMERA` — QR pairing. `uses-feature required="false"`, so camera-less
-  devices still install; there is a manual-entry fallback.
-- `android.permission.POST_NOTIFICATIONS`
-- `android.permission.RECEIVE_BOOT_COMPLETED`
+| Permission | Contributed by | Why |
+|---|---|---|
+| `android.permission.INTERNET` | app manifest | the daemon connection |
+| `android.permission.CAMERA` | app manifest | QR pairing. `uses-feature required="false"`, so camera-less devices still install; there is a manual-entry fallback |
+| `android.permission.POST_NOTIFICATIONS` | app manifest | push notifications |
+| `android.permission.RECEIVE_BOOT_COMPLETED` | app manifest | re-arm after reboot |
+| `android.permission.ACCESS_NETWORK_STATE` | `com.google.firebase:firebase-messaging:24.1.2` | FCM |
+| `android.permission.WAKE_LOCK` | `com.google.firebase:firebase-messaging:24.1.2` | FCM. The library's own comment: "required by older versions of Google Play services to create IID tokens" |
+| `com.google.android.c2dm.permission.RECEIVE` | `com.google.firebase:firebase-messaging:24.1.2` | FCM message delivery |
+| `dev.swarm.phone.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` | `androidx.core:core:1.13.0` | app-private, `protectionLevel="signature"`; guards receivers registered through `ContextCompat.registerReceiver`. Never shown to a user |
 
-**None of these triggers a Play sensitive-permission declaration form.** No
-`QUERY_ALL_PACKAGES`, no SMS/Call Log, no `MANAGE_EXTERNAL_STORAGE`, no location, no
-`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, no foreground service type. That is a materially
-easier review than most apps get — do not add any of them casually.
+**`play-services` contributes none of them.** All three FCM lines come from `firebase-messaging`
+itself; Play Services appears only as the *reason* in the `WAKE_LOCK` comment, not as the
+contributor.
+
+**It was ten until 2026-08-02.** `androidx.biometric:biometric:1.1.0` also contributed
+`USE_BIOMETRIC` and `USE_FINGERPRINT` — for the per-use biometric gate ADR-007 B133 had already
+deleted, while the privacy policy was being corrected to stop claiming biometric protection. The
+dependency was removed (bead `agents-tracker-i3u6`) and the merged manifest re-read to confirm
+both permissions are gone and nothing else moved.
+
+**None of these triggers a Play sensitive-permission declaration form** — and that now follows
+from the set Play actually receives rather than from a subset of it. No `QUERY_ALL_PACKAGES`, no
+SMS/Call Log, no `MANAGE_EXTERNAL_STORAGE`, no location, no
+`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, no `REQUEST_INSTALL_PACKAGES`, no `USE_EXACT_ALARM`, no
+AccessibilityService, no `READ_MEDIA_*`, and no foreground service type. `CAMERA` and
+`POST_NOTIFICATIONS` raise runtime prompts, which is not the same thing as a declaration form;
+the other six are `normal` or `signature` and are granted without any user interaction. That is
+a materially easier review than most apps get — do not add any of them casually.
+
+**Re-derive this table after any dependency change rather than trusting it.** A library
+contributes permissions whether or not a line of Kotlin calls it, which is exactly how the two
+biometric entries outlived the feature that justified them:
+
+```bash
+cd android && ./gradlew :app:processReleaseManifestForPackage
+grep -o 'uses-permission[^/]*android:name="[^"]*"' \
+  app/build/intermediates/packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml \
+  | sed 's/.*android:name="//;s/"//' | sort
+```
 
 ---
 

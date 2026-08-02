@@ -207,28 +207,38 @@ It appears in `error_taxonomy.tsv`, `mobile/relay.go:182` (`connReauthRequired`)
 change**, or `s16_ui_test.go`'s set-equality forces keeping a producer-less state. `mobile/conformance/
 s16_errorstates_test.go` ("every row reachable") is coupled and was outside the classification pass.
 
-## Follow-up: `androidx.biometric` still ships, justified by a VOID requirement
+## Follow-up: `androidx.biometric` — DONE 2026-08-02 (bead `agents-tracker-i3u6`)
 
-`android/app/build.gradle.kts:303` still declares `androidx.biometric:biometric:1.1.0`, justified at
-`:277-300` entirely by **PB-SEC-2 (now VOID)**. `android/dependency-inventory.tsv:37` carries the same
-stale justification. **No Kotlin file imports it** — `TestB133_TheAppImportsNothingFromAndroidxBiometric`
-in `android/gate/s16_ui_test.go` fences that, so it cannot return by accident.
+It declared `androidx.biometric:biometric:1.1.0` justified entirely by **PB-SEC-2 (now VOID)**, with
+`android/dependency-inventory.tsv` carrying the same stale justification, and **no Kotlin file
+importing it** — `TestB133_TheAppImportsNothingFromAndroidxBiometric` in `android/gate/s16_ui_test.go`
+fences that, so it cannot return by accident.
 
-**Attempted and deliberately backed out.** Removing the line breaks the build twice over: the
-dependency lock state (`Did not resolve 'androidx.biometric:biometric:1.1.0' which is part of the
-dependency lock state`), and then, under `--write-locks`, **dependency verification fails for 21
-artifacts**. `build.gradle.kts:133-137` prescribes the real procedure and says why it is not automatic:
+**What forced it past "worth doing eventually":** an unused dependency still contributes to the
+MERGED manifest. This one added `USE_BIOMETRIC` and `USE_FINGERPRINT`, so the app asked for biometric
+permissions for a deleted capability while its privacy policy was corrected to stop claiming
+biometric protection. The merged release set went from ten permissions to eight; the two removed are
+exactly those, verified by re-reading the packaged manifest, not inferred.
 
-```
-./gradlew :app:dependencies --write-locks
-./gradlew --write-verification-metadata sha256 help
-```
-> "and REVIEW THE DIFF. The regeneration step is the point at which a changed artifact has to be
-> justified by a person."
+**The earlier attempt was backed out for a reason that turned out to be avoidable.** It had used
+`--write-locks`, which under `dependencyLocking { lockAllConfigurations() }` re-resolves every
+configuration and made **dependency verification fail for 21 artifacts** — a PB-SEC-14 supply-chain
+action requiring human review, correctly refused as cleanup collateral.
 
-Regenerating checksum verification is a **PB-SEC-14 supply-chain action requiring human review**, not
-cleanup collateral. It is its own slice. Removing the dependency *pays* PB-SEC-14 by shrinking the
-closure — worth doing, deliberately, with the diff reviewed.
+That regeneration is not needed to REMOVE a dependency. Deleting a coordinate only shrinks the
+closure, so the correct edit is to delete the corresponding rows by hand and resolve normally:
+
+- `android/app/build.gradle.kts` — the `implementation(...)` line and its justification comment
+- `android/app/gradle.lockfile` — exactly one row (it had pulled nothing new; its fragment and
+  lifecycle modules all resolve through `androidx.appcompat`)
+- `android/gradle/verification-metadata.xml` — the one `<component>` block
+- `android/dependency-inventory.tsv` — the one row
+
+The last two must move **together**: `TestPBSEC8_TheInventoryCoversEveryResolvedModule` is
+bidirectional and reads the resolved set out of `verification-metadata.xml`, so removing either
+alone fails as an unjustified dependency or a stale justification. No new checksum enters the build
+and no artifact changes, which is why no human review of a verification diff is owed — this
+direction *pays* PB-SEC-14 rather than trading against it.
 
 ## Design decisions OWED — do not let these be resolved silently
 
