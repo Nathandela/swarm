@@ -91,11 +91,12 @@ policy at
 <a href="https://firebase.google.com/support/privacy">https://firebase.google.com/support/privacy</a>.
 </p>
 <p>
-The relay server is run by whoever operates the computer you pair your phone with. swarm's
-relay is designed to be self-hosted: the app developer does not run a central relay service
-that your traffic passes through. The relay stores encrypted message payloads until your phone
-confirms receipt, or for up to seven days if never delivered, along with the routing metadata
-needed to deliver them.
+swarm is designed to be self-hosted: the app has no relay address built in, and whoever sets up
+a swarm deployment runs their own relay and provisions its address themselves. For this closed
+test, that operator is the developer: the relay you connect to is deployed and run by the
+developer, on infrastructure the developer controls. The relay stores encrypted message payloads
+until your phone confirms receipt, or for up to seven days if never delivered, along with the
+routing metadata needed to deliver them.
 </p>
 <p>
 No data is sold, and none is shared with anyone else.
