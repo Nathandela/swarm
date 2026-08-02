@@ -1272,7 +1272,7 @@ func TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit(t *testing.T) {
 // TestPBAPP3_TheSessionDetailIsReachedFromTheApp is the composition fence's missing half, for the
 // one screen that had no way in.
 //
-// WHY IT IS NEEDED AND WHY ONLY HERE. Every other assertion in this file asks how a screen is
+// WHY A SOURCE SCAN IS NEEDED AT ALL. Every other assertion in this file asks how a screen is
 // BUILT; none asks whether anything renders it, because the runtime half of that question is
 // `PhoneSurfaceNavigationTest` -- it launches the real Activity, taps a real tab and reads what
 // lands under the bar. That test reaches the machines and activity screens and CANNOT reach this
@@ -1289,37 +1289,64 @@ func TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit(t *testing.T) {
 // reachable by nothing -- which is also the state `navHeaderDrill`'s chevron shipped in
 // (agents-tracker-2yb: "the chevron therefore looks like a control and does not act").
 //
+// What the comparison can and cannot see is on [assertScreenIsReachedFromTheApp], which both
+// fences of this shape call.
+func TestPBAPP3_TheSessionDetailIsReachedFromTheApp(t *testing.T) {
+	assertScreenIsReachedFromTheApp(t, "PB-APP-3", "sessionDetailView",
+		"inventory C2 is a screen the app cannot navigate to, and a user tapping a session row "+
+			"does not arrive at it")
+}
+
+// TestPBDS9_TheLinkSectionIsReachedFromTheApp is the same fence over the screen that was BUILT to
+// close this defect class, which is the one place it would be embarrassing to leave unfenced.
+//
+// `LinkPanelView` exists because `ClockBanner` and `StreamView` were modelled, unit-tested, reached
+// by `FacadeBridge` and drawn by nothing (agents-tracker-ah2). A section written to fix
+// "reachable by nothing" and then left reachable by nothing is the same bug with more files in it,
+// and every check that would notice is on the wrong side of a seam: `LinkPanelViewTest` builds the
+// view itself, and the runtime half is out of reach because `PhoneRuntime.phone()` answers
+// Unavailable on every JVM run, where `drawMachines` gets a null bridge and draws only the
+// unavailable sentence. A source scan is what is left.
+//
+// The comment above about scoping to ONE screen no longer holds and is superseded rather than
+// contradicted: there are two now, both named, and `machinesPanelView` is still legitimately
+// unrendered (agents-tracker-xtj). A blanket fence would still need an exemption table, and a
+// table of screens allowed to be unreachable is still a place for screens to go and stay.
+func TestPBDS9_TheLinkSectionIsReachedFromTheApp(t *testing.T) {
+	assertScreenIsReachedFromTheApp(t, "PB-DS-9", "linkPanelView",
+		"PB-TIME-1's clock verdict and PB-APP-8's four channel verdicts are drawn by nothing "+
+			"again, which is the exact defect this section was written to close")
+}
+
+// assertScreenIsReachedFromTheApp is the comparison both fences make.
+//
 // WHAT IT CANNOT SEE, stated rather than left to be assumed away: a call site is not
-// REACHABILITY. A `sessionDetailView(...)` inside a function nothing invokes satisfies this, the
-// same limit android/gate/boundverbledger_test.go records about its own name matching. It is
-// scoped to this ONE screen deliberately -- `machinesPanelView` is legitimately unrendered today
-// and its reason is agents-tracker-xtj's to spend, so a blanket fence would need an exemption
-// table, and a table of screens allowed to be unreachable is a place for screens to go and stay.
+// REACHABILITY. A `screen(...)` inside a function nothing invokes satisfies it, the same limit
+// android/gate/boundverbledger_test.go records about its own name matching.
 //
 // The comparison itself is `s24Spends`, whose negative control is TestPBDS6_AnImportIsNotACallSite
 // -- an import of the screen factory with no call under it must not read as a call site, which is
-// the cheapest possible way to make this finding go away without changing what a user can reach.
-func TestPBAPP3_TheSessionDetailIsReachedFromTheApp(t *testing.T) {
-	const detail = "sessionDetailView"
+// the cheapest possible way to make either finding go away without changing what a user can reach.
+func assertScreenIsReachedFromTheApp(t *testing.T, requirement, factory, cost string) {
+	t.Helper()
 
 	var reachedBy []string
 	for name, src := range s24ProductionKotlin(t) {
-		// The screen package is EXCLUDED, and that is the whole assertion. The detail composing
+		// The screen package is EXCLUDED, and that is the whole assertion. A screen composing
 		// itself, or a sibling screen composing it, says nothing about whether the app the user
 		// opens can get there.
 		if strings.HasPrefix(name, s24ScreenPackage+"/") {
 			continue
 		}
-		if s24Spends(kotlinCodeOnly(src), detail) {
+		if s24Spends(kotlinCodeOnly(src), factory) {
 			reachedBy = append(reachedBy, name)
 		}
 	}
 	if len(reachedBy) == 0 {
-		t.Errorf("PB-APP-3: no production Kotlin outside %s calls `%s`, so inventory C2 is a "+
-			"screen the app cannot navigate to. It is composed from the kit and covered by its "+
-			"own suite, and a user tapping a session row does not arrive at it -- which is the "+
-			"defect PB-DS-6 was recorded NOT MET over ('the kit has ZERO production call sites'), "+
-			"one level up.", s24ScreenPackage, detail)
+		t.Errorf("%s: no production Kotlin outside %s calls `%s`, so %s. It is composed from the "+
+			"kit and covered by its own suite -- which is the defect PB-DS-6 was recorded NOT MET "+
+			"over ('the kit has ZERO production call sites'), one level up.",
+			requirement, s24ScreenPackage, factory, cost)
 	}
 }
 
