@@ -69,27 +69,24 @@ This "Create app" action itself is low-stakes: an app shell with no uploaded bui
 deletable from Console if abandoned. **The action that actually locks anything in is the first AAB
 upload in step 12, not this one.**
 
-## 3. Enroll in Play App Signing — the decision point
+## 3. Play App Signing — automatic, not a decision point
 
-**Console prompts for this the first time you prepare a release** (Release → Setup → App
-signing, or presented inline during the first AAB upload flow).
+**Console enrolls this automatically the first time you prepare a release** (Release → Setup →
+App signing, or presented inline during the first AAB upload flow). Informational only — there is
+nothing to choose or confirm here.
 
-**STOP — HAND BACK TO NATHAN. This is the single most consequential choice in this entire
-walkthrough**, identified during `agents-tracker-cwz`'s research and written up in full in
-`docs/operations/release-signing.md`:
+Play App Signing has been mandatory for every app created from August 2021 onward
+(<https://developer.android.com/studio/publish/app-signing>), and `dev.swarm.phone` is a new app
+being created in 2026 — nowhere near that grandfather clause — so Console will not offer an opt-out
+and this step needs no action beyond letting it happen. Full detail in
+`docs/operations/release-signing.md`.
 
-- **Accept Play App Signing (the default, and what this script assumes).** Google generates and
-  holds the real app signing key. The keystore created in `agents-tracker-cwz`
-  (`~/.keystores/swarm-upload.jks`) is only the **upload** key — if it is lost or its password is
-  forgotten, Nathan can request an upload-key reset through Play Console (identity-verified, on
-  the order of days), and existing installs are unaffected because the key that actually signs
-  what a device sees never changes.
-- **Opt out and self-manage the app signing key instead.** The upload keystore becomes the *only*
-  copy of the real signing key. If it is ever lost, `dev.swarm.phone` can never receive another
-  update from this developer account, permanently, with no recovery path.
-
-**Confirm Play App Signing is selected before proceeding.** Do not let this default through
-unattended on the assumption that it is already correct — verify it is actually checked.
+What this means for the keystore created in `agents-tracker-cwz`
+(`~/.keystores/swarm-upload.jks`): it is only the **upload** key. Google generates and holds the
+real app signing key, so if the upload keystore is lost or its password is forgotten, Nathan can
+request an upload-key reset through Play Console (identity-verified, on the order of days), and
+existing installs are unaffected because the key that actually signs what a device sees never
+changes.
 
 ## 4. Store listing — main content
 
