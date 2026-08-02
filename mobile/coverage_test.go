@@ -68,6 +68,12 @@ var requiredScreenElements = []string{
 	// presses, and PB-SEC-11 forbids the one exported component from reaching either verb.
 	"key_custody.lock",
 	"callbacks", // PB-BIND-6's delivery plane
+	// The Machines pane's own identity field (bead agents-tracker-xtj). It is here rather than
+	// folded into an existing element because the name is not presence, not pairing state and
+	// not the machine's id -- it is what this phone called itself at enrolment, and the reason
+	// it needs a verb at all is that a screen typing the literal would be rendering a Go
+	// constant as though the wire had carried it.
+	"paired_device",
 
 	// ADDED BY SLICE S16, additively. This list is PB-BIND-3's enumeration transcribed, and
 	// it is hard-coded here so deleting a row from the TSV cannot make a requirement vanish --

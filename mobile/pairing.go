@@ -118,6 +118,23 @@ var errDifferentMachine = classed(ErrClassPairingFailed, errors.New(
 // rendezvous_timeout is a state nothing can reach.
 const pairingTTL = 60 * time.Second
 
+// DeviceName is what this phone calls itself when it enrols with a machine: the DeviceName
+// field of the pairing payload, sent once in msg3 and thereafter the label the machine's own
+// device registry shows its owner (internal/remote/enroll).
+//
+// IT IS OWNED HERE, AND RETURNED RATHER THAN MERELY SENT, for the reason WakeNotificationText
+// gives one file over: a second copy in Kotlin is a copy that drifts. A screen that wants to
+// show the paired device's name must not type this string -- it would be rendering a Go
+// constant as though the wire had carried it, which is ADR-007 B135's defect class.
+//
+// AND THE WIRE DOES NOT CARRY IT BACK. pairing.DeviceOutcome returns the SAS, the machine's
+// static key and the machine's payload -- there is no device payload in it. Nothing on this
+// side persists the name either: phonecore.State has no field for it and the pairing record
+// holds one label from a closed set. So App.PairedDeviceName returns THIS, honestly, and if a
+// screen ever needs the name the MACHINE holds -- which an owner can rename -- that is a
+// different verb carrying a fact the wire actually delivers.
+const DeviceName = "swarm phone"
+
 // DecodeQR parses a scanned pairing QR into what the scanner screen may DISPLAY. The
 // pairing secret is deliberately not part of the result: it never leaves the Go core.
 // Fails closed on a malformed payload.
@@ -404,7 +421,7 @@ func (p *Pairing) join(base context.Context) {
 		RendezvousID:     payload.RendezvousID,
 		MachineStaticPub: payload.MachineStaticPub,
 		Payload: pairing.DevicePayload{
-			DeviceName:           "swarm phone",
+			DeviceName:           DeviceName,
 			DeviceRoutingID:      []byte(relay.RoutingID(ks.RelayAuthPublic())),
 			DeviceRelayAuthPub:   ks.RelayAuthPublic(),
 			RecipientPub:         ks.RecipientPublic(),
@@ -679,6 +696,27 @@ func (a *App) writePairingState(state string) error {
 		return classed(ErrClassInternal, err)
 	}
 	return nil
+}
+
+// PairedDeviceName is the name this phone gave itself when it paired -- the string the
+// machine's device registry lists it under (bead agents-tracker-xtj).
+//
+// IT IS THIS SIDE'S CONSTANT, NOT A WIRE FACT, and the distinction is the whole reason the
+// verb exists. The name goes out once in the pairing handshake and nothing returns it; a
+// screen that needs it would otherwise type the literal itself, which renders a Go constant
+// as though it had come from the machine. Returning it here keeps one source. It does not
+// claim the machine still calls this device that -- an owner can rename it there, and reading
+// THAT would need a verb carrying something the wire delivers.
+//
+// It is gated on being paired because before there is a pairing there is no paired device to
+// name, and a pane about the machine this phone is bound to must not answer for one that does
+// not exist.
+func (a *App) PairedDeviceName() (name string, err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return "", err
+	}
+	return DeviceName, nil
 }
 
 // PairingState is the PERSISTED pairing state machine (PB-PAIR-4): "" when no attempt is

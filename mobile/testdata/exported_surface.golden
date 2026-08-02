@@ -1,4 +1,5 @@
 const CallbackQueueSize
+const DeviceName
 const ErrClassAwaitingKey
 const ErrClassClosed
 const ErrClassDeviceUnsupported
@@ -41,6 +42,8 @@ field LaunchSpec.Cwd string
 field LaunchSpec.Options string
 field LaunchSpec.Prompt string
 field LaunchSpec.Rows int
+field MachinePresence.ObservedUnixMs int64
+field MachinePresence.State string
 field Op.Action string
 field Op.OperationID string
 field Op.SessionID string
@@ -98,7 +101,9 @@ method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
 method App.MachineFreshness() (*Freshness, error)
+method App.MachinePresence() (*MachinePresence, error)
 method App.Outcome(string) (*Outcome, error)
+method App.PairedDeviceName() (string, error)
 method App.PairingState() (string, error)
 method App.Paste(string, string) error
 method App.Peek(string) (*Snapshot, error)
@@ -157,6 +162,7 @@ type JournalEntry struct
 type JournalPage struct
 type KeyCustody interface
 type LaunchSpec struct
+type MachinePresence struct
 type Op struct
 type Outcome struct
 type Pairing struct

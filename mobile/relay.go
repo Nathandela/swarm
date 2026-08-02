@@ -362,7 +362,20 @@ func (a *App) run(ctx context.Context) {
 		a.setConn(connOnline)
 		rb.reset() // PB-NET-4: a successful connection un-does whatever backoff came before it
 		a.onConnected(ctx, cl)
+		// The presence cadence lives for exactly this connection's lifetime, so it can never
+		// poll through a client the drain has finished with (bead agents-tracker-xtj). Its
+		// timer is what keeps a relay round-trip off the render path: a screen reads the
+		// cache MachinePresence exposes and never asks the relay itself.
+		pctx, endPoll := context.WithCancel(ctx)
+		go a.pollPresence(pctx, cl)
 		a.drain(ctx, cl)
+		endPoll()
+		// The link is gone, so the phone can no longer ask what it last answered. Holding the
+		// previous reading would leave the machine rendered "online" on evidence nothing can
+		// refresh -- PB-APP-11's silence, one value over.
+		if a.presence.forget() {
+			a.events.emit(&Event{Kind: "presence", State: presenceUnknown})
+		}
 		a.setClient(nil)
 		// PB-INPUT-2's FIRST enumerated severance event. A gateway restart kills the lease
 		// while being unable to seal any notice about it -- the gateway is the thing that

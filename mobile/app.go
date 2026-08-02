@@ -89,6 +89,11 @@ type App struct {
 	// is not guarded by a.mu.
 	coalesce *phonecore.InputCoalescer
 
+	// presence is the machine's reachability as the relay last reported it, fed by the
+	// per-connection poll and read O(1) by MachinePresence. Like coalesce it has its own
+	// lock: the relay goroutine writes it while the UI thread reads.
+	presence *presenceCache
+
 	// bucketMu orders the phone -> machine MAILBOX BUCKET -- every envelope on it, command
 	// and input alike. It is held across allocate-seal-append at each of the three append
 	// sites (sendInputFrame, sealSignedCommand, unsignedCommand), for the reason
@@ -183,6 +188,7 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		stateDir:    cfg.StateDir,
 		events:      newDispatcher(),
 		coalesce:    phonecore.NewInputCoalescer(time.Now),
+		presence:    newPresenceCache(time.Now),
 		connState:   "offline",
 		subscribed:  true,
 		needs:       map[string]string{},
