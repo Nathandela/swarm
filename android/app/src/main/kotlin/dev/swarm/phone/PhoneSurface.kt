@@ -187,7 +187,13 @@ class PhoneSurface(
     // the flow that succeeded; this is what swaps it for the app the user has now earned, when they
     // earned it rather than the next time they happen to leave and come back.
     private val pairing = PairingSurface(activity, runtime).also { it.onPaired = ::render }
-    private val settings = SettingsSurface(activity, runtime)
+
+    // IT IS HANDED THIS SURFACE'S DISPATCH, which is the half of the lifecycle that panel cannot
+    // know: [release] detaches, and only this file is told when the screen goes away. Settings owns
+    // the phone's one destructive verb now, and a revoke settling onto a window nobody is holding
+    // is what the attach/detach pair exists to stop -- the default instance is never detached by
+    // anyone.
+    private val settings = SettingsSurface(activity, runtime, dispatch)
 
     /**
      * IT REMEMBERS THE OPERATION IT ISSUED, which is what makes PB-INPUT-2's lease a fact rather
