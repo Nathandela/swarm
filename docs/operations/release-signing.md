@@ -56,29 +56,33 @@ keytool -genkeypair -v \
   -validity 10000
 ```
 
-`keytool` prompts interactively for the keystore password, the key password, and the certificate's
+`keytool` prompts interactively for the keystore password and then for the certificate's
 distinguished-name fields (name, org, locale) — none of those need to be accurate identities, Play
 does not check them, they only need to be *something* so the certificate is well-formed.
 
-**Give the key the same password as the keystore. Press RETURN at the key-password prompt, which
-is what that prompt's "(RETURN if same as keystore password)" offers.** Despite the `.jks`
-filename, JDK 9 and later produce a **PKCS12** keystore here, and PKCS12 has no per-entry password:
-if you type a different one, `keytool` does not fail, it discards it and tells you so —
+**It does not ask you for a key password, and that is not an omission — there is only one password
+here.** Despite the `.jks` filename, JDK 9 and later produce a **PKCS12** keystore, and PKCS12 has
+no per-entry password: the key is protected by the store password and nothing else. Executed
+against this project's pinned JDK 17, the prompts run keystore password → DN questions → done, and
+`keytool -list` on the result reports `Keystore type: PKCS12`. **So `SWARM_RELEASE_KEY_PASSWORD`
+and `SWARM_RELEASE_KEYSTORE_PASSWORD` (§4) must be set to the same value.**
+
+If you try to force a second password with `-keypass`, `keytool` does not fail — it discards the
+value and says so, in a warning easily lost in the surrounding output:
 
 ```
 Warning:  Different store and key passwords not supported for PKCS12 KeyStores. Ignoring user-specified -keypass value.
 ```
 
-— leaving the key openable only by the *store* password. Verified against this project's pinned
-JDK 17; `keytool -list` on the result reports `Keystore type: PKCS12`. If you then set
-`SWARM_RELEASE_KEY_PASSWORD` (§4) to the value you chose, Gradle asks the keystore for the key with
-a password it does not have and `bundleRelease` fails — after the keystore exists and has been
-backed up, which is the worst moment to discover it. Setting both settings to the one password
-avoids this entirely.
+Take that at face value: the keystore now holds a key openable only by the *store* password. Set
+`SWARM_RELEASE_KEY_PASSWORD` to the value you passed to `-keypass` and Gradle asks the keystore for
+the key with a password it does not have, so `bundleRelease` fails — after the keystore exists and
+has been backed up, which is the worst moment to discover it.
 
-(If you genuinely need two distinct passwords, add `-storetype JKS` to the command above. That
-selects the older proprietary format, which supports them and which `keytool` warns about on every
-use. Nothing in this project needs it.)
+(Two distinct passwords are possible only in the older, proprietary JKS format, via `-storetype
+JKS`. That format does prompt for a key password — `Enter key password for <swarm-upload>` with a
+"(RETURN if same as keystore password)" option — and `keytool` recommends migrating away from it
+on every use. Nothing in this project needs it.)
 
 - **`-keysize 4096`**: stronger than the 2048-bit figure Android's own sample commands use, and
   well within what every JDK/Android verifier supports. There is no reason to prefer a smaller key
