@@ -127,12 +127,11 @@ object PushTokens {
         app.deletePushToken()
     }
 
-    // NOTE, recorded here rather than left to be discovered: [disable] has no caller yet. The
-    // settings screen is where it belongs -- PB-APP-7's switches are the "disable" half of
-    // "deletion on revoke/disable" -- and dev.swarm.phone.ui.SettingsScreen is a pure model with
-    // no Activity to host it, because S16 shipped the screen MODELS and this module still
-    // declares no Activity at all. Revoke does NOT depend on this: App.RevokeThisDevice deletes
-    // the token in Go.
+    // THE CALLER, since S19: dev.swarm.phone.SettingsSurface.reconcileTheToken, which calls this
+    // when BOTH push categories are off -- a phone that has asked for no wake at all -- and
+    // [requestInitialToken] when either comes back. This note used to say there was no caller,
+    // which was true only while S16's settings screen was a pure model with no Activity to host
+    // it; leaving it standing would invite someone to "wire up" a method that is already wired.
 
     /** The process-wide phone, or null while it cannot be built (see `PhoneStartup`). */
     private fun phoneOf(context: Context): App? {
