@@ -218,13 +218,23 @@ func (lc *LeaseConn) refusalReason() string {
 // carriage returns has no text for the paste heuristic to swallow, so there is nothing to
 // separate. And gating every submit would drain them at 6.67/s against the coalescer's 8
 // frames/s ceiling: a held Enter (~30 Hz into the coalescer, the case PB-INPUT-5 exists to
-// survive) would arrive faster than this hop forwarded, and the lag would grow for as long as
-// the key was held. Keying on the last TEXT write removes that mismatch rather than bounding
-// it, and costs the submit that actually needs the gap nothing.
+// survive) would arrive faster than this hop forwarded it.
 //
-// COST: up to submitGap on a submit that closely follows text (once per prompt, not once per
-// keystroke), and the same bound on whatever shares that inbound batch, since processBatch is
-// serial. §6.0's 150 ms p50 budget is a keystroke-echo budget and is not on this path.
+// THAT DEFICIT WOULD NOT HAVE SELF-CORRECTED, which is the reason it was worth removing rather
+// than documenting. The backlog would form HERE, in frames the phone has already sealed and
+// appended; the phone gets no backpressure from this hop, so its coalescer keeps emitting one
+// frame per window and each frame's size is fixed at the moment it was emitted. Frames would
+// not grow to meet the drain rate -- the lag would just grow, about 1.3 frames per second held,
+// clearing only after the key came up. Keying on the last TEXT write removes the mismatch
+// instead, and costs the submit that actually needs the gap nothing.
+//
+// COST, and the whole of it: up to submitGap on a submit that closely follows text -- once per
+// prompt, not once per keystroke. wmu is NOT the mechanism and is not contended: every writer
+// on a LeaseConn (take_control from Leases.Begin, data_in and resize from Leases.Input) is the
+// inbound loop's own goroutine. That serial loop is the cost. Whatever shares the batch behind
+// a sleeping submit waits with it -- another session's keystrokes, a resize the user's screen
+// is waiting on, or a kill/take_control -- all bounded by the same 150 ms, none of it a hang.
+// §6.0's 150 ms p50 budget is a keystroke-echo budget and is not on this path.
 func (lc *LeaseConn) WriteDataIn(b []byte) error {
 	lc.wmu.Lock()
 	defer lc.wmu.Unlock()
