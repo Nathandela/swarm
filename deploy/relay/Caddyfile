@@ -1,0 +1,23 @@
+# Caddyfile for the swarm-relay reverse proxy (agents-tracker-vzl).
+#
+# Caddy terminates TLS with an automatic ACME certificate (Let's Encrypt by default) and
+# proxies straight through to the relay's local listener. swarm-relay itself
+# (internal/remote/relay/server.go) registers exactly one HTTP route -- mux.HandleFunc("/",
+# s.handleHTTP) -- so every path funnels to the same handler and there is no sub-path to
+# route around. It serves plain ws:// there and always will: Config.TLSMode is parsed by
+# relay.LoadConfig but read by nothing that serves (docs/operations/relay-runbook.md
+# section 0), so this file is the entire TLS story for the deployment.
+#
+# Caddy's reverse_proxy detects the "Connection: Upgrade" handshake and proxies WebSocket
+# connections with NO extra directives -- unlike nginx, which needs an explicit
+# Upgrade/Connection header pass-through block. Nothing else is required below.
+#
+# Replace relay.example.com with the DNS name pointed at this VPS (see
+# docs/operations/relay-vps-deploy.md, "Point DNS"). Keep it SHORT: `swarm remote init`
+# caps --relay-url at 39 characters (pairing.MaxRelayURLLen), because the URL is carried
+# verbatim into the pairing QR, and "wss://" alone already spends 6 of those.
+#
+# The backend address must match "listen" in relay.config.example exactly.
+relay.example.com {
+	reverse_proxy 127.0.0.1:9440
+}
