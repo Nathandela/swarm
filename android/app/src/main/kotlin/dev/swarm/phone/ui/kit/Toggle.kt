@@ -198,11 +198,12 @@ class ToggleSwitch internal constructor(
  * grammar reads `field <number>` and the only match for "at 40%" cites a preposition, the toggle is
  * not in `tokens.json`, and PB-TOK-7 forbids resolving `--p-ink3` at 40% into a literal resource.
  *
- * THE >=48 dp TOUCH TARGET IS NOT SET HERE, and [textField] is in the same position for the same
- * reason: rows 4, 10, 13, 15 and 22 all write ">=48", and this package's annotation grammar cannot
- * read a value behind a `>=`. It is a WCAG floor rather than a design value. Row 15 says where it
- * belongs instead -- the settings row is one target when it carries a toggle -- so the target is
- * the row's and this is the 46x28 visual inside it.
+ * THE >=48 dp TOUCH TARGET IS NOT SET HERE, AND ROW 4 IS WHY. Its clause is ">=48 with the VISUAL
+ * UNCHANGED", and a 46x28 control grown to 48 dp meets the number by destroying the drawing the
+ * same clause protects. Row 15 says where it belongs instead -- "the whole row is one >=48 dp
+ * target when it carries a toggle" -- so `settingsRow` spends `KitMetrics.MIN_TARGET_DP` and this
+ * is the 46x28 visual inside it. `s23TouchTargets` in `android/gate/s23_kit_test.go` records that
+ * assignment and fails if either row stops stating the floor or the row stops carrying it.
  *
  * @param description PB-DS-12's floor, and it is required rather than nullable. A toggle is four
  *  moving dp and no text, so a screen reader gets nothing at all from the visual -- there is no

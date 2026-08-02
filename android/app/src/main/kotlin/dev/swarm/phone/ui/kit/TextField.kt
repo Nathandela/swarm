@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.view.Gravity
 import android.widget.EditText
 import android.widget.LinearLayout
 import dev.swarm.phone.R
@@ -27,19 +28,32 @@ import dev.swarm.phone.R
  * no other label (`PhoneSurface` has no XML layouts, so every field is identified by its hint
  * alone). PB-DS-12 records the contrast; this is the site.
  *
- * WHAT IT DOES NOT SET IS THE TOUCH TARGET. Row 9 asks for a 48 dp target around a 36 dp visual,
- * and 48 has no expressible origin in this package's annotation grammar: rows 4, 10, 13, 15 and
- * 22 all write ">=48", and the metric reader cannot read a value behind a `>=`. It is a WCAG floor
- * rather than a design value, which may be the reason it needs a different mechanism. Reported
- * rather than typed, because typing it here is exactly the "a size somebody chose" this package
- * exists to prevent.
+ * **IT IS 48 dp OF TARGET AROUND 36 dp OF WELL, AND ROW 9 STATES BOTH**: "field padding `space_8`
+ * x `space_14`, visual height 36, touch target 48". It is the only row in the table that states a
+ * target and a smaller visual in the same cell, and the two numbers are not interchangeable -- a
+ * field grown to 48 dp meets PB-DS-12's floor and loses the well the same sentence specifies, and a
+ * 36 dp field keeps the well and cannot be hit. So the minimum is the target and the surface is
+ * inset inside it by the difference, split between the two edges it is short on.
+ *
+ * THE TEXT IS CENTRED VERTICALLY FOR THAT REASON AND NO OTHER. `TextView` puts its content at the
+ * top of whatever box it is given; with 12 dp more box than paint, a top-aligned line would sit
+ * against the well's upper edge and leave the difference below it, which is the same defect the
+ * inset exists to prevent, one layer in.
  */
 fun textField(context: Context, hint: CharSequence): EditText = EditText(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_primary))
     setHintTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     this.hint = hint
-    background = wellSurface(context)
+    // The room between the target and the paint, on each of the two edges the well is short on --
+    // the same `2` that counts the sides of the status dot's halo.
+    val roomPx = (Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) -
+        Kit.dpPx(context, KitMetrics.WELL_HEIGHT_DP)) / 2
+    background = wellSurface(context).apply {
+        for (layer in 0 until numberOfLayers) setLayerInset(layer, 0, roomPx, 0, roomPx)
+    }
+    minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+    gravity = Gravity.CENTER_VERTICAL
     setPaddingRelative(
         Kit.dimenPx(context, R.dimen.swarm_space_14),
         Kit.dimenPx(context, R.dimen.swarm_space_8),

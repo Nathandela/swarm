@@ -48,8 +48,36 @@ class DenyChipTest {
 
     private fun dimenPx(name: String): Int = dimen(name).roundToInt()
 
+    /** The design's px is Android dp at 1:1 -- the artifact is a 386x812 frame at device scale. */
+    private fun dp(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics,
+    )
+
+    /** A phone's content width, so a MATCH_PARENT component measures against something real. */
+    private val PARENT_WIDTH_DP = 360f
+
     private fun chip(description: CharSequence? = null) =
         denyChip(context, label = "Revoke", description = description)
+
+    /**
+     * Row 13's revoke cell ends "48 dp target", and unlike row 9 it states no smaller visual: the
+     * chip's own box is the target.
+     *
+     * IT IS MEASURED AND NOT READ OFF A MINIMUM, because this chip hugs its content -- a WRAP
+     * control is exactly the shape where a minimum can be set and then lost to a parent's spec, and
+     * the destructive action in a device row is the last control in the app that should be hard to
+     * hit.
+     */
+    @Test
+    fun `the revoke chip clears PB-DS-12's floor in both directions`() {
+        val faults = touchTargetFaults(
+            chip(),
+            dp(KitMetrics.MIN_TARGET_DP).roundToInt(),
+            dp(PARENT_WIDTH_DP).roundToInt(),
+        )
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+    }
 
     // ---- the treatment, from `.a2-no` ----------------------------------------
 

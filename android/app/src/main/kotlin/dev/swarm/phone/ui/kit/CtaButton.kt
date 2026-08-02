@@ -206,6 +206,13 @@ fun ctaButton(
             padPx + spec.insetPx,
             padPx + spec.insetPx,
         )
+        // Row 22's `min 48`, PLUS the room the halo takes and the margins below hand back. The
+        // floor is about the button a user can SEE: measured against the view's own box, a
+        // blooming CTA clears any minimum with 18 dp of transparent glow on every edge while its
+        // visible box stays 12 dp short. Adding the room here means the floor applies to what is
+        // left after the negative margins, which is the thing anyone aims at.
+        minimumWidth = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) + 2 * spec.insetPx
+        minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) + 2 * spec.insetPx
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {
             marginStart = -spec.insetPx
             marginEnd = -spec.insetPx

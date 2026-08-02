@@ -74,6 +74,12 @@ fun settingsRow(
             Kit.dimenPx(context, R.dimen.swarm_space_14),
             Kit.dimenPx(context, R.dimen.swarm_space_12),
         )
+        // Rows 4 and 15 are one instruction: "the whole row is one >=48 dp target when it carries
+        // a toggle", which is also where row 4 puts the TOGGLE's ">=48 with the visual unchanged".
+        // The floor belongs here rather than on the control, because a 46x28 toggle grown to 48
+        // would meet the number by destroying the drawing the same clause protects. A row with a
+        // sublabel already clears it; a single-line one does not.
+        minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         addView(text)
         trailing?.let {

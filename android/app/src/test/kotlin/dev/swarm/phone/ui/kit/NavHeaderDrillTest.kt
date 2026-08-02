@@ -40,10 +40,10 @@ import kotlin.math.roundToInt
  *     whether the glyph is on screen at all and whether it carries `--p-ink` rather than the
  *     label's `--p-ink2`, which is the one visual decision §4 makes about it.
  *
- * THE >=48 dp TOUCH TARGET IS NOT ASSERTED, for [textField]'s and [ToggleTest]'s reason: §4 writes
- * "48 dp target" and this package's annotation grammar reads no value behind a `>=` or in front of
- * a unit. It is a WCAG floor rather than a design value, and the component does not set one.
- * Recorded so the absence reads as a known boundary rather than as an oversight.
+ * THE 48 dp TOUCH TARGET IS ASSERTED ON THE BACK CONTROL AND NOT ON THE HEADER, which is the one
+ * place this claim can go wrong quietly: a full-width header holding a 24 dp glyph and §4's padding
+ * clears any floor by existing, so a wrapper-level assertion would pass with the tappable control
+ * at 24 dp inside it.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,6 +71,33 @@ class NavHeaderDrillTest {
     private fun backOf(header: LinearLayout) = header.kitRequire(KitTag.DRILL_BACK) as TextView
 
     private fun titleOf(header: LinearLayout) = header.kitRequire(KitTag.DRILL_TITLE) as TextView
+
+    /** The design's px is Android dp at 1:1 -- the artifact is a 386x812 frame at device scale. */
+    private fun dp(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics,
+    )
+
+    /** A phone's content width, so a MATCH_PARENT component measures against something real. */
+    private val PARENT_WIDTH_DP = 360f
+
+    /**
+     * §4 gives the BACK CONTROL a "48 dp target", and the subject is that control rather than the
+     * header around it.
+     *
+     * THIS IS THE WRAPPER TRAP WRITTEN OUT. A header is full-width and taller than 48 dp the moment
+     * it holds a 24 dp glyph and its padding, so a floor asserted on the header passes today and
+     * would pass with a 24 dp back control inside it -- which is the thing under the finger.
+     */
+    @Test
+    fun `the back control clears PB-DS-12's floor, not the header around it`() {
+        val faults = touchTargetFaults(
+            backOf(header()),
+            dp(KitMetrics.MIN_TARGET_DP).roundToInt(),
+            dp(PARENT_WIDTH_DP).roundToInt(),
+        )
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+    }
 
     // ---- the type and the inks --------------------------------------------
 

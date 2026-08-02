@@ -35,12 +35,11 @@ import dev.swarm.phone.R
  * A parameter for a third fill would make it a chip that can be any colour, which is a component
  * with no opinion at all.
  *
- * **THE >=48 dp TOUCH TARGET IS NOT SET HERE**, and [toggle] and [textField] are in the same
- * position for the same reason: rows 4, 10, 13, 15 and 22 all write ">=48", this package's
- * annotation grammar cannot read a value behind a `>=`, and it is a WCAG floor rather than a design
- * value. It belongs to whoever attaches the click -- which for this control is the surface, because
- * revoking a device deletes a push token and issues a signed command. Recorded here as a gap rather
- * than half-solved with a number nothing can check.
+ * **THE 48 dp TOUCH TARGET IS THIS COMPONENT'S**, and row 13 states it in the same cell as the
+ * metrics: `--p-chip-r` 8, `space_8` x `space_10`, `Label.Chip`, 48 dp target. Unlike row 9's field
+ * the row states no smaller visual, so the chip's own box is the target and the minimum is set on
+ * both edges -- a hugging control is exactly the shape that measures narrow, and the destructive
+ * action in a device row is the last one in the app that should be hard to hit.
  *
  * @param description what a screen reader announces INSTEAD of [label]. Null is the ordinary case:
  *  a chip carrying the word `Revoke` says what it is. It is here because one word is not always
@@ -69,6 +68,10 @@ fun denyChip(
         Kit.dimenPx(context, R.dimen.swarm_space_10),
         Kit.dimenPx(context, R.dimen.swarm_space_8),
     )
+    // Row 13's "48 dp target". A minimum rather than a size: the chip keeps its own padding and
+    // grows only where the design's metrics leave it under PB-DS-12's floor.
+    minimumWidth = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+    minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
     // HUGGING, unlike `ctaButton`, which lays itself out MATCH_PARENT for the full-width sheet it
     // was written for. This one sits at the trailing edge of a row whose text column is weighted,
     // and a MATCH_PARENT child there is measured against the whole row -- which leaves the name

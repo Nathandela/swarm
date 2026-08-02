@@ -49,8 +49,9 @@ import dev.swarm.phone.ui.kit.settingsRow
  *
  * **NOTHING IN THIS FILE OWNS A CLICK**, which is the division `SettingsPanelView` and
  * `LaunchPanelView` are built on. Revoke deletes this device's push token and then issues a signed
- * command, and PB-SEC-12 clause 1's touch filter belongs on the control -- both are the surface's,
- * and so is the >=48 dp target the kit deliberately does not set. The chip is tagged
+ * command, and PB-SEC-12 clause 1's touch filter belongs on the control -- both are the surface's.
+ * Row 13's >=48 dp target is NOT: `denyChip` carries its own floor, because a target is a property
+ * of the control's box rather than of the click attached to it. The chip is tagged
  * [MachinesTag.REVOKE] so the surface reaches the one this screen composed instead of building a
  * second one that looks like it.
  */

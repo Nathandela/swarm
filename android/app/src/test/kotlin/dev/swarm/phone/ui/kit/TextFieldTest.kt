@@ -41,6 +41,14 @@ class TextFieldTest {
         return context.resources.getDimension(id).roundToInt()
     }
 
+    /** The design's px is Android dp at 1:1 -- the artifact is a 386x812 frame at device scale. */
+    private fun dp(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics,
+    )
+
+    /** A phone's content width, so a MATCH_PARENT field measures against something real. */
+    private val PARENT_WIDTH_DP = 360f
+
     private fun field() = textField(context, "Paste the pairing code your machine printed")
 
     @Test
@@ -93,6 +101,40 @@ class TextFieldTest {
         )
 
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
+     * Row 9 states a target and a smaller visual in the same cell, and it is the only row that does:
+     * "field padding `space_8` x `space_14`, visual height 36, touch target 48".
+     *
+     * BOTH NUMBERS OR NEITHER. A field grown to 48 dp meets the floor and loses the 36 dp well the
+     * same sentence specifies; a 36 dp field keeps the well and cannot be hit. What the row asks for
+     * is 48 dp of target around 36 dp of paint, so the well is inset inside the target rather than
+     * filling it -- and the assertion reads the PAINTED band, not the view, because a well that
+     * quietly grew to 48 would satisfy every other check in this file.
+     */
+    @Test
+    fun `the field is 48 dp of target around row 9's 36 dp well`() {
+        val subject = field()
+        // The two numbers are the KIT's constants and not this file's: `s23_kit_test.go` is what
+        // holds each of them to the row it cites, which is the arrangement every metric in this
+        // package is already in.
+        val faults = touchTargetFaults(
+            subject,
+            dp(KitMetrics.MIN_TARGET_DP).roundToInt(),
+            dp(PARENT_WIDTH_DP).roundToInt(),
+        )
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+
+        val well = subject.background as SubstrateSurface
+        val painted = subject.measuredHeight - well.getLayerInsetTop(0) - well.getLayerInsetBottom(0)
+        assertEquals(
+            "row 9's well is 36 dp and the field is 48; a painted band of any other height is " +
+                "either the target eating the visual or the visual eating the target",
+            dp(KitMetrics.WELL_HEIGHT_DP).roundToInt(),
+            painted,
+        )
     }
 
     @Test

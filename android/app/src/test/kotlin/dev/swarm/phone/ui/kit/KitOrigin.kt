@@ -437,6 +437,43 @@ fun mismatches(claims: List<Claim>): List<String> = claims.mapNotNull { claim ->
 }
 
 /**
+ * Every reason a view's touch target is under PB-DS-12's floor, measured as a screen lays it out.
+ *
+ * IT MEASURES RATHER THAN READING `minimumHeight`, and the difference is the failure this check
+ * exists for. A minimum is a request; what a finger gets is the box the view ends up with, and a
+ * fixed `layoutParams` height, a parent's EXACTLY spec or a child that swallowed the space all
+ * produce a view whose minimum says 48 and whose box does not.
+ *
+ * IT SUBTRACTS ROOM THE VIEW HANDS BACK. `ctaButton` inflates itself to house the CTA bloom and
+ * returns every pixel of it as negative margin, so its measured box is up to 36 dp wider than the
+ * button anyone can see -- and a floor met by transparent halo is met by nothing a user can aim at.
+ * The visible box is the subject; a component with no negative margins is unaffected.
+ *
+ * @param availableWidthPx what the parent offers. A hugging control ignores it; a MATCH_PARENT one
+ *  is the width of its row, and measuring it against zero would report every row in the app as too
+ *  narrow to touch.
+ */
+fun touchTargetFaults(view: View, floorPx: Int, availableWidthPx: Int): List<String> {
+    view.measure(
+        View.MeasureSpec.makeMeasureSpec(availableWidthPx, View.MeasureSpec.AT_MOST),
+        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+    )
+    view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+    val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
+    fun handedBack(a: Int, b: Int) = -minOf(0, a) - minOf(0, b)
+    val visible = mapOf(
+        "width" to view.measuredWidth -
+            handedBack(margins?.marginStart ?: 0, margins?.marginEnd ?: 0),
+        "height" to view.measuredHeight -
+            handedBack(margins?.topMargin ?: 0, margins?.bottomMargin ?: 0),
+    )
+    return visible.filterValues { it < floorPx }.map { (edge, got) ->
+        "the visible $edge is $got px against PB-DS-12's ${floorPx}px floor: a control this size " +
+            "refuses taps that were aimed at it"
+    }
+}
+
+/**
  * Depth-first search for the part of a component the kit tagged with the design selector it
  * renders.
  *

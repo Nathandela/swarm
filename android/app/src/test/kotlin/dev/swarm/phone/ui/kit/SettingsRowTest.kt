@@ -57,6 +57,42 @@ class SettingsRowTest {
         trailing: View? = null,
     ) = settingsRow(context, label, sublabel, trailing)
 
+    /** The design's px is Android dp at 1:1 -- the artifact is a 386x812 frame at device scale. */
+    private fun dp(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics,
+    )
+
+    /** A phone's content width, so a MATCH_PARENT component measures against something real. */
+    private val PARENT_WIDTH_DP = 360f
+
+    /**
+     * Rows 4 and 15 are one instruction: "the whole row is one >=48 dp target when it carries a
+     * toggle", which is also where row 4 puts the toggle's own ">=48 with the visual unchanged".
+     *
+     * THE ROW IS THE SUBJECT AND THE TOGGLE IS NOT, and that is the point rather than a shortcut. A
+     * 46x28 control grown to 48 dp meets the floor by destroying the drawing the same clause
+     * protects; a row that is one target keeps both. Asserted with the toggle in place, because
+     * that is the configuration both rows are about.
+     *
+     * WITH NO SUBLABEL, which is the shape where the floor binds. Two text lines and 12 dp of
+     * padding clear 48 dp on their own, so a row asserted in its tallest configuration would pass
+     * whatever the component did -- and the single-line row is the one a caller reaches for when
+     * the label says everything.
+     */
+    @Test
+    fun `a row carrying a toggle is one target that clears PB-DS-12's floor`() {
+        val faults = touchTargetFaults(
+            row(
+                sublabel = null,
+                trailing = toggle(context, checked = true, description = "End-to-end encryption"),
+            ),
+            dp(KitMetrics.MIN_TARGET_DP).roundToInt(),
+            dp(PARENT_WIDTH_DP).roundToInt(),
+        )
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+    }
+
     // ---- the type and the inks -------------------------------------------
 
     @Test

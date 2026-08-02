@@ -42,14 +42,17 @@ import dev.swarm.phone.R
  * nothing to balance, so the title takes the remaining width the way `.pnav`'s does. A parameter
  * with no call site would be a component shaped by a screen that does not exist.
  *
- * **The 48 dp touch target is not set**, for [textField]'s reason exactly: §4 writes "48 dp
- * target" and rows 4, 10, 13, 15 and 22 write ">=48", and neither is a value this package's
- * annotation grammar can read. It is a WCAG floor rather than a design value. Recorded so the
- * absence reads as a known boundary rather than as an oversight.
+ * ## One thing §4 asks for that this does not do
  *
  * IT DOES NOT HANDLE ITS OWN TAP, like every other component here -- a screen composes components
  * and passes data. The back control is [KitTag.DRILL_BACK] so the screen that owns a destination
  * can find it.
+ *
+ * **THE 48 dp TARGET IS THE BACK CONTROL'S AND NOT THIS HEADER'S**, which is why it is set in
+ * [backControl] rather than here. A full-width header holding a 24 dp glyph and §4's padding is
+ * over 48 dp tall the moment it exists, so a floor asserted on the container would be met by the
+ * container while the thing under the finger stayed 24 dp -- the wrapper that satisfies a rule
+ * nothing else obeys.
  */
 fun navHeaderDrill(context: Context, back: CharSequence, title: CharSequence): LinearLayout =
     KitStack(
@@ -90,7 +93,7 @@ fun navHeaderDrill(context: Context, back: CharSequence, title: CharSequence): L
  *
  * ONE VIEW AND TWO INKS, which is what a compound drawable is for. §4 gives the glyph and the
  * label different colours, and two sibling views would give a screen reader two nodes for one
- * affordance and would put the 48 dp target -- when there is one -- around neither of them.
+ * affordance and would put the 48 dp target around neither of them.
  * `filterChip` reaches for the same mechanism to put the presence dot before its label.
  *
  * THE GAP BETWEEN GLYPH AND LABEL IS §4's OWN `space_10`. The row states exactly one separation
@@ -114,6 +117,11 @@ private fun backControl(context: Context, label: CharSequence): TextView = TextV
     compoundDrawableTintList =
         ColorStateList.valueOf(Kit.colour(context, R.color.swarm_text_primary))
     compoundDrawablePadding = Kit.dimenPx(context, R.dimen.swarm_space_10)
+    // §4's "48 dp target". It costs nothing visually because this control has no fill of its own:
+    // the glyph and its label keep their own box and what grows is the empty space a finger may
+    // land in. The floor is on BOTH edges -- a back control labelled `Inbox` is 31 dp wide.
+    minimumWidth = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+    minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
     layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
     tag = KitTag.DRILL_BACK
 }

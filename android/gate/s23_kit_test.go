@@ -713,6 +713,9 @@ func s23RowExists(doc, ref string) bool {
 // ("`--p-chip-r` 8 = half the 16 dp height"); taking the first match would make the check depend
 // on the order someone wrote a sentence in, and taking any match would let a contradiction pass.
 func s23DocMetric(row, field string) (float64, error) {
+	if field == s23MinTargetField {
+		return s23DocMinTarget(row)
+	}
 	re, err := regexp.Compile(`\b` + regexp.QuoteMeta(field) + `\s+([0-9]*\.?[0-9]+)\b`)
 	if err != nil {
 		return 0, fmt.Errorf("%q is not a field name", field)
@@ -737,6 +740,69 @@ func s23DocMetric(row, field string) (float64, error) {
 		}
 	}
 	return first, nil
+}
+
+// s23MinTargetField is the pseudo-field a constant cites to read a row's touch-target floor:
+// `derived: ... #4 Toggle { min-target }`.
+//
+// IT IS NOT A CELL ENTRY, which is why it is not read by the `field <number>` rule. Every other
+// citation names something the row writes as a labelled value -- `height 16`, `thumb 24` -- and a
+// minimum target is written as an INEQUALITY over a word that moves: ">=48", "touch target 48",
+// "48 dp target", "min 48". A reader keyed on the label would have to be told which of those four
+// the row happened to use.
+const s23MinTargetField = "min-target"
+
+// s23MinTargetForms are the spellings the derivation table uses for PB-DS-12's touch-target floor.
+//
+// THE FOUR ARE THE DOCUMENT'S, NOT A GENERALISATION OF IT. Row 4 writes "touch target >=48 with
+// the visual unchanged", row 9 "visual height 36, touch target 48" and "Both 48 dp targets", row 10
+// "targets >=48", row 13 "48 dp target", row 15 "one >=48 dp target", row 22 "padding `space_12`,
+// min 48", §4 "48 dp target". Two of those put the number BEFORE the word and two after, one hides
+// it behind a `>=` and one behind the word `min` -- which is the whole reason the metric reader
+// could not see any of them and the floor was asserted in prose and checked nowhere.
+//
+// WHY A LIST RATHER THAN ONE WIDE PATTERN. A pattern loose enough to catch a bare number near the
+// word "target" also catches "the mock's fixed 52 dp" three cells away, and a reader that returns
+// the wrong number is worse than one that returns none: the constant would be checked against a
+// value nobody stated. Each form here is anchored on the word that makes the number a target.
+var s23MinTargetForms = []*regexp.Regexp{
+	// "touch target >=48", "touch target 48", "targets >=48", "one >=48 dp target".
+	regexp.MustCompile(`\btargets?\s+(?:>=\s*)?([0-9]+)\b`),
+	// "48 dp target", "Both 48 dp targets", ">=48 dp target".
+	regexp.MustCompile(`\b([0-9]+)\s*dp\s+targets?\b`),
+	// Row 22's "min 48", the one spelling that names neither `touch` nor `target`.
+	regexp.MustCompile(`\bmin\s+([0-9]+)\b`),
+}
+
+// s23DocMinTarget reads the minimum touch target a derivation row states.
+//
+// EVERY OCCURRENCE MUST AGREE, across all four spellings, for [s23DocMetric]'s reason and one more
+// that is specific to this value: row 9 states its target twice (once for the field and once for
+// the two glyphs beside it) and row 15 states one for a row that CONTAINS another component's. A
+// reader that took the first match would make the floor depend on which sentence came first, and
+// one that took any match would let a row hold two different floors and satisfy both.
+//
+// @return the floor, or an error when the row states none -- which is the honest answer for the
+// twenty rows that specify components nothing taps.
+func s23DocMinTarget(row string) (float64, error) {
+	seen := map[string]string{}
+	for _, form := range s23MinTargetForms {
+		for _, m := range form.FindAllStringSubmatch(row, -1) {
+			seen[m[1]] = m[0]
+		}
+	}
+	switch len(seen) {
+	case 0:
+		return 0, fmt.Errorf("the row states no minimum touch target in any of the forms " +
+			"`target >=N`, `N dp target` or `min N`")
+	case 1:
+		for n := range seen {
+			return strconv.ParseFloat(n, 64)
+		}
+	}
+	return 0, fmt.Errorf("the row states %d disagreeing touch targets (%s), so PB-DS-12's floor "+
+		"for this component is whichever sentence a reader reached first",
+		len(seen), strings.Join(s23SortedKeys(seen), ", "))
 }
 
 func s23IsNumber(s string) bool {
@@ -1909,6 +1975,266 @@ func s23TokenMetric(tokens map[string]string, token, part string) (float64, erro
 		v /= 100
 	}
 	return v, nil
+}
+
+// ---------------------------------------------------------------------------
+// PB-DS-12: the touch-target floor, joined to the rows that state it.
+// ---------------------------------------------------------------------------
+
+// s23TouchTarget is one row that states a minimum touch target, and the factory that carries it.
+//
+// THE ASSIGNMENT IS A CLAIM AND NOT A DERIVATION, which is why it is checked in rather than
+// computed. A row states a floor for the CONTROL it describes, and a control is not always the
+// factory named on the same line: row 22 specifies a read-only note and states the floor for the
+// `[Take control]` button that row turns into a standalone `.a2-more`, which is `ctaButton`. A gate
+// that joined each row to the component citing it would demand a 48 dp target on a centred sentence
+// and let the button beside it have none -- the two failure modes that look identical from a
+// distance and are opposite up close.
+//
+// What the gate does NOT let this table do is drop one. Every row any kit component cites is read,
+// and a row stating a floor that appears in no entry here fails: assigning a target is a reviewed
+// act, ignoring one is not available.
+type s23TouchTarget struct {
+	Row     string
+	Factory string
+	Why     string
+}
+
+// s23TouchTargets is every stated floor in the derivation table, and where it reaches a pixel.
+var s23TouchTargets = []s23TouchTarget{
+	{
+		Row:     "#4 Toggle",
+		Factory: "settingsRow",
+		Why: "row 4 says \">=48 WITH THE VISUAL UNCHANGED\" and row 15 says where: \"the whole " +
+			"row is one >=48 dp target when it carries a toggle\". The two are one instruction. A " +
+			"46x28 control grown to 48 satisfies the number by destroying the drawing the same " +
+			"clause protects, and the toggle does not handle its own tap in any case -- the row " +
+			"it sits in is the control, so the row is where the floor is spent.",
+	},
+	{
+		Row:     "#9 Composer",
+		Factory: "textField",
+		Why: "row 9 is the only row that states a target and a SMALLER visual in the same cell -- " +
+			"\"visual height 36, touch target 48\" -- so the field is 48 dp of target around 36 dp " +
+			"of well, and both numbers are the row's.",
+	},
+	{
+		Row:     "#13 Paired-device row",
+		Factory: "denyChip",
+		Why: "row 13 ends the revoke control's cell with \"48 dp target\". It states the chip's " +
+			"padding, radius and label style and no smaller visual, so unlike row 9 the floor is " +
+			"the control's own box.",
+	},
+	{
+		Row:     "#15 Settings row",
+		Factory: "settingsRow",
+		Why: "\"The whole row is one >=48 dp target when it carries a toggle\" -- the same floor " +
+			"row 4 defers to this component, stated from this side.",
+	},
+	{
+		Row:     "#22 Read-only note",
+		Factory: "ctaButton",
+		Why: "row 22's floor is NOT the note's. The row turns `[Take control]` from an inline span " +
+			"into a standalone tertiary button precisely because \"an inline span cannot carry a " +
+			"48 dp target (PB-DS-12)\", and states that button as `.a2-more` unchanged: `--p-card`, " +
+			"1 dp `--p-hair`, `--p-btn-r` 9, `Label.Button` / `--p-ink`, padding `space_12`, min " +
+			"48. That is `ctaButton(kind = MORE)`, which is what ReadOnlyNote.kt's own KDoc says " +
+			"builds it.",
+	},
+	{
+		Row:     "§4 Drill-down nav header",
+		Factory: "navHeaderDrill",
+		Why: "§4 gives the back control a 24 dp chevron, a label and a \"48 dp target\". The " +
+			"target is the BACK CONTROL's and not the header's, which is why the header's own " +
+			"height is not the subject: a floor on the container is the wrapper that satisfies a " +
+			"rule while the thing under the finger stays 24 dp.",
+	},
+}
+
+// TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent joins PB-DS-12's floor to the rows.
+//
+// THE DEFECT IT CLOSES IS "SPECIFIED EVERYWHERE, ENFORCED NOWHERE". Six rows state a minimum touch
+// target, in four spellings, and until the metric reader learned to read an inequality none of them
+// was joined to anything -- so the accessibility floor was prose in a table, and every one of the
+// six components shipped without it while every gate reported ok.
+func TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent(t *testing.T) {
+	sources := s23KitSources(t)
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-12")
+
+	files := map[string]string{}
+	for _, c := range s23Inbox {
+		files[c.Factory] = c.File
+	}
+
+	for _, target := range s23TouchTargets {
+		file, known := files[target.Factory]
+		if !known {
+			t.Errorf("PB-DS-12: `%s` assigns its touch target to %s(), which no s23Inbox row names",
+				target.Row, target.Factory)
+			continue
+		}
+		row, found := s23FindRow(doc, target.Row)
+		if !found {
+			t.Errorf("PB-DS-12: `%s` is not a row in %s. A floor assigned to a row nobody can find "+
+				"is a floor nobody can check.", target.Row, s23ComponentsDoc)
+			continue
+		}
+		stated, err := s23DocMinTarget(row)
+		if err != nil {
+			t.Errorf("PB-DS-12: `%s` is claimed to state a minimum touch target for %s(): %v",
+				target.Row, target.Factory, err)
+			continue
+		}
+		if stated != float64(s23MinTargetDp(t)) {
+			t.Errorf("PB-DS-12: `%s` states a %g dp target and KitMetrics.MIN_TARGET_DP is %g. One "+
+				"floor differing between two controls is not a floor; either the row moved or the "+
+				"constant did.", target.Row, stated, s23MinTargetDp(t))
+		}
+		if !strings.Contains(kotlinCodeOnly(sources[file]), s23MinTargetConst) {
+			t.Errorf("PB-DS-12: `%s` states a %g dp minimum touch target for %s(), and %s spends no "+
+				"%s. The floor is in the design and not on the screen, which is the whole of this "+
+				"defect: a control smaller than a finger refuses taps that were aimed at it.\n\t%s",
+				target.Row, stated, target.Factory, file, s23MinTargetConst, target.Why)
+		}
+	}
+}
+
+// TestPBDS12_NoStatedTouchTargetIsUnassigned is the direction that makes the table above a fence
+// rather than a list of six good intentions.
+//
+// FORWARD would pass with an empty table. Every row the kit cites is read here, and a row that
+// states a floor and appears in no entry fails -- so a seventh component whose row states a target
+// cannot be added without someone deciding which factory carries it. The reverse of the reverse is
+// also checked: a factory spending the constant with no row behind it is a number somebody chose.
+func TestPBDS12_NoStatedTouchTargetIsUnassigned(t *testing.T) {
+	sources := s23KitSources(t)
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-12")
+
+	assigned := map[string]bool{}
+	spenders := map[string]bool{}
+	for _, target := range s23TouchTargets {
+		assigned[target.Row] = true
+		spenders[target.Factory] = true
+	}
+
+	read := 0
+	for _, c := range s23Inbox {
+		if c.Derived == "" {
+			continue
+		}
+		row, found := s23FindRow(doc, c.Derived)
+		if !found {
+			continue // TestPBDS7_EveryDerivationCitationResolvesToARow owns that fault.
+		}
+		read++
+		if _, err := s23DocMinTarget(row); err != nil {
+			continue
+		}
+		if !assigned[c.Derived] {
+			t.Errorf("PB-DS-12: `%s`, cited by %s(), states a minimum touch target and no "+
+				"s23TouchTargets entry claims it. A floor nobody was assigned is the state this "+
+				"whole check exists to end -- add the entry naming the factory that carries it, "+
+				"which is a decision rather than a lookup.", c.Derived, c.Factory)
+		}
+	}
+	if read == 0 {
+		t.Fatal("PB-DS-12: no derivation row was read, so this direction passed over an empty set")
+	}
+
+	// SCOPED TO THE FILE AND NOT TO THE FACTORY, because one file can hold two of them.
+	// SettingsRow.kt declares `settingsRow` and `statusLabel`, and only the first carries a floor;
+	// a per-factory reading of the same text accuses the second of spending a constant its
+	// neighbour wrote. What a text scan can honestly say is that SOMETHING in this file was
+	// assigned a target, and TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent is what says
+	// the assignment was met.
+	claimed := map[string]bool{}
+	for _, c := range s23Inbox {
+		if spenders[c.Factory] {
+			claimed[c.File] = true
+		}
+	}
+	for file, src := range sources {
+		if claimed[file] || !strings.Contains(kotlinCodeOnly(src), s23MinTargetConst) {
+			continue
+		}
+		t.Errorf("PB-DS-12: %s spends %s and no s23TouchTargets entry assigns a factory in it a "+
+			"touch target. A floor with no design behind it is a size somebody chose, which is "+
+			"what this package exists to prevent.", file, s23MinTargetConst)
+	}
+}
+
+// s23MinTargetConst is the spend the check above looks for. It is the CONSTANT and not the number:
+// a file typing 48 at a call site is TestPBDS7_NoMetricIsTypedAtADpCallSite's fault, and this one
+// is about whether the floor the design states reaches the component at all.
+const s23MinTargetConst = "KitMetrics.MIN_TARGET_DP"
+
+// s23MinTargetDp is the value the kit declares for the floor, read from the kit rather than typed
+// here -- TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber is what holds it to row 4.
+func s23MinTargetDp(t *testing.T) float64 {
+	t.Helper()
+	for _, m := range s23ScanMetrics(s23KitSources(t)["Kit.kt"]) {
+		if m.Name == "MIN_TARGET_DP" {
+			v, err := strconv.ParseFloat(m.Raw, 64)
+			if err != nil {
+				t.Fatalf("PB-DS-12: MIN_TARGET_DP = %s is not a number", m.Raw)
+			}
+			return v
+		}
+	}
+	t.Fatal("PB-DS-12: the kit declares no MIN_TARGET_DP, so PB-DS-12's floor has no value at all")
+	return 0
+}
+
+// TestPBDS12_TheTouchTargetReaderCanActuallyFail is the negative control the acceptance criteria
+// name: proof that the reader reads the ROW.
+//
+// IT DRIVES [s23DocMinTarget], the function the two assertions above call, for the reason
+// s23Metric's own comment gives -- a control that rebuilt the parse inline would prove the copy
+// works and say nothing about the fence.
+func TestPBDS12_TheTouchTargetReaderCanActuallyFail(t *testing.T) {
+	// The four spellings the document actually uses, each read out of the row it comes from.
+	for _, probe := range []struct{ name, row string }{
+		{"row 4's inequality", "| 4 | Toggle | track 46x28, thumb 24, touch target >=48 with the visual unchanged (PB-DS-12) |"},
+		{"row 9's bare value", "| 9 | Composer | visual height 36, touch target 48; glyphs 26 |"},
+		{"row 13's number-first form", "| 13 | Paired-device row | `Label.Chip`, 48 dp target |"},
+		{"row 22's `min`", "| 22 | Read-only note | padding `space_12`, min 48 |"},
+	} {
+		got, err := s23DocMinTarget(probe.row)
+		if err != nil || got != 48 {
+			t.Errorf("PB-DS-12: %s reads as (%g, %v), not 48. A spelling the reader cannot see is "+
+				"a floor that is stated and unchecked, which is the defect this reader exists to "+
+				"end.", probe.name, got, err)
+		}
+	}
+
+	// A ROW THAT STATES NO TARGET MUST NOT PRODUCE ONE. This is the half that keeps the patterns
+	// from being widened into a number-finder: twenty rows of this table state dimensions near the
+	// word "target" is not in, and every one of them would otherwise acquire a floor nobody wrote.
+	for _, probe := range []struct{ name, row string }{
+		{"row 11's dot", "| 11 | Machine row | Presence dot 7 dp, `--p-dot-r` |"},
+		{"row 14's retired fixed column", "| 14 | Activity row | the timestamp column is wrap-content, not the mock's fixed 52 dp |"},
+		{"row 8's padding", "| 8 | Empty state | padding 48 (2 x `space_24`) vertical |"},
+	} {
+		if got, err := s23DocMinTarget(probe.row); err == nil {
+			t.Errorf("PB-DS-12: %s produced a %g dp touch target and states none. A reader that "+
+				"finds a floor in a padding would hold a component to a number the design never "+
+				"wrote.", probe.name, got)
+		}
+	}
+
+	// A ROW THAT CONTRADICTS ITSELF IS A MISS, NOT A CHOICE -- s23FindRow's rule, one value down.
+	both := "| 9 | Composer | touch target 48; the voice glyph takes a 44 dp target |"
+	if got, err := s23DocMinTarget(both); err == nil {
+		t.Errorf("PB-DS-12: a row stating two different floors read as %g. Returning either is how "+
+			"a control held to the smaller one stays green.", got)
+	}
+
+	// And the join itself: the value has to come from the row rather than from the constant.
+	if got, _ := s23DocMinTarget("| 4 | Toggle | touch target >=44 with the visual unchanged |"); got == s23MinTargetDp(t) {
+		t.Errorf("PB-DS-12: a row stating 44 reads as the kit's own %g, so the comparison in "+
+			"TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent is a constant against itself",
+			got)
+	}
 }
 
 // ---------------------------------------------------------------------------

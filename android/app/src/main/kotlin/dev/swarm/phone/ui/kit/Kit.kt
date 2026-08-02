@@ -318,6 +318,36 @@ internal object KitMetrics {
     const val BADGE_HEIGHT_DP = 16f
 
     /**
+     * PB-DS-12's floor: the smallest a control may be to be hit reliably.
+     *
+     * SIX ROWS STATE IT AND NONE OF THEM STATES ANYTHING ELSE, which is why one constant serves all
+     * of them and why the gate compares every stating row against this one value rather than giving
+     * each component a constant of its own. Rows 4, 9, 13, 15 and 22 and §4's drill-down header all
+     * write 48, in four different spellings -- `>=48`, `touch target 48`, `48 dp target`, `min 48`
+     * -- and a floor that differed between two controls would not be a floor.
+     *
+     * IT IS CITED TO ROW 4 BECAUSE THAT ROW STATES THE HARD CASE: ">=48 with the visual unchanged".
+     * A target is not a size -- growing a control until it is 48 dp satisfies the number and loses
+     * the drawing -- and the row that says so is the one worth following the citation to.
+     *
+     * derived: docs/design/substrate-components.md #4 Toggle { min-target }
+     */
+    const val MIN_TARGET_DP = 48f
+
+    /**
+     * The field's PAINTED height, which row 9 states beside its target and separately from it:
+     * "field padding `space_8` x `space_14`, visual height 36, touch target 48".
+     *
+     * IT EXISTS BECAUSE THE TWO NUMBERS DISAGREE ON PURPOSE. Every other control in this kit is its
+     * own target; this one is a 36 dp well inside a 48 dp hit box, so the difference has to be a
+     * value rather than a consequence -- and both halves of it are the row's, which is what stops
+     * the well from being a height somebody liked.
+     *
+     * derived: docs/design/substrate-components.md #9 Composer { height }
+     */
+    const val WELL_HEIGHT_DP = 36f
+
+    /**
      * The toggle's thumb, which is also what its track is built out of.
      *
      * ROW 4 STATES FIVE NUMBERS AND ONLY TWO OF THEM ARE LEAVES. `track 46x28` is

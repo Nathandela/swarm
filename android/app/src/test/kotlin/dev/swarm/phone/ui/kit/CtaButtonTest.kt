@@ -364,6 +364,28 @@ class CtaButtonTest {
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
 
+    /**
+     * Row 22's floor, which belongs to this component rather than to the note that states it.
+     *
+     * The row turns `[Take control]` from an inline span into a standalone tertiary button
+     * *because* "an inline span cannot carry a 48 dp target (PB-DS-12)", and specifies that button
+     * as `.a2-more` unchanged plus "padding `space_12`, min 48". So the floor is `.a2-more`'s, and
+     * `.acts2 button`'s 12 dp padding around a 13.5 sp label does not reach it on its own.
+     *
+     * THE BLOOMING VARIANT IS THE ONE THAT COULD CHEAT. It inflates itself by 18 dp on every edge
+     * to house the halo and hands all of it back as negative margin, so its measured box clears any
+     * floor while the button a user can see is 36 dp smaller. [touchTargetFaults] subtracts the
+     * room for exactly that reason, and both variants are asked.
+     */
+    @Test
+    fun `every CTA variant clears PB-DS-12's floor in the box a user can see`() {
+        val floor = dp(KitMetrics.MIN_TARGET_DP).roundToInt()
+        val faults = listOf(more(), deny(), approve(), approve(bloom = false))
+            .flatMap { touchTargetFaults(it, floor, dp(360f).roundToInt()) }
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+    }
+
     /** `.acts2 { flex-direction: column }`: the buttons are full width and their labels centred. */
     @Test
     fun `the button fills its column and centres its label`() {
