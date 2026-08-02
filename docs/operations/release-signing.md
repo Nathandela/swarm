@@ -13,37 +13,26 @@ worse than no keystore at all — anyone who read the transcript would hold the 
 
 ## Read this first: what you are creating, and what happens if you lose it
 
-`keytool` below generates an **upload key**, not the app's real signing key — and which one you
-are actually trusting matters enormously, so the distinction is worth being precise about before
-you run anything.
+`keytool` below generates an **upload key**, not the app's real signing key.
 
-**Google Play now defaults new apps into Play App Signing**, and an AAB upload (which Play
-requires for a new app — no APK path exists for first submission) enrolls you in it as part of
-creating the app in Play Console. Under Play App Signing, **Google generates and holds the real
-app signing key**; the keystore you create here only signs the AAB you *upload to Google*, which
-Google then re-signs with the key it holds before it ever reaches a device. That has a direct,
-practical consequence: **if you lose this upload keystore, or forget its password, it is
-recoverable.** You request an upload key reset in Play Console (or through Play's developer
-support), prove you own the account, generate a brand-new keystore with `keytool` the same way as
-below, and continue shipping updates — existing installs are unaffected because the key that
-actually signs what a device sees never changed. Google's stated turnaround for this is on the
-order of days, not instant, so treat "recoverable" as "recoverable at a cost," not "harmless to
-lose."
+**Play App Signing is mandatory for this app, full stop — there is no opt-out to navigate.** Google
+requires it for every app created from August 2021 onward
+(<https://developer.android.com/studio/publish/app-signing>: "Configuring Play App Signing is
+required to sign your app for distribution through Google Play... except for apps created before
+August 2021, which may continue distributing self-signed APKs"). `dev.swarm.phone` is a new app
+being created in 2026 — nowhere near that grandfather clause — so Play Console will not offer a
+choice to decline, and there is nothing to confirm during app creation.
 
-**The catastrophic case is different, and it is still reachable if you opt out.** If Play Console's
-app-creation flow offers you a choice and you decline Play App Signing — self-managing the app
-signing key instead — then the keystore you create *is* the one and only app signing key, Google
-never holds a copy, and **losing it means you can never publish another update to this
-application id again.** There is no reset, no support ticket, no recovery: `dev.swarm.phone` would
-be permanently frozen at whatever version was last uploaded, and the only way forward would be
-publishing a brand-new, unrelated application id that every existing install would treat as a
-different app. **Confirm you are enrolled in Play App Signing when the app is created
-(`agents-tracker-2qm`) rather than opting out** — that single checkbox is what makes everything
-below "back up a recoverable upload key" instead of "the one artifact this application can never
-lose."
+Under Play App Signing, **Google generates and holds the real app signing key.** The keystore you
+create here only signs the AAB you *upload to Google*, which Google re-signs with the key it holds
+before it ever reaches a device. That means **losing this upload keystore, or forgetting its
+password, is recoverable**: request an upload-key reset in Play Console (identity-verified, on the
+order of days, not instant), generate a fresh keystore the same way as below, and continue shipping
+updates — existing installs are unaffected because the key that actually signs what a device sees
+never changes.
 
-Either way: **back this file up.** A recoverable-but-days-long reset is still a real outage for
-anyone relying on an update landing on schedule.
+**Back this file up anyway.** A recoverable-but-days-long reset is still a real outage for anyone
+relying on an update landing on schedule.
 
 ---
 
@@ -179,8 +168,8 @@ the exact shell/invocation that ran `bundleRelease`.
 
 ## 7. What happens next (out of scope here)
 
-Creating the app in Play Console, choosing (confirming) Play App Signing, and uploading this AAB
-to a closed-testing track is `agents-tracker-2qm`, not this task. Before that upload, re-check
+Creating the app in Play Console (which enrolls it in the mandatory Play App Signing automatically)
+and uploading this AAB to a closed-testing track is `agents-tracker-2qm`, not this task. Before that upload, re-check
 Play's current target API level requirement — `docs/ops/play-closed-testing-application.md`
 already flags that the floor moves every August and this project sits on the pinned value in
 `android/toolchain.env`.
