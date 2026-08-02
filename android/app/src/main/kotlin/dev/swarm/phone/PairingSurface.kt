@@ -212,6 +212,19 @@ class PairingSurface(
     private var rebuilt = false
 
     /**
+     * Told, once, that this phone is now paired.
+     *
+     * IT PUSHES AND IS NOT POLLED, which is [PhoneSurface.onDrillDownChanged]'s reason and one this
+     * screen makes sharper: the handshake finishes on a Go goroutine and reaches this surface
+     * through its own poller, so the moment a phone becomes paired is a moment nothing else on the
+     * screen is executing. An unpaired phone is shown [dev.swarm.phone.ui.screens.pairOnlyView] and
+     * NOTHING else (agents-tracker-64rf) -- so without this the user who has just finished pairing
+     * sits on the flow's last step, with the app they earned behind a screen that is no longer for
+     * them, until they leave the app and come back.
+     */
+    internal var onPaired: () -> Unit = {}
+
+    /**
      * Built on the first scan rather than in the constructor. CameraX allocates a camera
      * provider and a preview implementation the moment it exists, and this screen is created on
      * every launch whether or not anyone is pairing.
@@ -489,6 +502,11 @@ class PairingSurface(
             // skipped this pairs and then never connects.
             rebuilt = true
             runtime.rebuildAfterPairing()
+            // AFTER THE REBUILD AND NOT BEFORE IT. Whoever is told is going to ask the runtime for
+            // a phone, and the one this pairing ran on is the one that has to be replaced first --
+            // otherwise the app is redrawn against a core that pairs and then never connects, which
+            // is the defect the rebuild above exists to prevent.
+            onPaired()
         }
     }
 

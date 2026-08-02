@@ -40,14 +40,17 @@ import dev.swarm.phone.ui.screens.LaunchPanelScreen
 import dev.swarm.phone.ui.screens.LinkPanel
 import dev.swarm.phone.ui.screens.LinkPanelScreen
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
+import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PeekPanel
 import dev.swarm.phone.ui.screens.PeekPanelScreen
+import dev.swarm.phone.ui.screens.Presentation
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.linkPanelView
+import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.sessionDetailView
@@ -179,7 +182,11 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    private val pairing = PairingSurface(activity, runtime)
+    // THE REDRAW IS THE MOMENT THE APP APPEARS. An unpaired phone is shown one screen and nothing
+    // else ([drawPairOnly]), so a pairing that has just succeeded leaves the window still made of
+    // the flow that succeeded; this is what swaps it for the app the user has now earned, when they
+    // earned it rather than the next time they happen to leave and come back.
+    private val pairing = PairingSurface(activity, runtime).also { it.onPaired = ::render }
     private val settings = SettingsSurface(activity, runtime)
 
     /**
@@ -463,6 +470,26 @@ class PhoneSurface(
     private var barDrawn: Pair<List<InboxTab>, Destination>? = null
 
     /**
+     * Whether the offer on the unpaired phone's screen has been taken up.
+     *
+     * IT IS A FACT ABOUT THIS SCREEN AND NOT ABOUT THE PAIRING STATE, which is why it is here and
+     * not read from [PairingSurface]. An interrupted attempt is a state the flow restores; this is
+     * whether the person in front of the phone has asked to see the flow at all, and a handset that
+     * comes back to a half-finished attempt is still owed the sentence explaining why its app is
+     * empty before it is shown a camera.
+     */
+    private var pairingStarted = false
+
+    /**
+     * What the unpaired phone's screen last drew, or null while it is not the screen on show.
+     *
+     * [inboxDrawn]'s reason: [render] runs on every resume, after every action and on every journal
+     * event, and rebuilding this screen re-parents the pairing flow -- which on the step that
+     * matters is a live camera preview.
+     */
+    private var pairOnlyDrawn: Boolean? = null
+
+    /**
      * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
      *
      * THE LAUNCH FORM'S IS THE ONE THAT MATTERS TO A PERSON. The three fields are views this
@@ -530,9 +557,18 @@ class PhoneSurface(
      * it with real screens and puts the triage inbox first, so what is here now is the remainder.
      *
      * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
-     * [launchHost] are composed panels rather than loose views; the pairing panel composes itself.
-     * What is genuinely unrecomposed is the status line, the capability notice, the outcome line,
-     * and the KEYBOARD -- the field and Send.
+     * [launchHost] are composed panels rather than loose views. What is genuinely unrecomposed is
+     * the status line, the capability notice, the outcome line, and the KEYBOARD -- the field and
+     * Send.
+     *
+     * **THE PAIRING PANEL HAS LEFT IT, AND THAT IS THE DEFECT agents-tracker-64rf REPORTS.** It was
+     * a child of this column, which is hosted BELOW the session list on the Inbox destination -- so
+     * on a fresh install the one action the phone can usefully take was a control at the bottom of
+     * a scroll, under four always-drawn triage headings over an empty roster, on one of four tabs.
+     * The owner installed the app on a real handset and could not find it. An unpaired phone is now
+     * shown [dev.swarm.phone.ui.screens.pairOnlyView] and nothing else ([drawPairOnly]);
+     * `android/gate/pairingentry_test.go` fences the panel out of this column and out of everything
+     * the tab scaffold hosts, so it cannot come back to a list.
      *
      * KILL SESSION HAS LEFT IT, and inventory C2 is where it went. It was a loose button acting on
      * whichever session the surface happened to be targeting, one tap from ending it; it is now the
@@ -561,7 +597,7 @@ class PhoneSurface(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
-            status, notice, pairing.root, peekHost,
+            status, notice, peekHost,
             typed, send, launchHost, revoke, outcome,
         )) {
             addView(child)
@@ -818,9 +854,14 @@ class PhoneSurface(
         // machine that this phone is in no position to make.
         drawContent(bridge = null, inbox = null)
         // THE BAR IS DRAWN ANYWAY, because it is the window's chrome and not the inbox's contents.
-        // A phone whose core refused still has four destinations, and the one that might get it
-        // out of that state -- the pairing panel, under the Inbox tab -- is reached by navigating
-        // like everything else. [chromeTabs] says what the bar can honestly carry here.
+        // A phone whose core refused still has four destinations, and [chromeTabs] says what the
+        // bar can honestly carry here.
+        //
+        // IT IS NOT THE UNPAIRED PHONE'S SCREEN, and the difference is what there is to offer.
+        // [drawPairOnly] offers a pairing flow; on this branch there is no phone core to run one,
+        // and [PairingSurface] draws nothing at all for exactly that reason -- so the offer would
+        // lead to an empty screen. What this branch has to say is the routed startup failure on the
+        // status line, which is what it says.
         drawScaffold(chromeTabs())
     }
 
@@ -836,6 +877,21 @@ class PhoneSurface(
         // already live answers without consulting Keystore at all, so this costs nothing on
         // every other redraw.
         runtime.unlockContent()?.let { outcome.text = it.message }
+
+        // THE FIRST DECISION IS WHETHER THIS HANDSET IS SHOWN THE APP AT ALL (agents-tracker-64rf).
+        // Nothing below this line means anything on a phone with no machine pinned to it: the
+        // convergence re-establishes a connection to a machine it has not got, and every screen
+        // after that reads a roster it has no connection to fill -- an inbox announcing that
+        // nothing is waiting on the user, which is a claim about a machine this phone is in no
+        // position to make. [PairOnlyScreen] owns the decision, including the case where the state
+        // cannot be read at all.
+        if (PairOnlyScreen.presentationOf { startup.app.stateSummary().machine } ==
+            Presentation.PAIR_ONLY
+        ) {
+            drawPairOnly()
+            return
+        }
+
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
         // PB-APP-11 rides the same line as the connection banner, and it has to: the banner is
@@ -932,6 +988,38 @@ class PhoneSurface(
         TriageInboxScreen.of(TriageInbox.from(emptyList(), journalStale = false)).tabs
 
     /**
+     * The screen an unpaired phone opens on: one offer to pair, hosting the flow once it is taken
+     * up, and nothing else -- no scaffold, no tab bar, no inbox.
+     *
+     * IT IS HOSTED IN [host] AND NOT IN [contentHost], which is the whole of what the fix is. The
+     * content host is what the tab scaffold wraps around; putting this screen there would leave an
+     * unpaired phone looking at four tabs again, three of which lead to screens with nothing to
+     * show it. This screen IS the window while it is up.
+     */
+    private fun drawPairOnly() {
+        if (pairOnlyDrawn == pairingStarted && host.childCount > 0) return
+        pairOnlyDrawn = pairingStarted
+        // THE SCAFFOLD IS COMING DOWN, SO WHAT IT LAST DREW SAYS NOTHING ABOUT WHAT IS ON SCREEN.
+        // Both are cleared rather than left, because both guard early returns: a phone whose device
+        // was revoked lands here with a bar and a destination already recorded, and would then be
+        // shown neither of them again when it re-pairs.
+        barDrawn = null
+        contentShows = null
+        host.removeAllViews()
+        host.addView(
+            pairOnlyView(
+                context = activity,
+                pairing = pairing.root,
+                started = pairingStarted,
+                onStartPairing = {
+                    pairingStarted = true
+                    render()
+                },
+            ),
+        )
+    }
+
+    /**
      * Draw the bar, and rebuild it only when what it says has changed.
      *
      * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason [inboxDrawn] records: [render]
@@ -940,6 +1028,11 @@ class PhoneSurface(
      * whoever is using it, at whatever rate their agents happen to be producing events.
      */
     private fun drawScaffold(tabs: List<InboxTab>) {
+        // THE APP IS ON SCREEN, SO THE UNPAIRED PHONE'S SCREEN IS NOT -- [drawPairOnly]'s clearing,
+        // in the other direction. The offer is untaken again as well: a handset revoked later comes
+        // back to the sentence explaining why its app is empty, not to a camera it did not ask for.
+        pairOnlyDrawn = null
+        pairingStarted = false
         val next = tabs to destination
         if (next == barDrawn && host.childCount > 0) return
         barDrawn = next
@@ -1191,10 +1284,12 @@ class PhoneSurface(
      * `removeAllViews` on the content host detaches the INBOX, and the controls are two levels
      * inside it -- so without this they arrive at their next `addView` still claiming a parent, and
      * Android refuses that with "the specified child already has a parent". The settings root is
-     * here for the same reason now that it is a destination of its own.
+     * here for the same reason now that it is a destination of its own, and the pairing root now
+     * that [drawPairOnly] hosts it: it is the one view in this list that can be left parented by a
+     * screen this host never held.
      */
     private fun detachHostedViews() {
-        for (view in listOf(unrecomposedControls, settings.root)) {
+        for (view in listOf(unrecomposedControls, settings.root, pairing.root)) {
             (view.parent as? ViewGroup)?.removeView(view)
         }
     }
