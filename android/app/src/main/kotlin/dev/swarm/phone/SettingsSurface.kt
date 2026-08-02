@@ -338,15 +338,17 @@ class SettingsSurface(
      * kill the app, which is agents-tracker-7j4b exactly. Nothing in the platform would say so:
      * Go opens its sockets below the JVM.
      *
-     * THE PURGE IS IN A `finally`, WHICH IS THE PANIC ACTION'S SEMANTICS. `PhoneSurface`'s revoke
-     * recorded the reason and it is unchanged by the control moving: the command can refuse, and
-     * the situation this control exists for is one where the phone may not reach its machine. A
-     * purge that ran only on success would leave the live keys on a handset whose registration the
-     * owner has just disowned (ADR-007 B133 decision 3, both tiers).
+     * THE PURGE IS IN A `finally`, WHICH IS THE PANIC ACTION'S SEMANTICS RATHER THAN DEFENSIVE
+     * STYLE. The command can refuse, and the situation this control exists for is one where the
+     * phone may not reach its machine at all. A purge that ran only on success would leave the live
+     * keys on the very handset whose registration its owner has just disowned -- so both key tiers
+     * go with the registration, and neither comes back without pairing again (ADR-007 B133
+     * decision 3).
      *
-     * IT NAVIGATES NOWHERE. A revoked phone is an unpaired phone, and an unpaired phone already
-     * has one screen with one offer on it -- so [render] is the whole of the second half, and a
-     * "now go and pair" step would be a second thing to keep in agreement with it.
+     * IT NAVIGATES NOWHERE. A revoked phone is an unpaired phone, and `PhoneSurface.renderReady`
+     * gates on `PairOnlyScreen.presentationOf` before anything else -- so the next draw is the
+     * screen an unpaired phone gets, with one offer on it, and [render] is the whole of the second
+     * half. A "now go and pair" step would be a second thing to keep in agreement with that gate.
      */
     private fun onReplace(control: View) {
         val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
