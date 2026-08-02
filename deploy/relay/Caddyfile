@@ -18,6 +18,26 @@
 # verbatim into the pairing QR, and "wss://" alone already spends 6 of those.
 #
 # The backend address must match "listen" in relay.config.example exactly.
+#
+# `reuse_private_keys` IS LOAD-BEARING AND IS NOT A PERFORMANCE SETTING. Caddy's documented
+# default is the opposite: "a new key is created for every new certificate to mitigate
+# pinning". This deployment pins. `swarm remote init --relay-pin` records the SPKI hash, the
+# phone persists it (internal/phonecore/state.go, relay_spki_pin) and dials with
+# PinnedSPKISHA256 forever after (mobile/relay.go). Without this directive, the first ACME
+# renewal -- roughly 60 days after deployment, unattended -- presents a new key, the SPKI
+# changes, and BOTH the phone and the machine start failing with ErrPinMismatch at once. The
+# phone words that failure as "the relay presented a certificate the machine did not pin; the
+# pairing connection is being intercepted", so a routine renewal reads to the user as an
+# active attack.
+#
+# Caddy documents this option as "against industry best practices" and "subject to removal in
+# a future version". That is a real risk and the reason relay-vps-deploy.md carries a recovery
+# procedure rather than treating the pin as permanent: if a Caddy upgrade ever drops it, the
+# pin WILL change and the fix is to recompute it and re-pair, not to debug an interception
+# that never happened.
 relay.example.com {
+	tls {
+		reuse_private_keys
+	}
 	reverse_proxy 127.0.0.1:9440
 }
