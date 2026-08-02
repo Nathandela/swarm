@@ -122,6 +122,11 @@ private fun backControl(context: Context, label: CharSequence): TextView = TextV
     // land in. The floor is on BOTH edges -- a back control labelled `Inbox` is 31 dp wide.
     minimumWidth = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
     minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+    // Row 23, and this control is where it can go first: it paints no surface of its own, so the
+    // ring's `space_2` offset is measured against the 48 dp box the line above just gave it rather
+    // than against a fill sitting on the same edge. Radius 0, because a square corner's concentric
+    // ring is the offset alone.
+    Kit.focusable(this, componentRadiusPx = 0f)
     layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
     tag = KitTag.DRILL_BACK
 }

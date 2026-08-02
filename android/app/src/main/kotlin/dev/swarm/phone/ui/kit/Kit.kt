@@ -217,6 +217,33 @@ internal object Kit {
     private const val WORKING_GLOW_SHARE = 0.55f
 
     /**
+     * Give a view row 23's ring and make it something the ring can reach.
+     *
+     * **A RING NOTHING CAN FOCUS IS A RING THAT NEVER DRAWS**, and joining the two halves into one
+     * call is what makes that unbuildable: a component cannot acquire the paint without acquiring
+     * the state that shows it, and cannot become focusable without acquiring the ring PB-DS-12
+     * requires of every focusable. Row 23's clause is "applies to every focusable" in both
+     * directions, and this is that sentence as a function.
+     *
+     * `isFocusableInTouchMode` IS DELIBERATELY NOT SET, and the row's own selector is why. Row 23
+     * cites `:focus-visible`, not `:focus` -- the ring is for the user traversing with a keyboard,
+     * a D-pad or switch access, and a control that took focus on touch would leave a white ring
+     * behind every tap. Android's touch-mode rule produces exactly the pseudo-class's behaviour for
+     * free, so what would look like the more thorough call is the wrong one.
+     *
+     * IT IS HERE AND NOT A TOP-LEVEL FUNCTION for [emphasised]'s reason: every top-level `fun` in
+     * this package is read as a component factory by `android/gate/s23_kit_test.go`, and this is a
+     * treatment applied to one rather than a thing on screen.
+     *
+     * @param componentRadiusPx the radius of the surface being surrounded, so the ring is
+     *  concentric with it. A control with no surface of its own passes 0.
+     */
+    fun focusable(view: View, componentRadiusPx: Float) {
+        view.foreground = focusRing(view.context, componentRadiusPx)
+        view.isFocusable = true
+    }
+
+    /**
      * [text] with `.prow .ln b` applied over [span], or [text] unchanged when there is none.
      *
      * IT IS HERE BECAUSE TWO COMPONENTS NEED THE SAME SPAN. Row 14's activity row marks an inline
@@ -333,6 +360,17 @@ internal object KitMetrics {
      * derived: docs/design/substrate-components.md #4 Toggle { min-target }
      */
     const val MIN_TARGET_DP = 48f
+
+    /**
+     * Row 23's focus ring: a 2 dp stroke.
+     *
+     * IT IS NOT `HAIRLINE_DP` AND NOT `RAIL_DP`, both of which this kit already has at 1 dp and
+     * 2 dp. A hairline is structure, a rail is "this row needs you", and a focus ring is neither --
+     * three values that would be one constant only until one of them moved. Row 23 states this one.
+     *
+     * derived: docs/design/substrate-components.md #23 Focus ring { stroke }
+     */
+    const val FOCUS_RING_DP = 2f
 
     /**
      * The field's PAINTED height, which row 9 states beside its target and separately from it:

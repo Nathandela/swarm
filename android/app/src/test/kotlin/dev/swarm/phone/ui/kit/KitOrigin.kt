@@ -214,6 +214,34 @@ object KitOrigin {
     }
 
     /**
+     * The token a derivation row's named COLUMN specifies -- `--p-ink` for row 23's `Surface`.
+     *
+     * IT READS THE HEADER RATHER THAN COUNTING PIPES, because a column added to the table would
+     * otherwise shift every expectation in this suite by one silently. And it takes the cell's
+     * LEADING token, which is the table's own reading rule: "A token | `--p-elev` | Spend it as-is",
+     * with everything after it -- the resolved ARGB, the contrast ratios, the surfaces a value is
+     * measured against -- being the reviewer's arithmetic rather than a second specification.
+     */
+    fun cellToken(component: String, column: String): String {
+        val cell = rowCell(component, column)
+        return requireNotNull(Regex("`(--p-[a-z0-9-]+)`").find(cell)?.groupValues?.get(1)) {
+            "the `$component` row's $column cell names no token: $cell"
+        }
+    }
+
+    /** One named cell of a derivation row, by the column heading the table declares. */
+    fun rowCell(component: String, column: String): String {
+        val header = readResource(COMPONENTS_DOC).lineSequence()
+            .firstOrNull { it.startsWith("| # | Component |") }
+            ?: error("$COMPONENTS_DOC's derivation table has no header row to name columns by")
+        val index = header.split("|").map { it.trim() }.indexOf(column)
+        require(index > 0) { "the derivation table declares no `$column` column" }
+        val cells = derivationRow(component).split("|").map { it.trim() }
+        require(index < cells.size) { "the `$component` row has no $column cell" }
+        return cells[index]
+    }
+
+    /**
      * One row of the derivation table, found by its leading component cell.
      *
      * Fails loudly rather than returning null or the empty string: a value read out of a row that

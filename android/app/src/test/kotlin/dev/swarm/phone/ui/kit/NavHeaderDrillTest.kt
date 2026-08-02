@@ -7,6 +7,7 @@ import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -97,6 +98,33 @@ class NavHeaderDrillTest {
         )
 
         assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+    }
+
+    /**
+     * Row 23's ring lands on the BACK CONTROL, and lands there first because this is the one
+     * control in the kit that paints no surface at its own edge.
+     *
+     * THE RING AND THE FOCUS ARE ONE CLAIM. A ring on a view nothing can focus is paint that never
+     * appears, and a focusable with no ring is PB-DS-12's other half missing -- so what is asked is
+     * that the control carries both, on the same view the 48 dp target is on. Not the header: a
+     * ring around the whole header would say the screen is focused rather than the way back off it.
+     */
+    @Test
+    fun `the back control carries row 23's ring and can be reached by it`() {
+        val header = header()
+        val back = backOf(header)
+
+        assertTrue(
+            "the back control has no focus ring, so row 23 reaches no pixel on the one screen " +
+                "that has a destination to go back to",
+            back.foreground is FocusRingDrawable,
+        )
+        assertTrue("the back control cannot take focus, so its ring never draws", back.isFocusable)
+        assertFalse(
+            "the header itself is focusable, which puts the ring around the screen instead of " +
+                "around the control",
+            header.isFocusable,
+        )
     }
 
     // ---- the type and the inks --------------------------------------------

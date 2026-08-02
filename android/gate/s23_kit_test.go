@@ -227,6 +227,21 @@ var s23Inbox = []s23Component{
 			"than restating either.",
 	},
 	{
+		Factory: "focusRing",
+		File:    "FocusRing.kt",
+		Derived: "#23 Focus ring",
+		Why: "PB-DS-12's other unenforced clause, and the one component in this kit that is not a " +
+			"thing on screen but a treatment applied to one. The artifact's own `:focus-visible` " +
+			"is `#e2a33b`, which is the DOCUMENTATION PAGE's chrome accent rather than a product " +
+			"token, so there is no origin to cite and §1.1 argues the replacement at length: not " +
+			"the four status tokens (they mean state), not `--p-hero` (it means selected, and a " +
+			"hero ring around an unselected chip says the opposite of what is true), not " +
+			"`--p-ink2` (the resting colour of chip labels, so a ring in it reads as a border). " +
+			"It is a FOREGROUND because every focusable in this kit has already spent its " +
+			"background on a surface, and a ring merged into each of those would be five copies " +
+			"of one rule.",
+	},
+	{
 		Factory: "presenceDot",
 		File:    "PresenceDot.kt",
 		Derived: "#11 Machine row",
@@ -716,11 +731,23 @@ func s23DocMetric(row, field string) (float64, error) {
 	if field == s23MinTargetField {
 		return s23DocMinTarget(row)
 	}
-	re, err := regexp.Compile(`\b` + regexp.QuoteMeta(field) + `\s+([0-9]*\.?[0-9]+)\b`)
+	// BOTH ORDERS, because the table writes labelled values both ways and the reader has no
+	// business caring which: row 3 says "height 16" in one cell and "the 16 dp height" in another,
+	// and row 23 says "2 dp stroke" and nothing else. Reading only `field N` made the second order
+	// invisible, so a value the document states plainly could not be cited at all -- the same
+	// defect the touch-target floor had, in the other direction. Both are still ANCHORED on the
+	// field name, so this stays a labelled-value reader rather than a number-finder, and the
+	// every-occurrence-agrees rule below now spans the two orders as well.
+	label := regexp.QuoteMeta(field)
+	re, err := regexp.Compile(`\b` + label + `\s+([0-9]*\.?[0-9]+)\b`)
 	if err != nil {
 		return 0, fmt.Errorf("%q is not a field name", field)
 	}
-	matches := re.FindAllStringSubmatch(row, -1)
+	before, err := regexp.Compile(`\b([0-9]*\.?[0-9]+)\s*(?:dp\s+)?` + label + `\b`)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a field name", field)
+	}
+	matches := append(re.FindAllStringSubmatch(row, -1), before.FindAllStringSubmatch(row, -1)...)
 	if matches == nil {
 		return 0, fmt.Errorf("the row states no `%s <number>`", field)
 	}
