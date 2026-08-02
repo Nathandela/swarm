@@ -55,6 +55,7 @@ import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
 import swarmmobile.LaunchSpec
+import swarmmobile.Op
 
 /**
  * Phase B slice S18 -- the views [PhoneActivity] hosts.
@@ -127,6 +128,20 @@ import swarmmobile.LaunchSpec
 class PhoneSurface(
     private val activity: AppCompatActivity,
     private val runtime: PhoneRuntime,
+    /**
+     * Where a facade verb runs, which is NEVER the thread that pressed the control.
+     *
+     * Every verb below crosses JNI into a Go network call. A command verb resolves its
+     * destination through `sendContext` -> `awaitConn`, which "polls for up to five seconds"
+     * (mobile/commands.go:513-524) before appending to the relay, so running one inside the
+     * click listener froze the app for a round trip and, on a tap issued while the link was
+     * reconnecting, for about five seconds -- an ANR. `NetworkOnMainThreadException` never fires
+     * for a socket Go opened, so nothing on the platform side was ever going to say so.
+     *
+     * It is a CONSTRUCTOR PARAMETER so a test can hand in [VerbDispatch.direct] and keep its
+     * presses synchronous. The default is the shipping one.
+     */
+    private val dispatch: VerbDispatch = VerbDispatch.background(),
 ) {
 
     private val status = label(heading = true)
@@ -172,7 +187,7 @@ class PhoneSurface(
      * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
      * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
      */
-    private val takeControl = ctaAction("Take control", CtaKind.MORE, verb = ::takeControlOf)
+    private val takeControl = ctaAction("Take control", CtaKind.MORE) { takeControlOf(session) }
 
     /**
      * PB-APP-3's persistent Stop, and the one control on this surface whose PRESS DOES TWO
@@ -186,10 +201,18 @@ class PhoneSurface(
      * an interrupt and would leave the bound verb unreachable. [SessionDetail.interruptBytes] is
      * the phone-side statement of the constant and is consumed by its own unit test, not by this.
      */
-    private val stop = actionButton(SLOT_LABEL, ask = ::stopQuestion) { app, session ->
+    private val stop = actionButton(SLOT_LABEL, ask = ::stopQuestion) {
+        // THE BRANCH IS TAKEN ON THE MAIN THREAD, and it has to be: `detailDrawn` is the panel
+        // this surface last drew, written by `render` and owned by the looper. Reading it from a
+        // lane would be a data race on the fact that decides which of two different things this
+        // one control does.
+        val target = session
         when (detailDrawn?.confirmedStopAction) {
-            StopAction.SEND_INTERRUPT -> app.interrupt(session)
-            StopAction.ACQUIRE_LEASE_FIRST -> takeControlOf(app, session)
+            // The one control on this surface whose two arms are on two different PLANES, which
+            // is why the plane is chosen per press rather than per control.
+            StopAction.SEND_INTERRUPT ->
+                Press(SendPlane.LIVE, verb = { app -> app.interrupt(target) })
+            StopAction.ACQUIRE_LEASE_FIRST -> takeControlOf(target)
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
             // D7). Nothing is sent and nothing is said HERE, because the screen already says it --
             // `SessionDetail.notSentNotice` is on it for exactly this state.
@@ -210,8 +233,9 @@ class PhoneSurface(
     private val kill = actionButton(
         SLOT_LABEL,
         ask = { detailDrawn?.killConfirmation.orEmpty() },
-    ) { app, session ->
-        app.kill(session)
+    ) {
+        val target = session
+        Press(SendPlane.COMMAND, verb = { app -> app.kill(target) })
     }
 
     /**
@@ -229,10 +253,17 @@ class PhoneSurface(
      * The bytes are UTF-8 and nothing on this side interprets them. There is no VT emulator on
      * the handset (ADR-007 D2): what goes out is what was typed.
      */
-    private val send = actionButton("Send line") { app, session ->
+    private val send = actionButton("Send line") {
+        // Read here, on the looper that owns the field. The lane never touches a View.
+        val target = session
         val line = typed.text.toString()
-        app.sendInput(session, (line + "\r").toByteArray(Charsets.UTF_8))
-        typed.text.clear()
+        Press(
+            SendPlane.LIVE,
+            verb = { app -> app.sendInput(target, (line + "\r").toByteArray(Charsets.UTF_8)) },
+            // The field is emptied only once the bytes are away, which is where the clear has
+            // always been: a send the machine refused leaves what the user typed on screen.
+            settle = { typed.text.clear() },
+        )
     }
 
     /**
@@ -257,12 +288,19 @@ class PhoneSurface(
      * one where the phone may not reach its machine. A purge that ran only on success would
      * leave the live keys on exactly the handset the user was trying to disarm.
      */
-    private val revoke = actionButton("Revoke this device") { app, _ ->
-        try {
-            app.revokeThisDevice()
-        } finally {
-            runtime.purgeKeys()
-        }
+    private val revoke = actionButton("Revoke this device") {
+        Press(
+            SendPlane.COMMAND,
+            verb = { app ->
+                try {
+                    app.revokeThisDevice()
+                } finally {
+                    // Off the looper with the verb, and it belongs there: `PhoneRuntime` is
+                    // `@Synchronized` throughout, and a purge is Keystore work of its own.
+                    runtime.purgeKeys()
+                }
+            },
+        )
     }
 
     /**
@@ -288,14 +326,23 @@ class PhoneSurface(
      * field is refused at the machine too, but only after burning a durable command seq and a
      * signature on a request the phone could see was incomplete.
      */
-    private val launch = ctaAction("Launch a session", CtaKind.APPROVE) { app, _ ->
-        draftOnScreen().let { draft ->
-            when (val missing = launchScreen.missingField(draft)) {
-                null -> {
-                    launchRefusal = ""
-                    launchScreen.submit(draft, app.launch(specOf(draft)).operationID)
-                }
-                else -> launchRefusal = missing
+    private val launch = ctaAction("Launch a session", CtaKind.APPROVE) {
+        // The three fields are read on the looper that owns them, and the model's refusal is
+        // resolved here too -- a draft the phone can already see is incomplete never reaches a
+        // lane, let alone the wire.
+        val draft = draftOnScreen()
+        when (val missing = launchScreen.missingField(draft)) {
+            null -> {
+                launchRefusal = ""
+                Press(
+                    SendPlane.COMMAND,
+                    verb = { app -> app.launch(specOf(draft)) },
+                    settle = { answer -> submitLaunch(draft, answer) },
+                )
+            }
+            else -> {
+                launchRefusal = missing
+                null
             }
         }
     }
@@ -573,6 +620,10 @@ class PhoneSurface(
      * handset whose Keystore or state directory refused -- redraws once it is not.
      */
     fun render() {
+        // A drawn surface is one that may be handed the answer to a press. The pair with
+        // `release`'s detach is what stops a command that finishes after the screen went away
+        // from setting text on views nobody is holding.
+        dispatch.attach()
         pairing.render()
         settings.render()
         when (val startup = runtime.phone()) {
@@ -602,6 +653,13 @@ class PhoneSurface(
         // Activity reachable for as long as the process lives.
         PhoneEvents.stopObserving()
         observing = false
+
+        // The same reason, for the other thing that can outlive this screen. A command takes a
+        // relay round trip, so its answer routinely arrives after the user has left -- and the
+        // Activity may have been destroyed and rebuilt by then. A detached dispatch drops the
+        // settle rather than redrawing a surface nobody is holding, while still freeing the
+        // control it disabled, so a resumed screen does not come back with a dead button.
+        dispatch.detach()
 
         val live = connected ?: return
         if (ConnectivityPolicy.ruleFor(RuntimeState.BACKGROUND).socket != SocketDisposition.CLOSED) {
@@ -752,7 +810,7 @@ class PhoneSurface(
         // There is no phone to launch through either. The FORM still draws: it is the one thing on
         // this branch a user could reasonably be reaching for, and a handset whose core refused
         // needs to be able to see what it will be asked for once it has not.
-        launch.isEnabled = false
+        launch.enable(false)
         drawLaunch()
         // AND NO INBOX. The roster comes from the phone core, so a handset whose core refused
         // construction has no sections to draw and no counts to state -- and a triage inbox
@@ -826,7 +884,7 @@ class PhoneSurface(
         // session it starts does not exist yet, so an empty roster is exactly the state a user
         // reaches for it in. Gating it on the roster would leave a freshly paired phone with no
         // way to get its first session, which is section 1's "launches" with no subject again.
-        launch.isEnabled = true
+        launch.enable(true)
         renderLaunch(bridge)
         drawLaunch()
 
@@ -1245,7 +1303,7 @@ class PhoneSurface(
      * being composed into a panel that does not specify them.
      */
     private fun setKeyboardEnabled(enabled: Boolean) {
-        send.isEnabled = enabled
+        send.enable(enabled)
         typed.isEnabled = enabled
     }
 
@@ -1300,11 +1358,35 @@ class PhoneSurface(
      * words [SessionDetailPanel.stopLabel] chooses, and a second copy of these three lines is a
      * second place for the operation id to be forgotten.
      */
-    private fun takeControlOf(app: App, session: String) =
-        app.takeControl(session).also { issued ->
-            leaseOp = issued.operationID
-            leaseSession = session
-        }
+    private fun takeControlOf(target: String) = Press(
+        SendPlane.COMMAND,
+        verb = { app -> app.takeControl(target) },
+        // THE OPERATION ID IS REMEMBERED ON THE LOOPER, not beside the verb where it used to be
+        // written. `leaseOp` and `leaseSession` are read by `render` on every draw, so latching
+        // them from a lane would publish a lease to the drawing thread through a plain field.
+        settle = { answer -> rememberLease(answer, target) },
+    )
+
+    /**
+     * Latch the take_control this surface issued, so [leaseConfirmedFor] can claim its answer by
+     * operation id (PB-SYNC-2) rather than resolving it by proximity.
+     *
+     * @param answer what the verb returned, which is a `swarmmobile.Op` for every caller here.
+     *  Typed as `Any?` because [Press] carries one settle shape for six controls; a change to
+     *  `App.TakeControl`'s return type therefore fails to latch rather than failing to compile,
+     *  which is why the cast is written as one that cannot throw on a live handset.
+     */
+    private fun rememberLease(answer: Any?, target: String) {
+        val issued = answer as? Op ?: return
+        leaseOp = issued.operationID
+        leaseSession = target
+    }
+
+    /** Hand [LaunchScreen] the operation id the MACHINE keyed this launch by. See [rememberLease]. */
+    private fun submitLaunch(draft: LaunchDraft, answer: Any?) {
+        val issued = answer as? Op ?: return
+        launchScreen.submit(draft, issued.operationID)
+    }
 
     /**
      * What Stop asks before it acts, which is nothing at all for an observer.
@@ -1395,12 +1477,12 @@ class PhoneSurface(
         // (or whose machine is unreachable) is exactly the state its owner may need it in.
         // dropPushToken persists before it speaks to the relay, so an offline revoke still
         // deletes the token that would otherwise let a machine wake a disowned handset.
-        takeControl.isEnabled = enabled
+        takeControl.enable(enabled)
         // The session detail's two, which cannot in fact be on screen while this is false -- an
         // open drill-down IS the target, so the roster cannot be empty under one. They are here
         // because they act on the chosen session, which is what this function is about.
-        stop.isEnabled = enabled
-        kill.isEnabled = enabled
+        stop.enable(enabled)
+        kill.enable(enabled)
     }
 
     /**
@@ -1429,11 +1511,11 @@ class PhoneSurface(
     private fun actionButton(
         text: String,
         ask: () -> String = { "" },
-        verb: (App, String) -> Any?,
+        plan: () -> Press?,
     ): Button = SecureWindow.gate(
         Button(activity).apply {
             this.text = text
-            setOnClickListener { confirmThenInvoke(ask(), verb) }
+            setOnClickListener { control -> confirmThenPress(control, ask(), plan) }
         },
     )
 
@@ -1455,11 +1537,11 @@ class PhoneSurface(
      * confirmation buys against an overlay is different and still real: a tap the user could not
      * see now has to be followed by a second one on a window that was not there before.
      */
-    private fun confirmThenInvoke(question: String, verb: (App, String) -> Any?) {
-        if (question.isEmpty()) return invoke(verb)
+    private fun confirmThenPress(control: View, question: String, plan: () -> Press?) {
+        if (question.isEmpty()) return press(control, plan)
         AlertDialog.Builder(activity)
             .setMessage(question)
-            .setPositiveButton(android.R.string.ok) { _, _ -> invoke(verb) }
+            .setPositiveButton(android.R.string.ok) { _, _ -> press(control, plan) }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
@@ -1490,10 +1572,10 @@ class PhoneSurface(
     private fun ctaAction(
         text: String,
         kind: CtaKind,
-        verb: (App, String) -> Any?,
+        plan: () -> Press?,
     ): TextView = SecureWindow.gate(
         ctaButton(activity, text, kind).apply {
-            setOnClickListener { invoke(verb) }
+            setOnClickListener { control -> press(control, plan) }
             setAccessibilityDelegate(
                 object : View.AccessibilityDelegate() {
                     override fun onInitializeAccessibilityNodeInfo(
@@ -1508,20 +1590,99 @@ class PhoneSurface(
         },
     )
 
-    private fun invoke(verb: (App, String) -> Any?) {
+    /**
+     * What one press does, in the three phases the main thread requires.
+     *
+     * A press used to be one lambda run inside the click listener. It cannot be, for two
+     * independent reasons that pull in opposite directions:
+     *
+     *  - the FACADE CALL must not run on the looper, because it is a Go network call and
+     *    `awaitConn` can sit on it for five seconds ([dispatch]'s own KDoc has the rest);
+     *  - the SCREEN READS AND WRITES around it must, because `typed`, the three launch fields,
+     *    `detailDrawn`, `launchScreen` and `leaseOp` are all owned by the looper, and a lane
+     *    that touched them would be a data race the emulator would never show.
+     *
+     * So a control declares what to read before it acts, what crosses to Go, and what the answer
+     * changes on screen -- and only the middle one leaves the main thread.
+     *
+     * @param plane which of the facade's two send planes the verb resolves through. It is
+     *  declared per press and not per control because [stop] is on both:
+     *  `mobile/commands.go`'s command path polls `awaitConn` for a connection and its live path
+     *  deliberately does not (ADR-007 D7), and the two must not share a lane.
+     * @param verb the facade call, and NOTHING else. It runs on a lane. It must not touch a View.
+     * @param settle what the answer changes on screen, back on the looper. It runs only if the
+     *  verb returned; a refusal goes to the outcome line instead.
+     */
+    private class Press(
+        val plane: SendPlane,
+        val verb: (App) -> Any?,
+        val settle: (Any?) -> Unit = {},
+    )
+
+    /**
+     * Press [control], having planned what that means on the thread that owns the screen.
+     *
+     * @param plan runs HERE, on the looper: it reads the fields, applies the model's own
+     *  refusals, and returns null for a press that resolves without reaching the wire -- a launch
+     *  draft missing a required field, a Stop with no lease to send on. A null still redraws,
+     *  because the refusal it just recorded is what the screen has to show.
+     */
+    private fun press(control: View, plan: () -> Press?) {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> outcome.text = startup.error.message
-            is PhoneStartup.Ready -> outcome.text = try {
-                verb(startup.app, session)
-                ""
-            } catch (failure: Exception) {
-                // Everything the facade refuses arrives as an exception whose message carries
-                // the error class as a prefix, so it routes through the same table as every
-                // other failure rather than being shown raw.
-                FacadeBridge(startup.app).routeFacadeError(failure.message.orEmpty()).message
+            is PhoneStartup.Ready -> {
+                val app = startup.app
+                val planned = plan()
+                if (planned != null) return dispatchPress(control, app, planned)
             }
         }
         render()
+    }
+
+    /**
+     * Hand one planned press to its lane, and its answer back to the looper.
+     *
+     * THE OUTCOME LINE IS CLEARED FIRST. It holds the LAST command's answer, and a control that
+     * is now responsive would otherwise leave that answer sitting under a press in flight, where
+     * it reads as this press's. Empty is the same thing a success shows, which is the honest
+     * limit of what this surface can say: docs/design/substrate-components.md has no in-flight
+     * state in any of its 25 rows, so the only thing separating "still crossing" from "done" is
+     * that [VerbDispatch] holds the control disabled until the answer lands (derivation row 24's
+     * pair, which the kit already paints off the view's own drawable state).
+     */
+    private fun dispatchPress(control: View, app: App, planned: Press) {
+        outcome.text = ""
+        dispatch.press(
+            control,
+            planned.plane,
+            work = { planned.verb(app) },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { planned.settle(it) },
+                    // Everything the facade refuses arrives as an exception whose message carries
+                    // the error class as a prefix, so it routes through the same table as every
+                    // other failure rather than being shown raw.
+                    onFailure = {
+                        outcome.text =
+                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
+                    },
+                )
+                render()
+            },
+        )
+    }
+
+    /**
+     * Enable a control unless a press of it is still crossing to the machine.
+     *
+     * IT IS A FUNCTION AND NOT SIX ASSIGNMENTS, and the reason is a hole this change would
+     * otherwise have opened. [render] runs on every journal event, and it sets these flags -- so
+     * a control disabled at press time was re-enabled by the next event to arrive, one tap into a
+     * command still in flight. Two Launches is worse than the frozen UI this replaces, so the
+     * in-flight mark is [dispatch]'s and every enable is asked about it here.
+     */
+    private fun View.enable(on: Boolean) {
+        isEnabled = on && !dispatch.inFlight(this)
     }
 
     /**
