@@ -7,6 +7,16 @@ can be submitted (`agents-tracker-pwc`).
 The `Nathandela/swarm` repository is **public** (confirmed with `gh repo view Nathandela/swarm
 --json visibility`), so GitHub Pages needs no extra access configuration.
 
+## Prerequisite: this page must be on `main` first
+
+**`docs/ops/privacy-policy/` does not exist on `main`.** It, and everything else in the ops track,
+lives only on the `design-system-substrate` branch — `git log main -- docs/ops/privacy-policy`
+returns nothing. Pages is configured below to deploy from `main`/`docs`, so until that branch
+merges, the URL at the bottom of this file serves a 404 and the Play listing cannot be submitted.
+
+Merge to `main` before step 1, or the steps below appear to succeed — Pages reports the site live —
+while the policy URL does not resolve.
+
 ## Steps (GitHub web UI — nobody has run these yet)
 
 1. Go to `https://github.com/Nathandela/swarm/settings/pages`.
@@ -17,7 +27,8 @@ The `Nathandela/swarm` repository is **public** (confirmed with `gh repo view Na
    it under the repo's **Actions** tab (a `pages build and deployment` run).
 5. Open the resulting URL below and confirm the page renders and reads correctly on a phone.
 
-No repository file changes are required beyond what is already committed: `docs/.nojekyll`
+No repository file changes are required beyond what is already committed on this branch:
+`docs/.nojekyll`
 (added alongside this page) tells GitHub Pages to serve the `docs/` tree as plain static files
 instead of running it through Jekyll, which would otherwise try to build every other `.md` file
 under `docs/` into a themed page it was never meant to be.
