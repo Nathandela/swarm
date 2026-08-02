@@ -136,11 +136,21 @@ what all three machine dial paths read.
 - `--relay-url` is capped at 39 characters (`pairing.MaxRelayURLLen`) because it is carried into
   the pairing QR verbatim. The pin is **not** in the QR and costs it nothing.
 
-> **The handset is a different question and is NOT solved here.** `TrustRootSourceFor` makes
-> Android pinning-only, and the phone has no channel for a pin yet — the pairing QR has no field
-> for one and no room for one. A release handset therefore refuses every `wss://` dial with
-> `relay.ErrPinRequired`. That is ADR-007 residual 1.9 and it is a shipping blocker tracked
-> separately; this section provisions the **machine** only.
+> **The handset gets its pin from pairing, and only from pairing.** `TrustRootSourceFor` makes
+> Android pinning-only, so a handset that holds no pin refuses a `wss://` dial with
+> `relay.ErrPinRequired` — but that is the state *before* pairing, not a permanent one. The pin
+> travels to the phone in the pairing exchange's msg2 as `MachinePayload.RelaySPKIPin`
+> (`internal/remote/pairing/pairing.go`), fed from this machine's `relay.json`
+> (`internal/skeleton/pairing_config.go`); the phone persists it (`internal/phonecore/state.go`,
+> state schema v7 `relay_spki_pin`) and dials with it from then on (`mobile/relay.go`,
+> `handsetSecurity`). The pairing dial itself is the one dial that cannot be pinned — it is the
+> dial that *fetches* the pin — which is why `relay.PairingSecurity()` exists and why the QR
+> carrying no pin is not a deadlock (ADR-007 B33/B34 for the channel, B45 for the bootstrap).
+>
+> **What remains open is ROTATION, not first use.** Once a handset holds a pin, there is no
+> channel that can hand it a *different* one: §8c has the arithmetic for why the QR cannot carry
+> it. A rotated relay key is recovered by pairing again, not by reconfiguring the phone. This
+> section provisions the **machine** only.
 
 ## 5. Start both processes
 

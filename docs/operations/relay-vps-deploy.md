@@ -342,8 +342,13 @@ limits, and cross-version compatibility are all Phase C.** This runbook gets a r
 real `wss://` and documents the URL/pin pair `swarm remote init` needs — nothing here should be
 read as a claim of production operability beyond that.
 
-The Android handset side of certificate pinning is a separate, already-tracked gap: per
-`docs/operations/relay-runbook.md`, the pairing QR has no field for a pin today, so a release
-handset refuses every `wss://` dial with `relay.ErrPinRequired` regardless of what this document
-provisions on the machine side (ADR-007 residual 1.9). This document provisions the **machine**
-only, exactly as the LAN runbook's §4a does.
+**The handset is provisioned by pairing, not by this document, and that is sufficient.** This
+runbook configures the **machine** — exactly as the LAN runbook's §4a does. The phone gets the
+relay URL and the pin from the pairing exchange itself: the pin rides msg2 as
+`MachinePayload.RelaySPKIPin`, the phone persists it (state schema v7, `relay_spki_pin`) and dials
+with it thereafter. So a handset pairing against a relay deployed this way works with no further
+setup; the QR having no pin field is by design and is not a blocker (ADR-007 B33/B34, and B45 for
+why the unpinned pairing dial is permitted).
+
+The one thing that has **no** channel is changing a pin a handset already holds — see §9a, whose
+third step is re-pairing for exactly this reason.
