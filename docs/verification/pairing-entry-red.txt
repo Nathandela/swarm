@@ -1,0 +1,108 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:requireSwarmAar
+> Task :app:preBuild
+> Task :app:preDebugBuild
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
+
+> Task :app:compileDebugUnitTestKotlin
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:50:13 Unresolved reference 'Presentation'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:51:13 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:60:13 Unresolved reference 'Presentation'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:61:13 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:81:17 Unresolved reference 'Presentation'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:82:17 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:78:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:88:36 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:95:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:124:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:136:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:143:25 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:157:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:167:26 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:173:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:178:26 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:180:22 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:180:29 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:180:48 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:193:20 Unresolved reference 'pairOnlyView'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:198:22 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:198:64 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:199:22 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:199:63 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:200:22 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:200:62 Unresolved reference 'PairOnlyTag'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:202:22 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:202:29 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:202:51 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyViewTest.kt:202:72 Unresolved reference 'PairOnlyScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:50:13 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:64:17 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:73:21 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:88:13 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:97:27 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:98:37 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:106:19 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:121:19 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:123:9 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:123:59 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairedMachineRowTest.kt:123:69 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:55:54 No parameter with name 'machine' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:57:22 Unresolved reference 'PairedMachineRowScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:57:70 Unresolved reference 'machineSection'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:64:54 No parameter with name 'machine' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:66:38 Unresolved reference 'machineSection'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:79:46 No parameter with name 'machine' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:79:71 Unresolved reference 'machineSection'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:87:54 No parameter with name 'machine' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:91:19 Unresolved reference 'sectionHeadingsInOrder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:99:46 Unresolved reference 'sectionHeadingsInOrder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:107:54 No parameter with name 'machine' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:113:19 Unresolved reference 'machineSection'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:119:53 Unresolved reference 'machineSection'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachineSectionTest.kt:126:60 No parameter with name 'machine' found.
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+
+[Incubating] Problems report is available at: file:///Users/Nathan/Code/swarm/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 36s
+20 actionable tasks: 2 executed, 18 up-to-date
