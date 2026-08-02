@@ -3,9 +3,11 @@
     CANDIDATE 4 - "Cell Swarm"
 
     The swarm as multiplicity rather than motion: the cursor is three terminal cells of different
-    sizes, scattered off the baseline instead of one underscore. Revised 2026-08-02 per the
-    owner's direction: the top bar is the chevron's bottom stroke repeated, so the S is a zigzag;
-    the caps stay flat so the cells and the strokes belong to the same blocky family.
+    sizes, scattered off the baseline instead of one underscore.
+
+    Revised 2026-08-02 to the owner's third direction: SHARP. This candidate was always the blocky
+    one - flat caps, square cells - so the change is the mitred joins and the thinner stroke, which
+    put the zigzag in the same weight class as the cells it sits beside.
 
     This is the candidate that bets the most on small detail, which is exactly the bet the 48dp
     test is there to settle.
@@ -13,17 +15,17 @@
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 30.5.
+    Safe zone: max r = 28.7.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg">
-    <path d="M 56 32.5 L 35 45 L 56 57.5 L 35 70"
-          fill="none" stroke="#53CE7C" stroke-width="7.5" stroke-linecap="butt" stroke-linejoin="round"/>
+    <path d="M 56 38 L 34 48.7 L 56 59.3 L 34 70"
+          fill="none" stroke="#53CE7C" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter"/>
     <!-- Three cells, never closer than 4.5 units, which is the smallest gap that still shows at 48dp. -->
     <g fill="#53CE7C">
-      <rect x="58" y="65" width="8" height="8"/>
-      <rect x="70.5" y="55" width="7" height="7"/>
-      <rect x="70.5" y="67" width="6.5" height="6.5"/>
+      <rect x="60" y="66" width="8" height="8"/>
+      <rect x="72.5" y="56" width="7" height="7"/>
+      <rect x="72.5" y="68" width="6.5" height="6.5"/>
     </g>
   </g>
 </svg>

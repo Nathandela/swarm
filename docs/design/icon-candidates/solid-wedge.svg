@@ -2,24 +2,27 @@
   <!--
     CANDIDATE 3 - "Solid Wedge"
 
-    The S-dominant end of the spectrum, and the heaviest mark in the set. Revised 2026-08-02 per
-    the owner's direction: the top bar is the chevron's bottom stroke repeated, so the mark is the
-    zigzag drawn as one 10-unit band with mitred corners - the chevron still comes to real points
-    rather than rounded ones, and the flat butt cuts at both ends keep the blocky register. The
-    cursor is a solid bar with a step in it - the wave, made blocky.
+    The S-dominant end of the spectrum: the same zigzag carried at the heaviest weight the set
+    allows, so mass rather than detail is what survives downscaling.
 
-    One stroked polyline rather than overlapping shapes, so no junction has a seam or a nick.
+    Revised 2026-08-02 to the owner's third direction: SHARP. Mitred joins give the reversals real
+    points, butt caps cut both terminals flat at the diagonal's own angle, and the weight came down
+    from 10 to 8.5 - enough that the three legs keep an open channel between them at 48dp instead
+    of fusing into a slab. The box grew slightly (y 36-72) for the same reason.
+
+    The cursor is a solid bar with a step in it - the wiggle, made blocky - and it is the one
+    filled shape here, which is what keeps it reading as a cursor beside a stroked letter.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 32.1.
+    Safe zone: max r = 30.3.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg">
-    <path d="M 58 26 L 36 41 L 58 56 L 36 71"
-          fill="none" stroke="#53CE7C" stroke-width="10" stroke-linecap="butt" stroke-linejoin="miter"/>
+    <path d="M 57 36 L 34 48 L 57 60 L 34 72"
+          fill="none" stroke="#53CE7C" stroke-width="8.5" stroke-linecap="butt" stroke-linejoin="miter"/>
     <!-- The cursor: one bar, stepped. -->
-    <path d="M 60 63 L 69 63 L 69 66.5 L 76 66.5 L 76 73.5 L 66 73.5 L 66 70 L 60 70 Z" fill="#53CE7C"/>
+    <path d="M 60 65 L 69 65 L 69 69 L 78 69 L 78 76 L 69 76 L 69 72 L 60 72 Z" fill="#53CE7C"/>
   </g>
 </svg>

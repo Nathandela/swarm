@@ -2,25 +2,25 @@
   <!--
     CANDIDATE 1 - "Prompt Cap"
 
-    The literal reading of the brief, revised twice per the owner's direction (2026-08-02): the
-    added top bar is the chevron's bottom stroke repeated, and the WHOLE zigzag fits the box the
-    original `>` occupied (y 38-70), so adding the third stroke did not grow the mark - the S
-    keeps the proportions the prompt had, three legs sharing the chevron's height. One uniform
-    stroke weight, round caps and joins. The cursor is a single bar with one gentle wave in it -
-    the deviation is under two units, which is enough to see at store size and small enough that
-    at 48dp the bar still reads as an underscore rather than a tilde.
+    The literal reading of the brief. Revised 2026-08-02 to the owner's third direction: SHARP, not
+    rounded. Every cap is a flat butt cut and every join is mitred, so the diagonal terminals come
+    off at a blade angle and the zigzag's corners are points rather than beads. The stroke is thin
+    (6 units, down from 7.5) to match the weight of a monospaced `>` rather than a drawn letter.
 
-    S reading: the zigzag IS the S. Prompt reading: the lower two strokes are the `>`, the top
-    stroke its echo, with `_` on the baseline after it.
+    The cap is the chevron's bottom stroke repeated, and the whole three-leg zigzag sits in the
+    y 38-70 box the original `>` occupied alone, so the S kept the prompt's proportions.
+
+    The cursor is the wiggle made SQUARE: one bar with a single step in it, mitred, which is what a
+    terminal cursor mid-blink looks like rather than what a brush stroke looks like.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: all geometry including stroke sits inside the 66dp centre circle (max r = 32.8).
+    Safe zone: all geometry including stroke sits inside the 66dp centre circle (max r = 29.5).
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
-  <g id="fg" fill="none" stroke="#53CE7C" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round">
+  <g id="fg" fill="none" stroke="#53CE7C" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter">
     <path d="M 57 38 L 34 48.7 L 57 59.3 L 34 70"/>
-    <path d="M 58 70.5 C 64 68 70 73 76 70.5"/>
+    <path d="M 59 73 L 67 73 L 67 67 L 77 67"/>
   </g>
 </svg>

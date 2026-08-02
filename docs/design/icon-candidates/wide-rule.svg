@@ -4,10 +4,12 @@
 
     The one that changes the composition rather than the details: instead of a cursor sitting after
     the chevron, the swarm is a dashed rule running the full width underneath the whole mark, so the
-    prompt sits on a command line made of many cells. Revised 2026-08-02 per the owner's direction:
-    the top bar is the chevron's bottom stroke repeated, so the S is a zigzag - still smaller and
-    higher than in the other candidates, with the rule carrying the width, which gives the mark a
-    stacked silhouette no other candidate has.
+    prompt sits on a command line made of many cells. The S is smaller and higher, and the rule
+    carries the width, which gives the mark a stacked silhouette no other candidate has.
+
+    Revised 2026-08-02 to the owner's third direction: SHARP. The last rounded caps and joins on
+    the zigzag are gone; the whole mark is now the thinnest in the set, which is what lets a
+    stacked composition breathe at 108 without the two halves crowding.
 
     Four dashes at 7.5 units with 4-unit gaps is the coarsest dashing that still reads as plural
     rather than as a solid rule once the icon is down to 48dp.
@@ -15,13 +17,12 @@
     Tokens: mark and rule p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 29.9.
+    Safe zone: max r = 27.6.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
-  <g id="fg" fill="none" stroke="#53CE7C">
-    <path d="M 59 28 L 40 39 L 59 50 L 40 61"
-          stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-    <g stroke-width="5.5" stroke-linecap="butt">
+  <g id="fg" fill="none" stroke="#53CE7C" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M 59 31 L 40 41 L 59 51 L 40 61" stroke-width="5.5"/>
+    <g stroke-width="5">
       <path d="M 33 71 L 40.5 71"/>
       <path d="M 44.5 71 L 52 71"/>
       <path d="M 56 71 L 63.5 71"/>
