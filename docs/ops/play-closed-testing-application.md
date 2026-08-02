@@ -54,26 +54,38 @@ Ordered by how long they take.
 | 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below. | external hosting | 30 min |
-| 5 | **Five Phase B requirements are NOT MET**: `PB-SEC-2` (per-use biometric gate — a stale callback can resurrect authorization), `PB-PAIR-4` (a half-paired state is reachable), `PB-INPUT-4` (the retry mechanism has zero production callers), `PB-E2E-2`, plus `PB-NET-4`
-contested — the spec both demands and withdraws the same queue, and production ships an unbounded
-one nothing calls. **`PB-PAIR-4` is worse than first recorded: a half-pair is reachable in BOTH
+| 5 | **Two Phase B requirements are genuinely NOT MET** (`PB-PAIR-4`, `PB-NET-4`), one is unsatisfiable without physical hardware (`PB-E2E-2`), and one requirement's entire subject has left the product: `PB-SEC-2` (the per-use biometric gate) is **VOID**, not merely unmet — ADR-007 B133 (2026-07-31) deleted all phone-side user authentication, so there is nothing left for the requirement to grade against. `PB-INPUT-4`, previously listed here as NOT MET, no longer is: ADR-007 B92 (2026-07-30) adjudicated it — the retry clause presupposed a queueing mechanism ADR-007 D7 forbids for live input, so the clause was withdrawn, and production's actual behaviour (never resend) satisfies what remains (`docs/specifications/remote-phaseB-requirements.md:502`). `PB-PAIR-4` (a half-paired state is reachable) remains open. `PB-NET-4` (the reconnect/resilience row) also remains open, but not for the reason this bullet used to give: its queue self-contradiction was resolved by the same kind of amendment in ADR-007 B90 (2026-07-30) — the current reason it is NOT MET is unfenced evidence in the resilience half (nothing ties the reconnect delay to the stated backoff, nothing names re-auth after reconnect, and the connection-state-surfaced clause is covered only by an unrelated test's side effect — ADR-007 B113/B114). A related NEW requirement, `PB-NET-8` (added 2026-07-31, ADR-007 B120), covers the gateway's OWN reconnect — nothing required it before, and it was found completely absent. **`PB-PAIR-4` is worse than first recorded: a half-pair is reachable in BOTH
 directions from an ordinary clock, with no attacker — pairing near the 60-second expiry is enough.
-Give your testers the recovery in writing, because it will happen.** Separately `PB-E2E-5` (real-hardware validation of biometrics, camera, FCM delivery, Doze, Keystore attestation) is **deferred and unvalidated**. | `docs/verification/remote-phaseB-residuals.md` | in progress |
+Give your testers the recovery in writing, because it will happen.** Separately `PB-E2E-5` (real-hardware validation of camera, FCM delivery, Doze, Keystore attestation — "real biometrics" left this list when ADR-007 B133 removed the feature it would have validated) is **deferred and unvalidated**. | `docs/verification/remote-phaseB-residuals.md`, `docs/adr/ADR-007-remote-access.md` (B90, B92, B120, B133) | in progress |
 
 **On #5 and closed testing.** Closed testing is genuinely the right venue to burn down
 `PB-E2E-5` — it is the only way to get real handsets, real Doze, real FCM. That argues *for*
 shipping to a closed track soon.
 
-For a **trusted, closed loop of people you know**, these are defensible to defer — but know what
-you are deferring:
+For a **trusted, closed loop of people you know**, `PB-PAIR-4` and `PB-NET-4` are defensible to
+defer — but know what you are deferring. `PB-SEC-2` is not on this list to defer, because there
+is nothing left of it to land:
 
-- **`PB-SEC-2`** — the per-use biometric gate stands between a picked-up *unlocked* handset and
-  typing into a shell on your laptop. It needs physical possession, so it is a real hole rather
-  than an urgent one for twelve known testers. Land it if it is ready; do not hold the sprint.
-- **`PB-INPUT-4`** — the retry policy for a failed send has **zero production callers**; commands
-  call the transport directly and surface its error. A send that fails is not retried by anything.
-  (`PB-PUSH-9` was on this list and is now MET again — refusing self-consent restored the
-  push-token deletion that a self-edge had disabled.)
+- **`PB-SEC-2` is VOID, not deferred.** ADR-007 B133 (2026-07-31) removed the per-use biometric
+  gate — and every other form of phone-side user authentication — as a deliberate owner decision,
+  not a bug awaiting a fix: *"the trust boundary is the wire ... the phone endpoint is trusted the
+  way the computer endpoint has always been trusted."* **The accepted residual risk: a stolen,
+  unlocked phone gives the holder full control of agents that edit code on your laptop — no
+  prompt stands between them and take-control, type, kill or launch.** The only surviving
+  mitigation is `swarm remote off` or a device revoke, issued **from the computer**. Put that in
+  writing for your testers before they install; "lock your phone" is no longer the whole answer
+  it used to be.
+- **`PB-PAIR-4`** — a half-pair is reachable from an ordinary clock near the 60-second pairing
+  expiry, with no attacker required (see the blocker row above). Give your testers the recovery
+  in writing.
+- **`PB-NET-4`** — the resilience row still has unfenced evidence gaps (reconnect-delay-to-backoff,
+  re-auth-after-reconnect, connection-state-surfaced — ADR-007 B113/B114). The failure mode is a
+  stuck "reconnecting" UI, not a security hole, so it is defensible to defer for twelve known
+  testers who can restart the app.
+
+(`PB-INPUT-4` and `PB-PUSH-9` were on this list and are now MET — see the blocker row above for
+`PB-INPUT-4` (ADR-007 B92); refusing self-consent restored the push-token deletion that a
+self-edge had disabled for `PB-PUSH-9`.)
 
 ### The relay: the boot-bricking defect is FIXED, but keep it private anyway
 
@@ -229,8 +241,11 @@ carries the traffic cannot read it: it sees encrypted bytes and routing informat
 nothing else. The design treats that relay as hostile and is built so that it does not
 matter.
 
-Sensitive actions -- sending input to a session, revealing session content -- are held behind
-your device biometric each time you use them, not once at unlock.
+Trust in this design is anchored at the wire between your phone and your computer, not at a lock
+screen: the two devices are paired once, verified by a short code you check yourself, and both
+ends are then trusted the way a second monitor on your own desk would be. If your unlocked phone
+is ever lost or stolen, turn off remote access or revoke the device from your computer -- that is
+the control that stops it.
 
 The app contains no analytics, no telemetry, no crash reporting and no advertising SDKs. It
 collects nothing about you.
@@ -274,9 +289,9 @@ Consequences:
 
 - Play's mandatory 2–8 phone screenshots must come from a **real device running Android 13+**.
 - So must any hands-on verification of the pairing flow.
-- The same handset is what finally lets you close `PB-E2E-5` — real biometrics, real camera, real
-  FCM delivery, real Doze, real Keystore attestation — which is the largest unvalidated area in
-  the project.
+- The same handset is what finally lets you close `PB-E2E-5` — real camera, real FCM delivery,
+  real Doze, real Keystore attestation ("real biometrics" left this list when ADR-007 B133 removed
+  the feature it would have validated) — which is the largest unvalidated area in the project.
 
 If you do not already have an Android 13+ device to hand, **acquiring one is on the critical
 path**, ahead of most of the Console work.
@@ -540,7 +555,10 @@ Cryptographic keys, pairing records and session state never leave your phone. Cl
 and device-to-device transfer are both disabled for this app, so this data is not copied to
 Google's servers or to a new handset during setup.
 
-Sensitive keys are held in the Android Keystore and are protected by your device biometric.
+~~Sensitive keys are held in the Android Keystore and are protected by your device biometric.~~
+**SUPERSEDED (see the status note above §9): ADR-007 B133 removed all phone-side biometric
+protection. The published page at `docs/ops/privacy-policy/index.html` does not carry this
+sentence — do not copy it from here.**
 
 ## Permissions
 
@@ -595,7 +613,9 @@ then making publicly.
    this, closed testing cannot exercise push — which is most of what closed testing is for.
 3. Create the upload keystore; verify `./gradlew :app:bundleRelease` produces a signed AAB.
 4. Host the privacy policy.
-5. Land the `PB-SEC-2` fix.
+5. Write the tester-facing risk notice and hand it out before anyone installs: `PB-SEC-2` is VOID
+   (ADR-007 B133 — no per-use gate exists; `swarm remote off` / revoke from the computer is the
+   only mitigation for a lost unlocked phone), plus `PB-PAIR-4`'s half-pair recovery steps.
 
 **In the Console** (~2 hours)
 
@@ -606,9 +626,10 @@ then making publicly.
 **Then**
 
 9. Capture screenshots from a real device once testers are on it.
-10. Use the closed test to burn down `PB-E2E-5`: real biometrics, real camera, real FCM
-    delivery, real Doze, real Keystore attestation. It is the only environment where those
-    can be validated, and it is currently the largest unvalidated area in the project.
+10. Use the closed test to burn down `PB-E2E-5`: real camera, real FCM delivery, real Doze, real
+    Keystore attestation ("real biometrics" left this list when ADR-007 B133 removed the feature).
+    It is the only environment where those can be validated, and it is currently the largest
+    unvalidated area in the project.
 
 ---
 
