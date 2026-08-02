@@ -318,33 +318,32 @@ kotlin {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// PB-SEC-2 / ADR-007 B51 and B57: androidx.biometric is the ONLY way an app can require a
-// Class-3 biometric per use.
+// androidx.biometric is DELIBERATELY ABSENT (ADR-007 B133).
 //
-// WHY IT IS HERE AT ALL. Requirements 6.0 puts revoke, kill switch, launch and kill in a
-// PER-USE tier, and per-use is not a number -- it is a CryptoObject bound to one operation,
-// which on Android means BiometricPrompt. Until this line the app had no prompt of any kind, so
-// those four operations were gated by exactly what typing is gated by: the content KEK's
-// 60-second timed window, which is the silent downgrade PB-SEC-2 exists to forbid. The same
-// absence left ADR-007 B44's screen-lock purge with no way back in.
+// It was declared here for PB-SEC-2, which bound revoke, kill switch, launch and kill to a
+// PER-USE Class-3 biometric -- per-use is not a number, it is a CryptoObject bound to one
+// operation, which on Android means BiometricPrompt, which means this dependency. ADR-007 B133
+// removed all phone-side user authentication, so that requirement is VOID and the dependency
+// outlived its only caller. No Kotlin file imports it, and
+// TestB133_TheAppImportsNothingFromAndroidxBiometric fences that it cannot return by accident.
 //
-// WHAT IT COSTS, stated because PB-SEC-14 is the requirement it trades against. It regenerates
-// android/app/gradle.lockfile and android/gradle/verification-metadata.xml, and it adds rows to
-// android/dependency-inventory.tsv -- androidx.biometric itself plus the fragment/lifecycle
-// modules it pulls, most of which androidx.appcompat already brings. Verification was
-// REGENERATED and not disabled: enforcement being live is itself PB-SEC-14's evidence.
+// WHY THE DECLARATION HAD TO GO AND NOT JUST THE IMPORTS. A dependency contributes to the
+// MERGED manifest whether or not any code calls it: androidx.biometric's own manifest declares
+// USE_BIOMETRIC and USE_FINGERPRINT, so every build asked users for biometric permissions for a
+// capability the app no longer has, while the Play listing had just been corrected to stop
+// claiming biometric protection. What Play receives is the merged set, not the four permissions
+// in src/main/AndroidManifest.xml.
 //
-// The alternative -- android.hardware.biometrics.BiometricPrompt, the framework class, with no
-// dependency at all -- was rejected. It is API 28+ so the minSdk is not the obstacle; what it
-// lacks is BiometricManager.canAuthenticate's status taxonomy, which is what tells a handset
-// with nothing enrolled from one with no sensor. Those two have opposite remedies, and a gate
-// that cannot tell them apart refuses one user with advice they cannot act on.
+// REMOVING it PAYS PB-SEC-14 rather than trading against it, which is why it did not need the
+// regeneration procedure at :177. That step exists to make a person justify a CHANGED artifact;
+// here the lockfile and verification-metadata.xml each lost their biometric rows and gained
+// nothing, and no new checksum entered the build. The fragment and lifecycle modules it used to
+// pull all resolve through androidx.appcompat and are unaffected.
 // ---------------------------------------------------------------------------
 
 dependencies {
     implementation(files(swarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
 
     implementation("com.google.zxing:core:3.5.3")
