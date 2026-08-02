@@ -132,10 +132,25 @@ pairing *permanently unrevokable* by choosing an oversized ceremony ID.
 free, so total durable growth is still unbounded — which is the same root as the `token_register`
 defect above, and why the warning there stands regardless.
 
-**Also check before upload:** Play's minimum `targetSdk` for *new* apps rises every August.
-The app targets **35**. **[VERIFY]** in the Console whether 35 is still accepted for a new app
-at your upload date — if the floor has moved to 36, bump `SWARM_ANDROID_TARGET_SDK` in
-`android/toolchain.env` (the build reads it from there; nothing else needs editing).
+**Verified 2026-08-02** (`agents-tracker-cwz`), against Google's own current page, last updated
+2026-07-15: <https://developer.android.com/google/play/requirements/target-sdk>. Today, **35 is
+still the accepted floor for a new app** — the stricter requirement is not yet in force. **It
+changes on August 31, 2026**: from that date, new apps and app updates must target Android 16
+(API level 36) or higher to be submitted at all (an extension to November 1, 2026 is requestable
+in Console if needed). **Closed/internal testing tracks are not exempt from this** — the only
+exemption is for apps that are permanently private to an organization, which this is not — so if
+the upload in `agents-tracker-2qm` lands on or after August 31, it needs 36 regardless of track.
+
+**If a bump to 36 is needed, it is not a one-line edit.** `SWARM_ANDROID_TARGET_SDK` in
+`android/toolchain.env` is the value Play checks, but AGP refuses `targetSdk` above `compileSdk`,
+so `SWARM_ANDROID_COMPILE_SDK` (currently 35) has to move to 36 alongside it, and
+`SWARM_ANDROID_BUILD_TOOLS` should move to a 36-line release too. `android/supported-versions.tsv`'s
+`target` row and its comment (which currently states 35 by name) would need updating to match, or
+the pin and the recorded decision disagree. The Android Gradle Plugin pinned in
+`android/build.gradle.kts` (8.13.2) already supports `compileSdk` 36 without needing a plugin
+upgrade — confirmed against AGP's own 8.13.0 release notes — so that part of the toolchain is not
+a blocker. This still needs the Android build lane to make and test, same as any other toolchain
+pin change.
 
 ---
 
