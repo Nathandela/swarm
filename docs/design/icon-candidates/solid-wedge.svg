@@ -2,30 +2,24 @@
   <!--
     CANDIDATE 3 - "Solid Wedge"
 
-    The S-dominant end of the spectrum, and the only candidate where the chevron is a filled shape
-    rather than a stroke. It is the heaviest mark in the set and the chevron comes to a real mitred
-    point rather than a rounded one. The bar hangs a short vertical before
-    it turns into the diagonal, which opens the counter at the top left and is what makes the S
-    unmistakable here. The cursor is a solid bar with a step in it - the wave, made blocky.
+    The S-dominant end of the spectrum, and the heaviest mark in the set. Revised 2026-08-02 per
+    the owner's direction: the top bar is the chevron's bottom stroke repeated, so the mark is the
+    zigzag drawn as one 10-unit band with mitred corners - the chevron still comes to real points
+    rather than rounded ones, and the flat butt cuts at both ends keep the blocky register. The
+    cursor is a solid bar with a step in it - the wave, made blocky.
 
-    Bar, connector and chevron are one polygon rather than overlapping shapes, so the top-left
-    junction has no seam and no nick where two outlines cross.
+    One stroked polyline rather than overlapping shapes, so no junction has a seam or a nick.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 30.4.
+    Safe zone: max r = 32.1.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
-  <g id="fg" fill="#53CE7C">
-    <!--
-      Bar, connector and chevron: 10 units throughout, narrowing to 8 at the S's bottom terminal,
-      which is the one place a drawn S thins. The bar itself is parallel-sided; tapering it too
-      reads as a crooked bar rather than as a deliberate stroke modulation.
-    -->
-    <path d="M 72.00 33.00 L 31.00 33.00 L 31.00 47.83 L 46.11 56.89 L 33.02 65.53
-             L 36.98 72.47 L 65.89 57.11 L 41.00 42.17 L 41.00 43.00 L 72.00 43.00 Z"/>
+  <g id="fg">
+    <path d="M 58 26 L 36 41 L 58 56 L 36 71"
+          fill="none" stroke="#53CE7C" stroke-width="10" stroke-linecap="butt" stroke-linejoin="miter"/>
     <!-- The cursor: one bar, stepped. -->
-    <path d="M 60 63 L 69 63 L 69 66.5 L 76 66.5 L 76 73.5 L 66 73.5 L 66 70 L 60 70 Z"/>
+    <path d="M 60 63 L 69 63 L 69 66.5 L 76 66.5 L 76 73.5 L 66 73.5 L 66 70 L 60 70 Z" fill="#53CE7C"/>
   </g>
 </svg>

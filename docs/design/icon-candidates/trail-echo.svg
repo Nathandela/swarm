@@ -3,24 +3,22 @@
     CANDIDATE 2 - "Trail"
 
     The prompt-dominant end of the spectrum, reached by weight rather than by geometry: the chevron
-    is the heaviest stroke in the set and the bar over it is the lightest, so the eye lands on the
-    `>` first and the S assembles a beat later. Every terminal is a flat cut, which keeps it in the
-    register of a monospaced glyph. The cursor has come apart into a block and one shorter echo -
-    the swarm as motion rather than as multiplicity.
+    is the heaviest stroke in the set and the stroke over it is the lightest, so the eye lands on
+    the `>` first and the S assembles a beat later. Revised 2026-08-02 per the owner's direction:
+    the top stroke is the chevron's bottom stroke repeated - same diagonal, translated up - drawn
+    in the light weight, an echo above to pair with the cursor's echo below. Flat cuts keep it in
+    the register of a monospaced glyph. The cursor has come apart into a block and one shorter
+    echo - the swarm as motion rather than as multiplicity.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 29.4 against the 33dp the launcher mask guarantees.
+    Safe zone: max r = 31.6 against the 33dp the launcher mask guarantees.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg" fill="none" stroke="#53CE7C" stroke-linejoin="round">
-    <!--
-      The bar is the lightest stroke here so the chevron keeps the eye. It starts on the chevron's
-      centreline, not to the left of it: the round shoulder there is exactly as tall as the bar, so
-      the two meet flush instead of leaving a nick at the corner.
-    -->
-    <path d="M 34 38.5 L 71 38.5" stroke-width="5.5" stroke-linecap="butt"/>
+    <!-- The chevron's bottom stroke, repeated above in the lightest weight. -->
+    <path d="M 57 25 L 34 40" stroke-width="5.5" stroke-linecap="butt"/>
     <!-- The chevron and the cursor share the heaviest weight, which is what pairs them as `>_`. -->
     <path d="M 34 40 L 57 55 L 34 70" stroke-width="8.5" stroke-linecap="round"/>
     <path d="M 58 70 L 68 70" stroke-width="8.5" stroke-linecap="butt"/>
