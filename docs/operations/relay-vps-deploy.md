@@ -98,6 +98,31 @@ sudo chmod 0644 /etc/swarm-relay/relay.config
 secret. Leave `push_credentials` empty, as shipped, unless you have provisioned your own FCM
 service account.
 
+### 4a. If you do set `push_credentials`, the file it points at is a private key
+
+`0644` does not carry over. The Google service-account JSON that `push_credentials` names contains
+an RSA private key: anyone who can read it can send push as your Google project, and against this
+relay's own store — which holds a push token per routing id in the clear
+(`docs/operations/metadata-disclosure.md`) — that means waking any handset paired to it. Do not put
+it in `/etc/swarm-relay/relay.config`'s directory with the config's permissions.
+
+```bash
+sudo install -o root -g swarm-relay -m 0640 /path/to/service-account.json \
+  /etc/swarm-relay/push-credentials.json
+```
+
+`root:swarm-relay 0640` gives the relay exactly what it needs and nothing more: the unit runs as
+`User=swarm-relay` (§5) and only ever reads this file (`os.ReadFile` at boot,
+`cmd/swarm-relay/main.go`), so group-read is sufficient, `root` keeps ownership so the service
+account cannot rewrite its own credential, and no other user on the VPS can read it at all.
+`ProtectSystem=strict` in the unit already makes `/etc` read-only to the process regardless.
+
+A mode too restrictive to read is **not** a silent failure: a `push_credentials` that is set but
+unreadable fails the boot outright (`pushOptions` returns the `os.ReadFile` error and
+`swarm-relay` exits nonzero), so you find out from `systemctl status swarm-relay` immediately
+rather than from a hand-off nobody was woken for. An *empty* `push_credentials` is the different,
+supported case that boots with no push at all (PB-PUSH-5).
+
 **If you do set `push_credentials`, the file it points at is a private key and must not be
 world-readable.** It is a Google service-account document; anyone who can read it can send push
 messages as your project. `ProtectSystem=strict` (§5) keeps the relay from writing to `/etc`, but
