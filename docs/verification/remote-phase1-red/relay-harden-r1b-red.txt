@@ -1,0 +1,102 @@
+======================================================================
+Remote-control Phase 1 - RELAY HARDENING R1b (internal/remote/relay) - RED RUN
+epic: agents-tracker-qnx (remote-control)
+role: TEST-WRITER (TDD Phase 1 + Red, GG-5)
+encodes: docs/adr/ADR-007-remote-access.md
+         "Amendment 2026-07-20 - Relay pre-authentication rate-limiting model"
+remediates: docs/verification/remote-phase1-relay-review.md findings
+         R1-H1 (auth_init keyed by presented pubkey -> targeted victim lockout)   agents-tracker-40o
+         R1-H2 (attacker-chosen keys -> unbounded per-key rate state / memory DoS) agents-tracker-45s
+         R1-H3 (single global auth counter monopolizable by one source)           agents-tracker-a0u
+date: Mon Jul 20 11:39:29 CEST 2026
+go: go1.26.1   host: darwin/arm64
+baseline: pre-change tree = GREEN (R1 landed; harden_test.go CR-1/CR-2/HI-1 pass)
+changes (git status --short):
+   M internal/remote/relay/abuse_test.go   (TestRelay_ConnRateLimited: COMMENT-ONLY reframe)
+   M internal/remote/relay/harden_test.go  (TestRelay_AuthRatePerSource REPLACED by two tests
+                                            + file docstring/imports updated for the replacement)
+command: go test ./internal/remote/relay/... 2>&1
+======================================================================
+
+### WHAT CHANGED (USER-APPROVED by the ADR-007 2026-07-20 amendment)
+###
+### The old TestRelay_AuthRatePerSource asserted per-UNPROVEN-key independence -
+### the exact premise the amendment REJECTS. auth_init carries an unsigned pubkey,
+### so keying a pre-auth window by it lets an attacker (a) exhaust a victim's
+### window by presenting the victim's key (R1-H1), and (b) mint unbounded per-key
+### state with attacker-chosen keys (R1-H2). It is replaced by a poison-resistance
+### test + a post-auth per-key fairness test. TestRelay_ConnRateLimited is reframed
+### comment-only as the per-source(IP) pre-auth window (localhost = one source, so
+### its third Dial is still refused; no assertion/value/call changed).
+
+### RED STYLE: UNDEFINED-SYMBOL (matches relay-red.txt / relay-harden-r1-red.txt).
+### The one new contract symbol the implementer must supply does not exist yet;
+### because Go builds one test binary per package, referencing it fails the whole
+### relay test build. This is the intended compile-level RED.
+###
+### The CONTRACT the implementer must add (see report):
+###   WithSourceKeyFunc(func(remoteAddr string) string) Option
+###     Pre-auth source-key deriver. Evaluated ONCE per accepted connection with
+###     that connection's RemoteAddr; the result keys every PRE-SIGNATURE op
+###     (auth_init + the unauthenticated rendezvous ops), REPLACING today's
+###     authRate[RoutingID(presentedPub)] keying at server.go:489-499. Default (no
+###     option): the IP host of RemoteAddr (port stripped) -> all localhost
+###     connections collapse to one source.
+
+### VERBATIM RED (default go test output) ###
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harden_test.go:168:66: undefined: WithSourceKeyFunc
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+======================================================================
+### UNCAPPED VERIFICATION (go test -gcflags=-e): the COMPLETE error set is
+### exactly the ONE intended contract symbol and nothing else. Every other symbol
+### the new + reframed tests reference (OpsPerMin, MaxConcurrentConnections,
+### ConnPerMin, ErrQuotaExceeded, MailboxRead, dialAuthed, dialRaw, control,
+### Dial, authFor, newRelayAuthKey, mockAPNs, newFakeClock, New/Start/Close)
+### type-checks -> no test-bug, type, or logic error was introduced.
+======================================================================
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/harden_test.go:168:66: undefined: WithSourceKeyFunc
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+======================================================================
+### NEW / CHANGED TEST FUNCTIONS -> FINDING MAP
+======================================================================
+R1-H1  TestRelay_AuthInitNotPoisonableByPresentedPubkey  (harden_test.go, REPLACES
+         TestRelay_AuthRatePerSource)
+         - Attacker floods auth_init presenting the VICTIM's pubkey on ONE
+           connection (one transport source), spending that source's per-source
+           budget; the over-budget attempt is ErrQuotaExceeded (attacker's OWN
+           source, not the victim's identity).
+         - Victim, on a DISTINCT source, completes a FULL Dial (auth_init+auth_resp)
+           with that same pubkey SUCCESSFULLY.
+         - Uses WithSourceKeyFunc(identity) so each CONNECTION is its own source
+           (full RemoteAddr incl. ephemeral port) - two real client IPs are
+           unavailable on loopback.
+         - COMPILE-RED now (WithSourceKeyFunc undefined). BEHAVIORAL RED once the
+           symbol exists but keying is still by presented pubkey: the attacker's
+           flood drains authRate[RoutingID(victimPub)] and the victim's Dial is
+           refused. GREEN once pre-auth keying is by source.
+
+R1-4   TestRelay_PostAuthPerKeyOpBudgetIndependent  (harden_test.go, NEW)
+         - Two distinct keys each complete a full authenticated Dial, then key A
+           exhausts its OWN OpsPerMin on a post-auth op (mailbox_read); key B must
+           still complete the same op. Per-key limits are legitimate only AFTER
+           signature verification (amendment point 4).
+         - COMPILE-RED now (shares the package binary). GREEN once compiled; guards
+           that moving pre-auth keying to source does not collapse proven post-auth
+           per-key fairness.
+
+reframe TestRelay_ConnRateLimited  (abuse_test.go, COMMENT-ONLY)
+         - Docstring now states ConnPerMin is a per-source(IP) PRE-AUTH window;
+           localhost = one source, so the third Dial is still refused. No
+           assertion, value, or call changed.
+
+### CONFIRMATION: only the two authorized tests were changed
+### (TestRelay_ConnRateLimited comments + TestRelay_AuthRatePerSource replaced,
+### plus the harden_test.go file docstring/imports the replacement requires); NO
+### implementation was written; internal/remote/crypto untouched.
+======================================================================

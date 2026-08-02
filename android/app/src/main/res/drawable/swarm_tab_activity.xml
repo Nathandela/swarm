@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- origin: .ptabs svg, the Activity tab's own path. See swarm_tab_inbox.xml for the box, the
+     viewport and why the stroke is the platform's white. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M3 12h4l3-8 4 16 3-8h4" />
+</vector>

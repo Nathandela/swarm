@@ -1,0 +1,20 @@
+RED evidence — fix-pack item 1a (HIGH-1): remote launch env-drop + dangerous-options denylist
+Date: 2026-07-23  Commit-base: 0630830
+
+$ go test -run 'Policy_' ./internal/protocol/ -v
+--- FAIL: TestPolicy_RemoteLaunchDropsClientEnv (0.02s)
+--- FAIL: TestPolicy_RemoteForbiddenOptionsRefused (0.00s)
+    --- FAIL: TestPolicy_RemoteForbiddenOptionsRefused/dangerously-skip-permissions (0.00s)
+    --- FAIL: TestPolicy_RemoteForbiddenOptionsRefused/sandbox_danger-full-access (0.00s)
+--- PASS: TestPolicy_RemoteLaunchAllowsSafeOptions (0.00s)
+    --- PASS: TestPolicy_RemoteLaunchAllowsSafeOptions/dangerously-skip-permissions_false_allowed (0.00s)
+    --- PASS: TestPolicy_RemoteLaunchAllowsSafeOptions/sandbox_workspace-write_allowed (0.00s)
+--- PASS: TestPolicy_RemoteLaunchChecked_LocalLaunchNot (0.00s)
+--- FAIL: TestPolicy_AuthzPrecedesArgvValidation (0.00s)
+    --- PASS: TestPolicy_AuthzPrecedesArgvValidation/forged_sig_not_authorized (0.00s)
+    --- PASS: TestPolicy_AuthzPrecedesArgvValidation/missing_device_fields_invalid_field (0.00s)
+    --- FAIL: TestPolicy_AuthzPrecedesArgvValidation/policy_refusal_precedes_cwd_stat (0.00s)
+
+RED (fail on assertion): DropsClientEnv (env filtered not dropped); ForbiddenOptions/{dangerously-skip-permissions=true, sandbox=danger-full-access} (no denylist); AuthzPrecedes/policy_refusal_precedes_cwd_stat (reaches cwd stat).
+GREEN guards (must stay green): RemoteLaunchAllowsSafeOptions/{=false, =workspace-write} (value-aware: safe values allowed); RemoteLaunchChecked_LocalLaunchNot (remote-tier scoped); the two AuthzPrecedes not_authorized/invalid_field cases.
+Denied keys are grep-verified real: dangerously-skip-permissions (claude.go:193), sandbox=danger-full-access (codex.go:89). Denylist must be KEY+VALUE aware.

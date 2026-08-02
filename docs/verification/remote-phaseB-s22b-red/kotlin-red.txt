@@ -1,0 +1,42 @@
+$ . android/toolchain.env && cd android && ./gradlew --no-daemon :app:testDebugUnitTest \
+    --tests 'dev.swarm.phone.theme.DesignScaleResolutionTest' \
+    --tests 'dev.swarm.phone.theme.MonoBoxDrawingTest'
+
+DesignScaleResolutionTest > the spacing scale resolves as an ascending 2dp grid FAILED
+    java.lang.AssertionError at DesignScaleResolutionTest.kt:235
+DesignScaleResolutionTest > the frame constants resolve to the design's own frame FAILED
+    java.lang.AssertionError at DesignScaleResolutionTest.kt:67
+DesignScaleResolutionTest > the radii resolve to the radius tokens FAILED
+    java.lang.AssertionError at DesignScaleResolutionTest.kt:93
+DesignScaleResolutionTest > every text style resolves to its design rule FAILED
+    java.lang.IllegalStateException at DesignScaleResolutionTest.kt:135
+MonoBoxDrawingTest > box drawing renders through fallback at a different advance than the mono family FAILED
+    java.lang.AssertionError at MonoBoxDrawingTest.kt:71
+MonoBoxDrawingTest > the mono style is fixed-pitch and the sans style is not FAILED
+    java.lang.AssertionError at MonoBoxDrawingTest.kt:71
+7 tests completed, 6 failed
+w: Detected multiple Kotlin daemon sessions at 
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':app:testDebugUnitTest'.
+> There were failing tests. See the report at: file:///Users/Nathan/Code/swarm/android/app/build/reports/tests/testDebugUnitTest/index.html
+BUILD FAILED in 1m 34s
+
+================ per-assertion detail (JUnit XML) ================
+
+--- TEST-dev.swarm.phone.theme.DesignScaleResolutionTest.xml
+pass the design parse can distinguish two values
+FAIL the spacing scale resolves as an ascending 2dp grid
+        java.lang.AssertionError: R.dimen.swarm_space_2 does not exist in the merged resource table
+FAIL the frame constants resolve to the design's own frame
+        java.lang.AssertionError: R.dimen.swarm_screen_top did not resolve to the design's own value. The frame is the one part of the layout the scale does not govern -- 54/76/74 are not on a 2dp grid -- so it is the part most likely to be retyped from prose. expected:<54.0> but was:<-1.0>
+FAIL the radii resolve to the radius tokens
+        java.lang.AssertionError: R.dimen.swarm_radius_card did not resolve to --p-card-r expected:<9.0> but was:<-1.0>
+FAIL every text style resolves to its design rule
+        java.lang.IllegalStateException: type.xml is not on the unit-test classpath. app/build.gradle.kts must stage it so the style-to-selector join is read from the same artifact aapt compiles, rather than from a second copy of it
+
+--- TEST-dev.swarm.phone.theme.MonoBoxDrawingTest.xml
+FAIL box drawing renders through fallback at a different advance than the mono family
+        java.lang.AssertionError: R.style.TextAppearance_Swarm_Mono_Code is not in the resource table; this test would measure a default typeface rather than the app's. Actual: 0
+FAIL the mono style is fixed-pitch and the sans style is not
+        java.lang.AssertionError: R.style.TextAppearance_Swarm_Mono_Code is not in the resource table; this test would measure a default typeface rather than the app's. Actual: 0

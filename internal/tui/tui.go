@@ -189,6 +189,8 @@ type rootModel struct {
 	// restartAttempted is the once-per-process guard against restart loops.
 	restarter        DaemonRestarter
 	restartAttempted bool
+
+	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -490,7 +492,18 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repaintN++
 		return m, tea.Batch(repaintTick(), tea.ClearScreen)
 
+	case pairPendingMsg:
+		// The daemon pushed a pair_pending (SAS gate): open the pairing-confirm
+		// modal over whatever screen is showing. It stays up until answered (A4).
+		m.pairing = &pairingModal{sas: msg.SAS, deviceName: msg.DeviceName}
+		return m, nil
+
 	case tea.KeyPressMsg:
+		// The SAS gate is modal: while it is open it owns every keypress so a
+		// y/n/enter/esc can never leak through to the board beneath it.
+		if m.pairing != nil {
+			return m.updatePairing(msg)
+		}
 		switch m.screen {
 		case screenGeneral:
 			return m.updateGeneral(msg)
@@ -505,10 +518,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m rootModel) View() tea.View {
 	var content string
-	switch m.screen {
-	case screenLaunch:
+	switch {
+	case m.pairing != nil:
+		// The SAS gate overlays every screen: render it with its own allow/deny
+		// key hint on the bottom bar (A4). It stays until the operator answers.
+		content = m.composeBoard(m.pairing.view(), "y allow   n deny")
+	case m.screen == screenLaunch:
 		content = m.composeBoard(m.launch.view(), m.launch.hint())
-	case screenAttach:
+	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
 		content = m.attach.view()

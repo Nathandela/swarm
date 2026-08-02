@@ -1,0 +1,57 @@
+# PB-APP-9 traceability: every error class the facade exports -> the state the user is
+# shown and what they can do about it. Enforced in THREE directions, none of which trusts
+# this file:
+#
+#   - mobile/s16_taxonomy_test.go   class_const and token are set-compared against
+#                                   mobile/testdata/exported_surface.golden, and each token
+#                                   is read from the CONSTANT's source rather than from
+#                                   here -- so a drifted row fails instead of misrouting;
+#   - android/gate/s16_ui_test.go   rendered_state is set-compared against the Kotlin
+#                                   `enum class ErrorState`, and every token must appear
+#                                   verbatim in the Kotlin sources;
+#   - mobile/conformance/s16_errorstates_test.go  every row is reachable: an adversarial
+#                                   state matrix sweeps the whole golden surface and no
+#                                   error may land outside this table.
+#
+# Columns: class_const <TAB> token <TAB> sentinel <TAB> rendered_state <TAB> remedy <TAB> requirement <TAB> note
+#
+# `sentinel` is the Go error IDENTITY the class classifies, or "-" for a class the facade
+# authors itself. A class that classifies MORE than one identity lists them comma-separated;
+# the column is not exhaustive (ErrClassNoLease also absorbs ErrLeaseExpired and ErrGapPending)
+# and names the identities PB-APP-10 requires to be told apart.
+# `rendered_state` is a constant of dev.swarm.phone.ui.ErrorState.
+# `remedy` is what the user (or the machine) must do; the two of PB-APP-10 are
+# re_pair / machine_regrant and they may never collapse. There were THREE until ADR-007 B133:
+# `authenticate` left with its subject, because all phone-side user authentication is removed
+# and a remedy naming an act the product can no longer offer is advice nobody can carry out.
+# Its row -- ErrClassReauthRequired / REAUTH_REQUIRED, whose sentinel was
+# crypto.ErrKeyAuthRequired -- went in the same change as mobile/relay.go's connReauthRequired,
+# the Kotlin ConnectionState and ErrorState entries, and Remedy.AUTHENTICATE.
+#
+# crypto stays FROZEN and still raises crypto.ErrKeyAuthRequired, so the identity did not go
+# with the row: it is now classified by ErrClassRepairRequired, in all three places that route
+# it -- mobile/relay.go's dial switch (connRepairRequired), mobile/errorclass.go's
+# stampErrorClass, and dev.swarm.phone.PhoneRuntime.routeCustodyVerdict, which puts
+# KeyCustodyException.UserAuthenticationRequired in the same arm as KeyPermanentlyInvalidated.
+# The class ErrClassReauthRequired is deleted, not merely unmapped: an exported class this
+# table has no row for reaches the screen as an opaque exception, and the Kotlin router answers
+# UNKNOWN for its token -- fail-safe, and still the failure PB-APP-9 exists to stop.
+#
+#class_const	token	sentinel	rendered_state	remedy	requirement	note
+ErrClassUnknown	swarm/unknown	-	UNKNOWN	none	PB-APP-9	RESERVED. App.ErrorClass answers this for a message the facade did not produce, and for nothing else. It is what makes the exhaustiveness sweep a real assertion: a classifier that could not say "I do not know this" would satisfy every other check by answering one class for everything.
+ErrClassInternal	swarm/internal	-	INTERNAL	report_bug	PB-APP-9,PB-BIND-5	A panic caught at the JNI boundary, or a foreign error identity nothing routes. Never the user's fault and never has a user action, which is why it must not share a state with anything that does.
+ErrClassInvalidRequest	swarm/invalid-request	-	INVALID_REQUEST	report_bug	PB-APP-9	A screen passed something the facade cannot use: an empty session id, a nil spec, a stream name that is not one of the four repair channels. Same remedy as INTERNAL and a different state, because the app is otherwise healthy and one call was wrong.
+ErrClassNotFound	swarm/not-found	-	NOT_FOUND	refresh	PB-APP-9,PB-APP-2	A lookup that legitimately misses -- a session no longer in the roster, a snapshot never received, an index past the end of a handle. Distinct from INVALID_REQUEST: nothing is wrong with the call, the thing is simply gone.
+ErrClassClosed	swarm/closed	-	APP_CLOSED	restart_app	PB-APP-9,PB-BIND-6	A call on an App the Android lifecycle already closed. Its own class because it is the one failure a screen fixes by doing nothing: the next launch constructs a new App.
+ErrClassOffline	swarm/offline	-	OFFLINE	wait_for_connection	PB-APP-8,PB-APP-9	The transport: not started, no connection yet, or the relay refused or dropped the call. The ONE class for which a spinner is honest -- every other waiting state here has something the user must do.
+ErrClassNotPaired	swarm/not-paired	-	NOT_PAIRED	pair	PB-APP-9,PB-STATE-2	The phone holds no machine destination. NOT the same as REPAIR_REQUIRED: nothing is broken and no owner has revoked anything -- this handset has simply never completed a pairing that pinned a destination.
+ErrClassStateCorrupt	swarm/state-corrupt	phonecore.ErrCorruptState	STATE_CORRUPT	clear_data_and_re_pair	PB-STATE-4,PB-STATE-10	PB-STATE-4's fail-closed refusal of a durable blob that will not load. It was ErrClassInternal until S18b, i.e. remedy report_bug over a state the owner CAN recover from -- the brick expressed as a screen. Its remedy is its own because it is TWO acts and neither alone works: the user clears the app's data, and the OWNER unregisters the device at the machine, or the re-pair the advice ends in is refused (PB-KEY-3). It does not offer the pairing flow: there is no App to offer it from, the blob having failed Resume.
+ErrClassDeviceUnsupported	swarm/device-unsupported	-	DEVICE_UNSUPPORTED	report_bug	PB-KEY-8,PB-APP-10	PB-KEY-8's two refusals -- a capability the handset does not provide, and a key read back WEAKER than requested. Raised on the Android side (KeyCustodyException.PlatformCapabilityMissing / KeystoreDowngrade, routed by PhoneRuntime), so the sentinel column is "-": the Go facade has no identity for a Keystore read-back. Same remedy as INTERNAL and a different state, for INVALID_REQUEST's reason inverted: the APP is healthy and the platform is not, so a message blaming the app is false. It must never be re_pair -- a re-pair re-provisions the same key on the same handset and returns to this screen, which is PB-APP-10's forbidden loop reached through the remedy.
+ErrClassUnreconciled	swarm/unreconciled	phonecore.ErrUnreconciled	SYNCING	wait_for_machine	PB-SYNC-7,PB-APP-9	PB-SYNC-7's fail-closed refusal of mutating ops until the machine publishes its rollback authorities. Reads keep working throughout, so the screen shows a banner and not an error page.
+ErrClassAwaitingKey	swarm/awaiting-key	-	AWAITING_KEY	wait_for_machine	PB-KEY-10,PB-APP-9	No epoch content key, and the grant has NOT been proved lost. This is the ordinary first-launch window; rendering it as GRANT_LOST would send a healthy user to the machine for a key that is already on its way.
+ErrClassGrantLost	swarm/grant-lost	phonecore.ErrGrantLost	GRANT_LOST	machine_regrant	PB-KEY-3,PB-APP-10	The one remedy the USER cannot perform. It may never collapse into REPAIR_REQUIRED: BeginPairing fail-fasts while this device is registered (PB-STATE-10), so "pair again" is advice that cannot be carried out and the only exit left is physical access to the machine.
+ErrClassRepairRequired	swarm-custody/key-invalidated	crypto.ErrKeyInvalidated,crypto.ErrKeyAuthRequired	REPAIR_REQUIRED	re_pair	PB-KEY-6,PB-APP-10	PERMANENT. The Keystore key cannot be used and nothing done on the device brings it back. The token is the one Kotlin has matched on since S14 (GoCustodyFailure.KEY_INVALIDATED_TOKEN) and is deliberately not re-spelled; a drifted copy falls through to UNKNOWN, which tells a user whose key is gone to try again forever. TWO SENTINELS SHARE IT after ADR-007 B133: crypto.ErrKeyInvalidated is the destroyed key, and crypto.ErrKeyAuthRequired is a key gated on an authentication this product no longer performs -- raised only by an install provisioned before B133, whose AUTH_BIOMETRIC_STRONG content KEK KeystoreCustodyBootstrap.ensure does not re-request on upgrade. For that handset a re-pair discards the alias and re-provisions without an authenticator, so re_pair is the true remedy and not a bucket. It does NOT extend to phonecore.ErrGrantLost: that one the user cannot perform at all.
+ErrClassRevoked	swarm/revoked	relay.ErrRevoked	REVOKED	re_pair	PB-APP-10,PB-SEC-7	The OWNER removed this device. It shares REPAIR_REQUIRED's remedy and not its cause, which is why it is a class of its own: the machine still holds a registration the owner must clear before a re-pair can succeed. Without this row a revoked phone redials every 250 ms behind a spinner forever.
+ErrClassNoLease	swarm/no-lease	phonecore.ErrNoLease	NEEDS_LEASE	take_control	PB-INPUT-2,PB-APP-3	The machine has not confirmed a control lease, so every keystroke -- and PB-APP-3's Stop -- is refused. The screen's remedy is to offer take-control; a retry is the one thing that cannot help.
+ErrClassRateLimited	swarm/rate-limited	-	RATE_LIMITED	wait_and_retry	PB-SYNC-6,PB-APP-8	A bound this phone enforces on itself (the section 6.0 resync budget) or the relay enforces on it. Retryable only after waiting: "asking harder" is exactly what the bound exists to stop.
+ErrClassPairingFailed	swarm/pairing-failed	-	PAIRING_FAILED	retry_pairing	PB-PAIR-5,PB-APP-9	The class for errors the pairing VERBS return. The pairing attempt's own terminal state is on the Pairing handle and is finer grained (PB-PAIR-5's five values); this is what a screen shows when the call itself failed.

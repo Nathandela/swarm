@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- origin: .ptabs svg, the Settings tab's own path. See swarm_tab_inbox.xml for the box, the
+     viewport and why the stroke is the platform's white.
+
+     THE ARC FLAGS ARE SEPARATED AND THE ARTIFACT'S ARE NOT, and that is the one place in these
+     four files where the spelling differs from the source. The artifact writes
+     `a4 4 0 110 8`, where `110` is not a number: SVG lets an elliptical arc's two flags run
+     together with the parameter that follows them, so it reads as `1`, `1`, `0`. Android's
+     PathParser takes an arc's seven parameters as seven plain numbers and does not implement that
+     rule, so the artifact's own spelling would parse here as a large-arc flag of 110 and a sweep
+     flag of 8 - drawing a different shape, silently, with no error anywhere. The gate compares
+     the two spellings as token streams under the SVG rule, so this file is provably the
+     artifact's drawing rather than a hand-adjusted lookalike. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z" />
+</vector>

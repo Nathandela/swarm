@@ -93,6 +93,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "remote":
+		return runRemote(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:
@@ -133,7 +135,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
 	}
-	client, err := dialClient(cc)
+	client, err := dialClient([]string{"attach", "subscribe"})
 	if err != nil {
 		fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
@@ -200,14 +202,20 @@ func clientConfig() (daemon.ClientConfig, error) {
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
-// protocol client to it. EnsureDaemon only spawns one when the socket does not answer.
-func dialClient(cc daemon.ClientConfig) (*protocol.Client, error) {
+// protocol client to it, offering caps. EnsureDaemon only spawns one when the socket
+// does not answer. It builds its own ClientConfig so the remote subcommands can call
+// it bare; runTUI additionally builds one for the attach dialer and daemon restarter.
+func dialClient(caps []string) (*protocol.Client, error) {
+	cc, err := clientConfig()
+	if err != nil {
+		return nil, err
+	}
 	conn, err := daemon.EnsureDaemon(cc)
 	if err != nil {
 		return nil, err
 	}
-	_ = conn.Close() // EnsureDaemon proved the daemon is live; the TUI speaks the full client protocol on its own dial
-	return protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+	_ = conn.Close() // EnsureDaemon proved the daemon is live; the caller speaks the full client protocol on its own dial
+	return protocol.Dial(cc.SocketPath, caps)
 }
 
 // attachDialer builds the per-attach dialer the TUI's attach runner uses: it dials a
@@ -462,6 +470,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),
+		RemoteSocketPath:   gatewaySocket(stateDir), // ADR-007 B15: the SAME definition the unit dials
 		ShimBinary:         exe,
 		MaxSessions:        defaultMaxSessions,
 		PollInterval:       daemonPollInterval,

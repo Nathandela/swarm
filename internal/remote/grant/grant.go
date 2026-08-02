@@ -1,0 +1,140 @@
+// Package grant persists and transports the initial sealed EpochGrant that bootstraps
+// a freshly paired device's E2EE session (ADR-007 amendment 2026-07-24, decision C5).
+//
+// enroll.Enroll mints a crypto.EpochGrant sealed to the device's RECIPIENT key and
+// signed by the machine's grant-signing key, but BeginPairing used to discard it, so a
+// real (non-in-process) phone could never recover the epoch ContentKey. Delivery now
+// follows the out-of-band topology: the daemon PERSISTS the sealed grant addressable by
+// device id (opaque at rest -- only the phone's recipient private key opens it), and the
+// gateway -- the process already holding an authenticated relay client for the device --
+// appends it to the device mailbox as a tagged plaintext BOOTSTRAP frame.
+//
+// THE WIRE HALF LIVES IN internal/remote/grantwire and is re-exported below. The split is
+// PB-BIND-0's: the phone must be able to READ a bootstrap frame, and phonecore's bound
+// dependency closure is an allowlist of code shipped to a handset an adversary may hold --
+// so the frame's parser is allowlisted and this file's registry-sidecar I/O is not. Machine
+// -side callers import this package alone and see no difference.
+package grant
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+
+	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/grantwire"
+)
+
+// The bootstrap wire frame, re-exported from internal/remote/grantwire so the machine side
+// keeps one import. The frame is DISTINCT from phonecore's ContentKey-sealed router
+// "epoch_grant" rotation frame: it is recipient-sealed, because it is what DELIVERS the
+// ContentKey -- a chicken-and-egg the router cannot resolve.
+const BootstrapKind = grantwire.BootstrapKind
+
+// Bootstrap is the tagged plaintext frame the gateway appends to the device mailbox.
+type Bootstrap = grantwire.Bootstrap
+
+// MarshalBootstrap wraps a sealed grant in the tagged bootstrap frame the gateway
+// appends raw (NOT ContentKey-sealed) to the device mailbox.
+func MarshalBootstrap(g *crypto.EpochGrant) ([]byte, error) { return grantwire.MarshalBootstrap(g) }
+
+// ParseBootstrap decodes a mailbox item as a bootstrap frame, returning ok=false when
+// the item is not a well-formed bootstrap frame.
+func ParseBootstrap(env []byte) (*crypto.EpochGrant, bool) { return grantwire.ParseBootstrap(env) }
+
+// grantsSubdir is the sidecar directory under the device registry dir; one file per
+// device id keeps the frozen device.Record untouched.
+const grantsSubdir = "grants"
+
+// Path is the sidecar file for deviceID: <registryDir>/grants/<deviceID>.json, next to
+// the device registry (registryDir is <stateDir>/devices). deviceID is the canonical
+// hex SHA-256 of the command-signing key, so it is always a safe filename.
+func Path(registryDir, deviceID string) string {
+	return filepath.Join(registryDir, grantsSubdir, deviceID+".json")
+}
+
+// Save persists the sealed grant for deviceID atomically (temp+Sync+rename, 0600),
+// mirroring the device registry's process-crash durability model. The caller treats a
+// write error as a failed enrollment (fail-closed: never claim paired-without-grant).
+func Save(registryDir, deviceID string, g *crypto.EpochGrant) error {
+	data, err := json.Marshal(g)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(registryDir, grantsSubdir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "grant.tmp*") // os.CreateTemp creates 0600
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, Path(registryDir, deviceID)); err != nil {
+		return err
+	}
+	// C3 (finding, re-audit): fsync the parent directory so the RENAME itself is durable
+	// across a crash -- mirroring internal/remotegw/seqstore.go's durable-rename. The temp
+	// file is fsynced above, but without this a power loss could lose the rename and revert
+	// the sidecar to absent, leaving a "paired" device with no deliverable bootstrap grant.
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// Delete removes the sealed grant sidecar for deviceID. An ABSENT sidecar is NOT an error
+// (idempotent, like device.Registry.Remove), so RevokeDevice can call it unconditionally
+// after a successful removal without leaking the orphaned file (finding C4: a
+// revoke-then-repair otherwise leaks one sidecar per cycle).
+func Delete(registryDir, deviceID string) error {
+	if err := os.Remove(Path(registryDir, deviceID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Finding 4b (re-audit, durability): fsync the parent dir so the UNLINK survives power loss,
+	// symmetric with Save's durable rename. Best-effort: an absent grants dir (nothing was ever
+	// persisted here) means there is nothing to make durable.
+	d, err := os.Open(filepath.Join(registryDir, grantsSubdir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// Load reads the sealed grant persisted for deviceID. An ABSENT sidecar yields
+// (nil, nil) -- a gateway assembled for a pre-grant pairing has nothing to bootstrap and
+// must not fail closed; a present-but-corrupt sidecar is a non-nil error (fail-closed,
+// like a corrupt registry).
+func Load(registryDir, deviceID string) (*crypto.EpochGrant, error) {
+	data, err := os.ReadFile(Path(registryDir, deviceID))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var g crypto.EpochGrant
+	if err := json.Unmarshal(data, &g); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}

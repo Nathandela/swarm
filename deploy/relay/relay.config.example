@@ -1,0 +1,58 @@
+{
+  "_comment_listen": "TCP host:port the relay's websocket listener binds to. Bind to LOOPBACK ONLY -- Caddy (deploy/relay/Caddyfile) is the only thing that should reach this port, and the relay authenticates nothing at the transport layer (internal/remote/relay/server.go: Start does net.Listen(\"tcp\", cfg.Listen) unconditionally). Must match the reverse_proxy target in the Caddyfile.",
+  "listen": "127.0.0.1:9440",
+
+  "_comment_tls_mode": "Parsed by relay.LoadConfig but READ BY NOTHING THAT SERVES: Start binds Listen as plain ws:// unconditionally regardless of this value (docs/operations/relay-runbook.md section 0; internal/remote/relay/config.go's own field comment says the same). It does not turn TLS on or off. Caddy is the entire TLS story for this deployment. Left \"off\" so this file does not claim a protection it does not provide.",
+  "tls_mode": "off",
+
+  "_comment_db_path": "Path to the relay's bbolt persistence file (mailbox items, push tokens, pairing/consent state). Must be on writable storage that survives a reboot -- point it at the systemd unit's StateDirectory (deploy/relay/swarm-relay.service sets StateDirectory=swarm-relay, i.e. /var/lib/swarm-relay).",
+  "db_path": "/var/lib/swarm-relay/relay.db",
+
+  "_comment_push_credentials": "Path to a Google service-account JSON document for FCM push. OPTIONAL: empty is a SUPPORTED configuration (PB-PUSH-5) -- the relay boots with no push transport, push_trigger calls are dropped, and every other path is unaffected. A path that IS set but unreadable or invalid fails the boot on purpose, so a moved credential is never a silent, later-discovered outage. This project has never wired this to a real Google account (cmd/swarm-relay/main.go's pushOptions doc says so outright) -- leave this empty unless you have provisioned your own FCM service account. THE FILE IT NAMES IS A PRIVATE KEY: anyone who can read it can send push as your Google project, so unlike this config it must NOT be world-readable. Install it root:swarm-relay 0640, per docs/operations/relay-vps-deploy.md section 4.",
+  "push_credentials": "",
+
+  "_comment_handshake_timeout": "Nanoseconds (time.Duration marshals as an int64 count of nanoseconds). Bounds how long an UNAUTHENTICATED connection may sit idle before the relay closes it (slowloris defense). 30000000000 = 30s, the shipped default.",
+  "handshake_timeout": 30000000000,
+
+  "_comment_presence_timeout": "Nanoseconds. How long after a gateway disconnect presence flips to offline and the silent-push path fires. 30000000000 = 30s, the shipped default.",
+  "presence_timeout": 30000000000,
+
+  "_comment_rendezvous_ttl": "Nanoseconds. Hard lifetime of a pairing rendezvous slot. 60000000000 = 60s, the shipped default.",
+  "rendezvous_ttl": 60000000000,
+
+  "_comment_max_server_wait": "Nanoseconds. Ceiling on a parked mailbox_wait before the relay answers a clean empty page instead of holding the socket open. 0 selects the built-in default (25s), deliberately under the 30-60s idle timeout common to intermediaries -- including a reverse proxy like Caddy -- so the relay always answers before the proxy would sever the connection.",
+  "max_server_wait": 0,
+
+  "_comment_retention_cap": "Nanoseconds. Mailbox items older than this are purged even if never acknowledged. 604800000000000 = 7 days, the shipped default.",
+  "retention_cap": 604800000000000,
+
+  "_comment_sweep_interval": "Nanoseconds. Cadence of the background maintenance sweep (presence-went-silent pushes + retention purges). cmd/swarm-relay defaults this to 30s itself when the config leaves it at 0 or omits it, so this line is redundant with the binary's own default -- kept explicit so the cadence is visible without reading main.go. 30000000000 = 30s.",
+  "sweep_interval": 30000000000,
+
+  "_comment_quotas": "Day-one abuse controls (R-REL.8), all operator-tunable. Every window below is per minute unless noted otherwise. These values are the relay's own generous shipped defaults (relay.DefaultConfig) -- tighten deliberately, and read mailbox_append_per_min's comment before touching that one specifically. NOTE ON CADDY: the relay derives every one of these per-source windows from the TCP peer address of the connection it accepted (defaultSourceKey, internal/remote/relay/server.go) and consumes no X-Forwarded-For header -- cmd/swarm-relay never installs relay.WithSourceKeyFunc. Once Caddy reverse-proxies to this loopback listener, every client's connection arrives FROM CADDY, so max_concurrent_connections_per_source and conn_per_min are enforced across ALL clients combined, not per real client. Harmless for v1's single-machine-plus-single-phone scope; revisit with a source-key override reading X-Forwarded-For before fronting genuinely independent clients through this proxy.",
+  "quotas": {
+    "_comment_max_concurrent_rendezvous": "Cap on live pairing rendezvous slots at once, across all clients.",
+    "max_concurrent_rendezvous": 1024,
+
+    "_comment_max_concurrent_connections": "Global cap on live websocket connections admitted at once. The (cap+1)th connection is refused cleanly, not queued.",
+    "max_concurrent_connections": 4096,
+
+    "_comment_max_concurrent_connections_per_source": "Same cap, scoped to one transport source. See the Caddy note above: behind this proxy, \"one source\" means Caddy itself, not one real client.",
+    "max_concurrent_connections_per_source": 64,
+
+    "_comment_mailbox_append_per_min": "Appends per target routing id per minute. MUST STAY >= 600: this is the ONLY cap that applies to live typing (ops_per_min explicitly excludes mailbox_append), the client coalesces to <= 8 frames/s sustained, and 600/min is the deliberate 20% headroom over that. A lower value silently breaks live typing with no error the user ever sees.",
+    "mailbox_append_per_min": 600,
+
+    "_comment_mailbox_max_items": "Per-mailbox depth cap: an append past this many un-acked items is refused (not dropped) until the device drains. Bounds unbounded growth from a device that never reads; capacity recovers on ack.",
+    "mailbox_max_items": 10000,
+
+    "_comment_push_per_min": "Push triggers per target routing id per minute.",
+    "push_per_min": 600,
+
+    "_comment_conn_per_min": "Pre-authentication auth_init attempts per transport source per minute. See the Caddy note above.",
+    "conn_per_min": 600,
+
+    "_comment_ops_per_min": "Per-source cap on every other state-touching op (auth_resp, authorize_device, mailbox_read/ack, token_register/delete, presence, device_revoke, the rendezvous ops). mailbox_append and push_trigger keep their own dedicated windows above.",
+    "ops_per_min": 600
+  }
+}

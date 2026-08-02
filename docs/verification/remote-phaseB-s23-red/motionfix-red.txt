@@ -1,0 +1,216 @@
+PB-DS-8 MOTION DEFECT FIXES -- FAILING-FIRST (TDD RED, GG-5)
+============================================================
+
+Four defects the adversarial audit committee found in the S23 motion work. Each section below is
+the REAL output of the test that catches the defect, run against the code BEFORE the fix, with the
+values it reported. Nothing here is transcribed or reconstructed.
+
+Branch: design-system-substrate. Files: android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Motion.kt,
+android/app/src/test/kotlin/dev/swarm/phone/ui/kit/MotionTest.kt, android/gate/s23_motion_test.go,
+android/app/build.gradle.kts.
+
+
+------------------------------------------------------------------------------
+DEFECT 2 -- the animator fence permitted exactly what it exists to forbid
+------------------------------------------------------------------------------
+
+The exemption was PATH-scoped to ui/kit, not FILE-scoped to Motion.kt, so any kit component could
+construct a raw ObjectAnimator, bypass Motion.duration and stay green. The old test
+(TestPBDS8_TheKitPackageIsExempt) ASSERTED that permission. Inverted: a raw animator in a sibling
+kit file must now be flagged.
+
+RED -- the inverted test against the still-path-scoped isKitPath:
+
+    $ go test ./android/gate/ -run 'TestPBDS8' -v
+
+    === RUN   TestPBDS8_NoAnimatorIsConstructedOutsideTheKit
+    --- PASS: TestPBDS8_NoAnimatorIsConstructedOutsideTheKit (0.06s)
+    === RUN   TestPBDS8_EveryForbiddenConstructIsCaughtOutsideTheKit
+    ... (all six constructs PASS)
+    === RUN   TestPBDS8_ASiblingKitFileIsNotExempt
+        s23_motion_test.go:278: PB-DS-8: 0 finding(s) for a raw animator in a kit file that is NOT
+        Motion.kt, want 1. A component beside Motion.kt that builds its own animator has nothing
+        enforcing the reduced-motion check -- it must route through Motion's primitives
+        (translateY/translateX/colorTransition) or through Motion.duration:
+            []
+    --- FAIL: TestPBDS8_ASiblingKitFileIsNotExempt (0.00s)
+    === RUN   TestPBDS8_MotionKtIsTheOneExemption
+    --- PASS: TestPBDS8_MotionKtIsTheOneExemption (0.00s)
+    === RUN   TestPBDS8_KitExemptionIsPathScopedNotSubstringScoped
+    --- PASS: TestPBDS8_KitExemptionIsPathScopedNotSubstringScoped (0.00s)
+    === RUN   TestPBDS8_CommentsAndDocsDoNotDefeatOrTriggerTheScan
+    --- PASS: TestPBDS8_CommentsAndDocsDoNotDefeatOrTriggerTheScan (0.00s)
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	1.084s
+
+    "0 finding(s) ... want 1", with the empty finding list [] printed, is the defect itself: the
+    scan walked a ui/kit/Toggle.kt containing `val a = ObjectAnimator.ofFloat(...)` on line 5 and
+    reported nothing.
+
+NEGATIVE CONTROL, and it passed in the same RED run: TestPBDS8_MotionKtIsTheOneExemption plants the
+IDENTICAL violating line in dev/swarm/phone/ui/kit/Motion.kt and requires 0 findings. It passes
+before and after the fix -- which is what makes the failure above a statement about the sibling
+file rather than about the scan being broken.
+
+
+------------------------------------------------------------------------------
+DEFECT 1 -- reduced motion DIMMED the caret
+------------------------------------------------------------------------------
+
+streamingCaretBlink sets alpha = 1f and returns a duration-0 ValueAnimator. A zero-duration
+ValueAnimator STILL DELIVERS ONE UPDATE, at animatedFraction 1.0, and caretAlphaAt(1.0) is the dim
+state -- so the caret dimmed the instant the animator started. The old test never called .start(),
+so it could not see it. The new test does.
+
+RED -- the reproduction, with values:
+
+    $ ./gradlew --no-daemon :app:testDebugUnitTest --tests 'dev.swarm.phone.ui.kit.MotionTest'
+
+    streamingCaretBlink_leaves_the_caret_fully_visible_AFTER_IT_STARTS_when_motion_is_reduced
+    java.lang.AssertionError: reduced motion promises a STATIC, FULLY VISIBLE caret (ADR-007 B134
+    decision 3, and the KDoc on streamingCaretBlink). A zero-duration ValueAnimator still delivers
+    one update, at animatedFraction 1.0, so an update listener left wired dims the caret the
+    instant it starts. Inspecting the animator before it plays cannot see this, which is how it
+    shipped. expected:<1.0> but was:<0.35>
+        at org.junit.Assert.assertEquals(Assert.java:577)
+        at dev.swarm.phone.ui.kit.MotionTest.streamingCaretBlink_leaves_the_caret_fully_visible_AFTER_IT_STARTS_when_motion_is_reduced(MotionTest.kt:466)
+
+    expected:<1.0> but was:<0.35> -- CARET_DIM_ALPHA, delivered by an animator whose duration is 0
+    and whose repeatCount is 0. Exactly the reviewer's reproduction.
+
+NEGATIVE CONTROLS for it, both new:
+  - streamingCaretBlink_still_dims_the_caret_when_motion_is_not_reduced: the blink must STILL be
+    wired when motion is not reduced (0.35 at fraction 0.75, 1.0 at fraction 0.25), or "the caret
+    stays fully visible" would also be satisfied by a builder that animates nothing at all.
+  - a_zero_duration_animator_still_delivers_one_update_at_a_full_fraction: MEASURED, no Motion
+    involved -- a bare ValueAnimator with duration 0 reports animatedFraction 1.0 after start(),
+    and Motion.caretAlphaAt (THE SAME FUNCTION streamingCaretBlink wires) returns the dim value for
+    that fraction. The two together are the mechanism, not an assumption about it.
+
+
+------------------------------------------------------------------------------
+DEFECT 3 -- the five timing constants were a self-comparison
+------------------------------------------------------------------------------
+
+MotionTest asserted `assertEquals(350L, Motion.NAV_DURATION_MS)` and four more like it: literals
+transcribed from the implementation, compared against the implementation. NO TEST ANYWHERE READ
+docs/research/remote-control-mock.html -- it was not staged as a test resource and appeared only in
+comments.
+
+RED -- the same run as above, BEFORE app/build.gradle.kts staged the artifact. 17 of 36 tests
+failed; 16 of them with this, one per assertion that now reads the design:
+
+    java.lang.IllegalStateException: remote-control-mock.html is not on the unit-test classpath.
+    app/build.gradle.kts must stage it as a unit-test resource so these assertions read the design
+    itself rather than a number copied out of the implementation they are checking
+
+    nav_duration_is_the_transition_the_mock_declares_on_the_banner_and_the_sheet
+    nav_ease_is_the_cubic_bezier_the_mock_names
+    nav_ease_interpolates_as_the_curve_the_document_declares
+    nav_ease_is_not_indistinguishable_from_a_different_curve
+    toggle_duration_is_the_transition_the_mock_declares_on_the_track_and_the_thumb
+    caret_period_is_the_animation_the_mock_declares_on_the_streaming_caret
+    caret_period_is_not_the_working_dots_period
+    the_carets_dim_alpha_is_the_pulse_keyframes_only_declared_stop
+    the_carets_dim_alpha_does_not_match_an_opacity_the_document_does_not_declare
+    caretAlphaAt_is_a_two_state_step_not_a_fade
+    caretAlphaAt_takes_exactly_as_many_states_as_the_mocks_steps_declares
+    a_zero_duration_animator_still_delivers_one_update_at_a_full_fraction
+    streamingCaretBlink_still_dims_the_caret_when_motion_is_not_reduced
+    pushBannerEnter_hides_by_the_banners_own_height_plus_the_top_inset
+    pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions
+    pushBannerExit_is_pushBannerEnter_reversed
+
+    "not on the unit-test classpath" IS the defect stated mechanically: sixteen assertions that
+    claim to check the design cannot even reach it. Nothing in the repository could.
+
+WHAT THE DOCUMENT ACTUALLY SAYS, extracted by MockCss's parser from the real file (the values the
+constants are now asserted against -- none of them retyped into the test):
+
+    .banner          transition   = 'transform 0.35s cubic-bezier(0.32,0.72,0,1)'  -> 350ms
+    .sheet           transition   = 'transform 0.35s cubic-bezier(0.32,0.72,0,1)'  -> 350ms
+    .toggle          transition   = 'background 0.15s'                             -> 150ms
+    .toggle::after   transition   = 'left 0.15s'                                   -> 150ms
+    .stream-caret    animation    = 'pulse 0.9s steps(2) infinite'                 -> 900ms, 2 steps
+    .g-work          animation    = 'pulse 1.6s ease-in-out infinite'              -> 1600ms
+    @keyframes pulse stops        = {'50%': {'opacity': '0.35'}}                   -> 0.35
+    .banner          top          = '60px'
+    .banner          transform    = 'translateY(-130px)'
+
+    The caret's dim alpha is DERIVED, not retyped: `@keyframes pulse` declares only the 50% stop,
+    and the test asserts that -- the lit state is the element's own opacity, not a keyframe. The
+    join is followed rather than assumed: `.stream-caret`'s animation NAMES `pulse`, and that name
+    is what the keyframe lookup uses.
+
+NEGATIVE CONTROLS, one per constant, each feeding a perturbed value to the SAME function the real
+assertion calls (MockCss.millis, Motion.caretAlphaAt, PathInterpolatorCompat.create):
+  - nav_duration_does_not_match_a_transition_the_mock_does_not_declare (0.5s -> 500 != 350)
+  - toggle_duration_does_not_match_a_transition_the_mock_does_not_declare (0.25s -> 250 != 150)
+  - caret_period_is_not_the_working_dots_period -- the perturbation the DOCUMENT supplies: `.g-work`
+    runs the same @keyframes at 1.6s, and Motion must not have taken that rule's period
+  - the_carets_dim_alpha_does_not_match_an_opacity_the_document_does_not_declare (0.35 + 0.1)
+  - nav_ease_is_not_indistinguishable_from_a_different_curve -- a curve built through the same
+    PathInterpolatorCompat.create with one control point perturbed must sample differently, or
+    comparing sampled curves would pass over any curve at all
+
+
+------------------------------------------------------------------------------
+DEFECT 4 -- the banner used the magic number its own spec rejects
+------------------------------------------------------------------------------
+
+docs/design/substrate-components.md row 2: `translateY(-(own height + banner_top)) -> 0 ... Mock's
+-130 px is a magic number; derive from measured height.` Motion.kt hardcoded
+`BANNER_HIDDEN_DP = -130f` and used it directly, so the banner hid by the same distance whatever its
+height.
+
+RED -- captured on the run where the staged artifact first reached the classpath, so this assertion
+could finally reach a value instead of dying on a missing resource:
+
+    $ ./gradlew --no-daemon :app:testDebugUnitTest --tests 'dev.swarm.phone.ui.kit.MotionTest'
+    tests=36 failures=2 errors=0
+
+    pushBannerEnter_hides_by_the_banners_own_height_plus_the_top_inset
+    java.lang.AssertionError: expected:<-200.0> but was:<-130.0>
+
+    A banner twice the height the mock drew (2 x 70 = 140dp) resting below the same `banner_top`
+    (60dp) must hide at -200dp. It hid at -130dp -- the constant, unmoved by the banner it is
+    supposed to describe. (Robolectric's default density is 1.0, so these dp figures are the px
+    values the assertion compared.)
+
+    The other failure in that run is Defect 1, still unfixed at that point. The remaining 34 tests
+    passed, which is the evidence for Defect 3's fix: with the artifact staged, all five constants
+    match what the document declares -- 350ms, cubic-bezier(0.32,0.72,0,1), 900ms, 150ms and the
+    0.35 keyframe alpha -- and the curve sampled against one built from the parsed control points
+    agrees to 1e-4 across the whole fraction range.
+
+NEGATIVE CONTROL, new: the_banners_hidden_offset_moves_with_both_of_its_inputs feeds a perturbed
+height AND a perturbed inset to Motion.pushBannerHiddenTranslation -- the same function
+pushBannerEnter calls -- and requires the result to follow each. The mock-dimensions test
+(pushBannerEnter_reproduces_the_mocks_own_offset_at_the_mocks_own_dimensions) is satisfied by the
+-130 constant BY CONSTRUCTION, so it cannot be the test that catches this; and a one-sided control
+would miss an implementation that tracked the height while ignoring the inset.
+
+
+------------------------------------------------------------------------------
+GREEN
+------------------------------------------------------------------------------
+
+    $ ./gradlew --no-daemon :app:testDebugUnitTest --tests 'dev.swarm.phone.ui.kit.MotionTest'
+    MotionTest: tests=37 failures=0 errors=0
+
+    $ ./gradlew --no-daemon test
+    exit=0; debug unit tests: 306, failures 0, errors 0   (the whole module, not only MotionTest)
+
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	4.242s
+    $ go build ./... && go vet ./android/...
+    (both clean)
+
+37, not 36: the banner's derivation added the two-input negative control above.
+
+NOTE ON THE RUN ORDER. Defects 1 and 2 failed against the tree as it stood. Defect 3's RED is the
+staging failure -- sixteen assertions that could not reach the design at all -- and its GREEN is
+those same assertions passing once app/build.gradle.kts staged the artifact; the constants
+themselves turned out to match the document, which is the outcome to record, not a reason to
+weaken the test. Defect 4's RED had to wait for that staging, because its expected value is
+computed from the document's own `top: 60px` and `translateY(-130px)`.

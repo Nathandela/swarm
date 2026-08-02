@@ -1,0 +1,142 @@
+<title>swarm — Privacy Policy</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 40em;
+    margin: 0 auto;
+    padding: 1.5em;
+    line-height: 1.5;
+    color: #111;
+    background: #fff;
+  }
+  h1 { font-size: 1.5em; margin-bottom: 0.2em; }
+  h2 { font-size: 1.15em; margin-top: 1.6em; }
+  p, li { font-size: 1em; }
+  .updated { color: #555; margin-top: 0; }
+  a { color: #06c; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #eee; background: #111; }
+    .updated { color: #aaa; }
+    a { color: #6cf; }
+  }
+</style>
+
+<h1>swarm — Privacy Policy</h1>
+<p class="updated">Last updated: 2026-08-02</p>
+
+<p>
+swarm ("the app") is an Android client that lets you monitor and control coding-agent
+sessions running on a computer you own.
+</p>
+
+<h2>The short version</h2>
+<p>
+The app collects no personal information about you. It has no accounts, no analytics, no
+advertising and no crash reporting. Three kinds of data leave your phone: a push notification
+token, when push is available; your session traffic, which is end-to-end encrypted so that only
+your own computer can read it; and the routing information the relay needs in order to deliver
+that traffic — which device is talking to which computer, and when. Each is described below.
+</p>
+
+<h2>What is collected</h2>
+<p>
+<strong>Push notification token.</strong> This app can use Google Firebase Cloud Messaging to
+wake your phone in the background. When push is available, the app requests a token for this
+installation and sends it to the relay server so your computer can wake your phone; the token
+identifies this app installation, not you. If push is not available on a given build or at a
+given time, the app works normally without a token — it simply will not receive background
+wake notifications. The token is deleted when you revoke the device, and when you turn
+notifications off in the app's own settings. Turning notifications off in Android's system
+settings stops them being displayed but does not by itself delete the token — use the app's
+setting, or revoke the device, if you want it removed.
+</p>
+<p>
+<strong>Session content, end-to-end encrypted.</strong> Terminal output and the input you send
+travel between your phone and your computer through a relay server. This traffic is end-to-end
+encrypted. The relay carries encrypted bytes and the routing information needed to deliver
+them. It cannot read the content, and the app is designed on the assumption that the relay is
+hostile.
+</p>
+
+<h2>What is not collected</h2>
+<p>
+No name, email address, phone number or postal address. No location. No contacts, calendar,
+photos, audio or files. No browsing history. No advertising identifier. No analytics or usage
+telemetry of any kind. No crash reports.
+</p>
+
+<h2>What stays on your device</h2>
+<p>
+Cryptographic keys, pairing records and session state never leave your phone. They are
+encrypted at rest using a key generated inside your device's hardware-backed Android Keystore,
+which cannot be extracted from the device — so a copy of the app's data, however obtained,
+cannot be opened elsewhere. Cloud backup and device-to-device transfer are both disabled for
+this app, so this data is not copied to Google's servers or to a new handset during setup.
+</p>
+
+<h2>Permissions</h2>
+<ul>
+  <li><strong>Camera</strong> — to scan the pairing QR code. There is a manual-entry
+  alternative; you can decline this permission and still use the app. No image is stored or
+  transmitted.</li>
+  <li><strong>Notifications</strong> — to alert you when a session needs your attention.</li>
+  <li><strong>Internet</strong> — to reach the relay.</li>
+  <li><strong>Run at startup</strong> — declared so the app can reconnect to your computer on
+  its own after a reboot. This is not implemented yet: the app currently does nothing when
+  your phone restarts, and you open it yourself.</li>
+</ul>
+
+<h2>Third parties</h2>
+<p>
+<strong>Google Firebase Cloud Messaging</strong> delivers notifications and receives the token
+described above, when push is available. Google's handling is governed by its own privacy
+policy at
+<a href="https://firebase.google.com/support/privacy">https://firebase.google.com/support/privacy</a>.
+</p>
+<p>
+swarm is designed to be self-hosted: the app has no relay address built in, and whoever sets up
+a swarm deployment runs their own relay and provisions its address themselves. For this closed
+test, that operator is the developer: the relay you connect to is deployed and run by the
+developer, on infrastructure the developer controls. The relay stores encrypted message payloads
+until your phone confirms receipt, or for up to seven days if never delivered, along with the
+routing metadata needed to deliver them.
+</p>
+<p>
+No data is sold, and none is shared with anyone else.
+</p>
+
+<h2>Deleting your data</h2>
+<p>
+Revoke the device — from the app, or from the swarm interface on your computer — to end the
+pairing. This deletes the pairing itself and any messages the revoking side had queued that the
+other side had not yet collected. Your push token is deleted once no pairing remains that could
+still need to wake this device; if another computer is still paired with this phone, the token
+stays so that pairing keeps working.
+</p>
+<p>
+One thing is kept on purpose and is not deleted: a small record that this pairing was revoked.
+Without it, the revocation could be undone by replaying data the other side already holds, so the
+record is what makes revoking permanent. It identifies the ended pairing and nothing else — it
+contains none of your content.
+</p>
+<p>
+Uninstalling the app removes everything held locally. There is no server-side copy of your
+content to request.
+</p>
+
+<h2>Children</h2>
+<p>
+swarm is a developer tool and is not directed at anyone under 18.
+</p>
+
+<h2>Changes</h2>
+<p>
+Material changes will be posted here with an updated date.
+</p>
+
+<h2>Contact</h2>
+<p>
+nathan.delacretaz@gmail.com
+</p>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The round variant, which android:roundIcon points at.
+
+  It is the SAME two layers, and that is correct rather than lazy: an adaptive icon is already
+  masked to whatever shape the launcher wants, so the round form differs only in which mask is
+  applied and not in what is drawn. The mark is centred inside the 66dp safe circle
+  (ic_launcher_foreground documents the arithmetic), so the circular mask clips none of it.
+
+  It exists as its own file because android:roundIcon must resolve to something; pointing it at
+  ic_launcher would work and would read as an oversight the next time someone changes one of
+  the two.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/swarm_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

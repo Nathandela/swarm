@@ -1,9 +1,12 @@
 package protocol
 
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,18 +35,39 @@ const OptionWorktree = "worktree"
 // adapter's resume argv from the source conversation id.
 const OptionResumeFrom = "resume_from"
 
+// remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
+// remote tier (R-POL.4): each guarded option key maps to its single forbidden value, so
+// the safe default of the same key ("dangerously-skip-permissions"=="false",
+// "sandbox"=="workspace-write") is still allowed. Config-free by design (slice 1b adds
+// config).
+var remoteForbiddenOptions = map[string]string{
+	"dangerously-skip-permissions": "true",               // claude adapter full-access (claude.go:193)
+	"sandbox":                      "danger-full-access", // codex adapter full-access (codex.go:89)
+}
+
 // daemonLaunchSpec builds the DaemonAPI launch spec from a validated request,
 // applying the server-side env allowlist (S-6). Argv composition is the adapter's
-// job (Epic 9), so it is left empty here.
-func daemonLaunchSpec(req *LaunchReq) daemon.LaunchSpec {
+// job (Epic 9), so it is left empty here. On the remote tier the client env is DROPPED
+// entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
+// so filtering is not enough — it must not survive at all.
+func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
+	clientEnv := persist.FilterEnv(req.Env)
+	if remote {
+		clientEnv = nil // R-POL.5: remote launch carries no phone-supplied env
+	}
 	return daemon.LaunchSpec{
-		AgentType:     req.Agent,
-		Name:          sanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
-		Cwd:           req.Cwd,
-		ClientEnv:     persist.FilterEnv(req.Env),
-		Cols:          req.Cols,
-		Rows:          req.Rows,
-		Options:       launchOptions(req),
+		AgentType: req.Agent,
+		Name:      sanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
+		Cwd:       req.Cwd,
+		ClientEnv: clientEnv,
+		Cols:      req.Cols,
+		Rows:      req.Rows,
+		Options:   launchOptions(req),
+		// OperationID carries the signed launch operation_id to the daemon so its launch
+		// idempotency engages — a replayed signed remote launch reuses the reserved session
+		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so
+		// they take no idempotency reservation, unchanged.
+		OperationID:   operationID,
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 	}
 }
@@ -96,10 +120,28 @@ const (
 	// produces — so a wedged subscriber is still disconnected within a bound.
 	eventQueueCap = 256
 
+	// journalSndBuf bounds the kernel send buffer (SO_SNDBUF) of a journal-subscribe
+	// connection. Journal events are small, so with a default (large, OS-autotuned)
+	// send buffer a subscriber that stops reading can have hundreds of KB of events
+	// buffered in the kernel before its writer ever blocks — pinning kernel memory and
+	// deferring eviction. A small bound caps per-subscriber kernel memory and makes a
+	// wedged subscriber's writer block after a bounded volume, so its queue overflows
+	// and the fan-out evicts it (S9/P-3). See handleJournalSubscribe.
+	journalSndBuf = 4 << 10
+
 	// snapshotChunkSize is the largest snapshot slice carried in one TSnapshot
 	// frame. A grid snapshot can exceed wire.MaxFrame (maxDim=1000 → far over
 	// 1 MiB), so the Server chunks it across frames the client reassembles (F2).
 	snapshotChunkSize = wire.MaxFrame - 1
+
+	// maxPeekCols/maxPeekRows bound a remote terminal PEEK snapshot to the phone
+	// viewport so its single OpTerminalSnapshot control frame can never exceed
+	// wire.MaxFrame (A7 J). A session grid can be up to maxDim (1000) square, whose
+	// sanitized text would JSON-encode well past 1 MiB and be silently dropped by
+	// WriteFrame. v1 CLIPS the already-sanitized render to this bound (clipPeek);
+	// chunking a peek across frames like the lease snapshot is a future enhancement.
+	maxPeekCols = 300
+	maxPeekRows = 200
 )
 
 // pumpWriteTimeout bounds every controller-facing write (lease, snapshot chunk,
@@ -116,9 +158,41 @@ func pumpWriteTimeout() time.Duration {
 	return 5 * time.Second
 }
 
+// serverNowNS is the server-clock seam (mirroring pumpWriteTimeoutNS): when nonzero
+// it fixes s.now() to that wall-clock instant (unix nanoseconds), so a test can
+// freeze/advance the clock to drive control-session lazy expiry deterministically.
+// Zero (the default) means the real time.Now().
+var serverNowNS atomic.Int64
+
+func (s *Server) now() time.Time {
+	if ns := serverNowNS.Load(); ns > 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Now()
+}
+
+// maxControlSessionTTL is the server cap on a control-session lifetime (slice A5-b / A7 R7):
+// the lifetime is the EARLIEST of the device-signed ExpiresAt, now+maxControlSessionTTL, and
+// — when the caller sets one — now+TTLSeconds. The R5 lower-clamp keeps an overflowing
+// TTLSeconds from wrapping to a past (immediately-expired) instant.
+const maxControlSessionTTL = 30 * time.Minute
+
+// maxCommandValidity caps a device-signed command's ExpiresAt server-side (F5): a command
+// signed with a far-future expiry would otherwise stay cryptographically valid indefinitely,
+// widening the replay window without bound and outrunning the idempotency GC TTL.
+// requireRemoteAuthz rejects any command whose ExpiresAt is beyond now+maxCommandValidity, so
+// the replay-validity window is bounded to an hour (the parallel idempotency compaction TTL is
+// kept comfortably larger than this).
+const maxCommandValidity = 1 * time.Hour
+
 // serverCaps is the capability set the daemon supports; the handshake returns the
-// intersection with the client's offer.
-var serverCaps = []string{"attach", "subscribe"}
+// intersection with the client's offer. The remote-tier caps are advertised
+// unconditionally; a journal op still requires both the negotiated `journal` cap
+// and a JournalBackend, and a remote mutating op is gated by the remote tier.
+var serverCaps = []string{
+	CapAttach, CapSubscribe,
+	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
+}
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
 // a UNIX socket, wraps a DaemonAPI, holds the per-session controller lease (S2),
@@ -135,6 +209,19 @@ type Server struct {
 	endpointID string
 	epSeq      atomic.Uint64 // per-connection endpoint-id source (when endpointID == "")
 
+	// remoteTier marks a Server bound on the dedicated remote socket (ServeRemote):
+	// every connection is unconditionally remote-origin, so every remote mutating op
+	// must carry an operation_id (amendment D.0-A1/A4).
+	remoteTier bool
+
+	// severGen is a monotonic counter bumped on every severControl (re-audit finding A).
+	// take_control captures it BEFORE authorizing and re-checks it AFTER publishing
+	// cc.control under ctlMu; if a concurrent sever advanced it, the just-established lease
+	// escaped the sever's snapshot (a silent-resume hole `on` would reopen with no fresh
+	// take_control), so take_control fails closed. Atomic because the bump (before s.mu in
+	// severControl) and the re-check (under ctlMu) cross lock domains.
+	severGen atomic.Uint64
+
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
 	leases map[string]*sessionLease // keyed by local session id
@@ -142,6 +229,11 @@ type Server struct {
 
 	subMu sync.Mutex
 	subs  map[*clientConn]struct{}
+
+	jsubMu sync.Mutex
+	jsubs  map[*clientConn]struct{} // journal subscribers (fanned out separately)
+
+	journalCancel func() // stops the JournalBackend subscription on Close (if any)
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -208,10 +300,19 @@ func newServer(d DaemonAPI) *Server {
 		conns:  make(map[*clientConn]struct{}),
 		leases: make(map[string]*sessionLease),
 		subs:   make(map[*clientConn]struct{}),
+		jsubs:  make(map[*clientConn]struct{}),
 		stop:   make(chan struct{}),
 	}
 	s.wg.Add(1)
 	go s.fanoutLoop()
+	// When the backend exposes a journal, drain its single source and fan journal
+	// events out to journal subscribers (reusing the bounded-queue evict discipline).
+	if jb, ok := d.(JournalBackend); ok {
+		source, cancel := jb.JournalSubscribe()
+		s.journalCancel = cancel
+		s.wg.Add(1)
+		go s.journalFanoutLoop(source)
+	}
 	return s
 }
 
@@ -247,6 +348,9 @@ func (s *Server) Close() error {
 	}
 	for _, cc := range conns {
 		cc.close()
+	}
+	if s.journalCancel != nil {
+		s.journalCancel() // release the JournalBackend subscription
 	}
 	s.wg.Wait()
 	// If the DaemonAPI runs a background event source (FromDaemon's roster
@@ -350,6 +454,63 @@ func (s *Server) distribute(m persist.Meta) {
 	}
 }
 
+// journalFanoutLoop drains the single JournalBackend source and distributes each
+// record to every journal subscriber via its bounded queue; a wedged subscriber is
+// evicted, never allowed to block the loop (S9, mirrors fanoutLoop).
+func (s *Server) journalFanoutLoop(source <-chan JournalRecord) {
+	defer s.wg.Done()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case rec, ok := <-source:
+			if !ok {
+				return
+			}
+			s.distributeJournal(rec)
+		}
+	}
+}
+
+func (s *Server) distributeJournal(rec JournalRecord) {
+	// C2a: stop streaming journal events while remote control is disabled — a phone that
+	// subscribed before `off` must stop receiving session lifecycle events on the next event
+	// (the subscribe-time gate blocks NEW subscriptions; this blanks the live stream). Cheap
+	// (one switch read per record, not per subscriber). REMOTE-TIER ONLY (finding B): the owner
+	// Server shares the same KillSwitch-implementing coreAPI, so gating unconditionally would
+	// wrongly blank the OWNER-tier journal too; the kill switch gates the remote tier alone.
+	if s.remoteTier && s.remoteControlDisabled() {
+		return
+	}
+	s.jsubMu.Lock()
+	var dead []*clientConn
+	for sc := range s.jsubs {
+		// Encode HERE (in the fan-out), not in the writer, so one encoding is shared
+		// across subscribers and the fan-out never blocks on a slow writer.
+		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+		if err != nil {
+			continue
+		}
+		select {
+		case sc.jEventQ <- body:
+		default:
+			// Full queue: the subscriber is not draining its socket (its writer is
+			// blocked on a full kernel buffer while eventQueueCap events backed up).
+			// Evict it here, within the bound (S9/P-3), so a wedged subscriber never
+			// grows the queue unboundedly nor blocks the fan-out. A draining subscriber
+			// keeps its queue below the cap and is never evicted (mirrors distribute).
+			dead = append(dead, sc)
+		}
+	}
+	for _, sc := range dead {
+		delete(s.jsubs, sc)
+	}
+	s.jsubMu.Unlock()
+	for _, sc := range dead {
+		sc.close()
+	}
+}
+
 func (s *Server) removeConn(cc *clientConn) {
 	s.mu.Lock()
 	delete(s.conns, cc)
@@ -357,6 +518,9 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Lock()
 	delete(s.subs, cc)
 	s.subMu.Unlock()
+	s.jsubMu.Lock()
+	delete(s.jsubs, cc)
+	s.jsubMu.Unlock()
 }
 
 // IsControlled reports whether local currently has a controller lease — attached
@@ -498,6 +662,16 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 	defer s.wg.Done()
 	defer close(done)
 
+	// A REMOTE-tier controller (the phone, via take_control) gets OpLease + input acks
+	// ONLY: its terminal view is the sealed daemon-rendered snapshot stream (Slices
+	// C/D/E/F2), so raw output is suppressed — SnapshotLen 0, no TSnapshot chunks, no
+	// live TDataOut. Frames are STILL drained below so end-of-session and lease
+	// lifecycle are unchanged. The LOCAL (owner) tier path is byte-identical (A7/F3).
+	suppress := s.remoteTier
+	snapLen := len(snap)
+	if suppress {
+		snapLen = 0
+	}
 	// Lease grant carrying the snapshot's total length (for chunk reassembly),
 	// then the snapshot chunk frames, BEFORE any live frame (S10/F2).
 	body, err := EncodeControl(Control{
@@ -505,7 +679,7 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 		EndpointID:  cc.endpointID,
 		SessionID:   NamespacedID(cc.endpointID, local),
 		Generation:  gen,
-		SnapshotLen: len(snap),
+		SnapshotLen: snapLen,
 	})
 	if err != nil {
 		s.evictPump(cc, local)
@@ -521,19 +695,21 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 		s.evictPump(cc, local)
 		return
 	}
-	for off := 0; off < len(snap); off += snapshotChunkSize {
-		select {
-		case <-stop:
-			return // supersede/detach during the snapshot send: stop promptly, don't evict
-		default:
-		}
-		end := off + snapshotChunkSize
-		if end > len(snap) {
-			end = len(snap)
-		}
-		if werr := cc.writeFrameBy(wire.TSnapshot, snap[off:end], deadline); werr != nil {
-			s.evictPump(cc, local)
-			return
+	if !suppress {
+		for off := 0; off < len(snap); off += snapshotChunkSize {
+			select {
+			case <-stop:
+				return // supersede/detach during the snapshot send: stop promptly, don't evict
+			default:
+			}
+			end := off + snapshotChunkSize
+			if end > len(snap) {
+				end = len(snap)
+			}
+			if werr := cc.writeFrameBy(wire.TSnapshot, snap[off:end], deadline); werr != nil {
+				s.evictPump(cc, local)
+				return
+			}
 		}
 	}
 
@@ -546,6 +722,9 @@ func (s *Server) pump(cc *clientConn, local string, stream SessionStream, gen ui
 			if !ok {
 				s.releaseFromPump(cc, local, true)
 				return
+			}
+			if suppress {
+				continue // remote tier: drain the frame (end detection intact) but send no raw output
 			}
 			if werr := cc.writeFrameDeadline(wire.TDataOut, data); werr != nil {
 				s.evictPump(cc, local) // wedged/gone controller: evict within a bound (F3)
@@ -718,6 +897,18 @@ type clientConn struct {
 	caps       []string
 	helloed    bool
 
+	// opID is the operation_id of the control CURRENTLY being handled, echoed onto the
+	// reply by replyOK/replyError/replyErrorCode (PB-SYNC-7 reply correlation). Without
+	// it a phone with two ops in flight cannot tell which reply -- or which REFUSAL --
+	// answers which op, so PB-SYNC-2's repair, PB-STATE-1's outcome persistence and
+	// PB-INPUT-4's retry all lose their attribution at the source.
+	//
+	// Owned solely by the serve goroutine: serve reads controls sequentially and
+	// handleControl runs to completion before the next is read, so it needs no lock (the
+	// same discipline as helloed/caps). Background writers (eventWriter, journalWriter,
+	// the peek and pairing goroutines) use writeControl directly and never these helpers.
+	opID string
+
 	writeMu sync.Mutex
 
 	// subscription. eventQ carries pre-encoded TControl bodies (R3.3.1): the
@@ -726,13 +917,58 @@ type clientConn struct {
 	subOnce sync.Once
 	eventQ  chan []byte
 
+	// journal subscription (separate bounded queue + writer, same evict discipline).
+	// The queue carries PRE-ENCODED frame bodies: encoding happens in the fan-out
+	// goroutine, not the writer, so the fan-out and writer run at balanced speeds and
+	// a draining subscriber's writer keeps its queue below the cap (only a wedged one
+	// overflows).
+	jSubOnce sync.Once
+	jEventQ  chan []byte
+
 	// controller state (this conn as the controller of attSession)
 	attMu      sync.Mutex
 	attSession string
 	attGen     uint64
 
+	// pairing state: at most one owner-tier pairing in flight per connection
+	// (handlePairStart). pair is guarded by pairMu; handlePairConfirm routes the
+	// SAS-gate decision through it.
+	pairMu sync.Mutex
+	pair   *pairSession
+
+	// remote-control lease state (slice A5-a): the session this connection took
+	// control of via take_control and the lease generation attach assigned it.
+	// Guarded by ctlMu, mirroring pairMu/pair. A5-b adds input forwarding under this
+	// lease and A5-c binds a single-use gate token; both extend controlSession then.
+	ctlMu   sync.Mutex
+	control *controlSession
+
+	// remote terminal peek (A7 F2): peekCancel cancels this connection's single in-flight
+	// terminal_subscribe render goroutine. A second terminal_subscribe cancels the first
+	// (mirrors handleAttach's one-lease-per-conn), so one connection never runs two peeks.
+	// peekGen distinguishes the CURRENT peek from a superseded one: when a render goroutine
+	// returns it only signals the gateway / clears the cancel if it is still the current peek
+	// (peekGen unchanged), so a newer peek that took over the conn is never disturbed.
+	peekMu     sync.Mutex
+	peekCancel context.CancelFunc
+	peekGen    uint64
+
 	closeOnce sync.Once
 	done      chan struct{}
+}
+
+// controlSession records an established take_control lease: the target local session
+// id, the lease generation s.attach assigned (published via setAttach), the server-clock
+// instant at which the session lazily expires (slice A5-b), and the AUTHENTICATED device
+// id that established it (C1). Its fields are set once at establishment and never mutated,
+// so the input gate can capture the struct under ctlMu and read them after releasing the
+// lock. Slice A5-c adds the gate token; C1 adds deviceID so controlGateOpen can drop a
+// keystroke once the establishing device is revoked (per-keystroke sever).
+type controlSession struct {
+	target   string
+	leaseGen uint64
+	expiry   time.Time
+	deviceID string // the authenticated c.DeviceID that took control (C1 revoke sever)
 }
 
 // clientSrv is the subset of *Server a clientConn needs; it is *Server. (Named to
@@ -751,6 +987,7 @@ func (cc *clientConn) serve() {
 		case wire.TControl:
 			ctrl, derr := DecodeControl(payload)
 			if derr != nil {
+				cc.opID = "" // an undecodable request names no op; never echo the PREVIOUS one
 				cc.replyError("malformed control payload")
 				continue
 			}
@@ -764,6 +1001,9 @@ func (cc *clientConn) serve() {
 }
 
 func (cc *clientConn) handleControl(c Control) {
+	// Every reply to THIS control -- success or refusal, from any handler -- echoes the
+	// request's operation_id (see clientConn.opID).
+	cc.opID = c.OperationID
 	if c.Op == OpHello {
 		cc.handleHello(c)
 		return
@@ -796,6 +1036,32 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleResize(c)
 	case OpSubscribe:
 		cc.handleSubscribe()
+	case OpJournalRead:
+		cc.handleJournalRead(c)
+	case OpJournalSubscribe:
+		cc.handleJournalSubscribe()
+	case OpTerminalSubscribe:
+		cc.handleTerminalSubscribe(c)
+	case OpDeviceList:
+		cc.handleDeviceList()
+	case OpPolicyQuery:
+		cc.handlePolicyQuery()
+	case OpDeviceRevoke:
+		cc.handleDeviceRevoke(c)
+	case OpDeviceRegrant:
+		cc.handleDeviceRegrant(c)
+	case OpRemoteSetControl:
+		cc.handleRemoteSetControl(c)
+	case OpTakeControl:
+		cc.handleTakeControl(c)
+	case OpTakeControlEnd:
+		cc.handleTakeControlEnd(c)
+	case OpPushPrefs:
+		cc.handlePushPrefs(c)
+	case OpPairStart:
+		cc.handlePairStart(c)
+	case OpPairConfirm:
+		cc.handlePairConfirm(c)
 	default:
 		cc.replyError("unknown op " + strconv.Quote(c.Op))
 	}
@@ -840,6 +1106,52 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: missing request")
 		return
 	}
+	// R-POL.9: launch has no pre-existing session, so it is signed over the reserved
+	// LaunchSessionSentinel, and its spec is bound via LaunchContentHash so a gateway
+	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
+	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
+		return
+	}
+	// R-POL.4/.2: on the remote tier refuse a dangerous option (value-aware, hard-coded)
+	// AFTER authz but BEFORE argv/cwd validation, so the policy refusal precedes the cwd
+	// stat and produces no daemon side effect.
+	if cc.srv.remoteTier {
+		for k, v := range req.Options {
+			if forbidden, ok := remoteForbiddenOptions[k]; ok && forbidden == v {
+				cc.replyErrorCode("launch: option "+strconv.Quote(k)+"="+strconv.Quote(v)+" not permitted on the remote tier", CodePolicy)
+				return
+			}
+		}
+	}
+	// R-POL.3/.2: on the remote tier, confine the launch to the backend's machine-configured
+	// cwd roots. A backend that exposes NO LaunchPolicy at all is refused (F4, fail-closed on
+	// backend misassembly) rather than left unconfined — mirroring requireRemoteAuthz's
+	// fail-closed-absent handling of a missing DeviceAuthenticator. Resolve the cwd
+	// (symlink-hardened) HERE so the RESOLVED real path is what the policy checks — a symlink
+	// textually under a root but resolving outside it is refused — and do it AFTER
+	// authz/denylist but BEFORE the cwd stat / any side effect. An unresolvable cwd (e.g.
+	// nonexistent) is refused CodePolicy.
+	// resolvedCwd is the symlink-resolved launch cwd on the remote tier (empty on the owner
+	// tier). ADR-007 D8 (finding D): the RESOLVED real path the policy checked must be the path
+	// the shim uses, so a symlink validated here cannot be re-pointed before the launch.
+	var resolvedCwd string
+	if cc.srv.remoteTier {
+		lp, ok := cc.launchPolicy()
+		if !ok {
+			cc.replyErrorCode("launch: no remote launch policy configured", CodePolicy)
+			return
+		}
+		resolved, err := filepath.EvalSymlinks(req.Cwd)
+		if err != nil {
+			cc.replyErrorCode("launch: cwd is not a resolvable directory on the remote tier", CodePolicy)
+			return
+		}
+		if err := lp.RemoteLaunchAllowed(resolved); err != nil {
+			cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
+			return
+		}
+		resolvedCwd = resolved
+	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
 		return
@@ -858,18 +1170,59 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyError("launch: cols/rows out of range")
 		return
 	}
-	spec := daemonLaunchSpec(req)
+	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
+	if resolvedCwd != "" {
+		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated
+	}
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		cc.replyError("launch: " + err.Error())
 		return
 	}
-	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, Session: cc.stampView(m, status.Derive(m.Status))})
+	// OperationID for the reason replyOK and replyError carry it (see clientConn.opID): a
+	// reply is claimed BY operation id (PB-SYNC-2). Untagged, a launch that SUCCEEDED is
+	// unattributable -- the gateway seals it verbatim onto the phone's reply bucket and
+	// phonecore.foldContent drops a command reply naming no op rather than mis-key it -- so
+	// the op stays in flight for the life of the phone process while the session runs.
+	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, OperationID: cc.opID,
+		Session: cc.stampView(m, status.Derive(m.Status))})
 }
 
 func (cc *clientConn) handleKill(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionKill, c.SessionID, nil) {
+		return
+	}
+	// Replay-safe when the backend is an IdempotentExecutor (DHI-3): claim the
+	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
+	// re-executing Kill, so a captured remote kill cannot double-fire the side effect.
+	// REMOTE-tier ONLY: owner-tier local calls carry no operation_id and must bypass the
+	// claim (which rejects an empty operation_id); requireOperationID has already ensured
+	// a non-empty operation_id on the remote tier.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok && cc.srv.remoteTier {
+		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionKill, local)
+		if err != nil {
+			cc.replyError("kill: " + err.Error())
+			return
+		}
+		if existed {
+			if priorOK {
+				cc.replyOK(c.SessionID)
+			} else {
+				cc.replyError("kill: prior attempt failed")
+			}
+			return
+		}
+		kerr := cc.srv.d.Kill(local)
+		_ = exec.CommitIdempotentOp(c.OperationID, kerr == nil)
+		if kerr != nil {
+			cc.replyError("kill: " + kerr.Error())
+			return
+		}
+		cc.replyOK(c.SessionID)
 		return
 	}
 	if err := cc.srv.d.Kill(local); err != nil {
@@ -882,6 +1235,40 @@ func (cc *clientConn) handleKill(c Control) {
 func (cc *clientConn) handleDelete(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionDelete, c.SessionID, nil) {
+		return
+	}
+	// Replay-safe when the backend is an IdempotentExecutor (DHI-3): claim the
+	// operation_id AFTER authz. A replay (existed) replies the CACHED outcome WITHOUT
+	// re-executing Delete, so a captured remote delete cannot append a duplicate
+	// tombstone or re-fire OnSessionEnd.
+	// REMOTE-tier ONLY: owner-tier local calls carry no operation_id and must bypass the
+	// claim (which rejects an empty operation_id); requireOperationID has already ensured
+	// a non-empty operation_id on the remote tier.
+	if exec, ok := cc.srv.d.(IdempotentExecutor); ok && cc.srv.remoteTier {
+		existed, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionDelete, local)
+		if err != nil {
+			cc.replyError("delete: " + err.Error())
+			return
+		}
+		if existed {
+			if priorOK {
+				cc.replyOK(c.SessionID)
+			} else {
+				cc.replyError("delete: prior attempt failed")
+			}
+			return
+		}
+		derr := cc.srv.d.Delete(local)
+		_ = exec.CommitIdempotentOp(c.OperationID, derr == nil)
+		if derr != nil {
+			cc.replyError("delete: " + derr.Error())
+			return
+		}
+		cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+		cc.replyOK(c.SessionID)
 		return
 	}
 	if err := cc.srv.d.Delete(local); err != nil {
@@ -910,7 +1297,269 @@ func (cc *clientConn) handleRename(c Control) {
 	cc.replyOK(c.SessionID)
 }
 
+// handleDeviceRevoke serves device_revoke (slice A3.2): removes a paired device from
+// the daemon's device registry. The resource being acted on is the TARGET device
+// (c.TargetDeviceID), NOT the caller's own authenticating device (c.DeviceID) --
+// passing TargetDeviceID as requireRemoteAuthz's resource means the caller's
+// signature binds the target, so a device can revoke another device, not just
+// itself (see remote_devicerevoke_test.go's field-collision guard).
+//
+// KNOWN GAPS (out of scope for A3.2, tracked for later slices): (a) this removes
+// only the daemon-side device.Registry entry -- it does NOT purge the relay-side
+// registration/mailbox (atomic-revoke-closes-live-socket is A6/ME-1); (b)
+// device_revoke maps to ActionControl (deviceauth.go actionClass), so any CapFull
+// device can revoke any other device -- there is no separate admin tier yet.
+func (cc *clientConn) handleDeviceRevoke(c Control) {
+	dr, ok := cc.srv.d.(DeviceRevoker)
+	if !ok {
+		cc.replyError("device_revoke not supported by this daemon")
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionDeviceRevoke, c.TargetDeviceID, nil) {
+		return
+	}
+	removed, err := dr.RevokeDevice(c.TargetDeviceID)
+	// C1 [UNANIMOUS BLOCKER] + round-5 finding 1: PROACTIVELY sever the revoked device's live control
+	// lease + terminal peek on THIS Server whenever the device WAS removed -- even if RevokeDevice
+	// ALSO returned a trailing durability (dir-fsync) error. Registry.Remove returns (true, err) when
+	// the removal committed (rename landed) but the post-rename dir-fsync failed: the device IS
+	// durably revoked, so its live lease/peek must die regardless of the error. (The per-keystroke
+	// controlGateOpen presence check is the cross-Server backstop; this closes the live lease + peek
+	// at once when the revoke reaches the Server holding them.)
+	if removed {
+		cc.srv.severRevokedDeviceControl(c.TargetDeviceID)
+	}
+	// Round-6 finding 3 (codex#3 + sonnet#2, CONSENSUS -- regressed round-3's Finding 4b): SURFACE
+	// the error honestly. The round-5 handler replied OpOK once removed==true, SWALLOWING a
+	// grant.Delete cleanup failure or a committed-registry durability error -- and internal/protocol
+	// has no logger, so the failure became invisible. Reply error whenever RevokeDevice reported one:
+	// the device is already revoked + severed above, so the client's idempotent retry is harmless,
+	// but the operator must learn of a stranded sidecar / unconfirmed durability.
+	if err != nil {
+		cc.replyError("device_revoke: " + err.Error())
+		return
+	}
+	// An OWNER-tier revoke that removed nothing is a REFUSAL, not a success (residuals §3).
+	// `swarm remote revoke <id>` printed "revoked device <id>" and exited 0 for an id the
+	// machine had never paired -- during a device-loss incident, exactly the output that says
+	// the lost handset is cut off, produced by a command that cut nothing off. It was not even
+	// inert: cmd/swarm's runRemoteRevoke purges the machine's outbound journal once the daemon
+	// reports no error, so a mistyped id also dropped the frames queued for the phone that IS
+	// paired. `device_regrant` already fails closed on an unknown id; this is the same refusal
+	// for the same condition, so the two verbs answer a typo the same way.
+	//
+	// OWNER TIER ONLY, and the exclusion is the point rather than caution. The remote tier is
+	// the phone's own panic button arriving over an at-least-once relay: a retry of a revoke
+	// that already succeeded legitimately removes nothing, and answering that with an error
+	// would tell a handset its revocation failed when it did not. `removed` is computed inside
+	// RevokeDevice's transaction, so on the owner tier -- one operator, one command -- it is a
+	// presence answer and not a race.
+	if !removed && !cc.srv.remoteTier {
+		cc.replyError(fmt.Sprintf("device_revoke: no such device %q; nothing to revoke", c.TargetDeviceID))
+		return
+	}
+	cc.replyOK(c.TargetDeviceID)
+}
+
+// handleDeviceRegrant serves the OWNER-TIER device_regrant op (PB-KEY-3's documented
+// machine-side unblock). Gate order mirrors handleRemoteSetControl: owner tier, then the
+// negotiated `pairing` cap, then the backend seam.
+//
+// It is deliberately NOT behind requireRemoteAuthz like device_revoke. That gate demands a
+// device signature over the command tuple, and the party who needs a regrant is a phone
+// that cannot author a sealed command at all -- it holds no epoch content key, which is the
+// whole condition being repaired. Making the remedy require what is broken is the brick
+// PB-STATE-10 forbids, so the remedy is the OWNER's, at the machine.
+func (cc *clientConn) handleDeviceRegrant(c Control) {
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("device_regrant is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	rg, ok := cc.srv.d.(DeviceRegranter)
+	if !ok {
+		cc.replyError("device_regrant not supported by this daemon")
+		return
+	}
+	if c.TargetDeviceID == "" {
+		cc.replyErrorCode("device_regrant requires target_device_id", CodeInvalidField)
+		return
+	}
+	if err := rg.RegrantDevice(c.TargetDeviceID); err != nil {
+		cc.replyError("device_regrant: " + err.Error())
+		return
+	}
+	cc.replyOK(c.TargetDeviceID)
+}
+
+// handlePushPrefs AUTHORIZES a device's push-preference change and does nothing else
+// (PB-PUSH-8). The daemon is the one authorizer -- it holds the device registry and the
+// pinned command-signing keys -- while the durable record and the delivery decision live
+// at the gateway, because PB-PUSH-10 puts durability where delivery is decided and the
+// daemon never talks to the relay (D5). So there is deliberately no preference state here
+// to read, write, or reply with: an OK means "this device is who it says it is and may set
+// this", and the gateway persists on that OK.
+//
+// It carries no side effect, so it needs no OperationClaimer replay dedup the way kill and
+// delete do: a re-delivered push_prefs re-authorizes and the gateway's monotonic Version
+// refuses the stale write.
+func (cc *clientConn) handlePushPrefs(c Control) {
+	if !cc.requireRemoteAuthz(c, ActionPushPrefs, c.SessionID, nil) {
+		return
+	}
+	cc.replyOK(c.SessionID)
+}
+
+// severControl force-releases every control lease whose establishing control session matches the
+// predicate and cancels every active terminal peek. It is the shared severance machinery behind
+// the C1 device-revoke sever (match by establishing DeviceID) and the C2a kill-switch sever (match
+// all). It snapshots the controllers + connections under s.mu, then acts OUTSIDE the lock
+// (releaseLease and cancelPeek take other locks), so no lock is held across the sever. Terminal
+// peeks carry NO device identity (terminal_subscribe is unsigned), so ALL active peeks are
+// cancelled regardless of the lease predicate — coarse but safe (sever is rare; other devices
+// simply reconnect).
+func (s *Server) severControl(match func(*controlSession) bool) {
+	// Bump the sever generation BEFORE snapshotting (re-audit finding A): a take_control that
+	// publishes its lease/cc.control after this snapshot re-checks the generation under ctlMu
+	// and, seeing it advanced, fails closed rather than escaping the sever.
+	s.severGen.Add(1)
+	s.mu.Lock()
+	controllers := make([]*clientConn, 0, len(s.leases))
+	for _, ls := range s.leases {
+		if ls.controller != nil {
+			controllers = append(controllers, ls.controller)
+		}
+	}
+	conns := make([]*clientConn, 0, len(s.conns))
+	for cc := range s.conns {
+		conns = append(conns, cc)
+	}
+	s.mu.Unlock()
+
+	// Release every matching control lease, clearing cc.control so the input gate shuts.
+	for _, cc := range controllers {
+		cc.ctlMu.Lock()
+		matched := cc.control != nil && match(cc.control)
+		var target string
+		var gen uint64
+		if matched {
+			target, gen = cc.control.target, cc.control.leaseGen
+			cc.control = nil // shut the input gate for this connection
+		}
+		cc.ctlMu.Unlock()
+		if matched {
+			// matchGen: release only if still the current generation (never clobber a newer
+			// lease); notify: send OpDetach so the client's Frames() closes.
+			s.releaseLease(cc, target, gen, true, true)
+		}
+	}
+
+	// Cancel every active terminal peek (coarse: peeks carry no device identity).
+	for _, cc := range conns {
+		cc.cancelPeek()
+	}
+}
+
+// severRevokedDeviceControl force-releases exactly the revoked device's live control leases
+// (matched PRECISELY by the establishing DeviceID recorded on the control session) and cancels
+// every active terminal peek on this Server (C1).
+func (s *Server) severRevokedDeviceControl(deviceID string) {
+	s.severControl(func(ctl *controlSession) bool { return ctl.deviceID == deviceID })
+}
+
+// SeverAllRemoteControl force-releases EVERY remote control lease and cancels EVERY active terminal
+// peek on this Server (C2a). It is the PROACTIVE teardown the kill switch invokes when remote
+// control transitions to DISABLED (`swarm remote off`, or the last paired device removed): the
+// per-keystroke controlGateOpen clause-1 drop only PAUSES a live lease, so turning the switch back
+// ON before the signed expiry would silently RESUME it without a fresh take_control — no new device
+// signature, no new single-use gate token. This SEVERS the lease instead — clearing cc.control and
+// closing its upstream stream — so resuming control requires a new take_control. Exported so the assembly's coreAPI
+// kill-switch setter can signal the remote Server across the package boundary (mirroring how the
+// daemon's cross-package hooks are wired as callbacks).
+func (s *Server) SeverAllRemoteControl() {
+	s.severControl(func(*controlSession) bool { return true })
+	// Finding C: on the DISABLE transition also TERMINATE remote journal subscriber
+	// connections. While off, distributeJournal merely DROPS records (no envelope, so no
+	// sequence gap) — a surviving subscription would silently resume mid-stream on `on`,
+	// missing the off-interval events undetectably. Closing the connection forces a fresh
+	// journal_read (full resync) on reconnect. Remote-tier only (mirrors finding B): the owner
+	// tier's journal is never kill-switch-severed.
+	if s.remoteTier {
+		s.severJournalSubscribers()
+	}
+}
+
+// severJournalSubscribers closes every journal subscriber connection (finding C): the disable
+// transition tears them down like the control leases/peeks, so resuming journal delivery
+// requires a fresh journal_read. It snapshots under jsubMu and closes OUTSIDE the lock (cc.close
+// is idempotent, and the connection's cleanup unregisters it from jsubs).
+func (s *Server) severJournalSubscribers() {
+	s.jsubMu.Lock()
+	subs := make([]*clientConn, 0, len(s.jsubs))
+	for sc := range s.jsubs {
+		subs = append(subs, sc)
+	}
+	s.jsubMu.Unlock()
+	for _, sc := range subs {
+		sc.close()
+	}
+}
+
+// remoteControlDisabled reports whether the backend exposes a kill switch that is currently OFF.
+// Journal ops and the journal fan-out consult it so `swarm remote off` blanks the phone's journal
+// stream too (mirroring the terminal peek's kill-switch gate); a backend without a KillSwitch is
+// never disabled (behavior unchanged, e.g. the owner tier's non-remote backends).
+func (s *Server) remoteControlDisabled() bool {
+	ks, ok := s.d.(KillSwitch)
+	return ok && !ks.RemoteControlEnabled()
+}
+
+// handleRemoteSetControl serves the owner-tier remote_set_control op (A4) — the durable
+// manual kill switch behind `swarm remote off`/`on`. Gate order mirrors handlePairStart:
+// OWNER-TIER ONLY, so a remote-tier connection is refused not_authorized BEFORE the
+// backend is ever consulted (a remote device must never re-enable a switch its owner
+// turned off); then the negotiated `pairing` cap is required (like device_list/pair_start);
+// then the backend must implement RemoteControlSetter. It DURABLY flips the master override
+// the choke points read via RemoteControlEnabled — with the switch off, requireRemoteAuthz
+// refuses every remote mutating op, controlGateOpen drops live input, and an established
+// peek is blanked — so `off` severs remote control at the daemon choke point.
+func (cc *clientConn) handleRemoteSetControl(c Control) {
+	// Owner-tier only: fail closed on the remote tier before consulting the backend.
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("remote control toggle is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	setter, ok := cc.srv.d.(RemoteControlSetter)
+	if !ok {
+		cc.replyError("remote control toggle not supported by this daemon")
+		return
+	}
+	if c.RemoteControl == nil {
+		cc.replyErrorCode("remote_set_control requires remote_control", CodeInvalidField)
+		return
+	}
+	if err := setter.SetRemoteControl(*c.RemoteControl); err != nil {
+		cc.replyError("remote_set_control: " + err.Error())
+		return
+	}
+	cc.replyOK("")
+}
+
 func (cc *clientConn) handleAttach(c Control) {
+	// Fail closed on the remote tier: no signed take_control gate exists yet, so
+	// interactive control (lease acquisition) is refused before any session is
+	// resolved or lease established (HIGH-2 / A4-R).
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("interactive control not permitted on the remote tier (take_control not yet implemented)", CodeNotAuthorized)
+		return
+	}
 	local, ok := cc.resolveSession(c)
 	if !ok {
 		return
@@ -926,6 +1575,198 @@ func (cc *clientConn) handleAttach(c Control) {
 	if err := cc.srv.attach(cc, local); err != nil {
 		cc.replyError("attach: " + err.Error())
 	}
+}
+
+// handleTakeControl serves the signed take_control op (slice A5-a) — the ONLY
+// remote-tier path that acquires a controller lease. It mirrors handleKill's
+// authorization (the SAME requireRemoteAuthz choke point every remote mutating op
+// uses: kill switch first, then operation_id + DeviceAuthenticator) and, only once
+// authorized, handleAttach's lease establishment (the SAME s.attach path the owner
+// tier uses). On an authenticator refusal requireRemoteAuthz has already replied, so
+// we return WITHOUT attaching — no lease may open on refusal. On success the pump's
+// OpLease grant is the observed reply (no extra reply here, exactly like handleAttach).
+// SCOPE: establishment + authz. Input forwarding under this lease
+// (OpDataIn/OpResize) is slice A5-b.
+//
+// Slice A5-c binds a one-shot ANTI-SWAP gate token into the device signature and makes
+// the operation_id single-use. The token is a random 16 bytes minted per take_control; it
+// attests nothing about who is holding the phone and never did (ADR-007 B133) — its whole
+// function is that the daemon recomputes SHA256 over the WIRE value, so a relay that
+// substitutes it produces a content_hash the device signature does not cover and
+// verification fails. Both properties require the durable
+// idempotency store, so the whole mechanism engages ONLY when the backend implements
+// OperationClaimer (the production coreAPI always does); a bare stub keeps the A5-a/A5-b
+// establishment path unchanged. When engaged, the order is: present-check (an absent
+// token can never gate control, even though SHA256("") is a valid 32-byte hash) ->
+// requireRemoteAuthz with content_hash = SHA256(GateToken) (so a relay that swaps the
+// wire token breaks the signature, exactly as launch binds its spec) -> single-use claim
+// AFTER authz (so an unauthenticated caller cannot flood the durable log) -> attach.
+func (cc *clientConn) handleTakeControl(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	// The gate-token/single-use mechanism is coupled to the durable store: single-use is
+	// unenforceable without it, so it engages only when the backend is an OperationClaimer.
+	claimer, gated := cc.srv.d.(OperationClaimer)
+	var contentHash []byte
+	if gated {
+		// Present-check: refuse an empty one-shot token before authz. A hash-only check
+		// would wrongly accept it because SHA256("") is a valid 32-byte hash (A5-c).
+		if c.GateToken == "" {
+			cc.replyErrorCode("take_control requires a gate token", CodeInvalidField)
+			return
+		}
+		// Bind the gate token into the signed tuple via content_hash. The daemon
+		// recomputes SHA256(wire GateToken); a swapped token yields a different hash, so
+		// the device signature (which covers it) fails to verify (anti-tamper).
+		h := sha256.Sum256([]byte(c.GateToken))
+		contentHash = h[:]
+	}
+	// Capture the sever generation BEFORE authorizing (re-audit finding A). It is re-checked
+	// after cc.control is published; a sever that ran in between (an `off`/revoke racing this
+	// take_control) will have advanced it, so the lease is failed closed instead of escaping.
+	severAtStart := cc.srv.severGen.Load()
+	if !cc.requireRemoteAuthz(c, ActionTakeControl, c.SessionID, contentHash) {
+		return
+	}
+	// Single-use: claim the operation_id AFTER authz. A duplicate (existed) is a REPLAY —
+	// refuse with NO attach, so a captured take_control cannot open a second lease. Unlike
+	// launch, take_control is never redriven; a consumed operation_id stays consumed.
+	if gated {
+		existed, err := claimer.ClaimOperation(c.OperationID, ActionTakeControl, local)
+		if err != nil || existed {
+			cc.replyErrorCode("take_control operation_id already used", CodeStaleApproval)
+			return
+		}
+	}
+	// A second lease on this connection auto-detaches the first (mirror handleAttach),
+	// so one connection never holds two leases or cross-routes data (F7).
+	cc.attMu.Lock()
+	prev, prevGen := cc.attSession, cc.attGen
+	cc.attMu.Unlock()
+	if prev != "" && prev != local {
+		cc.srv.releaseLease(cc, prev, prevGen, false, true)
+	}
+	if err := cc.srv.attach(cc, local); err != nil {
+		cc.replyError("take_control: " + err.Error())
+		return
+	}
+	// Record the controller session at the generation attach assigned (attach publishes
+	// it via setAttach -> cc.attGen), stamping its lazy-expiry deadline from the caller's
+	// requested TTL clamped to the server bounds (never immediately-expired nor unbounded).
+	cc.attMu.Lock()
+	gen := cc.attGen
+	cc.attMu.Unlock()
+	// Bind the control-session lifetime to the EARLIEST of three bounds so it can never
+	// outlive what the device SIGNED nor the server cap (R7): the server maximum
+	// (now+maxControlSessionTTL); the signed command ExpiresAt (always present on the remote
+	// tier — requireRemoteAuthz refuses a nil expires_at and verifies *c.ExpiresAt against the
+	// signature, so it is device-authenticated, not a relay-forgeable hint); and, when the
+	// caller requested one, now+TTLSeconds (the A5-b hint).
+	now := cc.srv.now()
+	expiry := now.Add(maxControlSessionTTL)
+	if c.TTLSeconds > 0 {
+		ttl := time.Duration(c.TTLSeconds) * time.Second
+		// ttl <= 0 catches an int64 overflow (a huge TTLSeconds wraps the ns multiply to a
+		// NEGATIVE duration): an absurdly large request clamps to the server maximum, never
+		// to a past expiry, so the session is never immediately-expired (R5).
+		if ttl <= 0 || ttl > maxControlSessionTTL {
+			ttl = maxControlSessionTTL
+		}
+		if t := now.Add(ttl); t.Before(expiry) {
+			expiry = t
+		}
+	}
+	if c.ExpiresAt != nil && c.ExpiresAt.Before(expiry) {
+		expiry = *c.ExpiresAt
+	}
+	cc.ctlMu.Lock()
+	// Re-audit finding A: re-check the sever generation while STILL holding ctlMu — the same
+	// lock a sever clears cc.control under. If it advanced since severAtStart, a sever (`off`/
+	// revoke) ran concurrently and may have snapshotted its live leases BEFORE this one was
+	// published (a silent escape that a later `on` would resume with NO fresh take_control). So
+	// FAIL CLOSED: do not publish cc.control, and release the just-established lease below. A
+	// fresh take_control — a new device signature over a new single-use gate token — is then
+	// required to resume control.
+	if cc.srv.severGen.Load() != severAtStart {
+		cc.ctlMu.Unlock()
+		cc.srv.releaseLease(cc, local, gen, true, true)
+		return
+	}
+	// deviceID is the ALREADY-AUTHENTICATED c.DeviceID (requireRemoteAuthz verified the
+	// signature over the tuple that includes it), so controlGateOpen can drop this lease's
+	// keystrokes the moment the device is revoked, and handleDeviceRevoke can proactively
+	// release exactly the revoked device's leases (C1).
+	cc.control = &controlSession{target: local, leaseGen: gen, expiry: expiry, deviceID: c.DeviceID}
+	cc.ctlMu.Unlock()
+}
+
+// handleTakeControlEnd serves take_control_end (slice A5-b): the caller-scoped teardown
+// of its OWN control session. It clears cc.control (shutting the input gate — clause 2
+// fail-closed once cc.control is nil) and releases the caller's lease using the session
+// + generation it carries, mirroring handleDetach. No device signature is required: a
+// caller can only end a session it already holds, and releaseLease's controller==cc +
+// generation match is the gate (a delayed old-generation end cannot release a later
+// controller's lease, F11).
+func (cc *clientConn) handleTakeControlEnd(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	// Shut the input gate ONLY when the end identifies the CURRENT control session (same
+	// target + generation). A STALE end carrying an OLD generation (reordered by the
+	// untrusted relay) targets a superseded lease, so it must leave the live, newer control
+	// session intact: releaseLease already refuses the release on a generation mismatch
+	// (F11), and this makes the input-gate side agree so a replayed end can never shut a
+	// newer session's keystrokes (R3).
+	cc.ctlMu.Lock()
+	if cc.control != nil && cc.control.target == local && cc.control.leaseGen == c.Generation {
+		cc.control = nil
+	}
+	cc.ctlMu.Unlock()
+	cc.srv.releaseLease(cc, local, c.Generation, true, true)
+}
+
+// controlGateOpen is the slice A5-b gate (extended by C1): on the remote tier a keystroke or
+// resize reaches the shim ONLY inside a live, authorized control session. Every clause must
+// hold: (1) the kill switch is still ON (re-checked here so a mid-session `off` halts input),
+// (2) a control session exists (fail-closed default), (3) it has not lazily expired on the
+// server clock, (4) the lease-establishing device is STILL registered (C1 — so a device_revoke
+// severs this live lease per keystroke, even across the owner/remote Server split), and (5) it
+// still targets this connection's current lease (session + generation). Any clause false =>
+// drop. It captures the control-session fields under ctlMu and the lease identity under attMu,
+// releasing each lock before the caller forwards, so ctlMu is never held across the lease locks
+// forwardInput takes.
+func (cc *clientConn) controlGateOpen() bool {
+	// clause 1 — re-check the kill switch on every keystroke.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		return false
+	}
+	// clause 2 — fail-closed default: capture the (immutable) control session, release ctlMu.
+	cc.ctlMu.Lock()
+	ctl := cc.control
+	cc.ctlMu.Unlock()
+	if ctl == nil {
+		return false
+	}
+	// clause 3 — lazy expiry on the server clock.
+	if !cc.srv.now().Before(ctl.expiry) {
+		return false
+	}
+	// clause 4 — the lease-establishing device is STILL registered (C1). Re-checked on every
+	// keystroke so a device_revoke severs this live lease immediately — the daemon-side
+	// guarantee that holds even when the revoke was handled by a DIFFERENT Server sharing the
+	// backend registry but not this lease map (the production owner/remote split). Consulted
+	// only when the backend can answer device presence (optional, like the kill switch).
+	if reg, ok := cc.deviceRegistrar(); ok && !reg.DeviceRegistered(ctl.deviceID) {
+		return false
+	}
+	// clause 5 — still bound to this connection's current lease (session + generation).
+	cc.attMu.Lock()
+	sess, gen := cc.attSession, cc.attGen
+	cc.attMu.Unlock()
+	return ctl.target == sess && ctl.leaseGen == gen
 }
 
 func (cc *clientConn) handleDetach(c Control) {
@@ -945,6 +1786,27 @@ func (cc *clientConn) handleDetach(c Control) {
 }
 
 func (cc *clientConn) handleResize(c Control) {
+	// Remote tier (slice A5-b): a resize reaches the shim ONLY inside a live, authorized
+	// control session (the four-clause gate); any out-of-session resize is dropped. On the
+	// remote tier the resize is forwarded on the SAME server-tracked lease identity the gate
+	// validated (cc.attSession/cc.attGen), mirroring handleDataIn, so the gated identity and
+	// the forwarded identity are identical rather than the (potentially divergent) wire
+	// session/generation (R4). The owner tier keeps full interactive trust and its original
+	// wire-addressed behavior — the gate applies only on the remote tier. Resize is
+	// fire-and-forget, so no reply either way.
+	if cc.srv.remoteTier {
+		if !cc.controlGateOpen() {
+			return
+		}
+		cc.attMu.Lock()
+		local, gen := cc.attSession, cc.attGen
+		cc.attMu.Unlock()
+		if local == "" {
+			return
+		}
+		cc.srv.forwardResize(cc, local, gen, c.Cols, c.Rows)
+		return
+	}
 	ep, local, ok := ParseID(c.SessionID)
 	if !ok || ep != cc.endpointID || !validLocalID(local) {
 		return // resize is fire-and-forget; a bad id is simply dropped
@@ -968,7 +1830,523 @@ func (cc *clientConn) handleSubscribe() {
 	cc.replyOK("")
 }
 
+// handleJournalRead serves journal_read(from_cursor): it requires the `journal`
+// capability negotiated and a JournalBackend, then returns the snapshot+range from
+// the cursor (atomic per R-JRN.4) with the boundary cursor and full-resync flag.
+func (cc *clientConn) handleJournalRead(c Control) {
+	jb, ok := cc.journalBackend()
+	if !ok {
+		return
+	}
+	// C2a: blank the journal when remote control is disabled — a journal_read is a leak of
+	// session lifecycle metadata, so `off` must refuse it (mirrors the terminal peek's gate).
+	// REMOTE-TIER ONLY (finding B): the owner tier shares the KillSwitch-implementing coreAPI
+	// and must never be gated.
+	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return
+	}
+	res, err := jb.JournalReadFrom(c.Cursor)
+	if err != nil {
+		cc.replyError("journal_read: " + err.Error())
+		return
+	}
+	_ = cc.writeControl(Control{
+		Op:         OpJournalRead,
+		EndpointID: cc.endpointID,
+		Cursor:     res.Cursor,
+		Journal:    res.Events,
+		Roster:     res.Roster,
+		FullResync: res.FullResync,
+	})
+}
+
+// handleJournalSubscribe registers a journal subscriber (journal-capable backend +
+// negotiated `journal` cap) and starts its bounded-queue writer, then acks. Journal
+// events stream as journal_event frames via the journal fan-out.
+func (cc *clientConn) handleJournalSubscribe() {
+	if _, ok := cc.journalBackend(); !ok {
+		return
+	}
+	// C2a: refuse a new subscription when remote control is disabled, so a still-open phone
+	// cannot re-arm the journal stream after `off` (the fan-out below also stops streaming to
+	// existing subscribers while off — gate at subscribe + on the next event). REMOTE-TIER ONLY
+	// (finding B): the owner tier shares the KillSwitch-implementing coreAPI and is never gated.
+	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return
+	}
+	cc.jSubOnce.Do(func() {
+		// Bound this subscribe connection's kernel send buffer (see journalSndBuf):
+		// caps per-subscriber kernel memory and makes a wedged subscriber block (and
+		// be evicted) after a bounded volume. Best-effort — a conn without a settable
+		// buffer keeps its default.
+		if uc, ok := cc.conn.(interface{ SetWriteBuffer(int) error }); ok {
+			_ = uc.SetWriteBuffer(journalSndBuf)
+		}
+		cc.jEventQ = make(chan []byte, eventQueueCap)
+		cc.srv.wg.Add(1)
+		go cc.journalWriter()
+		cc.srv.jsubMu.Lock()
+		cc.srv.jsubs[cc] = struct{}{}
+		cc.srv.jsubMu.Unlock()
+	})
+	cc.replyOK("")
+}
+
+// journalBackend returns the backend's JournalBackend if journal ops are available
+// to this connection (negotiated `journal` cap AND a journal-capable backend),
+// replying with an error refusal otherwise (R-PROT.1: an unnegotiated op is refused).
+func (cc *clientConn) journalBackend() (JournalBackend, bool) {
+	if !cc.hasCap(CapJournal) {
+		cc.replyError("journal capability not negotiated")
+		return nil, false
+	}
+	jb, ok := cc.srv.d.(JournalBackend)
+	if !ok {
+		cc.replyError("journal not supported by this daemon")
+		return nil, false
+	}
+	return jb, true
+}
+
+// handleTerminalSubscribe serves the A7 F2 remote terminal peek: a READ-ONLY window onto a
+// session's screen. It renders the session server-side (daemon.RenderTerminal over a read-only
+// tap) and streams sanitized OpTerminalSnapshot frames — the phone's ONLY terminal view. It is
+// SECURITY-CRITICAL and read-only on three independent layers: (1) this handler NEVER forwards
+// input; (2) RenderTerminal only reads the stream; (3) the backend's tap is read-only
+// (Input/Resize no-ops). It NEVER supersedes the local controller — the tap is a separate
+// upstream subscriber, not the interactive lease/pump — so a peek cannot touch the owner's
+// generation.
+//
+// Gate order is load-bearing. The kill switch is the FIRST gate, fail-closed: terminal content
+// is more sensitive than journal metadata, so `swarm remote off` must BLANK the phone (refuse
+// with CodeKillSwitch before opening any tap or streaming a frame) even for this read. Then the
+// remote-gateway capability + a TerminalTapper backend are required (mirrors journalBackend()).
+// A second terminal_subscribe on the same connection cancels the first (one peek per conn,
+// mirroring handleAttach's one lease per conn); the render goroutine's ctx is bound to the
+// connection lifetime, so a dropped conn cancels the peek and closes its tap.
+func (cc *clientConn) handleTerminalSubscribe(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	// FIRST GATE (fail-closed): a disabled remote-control kill switch blanks the phone —
+	// refuse before any tap is opened or a single frame is streamed (R-KS.1). A valid peek
+	// must never survive `swarm remote off`.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return
+	}
+	tt, ok := cc.terminalTapper()
+	if !ok {
+		return
+	}
+	sub, err := tt.TerminalTap(local)
+	if err != nil {
+		cc.replyError("terminal_subscribe: " + err.Error())
+		return
+	}
+	cc.replyOK("")
+
+	// One peek per connection: a second terminal_subscribe cancels the first (mirrors
+	// handleAttach's one-lease-per-conn), so a connection never runs two render loops.
+	// peekGen tags this peek so its render goroutine, on exit, only acts (signal/clear) if
+	// it is STILL the current peek — a superseding second peek must not be disturbed.
+	ctx, cancel := context.WithCancel(context.Background())
+	cc.peekMu.Lock()
+	prev := cc.peekCancel
+	cc.peekGen++
+	myGen := cc.peekGen
+	cc.peekCancel = cancel
+	cc.peekMu.Unlock()
+	if prev != nil {
+		prev()
+	}
+
+	// stillAllowed is the render loop's per-tick liveness gate: an idle peek (no output)
+	// must terminate PROMPTLY once the kill switch flips OFF, not linger until the conn
+	// drops (Blocker 1a). A backend with no kill switch is always allowed.
+	stillAllowed := func() bool {
+		ks, ok := cc.killSwitch()
+		return !ok || ks.RemoteControlEnabled()
+	}
+
+	cc.srv.wg.Add(1)
+	go func() {
+		defer cc.srv.wg.Done()
+		defer cancel()    // stop the ctx-watcher below when the render loop returns
+		defer sub.Close() // read-only tap released on exit (drops this peek's upstream ref)
+		// Bind the render ctx to the connection lifetime: a dropped conn (or a superseding
+		// second peek) cancels the loop, which returns promptly on ctx.Done().
+		go func() {
+			select {
+			case <-cc.done:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		// Emit the LOCAL session id (the gateway namespaces at egress). NEVER forward input
+		// from this path — it is read-only.
+		daemon.RenderTerminal(ctx, local, sub, stillAllowed, func(r daemon.TerminalRender) {
+			// Re-check the kill switch before EVERY emission (A7 C): the FIRST gate only
+			// covers subscribe time, so `swarm remote off` (or revoking the last device)
+			// mid-peek must BLANK an established peek. A disabled switch cancels the render
+			// ctx — the loop returns and the deferred sub.Close releases the tap. Mirrors
+			// controlGateOpen clause 1 (the switch is re-checked on every keystroke).
+			if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+				cancel()
+				return
+			}
+			// Clip the sanitized render to the phone-viewport bound BEFORE encoding (A7 J), so
+			// a large grid (up to maxDim square, forwardResize-reachable) can never encode past
+			// wire.MaxFrame and be silently dropped by WriteFrame. SnapText already sanitized
+			// every line; clipping only bounds their count/width, never weakening sanitization.
+			lines, cols, rows := clipPeek(r.Lines, r.Cols, r.Rows)
+			body, err := EncodeControl(Control{
+				Op:         OpTerminalSnapshot,
+				EndpointID: cc.endpointID,
+				Terminal: &TerminalSnapshot{
+					Session: r.Session,
+					Lines:   lines,
+					Cols:    cols,
+					Rows:    rows,
+				},
+			})
+			if err != nil {
+				return
+			}
+			// Terminate the renderer on the FIRST write error (A7 #7): a readable-but-
+			// unwritable conn otherwise stalls pumpWriteTimeout per frame forever, pinning the
+			// renderer and its tap. Cancelling the ctx stops the loop and releases the tap
+			// within a bound (the deferred sub.Close runs when RenderTerminal returns).
+			if err := cc.writeFrameDeadline(wire.TControl, body); err != nil {
+				cancel()
+				return
+			}
+		})
+		// The render loop returned (idle kill-switch termination, stream end, or a write
+		// error). SIGNAL the gateway so its RunTerminal returns and reconnects instead of
+		// polling the now-silent conn forever (Blocker 1b) — but ONLY if this is still the
+		// current peek. A superseding second peek on this same conn has taken it over, so a
+		// stale signal here would break the live newer peek; skip it in that case.
+		cc.peekMu.Lock()
+		current := cc.peekGen == myGen
+		if current {
+			cc.peekCancel = nil
+		}
+		cc.peekMu.Unlock()
+		if current {
+			cc.sendPeekEnded(local)
+		}
+	}()
+}
+
+// sendPeekEnded tells a peeking gateway that its terminal peek has ended (idle kill-switch
+// termination, stream end, or write error), so Gateway.RunTerminal returns on the OpError
+// instead of polling the silent connection forever (Blocker 1b). Best-effort and deadline-
+// bounded: if the conn is already gone the write just fails, which is harmless.
+func (cc *clientConn) sendPeekEnded(local string) {
+	body, err := EncodeControl(Control{
+		Op:         OpError,
+		EndpointID: cc.endpointID,
+		SessionID:  NamespacedID(cc.endpointID, local),
+		Error:      "terminal peek ended",
+	})
+	if err != nil {
+		return
+	}
+	_ = cc.writeFrameDeadline(wire.TControl, body)
+}
+
+// cancelPeek cancels this connection's in-flight terminal peek, if any (C1): a device_revoke
+// terminates the peek's render loop (RenderTerminal returns on ctx.Done), which releases its
+// read-only tap and signals the gateway the peek ended. The CancelFunc is idempotent, so a
+// concurrent conn-drop or superseding peek that also cancels is harmless.
+func (cc *clientConn) cancelPeek() {
+	cc.peekMu.Lock()
+	cancel := cc.peekCancel
+	cc.peekMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// clipPeek bounds an already-sanitized peek render to at most maxPeekRows lines of at most
+// maxPeekCols runes each, returning the clipped lines and clipped dimensions so the encoded
+// OpTerminalSnapshot frame stays under wire.MaxFrame (A7 J). SnapText ran upstream, so this
+// only bounds line count/width — it NEVER alters sanitization. The common case (a grid within
+// the bound) returns the input unchanged; only an oversized grid pays the copy/truncation.
+func clipPeek(lines []string, cols, rows int) ([]string, int, int) {
+	if len(lines) <= maxPeekRows && cols <= maxPeekCols {
+		return lines, cols, rows // within the viewport bound: nothing to clip
+	}
+	if len(lines) > maxPeekRows {
+		lines = lines[:maxPeekRows]
+		rows = maxPeekRows
+	}
+	if cols > maxPeekCols {
+		cols = maxPeekCols
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		// A line's byte length is an upper bound on its rune count, so a short line needs no
+		// rune decode; only a line wider than the cap is truncated at the rune boundary.
+		if len(line) <= maxPeekCols {
+			out[i] = line
+			continue
+		}
+		if rs := []rune(line); len(rs) > maxPeekCols {
+			out[i] = string(rs[:maxPeekCols])
+		} else {
+			out[i] = line
+		}
+	}
+	return out, cols, rows
+}
+
+// terminalTapper returns the backend's TerminalTapper if terminal_subscribe is available to
+// this connection (negotiated remote-gateway cap AND a tapping backend), replying with an
+// error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) terminalTapper() (TerminalTapper, bool) {
+	if !cc.hasCap(CapRemoteGateway) {
+		cc.replyError("remote gateway capability not negotiated")
+		return nil, false
+	}
+	tt, ok := cc.srv.d.(TerminalTapper)
+	if !ok {
+		cc.replyError("terminal_subscribe not supported by this daemon")
+		return nil, false
+	}
+	return tt, true
+}
+
+// handleDeviceList serves device_list (slice A3.1): the backend's full
+// paired-device roster (R-DEV.1). It is a READ, so no requireRemoteAuthz gate
+// applies — only the negotiated `pairing` capability plus a DeviceLister backend.
+func (cc *clientConn) handleDeviceList() {
+	dl, ok := cc.deviceLister()
+	if !ok {
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpDeviceList, EndpointID: cc.endpointID, Devices: dl.ListDevices()})
+}
+
+// deviceLister returns the backend's DeviceLister if device_list is available to
+// this connection (negotiated `pairing` cap AND a device-listing backend),
+// replying with an error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) deviceLister() (DeviceLister, bool) {
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return nil, false
+	}
+	dl, ok := cc.srv.d.(DeviceLister)
+	if !ok {
+		cc.replyError("device_list not supported by this daemon")
+		return nil, false
+	}
+	return dl, true
+}
+
+// handlePairStart serves the owner-tier pair_start (slice A3.3-bc, ADR-007
+// amendment "Pairing host: Option A"). Gate order is load-bearing: pairing is
+// owner-tier only, so a remote-tier connection is refused not_authorized BEFORE the
+// host is ever consulted (mirrors handleAttach's remote-tier refusal); then the
+// negotiated `pairing` cap is required; then the backend must implement PairingHost.
+//
+// It drives the anti-MITM SAS gate fail-closed: the pairing ctx is derived from the
+// CONNECTION lifetime, so a disconnect cancels it and the in-flight confirm returns
+// a non-nil error (a decline) rather than hanging. BeginPairing returns the PairView
+// synchronously (replied as pair_start) and runs the handshake in a background
+// goroutine that calls confirm at the SAS gate (pushed as pair_pending, blocking for
+// the matching pair_confirm or ctx cancel) and result at the terminal outcome
+// (pushed as pair_result). Only ONE pairing is in flight per connection.
+func (cc *clientConn) handlePairStart(c Control) {
+	// Owner-tier only: fail closed on the remote tier before consulting the host
+	// (mirrors handleAttach's remote-tier refusal).
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("pairing is owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapPairing) {
+		cc.replyError("pairing capability not negotiated")
+		return
+	}
+	host, ok := cc.srv.d.(PairingHost)
+	if !ok {
+		cc.replyError("pairing not supported by this daemon")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ps := &pairSession{confirm: make(chan bool, 1), cancel: cancel}
+
+	cc.pairMu.Lock()
+	if cc.pair != nil { // one pairing in flight per connection
+		cc.pairMu.Unlock()
+		cancel()
+		cc.replyError("pairing already in progress")
+		return
+	}
+	cc.pair = ps
+	cc.pairMu.Unlock()
+
+	// Fail-closed wiring: a dropped connection closes cc.done, which cancels the
+	// pairing ctx so an in-flight confirm returns ctx.Err() (a decline). The
+	// goroutine also exits when the pairing ends normally (result -> cancel).
+	go func() {
+		select {
+		case <-cc.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	var req PairStartReq
+	if c.Pairing != nil {
+		req = PairStartReq{Capability: c.Pairing.Capability, TTLSeconds: c.Pairing.TTLSeconds}
+	}
+
+	// confirm pushes the SAS gate (pair_pending) to THIS connection, then blocks for
+	// the matching pair_confirm — or, if the connection drops, ctx cancel makes it
+	// fail closed (false, non-nil err). Writes use the connection's thread-safe path.
+	confirm := func(sas []string, deviceName string) (bool, error) {
+		ps.mu.Lock()
+		rvz := ps.rvz
+		ps.mu.Unlock()
+		_ = cc.writeControl(Control{Op: OpPairPending, EndpointID: cc.endpointID,
+			Pairing: &PairingControl{SAS: sas, DeviceName: deviceName, RendezvousID: rvz}})
+		select {
+		case allow := <-ps.confirm:
+			return allow, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+
+	// result pushes the terminal outcome (pair_result) and ends the pairing: success
+	// carries the device identity; failure carries no device and the CAUSE.
+	//
+	// The cause is the whole of ADR-007 B71(1). This closure used to drop r.Err on the
+	// floor and push a nil Pairing, so a declined SAS, an expired window, a spent code and
+	// a relay-consent abandonment arrived at the owner's terminal as one identical "not
+	// paired" -- during the ceremony every tester performs first, with nothing to act on.
+	// What crosses is a code from PairFailure's closed vocabulary, never r.Err's text:
+	// this path parses attacker-influenced bytes, and a code carries none of them.
+	result := func(r PairResult) {
+		cc.clearPairing(ps)
+		p := &PairingControl{}
+		if r.Err == nil {
+			p.DeviceID, p.Name, p.Capability = r.DeviceID, r.Name, r.Capability
+		} else {
+			p.Failure = string(classifyPairFailure(r.Err))
+		}
+		_ = cc.writeControl(Control{Op: OpPairResult, EndpointID: cc.endpointID, Pairing: p})
+	}
+
+	view, err := host.BeginPairing(ctx, req, confirm, result)
+	if err != nil {
+		cc.clearPairing(ps)
+		cc.replyError("pair_start: " + err.Error())
+		return
+	}
+	ps.mu.Lock()
+	ps.rvz = view.RendezvousID
+	ps.mu.Unlock()
+	// The pair_start reply and the pair_pending push race (this goroutine vs the
+	// host's background goroutine); both go through writeMu, so they are serialized
+	// and the test classifies the two frames by Op.
+	_ = cc.writeControl(Control{Op: OpPairStart, EndpointID: cc.endpointID,
+		Pairing: &PairingControl{QR: view.QR, RendezvousID: view.RendezvousID, ExpiresAt: view.ExpiresAt}})
+}
+
+// handlePairConfirm routes a pair_confirm's decision to this connection's in-flight
+// pairing's blocked confirm closure (a cap-1 channel, non-blocking send). No pairing
+// in flight -> error.
+func (cc *clientConn) handlePairConfirm(c Control) {
+	cc.pairMu.Lock()
+	ps := cc.pair
+	cc.pairMu.Unlock()
+	if ps == nil {
+		cc.replyError("no pairing in flight")
+		return
+	}
+	allow := c.Pairing != nil && c.Pairing.Allow
+	select {
+	case ps.confirm <- allow:
+	default: // already decided/cancelled: drop the duplicate
+	}
+}
+
+// clearPairing releases this connection's in-flight pairing slot (if ps still holds
+// it) and cancels its ctx, so the connection-lifetime canceller goroutine exits.
+func (cc *clientConn) clearPairing(ps *pairSession) {
+	cc.pairMu.Lock()
+	if cc.pair == ps {
+		cc.pair = nil
+	}
+	cc.pairMu.Unlock()
+	ps.cancel()
+}
+
+// handlePolicyQuery serves policy_query (slice A3.1): the backend's configured
+// remote launch policy (allowed cwd roots, R-POL.3). It is a READ, so no
+// requireRemoteAuthz gate applies — only the negotiated `policy` capability plus a
+// PolicyDescriber backend.
+func (cc *clientConn) handlePolicyQuery() {
+	pd, ok := cc.policyDescriber()
+	if !ok {
+		return
+	}
+	pv := pd.DescribePolicy()
+	_ = cc.writeControl(Control{Op: OpPolicyQuery, EndpointID: cc.endpointID, Policy: &pv})
+}
+
+// policyDescriber returns the backend's PolicyDescriber if policy_query is
+// available to this connection (negotiated `policy` cap AND a policy-describing
+// backend), replying with an error refusal otherwise (mirrors journalBackend()).
+func (cc *clientConn) policyDescriber() (PolicyDescriber, bool) {
+	if !cc.hasCap(CapPolicy) {
+		cc.replyError("policy capability not negotiated")
+		return nil, false
+	}
+	pd, ok := cc.srv.d.(PolicyDescriber)
+	if !ok {
+		cc.replyError("policy_query not supported by this daemon")
+		return nil, false
+	}
+	return pd, true
+}
+
+// journalWriter drains this subscriber's bounded journal queue (pre-encoded frame
+// bodies) to the socket. A wedged subscriber (one not draining its socket) blocks
+// the writer on a full kernel buffer, backs its queue up to eventQueueCap, and is
+// evicted by the fan-out on the next overflow; the close then unblocks this write
+// with an error and the goroutine exits.
+func (cc *clientConn) journalWriter() {
+	defer cc.srv.wg.Done()
+	for {
+		select {
+		case <-cc.done:
+			return
+		case body := <-cc.jEventQ:
+			if err := cc.writeFrame(wire.TControl, body); err != nil {
+				cc.close()
+				return
+			}
+		}
+	}
+}
+
 func (cc *clientConn) handleDataIn(payload []byte) {
+	// Remote tier (slice A5-b): a raw input frame reaches the shim ONLY inside a live,
+	// authorized control session (the four-clause gate) — this is the keystroke-injection
+	// vector, so every out-of-session frame is dropped. The owner tier keeps full
+	// interactive trust — the gate applies only on the remote tier, so the path below is
+	// unchanged there.
+	if cc.srv.remoteTier && !cc.controlGateOpen() {
+		return
+	}
 	cc.attMu.Lock()
 	local, gen := cc.attSession, cc.attGen
 	cc.attMu.Unlock()
@@ -1114,12 +2492,125 @@ func (cc *clientConn) writeFrameDeadline(typ wire.Type, payload []byte) error {
 	return cc.writeFrameBy(typ, payload, time.Now().Add(pumpWriteTimeout()))
 }
 
+// Every reply below echoes the request's operation_id (cc.opID). The REFUSAL paths matter
+// as much as the success one: a phone with two ops in flight that receives an untagged
+// refusal can neither retry the right op nor mark the right one failed.
 func (cc *clientConn) replyError(msg string) {
-	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, Error: msg})
+	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg})
+}
+
+// replyErrorCode is replyError carrying a machine-readable refusal code (R-PROT.7).
+func (cc *clientConn) replyErrorCode(msg string, code ErrorCode) {
+	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg, ErrorCode: code})
 }
 
 func (cc *clientConn) replyOK(sessionID string) {
-	_ = cc.writeControl(Control{Op: OpOK, EndpointID: cc.endpointID, SessionID: sessionID})
+	_ = cc.writeControl(Control{Op: OpOK, EndpointID: cc.endpointID, OperationID: cc.opID, SessionID: sessionID})
+}
+
+// hasCap reports whether cap was negotiated for this connection.
+func (cc *clientConn) hasCap(cap string) bool {
+	for _, c := range cc.caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// requireOperationID enforces the remote-tier rule that every remote mutating op
+// carries an operation_id (R-IDP.1/A4): on the remote tier a missing operation_id is
+// refused with invalid_field before any action. On the main (owner) tier it is a
+// no-op. Returns false when the caller must stop (already replied).
+func (cc *clientConn) requireOperationID(c Control) bool {
+	if cc.srv.remoteTier && c.OperationID == "" {
+		cc.replyErrorCode("remote mutating op requires operation_id", CodeInvalidField)
+		return false
+	}
+	return true
+}
+
+// deviceAuthenticator returns the backend's DeviceAuthenticator if it implements one.
+func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
+	da, ok := cc.srv.d.(DeviceAuthenticator)
+	return da, ok
+}
+
+// killSwitch returns the backend's KillSwitch if it implements one.
+func (cc *clientConn) killSwitch() (KillSwitch, bool) {
+	ks, ok := cc.srv.d.(KillSwitch)
+	return ks, ok
+}
+
+// deviceRegistrar returns the backend's DeviceRegistrar if it implements one (C1): the
+// per-keystroke device-presence check controlGateOpen consults so a revoked device's live
+// lease severs immediately.
+func (cc *clientConn) deviceRegistrar() (DeviceRegistrar, bool) {
+	reg, ok := cc.srv.d.(DeviceRegistrar)
+	return reg, ok
+}
+
+// launchPolicy returns the backend's LaunchPolicy if it implements one (R-POL.3).
+func (cc *clientConn) launchPolicy() (LaunchPolicy, bool) {
+	lp, ok := cc.srv.d.(LaunchPolicy)
+	return lp, ok
+}
+
+// requireRemoteAuthz is the single choke point for a remote mutating op (R-POL.9): it
+// gates launch/kill/delete before any side effect. On the owner (main) tier it is a
+// no-op — local connections keep full trust (R-POL.1). On the remote tier it enforces,
+// in order: operation_id present (R-IDP.1); the backend exposes a DeviceAuthenticator
+// (else FAIL CLOSED — a misassembled remote server authorizes nothing); the device
+// identity fields (device_id, device_sig, expires_at) are present; and finally the
+// authenticator verifies the signature over the canonical tuple AND the device's
+// capability permits action. A missing structural field is invalid_field; any
+// authorization failure is not_authorized. Returns false when the caller must stop
+// (a refusal has already been sent). `session` is the namespaced session id, empty
+// for launch (which creates a session). contentHash optionally binds op content.
+func (cc *clientConn) requireRemoteAuthz(c Control, action string, session string, contentHash []byte) bool {
+	if !cc.srv.remoteTier {
+		return true
+	}
+	// Kill switch (R-KS.1): fail closed BEFORE any authz work — a valid device signature
+	// must not bypass a disabled remote-control switch.
+	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return false
+	}
+	if !cc.requireOperationID(c) {
+		return false
+	}
+	auth, ok := cc.deviceAuthenticator()
+	if !ok {
+		cc.replyErrorCode("remote authorization unavailable", CodeNotAuthorized)
+		return false
+	}
+	if c.DeviceID == "" || c.DeviceSig == "" || c.ExpiresAt == nil {
+		cc.replyErrorCode("remote mutating op requires device_id, device_sig, and expires_at", CodeInvalidField)
+		return false
+	}
+	// F5: cap the device-signed validity window server-side. The authenticator still enforces
+	// not-past (the daemon-authoritative expiry); here we ALSO reject an expiry beyond
+	// now+maxCommandValidity, so a command signed with a far-future ExpiresAt cannot stay
+	// replay-valid indefinitely. Bounds the replay window and keeps the idempotency GC TTL safe.
+	if c.ExpiresAt.After(cc.srv.now().Add(maxCommandValidity)) {
+		cc.replyErrorCode("expires_at is beyond the maximum command validity window", CodeInvalidField)
+		return false
+	}
+	if err := auth.AuthorizeCommand(DeviceCommandAuth{
+		DeviceID:    c.DeviceID,
+		Action:      action,
+		Machine:     cc.endpointID,
+		Session:     session,
+		OperationID: c.OperationID,
+		ExpiresAt:   *c.ExpiresAt,
+		ContentHash: contentHash,
+		Sig:         c.DeviceSig,
+	}); err != nil {
+		cc.replyErrorCode("device command not authorized", CodeNotAuthorized)
+		return false
+	}
+	return true
 }
 
 // intersectCaps returns the capabilities present in both offered and supported,

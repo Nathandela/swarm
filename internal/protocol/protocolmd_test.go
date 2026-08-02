@@ -63,6 +63,7 @@ func wireJSONTags() []string {
 		reflect.TypeOf(Control{}),
 		reflect.TypeOf(SessionView{}),
 		reflect.TypeOf(LaunchReq{}),
+		reflect.TypeOf(TerminalSnapshot{}),
 	}
 	seen := map[string]bool{}
 	var out []string

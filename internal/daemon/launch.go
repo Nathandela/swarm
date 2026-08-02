@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -101,6 +102,50 @@ func (d *Daemon) Launch(spec LaunchSpec) (persist.Meta, error) {
 	return d.launch(spec, nil)
 }
 
+// ClaimOperation claims operationID as single-use through the durable two-phase
+// idempotency store (slice A5-c), for a remote op that — unlike launch — has NO
+// re-drivable side effect. It Prepares the record (fsync'd before the caller acts) and
+// surfaces whether the key ALREADY existed; a true `existed` is a REPLAY the caller must
+// refuse. The record is left `prepared` deliberately — it is the durable "this
+// operation_id was consumed" marker, and the launch-only stale-record sweep
+// (resolveStaleLaunches) ignores non-launch actions, so no terminal transition (Begin/
+// Complete) is needed for a take_control claim.
+func (d *Daemon) ClaimOperation(operationID, action, session string) (bool, error) {
+	_, existed, err := d.idem.Prepare(operationID, action, session)
+	return existed, err
+}
+
+// ClaimIdempotentOp is the durable backing of protocol.IdempotentExecutor for replay-safe
+// remote kill/delete (slice DHI-3). A fresh op Prepares (existed=false) and the caller then
+// executes + CommitIdempotentOp; a replay returns the ORIGINAL attempt's cached outcome:
+// completed => priorOK=true, failed => priorOK=false (a cached failure, never a false
+// success). A record still prepared/executing means a crash struck mid-op — kill/delete are
+// self-idempotent, so it is reported as not-existed and safe to re-run.
+func (d *Daemon) ClaimIdempotentOp(op, action, session string) (existed, priorOK bool, err error) {
+	rec, existed, err := d.idem.Prepare(op, action, session)
+	if err != nil || !existed {
+		return existed, false, err
+	}
+	switch rec.Phase {
+	case idempotency.PhaseCompleted:
+		return true, true, nil
+	case idempotency.PhaseFailed:
+		return true, false, nil
+	default:
+		return false, false, nil // prepared/executing (crash mid-op): safe to re-run
+	}
+}
+
+// CommitIdempotentOp records the terminal outcome of a claimed kill/delete durably: a
+// success transitions the record -> completed, a failure -> failed, so a later replay
+// surfaces that exact outcome via ClaimIdempotentOp.
+func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
+	if ok {
+		return d.idem.Complete(op, nil)
+	}
+	return d.idem.Fail(op, nil)
+}
+
 // launch is the two-phase, crash-safe launch (E5.4/S11): reserve a running meta,
 // spawn the shim with a deterministic socket and filtered env, then confirm it is
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
@@ -134,6 +179,48 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	s := &session{meta: m, stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
+
+	// Remote launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
+	// the reservation so a replayed launch reuses the reserved session and spawns
+	// nothing. Prepare is mutex-guarded, so a concurrent double-launch has exactly one
+	// winner; the loser drops its fresh reservation and returns the cached session. The
+	// reservation has touched only d.sessions (no disk yet), so dropReserved is a clean
+	// abort here.
+	if spec.OperationID != "" {
+		_, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		if perr != nil {
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
+		}
+		if existed {
+			// Replay of a known operation_id. The signal is LIVENESS, not phase: return
+			// the recorded session only if it is still usable; a MISSING (W1) or LOST
+			// (W3) session means the prior attempt crashed mid-launch and left no usable
+			// session, so re-point the key at THIS fresh reservation and re-drive rather
+			// than poison the key (W1) or return the dead corpse as success (W3).
+			redrive, cached, rerr := d.resolveReplay(spec.OperationID, id)
+			if rerr != nil {
+				d.dropReserved(id)
+				return persist.Meta{}, rerr
+			}
+			if !redrive {
+				d.dropReserved(id)
+				return cached, nil
+			}
+			// ponytail: the re-drive spawns a fresh session under the same operation_id.
+			// SAFETY CEILING (window W4, NOT "no worse" than before): if the lost session
+			// were actually a LIVE orphan shim (reconcile marked it LOST only because it
+			// could not match the orphan's identity, meta ShimPID=0), this re-drive spawns
+			// a SECOND live agent while the orphan keeps running — two code-editing agents
+			// racing on one cwd, and unbounded under repeated crash+replay (each cycle can
+			// leave another unreapable orphan). For the code-editing threat model that is
+			// arguably WORSE than the pre-fix corpse+one-orphan, not neutral. Closing it
+			// needs orphan-process tracking (persist the shim PID before/around cmd.Start,
+			// then SIGTERM the prior attempt on re-drive — collapsing W4 into W3); tracked
+			// as follow-up 4c and by the skipped TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO.
+			// Fall through and re-drive with our reservation `id`, now the operation_id's session.
+		}
+	}
 
 	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
 	// the AGENT's working directory. m.Cwd above already captured the caller's
@@ -405,4 +492,51 @@ func (d *Daemon) rollbackReserved(id string, m persist.Meta, preLaunchOK bool) {
 		}
 	}
 	d.dropReserved(id)
+}
+
+// resolveReplay decides a replayed launch (Prepare returned existed) under d.mu.
+// If the operation_id's recorded session is present and NOT lost, the prior launch
+// left a usable session and its meta is returned (redrive=false) for an idempotent
+// success. If that session is MISSING (W1) or LOST (W3), the record is re-pointed
+// at freshID (this call's reservation) and redrive=true is returned, so the caller
+// drives a fresh spawn under the SAME operation_id — never poisoning the key or
+// returning a corpse. Re-reading the record under d.mu makes concurrent re-drivers
+// converge on one winner: the loser observes the winner's reservation (Running) and
+// returns it instead of spawning again. Reads d.sessions directly (not d.Get) since
+// d.mu is already held.
+func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, cached persist.Meta, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec, _ := d.idem.Get(opID)
+	if s, ok := d.sessions[rec.SessionID]; ok && s.meta.Status.Process != status.ProcessLost {
+		return false, s.meta, nil // live (or already-exited) session: idempotent success
+	}
+	if _, rerr := d.idem.Redrive(opID, "launch", freshID); rerr != nil {
+		return false, persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: redrive: %w", opID, rerr)
+	}
+	return true, persist.Meta{}, nil
+}
+
+// resolveStaleLaunches sweeps launch idempotency records still in flight
+// (prepared/executing) whose reserved session did not survive the restart — MISSING
+// (W1) or reconcile-LOST (W3) — and fails them, so the operation_id is re-drivable
+// on the next replay instead of lingering as a poison/corpse pointing at a dead
+// session (fix-pack 4a, DCR-1/DCR-2). Runs in Open AFTER reconcile, so d.sessions
+// already reflects the reconnected/lost world; a record pointing at a live (or
+// already-exited) session is left untouched.
+func (d *Daemon) resolveStaleLaunches() {
+	for _, rec := range d.idem.List() {
+		if rec.Action != "launch" {
+			continue
+		}
+		if rec.Phase != idempotency.PhasePrepared && rec.Phase != idempotency.PhaseExecuting {
+			continue
+		}
+		if m, ok := d.Get(rec.SessionID); ok && m.Status.Process != status.ProcessLost {
+			continue // a usable session survived: leave the record alone
+		}
+		if err := d.idem.Fail(rec.OperationID, nil); err != nil {
+			d.logf("resolve stale launch %s: %v", rec.OperationID, err)
+		}
+	}
 }

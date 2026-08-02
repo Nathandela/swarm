@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    PB-SEC-10 / PB-STATE-6: the phone's durable state must leave this device by NO extraction
+    path. android:allowBackup="false" on <application> is the CLOUD half and is already there;
+    this file is the other half.
+
+    WHY BOTH SECTIONS. allowBackup="false" disables cloud backup and `adb backup`. It does NOT
+    reliably disable DEVICE-TO-DEVICE transfer: Android's backup documentation records that on
+    devices from some manufacturers the attribute governs cloud backup only, and that the
+    pre-Android-12 include/exclude mechanism does not affect D2D transfers at all. From Android
+    12 the attribute that governs D2D is android:dataExtractionRules and its device-transfer
+    section. Every device this app supports is Android 13 or later (android/supported-versions.tsv
+    sets minSdk 33), so this file, and not the legacy android:fullBackupContent, is the mechanism.
+
+    WHY domain="root" AND NO include list. An include list INVERTS these rules: only what is
+    listed is transferred, so a file carrying one stops being readable on its own terms and a
+    single added line silently re-admits the state directory. domain="root" is the app's entire
+    private data directory, which covers the state blob and the device key container wherever the
+    app chooses to put them, and nothing in android/app sets mobile.Config.StateDir yet, so a
+    narrower path rule would be a guess about a location that does not exist.
+
+    What would otherwise leave with them is the sealed key material and, from state schema v5,
+    the sealed PB-STATE-9 tier containers. Those are sealed under Keystore-backed KEKs that do
+    not travel, so an extracted copy is not a break by itself. It is the whole extraction surface,
+    handed over; PB-SEC-10 exists to shut it rather than to argue about how hard it is to open.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,341 @@
+S23 metric cross-check RED evidence -- the fourth audit round's finding, the runs that show the
+fence green when it should have been red, and the runs that show it red after the fix.
+
+GG-5 requires the failing-first run to be evidenced. Everything below is actual output, pasted
+from the run that produced it. Nothing here is predicted.
+
+WHERE THESE RUNS HAPPENED. The RED runs need the kit MUTATED, and this repository has several
+agents editing android/app/ concurrently, so every mutation was applied inside a throwaway
+detached git worktree of HEAD b888fa8 rather than in the working tree. `repoRoot` walks up to
+go.mod, so the gate reads the worktree's own copy of android/ and docs/. No file outside
+android/gate/s23_kit_test.go and this evidence file was modified in the repository itself.
+
+THE SUBJECT. android/gate/s23_kit_test.go. The finding is the fourth round against this fence:
+rounds one, two and three each widened the regexp s23MetricConst and each claimed the widened
+version was complete. Round three's comment said, at :920-923, "There is no spelling left that
+escapes by not being listed." Round four falsified it.
+
+===========================================================================================
+1. RED -- the fence as it shipped, green over three declarations it cannot see
+===========================================================================================
+
+Baseline, unmutated worktree at b888fa8:
+
+    $ go test ./android/gate/ -count=1 -run 'TestPBDS[567]'
+    ok  	github.com/Nathandela/swarm/android/gate	1.183s
+
+-------------------------------------------------------------------------------------------
+1a. Three numeric constants injected into `object KitMetrics`, Kit.kt:157, no `origin:` line
+-------------------------------------------------------------------------------------------
+
+    internal object KitMetrics {
+        const val EXTRA_PAD_DP =
+            11f
+        val gutterDp: Float get() = 13f
+        const val SHADE = 0x1F4
+
+        /** origin: .pdot { width } */
+        const val DOT_DP = 7f
+        ...
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.716s
+
+Three numbers, inside the object the fence polices, none carrying a design origin, and the
+whole gate package reports ok. s23MetricConst is line-anchored, so the ktlint wrap escapes it;
+a `get()` accessor has no `=` where the pattern wants one; the decimal alternation cannot read
+a hex literal. A declaration this pattern misses is not refused, it is INVISIBLE.
+
+-------------------------------------------------------------------------------------------
+1b. The same, plus a LIVE CALL SITE spending the unseen constant -- Badge.kt:50
+-------------------------------------------------------------------------------------------
+
+    minimumWidth = Kit.dpPx(context, KitMetrics.EXTRA_PAD_DP)
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.356s
+
+This is the finding proper. TestPBDS7_NoMetricIsTypedAtADpCallSite accepted the argument
+because it MATCHED `KitMetrics.<ident>` -- s23MetricRef, s23_kit_test.go:1280 -- and never
+asked whether that name was one s23ScanMetrics had returned. Two scans of the same file, each
+satisfied on its own terms, and between them a metric with no design origin reaching the screen.
+
+-------------------------------------------------------------------------------------------
+1c. A WRONG VALUE in the standard ktlint wrap -- Kit.kt:157, DOT_DP at 13f where the design
+    states 7px
+-------------------------------------------------------------------------------------------
+
+    /** origin: .pdot { width } */
+    const val DOT_DP =
+        13f
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.548s
+
+The `origin:` line above it is decoration: the declaration is not matched, so nothing is joined
+to `.pdot { width }` and nothing compares 13 to 7. DOT_DP is spent at StatusDot.kt:91 and :99.
+
+-------------------------------------------------------------------------------------------
+1d. What the two scans actually saw, in the state of 1a+1b+1c
+-------------------------------------------------------------------------------------------
+
+A temporary probe (worktree only, deleted) printing what the shipped functions return:
+
+    s23ScanMetrics sees 16 declaration(s): ATTENTION_BORDER_SHARE BADGE_HEIGHT_DP
+      GLOW_RADIUS_DP HAIRLINE_DP KEY_LIGHT_ALPHA KEY_LIGHT_DP NEEDS_INPUT_GLOW_SHARE
+      PRESENCE_DOT_DP RAIL_DP TAB_ICON_DP TRANSPARENT WORKBAR_FADE_STOP WORKBAR_HEIGHT_DP
+      WORKBAR_RADIUS_DP WORKING_GLOW_SHARE badgeCount
+    KitMetrics.<ident> spends: BADGE_HEIGHT_DP BADGE_HEIGHT_DP DOT_DP DOT_DP EXTRA_PAD_DP
+      GLOW_RADIUS_DP GLOW_RADIUS_DP HAIRLINE_DP HAIRLINE_DP HAIRLINE_DP KEY_LIGHT_ALPHA
+      KEY_LIGHT_DP PRESENCE_DOT_DP PRESENCE_DOT_DP RAIL_DP TAB_ICON_DP WORKBAR_FADE_STOP
+      WORKBAR_HEIGHT_DP WORKBAR_RADIUS_DP
+
+and on the clean tree, for comparison:
+
+    s23ScanMetrics sees 17 declaration(s): ... DOT_DP ... (the same list plus DOT_DP)
+
+DOT_DP and EXTRA_PAD_DP are SPENT and NOT SEEN, and nothing put those two facts side by side.
+That is the whole of the defect and the whole of the fix.
+
+The same probe shows why the resolvable set had to be scoped to `object KitMetrics`: the scan
+also returns TRANSPARENT (ColorMix.kt:44) and badgeCount (TabBar.kt:20), which are declarations
+in other files and must not be able to satisfy a `KitMetrics.` spend.
+
+===========================================================================================
+2. THE FIX
+===========================================================================================
+
+Not a fourth widening of s23MetricConst. The pattern is unchanged; what changed is that its
+blind spots are no longer silent. Two checks, neither of which looks at declaration syntax:
+
+  TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw
+      every `KitMetrics.<ident>` reference in the eleven fenced files must be a name
+      s23ScanMetrics RETURNED from inside `object KitMetrics`. An unrecognised declaration is
+      absent from that set, so its spend is a dangling reference and fails. This is not the
+      Kotlin compiler's check -- kotlinc resolves the name perfectly well -- it is the GATE's
+      blindness made observable.
+
+  TestPBDS7_EveryNumberInTheKitIsAccountedFor
+      every numeric literal token in those files must be the value of a recognised declaration
+      or one of nine exempt bare literals (s23LiteralExemptions), and inside object KitMetrics
+      not even that. An unrecognised declaration leaves its number unaccounted for.
+
+Plus one adjacent fail-open found while reading s23ScanMetrics and closed in the same change: a
+pending `origin:` annotation used to survive unmatched lines and be inherited by the next
+declaration, so `const val NEXT_DP = 7f` after an unmatched wrapped declaration passed against
+`.pdot { width }`. A pending annotation now dies on the first non-blank line of CODE; comment
+lines are blank in the stripped view, so a KDoc block between an annotation and its declaration
+still carries.
+
+Counts against the shipped kit, read by the shipped functions: 11 fenced files, 62 numeric
+literal tokens, 17 of them bound to recognised declarations, 45 exempt across the nine rows;
+12 members recognised inside object KitMetrics; 18 spends.
+
+===========================================================================================
+3. GREEN -- the fix against the clean tree
+===========================================================================================
+
+    $ go test ./android/gate/ -count=1 -run 'TestPBDS7_...' -v
+
+    === RUN   TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber
+    --- PASS: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.03s)
+    === RUN   TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw
+    --- PASS: TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw (0.00s)
+    === RUN   TestPBDS7_EveryNumberInTheKitIsAccountedFor
+    --- PASS: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+    === RUN   TestPBDS7_TheMetricScanCanActuallyFail
+    --- PASS: TestPBDS7_TheMetricScanCanActuallyFail (0.11s)
+    === RUN   TestPBDS7_TheCrossChecksCanActuallyFail
+    --- PASS: TestPBDS7_TheCrossChecksCanActuallyFail (0.01s)
+    PASS
+    ok  	github.com/Nathandela/swarm/android/gate	0.861s
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.951s
+    $ go vet ./android/gate/        (silent)
+    $ gofmt -l android/gate/s23_kit_test.go        (silent)
+
+===========================================================================================
+4. RED -- the fix against the SAME mutations as section 1
+===========================================================================================
+
+Section 1's three injections restored, the fixed s23_kit_test.go copied in. Fault text elided
+at [...] where it repeats; the elision is marked and nothing else is changed.
+
+    $ go test ./android/gate/ -count=1 -run 'TestPBDS7_EveryMetricSpendResolves...|TestPBDS7_EveryNumberInTheKitIsAccountedFor'
+
+    --- FAIL: TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw (0.01s)
+        PB-DS-7: Badge.kt:50: KitMetrics.EXTRA_PAD_DP is spent here, and s23ScanMetrics
+          recognised no declaration of EXTRA_PAD_DP inside `object KitMetrics`. [...]
+        PB-DS-7: StatusDot.kt:91: KitMetrics.DOT_DP is spent here, and s23ScanMetrics
+          recognised no declaration of DOT_DP inside `object KitMetrics`. [...]
+        PB-DS-7: StatusDot.kt:99: KitMetrics.DOT_DP is spent here, and s23ScanMetrics
+          recognised no declaration of DOT_DP inside `object KitMetrics`. [...]
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.00s)
+        PB-DS-7: Kit.kt:157: the number `11f` is typed here and nothing accounts for it. It is
+          not the value of a declaration s23ScanMetrics recognised, so no `origin:` annotation
+          is being required of it and no design value is being compared to it; and it is not
+          one of the nine bare literals on s23LiteralExemptions. If it is a design metric,
+          declare it in object KitMetrics with an `origin:` line. If it is not, add a row to
+          s23LiteralExemptions saying what it is instead.
+        PB-DS-7: Kit.kt:158: the number `13f` is typed here and nothing accounts for it. [...]
+        PB-DS-7: Kit.kt:159: the number `0x1F4` is typed here and nothing accounts for it. [...]
+        PB-DS-7: Kit.kt:163: the number `13f` is typed here and nothing accounts for it. [...]
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.813s
+
+Four numbers, four faults, each at its own line; three spends, three dangling references, each
+at its own call site. `gutterDp` (Kit.kt:158) and `SHADE` (Kit.kt:159) are never referenced, so
+only the literal accounting reaches them -- which is the reason there are two checks and not one.
+
+===========================================================================================
+5. Mutation ledger over the FIXED tree -- each fence and each control shown failing
+===========================================================================================
+
+Every row mutates one thing and records the run. A control that has never been seen to fail is
+a control nobody has checked.
+
+-------------------------------------------------------------------------------------------
+5a. s23DanglingSpendFaults neutered to return nil
+-------------------------------------------------------------------------------------------
+
+    --- FAIL: TestPBDS7_TheCrossChecksCanActuallyFail (0.02s)
+        PB-DS-7: KitMetrics.BADGE_HEIGHT_DP is spent by the kit, and the spend cross-check
+          reports nothing about it when the scan does not return that name. [...]
+        PB-DS-7: KitMetrics.DOT_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.GLOW_RADIUS_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.HAIRLINE_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.KEY_LIGHT_ALPHA is spent by the kit, [...]
+        PB-DS-7: KitMetrics.KEY_LIGHT_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.PRESENCE_DOT_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.RAIL_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.TAB_ICON_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.WORKBAR_FADE_STOP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.WORKBAR_HEIGHT_DP is spent by the kit, [...]
+        PB-DS-7: KitMetrics.WORKBAR_RADIUS_DP is spent by the kit, [...]
+        PB-DS-7: a wrapped initialiser is spent at a live call site and the spend cross-check
+          reports nothing. This is the injection the third review used to falsify the fence:
+        	const val EXTRA_PAD_DP =
+                11f
+        PB-DS-7: a wrapped initialiser holding a WRONG value is spent at a live call site and
+          the spend cross-check reports nothing. This is the injection the third review used to
+          falsify the fence:
+        	const val DOT_DP =
+                13f
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.683s
+
+Twelve rows, one per constant the kit spends, plus the two verbatim review probes. That IS the
+control's design: it does not sample
+spellings, it removes one name at a time from the set s23ScanMetrics returns, because absence
+from that set is the only form an unrecognised declaration can take by the time these functions
+see it.
+
+-------------------------------------------------------------------------------------------
+5b. s23LiteralExemptions gains a row nobody argued for: "13f"
+-------------------------------------------------------------------------------------------
+
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+        PB-DS-7: s23LiteralExemptions permits the bare literal `13f` and the kit types it
+          nowhere. Delete the row: an exemption nobody uses is one the next number of that
+          value inherits without anyone arguing for it.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	3.068s
+
+The table cannot grow quietly: an unused row is a fault. It is worth recording what this
+mutation did BEFORE s23StrictLines was added -- it also switched off two of the review probes
+in TestPBDS7_TheCrossChecksCanActuallyFail, because their declarations hold 13f:
+
+    --- FAIL: TestPBDS7_TheCrossChecksCanActuallyFail (0.01s)
+        PB-DS-7: a get() accessor declares a number s23MetricConst does not see, and the
+          literal accounting reports nothing about it:
+        	val gutterDp: Float get() = 13f
+        PB-DS-7: a wrapped initialiser holding a WRONG value declares a number s23MetricConst
+          does not see, and the literal accounting reports nothing about it:
+        	const val DOT_DP =
+                13f
+
+With s23StrictLines the probes are inside `object KitMetrics`, where no exemption is consulted,
+so a new row cannot reach them at all. That is the better outcome and the reason this record
+carries both runs rather than the tidier one.
+
+-------------------------------------------------------------------------------------------
+5c. The pending-annotation reset removed from s23ScanMetrics
+-------------------------------------------------------------------------------------------
+
+    --- FAIL: TestPBDS7_TheMetricScanCanActuallyFail (0.15s)
+        PB-DS-7: a constant declared after an UNMATCHED wrapped declaration inherits that
+          declaration's `origin:` line and passes on it. `.pdot { width }` is 7, so NEXT_DP =
+          7f is green against an authority that names the status dot's diameter and was never
+          written about NEXT_DP at all.
+
+-------------------------------------------------------------------------------------------
+5d. An unrecognised declaration holding an EXEMPT value, unspent, inside object KitMetrics
+-------------------------------------------------------------------------------------------
+
+    internal object KitMetrics {
+        const val QUIET_PAD_DP =
+            2f
+
+Against the fix WITHOUT s23StrictLines (an intermediate state, recorded because it is the case
+the value-keyed exemption table would otherwise have left open):
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.072s
+
+Unrecognised (no origin required), unspent (nothing dangles), value on the exemption table
+(accounting satisfied) -- three fences, all silent, for a number in the middle of the object
+they exist to police. With s23StrictLines, which consults no exemption inside that object:
+
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.02s)
+        PB-DS-7: Kit.kt:157: the number `2f` is typed here and nothing accounts for it. It is
+          not the value of a declaration s23ScanMetrics recognised, so no `origin:` annotation
+          is being required of it and no design value is being compared to it; and it is inside
+          `object KitMetrics`, where s23LiteralExemptions does not apply -- every number in
+          that object is a design metric, which is the whole of what the object is for. [...]
+
+===========================================================================================
+6. WHAT IS STILL FAIL-OPEN, demonstrated rather than reasoned
+===========================================================================================
+
+The last three rounds each ended with a completeness claim and two of them were false. So this
+section is a run, not an argument.
+
+-------------------------------------------------------------------------------------------
+6a. Outside object KitMetrics: unrecognised + exempt value + unspent
+-------------------------------------------------------------------------------------------
+
+Surfaces.kt, at file scope:
+
+    package dev.swarm.phone.ui.kit
+
+    private val pad =
+        2f
+
+    $ go test ./android/gate/ -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.113s
+
+STILL GREEN, and this is the exact boundary written on s23MetricConst and s23LiteralExemptions.
+All three conditions are needed: inside object KitMetrics it fails (5d); with a value off the
+nine-row table it fails (section 4); spent through a `KitMetrics.` reference it fails (section
+4). Closing it as well would mean either dropping the exemption table -- 45 of the kit's 62
+literals are zeroes, weights, `1 - fraction`, `/ 2f` and the 8-bit channel range -- or making
+the exemptions position-scoped, which is a per-line permission list and is the thing this whole
+sequence of rounds is about not building.
+
+-------------------------------------------------------------------------------------------
+6b. Other boundaries, stated with their reason
+-------------------------------------------------------------------------------------------
+
+  - A spend written without the `KitMetrics.` prefix -- a member import, or a reference from
+    inside the object itself -- is not seen by the spend check. Its declaration still faces the
+    literal accounting, which inside the object has no exemptions.
+  - Only the eleven files s23OwnedFiles names are scanned. Motion.kt is PB-DS-8's, for the
+    reason the package comment gives, and app code outside ui/kit is other slices'.
+  - s23CodeNoStrings blanks string contents, so a number inside a `${...}` template expression
+    is not counted. Raw strings are refused outright: s23KitLiterals fails the test rather than
+    scan a source it would misread.
+  - A number that never becomes a property at all -- `Kit.dp(context, 7f)` -- is
+    TestPBDS7_NoMetricIsTypedAtADpCallSite's, unchanged by this work.
+  - This is a FILE gate. What a component resolves on a running resource table is PB-DS-10's,
+    in app/src/test/.../ui/kit/, and nothing here speaks to it.

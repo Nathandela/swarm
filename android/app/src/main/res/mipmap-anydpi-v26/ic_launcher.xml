@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive launcher icon.
+
+  The background is the app's own window colour rather than a drawable of its own: it is a flat
+  fill, and a one-colour <shape> file would be an indirection with nothing in it. Using the
+  token keeps the icon on the same origin as every other colour in the app (PB-TOK-1), so it
+  cannot drift from the product it launches.
+
+  -anydpi-v26 WITH NO DENSITY FALLBACK IS DELIBERATE. minSdk is 33 and adaptive icons landed at
+  26, so every device this app supports resolves this file; the usual mipmap-hdpi..xxxhdpi PNG
+  ladder exists to serve API 25 and below, which this app does not have.
+
+  NOTE FOR THE STORE LISTING: the Play Console's 512x512 icon is a SEPARATE upload and is not
+  taken from the APK. This file does not satisfy it.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/swarm_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

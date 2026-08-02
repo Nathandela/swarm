@@ -6,13 +6,21 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"errors"
+
+	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
+	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -35,12 +43,392 @@ type coreAPI struct {
 	fakeAgentBin string
 	endpointID   string // this daemon's stable federation id (resume source validation)
 
+	// devices is the pinned-device registry backing R-POL.9 remote-command
+	// authorization. It is nil until wired at assembly; a nil registry authorizes
+	// nothing (authorizeCommand fails closed), so a remote-tier Server built on a
+	// coreAPI without a registry refuses every mutating op. clock is the expiry clock
+	// (nil => time.Now).
+	devices *device.Registry
+	clock   func() time.Time
+
+	// launchPolicy is the machine-configured remote launch policy (allowed cwd roots,
+	// R-POL.3/.7), loaded at assembly. nil until wired; the assembly ALWAYS wires a
+	// non-nil deny-all-by-default policy, so the remote tier is fail-closed even with no
+	// config file. A nil policy denies (fail-closed) via RemoteLaunchAllowed.
+	launchPolicy protocol.LaunchPolicy
+
+	// pairing carries the machine-side pairing identity + enrollment material and the
+	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
+	// until provisioned (a LATER slice: `swarm remote init`); a nil config makes
+	// BeginPairing fail closed, so pairing is simply unsupported until keys exist.
+	pairing *pairingConfig
+	// lifecycleMu is the OUTERMOST coreAPI lifecycle-transaction lock (round-4 re-audit,
+	// ADR-007). It serializes the ATOMIC CORE of the RevokeDevice transaction (presence check +
+	// rotateEpoch + Remove + the Count()==0 sever DECISION) against the BeginPairing COMMIT section
+	// (epoch re-check + enroll + AddSole + grant.Save), and two concurrent revokes against each
+	// other. This closes the residual finding-1 epoch TOCTOU (a rotate+remove could interleave
+	// between the commit's re-check and AddSole, enrolling under a stale epoch) and finding-4 (two
+	// revokes both rotating the epoch key -- a lost update). Round-5 finding 2 (codex#5+sonnet#1):
+	// the SLOW follow-up work -- the sever's deadline-bounded socket writes and grant.Delete's fsync
+	// -- runs OUTSIDE this lock (the per-keystroke DeviceRegistered check is the independent
+	// backstop), so a concurrent revoke/pair never stalls behind blocking network writes. Lock
+	// ORDER: lifecycleMu is taken FIRST; rotateEpoch's pairingMu is taken INSIDE it, NEVER the
+	// reverse, so no cycle can form. The sever's severMu is now taken only AFTER lifecycleMu is
+	// released, so it never nests under lifecycleMu at all. BeginPairing takes it ONLY for the brief
+	// commit -- never across the long handshake, and it is released BEFORE the result() notification.
+	lifecycleMu sync.Mutex
+	// pairingMu guards a.pairing. BeginPairing read it lock-free until revoke gained the
+	// power to MUTATE it: RevokeDevice rotates the machine epoch key and reassigns the
+	// snapshot (codex#1, ADR-007 2026-07-24). Held only for the pointer read/reassign,
+	// never across the long pairing handshake, and always INSIDE lifecycleMu when taken during
+	// a revoke/commit transaction (never the reverse), so no lock-ordering cycle can form.
+	pairingMu sync.Mutex
+	// lifecycleGate is a TEST-ONLY seam (nil in production, a no-op) invoked at the two
+	// lifecycle-transaction points the round-4 serialization fix makes atomic: the pairing
+	// commit's post-epoch-recheck window ("pair-commit") and the revoke's post-rotate window
+	// ("revoke-rotated"). It lets a concurrency test deterministically interleave the operation
+	// lifecycleMu must exclude (the residual finding-1 TOCTOU and the finding-4 double rotation).
+	lifecycleGate func(point string)
+
+	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
+	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
+	stateDir string
+	// ksMu guards the read-time diff-write of the durable kill-switch state:
+	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
+	// last enabled value written to remote-state.json this process (nil => never written),
+	// so the mirror only writes on a transition, not on every call.
+	ksMu        sync.Mutex
+	ksPersisted *bool
+	// manualOff is the durable OWNER override behind `swarm remote off`/`on` (A4): when
+	// set, RemoteControlEnabled reports false regardless of paired devices (manual off WINS
+	// over device presence). It is atomic so the hot RemoteControlEnabled read (every remote
+	// op) is lock-free, and it is loaded from remote-state.json at assembly so an owner who
+	// severs remote control stays severed across a restart.
+	manualOff atomic.Bool
+	// onRemoteControlDisabled, when set, is invoked whenever remote control transitions to
+	// DISABLED — `swarm remote off` (SetRemoteControl(false)) or the last paired device removed
+	// (RevokeDevice dropping Count to 0). The assembly wires it to the remote Server's
+	// SeverAllRemoteControl so `off` PROACTIVELY tears down every live remote control lease +
+	// terminal peek (C2a), not merely pausing per-keystroke input. Guarded by severMu; nil until
+	// wired (no remote Server) and a no-op then. Mirrors the daemon's cross-package hook callbacks.
+	severMu                 sync.Mutex
+	onRemoteControlDisabled func()
+
+	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
+	// it so the owner controller and the future remote peek can both observe one
+	// single-consumer shim session over a SINGLE upstream. Wired at construction.
+	tap *tapManager
+
 	events   chan persist.Meta
 	nudge    chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
+
+// AuthorizeCommand makes coreAPI a protocol.DeviceAuthenticator (R-POL.9): it verifies
+// a remote command's Ed25519 signature against the pinned registry key and enforces the
+// device's capability and the command's expiry. Fail-closed on every error.
+func (a *coreAPI) AuthorizeCommand(cmd protocol.DeviceCommandAuth) error {
+	return authorizeCommand(a.devices, a.now(), cmd)
+}
+
+// now returns the authorization clock (injectable for tests; defaults to time.Now).
+func (a *coreAPI) now() time.Time {
+	if a.clock != nil {
+		return a.clock()
+	}
+	return time.Now()
+}
+
+// coreAPI ALSO satisfies protocol.DeviceAuthenticator so an assembled remote-tier
+// Server authorizes remote mutating ops against the pinned device registry (R-POL.9).
+var _ protocol.DeviceAuthenticator = (*coreAPI)(nil)
+
+// RemoteLaunchAllowed makes coreAPI a protocol.LaunchPolicy (R-POL.3): it delegates to the
+// loaded policy so an assembled remote-tier Server confines remote launches to the
+// machine-configured cwd roots. A nil policy (never wired) denies every launch — fail-closed.
+func (a *coreAPI) RemoteLaunchAllowed(resolvedCwd string) error {
+	if a.launchPolicy == nil {
+		return fmt.Errorf("remote launch policy unavailable")
+	}
+	return a.launchPolicy.RemoteLaunchAllowed(resolvedCwd)
+}
+
+// coreAPI ALSO satisfies protocol.LaunchPolicy so the assembled remote-tier Server confines
+// remote launches to the configured cwd roots (R-POL.3).
+var _ protocol.LaunchPolicy = (*coreAPI)(nil)
+
+// ListDevices makes coreAPI a protocol.DeviceLister (slice A3.1): it converts the
+// pinned device registry's roster to the wire-facing protocol.DeviceView, carrying
+// the capability tier as its stable text form (device.Capability.MarshalText). A
+// nil registry (never wired) reports no devices rather than panicking.
+func (a *coreAPI) ListDevices() []protocol.DeviceView {
+	if a.devices == nil {
+		return nil
+	}
+	recs := a.devices.List()
+	out := make([]protocol.DeviceView, 0, len(recs))
+	for _, r := range recs {
+		capText, err := r.Capability.MarshalText()
+		if err != nil {
+			continue // corrupted capability: fail closed by omitting the record
+		}
+		out = append(out, protocol.DeviceView{
+			DeviceID:   r.DeviceID,
+			Name:       r.Name,
+			Capability: string(capText),
+			PairedAt:   r.PairedAt,
+		})
+	}
+	return out
+}
+
+// coreAPI ALSO satisfies protocol.DeviceLister so the assembled remote-tier Server
+// can serve device_list (R-DEV.1).
+var _ protocol.DeviceLister = (*coreAPI)(nil)
+
+// RevokeDevice makes coreAPI a protocol.DeviceRevoker (slice A3.2): it removes
+// deviceID from the pinned device registry. A nil registry (never wired) reports no
+// device removed rather than panicking (nil-registry-safe like ListDevices).
+func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
+	if a.devices == nil {
+		return false, nil
+	}
+	// The ATOMIC CORE of the transaction runs under the OUTERMOST lifecycle lock (ADR-007):
+	// presence check + rotateEpoch + Remove + grant.Delete + the Count()==0 sever DECISION. These are
+	// fast LOCAL ops that all need the transaction's atomicity. In particular grant.Delete must stay
+	// INSIDE the lock (round-6 finding 1, codex#1): a concurrent BeginPairing COMMIT of the SAME
+	// device id (a re-pair, also serialized on lifecycleMu) would otherwise slip its AddSole +
+	// grant.Save into the window between this revoke's Unlock and an outside-the-lock grant.Delete,
+	// and the delete would then wipe the freshly-sealed sidecar -- bricking the re-paired phone (a
+	// registered device with no deliverable grant). The closure uses defer Unlock so a panic in any
+	// step still releases the lock (panic-safe, opus#1, mirroring BeginPairing's commit). lifecycleMu
+	// is the OUTERMOST lock; rotateEpoch's pairingMu is taken inside it.
+	//
+	// Round-5 finding 2 (codex#5 + sonnet#1): ONLY the slow network sever (severRemoteControl ->
+	// sendDetach's deadline-bounded socket writes) runs OUTSIDE this lock -- the per-keystroke
+	// DeviceRegistered check is its independent backstop -- so a concurrent revoke/pair never stalls
+	// behind blocking network writes. severMu is thus taken only AFTER lifecycleMu is released.
+	removed, shouldSever, err := func() (bool, bool, error) {
+		a.lifecycleMu.Lock()
+		defer a.lifecycleMu.Unlock()
+		// Only rotate/remove a device that is actually present: a revoke of an absent id is a no-op
+		// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
+		// this check is atomic with the rotation, so a second concurrent revoke of the same device
+		// finds it already gone here and does not rotate a second time (finding 4).
+		if _, ok := a.devices.Get(deviceID); !ok {
+			return false, false, nil
+		}
+		// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
+		// invariant "device removed => epoch rotated" holds across a crash between the two. codex#1:
+		// the rotation kills the revoked device's retained content key for all future traffic. A
+		// rotation/persist fault ABORTS the revoke (return the error; the device stays registered and
+		// still severable) rather than removing under a stale, still-live key. Done BEFORE the sever
+		// so pairingMu (taken in rotateEpoch) never nests inside severMu.
+		if rerr := a.rotateEpoch(); rerr != nil {
+			return false, false, rerr
+		}
+		removed, err := a.devices.Remove(deviceID)
+		// A genuine PRE-rename Remove failure, or a raced-away device (removed==false), leaves nothing
+		// removed: abort without severing or deleting a grant. The device is still registered (and
+		// still severable) or was already gone -- either way there is no committed removal to follow.
+		if !removed {
+			return false, false, err
+		}
+		// Round-5 finding 1 (codex#2 + opus#1, CRITICAL REGRESSION): the device WAS durably removed --
+		// even if Registry.Remove ALSO returned a trailing post-rename dir-fsync durability error. The
+		// sever + grant.Delete MUST still run: skipping the last-device sever on a committed removal
+		// leaves a still-running gateway's stale-epoch journal subscription alive, so after a re-pair
+		// it re-seals the NEW session under the OLD key to the revoked device's mailbox. Decide the
+		// last-device sever atomically under the lock (the Count read must be serialized with Remove).
+		shouldSever := a.devices.Count() == 0
+		// C4 + Finding 4b (re-audit): clean the device's sealed grant sidecar, INSIDE the lock (round-6
+		// finding 1). Delete is idempotent (an absent sidecar -- e.g. a pre-grant pairing -- is not an
+		// error). Surface the durability error first (the device IS removed; the dir-fsync just wasn't
+		// confirmed), else the grant-cleanup error -- a stranded sidecar is a leak the operator must
+		// learn about.
+		derr := grant.Delete(a.registryDir(), deviceID)
+		if err != nil {
+			return true, shouldSever, err
+		}
+		return true, shouldSever, derr
+	}()
+
+	if shouldSever {
+		// C2a: this removal took the LAST device (Count was 0) -> remote control transitions to
+		// disabled; proactively sever every live remote control lease + terminal peek OUTSIDE the lock
+		// (the per-device C1 sever in handleDeviceRevoke covers the revoked device's own lease; this
+		// covers any lingering lease once the switch goes off).
+		a.severRemoteControl()
+	}
+	return removed, err
+}
+
+// rotateEpoch rotates the machine epoch key after a device is revoked (codex#1): it
+// loads the persisted machine identity, mints a fresh epoch (RotateEpoch), re-persists
+// it atomically (temp+fsync+rename, 0600), and reloads the in-memory pairing snapshot so
+// the NEXT BeginPairing seals the new device's grant under the new epoch. A MISSING
+// machine identity is a no-op (pairing unprovisioned, nothing to rotate -- mirrors
+// loadPairingConfig's tri-state); a present-but-broken identity surfaces the error.
+func (a *coreAPI) rotateEpoch() error {
+	path := filepath.Join(a.stateDir, "remote", remoteIdentityFile)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil // pairing unprovisioned: no epoch to rotate
+		}
+		return err
+	}
+	id, err := machineid.Load(path)
+	if err != nil {
+		return err
+	}
+	if err := id.RotateEpoch(); err != nil {
+		return err
+	}
+	if err := id.Save(path); err != nil {
+		return err
+	}
+	pc, err := loadPairingConfig(a.stateDir)
+	if err != nil {
+		return err
+	}
+	a.pairingMu.Lock()
+	a.pairing = pc
+	a.pairingMu.Unlock()
+	if a.lifecycleGate != nil {
+		a.lifecycleGate("revoke-rotated") // TEST-ONLY seam (nil in production): finding-4 window
+	}
+	return nil
+}
+
+// errNoRegistry refuses a re-grant on a daemon assembled without a device registry: there
+// is no record to converge and no device to seal to.
+var errNoRegistry = errors.New("skeleton: no device registry; nothing to re-grant")
+
+// RegrantDevice is PB-KEY-3's machine-side unblock and PB-KEY-4's convergence, which are
+// the same act: mint a FRESH sealed EpochGrant for a still-registered device under the
+// CURRENT machine epoch, persist it as that device's sidecar, and update the device
+// record's GrantedEpoch to match.
+//
+// It is the exit from PB-KEY-3's terminal state, and today there is no other. A grant can
+// be lost with no recovery: the relay refuses appends past the mailbox depth cap and
+// SweepRetention purges items older than RetentionCap (7 days) even when never acked, and
+// re-pairing is refused outright because BeginPairing fail-fasts while a device is
+// registered. Without this verb a phone that never received its grant -- or slept through a
+// rotation -- is recoverable only by physical access to the machine.
+//
+// THE GrantedEpoch UPDATE IS NOT BOOKKEEPING. reconcilePairedDevices removes any device
+// whose GrantedEpoch != the current machine epoch on EVERY daemon start (serve.go), so a
+// re-grant that leaves the record on the old epoch does not merely fail to converge -- it
+// SILENTLY UNPAIRS the only device on the next restart, and the owner discovers it when
+// their phone stops working for no visible reason.
+//
+// ORDER, and it is fail-closed at each step. The seq allocation is made DURABLE (id.Save)
+// before the grant is sealed, so a crash can only ever SKIP a coordinate, never re-issue
+// one -- a re-issued (epoch, seq) is refused by the phone as a replay, which is the one
+// outcome that leaves the device exactly as broken as it was. The sidecar lands before the
+// record moves, because the gateway delivers by loading that file: a record on the new
+// epoch with no sidecar for it is the "not fully paired" state reconcilePairedDevices
+// clears by REMOVING the device.
+//
+// It runs under lifecycleMu, the outermost lock, so it is atomic against a concurrent
+// revoke (which rotates the epoch and removes the device) and against a BeginPairing commit.
+func (a *coreAPI) RegrantDevice(deviceID string) error {
+	if a.devices == nil {
+		return errNoRegistry
+	}
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+
+	// Fail closed on an unknown id. Minting a sidecar for a device the registry does not
+	// hold would write a deliverable key nothing ever cleans up: the startup reconcile walks
+	// the REGISTRY, not the sidecar directory.
+	rec, ok := a.devices.Get(deviceID)
+	if !ok {
+		return fmt.Errorf("skeleton: no such device %q; nothing to re-grant", deviceID)
+	}
+	path := filepath.Join(a.stateDir, "remote", remoteIdentityFile)
+	id, err := machineid.Load(path)
+	if err != nil {
+		return fmt.Errorf("load machine identity: %w", err)
+	}
+	// The floor is the coordinate this device has already been handed. It matters when the
+	// epoch has NOT moved: a re-grant of a lost bootstrap reuses the live epoch, so only the
+	// seq can carry the strict increase the phone's grant receiver demands.
+	floor := uint64(0)
+	if prev, lerr := grant.Load(a.registryDir(), deviceID); lerr == nil && prev != nil && prev.EpochID == id.EpochID() {
+		floor = prev.GrantSeq
+	}
+	seq := id.NextGrantSeq(floor)
+	if err := id.Save(path); err != nil {
+		return fmt.Errorf("persist grant seq: %w", err)
+	}
+	g, err := crypto.SealEpochGrant(id.GrantSignPrivate(), rec.RecipientPub, id.EpochID(), seq, id.EpochKeys())
+	if err != nil {
+		return fmt.Errorf("seal epoch grant: %w", err)
+	}
+	if err := grant.Save(a.registryDir(), deviceID, g); err != nil {
+		return fmt.Errorf("persist epoch grant: %w", err)
+	}
+	rec.GrantedEpoch = id.EpochID()
+	if err := a.devices.Add(rec); err != nil {
+		return fmt.Errorf("converge device record onto epoch %d: %w", id.EpochID(), err)
+	}
+	// The in-memory pairing snapshot carries the grant seq the NEXT BeginPairing would seal
+	// under, so it must not keep naming one this re-grant has just consumed (the same reload
+	// rotateEpoch does for the same reason).
+	pc, err := loadPairingConfig(a.stateDir)
+	if err != nil {
+		return err
+	}
+	a.pairingMu.Lock()
+	a.pairing = pc
+	a.pairingMu.Unlock()
+	return nil
+}
+
+// coreAPI ALSO satisfies protocol.DeviceRevoker so the assembled remote-tier Server
+// can serve device_revoke (slice A3.2), and protocol.DeviceRegranter so the OWNER-tier
+// Server can serve device_regrant (PB-KEY-3's unblock).
+var (
+	_ protocol.DeviceRevoker   = (*coreAPI)(nil)
+	_ protocol.DeviceRegranter = (*coreAPI)(nil)
+)
+
+// DeviceRegistered makes coreAPI a protocol.DeviceRegistrar (C1): it reports whether deviceID
+// is still present in the pinned device registry, so the daemon's controlGateOpen severs a
+// revoked device's live control lease on the very next keystroke — independent of which Server
+// handled the revoke. A nil registry (never wired) reports not-registered (fail-closed, like
+// ListDevices/RevokeDevice).
+func (a *coreAPI) DeviceRegistered(deviceID string) bool {
+	if a.devices == nil {
+		return false
+	}
+	_, ok := a.devices.Get(deviceID)
+	return ok
+}
+
+// coreAPI ALSO satisfies protocol.DeviceRegistrar so the assembled remote-tier Server severs a
+// revoked device's live control lease per keystroke (C1).
+var _ protocol.DeviceRegistrar = (*coreAPI)(nil)
+
+// DescribePolicy makes coreAPI a protocol.PolicyDescriber (slice A3.1): it reports
+// the configured remote launch policy's allowed cwd roots. protocol.LaunchPolicy
+// itself only carries RemoteLaunchAllowed, so the roots are obtained by type-asserting
+// the loaded policy's own AllowedRoots() (remoteLaunchPolicy implements it); a nil or
+// non-conforming policy reports an empty root set rather than panicking.
+func (a *coreAPI) DescribePolicy() protocol.PolicyView {
+	rp, ok := a.launchPolicy.(interface{ AllowedRoots() []string })
+	if !ok {
+		return protocol.PolicyView{}
+	}
+	return protocol.PolicyView{AllowedCwdRoots: rp.AllowedRoots()}
+}
+
+// coreAPI ALSO satisfies protocol.PolicyDescriber so the assembled remote-tier
+// Server can serve policy_query (R-POL.3).
+var _ protocol.PolicyDescriber = (*coreAPI)(nil)
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{
@@ -51,6 +439,16 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 		nudge:        make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 	}
+	// The tap's dial seam is exactly today's Attach path (DialSession + the shared
+	// shim-wire stream); the tap tees that one upstream to N subscribers. DialSession
+	// returns the shim's negotiated caps since v0.6 (C3), and NewShimStream wants them.
+	a.tap = newTapManager(func(id string) (protocol.SessionStream, error) {
+		conn, caps, err := a.core.DialSession(id)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.NewShimStream(conn, caps)
+	})
 	a.wg.Add(1)
 	go a.watch()
 	return a
@@ -67,6 +465,108 @@ func (a *coreAPI) Rename(id, name string) error {
 	return err
 }
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
+
+// ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a
+// remote op's operation_id single-use through the daemon's durable idempotency store so
+// a take_control operation_id cannot be replayed to open a second lease. It delegates to
+// the daemon's ClaimOperation wrapper (Prepare + existed).
+func (a *coreAPI) ClaimOperation(operationID, action, session string) (bool, error) {
+	return a.core.ClaimOperation(operationID, action, session)
+}
+
+// coreAPI ALSO satisfies protocol.OperationClaimer so the assembled remote-tier Server
+// enforces take_control operation_id single-use (slice A5-c).
+var _ protocol.OperationClaimer = (*coreAPI)(nil)
+
+// ClaimIdempotentOp / CommitIdempotentOp make coreAPI a protocol.IdempotentExecutor
+// (slice DHI-3): they forward to the daemon's durable two-phase idempotency store so a
+// replayed remote kill/delete returns the original attempt's cached outcome and executes
+// the side effect exactly once.
+func (a *coreAPI) ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error) {
+	return a.core.ClaimIdempotentOp(operationID, action, session)
+}
+
+func (a *coreAPI) CommitIdempotentOp(operationID string, ok bool) error {
+	return a.core.CommitIdempotentOp(operationID, ok)
+}
+
+// coreAPI ALSO satisfies protocol.IdempotentExecutor so the assembled remote-tier Server
+// makes remote kill/delete replay-safe (slice DHI-3).
+var _ protocol.IdempotentExecutor = (*coreAPI)(nil)
+
+// coreAPI ALSO satisfies protocol.JournalBackend so the assembled remote-tier
+// Server can serve journal_read / journal_subscribe (DHI-1). The daemon and
+// internal/journal stay free of a protocol import; the wire-type conversion lives
+// here, where both packages are already in scope.
+var _ protocol.JournalBackend = (*coreAPI)(nil)
+
+// toWireJournalRecord converts a daemon-internal journal.Record to the wire-facing
+// protocol.JournalRecord (only the fields the phone needs; the opaque payload and
+// schema/ts are not carried on the wire). Agent IS one of those fields: the session
+// row renders it, and this conversion is the only place it can cross.
+func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
+	return protocol.JournalRecord{
+		Cursor:    r.Cursor,
+		SessionID: r.SessionID,
+		Type:      string(r.Type),
+		Group:     r.Group,
+		Agent:     r.Agent,
+	}
+}
+
+// JournalReadFrom forwards journal_read to the core and converts the daemon
+// journal.Resume to the wire protocol.JournalResume (Events + full-resync + cursor).
+func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
+	res, err := a.core.JournalReadFrom(from)
+	if err != nil {
+		return protocol.JournalResume{}, err
+	}
+	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+	for _, r := range res.Roster {
+		out.Roster = append(out.Roster, toWireJournalRecord(r))
+	}
+	for _, e := range res.Events {
+		out.Events = append(out.Events, toWireJournalRecord(e))
+	}
+	return out, nil
+}
+
+// JournalSubscribe forwards to the daemon journal fan-out, converting each
+// journal.Record to the wire protocol.JournalRecord on a dedicated relay goroutine
+// (the daemon cannot import protocol, so the conversion happens here). The returned
+// cancel stops the relay AND cancels the daemon subscription; it is idempotent and
+// race-free. The relay's send onto the wire feed is guarded by the done channel, so
+// cancel/shutdown never blocks it and no goroutine leaks.
+func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
+	src, cancelSrc := a.core.JournalSubscribe()
+	out := make(chan protocol.JournalRecord, eventsBuffer)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case rec, ok := <-src:
+				if !ok {
+					return // daemon journal closed the source
+				}
+				select {
+				case out <- toWireJournalRecord(rec):
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			close(done)
+			cancelSrc()
+		})
+	}
+	return out, cancel
+}
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and
@@ -254,15 +754,12 @@ func validateResumeSource(src, agentType, endpointID string, getSource func(loca
 	return local, m, nil
 }
 
-// Attach opens a real SessionStream over the daemon->shim connection, via the
-// single shared shim-wire implementation in internal/protocol (protocol.FromDaemon
-// uses the same code internally; see protocol.NewShimStream).
+// Attach opens a SessionStream for id, multiplexed through the shared per-session
+// tap (A7 F1). The first attach opens the one upstream shim connection; concurrent
+// attaches (the owner controller and the future remote peek) SHARE it. The owner
+// tier attaches readWrite so its Input/Resize drive the session exactly as before.
 func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
-	conn, caps, err := a.core.DialSession(id)
-	if err != nil {
-		return nil, err
-	}
-	return protocol.NewShimStream(conn, caps)
+	return a.tap.subscribe(id, readWrite)
 }
 
 // SampleSnapshot fetches one session's current grid snapshot for the tap
@@ -289,6 +786,18 @@ func (a *coreAPI) SampleSnapshot(id string) ([]byte, error) {
 	_ = stream.Close()
 	return snap, nil
 }
+
+// TerminalTap makes coreAPI a protocol.TerminalTapper (A7 F2): it opens a READ-ONLY tap on
+// the shared per-session multiplexer, so a remote peek observes the session's output over the
+// SAME single upstream the owner controller uses, WITHOUT injecting input — readOnly makes the
+// returned tapSub's Input/Resize no-ops, so the peek can never drive the session.
+func (a *coreAPI) TerminalTap(local string) (protocol.SessionStream, error) {
+	return a.tap.subscribe(local, readOnly)
+}
+
+// coreAPI ALSO satisfies protocol.TerminalTapper so the assembled remote-tier Server can serve
+// terminal_subscribe (A7 F2).
+var _ protocol.TerminalTapper = (*coreAPI)(nil)
 
 // emitStatus routes an engine-derived status change through both halves of Epic
 // 10's status wiring (the Epic 11 carry-forward, now wired):

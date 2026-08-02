@@ -1,0 +1,193 @@
+package gate
+
+// FAILING-FIRST (TDD RED, GG-5): the two wirings residuals §2.9 and §2.10(a) found missing,
+// fenced where they can actually be checked -- as REACHABILITY from the lifecycle callback that
+// has to reach them.
+//
+// WHY REACHABILITY AND NOT JUST A CALL. android/gate/boundverbledger_test.go asserts that
+// production Kotlin calls each verb, which is the control that catches a verb nobody wired at
+// all. It cannot see WHERE the call is: a `subscribeJournal` inside a helper nothing invokes
+// satisfies it, and so does one on a path that runs once at construction and never again. For
+// these three the LIFECYCLE is the property -- subscribe on resume, withdraw on pause
+// (ADR-007 B16) -- so this file walks from `render` and from `release`.
+//
+// WHY IT CANNOT BE A KOTLIN TEST. The phone core cannot be built on the unit-test JVM: there is
+// no libgojni, so `Swarmmobile.newApp` raises an UnsatisfiedLinkError and every Robolectric
+// launch of PhoneActivity gets `PhoneStartup.Unavailable`. `renderReady` -- where all of this
+// lives -- is unreachable from any test on this machine. That is the same property that let the
+// defect ship, so the fence is a source fence and says so.
+//
+// THE WALK IS THE S17 ONE (s17_pushclient_test.go), not a second weaker one. It already handles
+// expression bodies, which is most of this tree, and it was repaired twice this phase. It is
+// driven over ONE FILE rather than the whole module: `s17Bodies` concatenates the bodies of
+// every same-named function in production Kotlin, and `render` is declared in three surfaces --
+// so a module-wide walk would accept a subscribe in SettingsSurface.render as satisfying
+// PhoneSurface's. Its documented limit still applies: it cannot cross a property initialiser.
+//
+// NOTHING HERE CLAIMS PB-E2E-5's DEFERRED SET. These are assertions about source. That a real
+// handset delivers an event, that a real Keystore answers a capability probe, that a real
+// biometric gates anything -- none of it is claimed.
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func phoneSurfacePath(t *testing.T) string {
+	return filepath.Join(kotlinMainRoot(t),
+		filepath.FromSlash("dev/swarm/phone/PhoneSurface.kt"))
+}
+
+func phoneRuntimePath(t *testing.T) string {
+	return filepath.Join(kotlinMainRoot(t),
+		filepath.FromSlash("dev/swarm/phone/PhoneRuntime.kt"))
+}
+
+// reachableInFile walks from entry within one file's declarations.
+func reachableInFile(t *testing.T, path, entry string, depth int) string {
+	t.Helper()
+	src := stripKotlinComments(readFileOrFail(t, path, "PB-APP-3"))
+	bodies := s17BodiesIn(src)
+	if len(bodies) == 0 {
+		t.Fatalf("the Kotlin reader found no function bodies in %s at all. Every assertion "+
+			"below would then pass or fail for a reason that has nothing to do with the code",
+			mustRel(t, path))
+	}
+	body, ok := s17ReachableIn(bodies, entry, depth)
+	if !ok {
+		t.Fatalf("%s declares no `%s`. The assertions in this file are about what that callback "+
+			"reaches, and a renamed lifecycle hook must fail here rather than take its fences "+
+			"with it (defect class (iii))", mustRel(t, path), entry)
+	}
+	return body
+}
+
+// ---------------------------------------------------------------------------
+// residuals §2.9: the app could not observe.
+// ---------------------------------------------------------------------------
+
+// TestWiring_TheScreenComingToTheFrontStartsObserving.
+//
+// `SetEventListener`, `SubscribeJournal` and `TerminalWatch` appeared ZERO times in ALL Kotlin
+// -- main, test and androidTest alike. So no listener was installed, journal delivery never
+// started, and the machine was never asked to send terminal frames. `FacadeBridge.terminalPeek`
+// reads `App.Peek`, which reads `Router().Snapshots()` -- a LOCAL cache that only a watched
+// session fills -- so the peek was permanently empty and failed looking exactly like a quiet
+// machine. PB-APP-3/4/5 were non-functional in the shipping app.
+func TestWiring_TheScreenComingToTheFrontStartsObserving(t *testing.T) {
+	body := reachableInFile(t, phoneSurfacePath(t), "render", 4)
+
+	for _, want := range []struct{ verb, why string }{
+		{"SetEventListener", "no listener is installed, so no event the core emits can reach " +
+			"a screen and the roster never updates after the first draw"},
+		{"SubscribeJournal", "journal delivery never starts: mobile/relay.go's onJournal " +
+			"returns early unless `subscribed` is set, so every record is folded into durable " +
+			"state and none is announced"},
+		{"TerminalWatch", "the machine is never asked to send terminal frames, so App.Peek " +
+			"reads a local snapshot cache nothing populates and the peek is empty forever"},
+	} {
+		if !s17NamesVerb(body, want.verb) {
+			t.Errorf("PB-APP-3/4/5: nothing reachable from PhoneSurface.render calls "+
+				"App.%s.\n%s\n"+
+				"The verb existing is not the property: it existed, was unit-tested, and was "+
+				"traced in mobile/screen_coverage.tsv while the app could not reach it.\n"+
+				"reachable from render:\n%s", want.verb, want.why, s17Indent(body))
+		}
+	}
+}
+
+// TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor.
+//
+// ADR-007 B16: backgrounding DISCONNECTS, and the phone is reached by a push wake instead. Both
+// requests below are work the MACHINE is doing on this phone's behalf -- per-session terminal
+// rendering, and journal delivery into a queue nothing drains -- so a screen that subscribes
+// and never withdraws leaks them for every session the user ever opened. `TerminalUnwatch`'s
+// own doc says so in as many words.
+func TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor(t *testing.T) {
+	body := reachableInFile(t, phoneSurfacePath(t), "release", 3)
+
+	for _, want := range []struct{ verb, why string }{
+		{"UnsubscribeJournal", "a backgrounded screen goes on being fed events it will never " +
+			"render, into the bounded drop-oldest queue mobile/events.go documents"},
+		{"TerminalUnwatch", "the peek plane leaks per-session server render work for every " +
+			"session the user ever opened -- which is the reason this verb exists"},
+	} {
+		if !s17NamesVerb(body, want.verb) {
+			t.Errorf("PB-RUN-3/ADR-007 B16: nothing reachable from PhoneSurface.release calls "+
+				"App.%s.\n%s\nreachable from release:\n%s", want.verb, want.why, s17Indent(body))
+		}
+	}
+}
+
+// TestWiring_TheListenerOutlivesNoScreen.
+//
+// `SetEventListener` has no un-set that does not cross a null through JNI, and `PhoneRuntime`
+// caches the built App across Activity instances -- so a listener that captured the Activity
+// would keep it reachable for the life of the process, one per rotation. The shape that avoids
+// it is a process-lived listener holding a replaceable sink, which is what `PhoneEvents` is;
+// this asserts the pause path clears the SINK, since clearing the listener is what cannot be
+// done.
+func TestWiring_TheListenerOutlivesNoScreen(t *testing.T) {
+	src := stripKotlinComments(appKotlinSource(t))
+	if len(kotlinImplementsSupertype(src, "EventListener")) == 0 {
+		t.Fatalf("PB-APP-3: no production Kotlin implements swarmmobile.EventListener, so " +
+			"App.SetEventListener has nothing to be given")
+	}
+	body := reachableInFile(t, phoneSurfacePath(t), "release", 3)
+	if !strings.Contains(body, "stopObserving(") {
+		t.Errorf("PB-RUN-3: PhoneSurface.release does not clear the event sink.\n"+
+			"The listener itself cannot be un-installed, so this is the only thing between a "+
+			"paused Activity and a redraw against views it no longer owns -- and between the "+
+			"phone core and a permanent reference to a dead Activity.\n"+
+			"reachable from release:\n%s", s17Indent(body))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// residuals §2.10(a): the custody capability gate was never invoked.
+// ---------------------------------------------------------------------------
+
+// TestWiring_TheCapabilityGateIsAsked.
+//
+// `CustodyPlanner.forDevice` had NO production caller: `PhoneRuntime.construct()` went straight
+// to `KeystoreCustodyBootstrap` without building a capability map, so PB-KEY-8's defined
+// refusal was a fully-tested pure function nothing invoked, and
+// `KeyCustodyException.PlatformCapabilityMissing` was declared, routed by `routeStartupFailure`
+// and never thrown. The shipped app refused no handset over any capability -- which also made
+// physical-handset runbook step 2c inert.
+func TestWiring_TheCapabilityGateIsAsked(t *testing.T) {
+	body := reachableInFile(t, phoneRuntimePath(t), "attach", 3)
+
+	if !strings.Contains(body, "forDevice(") {
+		t.Errorf("PB-KEY-8: nothing reachable from PhoneRuntime.attach calls "+
+			"CustodyPlanner.forDevice.\nThe planner decides the requirement's \"defined refusal "+
+			"when the handset lacks the required algorithm or auth capability\", and a decision "+
+			"nobody asks for is not a gate.\nreachable from attach:\n%s", s17Indent(body))
+	}
+	if !strings.Contains(body, "PlatformCapabilityMissing(") {
+		t.Errorf("PB-KEY-8: nothing reachable from PhoneRuntime.attach throws " +
+			"KeyCustodyException.PlatformCapabilityMissing. A CustodyPlan.Refused that is " +
+			"computed and then dropped is the same as no gate, and worse: the type, its " +
+			"recovery mapping and its DEVICE_UNSUPPORTED routing all exist and read as live.")
+	}
+}
+
+// TestWiring_TheAnomalyHasAReader is the non-fatal half, and it is the half that is easy to
+// skip: an anomaly is BY DESIGN not a refusal, so nothing breaks if it goes nowhere. A record
+// computed on every launch and read by nobody is the same defect class one layer along.
+func TestWiring_TheAnomalyHasAReader(t *testing.T) {
+	src := stripKotlinComments(appKotlinSource(t))
+	if !strings.Contains(src, "CapabilityNotice") {
+		t.Fatalf("PB-KEY-8: production Kotlin has nothing that turns a CapabilityAnomaly into " +
+			"something a person reads")
+	}
+	body := reachableInFile(t, phoneSurfacePath(t), "render", 4)
+	if !strings.Contains(body, "CapabilityNotice") {
+		t.Errorf("PB-KEY-8: nothing reachable from PhoneSurface.render renders the capability "+
+			"anomalies.\nThey are recorded on CustodyPlan.Provisioned precisely BECAUSE they are "+
+			"not worth refusing a phone over (residuals §2.8) -- which makes a reader the only "+
+			"thing that distinguishes recording them from discarding them.\n"+
+			"reachable from render:\n%s", s17Indent(body))
+	}
+}

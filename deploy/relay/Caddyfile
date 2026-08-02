@@ -1,0 +1,43 @@
+# Caddyfile for the swarm-relay reverse proxy (agents-tracker-vzl).
+#
+# Caddy terminates TLS with an automatic ACME certificate (Let's Encrypt by default) and
+# proxies straight through to the relay's local listener. swarm-relay itself
+# (internal/remote/relay/server.go) registers exactly one HTTP route -- mux.HandleFunc("/",
+# s.handleHTTP) -- so every path funnels to the same handler and there is no sub-path to
+# route around. It serves plain ws:// there and always will: Config.TLSMode is parsed by
+# relay.LoadConfig but read by nothing that serves (docs/operations/relay-runbook.md
+# section 0), so this file is the entire TLS story for the deployment.
+#
+# Caddy's reverse_proxy detects the "Connection: Upgrade" handshake and proxies WebSocket
+# connections with NO extra directives -- unlike nginx, which needs an explicit
+# Upgrade/Connection header pass-through block. Nothing else is required below.
+#
+# Replace relay.example.com with the DNS name pointed at this VPS (see
+# docs/operations/relay-vps-deploy.md, "Point DNS"). Keep it SHORT: `swarm remote init`
+# caps --relay-url at 39 characters (pairing.MaxRelayURLLen), because the URL is carried
+# verbatim into the pairing QR, and "wss://" alone already spends 6 of those.
+#
+# The backend address must match "listen" in relay.config.example exactly.
+#
+# `reuse_private_keys` IS LOAD-BEARING AND IS NOT A PERFORMANCE SETTING. Caddy's documented
+# default is the opposite: "a new key is created for every new certificate to mitigate
+# pinning". This deployment pins. `swarm remote init --relay-pin` records the SPKI hash, the
+# phone persists it (internal/phonecore/state.go, relay_spki_pin) and dials with
+# PinnedSPKISHA256 forever after (mobile/relay.go). Without this directive, the first ACME
+# renewal -- roughly 60 days after deployment, unattended -- presents a new key, the SPKI
+# changes, and BOTH the phone and the machine start failing with ErrPinMismatch at once. The
+# phone shows its RELAY_UNTRUSTED banner (ui/ConnectionUi.kt) -- "it is not presenting the
+# identity your machine published when you paired" -- with no spinner, because this is not a
+# link that comes back on its own. A routine renewal reads to the user as a security failure.
+#
+# Caddy documents this option as "against industry best practices" and "subject to removal in
+# a future version". That is a real risk and the reason relay-vps-deploy.md carries a recovery
+# procedure rather than treating the pin as permanent: if a Caddy upgrade ever drops it, the
+# pin WILL change and the fix is to recompute it and re-pair, not to debug an interception
+# that never happened.
+relay.example.com {
+	tls {
+		reuse_private_keys
+	}
+	reverse_proxy 127.0.0.1:9440
+}

@@ -1,0 +1,15 @@
+RED evidence — fix-pack item 3 (HIGH-2): fail-close remote-tier attach/resize/input
+Date: 2026-07-23  Commit-base: 53732a3
+
+$ go test -run 'RemoteInput|RemoteAttach|RemoteResize|RemoteData' ./internal/protocol/
+--- FAIL: TestProtocol_RemoteAttachRefusedNoLeaseEstablished (0.01s)
+    remote_input_refused_test.go:91: remote attach = op "lease" code ""; want error/not_authorized (fail-closed, no take_control gate)
+--- FAIL: TestProtocol_RemoteResizeNotForwardedToSession (0.00s)
+    remote_input_refused_test.go:121: remote resize [123 45] reached the session shim; want it dropped (HIGH-2: unsigned remote interactive control)
+--- FAIL: TestProtocol_RemoteInputFrameNotForwardedNoKeystrokeInjection (0.00s)
+    remote_input_refused_test.go:149: remote raw input reached the session shim (keystroke injection, HIGH-2): "rm -rf ~\r"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.617s
+FAIL
+
+Tests 1-3 fail on the ASSERTION (the remote tier currently allows attach and forwards resize/input); test 4 (owner-tier regression guard) PASSES and must stay green. No stub changes needed. RED is for the right reason.

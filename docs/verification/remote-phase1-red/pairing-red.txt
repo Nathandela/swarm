@@ -1,0 +1,101 @@
+======================================================================
+Remote-control Phase 1 — PAIRING SLICE (internal/remote/pairing) — RED RUN
+epic: agents-tracker-5h5 (remote-control)
+role: TEST-WRITER (independent; TDD Phase 1 + Red, GG-5)
+requirements: R-PAIR.1-.9 (QR codec, XXpsk0 orchestration, SAS integration,
+              mandatory desktop confirm, mutual pinning, lifecycle + rate
+              limits, headless scope)
+amendments:   D.0-A5 (async/pairing context), D.0-A12 (R-PAIR.9 headless scope),
+              D.0-A14 (two-X25519-key split: payloads carry + pin RecipientPub)
+date: Sat Jul 18 19:49:30 CEST 2026
+go: go1.26.1   host: darwin/amd64
+command: go test ./internal/remote/pairing/... 2>&1
+======================================================================
+
+### RED STYLE (plan section B: "undefined-symbol OR behavioral failures"):
+### BEHAVIORAL failing-first against minimal unimplemented STUBS. qr.go +
+### pairing.go define the frozen seam (exported types/signatures the
+### implementer fills) with every function body returning ErrUnimplemented, a
+### sentinel DISTINCT from every behavioral error so an error-path test cannot
+### go green against a stub. The package COMPILES + vets clean; every test
+### FAILS because the seam is unimplemented. No implementation logic was
+### written; no crypto/relay source or test was touched.
+###
+### Hermetic: rendezvous is an in-memory two-party fake (fakeRendezvous);
+### R-PAIR.6 rendezvous mechanics stay owned + tested by internal/remote/relay.
+### The only external code used is the frozen public API of
+### internal/remote/crypto (Noise XXpsk0 handshake drive + SAS + identities).
+======================================================================
+
+### VERBATIM RED (default go test output) ###
+--- FAIL: TestPairing_PhotographedQRFailsAtConfirm (0.01s)
+    confirm_test.go:34: machine err = pairing: unimplemented, want ErrConfirmDeclined
+--- FAIL: TestPairing_DeclineLeavesNoState (0.00s)
+    confirm_test.go:64: machine err = pairing: unimplemented, want ErrConfirmDeclined
+--- FAIL: TestPairing_ConfirmTimeoutFailsClosed (0.00s)
+    confirm_test.go:98: machine err = pairing: unimplemented, want ErrConfirmTimeout
+--- FAIL: TestPairing_SecretSingleUse (0.00s)
+    lifecycle_test.go:29: machine Pair: pairing: unimplemented
+--- FAIL: TestPairing_NoStandingListener (0.00s)
+    lifecycle_test.go:67: machine Pair: pairing: unimplemented
+--- FAIL: TestPairing_RateLimitedBothSides (0.00s)
+    --- FAIL: TestPairing_RateLimitedBothSides/gateway_side (0.00s)
+        lifecycle_test.go:100: machine Pair err = pairing: unimplemented, want ErrRateLimited
+    --- FAIL: TestPairing_RateLimitedBothSides/relay_side (0.00s)
+        lifecycle_test.go:115: machine Pair err = pairing: unimplemented, want relay-surfaced ErrRateLimited
+--- FAIL: TestPairing_RefusedWithoutLocalConsole (0.00s)
+    lifecycle_test.go:135: headless Pair err = pairing: unimplemented, want ErrHeadlessRefused
+--- FAIL: TestPairing_XXpsk0Completes (0.00s)
+    pairing_test.go:31: machine Pair: pairing: unimplemented
+--- FAIL: TestPairing_PayloadFields (0.00s)
+    pairing_test.go:66: machine Pair: pairing: unimplemented
+--- FAIL: TestPairing_SecretNeverOnWire (0.00s)
+    pairing_test.go:96: machine Pair: pairing: unimplemented
+--- FAIL: TestSAS_MatchOnCleanHandshake (0.00s)
+    pairing_test.go:136: machine Pair: pairing: unimplemented
+--- FAIL: TestSAS_MismatchOnTamper (0.00s)
+    pairing_test.go:195: real device leg: pairing: unimplemented
+--- FAIL: TestPairing_PinsAndStoresRouting (0.00s)
+    pairing_test.go:225: machine Pair: pairing: unimplemented
+--- FAIL: TestPairing_ThenLiveHandshakeUsesPin (0.00s)
+    pairing_test.go:263: machine Pair: pairing: unimplemented
+--- FAIL: TestQR_RoundTripKAT (0.00s)
+    qr_test.go:36: EncodeQR: pairing: unimplemented
+--- FAIL: TestQR_SizeBudget (0.00s)
+    qr_test.go:75: EncodeQR: pairing: unimplemented
+--- FAIL: TestQR_RendezvousIndependentOfSecret (0.00s)
+    qr_test.go:95: EncodeQR(base): pairing: unimplemented
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/pairing	0.600s
+FAIL
+
+======================================================================
+### RACE RED (go test -race — package spawns goroutines in tests): same RED,
+### no data race, no panic reported (tail):
+======================================================================
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/pairing	0.879s
+FAIL
+
+======================================================================
+### PROOF: clean RED
+### - 17 top-level tests, ALL FAIL, 0 PASS.
+### - Every failure line cites 'pairing: unimplemented' (the stub sentinel):
+###   no syntax error, no type error, no test-bug, no wrong-value failure.
+### - go build ./internal/remote/pairing/... : OK (stubs compile)
+### - go vet ./internal/remote/pairing/...   : OK
+### - gofmt -l internal/remote/pairing/      : clean (no files listed)
+======================================================================
+
+Requirement -> test map (the frozen contract the implementer makes GREEN):
+  R-PAIR.1  TestPairing_SecretNeverOnWire, TestPairing_SecretSingleUse
+  R-PAIR.2  TestQR_RoundTripKAT, TestQR_SizeBudget, TestQR_RendezvousIndependentOfSecret
+  R-PAIR.3  TestPairing_XXpsk0Completes, TestPairing_PayloadFields
+  R-PAIR.4  TestSAS_MatchOnCleanHandshake, TestSAS_MismatchOnTamper
+  R-PAIR.5  TestPairing_PhotographedQRFailsAtConfirm, TestPairing_DeclineLeavesNoState,
+            TestPairing_ConfirmTimeoutFailsClosed
+  R-PAIR.6  (rendezvous mechanics owned by internal/remote/relay; here a hermetic fake)
+  R-PAIR.7  TestPairing_PinsAndStoresRouting, TestPairing_ThenLiveHandshakeUsesPin
+  R-PAIR.8  TestPairing_NoStandingListener, TestPairing_RateLimitedBothSides
+  R-PAIR.9  TestPairing_RefusedWithoutLocalConsole  (D.0-A12)
+======================================================================

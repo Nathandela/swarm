@@ -1,0 +1,249 @@
+======================================================================
+Remote-control Phase 1 — CRYPTO FOUNDATION — RED RUN
+date: Sat Jul 18 14:51:35 CEST 2026
+package: internal/remote/crypto (new)
+requirements: R-CRY.1-.16, R-PAIR.4 (SAS); amendments D.0-A5/A10/A14/A15
+======================================================================
+
+### CRYPTO FOUNDATION — internal/remote/crypto (undefined-only RED) ###
+# command: go test ./internal/remote/crypto/... 2>&1
+
+# github.com/Nathandela/swarm/internal/remote/crypto [github.com/Nathandela/swarm/internal/remote/crypto.test]
+internal/remote/crypto/common_test.go:24:34: undefined: KeyMaterial
+internal/remote/crypto/common_test.go:24:47: undefined: KeyStore
+internal/remote/crypto/common_test.go:34:20: undefined: KeyMaterial
+internal/remote/crypto/common_test.go:46:25: undefined: NoiseSession
+internal/remote/crypto/common_test.go:73:43: undefined: Identity
+internal/remote/crypto/common_test.go:73:72: undefined: NoiseSession
+internal/remote/crypto/devicesig_test.go:21:22: undefined: Command
+internal/remote/crypto/envelope_test.go:38:19: undefined: EnvelopeHeader
+internal/remote/crypto/envelope_test.go:299:55: undefined: Envelope
+internal/remote/crypto/envelope_test.go:310:33: undefined: MailboxReceiver
+internal/remote/crypto/envelope_test.go:310:33: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/crypto [build failed]
+FAIL
+
+======================================================================
+### FULL undefined-symbol enumeration (go test -gcflags=-e, cap lifted) ###
+# Every error line below is 'undefined: <symbol>' — a pure GG-5 RED:
+# the tests fail to COMPILE because the production symbols do not exist
+# yet. No syntax errors, no type errors, no test bugs. The three
+# non-'undefined:' lines are the package header and two FAIL summaries.
+======================================================================
+
+# github.com/Nathandela/swarm/internal/remote/crypto [github.com/Nathandela/swarm/internal/remote/crypto.test]
+internal/remote/crypto/common_test.go:24:34: undefined: KeyMaterial
+internal/remote/crypto/common_test.go:24:47: undefined: KeyStore
+internal/remote/crypto/common_test.go:26:13: undefined: NewFileKeyStoreFromMaterial
+internal/remote/crypto/common_test.go:34:20: undefined: KeyMaterial
+internal/remote/crypto/common_test.go:35:9: undefined: KeyMaterial
+internal/remote/crypto/common_test.go:46:25: undefined: NoiseSession
+internal/remote/crypto/common_test.go:73:43: undefined: Identity
+internal/remote/crypto/common_test.go:73:72: undefined: NoiseSession
+internal/remote/crypto/common_test.go:75:12: undefined: NewNoise
+internal/remote/crypto/common_test.go:75:21: undefined: NoiseConfig
+internal/remote/crypto/common_test.go:84:12: undefined: NewNoise
+internal/remote/crypto/common_test.go:84:21: undefined: NoiseConfig
+internal/remote/crypto/devicesig_test.go:21:22: undefined: Command
+internal/remote/crypto/devicesig_test.go:22:9: undefined: Command
+internal/remote/crypto/devicesig_test.go:42:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:51:26: undefined: KeyMaterial
+internal/remote/crypto/devicesig_test.go:61:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:65:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:69:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:88:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:97:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:104:12: undefined: VerifyCommandSig
+internal/remote/crypto/devicesig_test.go:117:29: undefined: Command
+internal/remote/crypto/devicesig_test.go:118:27: undefined: Command
+internal/remote/crypto/devicesig_test.go:119:27: undefined: Command
+internal/remote/crypto/devicesig_test.go:120:27: undefined: Command
+internal/remote/crypto/devicesig_test.go:121:27: undefined: Command
+internal/remote/crypto/devicesig_test.go:122:27: undefined: Command
+internal/remote/crypto/devicesig_test.go:123:27: undefined: Command
+internal/remote/crypto/envelope_test.go:38:19: undefined: EnvelopeHeader
+internal/remote/crypto/envelope_test.go:39:9: undefined: EnvelopeHeader
+internal/remote/crypto/envelope_test.go:40:19: undefined: VersionV1
+internal/remote/crypto/envelope_test.go:41:19: undefined: TypeMailbox
+internal/remote/crypto/envelope_test.go:44:19: undefined: KeyID
+internal/remote/crypto/envelope_test.go:45:19: undefined: KeyID
+internal/remote/crypto/envelope_test.go:62:14: undefined: SealDeterministic
+internal/remote/crypto/envelope_test.go:72:15: undefined: TypeMailbox
+internal/remote/crypto/envelope_test.go:73:49: undefined: TypeMailbox
+internal/remote/crypto/envelope_test.go:95:17: undefined: ParseEnvelope
+internal/remote/crypto/envelope_test.go:120:14: undefined: Seal
+internal/remote/crypto/envelope_test.go:126:16: undefined: ParseEnvelope
+internal/remote/crypto/envelope_test.go:136:14: undefined: Seal
+internal/remote/crypto/envelope_test.go:142:15: undefined: ParseEnvelope
+internal/remote/crypto/envelope_test.go:142:51: undefined: ErrUnknownVersion
+internal/remote/crypto/envelope_test.go:152:14: undefined: Seal
+internal/remote/crypto/envelope_test.go:162:15: undefined: ParseEnvelope
+internal/remote/crypto/envelope_test.go:175:19: undefined: ParseEnvelope
+internal/remote/crypto/envelope_test.go:190:15: undefined: Seal
+internal/remote/crypto/envelope_test.go:217:22: undefined: KeyID
+internal/remote/crypto/envelope_test.go:219:22: undefined: KeyID
+internal/remote/crypto/envelope_test.go:224:15: undefined: SealDeterministic
+internal/remote/crypto/envelope_test.go:228:15: undefined: SealDeterministic
+internal/remote/crypto/envelope_test.go:241:7: undefined: NewMailboxReceiver
+internal/remote/crypto/envelope_test.go:247:51: undefined: ErrStaleSeq
+internal/remote/crypto/envelope_test.go:256:7: undefined: NewMailboxReceiver
+internal/remote/crypto/envelope_test.go:262:51: undefined: ErrStaleSeq
+internal/remote/crypto/envelope_test.go:271:7: undefined: NewMailboxReceiver
+internal/remote/crypto/envelope_test.go:289:7: undefined: NewMailboxReceiver
+internal/remote/crypto/envelope_test.go:299:55: undefined: Envelope
+internal/remote/crypto/envelope_test.go:303:14: undefined: Seal
+internal/remote/crypto/envelope_test.go:310:33: undefined: MailboxReceiver
+internal/remote/crypto/epoch_test.go:26:22: undefined: EpochKeys
+internal/remote/crypto/epoch_test.go:27:9: undefined: EpochKeys
+internal/remote/crypto/epoch_test.go:37:16: undefined: SealEpochGrant
+internal/remote/crypto/epoch_test.go:45:33: undefined: OpenEpochGrant
+internal/remote/crypto/epoch_test.go:61:26: undefined: KeyMaterial
+internal/remote/crypto/epoch_test.go:66:16: undefined: SealEpochGrant
+internal/remote/crypto/epoch_test.go:70:21: undefined: OpenEpochGrant
+internal/remote/crypto/epoch_test.go:82:16: undefined: SealEpochGrant
+internal/remote/crypto/epoch_test.go:88:16: undefined: EpochGrant
+internal/remote/crypto/epoch_test.go:90:33: undefined: OpenEpochGrant
+internal/remote/crypto/epoch_test.go:108:23: undefined: KeyMaterial
+internal/remote/crypto/epoch_test.go:109:20: undefined: OpenEpochGrant
+internal/remote/crypto/epoch_test.go:109:40: undefined: EpochGrant
+internal/remote/crypto/epoch_test.go:121:30: undefined: EpochKeys
+internal/remote/crypto/epoch_test.go:132:17: undefined: TypePushWake
+internal/remote/crypto/epoch_test.go:133:18: undefined: Seal
+internal/remote/crypto/epoch_test.go:142:20: undefined: TypeMailbox
+internal/remote/crypto/epoch_test.go:143:21: undefined: Seal
+internal/remote/crypto/epoch_test.go:165:11: undefined: TypeMailbox
+internal/remote/crypto/epoch_test.go:166:14: undefined: Seal
+internal/remote/crypto/epoch_test.go:170:20: undefined: TypePushWake
+internal/remote/crypto/noise_test.go:39:37: undefined: LivePrologue
+internal/remote/crypto/noise_test.go:45:12: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:49:12: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:89:5: undefined: NoiseSuite
+internal/remote/crypto/noise_test.go:90:70: undefined: NoiseSuite
+internal/remote/crypto/noise_test.go:92:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:93:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:95:32: undefined: NoiseSuite
+internal/remote/crypto/noise_test.go:96:50: undefined: NoiseSuite
+internal/remote/crypto/noise_test.go:107:7: undefined: NewIdentityFromMaterial
+internal/remote/crypto/noise_test.go:108:7: undefined: NewIdentityFromMaterial
+internal/remote/crypto/noise_test.go:110:14: undefined: NewNoise
+internal/remote/crypto/noise_test.go:110:23: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:117:15: undefined: NewNoise
+internal/remote/crypto/noise_test.go:117:24: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:146:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:147:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:148:14: undefined: NewNoise
+internal/remote/crypto/noise_test.go:148:23: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:150:13: undefined: LivePrologue
+internal/remote/crypto/noise_test.go:155:15: undefined: NewNoise
+internal/remote/crypto/noise_test.go:155:24: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:157:13: undefined: LivePrologue
+internal/remote/crypto/noise_test.go:174:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:175:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:176:12: undefined: NewNoise
+internal/remote/crypto/noise_test.go:176:21: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:178:13: undefined: LivePrologue
+internal/remote/crypto/noise_test.go:180:13: undefined: NewNoise
+internal/remote/crypto/noise_test.go:180:22: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:182:13: undefined: LivePrologue
+internal/remote/crypto/noise_test.go:193:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:194:15: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:195:13: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:197:14: undefined: NewNoise
+internal/remote/crypto/noise_test.go:197:23: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:204:19: undefined: NewNoise
+internal/remote/crypto/noise_test.go:204:28: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:223:14: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:224:17: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:225:13: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:227:12: undefined: NewNoise
+internal/remote/crypto/noise_test.go:227:21: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:231:18: undefined: NewNoise
+internal/remote/crypto/noise_test.go:231:27: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:277:5: undefined: RekeyAfterBytes
+internal/remote/crypto/noise_test.go:278:53: undefined: RekeyAfterBytes
+internal/remote/crypto/noise_test.go:280:5: undefined: RekeyAfterDuration
+internal/remote/crypto/noise_test.go:281:49: undefined: RekeyAfterDuration
+internal/remote/crypto/noise_test.go:309:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:310:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:313:13: undefined: NewNoise
+internal/remote/crypto/noise_test.go:313:22: undefined: NoiseConfig
+internal/remote/crypto/noise_test.go:333:25: undefined: NoiseSession
+internal/remote/crypto/noise_test.go:341:11: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:342:11: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:356:36: undefined: NoiseSession
+internal/remote/crypto/noise_test.go:358:10: undefined: GenerateIdentity
+internal/remote/crypto/noise_test.go:359:10: undefined: GenerateIdentity
+internal/remote/crypto/identity_test.go:30:13: undefined: GenerateIdentity
+internal/remote/crypto/identity_test.go:71:8: undefined: NewIdentityFromMaterial
+internal/remote/crypto/identity_test.go:102:13: undefined: GenerateIdentity
+internal/remote/crypto/identity_test.go:109:19: undefined: LoadIdentity
+internal/remote/crypto/identity_test.go:132:15: undefined: LoadIdentity
+internal/remote/crypto/keystore_test.go:104:12: undefined: NewFileKeyStoreFromMaterial
+internal/remote/crypto/keystore_test.go:108:12: undefined: OpenFileKeyStore
+internal/remote/crypto/keystore_test.go:115:15: undefined: KeyStore
+internal/remote/crypto/keystore_test.go:117:25: undefined: KeyStore
+internal/remote/crypto/keystore_test.go:118:23: undefined: KeyStore
+internal/remote/crypto/keystore_test.go:119:28: undefined: KeyStore
+internal/remote/crypto/keystore_test.go:120:23: undefined: KeyStore
+internal/remote/crypto/keystore_test.go:135:12: undefined: VerifyCommandSig
+internal/remote/crypto/keystore_test.go:141:17: undefined: SealToRecipient
+internal/remote/crypto/sas_test.go:18:10: undefined: GenerateIdentity
+internal/remote/crypto/sas_test.go:19:10: undefined: GenerateIdentity
+internal/remote/crypto/sas_test.go:20:36: undefined: PairPrologue
+internal/remote/crypto/sas_test.go:25:17: undefined: SAS
+internal/remote/crypto/sas_test.go:29:18: undefined: SAS
+internal/remote/crypto/sas_test.go:51:11: undefined: GenerateIdentity
+internal/remote/crypto/sas_test.go:52:11: undefined: GenerateIdentity
+internal/remote/crypto/sas_test.go:53:37: undefined: PairPrologue
+internal/remote/crypto/sas_test.go:59:13: undefined: SAS
+internal/remote/crypto/sas_test.go:63:13: undefined: SAS
+internal/remote/crypto/sas_test.go:82:14: undefined: SAS
+internal/remote/crypto/sas_test.go:86:16: undefined: SAS
+FAIL	github.com/Nathandela/swarm/internal/remote/crypto [build failed]
+FAIL
+
+======================================================================
+### Non-'undefined:' lines (must be only header + FAIL summaries) ###
+======================================================================
+# github.com/Nathandela/swarm/internal/remote/crypto [github.com/Nathandela/swarm/internal/remote/crypto.test]
+FAIL	github.com/Nathandela/swarm/internal/remote/crypto [build failed]
+FAIL
+
+### Distinct undefined contract symbols (count x symbol) ###
+  26 undefined: GenerateIdentity
+  13 undefined: NoiseConfig
+  13 undefined: NewNoise
+   9 undefined: Command
+   8 undefined: VerifyCommandSig
+   8 undefined: Seal
+   6 undefined: SAS
+   6 undefined: KeyStore
+   6 undefined: KeyMaterial
+   5 undefined: TypeMailbox
+   5 undefined: ParseEnvelope
+   5 undefined: LivePrologue
+   4 undefined: OpenEpochGrant
+   4 undefined: NoiseSuite
+   4 undefined: NoiseSession
+   4 undefined: NewMailboxReceiver
+   4 undefined: KeyID
+   3 undefined: SealEpochGrant
+   3 undefined: SealDeterministic
+   3 undefined: NewIdentityFromMaterial
+   3 undefined: EpochKeys
+   2 undefined: TypePushWake
+   2 undefined: RekeyAfterDuration
+   2 undefined: RekeyAfterBytes
+   2 undefined: PairPrologue
+   2 undefined: NewFileKeyStoreFromMaterial
+   2 undefined: LoadIdentity
+   2 undefined: ErrStaleSeq
+   2 undefined: EpochGrant
+   2 undefined: EnvelopeHeader
+   1 undefined: VersionV1
+   1 undefined: SealToRecipient
+   1 undefined: OpenFileKeyStore
+   1 undefined: MailboxReceiver
+   1 undefined: Identity
+   1 undefined: ErrUnknownVersion
+   1 undefined: Envelope

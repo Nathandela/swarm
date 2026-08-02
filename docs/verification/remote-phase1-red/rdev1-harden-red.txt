@@ -1,0 +1,17 @@
+--- FAIL: TestRegistry_OpenRejectsFutureSchema (0.00s)
+    --- FAIL: TestRegistry_OpenRejectsFutureSchema/schema_99 (0.00s)
+        registry_harden_test.go:42: Open with schema_version 99 = nil error; want rejection (fail-closed)
+    --- FAIL: TestRegistry_OpenRejectsFutureSchema/schema_0 (0.00s)
+        registry_harden_test.go:42: Open with schema_version 0 = nil error; want rejection (fail-closed)
+--- FAIL: TestRegistry_AddRejectsMismatchedDeviceID (0.01s)
+    registry_harden_test.go:60: Add with mismatched DeviceID = nil error; want rejection
+--- FAIL: TestRegistry_AddRejectsNon32Keys (0.02s)
+    --- FAIL: TestRegistry_AddRejectsNon32Keys/noise (0.00s)
+        registry_harden_test.go:87: Add with bad noise key = nil error; want rejection
+    --- FAIL: TestRegistry_AddRejectsNon32Keys/relay (0.00s)
+        registry_harden_test.go:87: Add with bad relay key = nil error; want rejection
+    --- FAIL: TestRegistry_AddRejectsNon32Keys/recipient (0.01s)
+        registry_harden_test.go:87: Add with bad recipient key = nil error; want rejection
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/device	0.398s
+FAIL

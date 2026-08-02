@@ -4,6 +4,14 @@ on:
   push:
   pull_request:
 
+# ADR-008. GOTOOLCHAIN defaults to `auto`, which is why the previous `go-version: '1.24'`
+# pins never failed against a go.mod declaring 1.25.0: Go silently downloaded 1.25 and built
+# anyway, so every job reported success while naming a toolchain nothing was built with.
+# `local` turns a floor/pin mismatch into a hard error instead of letting the pin self-heal
+# into a lie.
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   docs:
     name: docs (required files)
@@ -18,6 +26,20 @@ jobs:
               exit 1
             fi
           done
+      # PB-DOC-7: every concrete PB-* id owned exactly once, no wildcard ownership, every
+      # dependency edge enumerated, the slice DAG acyclic and orphan-free, and section 11's
+      # readable table not contradicting either authoritative file. The requirement asks for
+      # this "validated in CI" specifically: ownership-in-prose failed three audit rounds
+      # running, and the checker existed for two more without anything running it on push.
+      # --strict-section11 IS ARMED HERE, and the reason is the paragraph above happening a
+      # second time one level down. Strict mode was built, and internal/verify's
+      # phaseb_manifest_test.go mutation-proves it has teeth -- then nothing ran it on push.
+      # So section 11's readable rows drifted for two days (S8 lost PB-SAS-4, S21 lost the
+      # re-scoped PB-E2E-2), an external reviewer found it by hand, and the S20 evidence file
+      # went on claiming "default AND --strict-section11: both exit 0" -- true when written.
+      # A mode nothing runs is not a check, however well it is tested (ADR-007 B97).
+      - name: Phase B slice-ownership manifest (PB-DOC-7)
+        run: python3 scripts/check-phaseb-manifest.py --strict-section11
 
   lint:
     name: lint (golangci-lint)
@@ -27,7 +49,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
@@ -41,7 +63,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Vet (GG-4)
         run: go vet ./...
       - name: Run tests
@@ -80,7 +102,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Engine + hookclient unit tests (incl. darwin CPU parser)
         run: go test -race ./internal/engine/... ./internal/hookclient/...
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
@@ -103,7 +125,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Fuzz FuzzRoundTrip (internal/wire)
         run: go test -run '^$' -fuzz '^FuzzRoundTrip$' -fuzztime=30s ./internal/wire
       - name: Fuzz FuzzReadFrame (internal/wire)
@@ -127,7 +149,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Build swarm binary (CGO_ENABLED=0)
         env:
           CGO_ENABLED: '0'
@@ -159,7 +181,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
       - name: Build darwin binary (CGO_ENABLED=0)
         env:
           CGO_ENABLED: '0'
@@ -194,7 +216,7 @@ jobs:
         # the release pipeline, so its toolchain should be reproducible.
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2'
+          go-version: '1.25.0'
       - name: Set up goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -244,3 +266,56 @@ jobs:
           GOBIN="$tmp" go install ./cmd/swarm
           "$tmp/swarm" version
           "$tmp/swarm" version | grep -q "swarm "
+
+  # PB-TOOL-7: the Android artifacts, built somewhere other than one laptop. Every version
+  # this lane installs is read from android/toolchain.env, so the pin is EXERCISED rather
+  # than described -- a lane that quietly used the runner's preinstalled SDK would report
+  # success for a toolchain nothing in this repository chose.
+  android:
+    name: android (aar + gradle gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install the pinned platform, build-tools and NDK
+        run: |
+          . android/toolchain.env
+          sdkmanager --install \
+            "platforms;android-$SWARM_ANDROID_COMPILE_SDK" \
+            "build-tools;$SWARM_ANDROID_BUILD_TOOLS" \
+            "ndk;$SWARM_ANDROID_NDK"
+      # Pinned by version rather than resolved from the module, so gomobile and gobind are
+      # the pair SWARM_GOMOBILE_VERSION names. gobind must be on PATH because `gomobile bind`
+      # spawns it as a child process and misreports its absence as "run gomobile init".
+      - name: Install the pinned gomobile and gobind
+        run: |
+          . android/toolchain.env
+          go install "golang.org/x/mobile/cmd/gomobile@$SWARM_GOMOBILE_VERSION"
+          go install "golang.org/x/mobile/cmd/gobind@$SWARM_GOMOBILE_VERSION"
+      - name: Build the AAR (PB-TOOL-2)
+        run: ./android/build-aar.sh
+      - name: Gradle gate (PB-TOOL-6)
+        working-directory: android
+        run: ./gradlew --no-daemon lint test
+      - name: Debug APK (PB-TOOL-3)
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+      # The expensive half of the gate: it inspects the real AAR for each declared ABI and
+      # for absolute builder paths, runs the wrapper with the system Gradle off PATH, and
+      # reads the JUnit XML to prove every checked-in Kotlin test actually ran. Behind the
+      # `androidgate` tag and not invoked here would be behind a tag and never run.
+      # -timeout is raised because go test defaults to 10 minutes for the whole package and
+      # these assertions run two gomobile cross-compiles, four Gradle invocations and an
+      # apksigner verification; their own per-command bounds already add up past that.
+      - name: Android artifact assertions (go test -tags androidgate)
+        run: go test -tags androidgate -timeout 60m -count=1 ./android/gate/...

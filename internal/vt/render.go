@@ -24,6 +24,10 @@ package vt
 //     text before it is written (see stripControls) — replaced, not deleted, so a
 //     run's written character count keeps pace with its declared Width. This is
 //     the render-time backstop to the producer-side N-6 filter in emulator.go.
+//     stripControls also DROPS Unicode bidi formatting/override/isolate and
+//     zero-width characters (F7, Trojan-Source): those runes have zero display
+//     width, so dropping them is the parity-preserving move, where a space would
+//     add a column the emulator never counted.
 
 import (
 	"strconv"
@@ -127,6 +131,34 @@ func RenderSnapshotClipped(s *Snap, cols, rows int) []byte {
 	return []byte(b.String())
 }
 
+// SnapText flattens a snapshot grid into plain-text lines, one string per grid
+// row, safe to display on a phone: no terminal control sequence can escape, and no
+// Unicode bidi/zero-width rune can visually spoof what is displayed. Unlike
+// RenderSnapshot it emits NO ANSI — just each row's run text concatenated with every
+// control byte, bidi-formatting/override/isolate rune, and zero-width rune removed
+// (stripControls: C0 incl. LF/CR, DEL, C1, bidi, zero-width). It is a sanitization
+// choke point in its own right, stripping directly rather than trusting the
+// producer-side N-6 filter, so hostile bytes that reach a Snap by any path still
+// cannot smuggle an escape sequence or a Trojan-Source visual spoof to the viewer
+// (F7). A nil snapshot yields nil.
+func SnapText(s *Snap) []string {
+	if s == nil {
+		return nil
+	}
+	lines := make([]string, len(s.Lines))
+	for y, line := range s.Lines {
+		var b strings.Builder
+		for _, r := range line.Runs {
+			// stripControls drops every C0 (incl. LF/CR/ESC), DEL, and C1 byte, so
+			// the concatenation can never contain a control byte or an embedded
+			// newline — the row is a single flat, escape-free line.
+			b.WriteString(stripControls(r.Text))
+		}
+		lines[y] = b.String()
+	}
+	return lines
+}
+
 // clampCursor bounds a 0-based cursor coordinate into the clipped grid. limit is the
 // client dimension on that axis; limit<=0 disables clipping and returns v unchanged
 // so the unclipped path is byte-identical to the legacy renderer. Otherwise the
@@ -179,29 +211,35 @@ func clipRunPrefix(text string, acc, cols int) (string, int) {
 	return text[:len(text)-len(rest)], w
 }
 
-// stripControls REPLACES C0 control runes (0x00-0x1f, including the ESC that
-// introduces any sequence), DEL (0x7f), and the C1 control range (U+0080-U+009F,
-// whose UTF-8-encoded CSI/OSC forms xterm-family terminals honor as controls)
-// with an ASCII space, keeping every other rune (space included) unchanged. It is
-// the render-time N-6 backstop: a skewed or compromised peer cannot smuggle
-// ESC/OSC (e.g. an OSC 52 clipboard write) through a validly-versioned snapshot,
-// because the control bytes never reach the real terminal. Clean single-grapheme
-// run text (the overwhelming common case) passes through unchanged.
+// stripControls sanitizes run text before it is written to a real terminal, as
+// the render-time N-6 backstop to the producer-side filter in emulator.go: a
+// skewed or compromised peer cannot smuggle ESC/OSC (e.g. an OSC 52 clipboard
+// write) through a validly-versioned snapshot. Two rune classes, two treatments,
+// and the difference is COLUMN PARITY:
 //
-// A rune is substituted rather than deleted (agents-tracker-rs8) so the run's
-// rendered character count keeps pace with its declared Run.Width: the renderer
-// positions only the start of each row (one absolute CUP) and relies on the
-// terminal's own cursor auto-advance for every run after that, so dropping a
-// rune would shift every following run on the row one column left of where
-// Run.Width says it belongs. This is not a general width-accounting fix: a
-// space is always one column wide, so a control rune that a hostile/producer-
-// bypassed snapshot claimed as part of a wider (e.g. combining or wide-grapheme)
-// cluster can still leave that run's total column count short of its Run.Width —
-// a pre-existing hostile-input edge case, noted here rather than solved.
+//   - C0 controls (0x00-0x1f, including ESC), DEL (0x7f) and the C1 range
+//     (U+0080-U+009F, whose UTF-8 CSI/OSC forms xterm-family terminals honor)
+//     are REPLACED WITH A SPACE, not deleted, so a run's written character count
+//     keeps pace with its declared Width -- the merged-run renderer
+//     (clipRunPrefix) depends on that pacing.
+//   - Unicode bidi formatting/override/isolate runes (U+061C, U+200E/U+200F,
+//     U+202A-U+202E, U+2066-U+2069) and zero-width runes (U+200B-U+200D,
+//     U+FEFF) are DROPPED (F7): without this a hostile PTY could emit a
+//     Trojan-Source visual spoof (U+202E reordering displayed text, zero-width
+//     runes hiding or splicing content) that no control-byte filter catches.
+//     These runes have zero display width, so dropping them PRESERVES parity,
+//     where a space would add a column the emulator never counted.
+//
+// Clean single-grapheme run text (the overwhelming common case) passes through
+// unchanged. Union of the two lines' filters, reconciled in the 2026-08-02 merge.
 func stripControls(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
-			return ' '
+		switch {
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			return ' ' // C0 / DEL / C1: replaced, never deleted (column parity)
+		case r == 0x061c, r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e,
+			r >= 0x2066 && r <= 0x2069, r == 0xfeff:
+			return -1 // bidi + zero-width (F7): zero display width, drop keeps parity
 		}
 		return r
 	}, s)

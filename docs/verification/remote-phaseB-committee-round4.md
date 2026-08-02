@@ -1,0 +1,132 @@
+# Phase B audit committee — round 4
+
+**Convened** 2026-07-30 against HEAD `d4c2e53`; the branch moved to `f97e12a` during review and
+reviewers noted it. **Verdict: REVISE, unanimous across four members.**
+
+**Round 3's synthesis was never written.** Its findings are recorded as ADR-007 B60, B61 and B62
+and are not lost, but the round closed without this document, which is why the process condition
+was still open. That is recorded here rather than quietly corrected: the gap is why round 4 exists.
+
+## Members
+
+| Member | Emphasis | Verdict |
+|---|---|---|
+| **GPT-5.6 sol (codex)**, external | Open — no repo context | REVISE; 7 production conditions |
+| **Opus** | Are the fences real; what composes | REVISE |
+| **Sonnet** | Is the count honest | Closed test yes; production no |
+| **Fable** | Threat model: what can the relay do | REVISE, conditional closed test |
+
+**Gemini failed for the third time on this project** — it never received the brief on stdin and
+spent its run enumerating the filesystem for a repository. Replaced by a fable reviewer rather
+than reporting a three-member committee as four.
+
+## Consensus — raised by two or more, treated as real
+
+1. **The count was not supportable.** Opened at 139/143, closed at **137**. Two requirements were
+   found NOT MET on evidence during the round (`PB-INPUT-4`, `PB-SEC-3`), one was restored
+   (`PB-PUSH-9`), and one (`PB-NET-4`) is left **contested and deliberately unresolved**, because
+   the specification demands and withdraws the same queue in two places and resolving it by
+   choosing the reading that keeps the number high would be the failure mode itself.
+
+2. **Fences that cannot fail are still the dominant defect class**, now at **thirteen**. Three were
+   found this round, two of them in code shipped and self-verified the same day. The sharpest is
+   B64's deadline fence: deleting the deadline outright left **the entire Go suite green**.
+
+3. **Unbounded durable growth reachable by an unauthenticated party**, in three separate buckets,
+   found independently by two reviewers.
+
+4. **`PB-PAIR-4` is worse than recorded and is structural.** The half-pair is reachable in **both**
+   orientations from an ordinary clock, with no attacker. The cause is that msg4 is the last frame
+   either side sends, so the acceptance is unacknowledged by construction. A patch cannot close it;
+   it needs a fifth frame or deferred enrolment.
+
+## Divergence — the interesting tension, recorded rather than resolved
+
+**Both reviewers who examined it agree the root of every bound-shaped finding is that a fresh
+routing id is free. They disagree on the remedy, and the disagreement is substantive.**
+
+- **Threat reviewer:** impose a **cost on registration**.
+- **Fence reviewer:** rejects it on three grounds — the rendezvous path is unauthenticated *by
+  design* so a gate either exempts it or breaks first boot; a registration ledger hands the
+  **declared adversary** a linkable long-lived identity, which is a worse trade than the disk it
+  saves; and the scarce quantity is **durable bytes, not identities**. Its counter-proposal: **a
+  durable write should require a pre-existing durable relationship** — converting "identities are
+  free" into "relationships are not" without the relay learning anything about anyone.
+
+**Adopted:** global per-bucket caps and connection-layer admission control as production blockers.
+**Not adopted:** registration cost. The anonymity objection is sound on this threat model's own
+terms, and a design change of that size should not be made under audit pressure.
+
+**A second divergence worth keeping:** the threat reviewer graded `PB-SEC-2(b)` as a live
+authorization bypass; the fence reviewer showed the same enrolment change destroys the content KEK,
+which is refused re-mint by design, so the attacker gets a green prompt for an operation that then
+**fails closed** — a UX ordering defect, not a bypass. Accepted as a **severity re-grade, not a
+closure**; the reviewer explicitly did not run it and asked not to be treated as certification.
+
+> **AMENDED 2026-07-31 (ADR-007 B133).** This divergence is now moot in both directions: PB-SEC-2
+> is **VOID**, and neither the prompt nor the enrolment-invalidation behaviour it turns on still
+> exists — `Provisioning.kt:422` sets `setInvalidatedByBiometricEnrollment(false)` on both KEKs.
+> Item 5 of the round's exit list below (*"`PB-SEC-2`'s per-prompt token; enrolment invalidation
+> terminal until explicit repair"*) is discharged the same way: **not done, and no longer owed.**
+> The methodological point the divergence illustrates — two reviewers grading the same mechanism
+> differently, resolved by measurement rather than by seniority — is why it is left standing.
+
+## Blind spots — what nobody asked, including me
+
+- **Nobody re-audited all 143 rows against their evidence.** Sampling found two fossil artifacts
+  cited for twelve requirements between them. The sampling rate is unknown.
+- **Nobody tested the crypto.** No forgery, nonce-reuse or PSK test was written by any member. That
+  area is READ-only across the whole committee and is therefore **unaudited, not sound**.
+- **Nobody ran the emulator or a handset**, so the deferred hardware gate remains entirely
+  unvalidated — and one reviewer found it **cannot run as documented** anyway.
+- **I claimed all gates green without running the race gate.** Run since; clean.
+- **The instrument-under-test problem was invisible until it was found twice.** An evidence artifact
+  generated by a broken scanner certifies the blindness. Nothing checks whether a gate's own output
+  is trustworthy.
+
+## Per-member signal
+
+- **codex (external)** — found what three internal reviewers missed: two requirements with **zero
+  production callers**, and that B64 made `PB-PAIR-4` naturally reachable. The only member to
+  challenge the count as a whole rather than sample it.
+- **Opus** — mutated the fences **nobody had touched**, and the news was mostly good: at-rest
+  sealing, epoch rotation and both halves of the hardware-key floor are all real. Then found the
+  log gate fail-open by the same mechanism as a defect fixed hours earlier. Also produced the
+  round's best refutations, several of which **restored** confidence.
+- **Sonnet** — found a failure mode nobody was looking for: evidence files checked for
+  **existence, never currency**. Two fossils, twelve requirements.
+- **Fable** — three unauthenticated criticals including one that **bricks the relay at boot with
+  the only recovery destroying every pairing**, and the metadata finding that a zero-byte push
+  separates wake kinds by shape, defeating the two-tier design without touching crypto.
+
+## Verdict: REVISE
+
+**Closed test on real hardware — conditionally yes**, with the relay bound to localhost or a
+private network. Not because the code is ready, but because the deferred hardware gate cannot be
+closed any other way, and the remaining defects are either documentation, or require an adversary
+a known tester set does not contain. **`PB-PAIR-4` will occur without an attacker**; testers need
+the recovery in writing.
+
+**Production — no.** Blocking, in order:
+
+1. `PB-PAIR-4` closed at the protocol level in **both** orientations — a durable prepare/commit,
+   not a patch.
+2. The three unauthenticated relay criticals fixed and fenced.
+3. Global per-bucket caps and connection admission control.
+4. `PB-SEC-3`'s log scan fixed, and its evidence regenerated by an instrument that works.
+5. `PB-SEC-2`'s per-prompt token; enrolment invalidation terminal until explicit repair.
+6. `PB-NET-4` adjudicated; `PB-INPUT-4` wired or withdrawn; `PB-NET-5` measured through the real
+   façade.
+7. `PB-E2E-2` formally resolved rather than carried as an active unmet requirement.
+8. `PB-E2E-5` run on real hardware — which first requires making it runnable.
+9. Every gate green at one immutable commit, including `-race`, with evidence regenerated **from
+   that commit**.
+
+## The honest trajectory
+
+**Each round has found more than the last, not less.** Round 4 found three unauthenticated
+criticals, a metadata leak defeating the two-tier design on packet shape, a structural half-pair,
+and two fail-open security gates — one of them a copy of a defect fixed the same morning.
+
+That is the process working. It is also the reason the goal's condition is not met: the committee
+has not agreed, and on this evidence it should not.

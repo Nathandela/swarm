@@ -1,0 +1,177 @@
+const CallbackQueueSize
+const DeviceName
+const ErrClassAwaitingKey
+const ErrClassClosed
+const ErrClassDeviceUnsupported
+const ErrClassGrantLost
+const ErrClassInternal
+const ErrClassInvalidRequest
+const ErrClassNoLease
+const ErrClassNotFound
+const ErrClassNotPaired
+const ErrClassOffline
+const ErrClassPairingFailed
+const ErrClassRateLimited
+const ErrClassRepairRequired
+const ErrClassRevoked
+const ErrClassStateCorrupt
+const ErrClassUnknown
+const ErrClassUnreconciled
+const KeyCustodyAuthRequired
+const KeyCustodyKeyInvalidated
+const WakeNotificationText
+field Config.MachineID string
+field Config.RelayURL string
+field Config.StateDir string
+field Event.Cursor int64
+field Event.Dropped int
+field Event.Kind string
+field Event.Message string
+field Event.SessionID string
+field Event.State string
+field Event.Stream string
+field Freshness.LastHeardUnixMs int64
+field Freshness.Silent bool
+field JournalEntry.Cursor int64
+field JournalEntry.Group string
+field JournalEntry.SessionID string
+field JournalEntry.Type string
+field LaunchSpec.Agent string
+field LaunchSpec.Cols int
+field LaunchSpec.Cwd string
+field LaunchSpec.Options string
+field LaunchSpec.Prompt string
+field LaunchSpec.Rows int
+field MachinePresence.ObservedUnixMs int64
+field MachinePresence.State string
+field Op.Action string
+field Op.OperationID string
+field Op.SessionID string
+field Outcome.Code string
+field Outcome.Message string
+field Outcome.OperationID string
+field Outcome.Resolved bool
+field PushPreference.Alerts bool
+field PushPreference.Mentions bool
+field QRPayload.HasStaticPub bool
+field QRPayload.RelayURL string
+field QRPayload.RendezvousID string
+field Session.Agent string
+field Session.Group string
+field Session.ID string
+field Session.Need string
+field Session.Present bool
+field Session.Title string
+field Snapshot.Cols int
+field Snapshot.Rows int
+field Snapshot.SessionID string
+field Snapshot.Stale bool
+field Snapshot.Text string
+field StateSummary.EpochID int64
+field StateSummary.Machine string
+field StateSummary.PendingOps int
+field StateSummary.Reconciled bool
+field StateSummary.RelayCursor int64
+field StateSummary.Restored bool
+field StateSummary.SendSeq int64
+field UndeliveredInput.AtMillis int64
+field UndeliveredInput.Bytes int
+field UndeliveredInput.Reason string
+field UndeliveredInput.SessionID string
+field WakeAlert.ContentReady bool
+field WakeAlert.Text string
+func DecodeQR(string) (*QRPayload, error)
+func NewApp(*Config, KeyCustody) (*App, error)
+ifacemethod EventListener.OnEvent(*Event)
+ifacemethod KeyCustody.ContentKEK() ([]byte, error)
+ifacemethod KeyCustody.WakeKEK() ([]byte, error)
+method App.BeginPairing(string) (*Pairing, error)
+method App.ClearUndeliveredInputs() error
+method App.ClockVerdict() (string, error)
+method App.Close() error
+method App.ConnectionState() (string, error)
+method App.DeletePushToken() error
+method App.ErrorClass(string) (string, error)
+method App.HandlePushWake(string) (*WakeAlert, error)
+method App.InstallContentKey([]byte) error
+method App.InstallWakeKey([]byte) error
+method App.Interrupt(string) (*Op, error)
+method App.IsRunning() (bool, error)
+method App.Kill(string) (*Op, error)
+method App.KillSwitchEngaged() (bool, error)
+method App.Launch(*LaunchSpec) (*Op, error)
+method App.MachineFreshness() (*Freshness, error)
+method App.MachinePresence() (*MachinePresence, error)
+method App.Outcome(string) (*Outcome, error)
+method App.PairedDeviceName() (string, error)
+method App.PairingState() (string, error)
+method App.Paste(string, string) error
+method App.Peek(string) (*Snapshot, error)
+method App.PendingOpCount() (int, error)
+method App.Presence() (string, error)
+method App.PurgeKeys() error
+method App.PushPreference() (*PushPreference, error)
+method App.ReadJournal(int64, int) (*JournalPage, error)
+method App.RegisterPushToken(string) error
+method App.ReleaseControl(string) (*Op, error)
+method App.Resize(string, int, int) error
+method App.Resync(string) error
+method App.ResyncPending(string) (bool, error)
+method App.RevokeThisDevice() (*Op, error)
+method App.Roster() (*SessionList, error)
+method App.SendInput(string, []byte) error
+method App.Session(string) (*Session, error)
+method App.SetEventListener(EventListener) error
+method App.SetPushPreference(*PushPreference) (*Op, error)
+method App.Start() error
+method App.StateSummary() (*StateSummary, error)
+method App.Stop() error
+method App.StreamState(string) (string, error)
+method App.SubscribeJournal() error
+method App.TakeControl(string) (*Op, error)
+method App.TerminalUnwatch(string) error
+method App.TerminalWatch(string) error
+method App.UndeliveredInputs() (*UndeliveredList, error)
+method App.UnlockContent() error
+method App.UnsubscribeJournal() error
+method JournalPage.At(int) (*JournalEntry, error)
+method JournalPage.Count() (int, error)
+method JournalPage.NextCursor() (int64, error)
+method JournalPage.Stale() (bool, error)
+method Pairing.Cancel() error
+method Pairing.Confirm() error
+method Pairing.ConfirmOrigin(string) error
+method Pairing.DeadlineMillis() (int64, error)
+method Pairing.Origin() (string, error)
+method Pairing.OriginIsPrivate() (bool, error)
+method Pairing.RejectSAS() error
+method Pairing.SAS() (string, error)
+method Pairing.State() (string, error)
+method SessionList.At(int) (*Session, error)
+method SessionList.Count() (int, error)
+method SessionList.Stale() (bool, error)
+method UndeliveredList.At(int) (*UndeliveredInput, error)
+method UndeliveredList.Count() (int, error)
+method UndeliveredList.Dropped() (int, error)
+type App struct
+type Config struct
+type Event struct
+type EventListener interface
+type Freshness struct
+type JournalEntry struct
+type JournalPage struct
+type KeyCustody interface
+type LaunchSpec struct
+type MachinePresence struct
+type Op struct
+type Outcome struct
+type Pairing struct
+type PushPreference struct
+type QRPayload struct
+type Session struct
+type SessionList struct
+type Snapshot struct
+type StateSummary struct
+type UndeliveredInput struct
+type UndeliveredList struct
+type WakeAlert struct

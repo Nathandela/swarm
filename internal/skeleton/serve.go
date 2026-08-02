@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -39,6 +40,9 @@ import (
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
+	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -54,6 +58,14 @@ type Config struct {
 	PollInterval                                        time.Duration // engine fallback-poll cadence (E10.8); 0 = no cadence
 	StalenessThreshold                                  time.Duration
 	FakeAgentBin                                        string // DEV/TEST ONLY: resolves the reserved agent "fake"
+	// RemoteSocketPath, when non-empty, stands up the dedicated REMOTE-tier UDS the
+	// gateway dials (R-GW.8 / amendment D.0-A1), distinct from the owner-trusted main
+	// SocketPath. Every connection on it is unconditionally remote-origin, so every
+	// mutating op is authorized against the pinned device registry (R-POL.9) before any
+	// action. Empty => no remote socket. cmd/swarm fills it from gatewaySocket(), the same
+	// definition the gateway's supervision unit dials, and leaves it empty on a machine
+	// that was never provisioned for remote (ADR-007 B15).
+	RemoteSocketPath string
 }
 
 // Daemon is the assembled, running walking skeleton: the core lifecycle daemon,
@@ -62,6 +74,7 @@ type Config struct {
 type Daemon struct {
 	core       *daemon.Daemon
 	srv        *protocol.Server
+	remoteSrv  *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
 	api        *coreAPI
 	eng        *engine.Engine
 	socketPath string
@@ -173,8 +186,104 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	// Round-7 re-audit (codex/opus/sonnet consensus): newCoreAPI already started the
+	// coreAPI.watch() roster poller, so EVERY assembly error return past this point must tear it
+	// down (and the core) or that goroutine + its fd leak. Harmless in production (a Serve error is
+	// a fatal startup -> the process exits and the OS reclaims), but wrong for tests / any
+	// in-process Serve retry. A defer'd cleanup-unless-success covers all error paths uniformly and
+	// panic-safely; the explicit per-path core.Close() calls below are now redundant (removed).
+	// coreAPI.close() is idempotent (stopOnce) and never touches core, so the later Daemon.Close()
+	// stays a no-op double-call.
+	assembled := false
+	defer func() {
+		if !assembled {
+			d.api.close()
+			_ = core.Close()
+		}
+	}()
+	// Open the pinned-device registry that backs R-POL.9 remote-command authorization.
+	// A corrupt registry fails assembly (fail-closed): the daemon must not start unable
+	// to authorize -- or worse, silently unable to enumerate -- its paired devices.
+	devReg, err := device.Open(filepath.Join(cfg.StateDir, "devices"))
+	if err != nil {
+		return nil, err
+	}
+	// Finding 5 (re-audit): when pairing is configured, clear any device whose sealed grant
+	// sidecar is absent -- a crash between AddSole and grant.Save (pairing.go) leaves such a
+	// device registered with no deliverable bootstrap grant, holding the single-device slot yet
+	// inert. Gated on the machine identity's presence: that crash can only occur under a
+	// configured grant-based pairing flow, so an unconfigured daemon (no grant delivery at all)
+	// never spuriously clears a record. Reconcile on load so the slot frees and re-pairing works.
+	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, "remote", remoteIdentityFile)); statErr == nil {
+		// Finding 2 (round-6): fail CLOSED. If a confirmed-stale device cannot be reconciled away,
+		// ABORT assembly rather than open remote.sock still serving it.
+		if err := reconcilePairedDevices(devReg, cfg.StateDir); err != nil {
+			return nil, err // defer'd cleanup tears down d.api + core
+		}
+	}
+	d.api.devices = devReg
+	// R-KS.1: the coreAPI mirrors its device-derived remote-control kill-switch state to a
+	// durable remote-state.json under the state dir. Wire the dir so the switch (default OFF
+	// until a device is paired) has somewhere to persist each transition.
+	d.api.stateDir = cfg.StateDir
+	// A4: restore the durable manual override (`swarm remote off`/`on`) so an owner who
+	// severed remote control stays severed across a restart. Absent file => not overridden;
+	// a corrupt file fails closed (loadRemoteState returns ManualOff=true).
+	if st, _ := loadRemoteState(cfg.StateDir); st.ManualOff {
+		d.api.manualOff.Store(true)
+	}
+	// R-POL.3/.7: load the machine-configured remote launch policy (allowed cwd roots) and
+	// attach it to the coreAPI so the remote-tier Server confines remote launches. ALWAYS
+	// wired: a missing/malformed config yields a deny-all policy (fail-closed by default),
+	// and the error is advisory only (the returned policy is always safe).
+	launchPolicy, _ := loadRemoteLaunchPolicy(cfg.StateDir)
+	d.api.launchPolicy = launchPolicy
+	// Load the machine's pairing identity (provisioned by `swarm remote init`) and wire
+	// it onto the coreAPI. TRI-STATE fail-closed, unlike the launch policy above: a
+	// MISSING identity simply leaves pairing unsupported (nil cfg -- BeginPairing
+	// already fails closed on that), but a CORRUPT identity aborts assembly entirely --
+	// the daemon must not start with pairing silently broken (machine key custody).
+	pc, err := loadPairingConfig(cfg.StateDir)
+	if err != nil {
+		return nil, err // defer'd cleanup tears down d.api + core
+	}
+	d.api.pairing = pc
 	d.srv = protocol.NewServer(d.api, epID)
 	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
+
+	// R-GW.8: the dedicated remote-tier listener the gateway dials. It binds its own
+	// socket and accept loop (independent of the demuxed main UDS), and every connection
+	// is remote-origin -- so mutating ops are authorized against the device registry via
+	// coreAPI's DeviceAuthenticator (R-POL.9). Assembled AFTER the registry is wired so
+	// the very first remote connection is already fail-closed.
+	if cfg.RemoteSocketPath != "" {
+		// Unlink a leftover socket from a crashed prior daemon before binding, as
+		// daemon.bindSocket does for the main UDS (S12). Without it a stale remote.sock would
+		// fail the bind and abort assembly below -- and since ADR-007 B15 every PROVISIONED
+		// machine opens this socket, so one crash would stop the daemon starting at all: "swarm
+		// is broken" rather than "remote is broken", a far worse failure than the one B15 fixes.
+		//
+		// Confined to paths that ARE sockets. The singleton flock taken by daemon.Open above
+		// makes the reclaim safe, but that lock is on <stateDir>/daemon.lock while
+		// RemoteSocketPath may be configured anywhere (SWARM_DAEMON_REMOTE_SOCK), so an
+		// unconditional remove would reach past it -- destroying a regular file an operator
+		// pointed at by mistake, and letting two daemons with different state dirs share one
+		// override path, the second silently stealing the first's LIVE socket instead of
+		// failing to bind. Crash debris is always a socket, so nothing is given up.
+		if fi, lerr := os.Lstat(cfg.RemoteSocketPath); lerr == nil && fi.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(cfg.RemoteSocketPath)
+		}
+		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID)
+		if rerr != nil {
+			return nil, rerr // defer'd cleanup tears down d.api + core
+		}
+		d.remoteSrv = rs
+		// C2a: `swarm remote off` (or removing the last device) must proactively SEVER every live
+		// remote control lease + terminal peek on the remote Server, not merely pause per-keystroke
+		// input. Wire the coreAPI kill-switch setter to the remote Server's teardown seam. Set
+		// before close(d.ready) below, so no served op can read the observer before it is wired.
+		d.api.SetRemoteControlObserver(rs.SeverAllRemoteControl)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -185,7 +294,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.tapWG.Add(1)
 	go func() { defer d.tapWG.Done(); d.tapGrids(ctx) }() // shim->engine output tap (seam b)
 
-	close(d.ready) // assembly complete: the ConnHandler may now serve
+	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
+	close(d.ready)   // assembly complete: the ConnHandler may now serve
 	return d, nil
 }
 
@@ -579,9 +689,68 @@ func (d *Daemon) Close() error {
 		d.captureWG.Wait() // drain in-flight conversation-id captures
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
-		d.api.close()      // stops the roster poller
+		if d.remoteSrv != nil {
+			_ = d.remoteSrv.Close() // tears down the remote-tier listener + its connections
+		}
+		d.api.close() // stops the roster poller
 	})
 	return nil
+}
+
+// reconcilePairedDevices clears, at startup (single-threaded, before close(d.ready), so no pairing
+// races it), any device that a crash left in an incoherent state:
+//
+//   - Finding 5 (round-4): a device whose sealed grant sidecar is ABSENT was never fully paired --
+//     a crash between devices.AddSole and grant.Save (pairing.go) left it registered with no
+//     deliverable bootstrap grant, holding the single-device slot yet unrecoverable except by
+//     revoke. Removing it on load frees the slot.
+//   - Finding 3 (round-5, codex#1): a device whose GrantedEpoch != the CURRENT machine epoch was
+//     granted under a dead epoch -- a crash after rotateEpoch persisted N+1 but before Remove
+//     persisted leaves the revoked device (GrantedEpoch==N) registered. Left in place, remote
+//     control re-enables and a still-running old-epoch gateway resumes sealing under N to the
+//     revoked phone. Clearing it on load closes that residual confidentiality window.
+//
+// Fail-safe throughout: a sidecar-load ERROR (corrupt, unreadable) leaves the device untouched, and
+// the epoch check only fires on a CONFIRMED mismatch -- an unreadable machine identity (epochOK
+// false) leaves every device's epoch untouched, mirroring the missing-grant reconcile's fail-safe
+// gate. Only a definitively absent sidecar or a definitively stale epoch clears a slot.
+//
+// Finding 2 (round-6, codex#2): the stale-epoch removal must fail CLOSED. Registry.Remove restores
+// the stale device in memory on a persistence failure, so discarding its (removed, err) would let
+// Serve open remote.sock still serving a CONFIRMED-stale record -- defeating the crash-confidentiality
+// reconcile. When a stale-epoch device cannot be removed (removed==false), return an error so Serve
+// ABORTS assembly. A committed post-rename dir-fsync error (removed==true) has already dropped the
+// device from the live set, so it is tolerated like the missing-grant path below.
+func reconcilePairedDevices(reg *device.Registry, stateDir string) error {
+	registryDir := filepath.Join(stateDir, "devices")
+	curEpoch, epochOK := currentMachineEpoch(stateDir)
+	for _, rec := range reg.List() {
+		if epochOK && rec.GrantedEpoch != curEpoch {
+			if removed, err := reg.Remove(rec.DeviceID); !removed { // stale epoch: the revoked device's content key is dead
+				return fmt.Errorf("reconcile: stale-epoch device %q could not be removed (still registered): %w", rec.DeviceID, err)
+			}
+			continue
+		}
+		g, err := grant.Load(registryDir, rec.DeviceID)
+		if err != nil {
+			continue // ambiguous read: leave the device alone (fail-safe)
+		}
+		if g == nil {
+			_, _ = reg.Remove(rec.DeviceID) // no sidecar => not fully paired: free the slot
+		}
+	}
+	return nil
+}
+
+// currentMachineEpoch loads the current epoch id from the machine identity (Finding 3). It reports
+// ok=false on ANY read/parse error so the caller leaves devices untouched (fail-safe): a stale-epoch
+// removal must fire only on a CONFIRMED mismatch, never on an unreadable identity.
+func currentMachineEpoch(stateDir string) (uint32, bool) {
+	id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile))
+	if err != nil {
+		return 0, false
+	}
+	return id.EpochID(), true
 }
 
 // endpointID derives the daemon's stable federation endpoint id from its state

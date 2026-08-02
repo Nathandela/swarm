@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      PB-DS-1 and PB-DS-4 (S22b): the spacing scale and the shape scale.
+
+      THE DESIGN HAS NO SPACING SCALE. Substrate declares 14 distinct spacing literals across
+      the phone, mode 12px, tightest rhythm a 7px gap; every one of them is a value typed at a
+      call site. A 4dp grid was rejected because it turns every 7px gap into 8dp and every card
+      padding into 12dp, loosening the whole layout by about 10 percent. The decision is a 2dp
+      grid of ten steps, and it costs at most 1dp of drift on this artifact:
+
+          5 to 4, 7 to 8, 9 to 8, 11 to 10, 13 to 12, 15 to 14
+
+      Six of the fourteen values move, each by 1dp. android/gate/s22b_spacing_test.go computes
+      that ledger from the design source on every run rather than trusting this comment, and it
+      records which step absorbs which literal, because two of the movers are exactly equidistant
+      and go OPPOSITE ways: 5 sits between 4 and 6 and goes down, 7 sits between 6 and 8 and goes
+      up. No rounding rule produces both. The assignment is a judgement (a 7px gap is the tightest
+      rhythm in the layout and tightening it further reads as a bug; a 5px dot margin is
+      decoration and loses nothing), so it is recorded where it can be argued with.
+
+      TWO STEPS ABSORB NOTHING IN SUBSTRATE and are here on purpose. 6dp exists for the mock's
+      badge padding and 24dp for its pairing-scaffold padding; neither appears in the Substrate
+      artifact, and 24dp is additionally the step the requirement's own ledger routes the mock's
+      26px through. Deleting either would leave the scale unable to express a value the screens
+      still to be built need. The gate asserts both directions, so "unused" cannot decay into
+      "unjustified".
+
+      DP, NOT PX. The constant this file replaces was PhoneSurface's `PADDING = 24`, in raw
+      pixels, which renders at 8dp on a 3x handset - the entire spatial output of the app.
+    -->
+    <dimen name="swarm_space_2">2dp</dimen>
+    <dimen name="swarm_space_4">4dp</dimen>
+    <dimen name="swarm_space_6">6dp</dimen>
+    <dimen name="swarm_space_8">8dp</dimen>
+    <dimen name="swarm_space_10">10dp</dimen>
+    <dimen name="swarm_space_12">12dp</dimen>
+    <dimen name="swarm_space_14">14dp</dimen>
+    <dimen name="swarm_space_16">16dp</dimen>
+    <dimen name="swarm_space_18">18dp</dimen>
+    <dimen name="swarm_space_24">24dp</dimen>
+
+    <!--
+      The frame. These are NOT scale steps and are named rather than rounded onto the grid: 54,
+      76 and 74 are not values a 2dp rhythm has anything to say about, and forcing them onto it
+      would move the safe area the whole app draws inside.
+
+      They come from `.pscreen { padding: 54px 0 76px }` and `.ptabs { height: 74px }` in the
+      design source, and the gate reads them from there. CSS px in the 386x812 mock is Android dp
+      at 1:1; there is no scaling factor.
+    -->
+    <dimen name="swarm_screen_top">54dp</dimen>
+    <dimen name="swarm_screen_bottom">76dp</dimen>
+    <dimen name="swarm_tabbar_height">74dp</dimen>
+
+    <!--
+      PB-DS-4: the shape scale. Each of these IS its token in internal/design/tokens.json
+      (p-card-r, p-sheet-r, p-btn-r, p-chip-r), and the gate joins them to it in both directions
+      so a corner cannot be chosen by eye here.
+
+      THERE IS NO FIFTH RADIUS, AND ITS ABSENCE IS THE POINT. The token set declares a fifth,
+      p-dot-r, at 4px - and it is a token whose declared value NEVER RENDERS. It is applied to
+      `.pdot`, a 7x7px box: 2 x 4 is 8, which is greater than 7, so CSS clamps the corner and the
+      dot is a full circle. The literal 4 is unreachable.
+
+      So the status dot is `<shape android:shape="oval">` and there is no swarm_radius_dot for it
+      to consult. The obvious thing to do is the wrong thing: transcribe the token into a dimen,
+      hand it to a rectangle shape, and ship a rounded square the design does not contain. That
+      is exactly what a reader who found four radii and a fifth token would do, which is why the
+      reason is here rather than only in ADR-007.
+
+      (The token is spelled without its leading dashes throughout this comment because XML
+      forbids a literal double hyphen inside a comment. It is p-dot-r in tokens.json.)
+    -->
+    <dimen name="swarm_radius_card">9dp</dimen>
+    <dimen name="swarm_radius_sheet">14dp</dimen>
+    <dimen name="swarm_radius_button">9dp</dimen>
+    <dimen name="swarm_radius_chip">8dp</dimen>
+</resources>

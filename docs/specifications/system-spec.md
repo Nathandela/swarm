@@ -4,7 +4,7 @@
 **Status**: Approved (Gate 2, 2026-07-16)
 **Author**: Nathan Delacrétaz (with Claude)
 **Created**: 2026-07-16
-**Revised**: Draft 2, after audit committee report `docs/verification/audit-001-system-spec.md`
+**Revised**: Draft 2, after audit committee report `docs/verification/audit-001-system-spec.md`; remote threat model recorded under F-2 per ADR-007 B133 (2026-07-31)
 
 ## Goal
 
@@ -12,7 +12,7 @@
 
 ## Context
 
-Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md`), but agent-agnostic. V2 adds mobile remote control; v1 keeps the protocol evolvable for that without claiming remote-readiness (remote needs its own auth/threat-model ADR). The codebase follows the agentic-codebase-manifesto. Four foundational decisions are recorded as ADR-001..004.
+Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md`), but agent-agnostic. V2 adds mobile remote control; v1 keeps the protocol evolvable for that without claiming remote-readiness (remote's auth/threat model is ADR-007 — see F-2 for the decided boundary). The codebase follows the agentic-codebase-manifesto. Four foundational decisions are recorded as ADR-001..004.
 
 ## Domain glossary
 
@@ -67,6 +67,7 @@ Derived view groups:
 - **D-6** (Ubiquitous) The daemon socket SHALL live under a 0700 state directory with 0600 permissions; a restarting daemon SHALL take a flock-based singleton lock **before** binding and unlink stale sockets only under that lock.
 - **D-7** (Unwanted) IF a second daemon instance starts, THEN it SHALL fail to take the lock and exit; the client that spawned it SHALL retry connecting to the winner (bounded backoff).
 - **D-8** (Event) WHEN client and daemon protocol versions are incompatible at handshake, swarm SHALL surface a clear error and offer `swarm daemon restart` — which is safe (D-5) and SHALL say so.
+- **D-9** (Ubiquitous) The daemon SHALL keep a single durable append-only event journal (session lifecycle and status-group transitions), fsync'd before each cursor is acked and surviving a crash/upgrade (D-5); and every **remote** mutating operation SHALL be idempotent, keyed by an `operation_id` whose durable two-phase record makes a replay return the cached outcome and execute nothing. ADR-007 is the authority on the journal, idempotency, and remote-access model.
 
 ### Sessions (S)
 
@@ -139,7 +140,9 @@ Derived view groups:
 ### V2-forward constraints (F)
 
 - **F-1** The protocol SHALL be versioned and capability-negotiated from the first release; messages carry an endpoint id and namespaced session ids so multi-daemon clients need no schema break.
-- **F-2** Remote transport (mobile, relay, multi-machine) is **not** claimed v1-ready: it requires its own ADR covering identity, pairing/auth, E2EE/relay trust, reconnect cursors, and idempotency. v1's obligation is only: no UDS-specific assumptions in message schemas.
+- **F-2** Remote transport (mobile, relay, multi-machine) is **not** claimed v1-ready: it requires its own ADR covering identity, pairing/auth, E2EE/relay trust, reconnect cursors, and idempotency. v1's obligation is only: no UDS-specific assumptions in message schemas. (That ADR now exists — ADR-007 — and its threat model, decided in B133, is recorded below.)
+
+  **Remote threat model (added per ADR-007 B133, 2026-07-31).** The trust boundary is the wire between the phone and the machine. The declared adversary is the relay, the network path, FCM/Google (which reads every push payload it carries), and any MITM between the endpoints; the phone and whoever holds it are trusted, exactly as the machine and its owner-uid user are. There is **no phone-side user authentication** — no biometric, PIN, per-use gate or content lock; the pairing-time SAS comparison is the only human-in-the-loop security step in the product, and it is what defeats a relay MITM. The two-tier wake/content key split is kept as a transport defence: FCM reads the push payload, so the push path holds the content-free wake key only, and that rule is enforced at the **sender**, in the gateway. Stated without gloss: on Android `FirebaseMessagingService` runs in the app process, so the phone-side half of the tier boundary was only ever Keystore auth-gating plus code discipline, not OS isolation — with auth-gating removed, **code discipline is the only phone-side enforcement**, and the defence the split rests on is the sender-side rule. Accepted residual risk (B133): a stolen unlocked phone gives its holder full control of agents that edit code on the machine; the only surviving mitigation is `swarm remote off` / device revoke, issued from the machine, which makes that kill switch load-bearing in a way it was not.
 
 ## Architecture diagrams
 
@@ -149,7 +152,7 @@ Derived view groups:
 flowchart TB
   subgraph clients["clients"]
     TUI["swarm TUI (Bubble Tea)"]
-    MOB["mobile (V2, own ADR)"]
+    MOB["mobile (V2, ADR-007)"]
   end
   subgraph daemon["swarm daemon"]
     API["protocol server: NDJSON control + binary data frames"]
@@ -254,4 +257,4 @@ sequenceDiagram
 
 ## Out of scope (v1)
 
-OS notifications (v1.x), mobile/remote transport + auth (V2, own ADR), multi-machine (V2), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate).
+OS notifications (v1.x), mobile/remote transport + auth (V2, ADR-007), multi-machine (V2), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate).

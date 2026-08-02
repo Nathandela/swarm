@@ -1,0 +1,84 @@
+# PB-BIND-0 -- executable allowlist of exact import paths for the gomobile-bound
+# dependency closure (docs/specifications/remote-phaseB-requirements.md 6.2).
+#
+# Enforced by bind_test.go for the HOST, android/arm64 and ios/arm64 closures, which
+# already differ (golang.org/x/sys/cpu is in the darwin closure and absent from android),
+# so a host-only check has a real blind spot. Every NON-STANDARD package reported by
+# `go list -deps` on this package must appear here verbatim; anything else fails.
+# Standard-library packages are implicitly allowed -- gomobile ships the Go runtime
+# regardless. This is an allowlist, not a denylist and not a set of categories.
+#
+# THE GUARD MOVED HERE WITH SLICE S8. internal/phonecore/deps_allowlist.txt kept its own
+# copy of the guard for the CORE, which is the tighter of the two and stays green; this
+# file guards what is actually bound. Adding a line here is a REVIEWED CHANGE: the bound
+# package runs on a handset an adversary may hold, so every entry is code shipped to that
+# device.
+#
+# One import path per line. Blank lines and # comments ignored.
+
+# --- the facade itself and the core it wraps
+github.com/Nathandela/swarm/mobile
+github.com/Nathandela/swarm/internal/phonecore
+
+# --- wire and leaf types
+# internal/protocol is deliberately NOT here and must not be: it still wraps a
+# daemon.Daemon, so the edge facade -> protocol -> daemon -- which drags the PTY and the
+# VT emulator onto the handset, against ADR-007 Decision 2 -- fails this test the moment
+# anyone reintroduces it. The canonical launch content hash the facade SIGNS with lives in
+# schema for exactly this reason.
+github.com/Nathandela/swarm/internal/protocol/schema
+github.com/Nathandela/swarm/internal/status
+
+# --- crypto: sealing, Noise, epoch keys, SAS, device id
+github.com/Nathandela/swarm/internal/remote/crypto
+github.com/Nathandela/swarm/internal/remote/device
+# The WIRE half of the epoch-grant bootstrap only: the tagged plaintext frame the machine
+# appends to this phone's mailbox, and its parser (PB-KEY-10 -- without it the phone can
+# never obtain an epoch key, so nothing below this line is reachable on a real handset).
+# internal/remote/grant is deliberately NOT listed and must not be: it carries the MACHINE's
+# registry-sidecar file I/O over <stateDir>/devices/grants, which has no business on the
+# handset. grant re-exports grantwire, so the machine side keeps one import.
+github.com/Nathandela/swarm/internal/remote/grantwire
+github.com/flynn/noise
+golang.org/x/crypto/blake2b
+golang.org/x/crypto/blake2s
+golang.org/x/crypto/chacha20
+golang.org/x/crypto/chacha20poly1305
+golang.org/x/crypto/curve25519
+golang.org/x/crypto/hkdf
+golang.org/x/crypto/internal/alias
+golang.org/x/crypto/internal/poly1305
+golang.org/x/crypto/nacl/box
+golang.org/x/crypto/nacl/secretbox
+golang.org/x/crypto/salsa20/salsa
+golang.org/x/sys/cpu
+
+# --- pairing: the XXpsk0 handshake the phone drives as initiator
+github.com/Nathandela/swarm/internal/remote/pairing
+
+# --- transport: the relay client (PB-NET-1's transitive deps, landing with the slice
+# that introduces them, exactly as the core's allowlist anticipated).
+#
+# RECORDED COST, for the reviewer: internal/remote/relay holds the relay SERVER as well as
+# the client, so binding the client drags go.etcd.io/bbolt -- the server's mailbox store --
+# into the AAR. It is dead code on the handset (nothing constructs a relay.Server there)
+# but it is still code shipped to a device an adversary may hold, which is precisely what
+# this allowlist exists to make visible rather than to wave through. Splitting the package
+# into a client half and a server half removes it; that edit is outside this slice's scope
+# (internal/remote/* is frozen for S8) and is owed.
+github.com/Nathandela/swarm/internal/remote/relay
+github.com/coder/websocket
+github.com/coder/websocket/internal/errd
+github.com/coder/websocket/internal/util
+go.etcd.io/bbolt
+
+# golang.org/x/sys/unix arrives WITH bbolt and with nothing else: bbolt is its only
+# importer in this closure (`go list -deps ./mobile`), which uses it for the mmap, flock
+# and fdatasync syscalls its page store needs. It is therefore not an independent entry
+# to argue for -- it is the same recorded cost as the line above, and it leaves when the
+# relay package is split into a client half and a server half. It is listed separately
+# only because the guard matches exact import paths.
+#
+# Note it is NOT the same package as golang.org/x/sys/cpu above, which is real code the
+# darwin closure runs (crypto feature detection) and is absent from the android one.
+golang.org/x/sys/unix

@@ -157,8 +157,11 @@ import (
 const (
 	// netTimeout bounds a single dial/handshake in the tests.
 	netTimeout = 5 * time.Second
-	// recvTimeout bounds waiting for one channel/frame delivery.
-	recvTimeout = 2 * time.Second
+	// recvTimeout bounds waiting for one channel/frame delivery. 5s (not 2s) so the heaviest
+	// render path (TestRemotePeek_LargeGridClippedUnderMaxFrame renders a 600x500 grid) stays
+	// green under CPU contention -- the 2s bound was a load-sensitive flake (re-audit codex#9);
+	// the pass case still returns immediately, only a genuine stall waits the full bound.
+	recvTimeout = 5 * time.Second
 	// oneSecond is the L1 fan-out latency bound asserted in fanout_test.
 	oneSecond = 1 * time.Second
 	// launchTimeout bounds a real-daemon launch + confirm in the integration test.
@@ -229,6 +232,14 @@ type stubDaemon struct {
 	deleteErr error
 	renameErr error
 	attachErr error
+
+	// R-POL.9 device authorization. authzFn decides each AuthorizeCommand (nil =>
+	// accept); authzCalls records every tuple the Server presented so a test can
+	// assert what was authorized. stubDaemon implements DeviceAuthenticator, so a
+	// remote-tier Server built on it is NOT fail-closed-absent (use daemonOnly for
+	// that case).
+	authzFn    func(DeviceCommandAuth) error
+	authzCalls []DeviceCommandAuth
 }
 
 // renameCall records one DaemonAPI.Rename forward so a test can assert the exact
@@ -237,6 +248,77 @@ type renameCall struct {
 	id   string
 	name string
 }
+
+// AuthorizeCommand makes stubDaemon a protocol.DeviceAuthenticator (R-POL.9). It
+// records the presented tuple and defers the accept/reject decision to authzFn.
+func (s *stubDaemon) AuthorizeCommand(a DeviceCommandAuth) error {
+	s.mu.Lock()
+	s.authzCalls = append(s.authzCalls, a)
+	fn := s.authzFn
+	s.mu.Unlock()
+	if fn != nil {
+		return fn(a)
+	}
+	return nil
+}
+
+// authorizedTuples returns a copy of every DeviceCommandAuth the Server presented.
+func (s *stubDaemon) authorizedTuples() []DeviceCommandAuth {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DeviceCommandAuth, len(s.authzCalls))
+	copy(out, s.authzCalls)
+	return out
+}
+
+// RemoteControlEnabled makes stubDaemon a KillSwitch (R-KS.1), reporting ON by default so
+// the remote-tier fail-closed construction guard (which requires a KillSwitch) is satisfied
+// and existing take_control tests behave as before. The kill-switch tests use a separate
+// killSwitchStub / toggleKillSwitchStub that OVERRIDES this to exercise an OFF switch.
+func (s *stubDaemon) RemoteControlEnabled() bool { return true }
+
+// ClaimOperation makes stubDaemon an OperationClaimer (slice A5-c), required by the remote-
+// tier construction guard. It reports every operation as FRESH (existed=false), so a
+// take_control carrying a gate token establishes; single-use REPLAY refusal is exercised by
+// the real signer (internal/skeleton's durable store), not this in-memory stub.
+func (s *stubDaemon) ClaimOperation(operationID, action, session string) (bool, error) {
+	return false, nil
+}
+
+// daemonOnly wraps a DaemonAPI so the concrete backend's DeviceAuthenticator does NOT
+// promote through: it embeds the interface, not the concrete stub. It DOES satisfy the
+// remote-tier construction guards (KillSwitch + OperationClaimer) so the Server constructs;
+// the point of the fixture is the ABSENT DeviceAuthenticator, which requireRemoteAuthz must
+// fail closed on at request time (R-POL.9).
+type daemonOnly struct{ DaemonAPI }
+
+// RemoteControlEnabled / ClaimOperation satisfy the mandatory remote-tier construction guards
+// so daemonOnly still constructs — leaving the DeviceAuthenticator omission as the sole
+// fail-closed condition under test.
+func (daemonOnly) RemoteControlEnabled() bool                  { return true }
+func (daemonOnly) ClaimOperation(_, _, _ string) (bool, error) { return false, nil }
+
+// remoteCapableBackend is DaemonAPI plus the optional interfaces the stubDaemon family
+// already implements (DeviceAuthenticator, KillSwitch, OperationClaimer) — the full set
+// allowAllLaunchPolicy needs to promote so wrapping ONLY adds RemoteLaunchAllowed.
+type remoteCapableBackend interface {
+	DaemonAPI
+	DeviceAuthenticator
+	KillSwitch
+	OperationClaimer
+}
+
+// allowAllLaunchPolicy grants every remote launch (F4/R-POL.3 satisfied trivially) on top
+// of an otherwise-complete remote backend. It exists so tests exercising a DIFFERENT
+// remote-launch guard (env-drop, option denylist, operation-id idempotency) are unaffected
+// by the F4 fail-closed-when-LaunchPolicy-absent fix: handleLaunch now REFUSES a remote
+// launch outright when the backend implements no LaunchPolicy at all, so any such test must
+// wire one explicitly. The negative case — a backend that truly omits LaunchPolicy — is
+// pinned directly against a plain *stubDaemon (which implements none of it) in
+// TestPolicy_LaunchPolicyAbsentRefused.
+type allowAllLaunchPolicy struct{ remoteCapableBackend }
+
+func (allowAllLaunchPolicy) RemoteLaunchAllowed(string) error { return nil }
 
 func newStubDaemon() *stubDaemon {
 	return &stubDaemon{events: make(chan persist.Meta, 64)}

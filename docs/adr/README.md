@@ -11,7 +11,14 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [005](ADR-005-vt-emulator-library.md) | VT emulator library — `github.com/charmbracelet/x/vt` (E2.1 risk gate) | Accepted | 2026-07-17 |
 | [006](ADR-006-field-test-ux-revisions.md) | Field-test UX revisions — detach key Ctrl+q, full-screen chrome, auth inheritance | Accepted | 2026-07-18 |
 | [007](ADR-007-inconclusive-heuristic-preserves-status.md) | An inconclusive grid heuristic preserves the committed status (per-adapter grid signatures) | Accepted | 2026-07-18 |
+| [007](ADR-007-remote-access.md) | Remote access — identity, pairing, two-scheme crypto, relay trust, journal, launch authority | Proposed | 2026-07-18 |
 | [008](ADR-008-status-events-latest-state-coalescing.md) | Status events are level-triggered latest-state snapshots (coalescing permitted) | Accepted | 2026-07-18 |
+| [008](ADR-008-go-toolchain-floor-1-25.md) | Go toolchain floor moves to 1.25 (gomobile tool directive) | Accepted | 2026-07-22 |
+
+Numbers 007 and 008 are each carried by TWO documents: the main line and the remote-control line
+minted them independently before merging (2026-08-02). Both pairs stay as published — the remote
+ADR alone is cited by number and letter (B31..B139) across docs/ and the codebase, so renumbering
+would break far more than the collision confuses. Disambiguate by filename.
 
 ## Adding a new ADR
 

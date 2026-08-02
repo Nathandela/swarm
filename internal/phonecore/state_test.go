@@ -1,0 +1,704 @@
+package phonecore
+
+// FAILING-FIRST (TDD RED, GG-5) tests for slice S7, PB-STATE-1 and PB-STATE-5: the phone
+// core persists and restores EVERY resume-critical coordinate in ONE versioned schema.
+//
+// Today internal/phonecore performs NO persistence at all (§4.3). Sequencer is a bare
+// atomic.Uint64 returning 1 on first call (input.go:33-36) and MailboxReceiver.highest is
+// in-memory (crypto/envelope.go:211-216), so one Android process death restarts the phone
+// at seq 1 under the same epoch -- every keystroke, take_control, launch and kill refused
+// as stale -- and simultaneously resets the phone's replay high-water to zero so a
+// retaining relay can redeliver.
+//
+// THE SEAM THESE TESTS PIN (undefined symbols -> compile-fail RED):
+//
+//	type Bucket struct{ Sender [8]byte; Epoch uint32 }   // per-(sender,epoch) receive bucket
+//	type State struct{ ... }                             // the ONE enumerated schema
+//	const StateSchemaVersion = 1
+//	type Store interface{ Load() State; Save(State) error }
+//	func OpenStore(path, machine string) (Store, error)  // mirrors remotegw.OpenInboundState
+//	var ErrCorruptState, ErrFutureSchema error
+//	type Config struct{ Dir, Machine string; State Store; Ack Acker }
+//	func Resume(cfg Config) (*Core, error)               // the process-start entry point
+//	func (*Core) KeyStore() crypto.KeyStore
+//	func (*Core) Seq() *Sequencer
+//	func (*Core) Router() *MailboxRouter
+//	func (*Core) Grants() *crypto.GrantReceiver
+//	func (*Core) Ops() *OpQueue
+//	func (*Core) State() State
+//	func (*Core) Save(State) error
+//	func (*Core) RecordOutcome(protocol.Control) error
+//	func (*Core) UnresolvedOps() []QueuedOp
+//
+// internal/remote/crypto is FROZEN. Persistence goes AROUND it through the seams it
+// already exposes: the receive high-water is replayed in through
+// MailboxReceiver.SeedHighWater and the grant watermark through crypto.NewGrantReceiverAt.
+// KeyStore custody was crypto.NewFileKeyStore / OpenFileKeyStore when this was written; S14a
+// replaced both with a sealed container this package owns (keycustody.go), and the raw
+// pre-seam layout those two produce is now REFUSED rather than adopted -- a layout with no
+// public half cannot be authenticated (see TestS14A_R3_ARawDeviceKeyBlobIsRefusedNotAdopted).
+//
+// NOTE ON Resume's CONTRACT, deliberately pinned by omission: there is no Close(). An
+// Android process is SIGKILLed, never shut down cleanly (PB-STATE-2), so durability may
+// not depend on a graceful exit. Every Save must be durable when it returns.
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/status"
+)
+
+// journalBucket is the machine-sender bucket carrying journal, terminal and reconcile
+// frames. replyBucket is the SEPARATE sender-zero bucket carrying command replies
+// (command_in.go leaves SenderKeyID zero). Two buckets under one epoch is the
+// multi-instance case PB-STATE-1 is keyed for: a SCALAR receive high-water would let the
+// reply stream's seq 4 stale-drop the journal stream's seq 4, silently deleting one of
+// the two channels -- the exact defect class the reviewer caught in S2 (per-(sender,epoch)
+// keying) and S2b (per-session stashing).
+func journalBucket(epoch uint32) Bucket { return Bucket{Sender: machineSender, Epoch: epoch} }
+func replyBucket(epoch uint32) Bucket   { return Bucket{Sender: [8]byte{}, Epoch: epoch} }
+
+// fullState is a State with EVERY field distinctively non-zero, so a restore that drops
+// any one of them is detectable. The round-trip test proves the fixture really is
+// exhaustive before comparing, which is what makes it cover fields added later.
+func fullState() State {
+	var wake crypto.WakeKey
+	for i := range wake {
+		wake[i] = byte(i + 100)
+	}
+	return State{
+		Machine:             "m1",
+		MachineStatic:       bytes.Repeat([]byte{0xA1}, 32),
+		MachineSignPub:      bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
+		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+		RelaySPKIPin:        bytes.Repeat([]byte{0xD4}, sha256.Size),
+		RoutingID:           "rid-m1",
+		EpochID:             7,
+		PushToken:           "fcm-token-m1",
+		PushPreference:      PushPreference{Alerts: true, Mentions: true},
+		ReconciledEpoch:     7,
+		Keys:                crypto.EpochKeys{WakeKey: wake, ContentKey: testContentKey()},
+		SendSeq:             map[uint32]uint64{7: 512, 6: 1024},
+		Receive:             map[Bucket]uint64{journalBucket(7): 42, replyBucket(7): 5},
+		GrantEpoch:          7,
+		GrantSeq:            2,
+		WakeReplay:          91,
+		RelayCursor:         17,
+		Sessions:            []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
+		Snapshots:           []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
+		PendingOps:          []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
+		OpOutcomes:          map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
+		Stale:               map[Bucket]bool{replyBucket(7): true},
+		StaleStreams:        map[string]bool{StreamJournal: true},
+		LastHeardAt:         1753900000000,
+	}
+}
+
+// TestState_EveryResumeCriticalFieldSurvivesARestart is PB-STATE-1's acceptance criterion
+// verbatim: "a test asserts each field survives a restart". The restart is a real one --
+// the first Core is dropped and a SECOND Core is built from the directory alone, so
+// nothing in memory can supply an answer.
+func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	want := fullState()
+
+	// The fixture must exercise EVERY field, or the comparison below silently stops
+	// covering fields added after this test was written. Checked here rather than in its
+	// own test so there is no assertion in this slice that a state-less implementation
+	// could satisfy.
+	//
+	// UNEXPORTED fields are custody's own bookkeeping, not coordinates: nothing outside this
+	// package can set or read one, so no caller can lose one across a restart and a durable
+	// coordinate can never be one. They are skipped here and asserted NOT to survive at the
+	// bottom of this test, so the exemption is a stated property rather than a blind spot.
+	fv := reflect.ValueOf(want)
+	for i := 0; i < fv.NumField(); i++ {
+		if !fv.Type().Field(i).IsExported() {
+			continue
+		}
+		if fv.Field(i).IsZero() {
+			t.Fatalf("fullState() leaves %s at its zero value; PB-STATE-1 enumerates every resume-critical field, so the fixture must set it",
+				fv.Type().Field(i).Name)
+		}
+	}
+
+	// PB-KEY-9: Resume fails closed with no sealer, and a restart must present the SAME
+	// KEKs -- a different KEK is a different device.
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (first launch): %v", err)
+	}
+	if err := c1.Save(want); err != nil {
+		t.Fatalf("Save state: %v", err)
+	}
+
+	// RESTART: a fresh Core over the same directory, nothing carried in memory.
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (second launch): %v", err)
+	}
+	got := c2.State()
+
+	// Field by field, so a failure names the coordinate that was lost.
+	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+	for i := 0; i < wv.NumField(); i++ {
+		if !wv.Type().Field(i).IsExported() {
+			continue
+		}
+		name := wv.Type().Field(i).Name
+		if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+			t.Errorf("State.%s after restart = %#v; want %#v (resume-critical, PB-STATE-1)",
+				name, gv.Field(i).Interface(), wv.Field(i).Interface())
+		}
+	}
+
+	// The other half of the exemption above: custody's bookkeeping must NOT come back from
+	// disk. purgeGen counts the lock purges THIS process has taken, and a restored one would
+	// make a fresh process refuse the first Save of every caller holding a legitimate
+	// snapshot.
+	//
+	// THIS FIXTURE NEVER PURGES, so the stamp is zero on both sides here whatever custody
+	// does: the check below states the property, it does not measure it. The measurement is
+	// TestS14A_R4_ThePurgeStampDoesNotSurviveARestart, which purges first and then asserts
+	// both halves -- the counter, and the Save that must still land once it is gone.
+	if got.purgeGen != 0 {
+		t.Errorf("State.purgeGen after restart = %d; unexported custody bookkeeping must not be "+
+			"persisted -- if it ever is, it belongs in the durable schema and in fullState()", got.purgeGen)
+	}
+
+	// The restored coordinates must be WIRED, not merely readable: a Store nothing
+	// assembles is the S1b brick re-created at the seam.
+	if got := c2.Router().Stale(replyBucket(7)); !got {
+		t.Errorf("Router().Stale(reply bucket) = false after restart; want the persisted stale flag to be in force")
+	}
+	if ops := c2.Ops().Peek(); len(ops) != 1 || ops[0].Cmd.OperationID != "op-pending" {
+		t.Errorf("Ops().Peek() after restart = %+v; want the persisted pending op", ops)
+	}
+	if unresolved := c2.UnresolvedOps(); len(unresolved) != 1 || unresolved[0].Cmd.OperationID != "op-pending" {
+		t.Errorf("UnresolvedOps() after restart = %+v; want the pending op whose outcome was never recorded", unresolved)
+	}
+	if err := c2.RecordOutcome(protocol.Control{Op: protocol.OpOK, OperationID: "op-pending"}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	if unresolved := c2.UnresolvedOps(); len(unresolved) != 0 {
+		t.Errorf("UnresolvedOps() after recording the outcome = %+v; want empty", unresolved)
+	}
+	c3, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (third launch): %v", err)
+	}
+	if _, ok := c3.State().OpOutcomes["op-pending"]; !ok {
+		t.Errorf("the recorded outcome for op-pending did not survive a restart; PB-STATE-1 persists ops AND their outcomes")
+	}
+}
+
+// TestState_DeviceKeysSurviveARestart covers the first item of PB-STATE-1's enumeration.
+// The keys must be the SAME keys, not merely present: a Resume that quietly regenerates
+// material on every launch would pass a "keystore is non-nil" check while every command
+// the phone signs is rejected by the daemon registry (which pins the device id to the
+// command-signing public key, R-DEV.1) and every grant fails to open.
+func TestState_DeviceKeysSurviveARestart(t *testing.T) {
+	dir := t.TempDir()
+
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (first launch): %v", err)
+	}
+	msg := []byte("canonical-command-tuple")
+	sig, err := c1.KeyStore().SignCommand(msg)
+	if err != nil {
+		t.Fatalf("SignCommand: %v", err)
+	}
+	cmdPub := append([]byte(nil), c1.KeyStore().CommandSigningPublic()...)
+	recipPub := append([]byte(nil), c1.KeyStore().RecipientPublic()...)
+
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (second launch): %v", err)
+	}
+	if !bytes.Equal(cmdPub, c2.KeyStore().CommandSigningPublic()) {
+		t.Fatalf("command-signing public key changed across a restart; the device identity the daemon pinned is gone")
+	}
+	if !bytes.Equal(recipPub, c2.KeyStore().RecipientPublic()) {
+		t.Fatalf("sealed-box recipient public key changed across a restart; no epoch grant can be opened")
+	}
+	if err := crypto.VerifyCommandSig(c2.KeyStore().CommandSigningPublic(), msg, sig); err != nil {
+		t.Fatalf("a signature made before the restart no longer verifies after it: %v", err)
+	}
+}
+
+// TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart is PB-STATE-1's explicitly
+// named case: "including a grant-replay-after-restart test". crypto/epoch.go:167 states
+// the requirement in its own words -- without a persisted watermark "a relay could replay
+// an old correctly-signed grant after a phone/app restart and have it accepted as the
+// first grant". NewGrantReceiverAt is the seam; what is missing is any durable source for
+// its two arguments.
+func TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	c1, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (first launch): %v", err)
+	}
+	machinePub, machinePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("machine key: %v", err)
+	}
+	keys, err := crypto.NewEpochKeys()
+	if err != nil {
+		t.Fatalf("epoch keys: %v", err)
+	}
+	grant, err := crypto.SealEpochGrant(machinePriv, c1.KeyStore().RecipientPublic(), 7, 2, keys)
+	if err != nil {
+		t.Fatalf("seal grant: %v", err)
+	}
+	if _, _, _, err := c1.Grants().Accept(c1.KeyStore(), machinePub, grant); err != nil {
+		t.Fatalf("accept the legitimate grant: %v", err)
+	}
+	st := c1.State()
+	st.Machine, st.MachineSignPub, st.EpochID, st.Keys = "m1", machinePub, 7, keys
+	st.GrantEpoch, st.GrantSeq = 7, 2
+	if err := c1.Save(st); err != nil {
+		t.Fatalf("Save state: %v", err)
+	}
+
+	// RESTART. The relay retained the grant and re-serves it.
+	c2, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume (second launch): %v", err)
+	}
+	if _, _, _, err := c2.Grants().Accept(c2.KeyStore(), machinePub, grant); !errors.Is(err, crypto.ErrGrantReplay) {
+		t.Fatalf("replayed grant after restart = %v; want crypto.ErrGrantReplay (the watermark must be persisted, epoch.go:167). A sealed-box open failure here means the DEVICE KEYS did not survive either, which is the same slice's first coordinate", err)
+	}
+	// The watermark is an anchor, not a wall: the NEXT legitimate grant still lands.
+	next, err := crypto.SealEpochGrant(machinePriv, c2.KeyStore().RecipientPublic(), 7, 3, keys)
+	if err != nil {
+		t.Fatalf("seal next grant: %v", err)
+	}
+	if _, _, _, err := c2.Grants().Accept(c2.KeyStore(), machinePub, next); err != nil {
+		t.Fatalf("grant above the restored watermark = %v; want accepted", err)
+	}
+}
+
+// stateV1Fixture is the PINNED v1 on-disk blob (§9 rule 4). PB-STATE-5 requires a forward
+// migration path, and the only mechanical way to have one is to keep a byte-literal of
+// each shipped version loading. When StateSchemaVersion is raised this literal MUST keep
+// loading with every v1 coordinate intact -- that is the migration test, and it cannot be
+// satisfied by regenerating the fixture from the current code.
+const stateV1Fixture = `{
+  "schema_version": 1,
+  "machine": "m1",
+  "routing_id": "rid-m1",
+  "epoch_id": 7,
+  "send_seq": [{"epoch": 7, "ceiling": 512}],
+  "receive": [{"sender": "090a0b0c0d0e0f10", "epoch": 7, "seq": 42}],
+  "grant_epoch": 7,
+  "grant_seq": 2,
+  "wake_replay": 91,
+  "relay_cursor": 17
+}`
+
+// stateV4FixtureKEK is the fixture's PINNED tier KEK. Every other test in this package mints
+// a random KEK per run, which is right for them and impossible here: a byte literal cannot
+// carry a ciphertext whose key is generated at run time, and the two sealed key fields have
+// to be IN the literal or the field-set tie below has a hole exactly where PB-KEY-9 lives.
+// So the fixture pins the KEK and the ciphertext together. It seals nothing but this
+// fixture's two throwaway epoch keys.
+var stateV4FixtureKEK = func() []byte {
+	kek := make([]byte, 32)
+	for i := range kek {
+		kek[i] = byte(0x5A + i)
+	}
+	return kek
+}()
+
+// stateV4Fixture is the PINNED v4 on-disk blob: byte-for-byte what this build writes for
+// fullState(), with the two epoch keys sealed under stateV4FixtureKEK.
+//
+// It does a SECOND job the v1 literal cannot. StateSchemaVersion was reverted from 4 to 3 in
+// a mutation with the whole repository still green: nothing tied the constant to the field
+// set it stamps, so the next durable field added without a bump would ship silently and a
+// build one version back would drop it -- which for a send-seq ceiling or a receive
+// high-water means a replay guard reset to zero, the exact hole the version exists to close.
+// This literal is the tie: it must keep LOADING (which a downgrade of the constant refuses,
+// ErrFutureSchema) and it must keep carrying EVERY durable field (which a new field without
+// a bump breaks). Raising the version therefore forces a new literal beside this one.
+//
+// v2 and v3 have no literal, and neither can be produced honestly here. A v2 blob carrying
+// either epoch key is REFUSED outright by load() -- its cleartext keys read as sealed blobs
+// are the silent reinterpretation the v3 bump exists to prevent -- so the only v2 literal
+// that could load is one with the coordinates the bump was about removed, which pins
+// nothing. A v3 blob is this literal minus stale_streams alone.
+const stateV4Fixture = `{
+  "schema_version": 4,
+  "machine": "m1",
+  "machine_static": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=",
+  "machine_sign_pub": "srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=",
+  "machine_relay_auth_pub": "w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=",
+  "routing_id": "rid-m1",
+  "epoch_id": 7,
+  "push_token": "fcm-token-m1",
+  "push_preference": {"alerts": true, "mentions": true},
+  "reconciled_epoch": 7,
+  "wake_key": "AQIDBAUGBwgJCgsMUjnRQtz97KtVbLtHTf4/N++9li4rV9S30xkVq4qvx6jpwus/7bgP0NJzPAB5ADWz",
+  "content_key": "AQIDBAUGBwgJCgsMMVS+L7+Yi842EcQ6LptYUozQ+UNIMrPSsERK9ikKYA2Hx40/KrnqG7mZ4mEWFuJ9",
+  "send_seq": [{"epoch": 6, "ceiling": 1024}, {"epoch": 7, "ceiling": 512}],
+  "receive": [
+    {"sender": "0000000000000000", "epoch": 7, "seq": 5},
+    {"sender": "090a0b0c0d0e0f10", "epoch": 7, "seq": 42}
+  ],
+  "grant_epoch": 7,
+  "grant_seq": 2,
+  "wake_replay": 91,
+  "relay_cursor": 17,
+  "sessions": [{"SessionID": "m1/s1", "Group": "running", "Present": true}],
+  "snapshots": [{"Session": "m1/s1", "Lines": ["$ ls"], "Cols": 80, "Rows": 24}],
+  "pending_ops": [
+    {
+      "op": "kill",
+      "session_id": "m1/s1",
+      "cmd": {
+        "Action": "", "ContentHash": null, "DeviceID": "",
+        "ExpiresAt": "0001-01-01T00:00:00Z", "Machine": "",
+        "OperationID": "op-pending", "Session": "", "Sig": ""
+      }
+    }
+  ],
+  "op_outcomes": {"op-done": {"op": "ok", "operation_id": "op-done", "endpoint_id": ""}},
+  "stale": [{"sender": "0000000000000000", "epoch": 7}],
+  "stale_streams": ["journal"]
+}`
+
+// stateFixtures is the pinned literal for each version that HAS one, keyed by version. The
+// map is what makes the version bump mechanical: TestStateSchemaVersion_IsPinnedToTheDurable
+// FieldSet demands an entry for whatever StateSchemaVersion currently is.
+// stateV5Fixture is the PINNED v5 blob: byte-for-byte what this build writes for fullState()
+// under stateV4FixtureKEK. v5 is S15's tier split -- eight formerly-cleartext fields now live in
+// three sealed containers (wake_state, content_kept, content_purgeable), which is exactly why the
+// literal must move with the version: a reader that stops understanding one of those containers
+// loses the coordinates inside it silently.
+const stateV5Fixture = `{"schema_version":5,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
+// sealedTags are the durable field names that S15 moved INSIDE a sealed container, so they
+// cannot appear as top-level keys in the pinned literal -- that is the point of sealing them.
+// They are still tied to the version: the container carrying them is itself a pinned key below,
+// and TestStateStore_PinnedSealedFixturesStillLoad opens every pinned version through the fixture
+// KEK and compares each restored coordinate against fullState(). So a field dropped from a sealed
+// container fails THERE rather than here.
+//
+// Listing them explicitly, rather than skipping any absent tag, is what preserves the
+// BOTH-DIRECTIONS property. If the check simply ignored a missing tag, absence would become
+// SELF-JUSTIFYING: the next durable field added without a version bump would not appear in the
+// literal, and the test would read that as "must be sealed" and pass -- the very defect this fence
+// exists to catch, reintroduced one level up and harder to see. Every declared tag must be
+// accounted for in exactly one place: present in the literal, or named here.
+var sealedTags = map[string]bool{
+	"push_token": true, "wake_replay": true,
+	"send_seq": true, "receive": true, "pending_ops": true,
+	"sessions": true, "snapshots": true, "op_outcomes": true,
+}
+
+// stateV6Fixture is the PINNED v6 blob. v6 adds PushPreference.Version -- the device-supplied
+// monotonic counter the machine gates a push_prefs update on (PB-PUSH-10) -- INSIDE the
+// existing push_preference object, so the top-level tag set is unchanged and the check below
+// would not have noticed it. That is exactly why the version had to move: a build one version
+// back drops the counter, it restarts at 1 on the next Save, and the machine then refuses every
+// preference update as a replay while the settings screen shows the user's new value.
+//
+// It is the v5 literal with the stamp raised, which is what this build writes for fullState():
+// the field is omitempty and fullState()'s counter is zero, so the two blobs' cleartext differs
+// in the stamp alone. The counter's own round trip is pinned separately, by
+// TestStateStore_PushPreferenceVersionSurvivesARestart, because no fixture can carry it while
+// the v5 literal must go on restoring the same fullState().
+const stateV6Fixture = `{"schema_version":6,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
+// stateV7Fixture is the PINNED v7 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v7 adds relay_spki_pin (ADR-007 B33/B34), the ONE coordinate a handset
+// cannot re-learn without re-pairing -- msg2 is its only channel, because the QR has no room
+// for it -- so a build that stops reading it leaves a pinning-only platform unable to dial
+// and unable to say why.
+const stateV7Fixture = `{"schema_version":7,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"EBaE3Bdu6rALf4KpmJgkUQ8vhYzj3JKs4Yuotx7gzLUv+Kwvcoi0tGTXcIKc9dZtz5f8xj6IPS45mCDn","content_key":"HAAHxTrbcrBi5XRWefLS34Fo3cP4wAYLtjS9yZgNK9l1tGcL6Dq9HVgF/KQmWx1xW8hyY0/9lmTeI1zz","wake_state":"KtkliB1bq/J5u7IxtFcKrN3dZISvExKteu91vzErxFE/TtU0fFdKBAvuEvWxm1oRdsZegekXuCd5tp2K/1fcjXmNbgMdlUS3f+E=","content_kept":"BcyyV6bCHEHoCl7SFwz9x9QIMmxWPIGWV0lpCgBcK415TC20pUECSPq2grb2II89LaUd2qU66o125A8vWd6QCOZs4A3IcxOuTbUgF13NfXt/cPWpZ0VdAAgrEYlZ1vIlLrQlqzLEcvqLvjLcKqNNQ2Bmyf33um0aGCB8U5cW7PPuHcKKoJ65QBMkml+BHXt8JA50mtS0Ts7uq1gMm6XjayvslgaxHY2WPH1QK911QY76IiEW5m9tpmWLqNGRFfv1Obhk9ztlo2ts5VyWOizaZNJuZ29dBS/bjw8ppHOGvXBRrh23JTAKxh1ZmmsxQF/20QLNouiV/V1qP0zMFuBqzlfuXn9kB8nHZdjb3iwlabWXSQN+rIOyPOjygpyMcNE3j38+PXBuVlx+G+9AwCHTLbVV2TuuY5xabcbbcCiYcVCAOaXbr8Fcl3ooRLjZ7cwl8zhYnJuQEGf5JhjX0suTSqcZd4O4XbHokHcsBbg6Wdn9oQwoLKOjRz7u00kblx1GO2DfiY5AHMyYw8jOpfkfhKAN1u1F","content_purgeable":"FtMqSl/uWSWlKM5N5GWhsvtgpRiiq9mnLBbFxUlcC+nCGkUUD1TQ1YzP7JaMOGDR0o0EcEOBjaD+X3k+jrnkj36Myicx+IID3GsSjEeHL0ANciRIEfPSZN1a6FHeRc8U+0d34P5RCJ+7zGhdb+6MAHM7myzKc6oegCZIvAXy5S+i0Py7umWaz81nnuZlyYUzwbAgOLBuC7HsfgB0CM0ISsqiO7qPqUd639EOGB4whjF9sSz3eN2nv7x162XEvGWc/4GX/Bu8IwtT+qtfB5pqWKwo4oRjc0XS434JxUhXMWGUzMhoJVuodgNUvNQ4kApFWIkbXBulavM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
+
+// stateV8Fixture is the PINNED v8 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v8 adds last_heard_at, PB-APP-11's freshness coordinate -- the newest
+// authenticated machine timestamp the phone has accepted. A build one version back drops it,
+// so the next launch reports a machine that has said nothing for hours as live and renders its
+// restored sessions and grids as current, which is the one thing PB-APP-8 forbids and which
+// nothing else on the handset can notice: a withholding relay leaves no gap, answers every
+// poll, and is itself the source of the only other liveness signal (ADR-007 B121).
+const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"hPJbGpYBeXu34Ub3WP7aZ1tJB3D9iqeNhT7TTnXIrK8P6sGdWFuy9xwbpRW/FKCR/wpjAXP90vcitbQn","content_key":"AwfT5hR5qtbhxGZGYrz1UpBREKgZZVwBzdZmlhwnh2qOuTgH9Q3eyHgd44QB+lOOeLEmB81RHtQQpwKR","wake_state":"phivocSvyexkNimLclLozrWLhBwtNKBR62NlSbpfQcBdKBhO74q0qkZJcTUcOjWdY0KaiaoE4NxUGeCmL3S3ih0t2q9Gm5yLUlA=","content_kept":"HbPSffp/swWt4sNhdsxM9ee7HiedO/iID0toRsT86lpBWOqe9ML1U9ncv2oRm1n6dG5kuKmBwpsaUzCVfTEQMB+7bXqHFBshprbXQQlTfS5cme/FPEw9bkNyT/+0FYzwPlQ6F+UfWK+WWVG3ZZwRWYQ+zENzfS74A+i9Nzc5iGCEghYBo7lb2tuQKY/DHl+y1Aj6ruvdGoCrNKEi3vn56XKu25rC0Psep1D0zDqM2sbmKP7L8IAy3sC1BkLBvUgM4Vl3OvSHSWOMVXTe4jI/nP1UMeSrMGdhzjshlFVbKHm7wcVZTyuA98abyZboLTCI4tBJroNAYLaP/OfCm7y5r+uIJDtAKUtbEVpzc0txeUY4m2reVLLlhkZFJ4Xg7D8YEJ0+L8yC6qI03YcAp+/938pxOvLPfNvkjjPBv8xvE2tYOWfSSx2fA00nkR7rX+aqsHNE2TaEnWIeFd3hRR5V+4Sqctjw/E2KLxuE75e3DUuG8D8Zn08fap9ES9T8uk5IeOKIPXPt/J3r2tRC7Tr155XP1fBD","content_purgeable":"ERUT6HrGCfcR6YOQS1tqoSkPQeY6gqI2WmJmXriI9Sfe43f1NJvy2BRrb/ZE2HBb/HUd1R79v8BNvfae5lyrH2wfGx3snbMQmwRd84ZwY7wugMa4PQyMaaEVBiPgHYrCwyFejONtYOS9sGZZMd0tnOXwt1XZuSa7JTv6k27VSnM4cq1EJY8jj3zHPW49kICbZPCmSIjYg+7nx38leMjPSb6gcj43WxxRzly9B/ic/7mTRDhjsulfp1NlK4xa0XwiaJEtPIU3ljxSKTTFEsK9/bQflwAYdVVIOsMa3UAWIpBjSZzyxqieOBdYeLukrLTM62iqnjOEVF8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
+var stateFixtures = map[int]string{
+	1: stateV1Fixture,
+	4: stateV4Fixture,
+	5: stateV5Fixture,
+	6: stateV6Fixture,
+	7: stateV7Fixture,
+	8: stateV8Fixture,
+}
+
+// TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
+// half that catches a DOWNGRADE of the constant: a build stamping 3 refuses this blob with
+// ErrFutureSchema before a single coordinate is read.
+//
+// It restores through the fixture's PINNED KEK -- a real AEAD, the same s14aSealer every
+// other test here uses, over a key that is a literal rather than fresh entropy. That is what
+// lets the two sealed fields live in the byte literal at all.
+func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
+	// EVERY pinned version from v4 on, not just the newest -- this is the forward-migration path:
+	// a v4 blob must still yield every coordinate it carries after those fields moved inside
+	// sealed containers. Iterating the map is what makes the sealed-tag exemption above honest --
+	// a field dropped from a container has no top-level tag to miss, and fails HERE instead.
+	//
+	// The comparison is version-aware, and it MUST be. An earlier version of this test compared
+	// every fixture against the CURRENT fullState(), which is right only while every pinned version
+	// is current: the moment a durable field is added, an old blob cannot restore a coordinate that
+	// did not exist when it was written, and the only ways to go green are to splice the key into a
+	// literal that never carried it -- falsifying the very artifact that proves migration works --
+	// or to weaken this guard. An implementer hit exactly that wall and correctly refused both.
+	//
+	// So: the CURRENT version must equal fullState() exactly, and an OLDER version must load and
+	// restore every coordinate ITS OWN literal carries. A field added later is legitimately absent
+	// from an older blob; a field the old blob carries and this build drops is the defect.
+	for _, version := range sortedFixtureVersions() {
+		if version < 4 {
+			continue // v1 predates the KEK and has its own test below
+		}
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "phone-state.json")
+			if err := os.WriteFile(path, []byte(stateFixtures[version]), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			kek := &s14aSealer{kek: stateV4FixtureKEK}
+			st, err := OpenStore(path, "m1", kek, kek)
+			if err != nil {
+				t.Fatalf("OpenStore on the pinned v%d fixture: %v (a shipped schema version must keep "+
+					"loading; if StateSchemaVersion was lowered, this blob is now from the future)", version, err)
+			}
+
+			// Which coordinates should this literal restore? Exactly the ones it carries: a
+			// top-level json key, or a field sealed into a container the literal has.
+			var blob map[string]any
+			if err := json.Unmarshal([]byte(stateFixtures[version]), &blob); err != nil {
+				t.Fatalf("decode the pinned v%d fixture: %v", version, err)
+			}
+			carries := func(tag string) bool {
+				if _, ok := blob[tag]; ok {
+					return true
+				}
+				if !sealedTags[tag] {
+					return false
+				}
+				for _, container := range []string{"wake_state", "content_kept", "content_purgeable"} {
+					if _, ok := blob[container]; ok {
+						return true
+					}
+				}
+				return false
+			}
+
+			want, got := fullState(), st.Load()
+			wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+			rt := reflect.TypeOf(stateFile{})
+			tagOf := map[string]string{}
+			for i := 0; i < rt.NumField(); i++ {
+				tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+				tagOf[rt.Field(i).Name] = tag
+			}
+			for i := 0; i < wv.NumField(); i++ {
+				name := wv.Type().Field(i).Name
+				if !wv.Type().Field(i).IsExported() {
+					continue
+				}
+				if version != StateSchemaVersion && !carries(tagOf[name]) {
+					continue // added after this version was pinned; legitimately absent
+				}
+				if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
+						"literal carries and this build no longer reads is a durable field dropped without "+
+						"a schema bump", version, name, gv.Field(i).Interface(), wv.Field(i).Interface())
+				}
+			}
+		})
+	}
+}
+
+// TestStateSchemaVersion_IsPinnedToTheDurableFieldSet is F2 itself: the constant and the
+// field set it stamps must move together. Nothing connected them, so both mutations were
+// silent -- lowering the constant, and adding a durable field without raising it.
+//
+// The tie is mechanical in BOTH directions. A field added to stateFile is missing from the
+// pinned literal for the current version, so it fails here until the version is raised and a
+// literal for the new one is pinned; a field REMOVED leaves a key in the pinned literal this
+// build can no longer decode, which is a coordinate silently dropped on every load of an
+// existing blob.
+func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
+	fixture, ok := stateFixtures[StateSchemaVersion]
+	if !ok {
+		t.Fatalf("StateSchemaVersion is %d and stateFixtures pins no literal for it (it pins %v). "+
+			"PB-STATE-5's forward-migration path is only mechanical if every shipped version keeps "+
+			"a byte-literal that must go on loading, so raising the version means pinning the blob "+
+			"the new version writes", StateSchemaVersion, sortedFixtureVersions())
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(fixture), &blob); err != nil {
+		t.Fatalf("decode the pinned v%d fixture: %v", StateSchemaVersion, err)
+	}
+
+	tags := map[string]bool{}
+	rt := reflect.TypeOf(stateFile{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if tag == "" || tag == "-" {
+			t.Fatalf("stateFile.%s has no json tag; a durable field's on-disk name must be explicit",
+				rt.Field(i).Name)
+		}
+		tags[tag] = true
+		if _, present := blob[tag]; !present && !sealedTags[tag] {
+			t.Errorf("the durable field %q is absent from the pinned v%d fixture. Either it is NEW "+
+				"-- in which case StateSchemaVersion must be raised and a literal for the new version "+
+				"pinned, or a build one version back drops it silently and a replay guard comes back "+
+				"as zero -- or the literal has drifted from what this build writes",
+				tag, StateSchemaVersion)
+		}
+	}
+	for name := range blob {
+		if !tags[name] {
+			t.Errorf("the pinned v%d fixture carries %q and stateFile no longer has a field for it. "+
+				"Removing a durable coordinate is a schema change too: every existing blob still "+
+				"carries it, and this build now drops it on load", StateSchemaVersion, name)
+		}
+	}
+}
+
+func sortedFixtureVersions() []int {
+	out := make([]int, 0, len(stateFixtures))
+	for v := range stateFixtures {
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// TestStateStore_PinnedV1FixtureStillLoads is the forward-migration guard (PB-STATE-5).
+func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "phone-state.json")
+	if err := os.WriteFile(path, []byte(stateV1Fixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	st, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t))
+	if err != nil {
+		t.Fatalf("OpenStore on the pinned v1 fixture: %v (a shipped schema version must keep loading)", err)
+	}
+	got := st.Load()
+	if got.EpochID != 7 || got.RelayCursor != 17 || got.WakeReplay != 91 {
+		t.Errorf("v1 fixture loaded as epoch=%d cursor=%d wake_replay=%d; want 7/17/91", got.EpochID, got.RelayCursor, got.WakeReplay)
+	}
+	if got.SendSeq[7] != 512 {
+		t.Errorf("v1 fixture send-seq ceiling for epoch 7 = %d; want 512", got.SendSeq[7])
+	}
+	if got.Receive[journalBucket(7)] != 42 {
+		t.Errorf("v1 fixture receive high-water for the journal bucket = %d; want 42", got.Receive[journalBucket(7)])
+	}
+	if got.GrantEpoch != 7 || got.GrantSeq != 2 {
+		t.Errorf("v1 fixture grant watermark = (%d,%d); want (7,2)", got.GrantEpoch, got.GrantSeq)
+	}
+}
+
+// TestStateStore_UnknownFutureSchemaFailsClosed is PB-STATE-5's other half. A blob written
+// by a NEWER app build (an upgrade, then a downgrade, or a restored backup) carries
+// coordinates this build cannot interpret. Reading it with the current decoder would
+// silently drop the fields it does not know -- which for a send-seq ceiling or a receive
+// high-water means resetting a replay guard to zero. Refuse it instead.
+func TestStateStore_UnknownFutureSchemaFailsClosed(t *testing.T) {
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(stateV1Fixture), &blob); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	blob["schema_version"] = StateSchemaVersion + 1
+	blob["a_field_this_build_has_never_heard_of"] = 1
+	data, err := json.Marshal(blob)
+	if err != nil {
+		t.Fatalf("encode future blob: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "phone-state.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write future blob: %v", err)
+	}
+	if _, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t)); !errors.Is(err, ErrFutureSchema) {
+		t.Fatalf("OpenStore on schema version %d = %v; want ErrFutureSchema (never a silent reinterpretation)", StateSchemaVersion+1, err)
+	}
+}
+
+// TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty is standing review
+// question 2 applied to this slice: does making this durable turn a currently
+// self-healing failure PERMANENT? S2 shipped exactly that regression -- its new durable
+// checkpoint was bound to no identity, so a regenerated machine identity or a reset relay
+// mailbox became a silent permanent brick where both had previously self-healed on
+// restart.
+//
+// The phone has the same two conditions. `swarm remote init` regenerates the machine
+// identity (epoch back to 1) and a re-paired phone must work; a state blob describing a
+// DIFFERENT machine is not corrupt, it simply describes coordinates that do not exist
+// here, so it loads EMPTY rather than erroring or -- far worse -- stale-dropping the
+// freshly paired phone's first frames with a retained epoch-1 high-water.
+//
+// A truly unreadable blob is different: it is refused, because starting from an empty
+// checkpoint would leave the replay guard blind (a fresh crypto.MailboxReceiver skips the
+// staleness check entirely) and re-open every frame the relay still retains.
+func TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	// (a) Another machine's blob: empty, not an error, so a re-pair is possible.
+	foreign := filepath.Join(dir, "foreign.json")
+	if err := os.WriteFile(foreign, []byte(stateV1Fixture), 0o600); err != nil {
+		t.Fatalf("write foreign blob: %v", err)
+	}
+	st, err := OpenStore(foreign, "some-other-machine", s14aNewSealer(t), s14aNewSealer(t))
+	if err != nil {
+		t.Fatalf("OpenStore for a different machine = %v; want an EMPTY state, not an error (a bricked re-pair is the S2 B1 regression)", err)
+	}
+	if got := st.Load(); got.EpochID != 0 || len(got.Receive) != 0 || len(got.SendSeq) != 0 {
+		t.Fatalf("another machine's blob loaded as %+v; want empty (its epoch-1 high-water would stale-drop a freshly paired phone)", got)
+	}
+
+	// (b) Unversioned and (c) unparseable both fail closed.
+	for name, body := range map[string]string{
+		"unversioned": `{"machine":"m1","epoch_id":7}`,
+		"garbage":     `{"machine":`,
+	} {
+		p := filepath.Join(dir, name+".json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		if _, err := OpenStore(p, "m1", s14aNewSealer(t), s14aNewSealer(t)); !errors.Is(err, ErrCorruptState) {
+			t.Errorf("OpenStore on a %s blob = %v; want ErrCorruptState (never a silent reset to zero)", name, err)
+		}
+	}
+
+	// (d) A missing file is first run, not corruption.
+	fresh, err := OpenStore(filepath.Join(dir, "absent.json"), "m1", s14aNewSealer(t), s14aNewSealer(t))
+	if err != nil {
+		t.Fatalf("OpenStore on a missing file = %v; want a fresh empty state (first launch)", err)
+	}
+	if got := fresh.Load(); got.EpochID != 0 {
+		t.Fatalf("missing file loaded as %+v; want the zero State", got)
+	}
+}

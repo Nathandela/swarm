@@ -1,0 +1,146 @@
+======================================================================
+Remote-control Phase 1 — CRYPTO FOUNDATION — REMEDIATION FIX WAVE — RED RUN
+date: Sat Jul 18 2026
+package: internal/remote/crypto
+committee: codex + opus + orchestrator probes (confirmed defects F1-F14)
+requirements: R-CRY.1-.16, R-PAIR.4; amendments D.0-A5/A14/A15; ADR-007 D2/D3/D4
+======================================================================
+
+For each CONFIRMED finding a failing test that pins the CORRECT behavior was
+added BEFORE any implementation change (GG-5 TDD RED). The RED is captured in
+two stages because the findings split into two kinds:
+
+  STAGE A (behavioral RED, existing symbols): tests that compile against the
+  un-fixed package and FAIL AT RUNTIME because the current behavior is wrong.
+  Covers F1 (empty-pin fail-open), F2 (NoiseStatic private leak), F6 (exported
+  caller-nonce), F8 (0600 not tightened on an existing file), F11 (prologue
+  field-splicing), F12 (empty-plaintext rejected). F14's sender_key_id-in-AAD
+  case is a regression pin for already-correct behavior and PASSES (documented).
+
+  STAGE B (undefined-symbol RED, new API): tests that reference the symbols the
+  fix introduces; against the un-fixed package they FAIL TO COMPILE. Covers F1
+  (pairing unpinned opt-in), the PSK seam, F3 (grant authentication + anti-
+  replay), F4 (mailbox high-water seeding), F7 (rekey thresholds enforced), F9
+  (issued_at freshness), F10 (typed wake/content keys), F12 (unknown type at
+  parse), F13 (command canonicalization returning an error).
+
+Test files: hardening_behavioral_test.go, hardening_api_test.go
+
+
+======================================================================
+### STAGE A — behavioral RED (go test -run <behavioral set>) ###
+# command: go test -run '<behavioral tests>' -v ./internal/remote/crypto/...
+======================================================================
+=== RUN   TestLive_EmptyPinIsHardError
+    hardening_behavioral_test.go:34: NewNoise accepted an empty (nil) pin for a live session
+--- FAIL: TestLive_EmptyPinIsHardError (0.00s)
+=== RUN   TestNoiseStatic_NoPrivateInFormat
+    hardening_behavioral_test.go:62: format %v = "&{{[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] [134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:62: format %+v = "&{dh:{Private:[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] Public:[134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:62: format %#v = "&crypto.NoiseStatic{dh:noise.DHKey{Private:[]uint8{0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7, 0xd7}, Public:[]uint8{0x86, 0x4a, 0x9, 0x28, 0xc0, 0xa, 0x65, 0x52, 0xfa, 0x7d, 0xcc, 0x5a, 0x7c, 0x8e, 0x91, 0x72, 0xef, 0xf5, 0x2e, 0x42, 0x78, 0x3c, 0x6d, 0xa5, 0x5c, 0x6e, 0x2e, 0x4b, 0x69, 0xed, 0x66, 0x39}}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:62: format %s = "&{{\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7 \x86J\t(\xc0\neR\xfa}\xccZ|\x8e\x91r\xef\xf5.Bx<m\xa5\\n.Ki\xedf9}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:62: format %x = "&{{d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7 864a0928c00a6552fa7dcc5a7c8e9172eff52e42783c6da55c6e2e4b69ed6639}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:62: format %q = "&{{\"\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\\xd7\" \"\\x86J\\t(\\xc0\\neR\\xfa}\\xccZ|\\x8e\\x91r\\xef\\xf5.Bx<m\\xa5\\\\n.Ki\\xedf9\"}}", want redacted "crypto.NoiseStatic{pub:49d04e99da123be5}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{{[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] [134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{{[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] [134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{dh:{Private:[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] Public:[134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{{\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7 \x86J\t(\xc0\neR\xfa}\xccZ|\x8e\x91r\xef\xf5.Bx<m\xa5\\n.Ki\xedf9}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{{\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7 \x86J\t(\xc0\neR\xfa}\xccZ|\x8e\x91r\xef\xf5.Bx<m\xa5\\n.Ki\xedf9}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "{%!s(*crypto.NoiseStatic=&{{[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] [134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}})}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "&{{d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7 864a0928c00a6552fa7dcc5a7c8e9172eff52e42783c6da55c6e2e4b69ed6639}}"
+    hardening_behavioral_test.go:80: formatted NoiseStatic leaks private material: "{%!q(*crypto.NoiseStatic=&{{[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] [134 74 9 40 192 10 101 82 250 125 204 90 124 142 145 114 239 245 46 66 120 60 109 165 92 110 46 75 105 237 102 57]}})}"
+--- FAIL: TestNoiseStatic_NoPrivateInFormat (0.00s)
+=== RUN   TestSeal_NoExportedCallerNonce
+    hardening_behavioral_test.go:114: exported SealDeterministic accepts a 24-byte caller nonce (nonce-reuse footgun)
+--- FAIL: TestSeal_NoExportedCallerNonce (0.01s)
+=== RUN   TestIdentity_SaveTightensExistingPerms
+    hardening_behavioral_test.go:144: Save left key file at 644 over a pre-existing 0644 file, want 0600
+--- FAIL: TestIdentity_SaveTightensExistingPerms (0.00s)
+=== RUN   TestKeyStore_SaveTightensExistingPerms
+    hardening_behavioral_test.go:165: device key file left at 644 over a pre-existing 0644 file, want 0600
+--- FAIL: TestKeyStore_SaveTightensExistingPerms (0.00s)
+=== RUN   TestLivePrologue_NoFieldSplicing
+    hardening_behavioral_test.go:173: LivePrologue splices variable-length ids: (a,bc) collides with (ab,c)
+--- FAIL: TestLivePrologue_NoFieldSplicing (0.00s)
+=== RUN   TestEnvelope_EmptyPlaintextRoundTrips
+    hardening_behavioral_test.go:188: ParseEnvelope(empty-plaintext): crypto: truncated envelope
+--- FAIL: TestEnvelope_EmptyPlaintextRoundTrips (0.00s)
+=== RUN   TestEnvelope_SenderKeyIDInAAD
+--- PASS: TestEnvelope_SenderKeyIDInAAD (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/crypto	0.771s
+FAIL
+
+======================================================================
+### STAGE B — new-API undefined-symbol RED (go test -gcflags=-e, cap lifted) ###
+# command: go test -gcflags=-e ./internal/remote/crypto/...
+# Every line below is undefined / signature-mismatch on a symbol the fix
+# introduces — a pure compile-time GG-5 RED (no syntax/type test bugs).
+======================================================================
+# github.com/Nathandela/swarm/internal/remote/crypto [github.com/Nathandela/swarm/internal/remote/crypto.test]
+internal/remote/crypto/hardening_api_test.go:31:45: unknown field AllowUnpinnedPeer in struct literal of type NoiseConfig
+internal/remote/crypto/hardening_api_test.go:38:46: unknown field AllowUnpinnedPeer in struct literal of type NoiseConfig
+internal/remote/crypto/hardening_api_test.go:60:42: unknown field PSK in struct literal of type NoiseConfig
+internal/remote/crypto/hardening_api_test.go:81:61: too many arguments in call to SealEpochGrant
+	have ("crypto/ed25519".PrivateKey, []byte, number, number, EpochKeys)
+	want ([]byte, uint32, uint64, EpochKeys)
+internal/remote/crypto/hardening_api_test.go:87:45: too many arguments in call to OpenEpochGrant
+	have (KeyStore, "crypto/ed25519".PublicKey, *EpochGrant)
+	want (KeyStore, *EpochGrant)
+internal/remote/crypto/hardening_api_test.go:92:45: too many arguments in call to OpenEpochGrant
+	have (KeyStore, "crypto/ed25519".PublicKey, *EpochGrant)
+	want (KeyStore, *EpochGrant)
+internal/remote/crypto/hardening_api_test.go:104:61: too many arguments in call to SealEpochGrant
+	have ("crypto/ed25519".PrivateKey, []byte, number, number, EpochKeys)
+	want ([]byte, uint32, uint64, EpochKeys)
+internal/remote/crypto/hardening_api_test.go:108:50: too many arguments in call to OpenEpochGrant
+	have (KeyStore, "crypto/ed25519".PublicKey, *EpochGrant)
+	want (KeyStore, *EpochGrant)
+internal/remote/crypto/hardening_api_test.go:112:11: stripped.Sig undefined (type EpochGrant has no field or method Sig)
+internal/remote/crypto/hardening_api_test.go:113:45: too many arguments in call to OpenEpochGrant
+	have (KeyStore, "crypto/ed25519".PublicKey, *EpochGrant)
+	want (KeyStore, *EpochGrant)
+internal/remote/crypto/hardening_api_test.go:117:45: too many arguments in call to OpenEpochGrant
+	have (KeyStore, "crypto/ed25519".PublicKey, *EpochGrant)
+	want (KeyStore, *EpochGrant)
+internal/remote/crypto/hardening_api_test.go:127:9: undefined: NewGrantReceiver
+internal/remote/crypto/hardening_api_test.go:129:60: too many arguments in call to SealEpochGrant
+	have ("crypto/ed25519".PrivateKey, []byte, number, number, EpochKeys)
+	want ([]byte, uint32, uint64, EpochKeys)
+internal/remote/crypto/hardening_api_test.go:136:60: too many arguments in call to SealEpochGrant
+	have ("crypto/ed25519".PrivateKey, []byte, number, number, EpochKeys)
+	want ([]byte, uint32, uint64, EpochKeys)
+internal/remote/crypto/hardening_api_test.go:140:60: too many arguments in call to SealEpochGrant
+	have ("crypto/ed25519".PrivateKey, []byte, number, number, EpochKeys)
+	want ([]byte, uint32, uint64, EpochKeys)
+internal/remote/crypto/hardening_api_test.go:152:4: r.SeedHighWater undefined (type *MailboxReceiver has no field or method SeedHighWater)
+internal/remote/crypto/hardening_api_test.go:167:4: r.SeedHighWater undefined (type *MailboxReceiver has no field or method SeedHighWater)
+internal/remote/crypto/hardening_api_test.go:191:6: ini.rekeyBytes undefined (type *NoiseSession has no field or method rekeyBytes)
+internal/remote/crypto/hardening_api_test.go:192:9: ini.RekeyDue undefined (type *NoiseSession has no field or method RekeyDue)
+internal/remote/crypto/hardening_api_test.go:204:10: ini.RekeyDue undefined (type *NoiseSession has no field or method RekeyDue)
+internal/remote/crypto/hardening_api_test.go:209:9: ini.RekeyDue undefined (type *NoiseSession has no field or method RekeyDue)
+internal/remote/crypto/hardening_api_test.go:218:6: ini.now undefined (type *NoiseSession has no field or method now)
+internal/remote/crypto/hardening_api_test.go:219:6: ini.established undefined (type *NoiseSession has no field or method established)
+internal/remote/crypto/hardening_api_test.go:220:6: ini.rekeyDur undefined (type *NoiseSession has no field or method rekeyDur)
+internal/remote/crypto/hardening_api_test.go:221:9: ini.RekeyDue undefined (type *NoiseSession has no field or method RekeyDue)
+internal/remote/crypto/hardening_api_test.go:225:10: ini.RekeyDue undefined (type *NoiseSession has no field or method RekeyDue)
+internal/remote/crypto/hardening_api_test.go:235:4: h.IssuedAt undefined (type EnvelopeHeader has no field or method IssuedAt)
+internal/remote/crypto/hardening_api_test.go:255:4: r.maxAge undefined (type *MailboxReceiver has no field or method maxAge)
+internal/remote/crypto/hardening_api_test.go:256:4: r.now undefined (type *MailboxReceiver has no field or method now)
+internal/remote/crypto/hardening_api_test.go:260:8: stale.IssuedAt undefined (type EnvelopeHeader has no field or method IssuedAt)
+internal/remote/crypto/hardening_api_test.go:265:56: undefined: ErrStaleAge
+internal/remote/crypto/hardening_api_test.go:271:8: fresh.IssuedAt undefined (type EnvelopeHeader has no field or method IssuedAt)
+internal/remote/crypto/hardening_api_test.go:285:15: undefined: NewEpochKeys
+internal/remote/crypto/hardening_api_test.go:293:15: undefined: SealMailbox
+internal/remote/crypto/hardening_api_test.go:300:15: undefined: OpenWake
+internal/remote/crypto/hardening_api_test.go:303:13: undefined: OpenMailbox
+internal/remote/crypto/hardening_api_test.go:311:15: undefined: SealWake
+internal/remote/crypto/hardening_api_test.go:318:15: undefined: OpenMailbox
+internal/remote/crypto/hardening_api_test.go:332:51: undefined: ErrUnknownType
+internal/remote/crypto/hardening_api_test.go:351:16: assignment mismatch: 2 variables but c.Canonical returns 1 value
+internal/remote/crypto/hardening_api_test.go:358:15: assignment mismatch: 2 variables but bad.Canonical returns 1 value
+internal/remote/crypto/hardening_api_test.go:363:15: assignment mismatch: 2 variables but ok.Canonical returns 1 value
+internal/remote/crypto/hardening_api_test.go:369:14: assignment mismatch: 2 variables but nilHash.Canonical returns 1 value
+internal/remote/crypto/hardening_api_test.go:370:14: assignment mismatch: 2 variables but empty.Canonical returns 1 value
+FAIL	github.com/Nathandela/swarm/internal/remote/crypto [build failed]
+FAIL

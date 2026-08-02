@@ -3,7 +3,7 @@
 This is the normative, field-level specification of the **client ⇄ daemon control
 surface** — the low-reversibility wire contract (ADR-002) that the TUI (Epic 7)
 and the attach path (Epic 8) consume. It is versioned; CI diffs this document's
-field set against the Go message structs in `internal/protocol` (the GG-7 drift
+field set against the Go message structs in `internal/protocol/schema` (the GG-7 drift
 check), so this file and the code move together.
 
 Implementation: `internal/protocol` (`types.go`, `codec.go`, `client.go`,
@@ -72,6 +72,34 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
 | `error`            | string          | human-readable error text, carried on `error`                            |
+| `operation_id`     | string            | idempotency key of a remote mutating op (`<device_id>:<client-ULID>`, R-IDP) |
+| `interaction_id`   | string            | the agent interaction being approved, distinct from `operation_id` (A6)      |
+| `device_id`        | string            | pairing device id; never trusted alone, always paired with `device_sig` (A1) |
+| `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
+| `cursor`           | uint64            | journal cursor, carried on `journal_read` / `journal_event` (R-PROT.3)       |
+| `issued_at`        | time              | daemon-authoritative issue time (pointer; the key is omitted when zero)      |
+| `expires_at`       | time              | daemon-authoritative expiry (pointer; the key is omitted when zero)          |
+| `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |
+| `error_code`       | `ErrorCode`       | machine-readable refusal reason, carried alongside `error` (R-PROT.7)        |
+| `journal`          | `[]JournalRecord` | journal records, carried on `journal_read` / `journal_event` (R-PROT.3)      |
+| `roster`           | `[]JournalRecord` | live sessions as-of `cursor` on a `journal_read` snapshot (R-JRN.4)          |
+| `full_resync`      | bool              | set when the caller's `cursor` fell below the retained journal floor (R-JRN.6) |
+| `devices`          | `[]DeviceView`    | paired-device roster, carried on the `device_list` reply (R-DEV.1)           |
+| `policy`           | `*PolicyView`     | remote launch policy (allowed cwd roots), carried on the `policy_query` reply (R-POL.3) |
+| `target_device_id` | string            | device_revoke: the device to REVOKE, distinct from the caller `device_id` (A3.2) |
+| `pairing`          | `*PairingControl` | owner-tier pairing payload, carried on `pair_start`/`pair_pending`/`pair_confirm`/`pair_result` (A3.3-a) |
+| `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
+| `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
+| `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
+| `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
+
+The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
+amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
+uses none of them serializes byte-identically to the pre-remote shape. The nested
+`ApproveReq` (approval), `JournalRecord` (journal event), `DeviceView` (paired
+device), `PolicyView` (launch policy), and `PairingControl` (pairing payload)
+shapes are documented at the field level in `internal/protocol` and are not
+repeated as wire tables here.
 
 ## The `SessionView` message
 
@@ -114,6 +142,22 @@ and unrelated secrets are dropped.
 | `initial_prompt` | string              | optional initial prompt text                               |
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
 
+## The `TerminalSnapshot` message
+
+`TerminalSnapshot` is one **server-rendered, sanitized terminal snapshot** (A7
+renderer slice B), carried in `Control.terminal` on a `terminal_snapshot` op. The
+daemon renders the session's VT grid to plain text — every control byte already
+stripped — so only sanitized text crosses the daemon → gateway socket and the raw
+hostile PTY bytes never reach the network-facing sidecar. The phone displays
+`lines` as-is.
+
+| JSON key    | Go type    | Meaning                                            |
+| ----------- | ---------- | -------------------------------------------------- |
+| `session`   | string     | namespaced session id the snapshot is for          |
+| `lines`     | []string   | sanitized plain-text grid rows, top to bottom      |
+| `cols`      | int        | grid width the snapshot was rendered at            |
+| `rows`      | int        | grid height the snapshot was rendered at           |
+
 ## Control-op vocabulary
 
 All op values are lowercase snake_case strings.
@@ -135,6 +179,65 @@ after an upgrade) can surface that and suggest `swarm daemon restart` even when
 
 The client sends `list`. The daemon replies with `list` carrying `sessions`, one
 stamped `SessionView` per session, each with its precomputed `group`.
+
+### `device_list`
+
+Remote-tier control-plane read (slice A3.1, R-DEV.1). The client sends
+`device_list`; the daemon replies with `device_list` carrying `devices`, the
+paired-device roster. Non-mutating: gated purely by the negotiated `pairing`
+capability and a `DeviceLister` backend (no `requireRemoteAuthz` choke point). An
+unnegotiated capability or an unsupporting backend replies `error`.
+
+### `policy_query`
+
+Remote-tier control-plane read (slice A3.1, R-POL.3). The client sends
+`policy_query`; the daemon replies with `policy_query` carrying `policy`, the
+machine's configured remote launch policy (allowed cwd roots). Non-mutating:
+gated purely by the negotiated `policy` capability and a `PolicyDescriber`
+backend (no `requireRemoteAuthz` choke point). An unnegotiated capability or an
+unsupporting backend replies `error`.
+
+### `device_revoke`
+
+Remote-tier control-plane MUTATING op (slice A3.2): removes a paired device from
+the daemon's device registry. The client sends `device_revoke` with
+`target_device_id` (the device to remove), plus the usual mutating-op device-auth
+fields (`operation_id`, `device_id`, `device_sig`, `expires_at`) — `device_id` here
+is the CALLER (the signer), and `target_device_id` is the resource: it is what
+`requireRemoteAuthz` binds the caller's signature to, so a device can revoke a
+*different* device, not only itself. Goes through the same `requireRemoteAuthz`
+choke point as `kill`/`delete` (kill switch, `operation_id`, device signature,
+capability — `device_revoke` maps to the `ActionControl` capability class, so it
+requires a CapFull device). The daemon replies `ok` (or `error`). Revoking the
+last paired device is not a distinct code path: `RemoteControlEnabled` already
+derives from the registry's device count, so it flips remote control off as a side
+effect. Known gaps (future slices): this only removes the daemon-side registry
+entry, not any relay-side registration/mailbox; and there is no separate admin
+capability tier yet — any CapFull device can revoke any other.
+
+### `remote_set_control`
+
+Owner-tier MUTATING op (A4) — the durable manual kill switch behind `swarm remote
+off`/`on`. The client sends `remote_set_control` with `remote_control` (the desired
+master state: `false` = manual off, `true` = on). It is **owner-tier only**: a
+remote-tier connection is refused `not_authorized` BEFORE the backend is consulted
+(mirroring `pair_start`), so a remote device can never re-enable a switch its owner
+turned off. On the owner tier it requires the negotiated `pairing` capability, then
+durably flips the override via `RemoteControlSetter.SetRemoteControl` (persisted to
+`remote-state.json`), and replies `ok` (or `error`). Manual off **wins over device
+presence**: with the override set, `RemoteControlEnabled` reports false even while a
+device is paired, so `off` severs remote control at the daemon choke point —
+`requireRemoteAuthz` refuses every remote mutating op, `controlGateOpen` drops live
+input, and an established terminal peek is blanked. `on` clears the override,
+returning to the device-derived value.
+
+### `pair_start` / `pair_pending` / `pair_confirm` / `pair_result`
+
+Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option A").
+This slice freezes the wire shape only — the four op names and the `pairing`
+field's `PairingControl` payload — with no handlers and no pairing logic wired up
+yet; a later slice adds the handlers and the `PairingHost` bridge against this
+frozen contract.
 
 ### `launch`
 
@@ -182,6 +285,60 @@ screen.
 A second `attach` on the **same connection** auto-detaches the first (its lease is
 released) before the new lease is granted, so one connection never holds two
 leases.
+
+### `take_control` / `take_control_end`
+
+Remote-tier interactive control (slice A5). The owner tier uses `attach`; the remote
+tier has no unsigned `attach` and instead requires a signed `take_control`.
+
+- **`take_control`** is a signed, MUTATING op that runs through the same
+  `requireRemoteAuthz` choke point as `kill`/`delete` (kill switch first, then
+  `operation_id`, then the `device_id`/`device_sig`/`expires_at` signature over the
+  canonical tuple) and, only once authorized, establishes a controller lease through
+  the same `attach` path (replying with `lease`). The control-session lifetime binds to
+  the EARLIEST of the device-signed `expires_at`, `now + server-max` (30 min), and — when
+  the caller sets the optional `ttl_seconds` hint — `now + ttl_seconds`. Because
+  `expires_at` is covered by the device signature, the session can never outlive what the
+  device signed; `ttl_seconds` (unsigned) can only shorten it further (R7). While that
+  control session is live, remote `TDataIn` input frames and
+  `resize` reach the session's shim; they are gated on every keystroke by four
+  conditions — the kill switch is still on, the control session exists, it has not
+  expired (lazy, on the server clock), and it still targets the connection's current
+  lease generation — and dropped otherwise.
+
+  **Input routing + best-effort delivery (A7).** Each sealed input frame carries its
+  target namespaced `session` INSIDE the AEAD-encrypted body, and the gateway routes it
+  by that sealed id — never by mutable focus state — so the untrusted relay cannot drop a
+  `take_control` and steer the following keystrokes onto another session's live lease.
+  The phone stamps commands AND input frames from ONE monotonic sequence (they share a
+  single machine `MailboxReceiver`), and the gateway opens each with EXACTLY ONE
+  `Accept`; a replayed/reordered/duplicate frame is rejected as a stale sequence, and a
+  frame that follows a sequence GAP (a preceding frame the relay dropped or reordered) is
+  DROPPED, not routed. The input plane is therefore **best-effort under relay
+  misbehavior**: an in-order relay never sets a gap, but a dropped/reordered frame may
+  cost a keystroke — fail-closed, since dropping a keystroke is strictly safer than
+  misrouting it.
+- **`take_control_end`** is the caller-scoped teardown of one's OWN control session:
+  it carries the `session_id` and lease `generation` (mirroring `detach`; no device
+  signature), clears the control session, and releases the lease — shutting the input
+  gate.
+
+### `terminal_subscribe` / `terminal_snapshot`
+
+Remote-tier terminal peek (A7 renderer slice B), mirroring the
+`journal_subscribe`/`journal_event` streaming pair. Unlike `take_control`, the peek
+is **read-only** and works BEFORE any control session exists (no lease, no signed
+op).
+
+- **`terminal_subscribe`** requests the server-rendered terminal snapshot stream for
+  a `session_id`. The daemon renders that session's VT grid off a persistent
+  read-only fan-out tap and streams `terminal_snapshot` frames as the grid changes.
+- **`terminal_snapshot`** is daemon → client. It carries a `terminal`
+  (`TerminalSnapshot`): the namespaced `session`, the sanitized plain-text `lines`
+  (every control byte stripped daemon-side), and the `cols`/`rows` the grid was
+  rendered at. The VT emulator and the raw hostile PTY bytes stay off the
+  network-facing sidecar — only this sanitized text crosses the daemon → gateway
+  socket.
 
 ### `detach`
 

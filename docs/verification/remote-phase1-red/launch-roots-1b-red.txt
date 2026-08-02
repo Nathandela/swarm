@@ -1,0 +1,20 @@
+RED evidence — fix-pack item 1b (R-POL.3/.7): allowed-cwd-roots + remote-policy.json fail-closed
+Date: 2026-07-23  Commit-base: 4056ea2
+
+Production build (untouched): OK
+
+$ go test -run 'Policy_Launch|Policy_Symlink|Policy_EmptyRoots' ./internal/protocol/
+--- FAIL: TestPolicy_LaunchOutsideAllowedRootsRefused (0.02s)
+    --- FAIL: TestPolicy_LaunchOutsideAllowedRootsRefused/outside_root_refused (0.02s)
+--- FAIL: TestPolicy_SymlinkEscapeRefused (0.00s)
+    launch_roots_test.go:154: remote launch whose cwd symlink escapes the root = op "launch" code ""; want error/policy (the RESOLVED path must be checked — filepath.EvalSymlinks, R-POL.3)
+--- FAIL: TestPolicy_EmptyRootsFailClosed (0.01s)
+    --- FAIL: TestPolicy_EmptyRootsFailClosed/remote_empty_roots_denies (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.622s
+FAIL
+
+Protocol RED (runtime, right reason): remote launch currently ALLOWED regardless of cwd (no LaunchPolicy roots enforcement). outside_root_refused / symlink-escape / empty_roots_denies all FAIL; guards inside_root_allowed + local_unaffected pass.
+
+Skeleton RED (new-API compile-fail): undefined loadRemoteLaunchPolicy / writeRemoteLaunchPolicy / protocol.LaunchPolicy — the config loader + optional interface do not exist yet.
+Seam pinned: protocol.LaunchPolicy{ RemoteLaunchAllowed(resolvedCwd) error } (symlink-resolved in the protocol layer); skeleton load/writeRemoteLaunchPolicy(<stateDir>/remote-policy.json, 0600, missing/malformed => empty-allowed deny-all, never fail-open).

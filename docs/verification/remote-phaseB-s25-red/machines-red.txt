@@ -1,0 +1,170 @@
+# S25 machines screen: failing-first run (GG-5)
+
+Recorded before ui/kit/PresenceDot.kt, ui/screens/MachinesPanel.kt and
+ui/screens/MachinesPanelView.kt existed. The two gate rows that name them were written first --
+`presenceDot` in `s23Inbox` (android/gate/s23_kit_test.go) and the MachinesPanelView.kt entry in
+`s24ScreenComponents` (android/gate/s24_screens_test.go) -- and this is what they said with
+nothing behind them.
+
+THE ACTIVITY ROWS IN THIS OUTPUT ARE NOT MINE. `ActivityRow.kt` and `ActivityPanelView.kt` are a
+second agent's rows, landing in the same two tables while this ran. They are left in rather than
+filtered out: the run is what it was, and a doctored capture is worth less than a noisy one.
+
+## Command
+
+    go test ./android/gate/ -run "TestPBDS6_EveryInboxComponentIsAKitFactory|TestPBDS7_EveryDerivationCitationResolvesToARow|TestPBDS6_EveryKitFileIsClaimedByAFence|TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit" -v
+
+    HEAD b06cec9, branch design-system-substrate, 2026-08-01T16:29:45Z
+
+## Output
+
+```
+=== RUN   TestPBDS6_EveryInboxComponentIsAKitFactory
+    s23_kit_test.go:421: PB-DS-6: the kit has no ActivityRow.kt, which is where activityRow() lives.
+        	the activity feed's only structural element, and the machine pane's audit log -- one factory for both, which is why it takes a body and an optional emphasis rather than a JournalRow. Substrate's demo phone renders the inbox and nothing else, so `.arow` is the retired mock's class and §4 is the whole specification. Its card geometry is `.prow`'s and is spent through cardSurface -- §2's reuse rule again, and the reason the mock's radius 12 and 11/13 padding are not here. The mock's fixed 52 px timestamp gutter is dropped with NOTHING replacing it: 52 is not on the spacing scale, and `HH:MM` in a monospace face is constant width by construction. That dropped column is also what lets the timestamp be optional, which it has to be -- see the note on s23DerivedSpacing below.
+    s23_kit_test.go:421: PB-DS-6: the kit has no PresenceDot.kt, which is where presenceDot() lives.
+        	the machines screen's 7 dp mark, and it is a SEPARATE FACTORY FROM statusDot rather than a fifth key in the Group table. `--p-ok` online and `--p-ink3` offline is the same pair of tokens two Groups already carry, so the cheap implementation is to hand statusDot the Group whose colour happens to match -- `ready_for_review` for online, `completed` for offline -- which renders every pixel correctly and is the phone INVENTING a status.Group. TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping refuses a bound name that is not in android/group-tokens.tsv precisely so that cannot be done quietly, and the row's own words are that machine presence is not a Group and must not be smuggled in as one. So the drawable, the 7 dp and the flat no-glow treatment are shared with statusDot and the BINDING is not: this one takes a boolean, and the Group fence stays strict.
+--- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.01s)
+=== RUN   TestPBDS6_EveryKitFileIsClaimedByAFence
+    s23_kit_test.go:532: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/ActivityRow.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+    s23_kit_test.go:532: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/PresenceDot.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+--- FAIL: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+=== RUN   TestPBDS7_EveryDerivationCitationResolvesToARow
+--- PASS: TestPBDS7_EveryDerivationCitationResolvesToARow (0.00s)
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1197: PB-DS-6: 2 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/ActivityPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+        dev/swarm/phone/ui/screens/MachinesPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.767s
+FAIL
+```
+
+## What changed after this run, and why the quoted prose does not match the tree
+
+The `Why` text quoted above for the `presenceDot` row was rewritten after this capture, and the
+row's citation moved from `§4 Machine presence dot` to `#11 Machine row`. The reason is not a
+second thought about the component: commit e8af092 ("Revert the duplicate section 4 rows: rows
+11-15 already said all of it") removed the §4 adjacent rows this slice was briefed against, and
+row 11 -- which was always there -- states the same presence mark, its two tokens and its
+flatness. The citation was pointed at the surviving row.
+
+That mismatch was itself caught by a fence rather than by reading. With PresenceDot.kt written and
+the stale citation still in it:
+
+```
+    s23_kit_test.go:574: PB-DS-7: PresenceDot.kt cites `§4 Machine presence dot`, and no such row
+    exists in docs/design/substrate-components.md. Either the row was renamed and the component now
+    paints to a specification nobody can find, or the citation was written from memory.
+```
+
+which is TestPBDS7_EveryDerivationCitationResolvesToARow doing exactly the job its comment claims.
+
+## What is NOT in this file, and why
+
+The KOTLIN lane's red run. Three suites were written before their subjects existed --
+`PresenceDotTest`, `MachinesPanelTest` and `MachinesPanelViewTest` -- and their failing-first
+state is a COMPILE failure (`unresolved reference: presenceDot`, `unresolved reference:
+machinesPanelView`), not a test report. Capturing it needs `./gradlew`, which this agent was told
+not to run: the Android lane is sequenced by whoever holds it, so the JVM half of this slice's
+evidence is theirs to record.
+
+Recorded as an absence rather than as a run that happened. What is above is the whole of what was
+executed here.
+
+## The green run
+
+    go test ./android/gate/
+
+is recorded by whoever runs the lane after the Kotlin half compiles. The two rows above were
+observed to go green locally after the three files landed; that run is not in this file, because
+this file is the RED one.
+
+---
+
+# Second failing-first run: the three components row 11-13 actually need
+
+The screen above was built on `settingsRow` for all three of its rows. That was wrong, and the
+reason is worth keeping: the §4 rows this slice was briefed from were DUPLICATES of §3 rows 11, 12
+and 13, which had specified the machines screen completely all along. Once the duplicates were
+deleted (e8af092) and the numbered rows read, two of the three blocks turned out to be components
+of their own -- row 11's shape is a leading mark, a name and a trailing mono identifier over a meta
+line, which no existing factory has, and row 12 is the one bordered container in this app with no
+fill. Row 13's Revoke is likewise the deny button's colours at the scope chip's METRICS, which
+neither `ctaButton` nor `filterChip` renders.
+
+So `machineRow`, `killSwitchPanel` and `denyChip` were added to `s23Inbox`, and their padding,
+margins and internal gaps were joined to rows 11 and 12 through `s23DerivedSpacing` and
+`s23DerivedEdge`. This is what those rows said before the files existed.
+
+## Command
+
+    go test ./android/gate/ -run "TestPBDS6_EveryInboxComponentIsAKitFactory|TestPBDS6_EveryKitFileIsClaimedByAFence|TestPBDS7_EveryDerivedSpacingIsTheRowsStep|TestPBDS7_EveryPerEdgeSpacingIsTheRowsStep|TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit" -v
+
+    HEAD dcaf837, branch design-system-substrate, 2026-08-01T16:57:08Z
+
+## Output
+
+```
+=== RUN   TestPBDS6_EveryInboxComponentIsAKitFactory
+    s23_kit_test.go:466: PB-DS-6: the kit has no MachineRow.kt, which is where machineRow() lives.
+        	the machines screen's only row, and a COMPONENT rather than a reuse. Its card is `cardSurface` -- §2's reuse rule, the same call the settings row and the activity row make -- but its SHAPE is its own: a leading mark, a name, a trailing mono identifier on one line, and a meta line beneath, at `space_12` x `space_14` rather than `.prow`'s `space_10` x `space_12`. `sessionRow` is the near miss and it is a miss in the one place that matters: it builds its leading mark by calling statusDot with a `status.Group`, and a machine's reachability is not one. A reuse justified by identical pixels is not a reuse justified by a compatible seam; this row passed the first test and failed the second.
+    s23_kit_test.go:466: PB-DS-6: the kit has no KillSwitchPanel.kt, which is where killSwitchPanel() lives.
+        	the charged container that reports the daemon-side switch. It is the one component in the kit with a BORDER AND NO FILL -- the ground shows through, as the mock drew it -- and its border is `.prow.attention`'s recipe with `--p-err` substituted for `--p-att`, which is row 12's own sentence and is why it spends the SAME 36% share internal/design declares for the attention row rather than a sixth derivation. Row 12's trailing control is deleted by its own 2026-08-01 amendment: `App.KillSwitchEngaged` is read only by design, `handleRemoteSetControl` refuses the remote tier before the backend is consulted, and a toggle here is a control that cannot act. So this factory HAS no trailing parameter -- the absence is in the signature, where a later caller cannot supply one by accident.
+    s23_kit_test.go:466: PB-DS-6: the kit has no DenyChip.kt, which is where denyChip() lives.
+        	Revoke, which row 13 specifies as "the `.a2-no` treatment at chip metrics": the deny button's fill and ink at the scope chip's radius, padding and label style. NEITHER EXISTING FACTORY RENDERS IT. `ctaButton(DENY)` has the colours and the wrong metrics -- `--p-btn-r` 9, `space_12`, `Label.Button` against row 13's `--p-chip-r` 8, `space_8` x `space_10`, `Label.Chip` -- and `filterChip` has the metrics and hardcodes its own two fills. This is not a second denial idiom, which §2 forbids: it is the ONE tinted-fill denial at a second size, spending Kit.denyFill and pillSurface rather than restating either.
+--- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.01s)
+=== RUN   TestPBDS6_EveryKitFileIsClaimedByAFence
+    s23_kit_test.go:577: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/DenyChip.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+    s23_kit_test.go:577: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/KillSwitchPanel.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+    s23_kit_test.go:577: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/MachineRow.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+--- FAIL: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+=== RUN   TestPBDS7_EveryDerivedSpacingIsTheRowsStep
+    s23_kit_test.go:1268: PB-DS-7: MachineRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:1268: PB-DS-7: MachineRow.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:1268: PB-DS-7: KillSwitchPanel.kt does not exist, so its spacing cannot be checked
+    s23_kit_test.go:1268: PB-DS-7: KillSwitchPanel.kt does not exist, so its spacing cannot be checked
+--- FAIL: TestPBDS7_EveryDerivedSpacingIsTheRowsStep (0.00s)
+=== RUN   TestPBDS7_EveryPerEdgeSpacingIsTheRowsStep
+    s23_kit_test.go:1395: PB-DS-7: MachineRow.kt does not exist, so its gap edge cannot be checked
+    s23_kit_test.go:1395: PB-DS-7: MachineRow.kt does not exist, so its below edge cannot be checked
+    s23_kit_test.go:1395: PB-DS-7: KillSwitchPanel.kt does not exist, so its top edge cannot be checked
+    s23_kit_test.go:1395: PB-DS-7: KillSwitchPanel.kt does not exist, so its sides edge cannot be checked
+--- FAIL: TestPBDS7_EveryPerEdgeSpacingIsTheRowsStep (0.00s)
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1212: PB-DS-6: 4 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/MachinesPanelView.kt: does not reach `denyChip` -- C4.4 -- Revoke, row 13's `.a2-no` treatment at chip metrics
+        dev/swarm/phone/ui/screens/MachinesPanelView.kt: does not reach `killSwitchPanel` -- C4.3 -- row 12 as amended: the state, and no control
+        dev/swarm/phone/ui/screens/MachinesPanelView.kt: does not reach `machineRow` -- C4.2 -- row 11, with row 11's presence mark inside it
+        dev/swarm/phone/ui/screens/MachinesPanelView.kt: does not reach `sessionList` -- C4.2/4 `.prows` -- the container the rows sit in, per §6 over `.cards`
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.721s
+FAIL
+```
+
+## What this run says that the first one could not
+
+The four spacing faults are the interesting ones. `TestPBDS7_EveryDerivedSpacingIsTheRowsStep` and
+`TestPBDS7_EveryPerEdgeSpacingIsTheRowsStep` read rows 11 and 12 out of the derivation table BEFORE
+either component existed, resolved every cell they were asked for -- `padding space_12 x space_14`,
+`top-line gap space_8`, `meta space_4 below`, `margin space_8 top / space_14 sides` -- and reported
+only the absent files. No row reported "no such row exists" and none reported a cell it could not
+parse, which is the half of a failing-first run that says the EXPECTATION is real: the numbers
+these components are about to be built against were read out of the design, not written down twice.
+
+The Kotlin lane is again absent for the reason the first run gives: `MachineRowTest`,
+`KillSwitchPanelTest` and `DenyChipTest` fail to COMPILE before their subjects exist, and capturing
+that needs `./gradlew`, which this agent does not run.
+
+## And the green that followed it
+
+    go test -count=1 ./android/gate/
+    ok  github.com/Nathandela/swarm/android/gate
+
+run after `MachineRow.kt`, `KillSwitchPanel.kt` and `DenyChip.kt` landed with their tests. That is
+the GO half only, and it is the half this agent can run: the five suites above go from the failures
+quoted here to a clean package, which is what makes the red above a failing-first run rather than a
+description of one. The Kotlin half -- six Robolectric suites across the three components, the two
+screen models and the two screen views -- is the Android lane's, and this agent does not run it.

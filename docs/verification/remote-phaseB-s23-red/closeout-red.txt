@@ -1,0 +1,486 @@
+S23 CLOSEOUT RED EVIDENCE -- the fourth audit round's five findings
+===================================================================
+
+GG-5 requires the failing-first run to be evidenced. Everything below is actual output, pasted
+from the run that produced it. Nothing here is predicted or reconstructed.
+
+Repo /Users/Nathan/Code/swarm, branch design-system-substrate, from HEAD 652a775.
+Files changed: android/gate/s23_kit_test.go, android/gate/s23_motion_test.go.
+Command throughout: `go test ./android/gate/... -count=1`.
+
+BASELINE, before anything was touched:
+
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	4.059s
+
+INJECTION HYGIENE. Every injection below was reverted and the revert verified with
+`git status --porcelain`, not `git diff` -- an untracked injected file is invisible to `git diff`
+and one from a concurrent agent polluted the fourth reviewer's run. The porcelain output is quoted
+at each revert. At the end of this work the only modified paths are the two gate test files and
+this directory.
+
+
+===================================================================
+FINDING 1 -- "the kit" meant 11 of 12 files
+===================================================================
+
+THE CLAIM THAT WAS FALSE. s23OwnedFiles (s23_kit_test.go:181-187) is a FIXED LIST: the three
+foundation files plus the eight files s23Inbox names. Every scan in the gate -- the colour fence,
+the raw-dimension fence, the metric join, the literal accounting -- iterates it. The motion fence
+walks the production tree but judges only animation vocabulary. So nothing in the lane read a file
+that was merely PRESENT in ui/kit/.
+
+RED. The reviewer's file, written verbatim to
+android/app/src/main/kotlin/dev/swarm/phone/ui/kit/AuditProbe12.kt:
+
+    package dev.swarm.phone.ui.kit
+
+    import android.os.Handler
+    import android.view.View
+    import android.widget.LinearLayout
+
+    internal const val PROBE_PAD_PX = 37
+    internal const val PROBE_HEX = 0x1F4
+    internal fun probeBlink(view: View, handler: Handler) {
+        view.layoutParams = LinearLayout.LayoutParams(PROBE_PAD_PX, PROBE_HEX)
+        handler.postDelayed({ probeBlink(view, handler) }, 16L)
+    }
+
+A raw pixel count in a layout param, a hex literal, and a 60 fps re-entrant blink -- the three
+things PB-DS-6, PB-DS-7 and PB-DS-8 respectively exist to forbid.
+
+    $ ls android/app/src/main/kotlin/dev/swarm/phone/ui/kit/
+    AuditProbe12.kt Badge.kt ColorMix.kt FilterChip.kt Kit.kt Motion.kt NavHeader.kt
+    SectionLabel.kt SessionRow.kt StatusDot.kt Surfaces.kt TabBar.kt WorkingBar.kt
+
+    $ git status --porcelain
+    ?? android/app/src/main/kotlin/dev/swarm/phone/ui/kit/AuditProbe12.kt
+
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	4.142s
+
+Per-test, all 21 assertions green with the file in the tree:
+
+    $ go test ./android/gate/... -count=1 -run 'TestPBDS[678]_' -v
+    --- PASS: TestPBDS6_EveryInboxComponentIsAKitFactory (0.01s)
+    --- PASS: TestPBDS6_EveryKitFactoryIsAnInboxComponent (0.00s)
+    --- PASS: TestPBDS7_EveryDerivationCitationResolvesToARow (0.00s)
+    --- PASS: TestPBDS6_NoColourIsTypedInTheKit (0.00s)
+    --- PASS: TestPBDS6_NoTypefaceIsChosenInTheKit (0.00s)
+    --- PASS: TestPBDS6_NoRawDimensionIsTypedInTheKit (0.00s)
+    --- PASS: TestPBDS6_EveryKitSpacingIsTheLedgersStep (0.01s)
+    --- PASS: TestPBDS7_EveryDerivedSpacingIsTheRowsStep (0.00s)
+    --- PASS: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.01s)
+    --- PASS: TestPBDS7_NoMetricIsTypedAtADpCallSite (0.00s)
+    --- PASS: TestPBDS6_EveryKitMetricIsRenderedOneWay (0.00s)
+    --- PASS: TestPBDS7_EveryMetricSpendResolvesToADeclarationTheScanSaw (0.00s)
+    --- PASS: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+    --- PASS: TestPBDS7_TheContestedHoldIsStillOpen (0.00s)
+    --- PASS: TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping (0.00s)
+    --- PASS: TestPBDS7_TheDotGlowsAreTheDeclaredDerivations (0.00s)
+    --- PASS: TestPBDS7_TheMetricJoinCanActuallyFail (0.00s)
+    --- PASS: TestPBDS7_TheMetricScanCanActuallyFail (0.12s)
+    --- PASS: TestPBDS7_TheCrossChecksCanActuallyFail (0.01s)
+    --- PASS: TestPBDS6_TheDpScanCanActuallyFail (0.00s)
+    --- PASS: TestPBDS6_TheAnnotationParserCanActuallyFail (0.00s)
+    --- PASS: TestPBDS8_NoAnimatorIsConstructedOutsideMotion (0.02s)
+
+Note the last line: the motion fence read the blink loop and called the tree clean. That is
+finding 4's subject, recorded here because this is where it was measured.
+
+THE FIX. s23ClaimedFiles + TestPBDS6_EveryKitFileIsClaimedByAFence: the enumeration is now itself
+checked against the directory, in both directions. Forward, a file on disk no fence claims;
+reverse, a claim naming a file that is not there.
+
+GREEN-AFTER, same injection, after the fix:
+
+    $ go test ./android/gate/... -count=1
+    --- FAIL: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+        s23_kit_test.go:353: PB-DS-6: dev/swarm/phone/ui/kit/AuditProbe12.kt is in the kit
+        package and no fence claims it. Every scan in this gate -- the colour fence, the
+        raw-dimension fence, the metric join, the literal accounting -- iterates s23OwnedFiles,
+        so a file nothing claims is a file where a raw pixel count, a hex literal and a
+        decorative animation loop all pass unread; that is the injection s23ClaimedFiles quotes,
+        and it defeated this entire lane. [...]
+    FAIL	github.com/Nathandela/swarm/android/gate	4.193s
+
+    $ rm android/app/src/main/kotlin/dev/swarm/phone/ui/kit/AuditProbe12.kt
+    $ git status --porcelain
+    (empty)
+
+FINDING 1b -- FOUND BY SELF-REVIEW, IN THE FIX FOR FINDING 1
+------------------------------------------------------------
+
+The fence above claimed "a new file must not be able to enter the kit unexamined". IT DID NOT
+DELIVER THAT, and the hole was worse than the one it closed.
+
+`kotlinFiles` RECURSES, and `s23KitSources` keys its map by BASENAME. So a file at
+`ui/kit/zz/Badge.kt` did not add a key -- it OVERWROTE the real `Badge.kt` and took its place in
+every scan in this gate. TestPBDS6_EveryKitFileIsClaimedByAFence could not see it either, for the
+same reason: the basename was claimed.
+
+RED. `ui/kit/zz/Badge.kt` = a byte-identical copy of the real Badge.kt, and the REAL, checked-in
+`ui/kit/Badge.kt` given a raw pixel:
+
+            gravity = Gravity.CENTER
+            minWidth = 21
+
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	4.090s
+
+A raw dimension in a reviewed, checked-in kit file, hidden by a copy of itself one directory down.
+Not a missed file -- an EVICTED one.
+
+THE FIX, in two places, because either alone leaves half of it:
+  - s23KitSources reads DIRECT CHILDREN ONLY. The kit is one Kotlin package; a subdirectory is a
+    different package. This restores the real Badge.kt to every scan.
+  - s23NestedKitFiles + a third direction in TestPBDS6_EveryKitFileIsClaimedByAFence refuses any
+    .kt below the root, so the nested file is a fault rather than a silence.
+
+GREEN-AFTER, same injection:
+
+    $ go test ./android/gate/... -count=1
+    --- FAIL: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+        s23_kit_test.go:414: PB-DS-6: dev/swarm/phone/ui/kit/zz/Badge.kt sits below the kit root.
+        The kit is ONE Kotlin package, so a subdirectory is a different package that no fence in
+        this gate reads -- and because the kit is scanned by BASENAME, a nested file named after
+        a real one used to take its place in every scan rather than merely being skipped. [...]
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+        s23_kit_test.go:2255: PB-DS-7: Badge.kt:44: the number `21` is typed here and nothing
+        accounts for it. [...]
+
+Both halves: the nested file is refused, AND the real file is being read again.
+
+    $ rm -rf android/app/src/main/kotlin/dev/swarm/phone/ui/kit/zz
+    $ git checkout android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Badge.kt
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	4.537s
+
+
+===================================================================
+FINDING 2 -- a number that is not a numeric token
+===================================================================
+
+THE CLAIM THAT WAS FALSE. s23KitLiterals runs s23CodeNoStrings (s23_kit_test.go:1651) BEFORE
+s23ScanLiterals (:1682). s23CodeNoStrings blanks the contents of string and char literals, so by
+the time the numeric scan runs, the digits are spaces. A number spelled inside a string is
+accounted for by nothing: not by the declaration recogniser (it is not a numeric literal), not by
+the spend cross-check (it resolves no KitMetrics name), not by the literal accounting (there is no
+literal).
+
+RED. Injected into android/.../ui/kit/Badge.kt -- an OWNED file, at live call sites:
+
+    private val badgeMinWidthPx = "21".toInt()
+    private val probeCodePx = '%'.code
+    private val probeConcatPx = ("1" + "1").toFloat()
+
+spent inside badge()'s apply block:
+
+            minWidth = badgeMinWidthPx
+            minHeight = probeCodePx
+            translationX = probeConcatPx
+
+21 px, 37 px and 11f: three design metrics, no origin, compared to nothing.
+
+    $ git status --porcelain
+     M android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Badge.kt
+
+    $ go test ./android/gate/... -count=1
+    ok  	github.com/Nathandela/swarm/android/gate	3.842s
+
+The reviewer reports the same construct also survived `./gradlew test --rerun-tasks` with both
+variants; that half was not re-run here (Go only for this pass) and is taken from their report.
+
+THE FIX. s23TextLiteral / s23ScanTextLiterals / s23TextLiteralFaults read the region
+s23CodeNoStrings erases. TWO RULES, because neither covers the other's case:
+
+  - RECEIVER: a string or char literal immediately followed by `.` or `[`. The kit types no method
+    call on a literal anywhere -- verified over all twelve files -- so the permitted set is empty
+    and this is an inversion rather than a list of conversion spellings. Catches `"21".toInt()`
+    and `'%'.code`, the latter carrying no digit in the source at all.
+  - CONTENT: a digit inside a string or char literal, unless the literal is on
+    s23TextLiteralExemptions. Catches `("1" + "1").toFloat()`, where the conversion is applied to
+    a parenthesised expression and the receiver rule cannot see it.
+
+No exemption applies inside object KitMetrics, matching s23UnaccountedLiteralFaults' strict zone.
+s23TextLiteralExemptions has two rows: `"99+"` (Badge's saturated count) and the PB-TOK-8 failure
+message in Kit.kt. A dead-row check keeps the table from growing stale.
+
+GREEN-AFTER, same injection, after the fix:
+
+    $ go test ./android/gate/... -count=1
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+        s23_kit_test.go:2221: PB-DS-7: Badge.kt:34: the literal "21" is the receiver of a member
+        access or an index. [...]
+        s23_kit_test.go:2221: PB-DS-7: Badge.kt:35: the literal '%' is the receiver of a member
+        access or an index. [...]
+        s23_kit_test.go:2221: PB-DS-7: Badge.kt:36: the literal "1" contains a digit, and it is
+        not on s23TextLiteralExemptions. [...]
+        s23_kit_test.go:2221: PB-DS-7: Badge.kt:36: the literal "1" contains a digit, and it is
+        not on s23TextLiteralExemptions. [...]
+    FAIL	github.com/Nathandela/swarm/android/gate	3.757s
+
+Four faults for three injections -- `("1" + "1")` is two literals, and each is reported where it
+sits. Each fires on the intended rule: the first two on RECEIVER, the last two on CONTENT.
+
+    $ git checkout android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Badge.kt
+    $ git status --porcelain
+     M android/gate/s23_kit_test.go
+
+DISCRIMINATION. The rules must not refuse the kit's ordinary code, or the fence gets deleted by
+whoever hits it first. Asserted in TestPBDS7_TheCrossChecksCanActuallyFail section 2c over
+`contentDescription = "decorative"`, `const val TITLE = ".pnav .big"`, `text = count.toString()`
+and an `error("$group is not a Group this kit can colour")` message -- all pass -- plus `"99+"`
+passing outside object KitMetrics and failing inside it.
+
+
+===================================================================
+FINDING 3 -- the control's completeness argument was false
+===================================================================
+
+THE CLAIM THAT WAS FALSE. TestPBDS7_TheCrossChecksCanActuallyFail's header said an unrecognised
+declaration "reaches these two functions through exactly one observable state ... its NAME is
+absent from the set s23ScanMetrics returned, and its LITERAL is absent from the positions
+s23BoundLiterals bound", and the probe loop enumerated over `bound`.
+
+A loop over `bound` can only ever visit literals the numeric scan already tokenised. There is a
+third state -- the literal is absent from the scan's output ENTIRELY -- and that state is exactly
+finding 2. The completeness argument was doing the work of a proof while enumerating two thirds of
+its own domain. This is the third completeness claim in this file to be falsified by the next
+reader, which is why the header now states three CHECKED STATES rather than a completeness result.
+
+THE FIX. The header enumerates three states and names which function closes each. A new probe
+block (section 2b) drives state 3 directly, over the three constructs from finding 2, and asserts
+BOTH halves for each: that s23ScanLiterals really is blind to it -- otherwise the probe controls
+nothing -- and that s23TextLiteralFaults reports it anyway.
+
+RED, by mutation, proving the new probes are live rather than decorative. s23TextLiteralFaults was
+made to return nil -- which is the state the gate was in before finding 2 was fixed:
+
+    $ go test ./android/gate/... -count=1 -run TestPBDS7_TheCrossChecksCanActuallyFail -v
+    === RUN   TestPBDS7_TheCrossChecksCanActuallyFail
+        s23_kit_test.go:3077: PB-DS-7: a number spelled inside a string reaches a live call site
+        and NOTHING reports it. [...]
+        	private val badgeMinWidthPx = "21".toInt()
+        s23_kit_test.go:3077: PB-DS-7: a character's code point reaches a live call site and
+        NOTHING reports it. [...]
+        	private val probeCodePx = '%'.code
+        s23_kit_test.go:3077: PB-DS-7: a number assembled from two strings reaches a live call
+        site and NOTHING reports it. [...]
+        	private val probeConcatPx = ("1" + "1").toFloat()
+        s23_kit_test.go:3107: PB-DS-7: `"99+"` inside object KitMetrics produces 0 fault(s),
+        want 1. No exemption is consulted in the strict zone, or a metric could be written as
+        text in the one object every fence exists to police.
+    --- FAIL: TestPBDS7_TheCrossChecksCanActuallyFail (0.02s)
+
+All three state-3 probes fire, plus the strict-zone half of section 2c. The mutation was reverted
+from a copy and the suite is green again. The end-to-end proof that these constructs defeat the
+unfixed gate is finding 2's RED above, which is the stronger evidence and is not repeated here.
+
+
+===================================================================
+FINDING 4 -- a self-confirming control
+===================================================================
+
+THE CLAIM THAT WAS FALSE. TestPBDS8_TheFenceCatchesConstructsNobodyListed
+(s23_motion_test.go:405-419) was unchanged since 55d4e2a. All six invented identifiers --
+FooAnimator, BarAnimation, QuuxTransition, HolographicAnimator, applyAnimated,
+GIZMO_ANIMATION_SERVICE -- contain `animat` or `transition`, so the set scores 6/6 under a
+vocabulary rule for the same reason it scored 6/6 under the denylist that preceded it. It
+demonstrated the vocabulary catching its own vocabulary.
+
+RED. The six replaced with the reviewer's constructs, which do NOT contain the vocabulary:
+
+    $ go test ./android/gate/... -count=1 -run TestPBDS8_TheFenceCatchesConstructsNobodyListed -v
+    === RUN   TestPBDS8_TheFenceCatchesConstructsNobodyListed
+        s23_motion_test.go:415: PB-DS-8: the fence passes "val a = Kinetics.tween(view, \"alpha\", 0f, 1f)".
+        s23_motion_test.go:415: PB-DS-8: the fence passes "Morph.between(from, to).start()".
+        s23_motion_test.go:415: PB-DS-8: the fence passes "Ease.run(view, spec)".
+        s23_motion_test.go:415: PB-DS-8: the fence passes "val t = Ticker(view).start()".
+        s23_motion_test.go:415: PB-DS-8: the fence passes "handler.postDelayed({ blink(view, handler) }, 16L)".
+        s23_motion_test.go:415: PB-DS-8: the fence passes "OverScroller(context).startScroll(0, 0, 0, 100)".
+    --- FAIL: TestPBDS8_TheFenceCatchesConstructsNobodyListed (0.00s)
+
+0 of 6. Under the old identifiers, 6 of 6. That is the finding.
+
+WHAT WAS CHOSEN, AND WHY -- the reviewer asked for either a widened fence or an honest rename with
+the residual recorded. BOTH, split by whether there is evidence:
+
+  a) WIDENED, where a name has no non-animation use. Scroller and OverScroller are the platform's
+     fling and smooth-scroll drivers; they interpolate a value over a duration and do nothing
+     else. Both are on animatorAlwaysForbidden and both are rows in
+     TestPBDS8_EveryForbiddenConstructIsCaught. Both spellings are listed because animatorContains
+     matches an identifier WHOLE -- OverScroller is not Scroller.
+
+  b) RENAMED, because the old test does prove something worth keeping, at its real size.
+     TestPBDS8_TheVocabularyCatchesSpellingsNoListNames keeps the six original identifiers and
+     claims only what they show: the rule is a vocabulary and not an inventory, so an API whose
+     name nobody has written down fails on its spelling. A six-name list scores zero on that set.
+
+  c) RECORDED, for the rest. TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary ASSERTS THAT
+     THE FENCE PASSES Kinetics.tween, Morph.between, Ease.run, Ticker and the postDelayed blink.
+     It fails in both directions: if the fence is ever widened to catch one, the test goes red and
+     whoever widened it must delete the row they closed. The record cannot drift away from the
+     rule.
+
+postDelayed WAS ADDED TO THE LIST AND TAKEN BACK OUT, and the run is why:
+
+    $ go test ./android/gate/... -count=1     # with "postDelayed" on animatorAlwaysForbidden
+    --- FAIL: TestPBDS8_NoAnimatorIsConstructedOutsideMotion (0.01s)
+        s23_motion_test.go:331: PB-DS-8: 1 animator construct(s) outside
+        dev/swarm/phone/ui/kit/Motion.kt. [...]
+        	dev/swarm/phone/PairingSurface.kt:378: `postDelayed` in: poller.postDelayed({ render() }, POLL_MILLIS)
+
+PairingSurface.kt:378 with POLL_MILLIS = 400L (:600) is a pairing-state poll and animates nothing.
+It is the SAME PROGRAM as the reviewer's blink: a callback that re-posts itself from inside the
+function it runs. They differ in the interval and in what the body touches, and no scan over text
+reads either. The two ways out were a threshold on the delay -- indefensible at any value and
+fail-open one millisecond past it -- and an allowlist for PairingSurface.kt, which s23_motion_test.go's
+own header forbids in terms (PB-DS-11 in S24 owns surface code; a per-file allowlist here is the
+defect that requirement was reassigned away from S23 to avoid). So postDelayed is a residual
+rather than a row, and it is the last line of the residual test.
+
+    $ go test ./android/gate/... -count=1     # after postDelayed was removed again
+    ok  	github.com/Nathandela/swarm/android/gate	4.042s
+
+
+===================================================================
+FINDING 5 -- s23ScanAlignmentFault was never run on the real files
+===================================================================
+
+THE CLAIM THAT WAS FALSE. s23ScanAlignmentFault's own comment says the consequence of the
+invariant being false is "silent and total" -- every constant in the kit joined to its neighbour's
+`origin:` annotation. It was asserted only over four synthetic strings, inside a control.
+
+THE FIX. One loop over s23KitSources, in TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber, over every
+kit source rather than the owned eleven -- the helper is shared and a drift on any file is the
+same bug. FATAL rather than an error, because no comparison in that test means anything once the
+two views disagree.
+
+RED, by mutation. kotlinCodeOnly (helpers_test.go, another slice's helper) had its newline
+preservation removed from the blockComment branch:
+
+    } else if c == '\n' {
+        // Kept so reported line numbers and the shape of the file survive.
+        out.WriteByte(c)
+    }
+
+    $ go test ./android/gate/... -count=1 -run TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber -v
+    === RUN   TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber
+        s23_kit_test.go:1323: PB-DS-7: Badge.kt: the raw source has 55 line(s) and the
+        comment-stripped view has 31, so the two indexes disagree and every constant would be
+        joined to the wrong annotation
+    --- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.02s)
+
+The helper was restored from a copy and the restore verified:
+
+    $ git status --porcelain
+     M android/gate/s23_kit_test.go
+     M android/gate/s23_motion_test.go
+
+HONEST SCOPE OF THIS CHECK. kotlinCodeOnly writes a newline in every one of its five states, so
+with the helper as it stands today the alignment fault CANNOT fire on any input -- the mutation
+above is the only way to see it. This loop is therefore a REGRESSION GUARD over a shared helper
+this slice does not own, not a check that can catch a defect in the kit's own sources. That is
+still worth having and is what the reviewer asked for, but it should not be read as closing
+anything about the kit.
+
+
+===================================================================
+THE THREE CHEAP ITEMS
+===================================================================
+
+RAW-STRING GUARD (s23KitLiterals, :1867). It tested the RAW source, so a KDoc merely MENTIONING
+`"""` -- documenting this very restriction, say -- hard-failed the whole fence on a source
+containing no raw string at all. Now tested against kotlinCodeOnly's view. Both directions run:
+
+    injected into SectionLabel.kt:
+        /** A KDoc that merely mentions a """ raw string while documenting the fence. */
+    $ go test ./android/gate/... -count=1 -run TestPBDS7_EveryNumberInTheKitIsAccountedFor -v
+    --- PASS: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.02s)
+
+    injected into SectionLabel.kt:
+        private val probeRaw = """pad 21"""
+    $ go test ./android/gate/... -count=1 -run TestPBDS7_EveryNumberInTheKitIsAccountedFor -v
+        s23_kit_test.go:2194: PB-DS-7: SectionLabel.kt contains a raw string, and
+        s23CodeNoStrings reads only `"` and `'` literals. [...]
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.01s)
+
+    $ git checkout android/app/src/main/kotlin/dev/swarm/phone/ui/kit/SectionLabel.kt
+    $ git status --porcelain
+     M android/gate/s23_kit_test.go
+     M android/gate/s23_motion_test.go
+
+DEAD EXEMPTIONS (s23DeadExemptionFaults). It counted a literal inside object KitMetrics as USE of
+an exemption that is never consulted there, so a row could be kept alive by an occurrence that
+never reads it. It now takes the strict-line set and skips those lines. The kit is green either
+way today -- no row's only use is inside the object -- so the repair is proved by a control rather
+than by the tree: a `0` at a strict line must leave all nine rows reported dead.
+
+README.md. It described 3 of the 10 evidence files in this directory. All eleven are now listed.
+
+
+===================================================================
+WHAT IS STILL FAIL-OPEN
+===================================================================
+
+Four rounds have each falsified a closure claim, so this section is measured rather than reasoned.
+Every item below was RUN against the gate as it stands after this pass, on 2026-08-01, and the
+verdict quoted is the real one.
+
+1. THE LITERAL ACCOUNTING IS STILL LEXICAL. Three constructs injected into Badge.kt, an OWNED
+   file, at live call sites:
+
+       private val pctSign = "%"
+       private val probeA = pctSign[0].code          // 37 px
+       private val probeB = (1 + 2) * (2 + 2 + 2 + 1) // 21
+       private val probeC: Float get() = -2f          // -2f
+
+   $ go test ./android/gate/... -count=1
+   ok  	github.com/Nathandela/swarm/android/gate	4.451s
+
+   All three pass. Why each:
+     - probeA: the literal `"%"` carries no digit, so the CONTENT rule does not see it, and it is
+       bound to a val before being indexed, so it is not a RECEIVER either. One extra assignment
+       defeats both of finding 2's rules. This is the honest boundary of that fix: it closes the
+       three spellings that were demonstrated, and an indirection past them is not closed.
+     - probeB: every token is on s23LiteralExemptions (`1` and `2`), and arithmetic between exempt
+       tokens is not examined. 21 px assembled from permissions.
+     - probeC: a `get()` accessor is invisible to s23MetricConst, and `2` is exempt outside object
+       KitMetrics. The sign is dropped by s23NormaliseLiteral.
+
+   These are NOT new. bd agents-tracker-4n3 ("Literal accounting is lexical and fails open on
+   encoded values, shared exemptions, and new kit files", P1, open) already records them, and the
+   re-run above confirms they survive this pass. Finding 2 closed that issue's "encoded values"
+   clause for the demonstrated spellings and finding 1/1b closed its "new kit files" clause; the
+   exempt-token and sign clauses are untouched. The issue should stay open.
+
+2. THE MOTION FENCE IS A SPELLING RULE. Kinetics.tween, Morph.between, Ease.run, Ticker and a
+   `postDelayed` blink loop all pass, and TestPBDS8_TheFenceIsBlindToAnimationOutsideItsVocabulary
+   asserts that they do. Finding 4 has the argument. This is recorded rather than closed, and the
+   test goes red if anyone closes it without updating the record.
+
+3. THE ALIGNMENT CHECK CANNOT FIRE TODAY. kotlinCodeOnly writes a newline in every one of its five
+   states, so s23ScanAlignmentFault is unfalsifiable against the helper as it stands. Finding 5's
+   loop is a regression guard over a shared helper, not a check on the kit. Stated there too.
+
+4. STRING TEMPLATES WITH NESTED QUOTES ARE NOT PARSED. s23ScanTextLiterals, like s23CodeNoStrings
+   before it, treats `"` as a simple delimiter, so `"${"21"}"` would be read as two literals with
+   the wrong boundaries. The kit contains no such construct today -- checked -- and the raw-string
+   guard covers the `"""` case loudly, but a nested-template case would be misread rather than
+   refused. Not closed, and not currently reachable.
+
+5. WHAT THE OWNERSHIP FENCE DOES AND DOES NOT MEAN. It asserts that every .kt DIRECTLY IN
+   ui/kit/ is claimed by a fence and that nothing sits below it. It does not assert that the
+   claiming fence checks anything in particular -- Motion.kt is claimed by PB-DS-8, whose fence
+   judges animation vocabulary and not dimensions, so a raw pixel count in Motion.kt is still
+   unread by this gate. That is the S23/S24 split working as designed rather than a defect, but it
+   is a real gap between "claimed" and "checked" and should not be read as the stronger statement.
+
+CONCURRENT-AGENT NOTE. During this pass an injection into Badge.kt and a directory under ui/kit/
+were reverted by something other than this session between one run and the next -- observed as a
+clean `git status --porcelain` where a modification had just been made. The affected measurement
+(finding 1b) was re-run from scratch afterwards and the output above is from that re-run. Anyone
+reading a green lane on this branch should confirm the tree state with
+`git status --porcelain` first: `git diff` does not show an untracked injected file, which is how
+the fourth reviewer's run was polluted.

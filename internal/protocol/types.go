@@ -8,15 +8,18 @@
 // This is the low-reversibility wire surface. The message schema is frozen and
 // documented field-by-field in docs/specifications/protocol.md (kept in sync by
 // the GG-7 drift check). See that file and the ADRs for the normative contract.
+//
+// The message TYPES live in the daemon-free subpackage schema and are aliased here
+// (PB-BIND-0): protocol.Control and schema.Control are the same type, so this
+// package's surface, the wire encoding and the drift check are all unchanged.
 package protocol
 
 import (
 	"errors"
-	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
-	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 // Version is the client<->daemon protocol version. A mismatch is fatal to the
@@ -39,71 +42,120 @@ const (
 	OpLease     = "lease"
 	OpOK        = "ok"
 	OpError     = "error"
+
+	// Remote journal ops (R-PROT.3): stream/read the daemon-wide journal.
+	OpJournalSubscribe = "journal_subscribe"
+	OpJournalRead      = "journal_read"
+	OpJournalEvent     = "journal_event"
+
+	// Remote control-plane read ops (slice A3.1): non-mutating, capability-gated
+	// reads of the paired-device roster and the machine's remote launch policy.
+	OpDeviceList  = "device_list"
+	OpPolicyQuery = "policy_query"
+
+	// OpDeviceRevoke is the remote control-plane MUTATING op (slice A3.2): removes a
+	// paired device from the daemon's device registry.
+	OpDeviceRevoke = "device_revoke"
+
+	// OpDeviceRegrant is PB-KEY-3's OWNER-TIER machine-side unblock behind
+	// `swarm remote regrant`: mint a fresh sealed epoch grant for a still-registered
+	// device and converge its record onto the current machine epoch.
+	//
+	// Owner-only, and not because of tiering taste. A device whose grant was lost holds no
+	// epoch CONTENT key, so it cannot seal a command for the gateway at all -- a remote-tier
+	// regrant verb would be unusable by exactly the device that needs it, while handing any
+	// remote caller a way to make the machine re-issue key material.
+	OpDeviceRegrant = "device_regrant"
+
+	// OpRemoteSetControl is the OWNER-TIER op behind `swarm remote off`/`on` (A4): it
+	// durably flips the manual remote-control master override the daemon reads at its
+	// kill-switch choke points. Owner-only (refused not_authorized on the remote tier,
+	// mirroring pair_start), so a remote device can never re-enable a switch its owner
+	// turned off. The desired enabled state rides on Control.RemoteControl.
+	OpRemoteSetControl = "remote_set_control"
+
+	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
+	// controller lease on a session — the anti-abuse gate that must precede any remote
+	// keystroke reaching a session. It runs through requireRemoteAuthz like every other
+	// remote mutating op and, on success, establishes a lease via the same attach path.
+	OpTakeControl = "take_control"
+
+	// OpTakeControlEnd is the caller-scoped teardown of one's OWN control session
+	// (slice A5-b): it clears the connection's control session and releases its lease
+	// (session_id + generation, mirroring detach; no device signature). Ending the
+	// control session shuts the remote input gate.
+	OpTakeControlEnd = "take_control_end"
+
+	// Owner-tier pairing ops (slice A3.3-a, ADR-007 amendment "Pairing host: Option
+	// A"): wire types only in this slice — no handlers, no pairing logic.
+	OpPairStart   = "pair_start"
+	OpPairPending = "pair_pending"
+	OpPairConfirm = "pair_confirm"
+	OpPairResult  = "pair_result"
+
+	// Terminal-snapshot ops (A7 renderer slice B): terminal_subscribe requests the
+	// server-rendered terminal snapshot stream for a session; terminal_snapshot carries
+	// one sanitized, server-rendered snapshot to the phone (mirroring the
+	// journal_subscribe/journal_event pair).
+	OpTerminalSubscribe = "terminal_subscribe"
+	OpTerminalSnapshot  = "terminal_snapshot"
+
+	// OpPushPrefs is the signed remote op behind ActionPushPrefs (PB-PUSH-8): the phone
+	// asks the machine to change which transitions may wake it. The daemon AUTHORIZES it
+	// and nothing more -- the durable record and the delivery decision live at the gateway,
+	// because PB-PUSH-10 puts durability where delivery is decided. It exists as a daemon
+	// op precisely so the verb rides the one authorization plane (requireRemoteAuthz)
+	// instead of growing a second one inside a gateway that holds no device key.
+	OpPushPrefs = "push_prefs"
 )
 
-// Control is the single JSON envelope for every control message (F-1: every
-// message carries endpoint_id; a session-scoped op carries a namespaced
-// session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
-type Control struct {
-	Op              string `json:"op"`
-	EndpointID      string `json:"endpoint_id"`
-	SessionID       string `json:"session_id,omitempty"`
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
-	// BuildVersion is the daemon's internal/version.Version, carried on the hello
-	// reply (E13.2). It is ADDITIVE: unlike ProtocolVersion (the wire skew gate,
-	// unchanged by this field), a mismatch here is not fatal to the handshake — it
-	// lets a client notice it is talking to a different-build daemon and nudge
-	// `swarm daemon restart` even when the wire protocol still matches.
-	BuildVersion string   `json:"build_version,omitempty"`
-	Capabilities []string `json:"capabilities,omitempty"`
-	Generation   uint64   `json:"generation,omitempty"`
-	SnapshotLen  int      `json:"snapshot_len,omitempty"`
-	Cols         int      `json:"cols,omitempty"`
-	Rows         int      `json:"rows,omitempty"`
-	// Name is the new session label carried on a rename op (v0.5). It is re-validated
-	// and sanitized server-side (sanitizeName) before it reaches the daemon, exactly
-	// like the label in a launch request.
-	Name     string        `json:"name,omitempty"`
-	Launch   *LaunchReq    `json:"launch,omitempty"`
-	Sessions []SessionView `json:"sessions,omitempty"`
-	Session  *SessionView  `json:"session,omitempty"`
-	Error    string        `json:"error,omitempty"`
-}
+// Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier
+// caps (R-PROT.1): the hello handshake returns the intersection with the client's
+// offer, and an op whose capability was not negotiated is refused.
+const (
+	CapAttach        = "attach"
+	CapSubscribe     = "subscribe"
+	CapRemoteGateway = "remote-gateway"
+	CapJournal       = "journal"
+	CapActivity      = "activity"
+	CapPolicy        = "policy"
+	CapPairing       = "pairing"
+)
 
-// SessionView is one general-view row (V-4), stamped for the receiving client: a
-// namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
-// never call status.Derive), alongside the three raw status dimensions.
-type SessionView struct {
-	EndpointID   string        `json:"endpoint_id"`
-	ID           string        `json:"id"` // namespaced: <endpoint_id>/<local>
-	Agent        string        `json:"agent"`
-	Name         string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
-	Cwd          string        `json:"cwd"`
-	Status       status.Status `json:"status"` // the three raw dims
-	Group        status.Group  `json:"group"`  // precomputed server-side (E6.9)
-	LastActivity time.Time     `json:"last_activity"`
-	CreatedAt    time.Time     `json:"created_at"`
-	Summary      string        `json:"summary"` // V-4 one-line last-output summary
-}
+// The JSON message types are declared in the daemon-free subpackage schema and
+// aliased here, so every existing importer (and the GG-7 drift check, which
+// reflects them) sees exactly the same types. The split is PB-BIND-0: a Go
+// dependency closure is per package, so while these types lived beside the
+// daemon-wrapping Server the phone core could not name Control without shipping
+// the daemon, the shim and the VT emulator into the bound Android app
+// (docs/specifications/remote-phaseB-requirements.md 4.2, ADR-007 Decision 2).
+type (
+	Control          = schema.Control
+	TerminalSnapshot = schema.TerminalSnapshot
+	ApproveReq       = schema.ApproveReq
+	AgentInstanceRef = schema.AgentInstanceRef
+	SessionView      = schema.SessionView
+	DeviceView       = schema.DeviceView
+	PolicyView       = schema.PolicyView
+	PairingControl   = schema.PairingControl
+	LaunchReq        = schema.LaunchReq
+	ReconcileRecord  = schema.ReconcileRecord
+)
 
-// LaunchReq is a client's request to launch a new session. Every field is
-// re-validated server-side (E6.6) before it reaches the DaemonAPI.
-type LaunchReq struct {
-	Agent         string            `json:"agent"`
-	Name          string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
-	Cwd           string            `json:"cwd"`
-	Options       map[string]string `json:"options"`
-	Env           []string          `json:"env"`
-	Cols          int               `json:"cols"`
-	Rows          int               `json:"rows"`
-	InitialPrompt string            `json:"initial_prompt"`
-	// Worktree opts this session into launch-time git-worktree isolation (Epic 12):
-	// the daemon runs the session's agent in a fresh isolated worktree/branch. It is
-	// carried to the daemon's PreLaunch/PreDelete hooks by the assembly (skeleton),
-	// which registers worktree.Create/Remove gated on this flag; the protocol layer
-	// only transports it.
-	Worktree bool `json:"worktree,omitempty"`
-}
+// The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no
+// compile-time tie of its own. This assignment compiles ONLY while they are the SAME type:
+// two DEFINED types with identical underlying types are not assignable. Un-alias Control --
+// most likely by wanting to add a method, which the alias forbids in this package -- and
+// this breaks loudly, rather than remotegw sealing one struct while phonecore opens another
+// that has silently drifted (S1 review R3).
+var _ Control = schema.Control{}
+
+// LaunchContentHash re-exports the canonical launch content binding, which lives in the
+// daemon-free schema package so the gomobile-bound phone facade -- the SIGNER -- can reach
+// it without dragging internal/daemon into the closure shipped to a handset (PB-BIND-0).
+// Verifier and signer must compute the SAME bytes: a divergent reimplementation produces
+// silent signature-verification failures with no compile error, so there is exactly one.
+var LaunchContentHash = schema.LaunchContentHash
 
 // Event is the client-facing subscribe payload: one status-changed session view.
 type Event struct {
@@ -123,6 +175,34 @@ type SessionStream interface {
 	Input(p []byte) error
 	Resize(cols, rows int) error
 	Close() error
+}
+
+// OperationClaimer is the optional interface a DaemonAPI ALSO implements to claim a
+// remote op's operation_id as single-use through the daemon's durable idempotency store
+// (slice A5-c). handleTakeControl claims the op AFTER authorization: a duplicate
+// operation_id (existed=true) is a REPLAY and is refused, so a captured take_control
+// cannot re-establish a second lease. Unlike launch it is NOT redriven — take_control
+// has no re-drivable side effect, so a consumed operation_id stays consumed. A backend
+// that does NOT implement this interface leaves the A5-a/A5-b establishment path
+// unchanged (the gate-token/single-use mechanism engages only with a real store).
+type OperationClaimer interface {
+	ClaimOperation(operationID, action, session string) (existed bool, err error)
+}
+
+// IdempotentExecutor is the optional interface a DaemonAPI ALSO implements to make a
+// remote MUTATING op replay-safe by CACHED OUTCOME (slice DHI-3), backing handleKill/
+// handleDelete. Unlike OperationClaimer (existed => refuse — correct for take_control,
+// which must NOT re-establish a lease), a replayed kill/delete must return the ORIGINAL
+// attempt's SUCCESS, executing the side effect exactly once.
+//
+// Fresh op: existed=false — the caller executes the side effect, then CommitIdempotentOp
+// with its terminal outcome. Replayed op: existed=true, priorOK reports whether the
+// ORIGINAL attempt COMPLETED (true) or FAILED (false); the caller returns that cached
+// outcome and executes nothing. A backend that does NOT implement this interface leaves
+// the existing non-idempotent kill/delete path unchanged.
+type IdempotentExecutor interface {
+	ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error)
+	CommitIdempotentOp(operationID string, ok bool) error
 }
 
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so

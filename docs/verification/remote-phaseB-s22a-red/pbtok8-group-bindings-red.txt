@@ -1,0 +1,76 @@
+PB-TOK-8 RED, STAGE 1 of 2 -- there is no Group->token table.
+Command: go test ./android/gate/ -run TestPBTOK8
+Date: 2026-07-31T21:51:25Z  HEAD: 9b90704
+
+TestPBTOK8_TheGroupParserCanActuallyFail is absent because it PASSES: it is the negative
+control on declaredGroups, which every other assertion is built on. It already proves the
+parser reads the four real Group constants out of internal/status and does not sweep up
+the Process/Turn/Interaction constants beside them.
+
+--- FAIL: TestPBTOK8_EveryStatusGroupIsBoundToExactlyOneToken (0.01s)
+    s22_grouptokens_test.go:161: PB-TOK-8 requires a checked-in Group->token table at android/group-tokens.tsv: open /Users/Nathan/Code/swarm/android/group-tokens.tsv: no such file or directory
+        Columns (tab separated): group_const<TAB>group_value<TAB>token<TAB>note.
+        `group_const` is a Group constant in internal/status (e.g. GroupNeedsInput), `group_value` is its string value (e.g. needs_input), and `token` is a key of internal/design/tokens.json's "tokens" object. Both Group columns are checked against the REAL constants, parsed from internal/status rather than transcribed.
+--- FAIL: TestPBTOK8_EveryBoundTokenReachesTheTheme (0.00s)
+    s22_grouptokens_test.go:246: PB-TOK-8 requires a checked-in Group->token table at android/group-tokens.tsv: open /Users/Nathan/Code/swarm/android/group-tokens.tsv: no such file or directory
+        Columns (tab separated): group_const<TAB>group_value<TAB>token<TAB>note.
+        `group_const` is a Group constant in internal/status (e.g. GroupNeedsInput), `group_value` is its string value (e.g. needs_input), and `token` is a key of internal/design/tokens.json's "tokens" object. Both Group columns are checked against the REAL constants, parsed from internal/status rather than transcribed.
+--- FAIL: TestPBTOK8_TheRebindingRecordedInTheADRIsTheOneInTheTable (0.00s)
+    s22_grouptokens_test.go:291: PB-TOK-8 requires a checked-in Group->token table at android/group-tokens.tsv: open /Users/Nathan/Code/swarm/android/group-tokens.tsv: no such file or directory
+        Columns (tab separated): group_const<TAB>group_value<TAB>token<TAB>note.
+        `group_const` is a Group constant in internal/status (e.g. GroupNeedsInput), `group_value` is its string value (e.g. needs_input), and `token` is a key of internal/design/tokens.json's "tokens" object. Both Group columns are checked against the REAL constants, parsed from internal/status rather than transcribed.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.894s
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-8 RED, STAGE 2 of 2 -- each assertion firing, with values.
+Command: same, over a deliberately defective android/group-tokens.tsv (since deleted):
+  GroupNeedsInput      needs_input   --p-att
+  GroupWorking         working       --p-att      <- token bound to two Groups
+  GroupReadyForReview  ready         --p-ink3     <- stale wire value AND the reverted
+                                                    B134 binding
+  (GroupCompleted omitted entirely                 <- a Group with no token; this is also
+                                                    the mechanism by which a FIFTH Group
+                                                    added to internal/status fails)
+Recorded because stage 1 proves only that a file was missing.
+Date: 2026-07-31T21:51:26Z
+
+--- FAIL: TestPBTOK8_EveryStatusGroupIsBoundToExactlyOneToken (0.01s)
+    s22_grouptokens_test.go:180: group-tokens.tsv:4: the table says GroupReadyForReview is "ready" and internal/status says "ready_for_review". The wire value is what crosses to the phone, so a table holding a stale one binds a colour to a Group the daemon never sends.
+    s22_grouptokens_test.go:211: PB-TOK-8: 1 status.Group constant(s) have no row in group-tokens.tsv:
+        	GroupCompleted (completed)
+        A Group the phone renders with no token is a Group whose colour an implementer has to invent at the point of use -- which is how ReadyForReview would have acquired the retired mock's purple.
+    s22_grouptokens_test.go:230: PB-TOK-8: token --p-att is bound to 2 Groups (GroupNeedsInput, GroupWorking). ADR-007 B134 decision 1 chose a rebinding over a 32nd token specifically because it gives all four Groups DISTINCT hues at zero token cost; sharing one throws that away and makes two states indistinguishable on the surface built to distinguish them.
+--- FAIL: TestPBTOK8_TheRebindingRecordedInTheADRIsTheOneInTheTable (0.00s)
+    s22_grouptokens_test.go:321: PB-TOK-8: ReadyForReview is bound to "--p-ink3"; ADR-007 B134 decision 1 binds it to --p-ok. Substrate's demo labelled the green dot "Done", and moving green to review is the deliberate part of the decision -- it is what swarm's own TUI identity already does and what a triage surface needs.
+    s22_grouptokens_test.go:327: PB-TOK-8: Completed is bound to ""; ADR-007 B134 decision 1 binds it to --p-ink3, the recessive grey. Finished work should recede rather than hold the most saturated colour on screen. Binding it to the green is the intuitive edit and the one the decision was made against.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.669s
+FAIL
+
+go test exit status: 1
+
+==================================================================================
+PB-TOK-8 RED, addendum -- the theme join and the ADR join firing.
+Stage 2 above proved completeness, uniqueness and the wire-value check. It did NOT exercise
+TestPBTOK8_EveryBoundTokenReachesTheTheme, because every token in that defective table
+happened to be a real colour. This run binds GroupCompleted to p-tabbg (a real token, of
+kind effect, with no colour resource) and reverts.
+Command: go test ./android/gate/ -run TestPBTOK8
+Date: 2026-07-31T21:59:42Z
+
+--- FAIL: TestPBTOK8_EveryStatusGroupIsBoundToExactlyOneToken (0.02s)
+    s22_grouptokens_test.go:192: group-tokens.tsv:37: binds GroupCompleted to --p-tabbg, which the origin types "effect". A Group is rendered as a colour -- a dot fill, a row rail, a section label -- so its token must be one.
+--- FAIL: TestPBTOK8_EveryBoundTokenReachesTheTheme (0.00s)
+    s22_grouptokens_test.go:259: PB-TOK-8: group-tokens.tsv binds GroupCompleted to --p-tabbg, which has no row in design-tokens.tsv and therefore no Android colour resource. PB-TOK-5 exists so that every colour token reaches the app; a Group bound to one that does not is bound to nothing.
+--- FAIL: TestPBTOK8_TheRebindingRecordedInTheADRIsTheOneInTheTable (0.00s)
+    s22_grouptokens_test.go:313: PB-TOK-8: group-tokens.tsv binds GroupCompleted to --p-tabbg, and ADR-007 B134 does not mention --p-tabbg. The criterion asks for this decision to be recorded; a table edited without the ADR is a decision changed without one.
+    s22_grouptokens_test.go:327: PB-TOK-8: Completed is bound to "--p-tabbg"; ADR-007 B134 decision 1 binds it to --p-ink3, the recessive grey. Finished work should recede rather than hold the most saturated colour on screen. Binding it to the green is the intuitive edit and the one the decision was made against.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.717s
+FAIL
+
+go test exit status: 1

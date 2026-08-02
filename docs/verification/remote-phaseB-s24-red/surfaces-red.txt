@@ -1,0 +1,303 @@
+S24 RED/GREEN -- the SETTINGS and PAIRING screens (PB-DS-6, PB-DS-9)
+
+This is the second half of S24. `screens-model-red.txt` and `screens-gate-red.txt` in this
+directory cover the triage inbox and the PB-DS-11 fence; this covers the two screens
+recomposed after it.
+
+HOW THE KOTLIN RUNS WERE PRODUCED, EXACTLY -- the same way, and for the same reason. The
+Kotlin lane is sequenced by another agent and this slice may not invoke ./gradlew, so each
+model suite was compiled and run on a plain JVM with the kotlin-compiler-embeddable and junit
+jars the Gradle cache already holds and the JDK android/toolchain.env pins. `SettingsPanel`
+and `PairingPanel` are pure Kotlin -- no Android import, no resources, no Robolectric -- so
+the classes that ran are the classes the Gradle lane compiles. android.jar is on the COMPILE
+classpath only, because `PermissionState` and `ScannerState` are declared in files that also
+name `android.Manifest`; no android class is loaded at run time.
+
+The RED runs use the implementation as it was committed for them: every signature present,
+every copy table real, `of()` a single TODO(). So the failures are NotImplementedError --
+missing behaviour rather than unresolved references, which is what makes them evidence rather
+than a syntax error. Both files are a re-run of the FINAL assertions, so what is recorded is
+the wording the tests ship with.
+
+===============================================================================
+1. SETTINGS -- the screen model
+===============================================================================
+
+$ kotlinc runtime/PermissionGate.kt ui/SettingsScreen.kt <SettingsPanel.kt stub> \
+      ui/screens/SettingsPanelScreenTest.kt
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.SettingsPanelScreenTest
+
+JUnit version 4.13.2
+.E.E.E.E.E.E.E.E.E.E.E.E.E.E
+Time: 0.063
+There were 14 failures:
+1) each row carries the sublabel C6 records under its label(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.each row carries the sublabel C6 records under its label(SettingsPanelScreenTest.kt:75)
+2) the panel repeats the model's own reason for a dead switch(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.the panel repeats the model's own reason for a dead switch(SettingsPanelScreenTest.kt:155)
+3) a permission nobody has resolved yet is not a blocked one(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a permission nobody has resolved yet is not a blocked one(SettingsPanelScreenTest.kt:196)
+4) a row renders the preference that was persisted(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a row renders the preference that was persisted(SettingsPanelScreenTest.kt:97)
+5) the row announces its label and its sublabel together(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.the row announces its label and its sublabel together(SettingsPanelScreenTest.kt:112)
+6) a settled, permitted screen says nothing extra(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a settled, permitted screen says nothing extra(SettingsPanelScreenTest.kt:188)
+7) a granted permission leaves both rows live(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a granted permission leaves both rows live(SettingsPanelScreenTest.kt:142)
+8) a blocked permission and a pending change are both said, blocked first(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a blocked permission and a pending change are both said, blocked first(SettingsPanelScreenTest.kt:178)
+9) a withheld notification permission disables every row(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a withheld notification permission disables every row(SettingsPanelScreenTest.kt:133)
+10) the two rows are bound to two different preferences(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.the two rows are bound to two different preferences(SettingsPanelScreenTest.kt:83)
+11) a change the machine has not acknowledged is reported(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.a change the machine has not acknowledged is reported(SettingsPanelScreenTest.kt:165)
+12) notifications is the only section, because the other C6 rows have nothing behind them(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.notifications is the only section, because the other C6 rows have nothing behind them(SettingsPanelScreenTest.kt:59)
+13) the panel is titled with the screen inventory C6 names(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.the panel is titled with the screen inventory C6 names(SettingsPanelScreenTest.kt:50)
+14) the rows carry C6's recorded labels in C6's order(dev.swarm.phone.ui.screens.SettingsPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the settings panel is not composed yet
+	at dev.swarm.phone.ui.screens.SettingsPanelScreen.of(SettingsPanel.kt:132)
+	at dev.swarm.phone.ui.screens.SettingsPanelScreenTest.the rows carry C6's recorded labels in C6's order(SettingsPanelScreenTest.kt:67)
+
+FAILURES!!!
+Tests run: 14,  Failures: 14
+
+
+--- and against the implementation ---------------------------------------------
+
+$ kotlinc runtime/PermissionGate.kt ui/SettingsScreen.kt ui/screens/SettingsPanel.kt \
+      ui/screens/SettingsPanelScreenTest.kt
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.SettingsPanelScreenTest
+
+JUnit version 4.13.2
+..............
+Time: 0.066
+
+OK (14 tests)
+
+14 of 14 failing, then 14 of 14 passing. Nothing was green before the implementation: every
+assertion in that suite reads `of()`, including the ones that only look at copy, because the
+copy reaches the screen through the panel rather than through the table directly.
+
+===============================================================================
+2. PAIRING -- the screen model
+===============================================================================
+
+$ kotlinc runtime/PermissionGate.kt ui/PairingUi.kt <PairingPanel.kt stub> \
+      ui/screens/PairingPanelScreenTest.kt
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.PairingPanelScreenTest
+
+JUnit version 4.13.2
+.E.E.E..E.E.E.E.E.E.E.E...E
+Time: 0.056
+There were 12 failures:
+1) stop is offered while an attempt is live and withdrawn once it has stopped(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.stop is offered while an attempt is live and withdrawn once it has stopped(PairingPanelScreenTest.kt:226)
+2) a denied camera withdraws the scanner and offers the typed fallback(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.a denied camera withdraws the scanner and offers the typed fallback(PairingPanelScreenTest.kt:138)
+3) the destination notice is the attempt's own, not the panel's(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of$default(PairingPanel.kt:128)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.the destination notice is the attempt's own, not the panel's(PairingPanelScreenTest.kt:118)
+4) no destination is on screen until it is the step that shows one(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.no destination is on screen until it is the step that shows one(PairingPanelScreenTest.kt:184)
+5) an interrupted attempt says so, and only while there is no live handshake(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.an interrupted attempt says so, and only while there is no live handshake(PairingPanelScreenTest.kt:240)
+6) the body is the flow's own wording for the step(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.the body is the flow's own wording for the step(PairingPanelScreenTest.kt:107)
+7) the destination step offers exactly the confirm control and the way out(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.the destination step offers exactly the confirm control and the way out(PairingPanelScreenTest.kt:164)
+8) no symbols are shown until the handshake has derived them(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.no symbols are shown until the handshake has derived them(PairingPanelScreenTest.kt:211)
+9) only a permanent denial routes to system settings(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.only a permanent denial routes to system settings(PairingPanelScreenTest.kt:154)
+10) a live attempt offers no scanner, whatever the camera says(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.a live attempt offers no scanner, whatever the camera says(PairingPanelScreenTest.kt:261)
+11) the comparison shows the six symbols and offers exactly the two answers(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.the comparison shows the six symbols and offers exactly the two answers(PairingPanelScreenTest.kt:192)
+12) with no attempt in this process the scanner is offered and nothing else is(dev.swarm.phone.ui.screens.PairingPanelScreenTest)
+kotlin.NotImplementedError: An operation is not implemented: S24: the pairing panel is not composed yet
+	at dev.swarm.phone.ui.screens.PairingPanelScreen.of(PairingPanel.kt:134)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel(PairingPanelScreenTest.kt:53)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.panel$default(PairingPanelScreenTest.kt:44)
+	at dev.swarm.phone.ui.screens.PairingPanelScreenTest.with no attempt in this process the scanner is offered and nothing else is(PairingPanelScreenTest.kt:128)
+
+FAILURES!!!
+Tests run: 15,  Failures: 12
+
+
+--- and against the implementation ---------------------------------------------
+
+$ kotlinc runtime/PermissionGate.kt ui/PairingUi.kt ui/screens/PairingPanel.kt \
+      ui/screens/PairingPanelScreenTest.kt
+$ java org.junit.runner.JUnitCore dev.swarm.phone.ui.screens.PairingPanelScreenTest
+
+JUnit version 4.13.2
+...............
+Time: 0.074
+
+OK (15 tests)
+
+12 of 15 failing, then 15 of 15 passing. THE THREE THAT WERE ALREADY GREEN ARE RECORDED RATHER
+THAN HIDDEN: they are the three heading assertions, which read `titleFor` -- a copy table the
+stub already carried, because the stub was the file with `of()` removed and nothing else.
+
+===============================================================================
+3. THE GATE -- the fence over the recomposed screens
+===============================================================================
+
+Four assertions added to android/gate/s24_screens_test.go. The RED run is the SHIPPED
+assertions against the pre-slice tree: HEAD exported with `git archive`, the shipped
+s24_screens_test.go dropped into it, `go test` run there -- so what is recorded is the wording
+the gate ships with rather than an earlier draft's.
+
+$ go test ./android/gate/ -run "TestPBDS6_EveryRecomposed|TestPBDS6_TheRecomposed|TestPBDS9_AScreen|TestPBDS9_TheVisibility" -count=1 -v
+
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1150: PB-DS-6: 2 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/PairingPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+        dev/swarm/phone/ui/screens/SettingsPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.02s)
+=== RUN   TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation
+--- PASS: TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation (0.00s)
+=== RUN   TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot
+--- PASS: TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot (0.00s)
+=== RUN   TestPBDS9_TheVisibilityCheckSeesBothSpellings
+--- PASS: TestPBDS9_TheVisibilityCheckSeesBothSpellings (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.745s
+FAIL
+
+--- and against this working tree ----------------------------------------------
+
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+--- PASS: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.02s)
+=== RUN   TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation
+--- PASS: TestPBDS6_TheRecomposedScreenCheckSeesEachClassOfViolation (0.00s)
+=== RUN   TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot
+--- PASS: TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot (0.01s)
+=== RUN   TestPBDS9_TheVisibilityCheckSeesBothSpellings
+--- PASS: TestPBDS9_TheVisibilityCheckSeesBothSpellings (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/android/gate	0.725s
+
+WHAT THE GATE RED RUN DOES AND DOES NOT SHOW, said plainly.
+
+TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit fails on the pre-slice tree, and it fails on
+the clause that matters: the two screens its composition table claims did not exist, so their
+components were checked against nothing. That is the same defect PB-DS-6 was recorded NOT MET
+over, one screen further along -- a table of components nobody renders.
+
+TestPBDS9_AScreenComposesWhatIsOnItRatherThanHidingWhatIsNot PASSES on the pre-slice tree, and
+that is recorded rather than dressed up. The screen package then held one file, the triage
+inbox, and it never wrote a visibility. The three `render*Step` functions this fence is about
+were in PairingSurface, which is a SURFACE and is deliberately outside this fence's tree -- a
+surface owns controls whose visibility is a fact about the device rather than about the step
+(the camera preview is the standing example). So this assertion is a fence against the pattern
+coming back into the screen package, not a fix of a violation that was in it. Its negative
+control is where its strength is demonstrated.
+
+Both control assertions pass on both trees, which is what a control is for: they run against
+synthetic sources and are independent of the tree.
+
+===============================================================================
+4. WHAT IS NOT EVIDENCED HERE
+===============================================================================
+
+- `SettingsPanelViewTest` and `PairingPanelViewTest` have NOT been run. They are Robolectric
+  and need the Gradle lane, which another agent sequences. They exist, they assert the
+  composition, the order, the copy and -- in the pairing case -- that the two SAS answers
+  cannot swap places, and NOTHING HAS EXECUTED THEM. That is the largest hole in this
+  evidence and it is stated first rather than last.
+
+  What has been verified about the two views without Gradle is that they TYPE-CHECK: both
+  compile against android.jar with the two kit signatures they call (`navHeader`,
+  `sectionLabel`) declared exactly as ui/kit declares them. That says the calls are shaped
+  right. It does not say the screen is.
+- `SettingsSurface` and `PairingSurface` have not been compiled at all. They import
+  `swarmmobile`, which is the gomobile AAR, and it cannot be built on this JVM harness.
+- No screen here is fully PIXELED, though less is missing than when these tests were written.
+  Derivation rows 15 (settings row), 9 (text field) and 18 (the mono well) landed in ui/kit
+  while this slice was running and are now spent: the settings rows are `settingsRow`, the
+  launch and pairing fields are `textField`, the pairing destination and the terminal peek are
+  `monoWell` -- and the peek's `terminal = true` is the first time PB-TOK-3's
+  `terminal_peek.fg = --p-hero` has reached a pixel on a handset.
+
+  Row 4 (toggle) and row 10 (the three CTA variants) still have no factory. So the settings
+  toggle is a bare `SwitchCompat` and the pairing screen's seven controls are bare `Button`s,
+  and both arrive at their screen as parameters. Nothing here asserts their appearance,
+  because there is none to assert.
+
+- The two model suites above were captured BEFORE those three components landed, and they are
+  unaffected by them: both are pure models with no view in them. The two view suites were
+  written against the hand-built settings row and updated to the kit's; neither has run.

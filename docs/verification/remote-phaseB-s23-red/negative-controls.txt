@@ -1,0 +1,238 @@
+S23 negative controls -- PB-DS-6, PB-DS-7, PB-DS-10
+
+*** INTEGRITY NOTE, 2026-08-01. A re-audit found four records in this file that are not
+*** evidence: one with no output at all, and three carrying output copy-pasted verbatim from
+*** the preceding entry -- wrong failure message, no test name, no count. Two are corrected
+*** in place below and marked VOID with the reason, and the three COPY-PASTE records are now
+*** marked VOID individually too.
+***
+*** CORRECTION 2026-08-01: an earlier version of this note claimed the copy-paste cases were
+*** "listed here". They were not -- the note asserted a marking it had not performed, in a file
+*** whose subject is records that assert what they have not demonstrated. That is the same
+*** error one level up, and it is fixed by the per-record markers below rather than by
+*** rewording this paragraph.
+***
+*** A record whose output belongs to a different mutation is worse than a missing record. It
+*** reads as a demonstrated failure mode and is not one, which is exactly the error this file
+*** exists to prevent, committed by the file itself.
+***
+*** Regenerating the remaining records requires one Gradle run per mutation against the
+*** current tree, reverting between. That is owed and is filed, not done.
+
+Each entry mutates the FINISHED implementation by one value and records what the assertions
+say. An assertion whose failure mode has never been demonstrated is the shape that let this
+codebase ship a third divergent palette under a green test.
+
+== Kotlin (Robolectric, PB-DS-10) ==
+
+=== B134 undone: Completed takes green again, which is what Substrate's demo labels it
+    *** THIS RECORD IS VOID, TWICE OVER. CORRECTED 2026-08-01. ***
+
+    (1) It never carried any output. A re-auditor flagged it: an entry in a negative-control
+        ledger that records no failure is not evidence of anything, and this file's whole
+        purpose is that distinction.
+
+    (2) The mutation is no longer a failure by DESIGN. ADR-007 B134 decision 1 is marked
+        CONTESTED and awaiting the designer, and the gate that enforced it has been changed so
+        that Substrate's ORIGINAL binding is also legal for exactly the two Groups the
+        rebinding moved -- a reviewer acting on the ADR's own words must not have to fight a
+        green build. So `"completed" -> R.color.swarm_state_ok` now PASSES, deliberately.
+
+    The real control for that gate, with run output both ways, is in contested-hold-red.txt:
+    reverting to Substrate's binding passes, a third value (swarm_state_error) still fails.
+    Do not re-add this record; it would assert the opposite of a decision that is on hold.
+
+=== the blend interpolates un-premultiplied, so the glow fades --p-att through black
+    ColorMix.kt: val premultiplied = fraction * ax * cx + (1 - fraction) * ay * cy
+            return quantise(premultiplied / a)
+        ->  val plain = fraction * cx + (1 - fraction) * cy
+            return quantise(plain)
+    KitFoundationTest > the two live Groups glow at the design's share and the other two do not glow FAILED
+    KitFoundationTest > the blend is the premultiplied one CSS specifies FAILED
+    9 tests completed, 2 failed
+        java.lang.AssertionError: expected:<[]> but was:<[needs_input (--p-att) glow: design says 0xB3F1A10D, component resolved 0xB3A97109, working (--p-work) glow: design says 0x8C00C2D7, component resolved 0x8C006B76]>
+        java.lang.AssertionError: expected:<[]> but was:<[--p-att 70.0% over transparent: design says 0xB3F1A10D, component resolved 0xB3A97109]>
+
+=== the key light is dropped -- the card renders flat, as it would under an elevation shadow
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a glow-blend failure). `keyLight = null` cannot produce it.
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
+    Surfaces.kt: keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        ->  keyLight = null,
+        java.lang.AssertionError: expected:<[]> but was:<[needs_input (--p-att) glow: design says 0xB3F1A10D, component resolved 0xB3A97109, working (--p-work) glow: design says 0x8C00C2D7, component resolved 0x8C006B76]>
+        java.lang.AssertionError: expected:<[]> but was:<[--p-att 70.0% over transparent: design says 0xB3F1A10D, component resolved 0xB3A97109]>
+
+=== the attention row keeps the plain hairline instead of the warmed derived border
+    Surfaces.kt: stroke = if (attention) {
+            Kit.attentionBorder(context)
+        } else {
+            Kit.colour(context, R.color.swarm_hairline)
+        },
+        ->  stroke = Kit.colour(context, R.color.swarm_hairline),
+    KitFoundationTest > the attention card carries the derived border and the attention rail FAILED
+    9 tests completed, 1 failed
+        java.lang.AssertionError: expected:<[]> but was:<[`.prow.attention` border: design says 0xFF6D5220, component resolved 0xFF23252A]>
+
+=== the workbar fades to a transparent BLACK -- the obvious spelling of `transparent`
+    WorkingBar.kt: endColour = Color.argb(0, Color.red(work), Color.green(work), Color.blue(work)),
+        ->  endColour = Color.TRANSPARENT,
+    InboxRowTest > the working bar fades to a transparent WORKING colour, not to a transparent black FAILED
+    9 tests completed, 1 failed
+        java.lang.AssertionError: expected:<[]> but was:<[gradient end: design says 0x0000C2D7, component resolved 0x00000000]>
+
+=== the glowing dot stays hardware-accelerated, so setShadowLayer is silently ignored
+    StatusDot.kt: if (glow != null) setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        ->  // layer type not set
+    InboxRowTest > only the live Groups glow, and only they are on a software layer FAILED
+    9 tests completed, 1 failed
+        java.lang.AssertionError: expected:<[]> but was:<[needs_input layer type: design says 0x00000001, component resolved 0x00000000, working layer type: design says 0x00000001, component resolved 0x00000000]>
+
+=== the row spends the wrong scale step: 12dp vertical padding where the ledger says 10
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a layer-type failure).
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
+    SessionRow.kt: Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+            Kit.dimen(context, R.dimen.swarm_space_10).toInt(),
+        ->  Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+            Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+        java.lang.AssertionError: expected:<[]> but was:<[needs_input layer type: design says 0x00000001, component resolved 0x00000000, working layer type: design says 0x00000001, component resolved 0x00000000]>
+
+=== the badge is repainted the mock's retired red
+    Badge.kt: pillSurface(context, Kit.colour(context, R.color.swarm_state_attention))
+        ->  pillSurface(context, Kit.colour(context, R.color.swarm_state_error))
+    InboxChromeTest > the badge is the attention pill the derivation table specifies FAILED
+    11 tests completed, 1 failed
+        java.lang.AssertionError: expected:<[]> but was:<[badge fill: design says 0xFFF1A10D, component resolved 0xFFFF6369]>
+
+=== the section label uppercases its copy instead of transforming it
+    *** VOID -- COPY-PASTED OUTPUT. Marked 2026-08-01. ***
+    the output below is VERBATIM the preceding record's (a badge-fill failure).
+    A record whose output belongs to a different mutation reads as a demonstrated
+    failure mode and is not one. Regeneration needs one run per mutation and is owed.
+    SectionLabel.kt: isAllCaps = true
+        ->  isAllCaps = false
+        java.lang.AssertionError: expected:<[]> but was:<[badge fill: design says 0xFFF1A10D, component resolved 0xFFFF6369]>
+
+=== the tab bar is opaque -- --p-tabbg's 88% dropped
+    *** THIS RECORD MUTATES CODE THAT NO LONGER EXISTS. VOID, CORRECTED 2026-08-01. ***
+    Kit.tabBarFill and KitMetrics.TABBAR_ALPHA were deleted in 446f1cb: --p-tabbg is now a real
+    joined resource (swarm_tabbar_background) and TabBar reads it directly, because composing it
+    from --p-bg at the token's alpha joined the ALPHA to the origin and assumed the RGB. There is
+    nothing left to perturb here. A ledger entry against deleted code reads as coverage and is
+    not.
+    ORIGINAL (unrunnable):
+    Kit.kt: ColorMix.withAlpha(colour(context, R.color.swarm_background), KitMetrics.TABBAR_ALPHA)
+        ->  colour(context, R.color.swarm_background)
+    InboxChromeTest > the tab bar is the design's translucent bar with a hairline rule FAILED
+    11 tests completed, 1 failed
+        java.lang.AssertionError: expected:<[]> but was:<[--p-tabbg fill: design says 0xE008090A, component resolved 0xFF08090A]>
+
+== Go gate (PB-DS-5, PB-DS-6, PB-DS-7) ==
+
+=== the elevation fence is NOT trippable by a comment (recorded because the first attempt at
+=== this control was one, and the gate correctly ignored it -- kotlinCodeOnly strips comments,
+=== because a fence a thorough commenter can turn off is not one)
+    Surfaces.kt: // elevation = 2f  (inserted as a comment)
+    ok  	github.com/Nathandela/swarm/android/gate	0.880s
+
+=== a colour is typed into the kit
+    Badge.kt: setTextColor(Kit.colour(context, R.color.swarm_hero_ink))
+        ->  setTextColor(0xFF06150C.toInt())
+    --- FAIL: TestPBDS6_NoColourIsTypedInTheKit (0.00s)
+        s23_kit_test.go:408: PB-DS-6: Badge.kt:31 types the colour literal #FF06150C. Every colour the kit paints with is R.color.swarm_*, which android/design-tokens.tsv joins to the origin, or a documented blend over those. A literal here is a fourth copy of the palette in the one file that was supposed to end them.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.760s
+    FAIL
+
+=== a component loses the origin annotation that makes it checkable
+    WorkingBar.kt:  * origin: .workbar
+        ->   * the working bar
+    --- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.00s)
+        s23_kit_test.go:226: PB-DS-6: WorkingBar.kt carries no `origin: .workbar` annotation. The annotation is the join -- it is what lets this gate and the Robolectric suite compute every expected value from the DESIGN rather than from the implementation they are checking, which is the arrangement type.xml's `<!-- origin: -->` comments already established.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.799s
+    FAIL
+
+=== a metric constant drifts one dp from the design
+    Kit.kt: const val DOT_DP = 7f
+        ->  const val DOT_DP = 8f
+    --- FAIL: TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber (0.00s)
+        s23_kit_test.go:709: PB-DS-7: Kit.kt:124: DOT_DP = 8, but the design's `.pdot { width }` is 7. The design's px is Android dp at 1:1, so this is a transcription error and nothing else.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.806s
+    FAIL
+
+=== a raw pixel dimension is typed in a padding call
+    SectionLabel.kt: Kit.dimen(context, R.dimen.swarm_space_12).toInt(),
+        ->  12,
+    --- FAIL: TestPBDS6_EveryKitSpacingIsTheLedgersStep (0.00s)
+        s23_kit_test.go:602: PB-DS-6: SectionLabel.kt never references R.dimen.swarm_space_12, which is the step PB-DS-1's ledger assigns to `.plabel { padding }` = 12px. A dimension that is not read from the scale is one typed at the call site, and the constant this requirement replaced was PhoneSurface's `PADDING = 24` in raw pixels.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.750s
+    FAIL
+
+=== a typeface is chosen at a call site instead of coming from the type scale
+    Badge.kt: gravity = Gravity.CENTER
+        ->  setTypeface(android.graphics.Typeface.MONOSPACE)
+        gravity = Gravity.CENTER
+    --- FAIL: TestPBDS6_NoTypefaceIsChosenInTheKit (0.00s)
+        s23_kit_test.go:430: PB-DS-6: Badge.kt calls Typeface.. Size, weight, tracking and family come from ONE TextAppearance.Swarm.* style per text role (PB-DS-2); setting any of them at a call site re-specifies the scale one view at a time, which is the state S22 found the app in -- one Typeface.MONOSPACE, one Typeface.BOLD and no setTextSize anywhere.
+        s23_kit_test.go:430: PB-DS-6: Badge.kt calls setTypeface(. Size, weight, tracking and family come from ONE TextAppearance.Swarm.* style per text role (PB-DS-2); setting any of them at a call site re-specifies the scale one view at a time, which is the state S22 found the app in -- one Typeface.MONOSPACE, one Typeface.BOLD and no setTextSize anywhere.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.750s
+    FAIL
+
+=== the card reaches for View.elevation -- the obvious implementation of --p-card-fx
+    SessionRow.kt: (the row's apply block) + elevation = 2f
+    --- FAIL: TestPBDS5_TheKitNeverReachesForElevation (0.02s)
+        s23_kit_test.go:390: PB-DS-5: SessionRow.kt reaches for `elevation =`. Substrate bans drop shadows -- elevation is one ladder step LIGHTER, never a shadow (ADR-007 B134 decision 4) -- so --p-card-fx is an INSET 1dp top-edge highlight clipped to the card radius, and --p-elev is what a raised surface is made of. This is the wrong implementation despite being the obvious one, which is why it is fenced rather than reviewed.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.717s
+    FAIL
+
+=== a raw pixel dimension is typed in an RTL-correct padding call, which PB-DS-1's own scan
+=== does not cover (it matches setPadding and setMargins and stops there)
+    SectionLabel.kt: Kit.dimen(context, R.dimen.swarm_space_12).toInt()  ->  12
+    --- FAIL: TestPBDS6_NoRawDimensionIsTypedInTheKit (0.01s)
+        s23_kit_test.go:565: PB-DS-6: SectionLabel.kt calls setPaddingRelative( with the literal 12. Every dimension the kit spends comes from R.dimen.swarm_* -- the scale PB-DS-1 decided -- or from Kit.dp over a KitMetrics constant the design source can be checked against. A bare number here is in PIXELS.
+    FAIL
+    FAIL	github.com/Nathandela/swarm/android/gate	0.749s
+    FAIL
+
+== What these controls found in the fences themselves ==
+
+Two of the seventeen mutations PASSED on the first run, and both were defects in this slice's own
+gate rather than in the kit:
+
+1. `elevation = 2f` inside an `apply {}` block -- which is how every view in this kit is
+   configured -- was invisible to the PB-DS-5 fence, because the list held only `setElevation` and
+   `.elevation` and the idiomatic Kotlin spelling has no receiver and no dot. The fence was blind
+   to exactly the form the mistake would be written in.
+
+2. A raw `12` as the FIRST argument of a multi-line `setPaddingRelative(...)` was invisible to the
+   raw-dimension scan, because its argument list was bounded by `[^)]*`, which stops at the first
+   close paren -- inside the `Kit.dimen(context, ...)` of the NEXT argument. The scan was
+   inspecting a fragment of the call and reporting on the rest by accident.
+
+Both are fixed, both now fire (recorded above), and both carry a probe inside the test so the
+recognisers cannot quietly stop matching. The first attempt at control 1 was itself written as a
+COMMENT and the gate correctly ignored it; that is recorded above rather than deleted, because a
+fence a comment can trip is one the next thorough commenter turns into noise.
+
+== The probe itself (added after the lead asked whether it can tell two faces apart) ==
+
+=== the pitch probe is widened until it answers "fixed pitch" for everything
+    KitOrigin.isFixedPitch: advance tolerance 0.01f -> 1000f
+    InboxChromeTest > the nav header resolves the display title and the live counter FAILED
+    InboxChromeTest > the chrome assertions can actually fail FAILED
+    InboxChromeTest > the filter chip resolves both of its states FAILED
+    InboxChromeTest > the tab items resolve the inactive and active inks FAILED
+    InboxRowTest > the row assertions can actually fail FAILED
+    InboxRowTest > the session row resolves the design's card and type FAILED
+    KitFoundationTest > the appearance comparison can actually fail FAILED
+    29 tests completed, 7 failed
+    > Task :app:testDebugUnitTest FAILED
+    BUILD FAILED in 1m 34s
+        java.lang.AssertionError: expected:<[]> but was:<[the probe says Typeface.SANS_SERIF IS fixed-pitch, so it answers "monospace" for everything and every mono claim in this package passes vacuously]>

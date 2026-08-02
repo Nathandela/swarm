@@ -49,9 +49,10 @@ cask "swarm" do
   end
 
   binary "swarm"
+  binary "swarm-remote"
 
   postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/swarm"]
+    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path]
   end
 
   # No zap stanza required

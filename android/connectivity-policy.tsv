@@ -1,0 +1,29 @@
+# PB-RUN-3 -- the foreground/background connectivity policy, as a table rather than prose.
+#
+# Prose cannot be checked for totality, and the failure this requirement exists to prevent is
+# not a wrong decision but an UNSTATED one. android/gate/connectivity_test.go enforces that
+# every condition PB-RUN-3 names has a row, that every cell comes from a closed vocabulary,
+# and that the rows are jointly consistent. ConnectivityPolicyTest.kt asserts the shipping
+# implementation IS this table.
+#
+# The decision itself is ADR-007 B16: backgrounding DISCONNECTS and no foreground service
+# ships in v1. B7's inbound mechanism parks a socket in a bounded server-side wait for up to
+# 25 s (docs section 6.0), which is exactly what Doze, App Standby and battery saver exist to
+# kill. Holding it would force a foregroundServiceType of dataSync (capped from API 34 at
+# ~6 h/day, after which the system force-stops the service) or specialUse (a Play-review
+# dependency on a personal tool). Dropping it makes the high-priority FCM wake in
+# android/fcm-priority.tsv load-bearing, which is what D6 already assumed.
+#
+# Columns, tab-separated:
+#   state               foreground | background | doze | app_standby | battery_saver
+#   socket              connected | suspended | closed
+#   max_wait_s          ceiling on a server-side wait ISSUED in this state; 0 = none
+#   foreground_service  yes | no
+#   fgs_type            an Android foregroundServiceType token, or - when there is no service
+#   wake_path           socket | push | none -- how the machine reaches the phone here
+#   wait_on_entry       keep | cancel -- what happens to an ALREADY-OUTSTANDING wait on entry
+foreground	connected	25	no	-	socket	keep
+background	closed	0	no	-	push	cancel
+doze	closed	0	no	-	push	cancel
+app_standby	closed	0	no	-	push	cancel
+battery_saver	closed	0	no	-	push	cancel

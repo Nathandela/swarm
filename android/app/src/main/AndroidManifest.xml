@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- PB-RUN-2. Both are requested at runtime and both have a denial path; see
+         PermissionStateResolver. A permission the resolver handles but the manifest omits can
+         only ever resolve to DENIED, which makes every denial path dead code. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- PB-RUN-5. Without it the boot receiver below is declared and never invoked, which is
+         silent rather than broken. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- PB-PAIR-2 has a manual-entry fallback, so the camera is not a hardware requirement.
+         Declaring it required would also remove the app from Play for camera-less devices. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- No foreground service is declared: ADR-007 B16 disconnects on backgrounding, so no
+         state in android/connectivity-policy.tsv holds one. No REQUEST_IGNORE_BATTERY_-
+         OPTIMIZATIONS either: an exemption would opt out of the constraints that policy
+         exists to describe. -->
+
+    <!-- PB-SEC-10 / PB-STATE-6. allowBackup="false" is the CLOUD half: `adb backup` and cloud
+         backup return nothing for this app. dataExtractionRules is the DEVICE-TO-DEVICE half,
+         which allowBackup does not reliably cover on every manufacturer's build; see the rules
+         file for the reasoning and for why it carries no include list. The legacy
+         android:fullBackupContent is deliberately NOT declared, because every supported device
+         is Android 13 or later (android/supported-versions.tsv), where it is dead configuration
+         that reads like the D2D exclusion without being it. -->
+    <!-- PB-SEC-5. usesCleartextTraffic="false" is DECLARED rather than inherited: on the
+         minSdk 33 floor the platform default is already false, so this is not a live hole
+         today, but a default is not a decision and the next targetSdk bump is not required to
+         keep it.
+
+         ITS SCOPE IS THE JAVA / WEBVIEW STACK ONLY, AND THAT LIMIT IS PART OF THE
+         REQUIREMENT. Android enforces this attribute (and networkSecurityConfig) in the
+         platform networking stack: java.net, OkHttp, WebView, Cronet. The relay connection is
+         made by Go's crypto/tls INSIDE the gomobile .so, which goes through none of them and
+         is unaffected by either attribute. PB-NET-2 is the sole control over that socket.
+         v1 of the spec drew the opposite inference from this attribute and shipped it, so the
+         statement sits beside the control rather than in an evidence file. -->
+    <application
+        android:name=".SwarmApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Swarm"
+        android:usesCleartextTraffic="false">
+
+        <!-- PB-SEC-12 / PB-E2E-2. The app's one Activity: the window every panel is hosted on
+             and the View hierarchy the overlay filter applies to. Before it existed both
+             requirements had no subject, because S16 shipped screen models and a data class
+             has no window. It carried PB-SEC-4 too until ADR-007 B65 withdrew that
+             requirement; nothing is set on the window now, and screenshots are allowed.
+
+             exported="true" is FORCED by the LAUNCHER filter and is not a preference: the
+             launcher is another process, and it cannot start a component this app keeps to
+             itself. That makes this the most reachable surface the app has, so PhoneActivity
+             reads nothing off the incoming Intent and reaches no facade verb; see
+             android/exported-components.tsv for the row and the validation this records. -->
+        <activity
+            android:name=".PhoneActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".runtime.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- PB-PUSH-9 / PB-PUSH-4. Android instantiates a FirebaseMessagingService ONLY through
+             the MESSAGING_EVENT filter, so a subclass that is not declared here is dead code
+             with a full unit-test suite: it compiles, its tests pass, and the OS never calls a
+             line of it.
+
+             exported="false" because there is nothing to gain by exporting it and a wake handler
+             reachable from outside is a way to drive the phone's push path from another process.
+             Android 12+ requires the attribute to be explicit, so omitting it is a build failure
+             on some AGP versions and an exported service on others. -->
+        <service
+            android:name=".push.SwarmMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>

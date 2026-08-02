@@ -1,0 +1,42 @@
+PB-TOK-8 / ADR-007 B134 decision 1 -- making a CONTESTED hold mechanical.
+
+THE FINDING (re-audit, 2026-08-01). B134 decision 1 is marked CONTESTED and awaiting the
+designer. A committee established the premise was overstated: Substrate DOES bind the token
+the rebinding moves -- design-directions.html:80, `.pdot.ok`, under the section labelled
+Done -- and the designer's own rationale (design-directions.html:315) calls --p-ok success.
+
+The ADR said "not settled". The gate said "settled", bidirectionally, and the gate is what
+runs. A reviewer acting on the ADR's own words had to fight a green build. The re-auditor's
+words: the annotation "has zero mechanical consequence", and the fix pass moved AGAINST
+holding by adding a join through group-tokens.tsv whose own comment calls it "the join that
+survives the rebinding" -- i.e. built so no test could ever object.
+
+THE FIX. For exactly the two Groups the rebinding moved, Substrate's ORIGINAL binding is
+also legal. Anything that is neither the rebinding nor the original still fails. The two
+Groups not in dispute stay strict.
+
+PROOF, by mutation of android/app/.../ui/kit/Kit.kt:120, run and reverted:
+
+  A. `"completed" -> R.color.swarm_state_ok`      (Substrate's original)
+     $ go test ./android/gate/ -run TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping
+     ok    github.com/Nathandela/swarm/android/gate   0.719s
+     PASSES. A reviewer reverting the contested decision does not fight the fence.
+
+  B. `"completed" -> R.color.swarm_state_error`   (a third value)
+     s23_kit_test.go:1331: PB-DS-7: the kit paints group completed with
+       R.color.swarm_state_error, but PB-TOK-8 binds it to --p-ink3 =
+       R.color.swarm_text_tertiary. [...]
+     FAIL  github.com/Nathandela/swarm/android/gate  0.723s
+     FAILS. The gate still guards everything except the disputed alternative.
+
+Kit.kt was restored after each; `git diff` is empty.
+
+ASYMMETRY, RECORDED RATHER THAN HIDDEN. `completed` has a concrete alternative
+(swarm_state_ok). `ready_for_review` does not: Substrate never coloured it, which is the
+gap the rebinding was written to fill, and the committee's recommendation is a 32nd token
+whose name cannot be known in advance. Its row carries an empty alternative -- it grants
+nothing today and exists so a reader sees the asymmetry instead of inferring it from
+absence.
+
+THIS IS A HOLD, NOT A WIDENING. Delete it the day the designer rules, in either direction.
+It should not outlive the question.

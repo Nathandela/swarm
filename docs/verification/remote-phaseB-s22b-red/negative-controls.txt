@@ -1,0 +1,97 @@
+S22b negative controls: every assertion mutated, and the failure it produces.
+Each block restores the file before the next. Final line proves the tree is green again.
+
+### 1. textSize 27sp -> 28sp   (PB-DS-2 value join)
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:278: PB-DS-2: android/app/src/main/res/values/type.xml:57 TextAppearance.Swarm.Display.NavTitle (origin `.pnav .big`) is 28sp; the design says 27px. CSS px in the 386x812 mock is Android dp/sp at 1:1 -- there is no scaling factor to explain the difference.
+
+### 2. Mono.Code fontFamily monospace -> sans-serif   (PB-DS-3)
+--- FAIL: TestPBDS3_EveryMonoRuleBecomesAMonoStyle (0.01s)
+    s22b_type_test.go:513: PB-DS-3: `.sheet2 .cmd` is a --p-mono rule and "TextAppearance.Swarm.Mono.Code" renders it in "sans-serif". The terminal peek, every timestamp and every command line are on this family; a sans substitution there is the app silently abandoning the fixed advance the design draws frames with.
+
+### 3. letterSpacing -0.025 -> -0.02   (PB-DS-2 tracking)
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:278: PB-DS-2: android/app/src/main/res/values/type.xml:57 TextAppearance.Swarm.Display.NavTitle (origin `.pnav .big`) is -0.02em; the design says -0.025em
+
+### 4. lineHeight 18.125sp -> 18sp   (PB-DS-2 computed leading)
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:278: PB-DS-2: android/app/src/main/res/values/type.xml:98 TextAppearance.Swarm.Body.Message (origin `.m2`) has line height 18sp; the design says 1.45 x 12.5px = 18.125sp
+
+### 5. drop one style   (PB-DS-2 unimplemented row)
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:250: PB-DS-2: android/app/src/main/res/values/type.xml defines 17 TextAppearance.Swarm.* styles, want 18
+    s22b_type_test.go:291: PB-DS-2: 1 text style(s) in the design have no TextAppearance:
+
+### 6. re-point a style at a rule the design does not have   (PB-DS-2 unlisted style)
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:264: PB-DS-2: android/app/src/main/res/values/type.xml:90 style "TextAppearance.Swarm.Label.StatusBar" declares origin `.ptime-invented`, which is not a text style in the design source. A style with no rule behind it is a size somebody chose.
+    s22b_type_test.go:291: PB-DS-2: 1 text style(s) in the design have no TextAppearance:
+
+### 7. textColor sneaks into a style   (PB-DS-2 scoping decision)
+--- FAIL: TestPBDS2_NoTextStyleCarriesAColour (0.01s)
+    s22b_type_test.go:391: PB-DS-2: style "TextAppearance.Swarm.Label.Chip" carries android:textColor="@color/swarm_text_primary". Colour is applied by the component kit (PB-DS-6): the same style renders in several colours -- Label.Button is the hero ink, the error red and the primary ink at its three call sites -- so a TextAppearance that carried one would be wrong at two of them.
+    s22b_type_test.go:398: PB-DS-2: style "TextAppearance.Swarm.Label.Chip" sets android:textColor to the colour resource "@color/swarm_text_primary"
+
+### 8. radius 9dp -> 10dp   (PB-DS-4 token join)
+--- FAIL: TestPBDS4_TheRadiiAreTheRadiusTokens (0.02s)
+    s22b_spacing_test.go:473: PB-DS-4: <dimen name="swarm_radius_card"> is 10dp and --p-card-r is 9px. A radius that disagrees with its token is the same defect class as a colour that does.
+
+### 9. swarm_radius_dot added -- the exact trap PB-DS-4 exists for
+--- FAIL: TestPBDS4_TheRadiiAreTheRadiusTokens (0.02s)
+    s22b_spacing_test.go:492: PB-DS-4: android/app/src/main/res/values/dimens.xml declares radius dimen(s) with no token behind them: swarm_radius_dot
+--- FAIL: TestPBDS4_TheDotRadiusTokenIsNotTranscribedAsARadius (0.00s)
+    s22b_spacing_test.go:540: PB-DS-4: --p-dot-r = 4px on a 7x7px box; 2r = 8 >= 7, so the corner is clamped and the dot is a full circle. The literal 4 is unreachable.
+
+### 10. frame constant 54dp -> 56dp   (PB-DS-1 frame join)
+--- FAIL: TestPBDS1_TheFrameConstantsAreTheDesignsOwn (0.01s)
+    s22b_spacing_test.go:247: PB-DS-1: <dimen name="swarm_screen_top"> is 56dp; the design says 54px (`.pscreen { padding: 54px 0 76px }`). CSS px in a 386x812 mock is Android dp at 1:1 -- there is no scaling factor to explain a difference away.
+
+### 11. a scale step goes off the 2dp grid: 10dp -> 11dp   (PB-DS-1)
+--- FAIL: TestPBDS1_TheSpacingScaleIsDeclared (0.01s)
+    s22b_spacing_test.go:169: PB-DS-1: <dimen name="swarm_space_10"> is 11dp, want 10dp.
+
+### 12. the deleted raw-pixel constant comes back   (PB-DS-1 last sentence)
+--- FAIL: TestPBDS1_NoRawPixelPaddingSurvives (0.02s)
+    s22b_spacing_test.go:408: PB-DS-1: android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt declares `const val PADDING` as a bare number. A layout dimension written as an Int is in PIXELS, and pixels are not a unit any design states: the constant this replaces rendered at 8dp on a 3x handset and at 24dp on a 1x one. Every spacing value comes from res/values/dimens.xml.
+
+### restored
+ok  	github.com/Nathandela/swarm/android/gate	0.893s
+
+================================================================
+Robolectric half. The Go gate compares FILES; these prove the other chain -- stage the
+artifact, let aapt compile the resource, let Android merge the table, resolve it at runtime --
+fails when the resource and the design disagree. Run together, both mutations applied at once.
+
+### K1. type.xml Label.Tab textSize 9.5sp -> 10sp
+FAIL the frame constants resolve to the design's own frame
+FAIL every text style resolves to its design rule
+     java.lang.AssertionError: TextAppearance.Swarm.Label.Tab (origin `.ptabs div`) textSize
+     expected:<9.5> but was:<10.0>
+
+### K2. dimens.xml swarm_screen_bottom 76dp -> 78dp
+FAIL the frame constants resolve to the design's own frame
+     java.lang.AssertionError: R.dimen.swarm_screen_bottom did not resolve to the design's own
+     value. The frame is the one part of the layout the scale does not govern -- 54/76/74 are
+     not on a 2dp grid -- so it is the part most likely to be retyped from prose.
+
+### restored
+230 tests, 0 failures, 0 errors
+
+================================================================
+ThemeTokenOriginTest's positional check (PB-TOK-1 / PB-TOK-5 seam, S22b scope addition).
+
+### T1. EXPECTED_DARK_COLORS entries 0 and 1 transposed in SwarmTheme.kt
+FAIL the recorded theme colours are the design tokens
+     the recorded palette does not correspond to the themed attributes position by position
+     android:colorBackground -> swarm_background: origin 0xFF08090A, recorded 0xFFF7F8F8
+FAIL the positional check can actually fail
+     (its own precondition -- it transposes the first two entries, so it needs both correct)
+Containment alone passes this mutation: both colours are still SOME mapped token's value,
+while the theme paints text in the background colour.
+
+### T2. positionalMismatches() neutered to return emptyList() always
+FAIL the positional check can actually fail
+This is the mutation the PREVIOUS control could not catch. It rebuilt the comparison inline
+with its own filterIndexed and never called the function the requirement rests on, so a
+comparison that had been normalised, short-circuited or reduced to a self-comparison stayed
+certified. Both paths now call one function.

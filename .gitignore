@@ -12,16 +12,55 @@
 .idea/
 .vscode/
 
+# Agent worktrees. `git worktree add` under .claude/ leaves a full checkout per agent, and
+# repo-wide gates that walk from the root scan them: TestB30_NoCallerOutsideTheCoreAdopts
+# TheWholeDurableBlob fails on `core.Save` inside an agent's copy of mobile/app.go, which is
+# not a caller in this repository at all. Eighteen of them accumulated during one session.
+.claude/worktrees/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
 
-# build artifacts
+# build artifacts. Every cmd/ target compiles to the repo root under an unqualified
+# `go build ./cmd/...`, and this tree has six recorded incidents of a stray artifact reaching
+# a commit. /swarm-relay was left here by a runbook verification that built the binary to
+# prove its config template actually boots -- the right thing to do, needing the right guard.
 /swarm
+/swarm-relay
+/swarm-remote
+/swarm-char
+/swarm-fake-agent
 
-# local agent scratch — plans and red-run evidence; snippets are embedded in docs/verification
+# Android (S13)
+android/.gradle/
+android/build/
+android/app/build/
+# PB-TOOL-2: the AAR and its sources jar are build outputs of android/build-aar.sh.
+android/app/libs/
+*.aar
+# Kotlin 2.x writes build-session state here. It is a build output, it is not under any
+# directory already ignored above, and this repository has five recorded incidents of a
+# `git add -A` committing an artifact -- one of them a derivation mutation that reached a demo
+# binary (ADR-007 B132 F1, residuals 4.7). Ignoring it is cheaper than the sixth.
+android/.kotlin/
+
+# internal/remote/relay/releaseprobe_test.go builds a throwaway package here (os.MkdirTemp with
+# this prefix, at the repo root so it is invisible to ./...). The test removes it, so it exists
+# only while that test runs -- which is exactly the window this repository keeps losing: a
+# `git add -A` fired during a concurrent test run commits it, and the sixth instance of that
+# class is already recorded (agents-tracker-62c). Observed untracked in a live status read.
+_releaseprobe-*/
+
+# PB-TOOL-3: release signing material is operator-supplied and never enters the repository.
+# local.properties additionally carries the machine's SDK path.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.bks
+local.properties
+
+# local agent scratch -- plans and red-run evidence; snippets are embedded in docs/verification
 .claude/tmp/
-
-# Session-local Claude Code worktrees (parallel sessions), never committable
-.claude/worktrees/

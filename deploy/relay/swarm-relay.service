@@ -1,0 +1,45 @@
+[Unit]
+Description=swarm relay (untrusted rendezvous/mailbox/push relay)
+Documentation=https://github.com/Nathandela/swarm/blob/main/docs/operations/relay-vps-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=swarm-relay
+Group=swarm-relay
+
+# cmd/swarm-relay/main.go accepts exactly one flag: --config <path>. It fails closed
+# (nonzero exit) on a missing or malformed config rather than booting on defaults.
+ExecStart=/opt/swarm-relay/bin/swarm-relay --config /etc/swarm-relay/relay.config
+Restart=on-failure
+RestartSec=5s
+
+# StateDirectory=swarm-relay resolves to /var/lib/swarm-relay, created and chowned to
+# User/Group by systemd before the first start -- this is where relay.config's db_path
+# must point (its bbolt store is the only thing this process needs to persist).
+StateDirectory=swarm-relay
+WorkingDirectory=/var/lib/swarm-relay
+
+# Hardening. This process needs nothing beyond its own state directory, its config file
+# (read-only), and the network -- so the filesystem is read-only everywhere else and it
+# gets no privileges it does not already lack. Deliberately conservative: it does not
+# include MemoryDenyWriteExecute or RestrictRealtime, which are more likely to interact
+# badly with the Go runtime on a first deploy and are not required to satisfy this task's
+# acceptance criteria. Monitoring and further hardening review are Phase C
+# (docs/specifications/remote-phaseB-requirements.md, PB-OPS scope correction).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/swarm-relay
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

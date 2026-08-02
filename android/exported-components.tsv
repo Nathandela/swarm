@@ -1,0 +1,21 @@
+# PB-SEC-11 -- the android:exported allowlist.
+#
+# "Exported-component hygiene: an explicit android:exported ALLOWLIST, validated intents/deep
+# links, no component reachable by a third-party app that can act on the session."
+#
+# WHY AN ARTIFACT AND NOT JUST THE MANIFEST. A manifest assertion over the components that
+# happen to be declared can only restate what the manifest already says, which is a guard that
+# cannot fail. This table is what a NEW component has to survive: the join is bidirectional in
+# android/gate/s18_sec11_exported_test.go, so a component with no row fails, a row for a
+# component that no longer exists fails, and a row whose `exported` disagrees with the manifest
+# fails -- that last one being the dangerous case, where the artifact a reviewer reads says
+# false and the artifact Android obeys says true.
+#
+# `validation` is what the component does to an intent it did not originate. For an
+# exported=false component the honest value is the reason it needs none; for an exported=true
+# one it must name the check.
+#
+# Columns: component <TAB> exported <TAB> why <TAB> validation
+.PhoneActivity	true	The app's only Activity and its launcher entry point. exported=true is FORCED by the MAIN/LAUNCHER filter rather than chosen: the launcher runs in another process and cannot start a component this app keeps to itself. That makes it the most reachable surface the app has, so the mitigation is what it does with what it receives, not whether it can be reached.	It reads NOTHING off the incoming Intent: no extra, no data URI, no action beyond the one the filter matched. What the screen shows is chosen from persisted local state alone, so a crafted intent selects nothing, and PhoneActivityWindowTest drives a hostile intent (a swarm:// data URI plus session/action/relay extras) and asserts the rendered output is byte-identical to a plain launch. It reaches no facade verb either: every verb that touches a session lives in PhoneSurface, one call away, behind a control a person pressed.
+.runtime.BootReceiver	true	BOOT_COMPLETED is an implicit system broadcast and cannot be delivered to an unexported receiver, so exported=true is the only way PB-RUN-5's relaunch-after-reboot works at all. The broadcast is protected by the RECEIVE_BOOT_COMPLETED permission the manifest declares, and only the system can send it with that protection; a third-party app can still send the bare action.	onReceive compares intent.action against Intent.ACTION_BOOT_COMPLETED and returns on anything else, so a forged broadcast reaches nothing. Beyond that check the body is empty: acting on LifecycleConvergence's plan is owed by a later slice, so today even a broadcast that passes the check reaches no facade verb and cannot act on a session. When the reconnect lands, this row is where the widened reach has to be argued.
+.push.SwarmMessagingService	false	FirebaseMessagingService is instantiated by Android through the MESSAGING_EVENT filter, which is an in-process binding rather than a cross-app one, so nothing is lost by keeping it unexported. It DOES reach handlePushWake, which is the phone's push path, and a wake handler reachable from outside is a way to drive that path from another process. Android 12+ requires the attribute to be explicit, so omitting it is a build failure on some AGP versions and an exported service on others.	None needed, and that is the point of exported=false: no third-party app can bind to or start this service, so there is no attacker-supplied intent for it to validate. The sealed wake payload it does receive is authenticated by the content-tier AEAD in the Go core, not by anything Kotlin checks.

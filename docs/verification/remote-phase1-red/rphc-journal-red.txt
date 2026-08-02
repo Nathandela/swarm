@@ -1,0 +1,4 @@
+internal/phonecore/journal_test.go:56:20: undefined: OpenJournalEnvelope
+internal/phonecore/journal_test.go:97:18: undefined: OpenJournalEnvelope
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL

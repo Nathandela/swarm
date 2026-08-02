@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/idempotency"
+	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -36,6 +38,27 @@ const (
 // killSpawnedShim's wait for an aborting shim. It is a var (not a const) so a test
 // can shorten it to exercise the termination-timeout path quickly.
 var deleteWait = 10 * time.Second
+
+// Idempotency-store retention (C4 / R-IDP.4 / A5 review R6). Without these the log
+// grows unbounded: every remote kill/delete/take_control/launch appends a permanent
+// fsync'd record replayed IN FULL on every restart. A device-signed command's
+// ExpiresAt is capped server-side at now+1h (F5), so no accepted command can be
+// valid past ~1h. The store GCs on UpdatedAt (not ExpiresAt), so a 24h TTL — far
+// larger than the 1h validity cap — can NEVER drop a record whose command is still
+// replayable: by the time a record ages out, any command it guards is long expired,
+// closing the R6 hole by construction. MaxEntries is a backstop against pathological
+// growth (the newest are kept); the interval bounds steady-state disk use.
+const (
+	idempotencyTTL             = 24 * time.Hour
+	idempotencyMaxEntries      = 100_000
+	idempotencyCompactInterval = time.Hour
+)
+
+// Registry is the read view of the session roster (frozen API).
+type Registry interface {
+	List() []persist.Meta
+	Get(id string) (persist.Meta, bool)
+}
 
 // Config configures a daemon instance.
 type Config struct {
@@ -114,6 +137,11 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
+	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
+	// session — the replay reuses the reserved session and spawns nothing. Local
+	// launches leave it "" (no idempotency reservation).
+	OperationID string
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a
@@ -122,6 +150,12 @@ type LaunchSpec struct {
 type session struct {
 	meta persist.Meta
 	stop chan struct{}
+	// persisted is false for a launch reservation until its first saveMetaLocked
+	// commits, and true for any session known to disk (adopted via putMem). It lets
+	// the journal choke point tell a fresh launch (no prior on disk) apart from a
+	// running->running status tick, so exactly one `launched` record is written even
+	// though the reservation already occupies the registry slot before that write.
+	persisted bool
 }
 
 // Daemon is the running lifecycle authority. Exactly one holds the flock + bound
@@ -129,6 +163,8 @@ type session struct {
 type Daemon struct {
 	cfg      Config
 	store    *persist.Store
+	journal  *journal.Journal   // daemon-wide durable event log (R-JRN)
+	idem     *idempotency.Store // two-phase launch idempotency (R-IDP)
 	lockFile *os.File
 	listener net.Listener
 
@@ -171,9 +207,29 @@ func Open(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 
+	// The daemon-wide durable journal (R-JRN) and the two-phase idempotency store
+	// (R-IDP) both live under the state dir and must be open BEFORE reconcile, whose
+	// restart transitions journal through the saveMeta choke point.
+	jrnl, err := journal.Open(filepath.Join(cfg.StateDir, "journal"))
+	if err != nil {
+		listener.Close()
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
+	idem, err := idempotency.OpenWithOptions(filepath.Join(cfg.StateDir, "idempotency"),
+		idempotency.Options{TTL: idempotencyTTL, MaxEntries: idempotencyMaxEntries})
+	if err != nil {
+		_ = jrnl.Close()
+		listener.Close()
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
+
 	d := &Daemon{
 		cfg:      cfg,
 		store:    store,
+		journal:  jrnl,
+		idem:     idem,
 		lockFile: lockFile,
 		listener: listener,
 		sessions: make(map[string]*session),
@@ -187,15 +243,53 @@ func Open(cfg Config) (*Daemon, error) {
 	// live sessions (F4). Release everything acquired above before returning.
 	if err := d.reconcile(); err != nil {
 		d.listener.Close()
+		_ = d.journal.Close()
 		removePIDFile(cfg.StateDir)
 		_ = releaseLock(lockFile)
 		return nil, err
 	}
 
+	// Resolve launch idempotency records left in flight by a mid-launch crash whose
+	// reserved session did not survive (W1 missing / W3 reconcile-LOST), so the
+	// operation_id is re-drivable rather than a permanent poison/corpse (fix-pack 4a).
+	// Runs after reconcile so d.sessions already reflects the reconnected world.
+	d.resolveStaleLaunches()
+
+	// Bound the idempotency log (C4): compact once at startup — AFTER
+	// resolveStaleLaunches has seen the full replayed set — so the NEXT restart's
+	// replay is bounded, then keep it bounded with a lifecycle-tied ticker. Both drop
+	// only TTL-expired / over-cap records; a within-validity command's replay guard is
+	// never GC'd (R6, see idempotencyTTL). The initial Compact is best-effort: a
+	// failure must not block serving, so it is logged, not fatal.
+	if err := d.idem.Compact(); err != nil {
+		d.logf("idempotency compact (startup): %v", err)
+	}
+	d.wg.Add(1)
+	go d.compactLoop()
+
 	d.wg.Add(1)
 	go d.acceptLoop()
 
 	return d, nil
+}
+
+// compactLoop periodically compacts the idempotency store so its durable log stays
+// bounded over the daemon's lifetime (C4). It is registered on d.wg and returns on
+// d.stopCh, so Close drains it — no goroutine leak. Mirrors pollMonitor's shape.
+func (d *Daemon) compactLoop() {
+	defer d.wg.Done()
+	t := time.NewTicker(idempotencyCompactInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.stopCh:
+			return
+		case <-t.C:
+			if err := d.idem.Compact(); err != nil {
+				d.logf("idempotency compact: %v", err)
+			}
+		}
+	}
 }
 
 // List returns a snapshot of every session's meta.
@@ -364,6 +458,9 @@ func (d *Daemon) Close() error {
 
 	d.listener.Close() // unlinks the socket (clean shutdown)
 	d.wg.Wait()        // accept loop + supervisors drain on stopCh
+	_ = d.journal.Close()
+	// The idempotency store fsyncs every write, so dropping its handle loses nothing;
+	// it exposes no Close (internal/idempotency), so the fd is released on GC.
 	removePIDFile(d.cfg.StateDir)
 	return releaseLock(d.lockFile)
 }
@@ -388,6 +485,10 @@ func (d *Daemon) abandon() {
 	}
 	d.listener.Close()
 	d.lockFile.Close() // release the flock as the OS would on process death
+	// Every journal / idempotency write was fsync'd before its ack, so dropping these
+	// handles (as a kill -9 would) loses nothing already made durable. The idempotency
+	// store exposes no Close (internal/idempotency), so only the journal handle closes.
+	_ = d.journal.Close()
 }
 
 // saveMeta is the SINGLE meta-write choke point (G6): it stamps the meta to the
@@ -429,6 +530,25 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
+	}
+	// Derive the journal record from the PREVIOUS state, read BEFORE putMem overwrites
+	// it. A launch reservation is prevExists=false (persisted still false) so a fresh
+	// launch journals `launched`, not a same-group tick.
+	d.mu.Lock()
+	prevSess, inMap := d.sessions[m.ID]
+	prevExists := inMap && prevSess.persisted
+	var prev persist.Meta
+	if prevExists {
+		prev = prevSess.meta
+	}
+	d.mu.Unlock()
+
+	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
+	// journal record without meta (tolerable) but never meta without journal (A7).
+	if rec, ok := journalRecordFor(prev, prevExists, m); ok {
+		if _, jerr := d.journal.Append(rec); jerr != nil {
+			return false, jerr
+		}
 	}
 	if err := d.store.Save(m); err != nil {
 		return false, err

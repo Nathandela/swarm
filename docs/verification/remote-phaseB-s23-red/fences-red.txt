@@ -1,0 +1,236 @@
+PB-DS-7 / PB-DS-8 -- the fences were allowlists of SPELLINGS, not of behaviour.
+
+THE FINDING (re-audit 2026-08-01, reached independently by two reviewers). The exact round-1
+defects were closed and the CLASS was not:
+
+  metric fence (s23_kit_test.go:905) required an UPPERCASE name, a lowercase `f` suffix and
+  end-of-line immediately after it, so each of these carried a dp literal into the kit with
+  no `origin:` annotation and no complaint:
+      private val dotDp = 7f              (camelCase name)
+      const val PROBE_DP = 7F             (capital suffix)
+      const val X = 7f // trailing comment (anchored \s*$ never matched)
+      @JvmField val PROBE2_DP = 7f        (annotation prefix)
+
+  animator fence (s23_motion_test.go:60) listed six identifiers, so these constructed an
+  animation that never passes Motion.duration() and walked straight through:
+      AnimatorInflater.loadAnimator(ctx, id).start()
+      SpringAnimation(view, DynamicAnimation.ALPHA).start()
+
+  PB-DS-8's text is that NO animator is constructed outside the kit. Six strings is not that.
+
+PROOF THE WIDENING WORKS. Each mutation inserted into ui/kit/Badge.kt, run, reverted:
+
+  private val dotDp = 7f                     FAIL (fence caught it)
+  const val PROBE_DP = 7F // trailing comment FAIL (fence caught it)
+  @JvmField val PROBE2_DP = 7f               FAIL (fence caught it)
+  AnimatorInflater...loadAnimator(...).start() FAIL (fence caught it)
+
+All four PASSED before the widening -- that is what made them findings. Badge.kt restored
+after each; `git diff` empty.
+
+WHAT IS STILL FAIL-OPEN, STATED RATHER THAN CLAIMED CLOSED. Both fences remain DENYLISTS,
+and a denylist's failure mode is always "a form nobody listed". A metric written as an Int
+(`val dot = 7`), assembled (`7f * 1f`), or read from a companion is still invisible; an
+animation driven through an API not in the list still passes. The honest structural answer
+is an allowlist of PERMITTED constructs, which is a larger change than this fix and would
+have to be designed rather than patched. Recorded so the next reader does not mistake a
+wider denylist for a closed class.
+
+
+===========================================================================================
+PART 2 -- the allowlist the section above deferred.  Agent: fences.  2026-08-01.
+===========================================================================================
+
+WHOSE RECORDS ARE WHOSE, since this file now has two authors. Everything ABOVE this banner
+is the team lead's, recorded behind commits 60ab20c and 5ed6599. Everything BELOW it is the
+`fences` agent's, behind 05c813c. The two were written in parallel by accident -- the lead's
+liveness check for this agent misfired and the items were done twice -- so Part 2 builds on
+Part 1 and reverts none of it. Where Part 2 corrects Part 1 it says so in place.
+
+Part 1 closed the INSTANCES and named the class it was leaving open. This is that class,
+closed. Three findings, three RED runs, plus one correction to a claim in Part 1's work.
+
+Findings 1 and 2 are the class defects Part 1 recorded. Because Part 1 closed their
+instances, a plain run of the new controls against the tree is GREEN -- and a green run
+proves nothing about a fence. So RED 1 and 2 are MUTATION PROOFS: each fence is reverted to
+the pattern Part 1 committed, and the new controls are run against it. What they print is
+what the wider denylist still lets through.
+
+Finding 3 is an open defect in the tree. Its RED is a plain run, no mutation.
+
+===========================================================================
+RED 1 -- the metric fence is an allowlist of spellings (s23_kit_test.go)
+===========================================================================
+
+MUTATION: s23MetricConst reverted to Part 1's pattern --
+
+    ^\s*(?:@JvmField\s+)?(?:(?:private|internal|public|protected)\s+)?(?:const\s+)?val\s+
+    ([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*Float\s*)?=\s*(-?[0-9.]+)[fF]\s*(?://.*)?$
+
+The control no longer asks about four hand-picked forms. It CROSSES the axes -- annotation x
+visibility x const x val/var x name shape x type annotation x literal form x trailing
+punctuation -- generating 53760 spellings, and ENUMERATES every one the scan fails to refuse.
+
+COMMAND: go test ./android/gate/ -count=1 -run TestPBDS7_TheMetricScanCanActuallyFail
+
+--- FAIL: TestPBDS7_TheMetricScanCanActuallyFail (0.13s)
+    s23_kit_test.go:1869: PB-DS-7: the metric scan does not refuse 38400 of the generated spellings. A number written any of these ways carries no origin, is checked against nothing, and fails no assertion in this gate however wrong its value is -- which is the defect this fence has now shipped twice, each time as "a spelling nobody listed". First 12:
+        	    val DOT_DP = 7f,
+        	    val DOT_DP = 7f;
+        	    val DOT_DP = 7F,
+        	    val DOT_DP = 7F;
+        	    val DOT_DP = 7.0f,
+        	    val DOT_DP = 7.0f;
+        	    val DOT_DP = 7.0
+        	    val DOT_DP = 7.0,
+        	    val DOT_DP = 7.0;
+        	    val DOT_DP = 7.0
+        	    val DOT_DP = 7.0 // the design's dot
+        	    val DOT_DP = 7.0 /* the design's dot */
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.137s
+
+38400 of 53760. Part 1's pattern is blind to `var`, to a trailing comma or semicolon, to a
+literal with no `f` suffix, to a type annotation that is not `Float`, to a second annotation
+(`@JvmStatic`, `@Suppress`), and to a trailing BLOCK comment -- Part 1 handled `//` inside
+the pattern and thereby handled exactly one comment syntax.
+
+Every one of those is a dp value entering the kit with no `origin:` line, joined to nothing.
+
+===========================================================================
+RED 2 -- the animator fence is an allowlist of API names (s23_motion_test.go)
+===========================================================================
+
+MUTATION: animatorVocabulary reverted to Part 1's fourteen identifiers, matched as whole
+identifiers; animatorAlwaysForbidden emptied.
+
+COMMAND: go test ./android/gate/ -count=1 -run TestPBDS8
+
+--- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught (0.02s)
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/TimeAnimator (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "TimeAnimator": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/createCircularReveal (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "createCircularReveal": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/stateListAnimator (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "stateListAnimator": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/AnimatedVectorDrawable (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "AnimatedVectorDrawable": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/AnimationDrawable (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "AnimationDrawable": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+    --- FAIL: TestPBDS8_EveryForbiddenConstructIsCaught/Choreographer (0.00s)
+        s23_motion_test.go:389: PB-DS-8: pattern "Choreographer": got 0 finding(s) in a file planted with exactly one violation, want 1. The construct this pattern names is no longer detected:
+            	[]
+--- FAIL: TestPBDS8_TheFenceCatchesConstructsNobodyListed (0.00s)
+    s23_motion_test.go:415: PB-DS-8: the fence passes "val a = FooAnimator.ofFloat(view, \"alpha\", 0f, 1f)". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+    s23_motion_test.go:415: PB-DS-8: the fence passes "BarAnimation(view).start()". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+    s23_motion_test.go:415: PB-DS-8: the fence passes "val t = QuuxTransition(root)". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+    s23_motion_test.go:415: PB-DS-8: the fence passes "import android.gizmo.HolographicAnimator". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+    s23_motion_test.go:415: PB-DS-8: the fence passes "view.applyAnimated(spec)". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+    s23_motion_test.go:415: PB-DS-8: the fence passes "val d = context.getSystemService(GIZMO_ANIMATION_SERVICE)". Nothing in this file names that identifier, which is the whole point of the probe -- an unlisted animation API must fail on its SPELLING, not on someone having met it before.
+--- FAIL: TestPBDS8_ThePermittedConstructsAreNotFlagged (0.00s)
+    s23_motion_test.go:455: PB-DS-8: the fence passes "val fade = colorTransition(view, from, to)". Only `Motion.` routes through the reduced-motion check; a bare or differently-receivered call of the same name does not, and the two differ by one word in review.
+    s23_motion_test.go:455: PB-DS-8: the fence passes "val fade = MyMotion.colorTransition(view, from, to)". Only `Motion.` routes through the reduced-motion check; a bare or differently-receivered call of the same name does not, and the two differ by one word in review.
+    s23_motion_test.go:455: PB-DS-8: the fence passes "val fade = motion.colorTransition(view, from, to)". Only `Motion.` routes through the reduced-motion check; a bare or differently-receivered call of the same name does not, and the two differ by one word in review.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.875s
+
+Read the three blocks together.
+
+The FIRST is six platform APIs that construct or drive an animation and were STILL missing
+after Part 1's widening -- TimeAnimator, ViewAnimationUtils.createCircularReveal,
+setStateListAnimator, AnimatedVectorDrawable, AnimationDrawable, Choreographer. No reviewer
+named them. That is the point: the widening closed the two APIs a reviewer happened to name,
+and six more were sitting behind it.
+
+The SECOND is the class itself. Every identifier there is INVENTED -- it appears in no
+platform, no review and no list -- and a denylist scores zero on it by construction. A fence
+that can only refuse what someone has already met is an inventory of past mistakes.
+
+The THIRD is the exemption failing OPEN under a name denylist: a local copy of a Motion
+primitive (`colorTransition(...)` bare, or on a `MyMotion` receiver) bypasses the
+reduced-motion check and is invisible, because the denylist never named that either.
+
+===========================================================================
+RED 3 -- one token, two renderings (open defect in the tree, no mutation)
+===========================================================================
+
+TabBar.kt:58 spends KitMetrics.HAIRLINE_DP through Kit.dp (Float, exact); Surfaces.kt:214
+and :240 spend the same constant through Kit.dpPx (Int, the platform's own rounding). One
+design value -- the 1dp `--p-hair` rule -- rendered two ways on one screen.
+
+COMMAND: go test ./android/gate/ -count=1 -run TestPBDS6_EveryKitMetricIsRenderedOneWay
+
+--- FAIL: TestPBDS6_EveryKitMetricIsRenderedOneWay (0.00s)
+    s23_kit_test.go:1446: PB-DS-6: KitMetrics.HAIRLINE_DP is spent through Kit.dp (exact: TabBar.kt:58) AND through Kit.dpPx (rounded: Surfaces.kt:214, Surfaces.kt:240). One design value, two renderings -- at density 2.625 a 1dp length is 2.625px one way and 3px the other, so the same rule paints differently in two places on one screen. Either spend it one way, or add a row to s23DualQuantised saying which two quantities it describes.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.425s
+
+At 420dpi (density 2.625) that is 2.625px against 3px, on the ONE element Substrate leans on
+for all of its depth: elevation is a ladder step lighter and never a shadow, so a surface's
+separation from the ground is its 1dp hairline and nothing else. The card and the chip draw
+it at 3px; the tab bar drew it at 2.625.
+
+The fence is not "never use Kit.dp". Three constants are legitimately spent both ways --
+DOT_DP, GLOW_RADIUS_DP and PRESENCE_DOT_DP each describe a whole-pixel LAYOUT box and a drawn
+float quantity that happen to share a number -- and those are on s23DualQuantised with the
+reason written out. HAIRLINE_DP describes one quantity, so it has no row and the fence fires.
+
+===========================================================================
+RED 4 -- the hold now has a mechanical consequence (mutation proof)
+===========================================================================
+
+Part 1's sibling commit (60ab20c, same author) made the CONTESTED hold real for the two
+rebound Groups:
+Substrate's original binding is legal, so a revert stays green. What it did not do is join
+that allowance to the ADR marker that justifies it. s23ContestedBindings WIDENS a fence, and
+if the CONTESTED block is ever edited away -- by a ruling, or by a tidy-up -- the widening
+silently becomes permanent, and the two Groups whose colour IS the disputed decision become
+the two nothing checks.
+
+MUTATION: the CONTESTED marker in ADR-007 B134 decision 1 replaced with SETTLED.
+
+COMMAND: go test ./android/gate/ -count=1 -run TestPBDS7_TheContestedHoldIsStillOpen
+
+--- FAIL: TestPBDS7_TheContestedHoldIsStillOpen (0.01s)
+    s23_kit_test.go:1629: PB-DS-7: ADR-007 B134 decision 1 no longer carries a CONTESTED marker, so the question is closed -- and s23ContestedBindings is still open, which makes it a permanent widening of the one fence that guards the colour the argument was about.
+        	If the designer RULED FOR the rebinding: delete s23ContestedBindings and this hold machinery, and the fence goes back to strict.
+        	If the designer RULED AGAINST it: change android/group-tokens.tsv and Kit.kt to the ruling, then delete s23ContestedBindings -- the allowance exists to keep a revert cheap, not to make two answers permanently equal.
+        	If the marker was removed by a tidy-up: put it back. A contested decision that stops being marked contested is how it becomes a settled one without anyone deciding.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.786s
+
+ADR restored, `git diff docs/adr/` empty, package green again.
+
+The allowance is also GATED on the same read: with the marker gone the fence is strict again,
+so a ruling in either direction leaves exactly one legal answer rather than two.
+
+VISIBILITY -- THE ONE PLACE PART 2 CORRECTS PART 1, measured rather than claimed. Part 1
+described the hold as "build-visible"; it was not. It announced itself with `t.Logf`, which
+`go test` shows only under `-v` or on failure, so the notice was invisible in the run anyone
+actually performs. The claim was overstated rather than wrong in intent, and the correction
+is below.
+
+The hold now prints a five-line notice to stderr on GREEN, because the passing state is the
+one that makes a contested decision look settled.
+`go test` DISCARDS a passing package's output in non-verbose mode, so a bare
+`go test ./android/gate/...` prints `ok` and the notice goes nowhere; it is visible under
+`-v` (how every file in docs/verification is captured) and on any failure in the package.
+That is the ceiling -- Go has no pending state. The half a reader cannot miss is the build
+failure above.
+
+Under -v, on a passing run:
+
+    === RUN   TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping
+
+        HOLD: ADR-007 B134 decision 1 is marked CONTESTED and awaits the designer.
+        The status-dot rebinding (green from Completed to ReadyForReview) is ENFORCED by
+        this gate while unsettled. For completed and ready_for_review the checked-in binding and
+        Substrate's original are BOTH legal here, so a revert stays green. Green below is
+        not agreement -- see docs/adr/ADR-007-remote-access.md.
+
+    --- PASS: TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping (0.01s)

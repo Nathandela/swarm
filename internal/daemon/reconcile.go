@@ -196,6 +196,7 @@ func (d *Daemon) putMem(m persist.Meta) *session {
 		d.sessions[m.ID] = s
 	}
 	s.meta = m
+	s.persisted = true // now known to disk; a launch reservation flips from its pre-save false
 	return s
 }
 

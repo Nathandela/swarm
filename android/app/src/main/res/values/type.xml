@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      PB-DS-2 and PB-DS-3 (S22b): the typography scale.
+
+      18 product text styles across 12 sizes, 4 weights and 5 tracking values, plus the one
+      docs/design/substrate-components.md §7 adds - `Display.SAS`, the 34 sp the pairing screen's
+      verification emoji are set in. Before this file the app expressed zero of them: 1582 lines
+      of surface code held one Typeface.MONOSPACE, one Typeface.BOLD, and no setTextSize or
+      setLetterSpacing anywhere.
+
+      EACH STYLE DECLARES THE DESIGN FACT IT DESCENDS FROM, in the annotation above it. That
+      comment is machine-read - android/gate/s22b_type_test.go and the Robolectric suite both
+      parse it - and it is the only thing in this file that is a decision. Every NUMBER below is
+      read out of that fact at test time and compared, in both directions: a style whose citation
+      names nothing fails, and a design fact with no style here fails too. So a size cannot be
+      edited here without the design disagreeing, and re-pointing a style at a different rule is a
+      visible claim.
+
+      THERE ARE TWO CLASSES OF CITATION, AND THE DIFFERENCE IS WHERE THE AUTHORITY LIVES.
+      `origin:` names a CSS rule in the shared block of
+      docs/research/remote-control-design-directions.html - eighteen of the nineteen styles are
+      that, and they are transcriptions of a rule the artifact draws. `derived:` names a row of
+      docs/design/substrate-components.md, which is where the design decided something the
+      artifact never drew. `Display.SAS` is the only one: the artifact has no `.sas` rule at all,
+      because it renders four candidate skins and not the pairing flow, so citing `origin: .sas`
+      would claim a join to a rule that does not exist. The kit already made this distinction for
+      the same reason - EmptyState.kt cites `derived:` because `.empty` is the mock's class - and
+      the gate counts the two classes separately so neither can absorb a style belonging to the
+      other.
+
+      NO STYLE CARRIES A COLOUR, and that is deliberate. PB-DS-2's sentence lists colour among the
+      attributes; the same style renders in several colours - Label.Button is the hero ink on the
+      approve variant, the error red on the deny variant and the primary ink on the tertiary one,
+      from ONE CSS rule - so a TextAppearance that carried one would be wrong at two of its three
+      call sites. Colour is applied by the component kit (PB-DS-6, S23), and the gate asserts the
+      absence so it stays a decision rather than becoming a habit.
+
+      SIZES ARE sp, NOT dp. The design is a fixed 386x812 frame and dp would reproduce it exactly,
+      which is the argument for dp and it is the wrong one: dp text does not respond to the user's
+      font-size setting at all. PB-DS-12 makes surviving a 1.3x scale a floor, and a scale that
+      shipped in dp would have decided against it here, silently, for every screen.
+
+      LINE HEIGHT IS AN ABSOLUTE DIMENSION, because Android has no unitless multiplier on a
+      TextAppearance. Each value below is the design's multiplier times its own size, and the gate
+      recomputes the product rather than trusting it. It appears only on the seven styles whose
+      CSS rule declares a line-height; the other twelve inherit the platform's, which is what the
+      design does. `.prow .ln b` is the interesting omission: it inherits 1.4 from `.prow .ln` in
+      CSS, and on Android it is an inline span inside somebody else's paragraph, where line height
+      is the paragraph's property and not the span's. There is nothing for it to carry.
+
+      FAMILIES ARE THE PLATFORM'S (ADR-007 B134 decision 2). The design names SF Pro and SF Mono;
+      neither is licensable off Apple, so every style in this app has always rendered a substitute
+      chosen by nobody. The decision is `sans-serif` and `monospace` with zero bundled assets.
+      Weight 650 is reachable because android:textFontWeight resolves against the platform's
+      variable Roboto at API 33, which minSdk guarantees.
+
+      THE RECORDED RESIDUAL IS NOT WHAT THE ADR SAYS IT IS. B134 records that `monospace` may show
+      TOFU for U+2500-257F. Measured (MonoBoxDrawingTest), the box-drawing glyphs all resolve -
+      through font FALLBACK, at 0.71em against the mono family's own 0.60em. The terminal peek's
+      frame therefore renders and is 18 percent wider per character than the text it frames, so it
+      does not align. That is a worse failure than tofu, because tofu is visible to anyone who
+      looks at the screen once. Bundling JetBrains Mono remains the upgrade path.
+
+      Parents are stated explicitly on every style. `A.B.C` inherits from `A.B` implicitly in
+      aapt, and the intermediate names here (TextAppearance.Swarm.Display, .Title, .Label, .Body,
+      .Mono) are groupings rather than styles - none of them exists, and an implicit parent that
+      does not exist is a build error.
+    -->
+
+    <!--
+      derived: docs/design/substrate-components.md §7 Display.SAS
+
+      The SAS display: the four verification emoji a person compares against the ones their Mac
+      shows. §7 states 34 sp / 400 / sans and nothing else, so this style states nothing else
+      either - tracking is CSS's `normal`, which is 0, and there is no leading, because a row that
+      does not give one is not a row somebody can read a leading out of.
+
+      IT CARRIES NO INK, and for a stronger reason than the rest of this file's. Derivation row 7
+      records it as an exception: emoji glyphs are drawn by the platform's colour emoji font, which
+      ignores textColor entirely. There is no token that could apply.
+    -->
+    <style name="TextAppearance.Swarm.Display.SAS" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">34sp</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .pnav .big -->
+    <style name="TextAppearance.Swarm.Display.NavTitle" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">27sp</item>
+        <item name="android:textFontWeight">650</item>
+        <item name="android:letterSpacing">-0.025</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .sheet2 h4 -->
+    <style name="TextAppearance.Swarm.Title.Sheet" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">15.5sp</item>
+        <item name="android:textFontWeight">650</item>
+        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .prow .pj -->
+    <style name="TextAppearance.Swarm.Title.Row" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .acts2 button -->
+    <style name="TextAppearance.Swarm.Label.Button" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">13.5sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:lineHeight">13.5sp</item>
+    </style>
+
+    <!-- origin: .ptime -->
+    <style name="TextAppearance.Swarm.Label.StatusBar" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .m2 -->
+    <style name="TextAppearance.Swarm.Body.Message" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">12.5sp</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:lineHeight">18.125sp</item>
+    </style>
+
+    <!-- origin: .prow .ln -->
+    <style name="TextAppearance.Swarm.Body.Secondary" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:lineHeight">16.8sp</item>
+    </style>
+
+    <!-- origin: .prow .ln b -->
+    <style name="TextAppearance.Swarm.Mono.InlineStrong" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .sheet2 .cmd -->
+    <style name="TextAppearance.Swarm.Mono.Code" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:lineHeight">17.25sp</item>
+    </style>
+
+    <!-- origin: .chip -->
+    <style name="TextAppearance.Swarm.Label.Chip" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">11sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:lineHeight">11sp</item>
+    </style>
+
+    <!-- origin: .tcard .b -->
+    <style name="TextAppearance.Swarm.Mono.CodeSmall" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">11sp</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:lineHeight">17.05sp</item>
+    </style>
+
+    <!-- origin: .plabel -->
+    <style name="TextAppearance.Swarm.Label.Section" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">10.5sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0.09</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .tcard .h -->
+    <style name="TextAppearance.Swarm.Label.CardHead" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">10.5sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .sheet2 .ctx -->
+    <style name="TextAppearance.Swarm.Mono.Meta" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">10.5sp</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .pnav .live -->
+    <style name="TextAppearance.Swarm.Label.Live" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">10sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0.07</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .prow .ag -->
+    <style name="TextAppearance.Swarm.Mono.Agent" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">10sp</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- origin: .ptabs div -->
+    <style name="TextAppearance.Swarm.Label.Tab" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">9.5sp</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <!-- origin: .sheet2 .bind -->
+    <style name="TextAppearance.Swarm.Mono.Fine" parent="TextAppearance.AppCompat">
+        <item name="android:textSize">9.5sp</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:lineHeight">15.2sp</item>
+    </style>
+</resources>

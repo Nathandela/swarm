@@ -1,0 +1,7 @@
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/outbound_seq_restart_test.go:45:15: undefined: OpenSeqSource
+internal/remotegw/outbound_seq_restart_test.go:56:4: unknown field Seq in struct literal of type RelayConfig
+internal/remotegw/outbound_seq_restart_test.go:114:15: undefined: OpenSeqSource
+internal/remotegw/outbound_seq_restart_test.go:124:4: unknown field ReplySeq in struct literal of type CommandBridgeConfig
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL

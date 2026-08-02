@@ -1,0 +1,51 @@
+======================================================================
+Remote-control Phase 1 — DAEMON DHI-1 (assembled daemon serves remote journal ops) — RED RUN
+date: Mon Jul 20 12:35:50 CEST 2026
+go: go1.26.1  host: darwin/arm64
+finding: DHI-1 (docs/verification/remote-phase1-daemon-review.md)
+packages: internal/skeleton (new test remote_journal_test.go), internal/protocol (unchanged)
+new tests: TestSkeleton_RemoteJournalReadReturnsRealJournalData
+           TestSkeleton_RemoteJournalSubscribeStreamsLiveEvent
+path under test: coreAPI (real *daemon.Daemon) -> protocol.ServeRemote (remote-tier)
+                 -> remote client journal_read / journal_subscribe / journal_event
+TDD: GG-5 failing-first. NO production code/stubs written. No existing test modified.
+RED kind: BEHAVIORAL — the assembled DaemonAPI (coreAPI) does not satisfy
+          protocol.JournalBackend (coreAPI forwards neither JournalReadFrom nor
+          JournalSubscribe; *daemon.Daemon has no JournalSubscribe), so the server
+          answers "journal not supported by this daemon" (server.go:1058).
+ISOLATION: the wedged-eviction journal-subscribe test in internal/protocol is
+           CPU-scheduling sensitive under parallel load; the new tests are run in
+           isolation (-run) below for a clean RED signal, then the full packages.
+======================================================================
+
+######################################################################
+### ISOLATED RED (the new tests only): go test ./internal/skeleton/ -run TestSkeleton_RemoteJournal -v
+######################################################################
+=== RUN   TestSkeleton_RemoteJournalReadReturnsRealJournalData
+    remote_journal_test.go:167: journal_read over the assembled remote path was REFUSED: "journal not supported by this daemon" / code=""
+        DHI-1: coreAPI (skeleton/api.go) does not forward JournalReadFrom, so the assembled DaemonAPI does not satisfy protocol.JournalBackend and the server answers "journal not supported by this daemon". Fix: add coreAPI.JournalReadFrom + coreAPI.JournalSubscribe forwarders.
+--- FAIL: TestSkeleton_RemoteJournalReadReturnsRealJournalData (0.81s)
+=== RUN   TestSkeleton_RemoteJournalSubscribeStreamsLiveEvent
+    remote_journal_test.go:214: journal_subscribe over the assembled remote path was REFUSED: "journal not supported by this daemon" / code=""
+        DHI-1: coreAPI forwards no JournalSubscribe and *daemon.Daemon has no JournalSubscribe (no internal/journal fan-out), so the assembled DaemonAPI does not satisfy protocol.JournalBackend. Fix: add journal.Subscribe fan-out + daemon.JournalSubscribe + coreAPI.JournalSubscribe forwarder.
+--- FAIL: TestSkeleton_RemoteJournalSubscribeStreamsLiveEvent (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.028s
+FAIL
+
+######################################################################
+### FULL PACKAGES: go test ./internal/skeleton/... ./internal/protocol/...
+######################################################################
+--- FAIL: TestSkeleton_RemoteJournalReadReturnsRealJournalData (0.67s)
+    remote_journal_test.go:167: journal_read over the assembled remote path was REFUSED: "journal not supported by this daemon" / code=""
+        DHI-1: coreAPI (skeleton/api.go) does not forward JournalReadFrom, so the assembled DaemonAPI does not satisfy protocol.JournalBackend and the server answers "journal not supported by this daemon". Fix: add coreAPI.JournalReadFrom + coreAPI.JournalSubscribe forwarders.
+--- FAIL: TestSkeleton_RemoteJournalSubscribeStreamsLiveEvent (0.00s)
+    remote_journal_test.go:214: journal_subscribe over the assembled remote path was REFUSED: "journal not supported by this daemon" / code=""
+        DHI-1: coreAPI forwards no JournalSubscribe and *daemon.Daemon has no JournalSubscribe (no internal/journal fan-out), so the assembled DaemonAPI does not satisfy protocol.JournalBackend. Fix: add journal.Subscribe fan-out + daemon.JournalSubscribe + coreAPI.JournalSubscribe forwarder.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.103s
+--- FAIL: TestProtocol_JournalSubscribeOrderedAndEvictsWedged (15.00s)
+    remote_journal_test.go:262: healthy subscriber received only 214 ordered journal_event frames; want >= 320 (a continuous stream)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	18.073s
+FAIL

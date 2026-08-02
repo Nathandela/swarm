@@ -166,6 +166,48 @@ Goal: the whole system proven against everything above.
 - E14.7 GG-3 EARS traceability matrix committed.
 - E14.8 End-to-end L1 composite: signal → engine → fan-out → TUI render ≤1 s under load (contracts row 14).
 
+### Epic 15 — Phase B: remote access (phone -> untrusted relay -> gateway -> daemon)
+
+Requirements live in `docs/specifications/remote-phaseB-requirements.md` (143 active, 1 withdrawn),
+owned one-to-one by `remote-phaseB-manifest.tsv`. **These criteria were written while the epic was
+still open and deliberately include ones the tree fails today** — an exit criterion authored to match
+what was already built grades its own homework.
+
+- E15.1 **Every one of the 143 active requirements has an evidence file that NAMES IT.**
+  `scripts/phaseb-traceability.py` reports *asserted shipped* and *measured evidenced* separately
+  because the shipped list is hand-maintained and nothing verifies it; the two numbers must be equal
+  at close. **STRENGTHENED 2026-07-26 — as originally written this criterion had the exact defect
+  this epic keeps finding.** "Evidenced" measured only that the slice's file *exists*, so a
+  requirement could count as evidenced by a document that never mentions it; the count reached
+  130/130 while **13 shipped requirements cited evidence naming something else** (PB-APP-2/-4/-5/-6,
+  PB-DOC-5, PB-GW-5, PB-NET-4/-6/-7, PB-STATE-2/-3/-4/-5). The S19 RED author found this and fenced
+  it in `internal/verify/phaseb_evidence_test.go`, with a parse-count control so a formatting change
+  cannot silence the check. **That fence, not the traceability count, is the criterion.** (Currently
+  failing.)
+- E15.2 **GG-4 holds for real**: `go build ./...`, `go vet ./...`, `go test ./...` and
+  `golangci-lint run ./...` all green, plus `-race` on every package that spawns goroutines. The
+  linter lives at `~/go/bin/golangci-lint` and is **not on PATH**, which has already produced two
+  agents disagreeing about whether this gate ran. (Currently failing.)
+- E15.3 **GG-5 is evidenced per slice**: each slice's failing-first run is recorded in its evidence
+  file. A file asserting a RED it does not have is worse than one admitting the test was green on
+  arrival.
+- E15.4 **No known-open security defect.** Every attack recorded in ADR-007 has either a passing
+  fence or an ADR entry accepting it with a stated reason. A defect recorded in an ADR is not
+  thereby resolved. (Currently failing: B25/B26.)
+- E15.5 **GG-3 exclusions are ADR-approved, not asserted.** PB-E2E-5 (physical handset) is deferred;
+  the deferral must be an approved exclusion naming what is untested — real biometrics, camera, FCM
+  delivery, Doze, hardware attestation — never a bare "documented justification".
+- E15.6 **The suite is trustworthy**: zero skips, and no known flake left unresolved or unaccepted in
+  writing. A green that requires re-running trains readers to dismiss reds. (Currently failing:
+  three flakes, one suspected shared cause.)
+- E15.7 **Docs match the code**: manifest ownership check passes, the traceability index is
+  regenerated from the manifest rather than edited, and every ADR claim that names a mechanism has
+  been checked against what that mechanism actually gates. Three ADR entries in this epic asserted
+  security properties the code did not have.
+- E15.8 **The audit committee validates against every requirement**, not every slice, and iterates
+  until it agrees. Committee sign-off is recorded with its objections and their resolutions, including
+  any it did not accept.
+
 ## Orchestration protocol (how epics get built)
 
 1. Epic opens: `bd update <id> --claim`; orchestrator decomposes into right-sized tasks. Shared-package interfaces (`status`, `wire`, snapshot format) are frozen — contract tests green — before any dependent fleet starts in parallel.
