@@ -180,6 +180,44 @@ func TestR3PLeaseConn_ASubmitAfterAPauseIsNotDelayed(t *testing.T) {
 	}
 }
 
+// TestR3PLeaseConn_ASubmitFollowingASubmitIsNotDelayed resolves the rate mismatch the gap
+// would otherwise introduce, and it is a correctness statement before it is a throughput one.
+//
+// THE HEURISTIC IS ABOUT TEXT-THEN-SUBMIT. A submit arriving after another submit carries no
+// text for the CLI to swallow: the worst a CLI can make of a read tick holding only carriage
+// returns is a blank line. There is nothing to separate, so there is nothing to wait for.
+//
+// AND THE RATE WOULD NOT CLOSE. The phone's coalescer releases up to 8 frames/s (one per
+// 125 ms window); a gap applied to EVERY submit would drain them at 6.67/s. A held Enter --
+// ~30 Hz into the coalescer, which is exactly what PB-INPUT-5 exists to survive -- would then
+// arrive faster than this hop forwards, and the lag would grow for as long as the key was
+// held. Bounding that would be a second pacing rule; keying the gap on the last TEXT write
+// removes it instead, and the gap still applies to the submit that actually needs it.
+func TestR3PLeaseConn_ASubmitFollowingASubmitIsNotDelayed(t *testing.T) {
+	lc, arrivals := r3pLeaseConn(t)
+
+	if err := lc.WriteDataIn([]byte("make test")); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+	text := r3pNext(t, arrivals)
+	if err := lc.WriteDataIn([]byte("\r")); err != nil {
+		t.Fatalf("write first submit: %v", err)
+	}
+	first := r3pNext(t, arrivals)
+	if gap := first.at.Sub(text.at); gap+r3pSkew < r3pWantGap {
+		t.Fatalf("premise broken: the submit after the text was spaced by only %v, so this test proves nothing about the one after it", gap)
+	}
+
+	if err := lc.WriteDataIn([]byte("\r")); err != nil {
+		t.Fatalf("write second submit: %v", err)
+	}
+	second := r3pNext(t, arrivals)
+
+	if gap := second.at.Sub(first.at); gap > r3pUnpacedMax {
+		t.Fatalf("a submit following a submit was held %v, want under %v -- the coalescer releases up to 8 frames/s and a gap on every submit drains 6.67/s, so a held Enter would fall further behind for as long as it was held; and a read tick of nothing but carriage returns has no text for the paste heuristic to swallow", gap, r3pUnpacedMax)
+	}
+}
+
 // TestR3PLeaseConn_ARunOfSubmitsIsOneFrameAndIsSpacedOnce pins the shape the phone's
 // coalescer emits for a held Enter: the run arrives as ONE frame, and the gateway treats it
 // as the submit it is -- spaced from the text before it, and passed through byte for byte.

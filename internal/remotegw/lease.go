@@ -50,8 +50,8 @@ type LeaseConn struct {
 	session     string // namespaced session id the lease targets (for OpResize addressing)
 	operationID string // the phone's take_control operation id, so a severance is attributable
 
-	wmu    sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
-	lastIn time.Time  // guarded by wmu: when the last keystroke frame left (submitGap)
+	wmu      sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
+	lastText time.Time  // guarded by wmu: when the last NON-submit keystroke frame left (submitGap)
 
 	mu         sync.Mutex
 	gen        uint64 // captured OpLease generation (0 until granted)
@@ -213,19 +213,29 @@ func (lc *LeaseConn) refusalReason() string {
 // ptyWriter is shared with the emulator's reply pump, so sleeping under that lock stalls the
 // DSR/CPR replies the CLI is blocking on -- a hang, not a latency cost.
 //
+// THE GAP IS MEASURED FROM THE LAST TEXT WRITE, NOT THE LAST WRITE, so a submit that follows
+// another submit goes out at once. Both halves of that matter. A read tick holding nothing but
+// carriage returns has no text for the paste heuristic to swallow, so there is nothing to
+// separate. And gating every submit would drain them at 6.67/s against the coalescer's 8
+// frames/s ceiling: a held Enter (~30 Hz into the coalescer, the case PB-INPUT-5 exists to
+// survive) would arrive faster than this hop forwarded, and the lag would grow for as long as
+// the key was held. Keying on the last TEXT write removes that mismatch rather than bounding
+// it, and costs the submit that actually needs the gap nothing.
+//
 // COST: up to submitGap on a submit that closely follows text (once per prompt, not once per
 // keystroke), and the same bound on whatever shares that inbound batch, since processBatch is
 // serial. §6.0's 150 ms p50 budget is a keystroke-echo budget and is not on this path.
 func (lc *LeaseConn) WriteDataIn(b []byte) error {
 	lc.wmu.Lock()
 	defer lc.wmu.Unlock()
-	if isSubmitOnly(b) && !lc.lastIn.IsZero() {
-		if wait := submitGap - time.Since(lc.lastIn); wait > 0 {
+	if isSubmitOnly(b) {
+		if wait := submitGap - time.Since(lc.lastText); !lc.lastText.IsZero() && wait > 0 {
 			time.Sleep(wait)
 		}
+		return wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
 	}
 	err := wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
-	lc.lastIn = time.Now()
+	lc.lastText = time.Now()
 	return err
 }
 
