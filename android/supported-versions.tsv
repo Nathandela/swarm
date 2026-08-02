@@ -6,11 +6,39 @@
 # degrade PB-KEY-8's central property on old devices. 33 makes PB-KEY-8 clean by construction
 # instead of forcing a fallback matrix nobody exercises.
 #
-# The target is 35: it is the highest platform the toolchain pin provisions, it is Play's
-# current floor for new and updated apps, and every behaviour change the connectivity policy
-# reasons about (mandatory foregroundServiceType, the API 34 dataSync cap) is already in force
-# at 34, so targeting 35 opts into nothing this slice has not already priced. compileSdk is 35
-# for the same reason -- the app cannot opt into behaviour it cannot compile against.
+# The target is 36, raised from 35 on 2026-08-02. Play's own requirements page sets a HARD
+# DATE: from 2026-08-31 a new app cannot be SUBMITTED unless it targets 36, and the closed
+# testing track this beta ships on is not exempt. Bumping ahead of the date rather than at
+# upload time is the whole reason: discovering it at upload means re-running the Kotlin lane
+# under a deadline.
+#
+# WHAT TARGETING 36 OPTS INTO, checked one by one against developer.android.com/about/versions
+# /16/behavior-changes-16 rather than assumed:
+#
+#  - Edge-to-edge is no longer opt-out-able (R.attr#windowOptOutEdgeToEdgeEnforcement is
+#    disabled at 36). This app never set that attribute and has been laid out edge-to-edge
+#    since 35 anyway; PhoneActivity.insetTheSystemBars already pads the root by the real
+#    WindowInsets.Type.systemBars, which is ADR-007 B132's fix. Nothing to do.
+#  - Predictive back is on by default and onBackPressed() is no longer called. The app never
+#    overrode onBackPressed(): PhoneActivity registers an androidx OnBackPressedCallback, which
+#    the framework drives through OnBackInvokedDispatcher on either side of the change.
+#  - Orientation, resizability and aspect-ratio restrictions are ignored at sw600dp. The
+#    manifest declares no screenOrientation, no resizableActivity and no aspect ratio, so
+#    there is nothing for the platform to ignore.
+#  - Foreground-service and JobScheduler quota changes have no subject here: no <service> holds
+#    a foregroundServiceType (ADR-007 B16 disconnects on backgrounding) and the app schedules
+#    no job.
+#  - Nothing at 36 touches KeyMint, KeyGenParameterSpec, StrongBox or attestation. Android 16's
+#    only Keystore-adjacent change is mandatory RKP for devices LAUNCHING with 16, which is a
+#    device provisioning policy and not targetSdk-gated; keys/Provisioning.kt requests no
+#    attestation challenge. This mattered because that path fails closed on first launch.
+#
+# API 36.1 (the QPR2 minor SDK) is deliberately NOT the target: Google states a minor SDK
+# version "cannot introduce targetSdkVersion gated behavior changes", so it would buy nothing
+# and cost a second platform install.
+#
+# compileSdk moves with it, and not only because AGP refuses a targetSdk above compileSdk --
+# the app cannot opt into behaviour it cannot compile against.
 #
 # Note that none of these is gomobile's -androidapi, which is the NDK's floor (21) and a
 # different decision; see SWARM_ANDROID_API in android/toolchain.env.
@@ -18,4 +46,5 @@
 # Columns, tab-separated: api, Android release, role (min | supported | target).
 33	Android 13	min
 34	Android 14	supported
-35	Android 15	target
+35	Android 15	supported
+36	Android 16	target

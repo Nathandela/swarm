@@ -22,9 +22,9 @@ in the repo installs `gomobile`**, and you find that out ten minutes into a buil
 | Needs | Pin | Where it comes from |
 |---|---|---|
 | Go toolchain | `1.25` or newer (`SWARM_GO_VERSION`) | ADR-008 |
-| JDK | 17 (`SWARM_JDK_MAJOR`) | AGP requires it |
-| Android SDK platform | `android-35` (`SWARM_ANDROID_COMPILE_SDK`) | `sdkmanager` |
-| Build tools | `35.0.0` (`SWARM_ANDROID_BUILD_TOOLS`) | `sdkmanager` |
+| JDK | 21 (`SWARM_JDK_MAJOR`) | AGP needs 17+; Robolectric needs 21 for API 36 |
+| Android SDK platform | `android-36` (`SWARM_ANDROID_COMPILE_SDK`) | `sdkmanager` |
+| Build tools | `36.0.0` (`SWARM_ANDROID_BUILD_TOOLS`) | `sdkmanager` |
 | NDK | `27.2.12479018` (`SWARM_ANDROID_NDK`) | `sdkmanager`; `gomobile bind` needs it explicitly |
 | `gomobile` **and** `gobind` | `SWARM_GOMOBILE_VERSION` | **you install these; see below** |
 | A handset | Android 13+ (`SWARM_ANDROID_MIN_SDK` = 33), `arm64-v8a` | |

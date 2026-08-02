@@ -45,10 +45,10 @@ From the roadmap, verbatim:
 
 | Component | Version | Location |
 |---|---|---|
-| JDK | OpenJDK 17.0.20 (Homebrew `openjdk@17`) | `$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home` |
+| JDK | OpenJDK 21.0.12 (Homebrew `openjdk@21`; `openjdk@17` still installed, no longer used) | `$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home` |
 | Android cmdline-tools | 14742923 | `/usr/local/share/android-commandlinetools` |
-| Android platform | android-35 | `$ANDROID_HOME/platforms` |
-| Build tools | 35.0.0 | `$ANDROID_HOME/build-tools` |
+| Android platform | android-36 (android-35 also installed, no longer used) | `$ANDROID_HOME/platforms` |
+| Build tools | 36.0.0 (35.0.0 also installed, no longer used) | `$ANDROID_HOME/build-tools` |
 | NDK | 27.2.12479018 | `$ANDROID_HOME/ndk` |
 | gomobile / gobind | installed 2026-07-24 | `~/go/bin` |
 | Gradle | 9.5.1 wrapper, checked in and pinned by distribution SHA-256 (PB-TOOL-4, closed by S13). 9.6.1 is what the host has; 9.6.0 removed an internal API AGP 8.x needs, and AGP 9 rejects the Kotlin Android plugin PB-TOOL-6 requires. | `android/gradle/wrapper` |

@@ -141,16 +141,17 @@ in Console if needed). **Closed/internal testing tracks are not exempt from this
 exemption is for apps that are permanently private to an organization, which this is not — so if
 the upload in `agents-tracker-2qm` lands on or after August 31, it needs 36 regardless of track.
 
-**If a bump to 36 is needed, it is not a one-line edit.** `SWARM_ANDROID_TARGET_SDK` in
-`android/toolchain.env` is the value Play checks, but AGP refuses `targetSdk` above `compileSdk`,
-so `SWARM_ANDROID_COMPILE_SDK` (currently 35) has to move to 36 alongside it, and
-`SWARM_ANDROID_BUILD_TOOLS` should move to a 36-line release too. `android/supported-versions.tsv`'s
-`target` row and its comment (which currently states 35 by name) would need updating to match, or
-the pin and the recorded decision disagree. The Android Gradle Plugin pinned in
-`android/build.gradle.kts` (8.13.2) already supports `compileSdk` 36 without needing a plugin
-upgrade — confirmed against AGP's own 8.13.0 release notes — so that part of the toolchain is not
-a blocker. This still needs the Android build lane to make and test, same as any other toolchain
-pin change.
+**The bump was made on 2026-08-02 (`agents-tracker-xfw`) rather than raced against the date**,
+because discovering the requirement at upload time would mean re-running the whole Kotlin
+verification under a deadline. `SWARM_ANDROID_TARGET_SDK` and `SWARM_ANDROID_COMPILE_SDK` in
+`android/toolchain.env` are both **36**, `SWARM_ANDROID_BUILD_TOOLS` is **36.0.0**, and
+`android/supported-versions.tsv` carries `36 / Android 16 / target` with the reasoning for each
+Android 16 behaviour change written out row by row. The Android Gradle Plugin pinned in
+`android/build.gradle.kts` (8.13.2) took `compileSdk` 36 without a plugin upgrade, as its 8.13.0
+release notes said it would. No app code changed: the app never set
+`windowOptOutEdgeToEdgeEnforcement`, never overrode `onBackPressed()`, declares no
+`screenOrientation` and holds no foreground service, so the four behaviour changes that gate on
+targeting 36 have no subject here.
 
 ---
 
@@ -162,7 +163,7 @@ pin change.
 | App name (device label) | `swarm` | `res/values/strings.xml` |
 | versionCode / versionName | `1` / `0.1.0` | `app/build.gradle.kts:153-154` |
 | minSdk | **33** (Android 13) | `toolchain.env` → `SWARM_ANDROID_MIN_SDK` |
-| targetSdk / compileSdk | **35** (Android 15) | `toolchain.env` |
+| targetSdk / compileSdk | **36** (Android 16) | `toolchain.env` |
 | ABIs in the native AAR | `arm64-v8a`, `x86_64` | `toolchain.env` → `SWARM_AAR_ABIS` |
 | Foreground services | **none declared** | manifest — by design (ADR-007 B16) |
 | Analytics / crash reporting | **none** | `android/dependency-inventory.tsv`, gate-enforced |
