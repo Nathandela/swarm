@@ -2,12 +2,13 @@
   <!--
     CANDIDATE 1 - "Prompt Cap"
 
-    The literal reading of the brief, revised 2026-08-02 per the owner's direction: the added top
-    bar is no longer horizontal but the same shape as the chevron's bottom stroke - so the mark is
-    three identical strokes, alternating, a zigzag. One uniform stroke weight, round caps and
-    joins. The cursor is a single bar with one gentle wave in it - the deviation is under two
-    units, which is enough to see at store size and small enough that at 48dp the bar still reads
-    as an underscore rather than a tilde.
+    The literal reading of the brief, revised twice per the owner's direction (2026-08-02): the
+    added top bar is the chevron's bottom stroke repeated, and the WHOLE zigzag fits the box the
+    original `>` occupied (y 38-70), so adding the third stroke did not grow the mark - the S
+    keeps the proportions the prompt had, three legs sharing the chevron's height. One uniform
+    stroke weight, round caps and joins. The cursor is a single bar with one gentle wave in it -
+    the deviation is under two units, which is enough to see at store size and small enough that
+    at 48dp the bar still reads as an underscore rather than a tilde.
 
     S reading: the zigzag IS the S. Prompt reading: the lower two strokes are the `>`, the top
     stroke its echo, with `_` on the baseline after it.
@@ -15,11 +16,11 @@
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: all geometry including stroke sits inside the 66dp centre circle (max r = 32.5).
+    Safe zone: all geometry including stroke sits inside the 66dp centre circle (max r = 32.8).
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg" fill="none" stroke="#53CE7C" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M 58 25.5 L 36 40.5 L 58 55.5 L 36 70.5"/>
+    <path d="M 57 38 L 34 48.7 L 57 59.3 L 34 70"/>
     <path d="M 58 70.5 C 64 68 70 73 76 70.5"/>
   </g>
 </svg>
