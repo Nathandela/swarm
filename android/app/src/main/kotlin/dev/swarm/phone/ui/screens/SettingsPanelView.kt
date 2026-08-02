@@ -32,9 +32,10 @@ import dev.swarm.phone.ui.kit.settingsRow
  * a paired machine, because the entry point only moved onto this screen after an owner could not
  * find it on a real handset. It is composed from the same two components the preference sections
  * are, plus `denyChip` for its one control, and it leads -- see [SettingsPanel.machineSection].
- * NOTHING HERE OWNS ITS CLICK: replacing is revoke-then-pair, which reaches a facade verb and
- * carries PB-SEC-12 clause 1's touch filter, so the control is tagged [SettingsTag.REPLACE] for
- * the surface to reach rather than built a second time where the click is.
+ * NOTHING HERE OWNS ITS CLICK, which is the division the toggle already arrives through: replacing
+ * REVOKES THIS DEVICE, so the control carries a facade verb, PB-SEC-12 clause 1's touch filter and
+ * an identity that has to survive a redraw, and `SettingsSurface` is where all three are. It
+ * arrives as [settingsPanelView]'s `replaceFor` and is tagged [SettingsTag.REPLACE] once placed.
  *
  * THE NOTICE LINES ARE STILL BARE `TextView`s. There is no notice or body-copy component -- row 8's
  * empty state is centred with 48 dp of vertical padding and is a different thing -- so they carry
@@ -65,9 +66,10 @@ object SettingsTag {
     const val MACHINE_ROW = "settings.machine.row"
 
     /**
-     * The replace control, tagged because the SURFACE owns its click -- the division this file and
-     * `MachinesPanelView` are both built on. Replacing is revoke-then-pair, which reaches a facade
-     * verb and carries PB-SEC-12 clause 1's touch filter; neither is a screen's.
+     * The replace control, WHEREVER IT WAS BUILT. `SettingsSurface` builds the shipping one --
+     * replacing revokes this device, so the control carries a facade verb and PB-SEC-12 clause 1's
+     * touch filter, and that filter is applied at construction, on an instance that outlives every
+     * redraw. The tag is how anything finds the one the panel actually placed.
      */
     const val REPLACE = "settings.machine.replace"
 
@@ -82,6 +84,12 @@ object SettingsTag {
  *  kit does not ship. It is a function of the row rather than a flat list so a caller cannot
  *  silently pair the wrong switch with the wrong preference, which is the one defect
  *  [SettingsPanel]'s bijection exists to prevent.
+ * @param replaceFor the paired machine row's trailing control, for the same reason [rowFor] is a
+ *  parameter: pressing it revokes this device, so it carries a facade verb, PB-SEC-12 clause 1's
+ *  touch filter and an identity that has to survive a redraw -- all three of which are the
+ *  surface's. It takes the row so the words on the control are the MODEL'S and a caller cannot
+ *  type a second copy of them. The default is the chip this screen would place if nobody owned the
+ *  click: correct to look at, and attached to nothing.
  * @param below views this slice has NOT recomposed, hosted under the panel. Null is the finished
  *  shape.
  */
@@ -89,6 +97,7 @@ fun settingsPanelView(
     context: Context,
     panel: SettingsPanel,
     rowFor: (SettingsRow) -> View,
+    replaceFor: (PairedMachineRow) -> View = { row -> denyChip(context, row.replaceLabel) },
     below: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
@@ -114,11 +123,10 @@ fun settingsPanelView(
                 context = context,
                 label = section.row.label,
                 sublabel = section.row.sublabel,
-                // Row 13's arrangement, reused: `denyChip` is the `.a2-no` treatment at chip
-                // metrics and this is the same class of action as Revoke -- it ends this phone's
-                // pairing. The chip's own copy says what it does, so no description beside it.
-                trailing = denyChip(context, section.row.replaceLabel)
-                    .apply { tag = SettingsTag.REPLACE },
+                // Row 13's arrangement, reused: the `.a2-no` treatment at chip metrics, for the
+                // same class of action as Revoke -- because it IS the revoke. The control is the
+                // caller's; this places it and tags it.
+                trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
             ).apply { tag = SettingsTag.MACHINE_ROW },
         )
     }

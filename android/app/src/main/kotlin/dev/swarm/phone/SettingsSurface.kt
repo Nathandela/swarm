@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -17,6 +19,8 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.kit.denyChip
+import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
 import dev.swarm.phone.ui.screens.SettingsPanelScreen
 import dev.swarm.phone.ui.screens.SettingsRow
@@ -52,10 +56,31 @@ import swarmmobile.PushPreference
  * used to model a biometric-gate preference alongside them, never rendered, passed as `false` at
  * the one call site that read it. Its subject has left the product, so the field, its setter and
  * the freshness table it fed are gone rather than left as a preference over nothing.
+ *
+ * IT ALSO OWNS THE REVOKE NOW (agents-tracker-64rf). `Revoke this device` was a `PhoneSurface`
+ * button in the unrecomposed remainder below the inbox -- the same burial the pairing entry point
+ * was found in, on the same screen, for the same reason -- and it is the same action the paired
+ * machine row offers as `Replace this computer`: swarm v1 is single-device, so replacing IS
+ * revoke-then-pair. The control lives here because this is the surface whose screen shows it, and
+ * because a control's touch filter, its facade verb and its in-flight identity cannot be split
+ * from each other.
  */
 class SettingsSurface(
     private val activity: Activity,
     private val runtime: PhoneRuntime,
+    /**
+     * Where the revoke behind [replace] runs, which is never the thread that drew it.
+     *
+     * IT IS A PARAMETER SO THE SCREEN'S DISPATCH CAN BE SHARED. `revokeThisDevice` resolves
+     * through `sendContext`, whose `awaitConn` polls for up to five seconds
+     * (android/gate/s25_mainthread_test.go derives that from the Go side rather than being told
+     * it), so the call cannot run on the looper. The default is its own instance over the
+     * process-wide lanes and is correct on every axis but one: `attach`/`detach` are the pair that
+     * stops a command settling onto a screen nobody is holding, and only `PhoneSurface` knows when
+     * that happens. Handed this surface its dispatch, the answer to a revoke is dropped with every
+     * other one.
+     */
+    private val dispatch: VerbDispatch = VerbDispatch.background(),
 ) {
 
     /**
@@ -67,6 +92,45 @@ class SettingsSurface(
 
     private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
     private val finished = touchFilteredSwitch(PushToggle.SECOND)
+
+    /**
+     * agents-tracker-64rf's `Replace this computer`, which IS the revoke.
+     *
+     * IT IS ONE VERB AND NOT TWO. swarm v1 is single-device -- `internal/skeleton/pairing.go`'s
+     * `BeginPairing` refuses a second pairing while a device is registered and names
+     * revoke-then-pair as the remedy -- so replacing is `App.RevokeThisDevice` and then the phone
+     * simply is unpaired, which is the state that already has a screen of its own with one offer on
+     * it. There is nothing to navigate to and no second step to build.
+     *
+     * IT IS BUILT HERE AND NOT BY THE SCREEN, for the three reasons the toggles are: PB-SEC-12
+     * clause 1's touch filter is applied at CONSTRUCTION and a control rebuilt on every draw would
+     * be a different view from the one [touchFilteredActions] names; the verb crosses to Go; and
+     * `VerbDispatch` marks the control itself while a press is in flight, which needs an identity
+     * that outlives the redraw.
+     *
+     * IT CARRIES NO WORDS AT CONSTRUCTION. Its label is [PairedMachineRow.replaceLabel] and it is
+     * written on every draw by [replaceFor] -- a string typed here would be the second copy of copy
+     * the model already owns, which is the drift PB-DS-9 assigns copy to one place to prevent.
+     */
+    private val replace: TextView = SecureWindow.gate(
+        denyChip(activity, "").apply {
+            setOnClickListener { control -> onReplace(control) }
+            // A `TextView` announces itself as text, and the kit cannot fix that: `CtaButton`'s
+            // KDoc records the same gap, because a component with no click has no role to declare.
+            // The role goes where the click is, which is here.
+            setAccessibilityDelegate(
+                object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfo,
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.className = Button::class.java.name
+                    }
+                },
+            )
+        },
+    )
 
     /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
     private var drawn: SettingsPanel? = null
@@ -101,8 +165,13 @@ class SettingsSurface(
 
     val root: View = host
 
-    /** PB-SEC-12 clause 1: a switch that stops notifications is worth an overlay. */
-    val touchFilteredActions: List<View> = listOf(needsInput, finished)
+    /**
+     * PB-SEC-12 clause 1: a switch that stops notifications is worth an overlay, and so is a chip
+     * that revokes this device. [replace] is the one authorising control on this screen and, with
+     * ADR-007 B133's removal of phone-side authentication, the filter is the only thing left
+     * standing between it and a tap the user could not see.
+     */
+    val touchFilteredActions: List<View> = listOf(needsInput, finished, replace)
 
     fun render() {
         when (val startup = runtime.phone()) {
@@ -201,7 +270,15 @@ class SettingsSurface(
         drawn = panel
         detachControls()
         host.removeAllViews()
-        host.addView(settingsPanelView(activity, panel, ::controlFor, outcome))
+        host.addView(
+            settingsPanelView(
+                context = activity,
+                panel = panel,
+                rowFor = ::controlFor,
+                replaceFor = ::replaceFor,
+                below = outcome,
+            ),
+        )
     }
 
     /**
@@ -231,10 +308,72 @@ class SettingsSurface(
         return control
     }
 
+    /**
+     * The paired machine row's trailing control: the revoke chip this surface owns, wearing the
+     * row's own words.
+     *
+     * THE SAME INSTANCE EVERY DRAW, for [controlFor]'s three reasons -- the touch filter, the
+     * listener, and [dispatch]'s in-flight mark, which is keyed by the control's identity and
+     * would be lost by a chip rebuilt under it.
+     */
+    private fun replaceFor(row: PairedMachineRow): View {
+        (replace.parent as? ViewGroup)?.removeView(replace)
+        replace.text = row.replaceLabel
+        return replace
+    }
+
     private fun detachControls() {
-        for (control in listOf(needsInput, finished, outcome)) {
+        for (control in listOf(needsInput, finished, replace, outcome)) {
             (control.parent as? ViewGroup)?.removeView(control)
         }
+    }
+
+    /**
+     * Replace this computer: revoke this device, off the looper, and let the next draw be whatever
+     * an unpaired phone is.
+     *
+     * THE VERB CANNOT RUN ON THE MAIN THREAD. `revokeThisDevice` seals a signed command and
+     * resolves through `sendContext`, whose `awaitConn` polls for up to five seconds -- a tap
+     * issued while the link is reconnecting would freeze the UI long enough for Android to offer to
+     * kill the app, which is agents-tracker-7j4b exactly. Nothing in the platform would say so:
+     * Go opens its sockets below the JVM.
+     *
+     * THE PURGE IS IN A `finally`, WHICH IS THE PANIC ACTION'S SEMANTICS. `PhoneSurface`'s revoke
+     * recorded the reason and it is unchanged by the control moving: the command can refuse, and
+     * the situation this control exists for is one where the phone may not reach its machine. A
+     * purge that ran only on success would leave the live keys on a handset whose registration the
+     * owner has just disowned (ADR-007 B133 decision 3, both tiers).
+     *
+     * IT NAVIGATES NOWHERE. A revoked phone is an unpaired phone, and an unpaired phone already
+     * has one screen with one offer on it -- so [render] is the whole of the second half, and a
+     * "now go and pair" step would be a second thing to keep in agreement with it.
+     */
+    private fun onReplace(control: View) {
+        val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+        // The line holds the LAST answer, and leaving it under a press in flight reads as this
+        // press's -- `PhoneSurface.dispatchPress` clears it in the same place and for the reason.
+        outcome.text = ""
+        dispatch.press(
+            control,
+            SendPlane.COMMAND,
+            work = {
+                try {
+                    app.revokeThisDevice()
+                } finally {
+                    // Off the looper with the verb: PhoneRuntime is `@Synchronized` throughout and
+                    // a purge is Keystore work of its own.
+                    runtime.purgeKeys()
+                }
+            },
+            settle = { answer ->
+                // Every facade refusal arrives as an exception whose message carries the error
+                // class as a prefix, so it routes through the table rather than being shown raw.
+                answer.onFailure {
+                    outcome.text = FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
+                }
+                render()
+            },
+        )
     }
 
     private fun onToggled(toggle: PushToggle, value: Boolean) {
