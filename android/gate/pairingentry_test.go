@@ -72,7 +72,11 @@ var pairingEntryInboxSources = []string{
 // templates would be parsing Kotlin.
 func pairingEntryCode(t *testing.T, rel string) string {
 	t.Helper()
-	path := filepath.Join(kotlinMainRoot(t), filepath.FromSlash(rel))
+	return pairingEntryScan(t, filepath.Join(kotlinMainRoot(t), filepath.FromSlash(rel)))
+}
+
+func pairingEntryScan(t *testing.T, path string) string {
+	t.Helper()
 	return kotlinWithoutStringLiterals(kotlinCodeOnly(readFileOrFail(t, path, "agents-tracker-64rf")))
 }
 
@@ -446,6 +450,88 @@ func TestPairingEntry_TheInboxIsNeverHandedThePairingPanel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// The screen an unpaired phone gets builds no tab bar and no inbox.
+// ---------------------------------------------------------------------------
+
+// pairOnlyView is the pairing-only screen's composition function.
+//
+// THE NAME IS NOT THIS GATE'S INVENTION, and that distinction is what makes the check below sound
+// rather than a convention enforced by a regexp. `PairOnlyViewTest` and `PairOnlyScreenTest` are
+// committed, failing-first, over exactly this symbol; the screen is pinned by the suite that will
+// prove it renders, and this fence reads the same subject from the other side.
+//
+// It is found by DECLARATION and not by file name, so where the screen lives is nobody's business
+// but the module's.
+const pairOnlyView = "pairOnlyView"
+
+// pairOnlyForbidden is what the screen an unpaired phone opens on may not compose. The list is the
+// recorded design's own sentence -- "no tab bar, no inbox, no empty triage sections" -- with each
+// clause resolved to the component that would put it on screen.
+var pairOnlyForbidden = []struct{ call, what string }{
+	{"tabBar", "the tab bar (inventory C1.4)"},
+	{"phoneScaffoldView", "the four-tab scaffold, which carries the bar"},
+	{"triageInboxView", "the triage inbox"},
+	{"sessionList", "the inbox's row column"},
+	{"sectionLabel", "a triage section heading -- the four that are drawn even when empty"},
+	{"chipRow", "the inbox's scope bar"},
+	{"filterChip", "the inbox's scope bar"},
+}
+
+func pairOnlyFaults(where, code string) []string {
+	var faults []string
+	for _, forbidden := range pairOnlyForbidden {
+		if len(kotlinCallSites(code, forbidden.call)) > 0 {
+			faults = append(faults, where+" composes "+forbidden.what+" (`"+forbidden.call+"(`)")
+		}
+	}
+	sort.Strings(faults)
+	return faults
+}
+
+// TestPairingEntry_TheScreenAnUnpairedPhoneGetsBuildsNoTabBarAndNoInbox is the source half of the
+// design's first sentence.
+//
+// WHY IT IS HERE AS WELL AS IN THE KOTLIN SUITE. `PairOnlyViewTest` asserts the rendered tree of
+// one invocation, which is the right test and is the stronger one for what it covers. This is a
+// different claim: that the SOURCE cannot compose a bar or an inbox at all, on any branch, for any
+// argument. A screen that grew a tab bar behind a condition the suite does not exercise would pass
+// there and fail here, and the whole reason this bug exists is that the pairing affordance was
+// reachable in principle and not in practice.
+func TestPairingEntry_TheScreenAnUnpairedPhoneGetsBuildsNoTabBarAndNoInbox(t *testing.T) {
+	var found []string
+	var faults []string
+	for _, path := range kotlinFiles(t, kotlinMainRoot(t)) {
+		code := pairingEntryScan(t, path)
+		if !regexp.MustCompile(`\bfun\s+` + pairOnlyView + `\s*\(`).MatchString(code) {
+			continue
+		}
+		found = append(found, mustRel(t, path))
+		faults = append(faults, pairOnlyFaults(mustRel(t, path), code)...)
+	}
+
+	if len(found) == 0 {
+		t.Fatalf("agents-tracker-64rf: no production Kotlin declares `fun %s(`, so an unpaired "+
+			"phone has no screen of its own and is still shown the four-tab app with the pairing "+
+			"block under an empty inbox -- the state the owner could not find pairing in on a real "+
+			"handset. `PairOnlyScreenTest` and `PairOnlyViewTest` are committed against this symbol.",
+			pairOnlyView)
+	}
+	if len(found) > 1 {
+		t.Errorf("agents-tracker-64rf: %d files declare `fun %s(`: %s. The unpaired phone is offered "+
+			"ONE screen; two compositions claiming to be it is two screens to keep in agreement",
+			len(found), pairOnlyView, strings.Join(found, ", "))
+	}
+	sort.Strings(faults)
+	if len(faults) > 0 {
+		t.Errorf("agents-tracker-64rf: the screen an unpaired phone opens on composes the app it is "+
+			"supposed to replace:\n  %s\n\nThe recorded design is one screen -- `--p-bg` ground, one "+
+			"hero CTA offering to pair, nothing else. A tab bar there offers three destinations that "+
+			"have nothing to show a phone with no machine, and a triage section offers four headings "+
+			"over a roster that cannot exist yet.", strings.Join(faults, "\n  "))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Negative controls. Each one feeds a perturbed source to the SAME function the assertions call.
 // ---------------------------------------------------------------------------
 
@@ -594,16 +680,45 @@ func TestPairingEntry_ThePairingScanDiscriminates(t *testing.T) {
 	}
 }
 
+// TestPairingEntry_TheUnpairedScreenScanSeesABarAndAnInbox is that fence's negative control.
+//
+// It is the direction that fails silently: a scan looking for calls that are not there reports a
+// clean screen, and a scan that could never see them reports a clean screen too. The perturbed
+// sources are fed to the same function the assertion calls.
+func TestPairingEntry_TheUnpairedScreenScanSeesABarAndAnInbox(t *testing.T) {
+	perturbed := []struct {
+		what string
+		src  string
+	}{
+		{"a tab bar", `fun pairOnlyView(context: Context): View = column.apply { addView(tabBar(context, tabs)) }`},
+		{"the scaffold", `fun pairOnlyView(context: Context): View = phoneScaffoldView(context, cta, tabs, dest) {}`},
+		{"the inbox", `fun pairOnlyView(context: Context): View = triageInboxView(context, screen, {}, {}, cta)`},
+		{"a section heading", `fun pairOnlyView(context: Context): View = column.apply { addView(sectionLabel(context, heading)) }`},
+	}
+	for _, c := range perturbed {
+		if got := pairOnlyFaults("perturbed.kt", c.src); len(got) == 0 {
+			t.Errorf("the unpaired-screen scan is blind to %s: `%s` produced no fault, so a clean "+
+				"run says nothing about what the screen composes", c.what, c.src)
+		}
+	}
+
+	// And the screen the design actually describes: a ground, a title, a body and one CTA. A fence
+	// that rejected this would be a fence nobody could satisfy.
+	const allowed = `fun pairOnlyView(context: Context, onStartPairing: () -> Unit): View =
+    LinearLayout(context).apply {
+        addView(label(context, PairOnlyScreen.TITLE))
+        addView(label(context, PairOnlyScreen.BODY))
+        addView(ctaButton(context, PairOnlyScreen.CTA, CtaKind.APPROVE, onStartPairing))
+    }`
+	if got := pairOnlyFaults("allowed.kt", allowed); len(got) > 0 {
+		t.Errorf("the unpaired-screen scan rejects the screen the design describes:\n%s",
+			strings.Join(got, "\n"))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // What is NOT fenced here, and why. Recorded so the absence reads as a decision rather than an
 // oversight, and so the next reader does not take a green run for more than it is.
-//
-//   - "The pairing-only screen builds no tab bar." There is no sound textual subject for it yet:
-//     the screen does not exist, and locating it by a file name this gate invented would fence a
-//     naming convention rather than an invariant -- the design permits the CTA to be built in the
-//     surface itself. What IS fenced is the containment fact that makes the tab bar impossible on
-//     it: the panel is not a child of the scaffold's content (first test above), and the scaffold
-//     is the only thing in this app that composes `tabBar`.
 //
 //   - "Settings is the ONLY destination that names the pairing entry point." The entry point's
 //     spelling does not exist yet -- it is a row with copy nobody has written -- so any regexp for
