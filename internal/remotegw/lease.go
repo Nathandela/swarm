@@ -25,6 +25,13 @@ import (
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
+// submitGap is the minimum spacing between a keystroke frame and the submit that follows
+// it, at the PTY. It is spike S-A's measured value (docs/verification/spike-SA.md finding
+// #1): the harness that made a real Claude Code submit reliably wrote the text, slept
+// 150 ms, then wrote the CR. Nothing establishes that less is enough, so this is the number
+// the fix owes rather than one tuned for latency.
+const submitGap = 150 * time.Millisecond
+
 var (
 	// errLeaseDead reports that the lease died (OpDetach or conn close) before it was
 	// ever granted — e.g. the daemon refused the take_control (OpError).
@@ -43,7 +50,8 @@ type LeaseConn struct {
 	session     string // namespaced session id the lease targets (for OpResize addressing)
 	operationID string // the phone's take_control operation id, so a severance is attributable
 
-	wmu sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
+	wmu    sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
+	lastIn time.Time  // guarded by wmu: when the last keystroke frame left (submitGap)
 
 	mu         sync.Mutex
 	gen        uint64 // captured OpLease generation (0 until granted)
@@ -183,10 +191,57 @@ func (lc *LeaseConn) refusalReason() string {
 // WriteDataIn writes a wire.TDataIn keystroke frame on the lease connection. The daemon
 // forwards it to the session's shim only while the control gate is open (the four-clause
 // gate bound to this connection's lease); it is fire-and-forget (no reply).
+//
+// A SUBMIT-ONLY FRAME IS HELD OFF THE TEXT BEFORE IT by submitGap (bead agents-tracker-r3p).
+// The phone already refuses to put text and its submit in one frame, and spaces its own
+// frames by a 125 ms window, but neither survives the relay: it is store-and-forward, and
+// the inbound wait returns a BATCH that processBatch walks serially, so two frames appended
+// 125 ms apart are routed microseconds apart here (576 us measured). Nothing downstream
+// restores a gap and nothing merges the frames either -- the daemon forwards one frame per
+// frame and the shim does one PTY write per frame, all on localhost -- so the PTY hands the
+// CLI both writes in one read tick and Claude Code reads them as a multi-line paste: the CR
+// becomes a literal newline and the prompt is never submitted. This is the last hop that can
+// create the gap and the first at which it survives to the PTY.
+//
+// IT SPACES, AND NEVER SPLITS. A sealed input frame carries no keystroke-vs-paste marker
+// (InputFrame.T is "data" for both SendInput and Paste), so a gateway that split payloads at
+// their newlines would chop a legitimate multi-line paste into N submits. Only a frame that
+// is ALREADY nothing but submit bytes is delayed; the 4 KiB chunks of a large paste are
+// adjacent text frames and go out untouched.
+//
+// NOT IN THE SHIM, which is closer to the PTY and would cover the local attach lane too: its
+// ptyWriter is shared with the emulator's reply pump, so sleeping under that lock stalls the
+// DSR/CPR replies the CLI is blocking on -- a hang, not a latency cost.
+//
+// COST: up to submitGap on a submit that closely follows text (once per prompt, not once per
+// keystroke), and the same bound on whatever shares that inbound batch, since processBatch is
+// serial. §6.0's 150 ms p50 budget is a keystroke-echo budget and is not on this path.
 func (lc *LeaseConn) WriteDataIn(b []byte) error {
 	lc.wmu.Lock()
 	defer lc.wmu.Unlock()
-	return wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
+	if isSubmitOnly(b) && !lc.lastIn.IsZero() {
+		if wait := submitGap - time.Since(lc.lastIn); wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+	err := wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
+	lc.lastIn = time.Now()
+	return err
+}
+
+// isSubmitOnly reports whether b is nothing but bytes a CLI reads as "run what I typed".
+// The phone's coalescer emits such a run as its own frame (phonecore.frameLen), so this is
+// the whole class of frames the gap applies to -- and an empty frame is not one of them.
+func isSubmitOnly(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	for _, c := range b {
+		if c != '\r' && c != '\n' {
+			return false
+		}
+	}
+	return true
 }
 
 // WriteResize writes an OpResize control on the lease connection. On the remote tier the

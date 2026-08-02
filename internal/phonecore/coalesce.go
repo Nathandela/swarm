@@ -288,13 +288,54 @@ func (c *InputCoalescer) drain(s *inputBuffer, now time.Time, force bool) []Inpu
 		if !force && s.started && now.Sub(s.lastEmit) < InputFrameInterval && len(s.buf) < MaxInputPayload {
 			break
 		}
-		n := min(len(s.buf), MaxInputPayload)
+		n := frameLen(s.buf)
 		out = append(out, InputFrame{T: "data", Session: s.session, Data: copyBytes(s.buf[:n])})
 		s.buf = s.buf[n:]
 		s.started, s.lastEmit = true, now
 	}
 	return out
 }
+
+// frameLen is how many leading bytes of buf may share ONE frame: a maximal run of submit
+// bytes or a maximal run of ordinary ones, never a mixture, capped at MaxInputPayload.
+//
+// THE MIXTURE IS THE DEFECT (bead agents-tracker-r3p, spike-SA finding #1, measured against
+// the real CLIs). A PTY write carrying text AND the carriage return that submits it is read
+// by Claude Code's TUI as a multi-line PASTE: the CR is inserted into the input box as a
+// literal newline instead of submitting, the prompt sits there unsent, and the next turn's
+// text is appended to the SAME unsent draft. Nothing reports it on either side.
+//
+// THE BOUNDARY MUST BE MADE HERE, and it is not a call-site concern. PhoneSurface's
+// "Send line" hands SendInput `line + "\r"` in one buffer, but a caller that split that in
+// two would not help: while the user is typing, this buffer holds the tail of the burst, so
+// a submit arriving inside the window is appended to those held bytes and the next drain
+// emits "ello prod\r" as one frame regardless. The gateway cannot repair it either -- a
+// sealed input frame carries no keystroke-vs-paste marker, so a machine-side split would
+// chop a genuine multi-line paste into N submits. Only this side knows which it is.
+//
+// A RUN, NOT ONE BYTE PER FRAME. A held Enter is a ~30 Hz stream of submits; one per 125 ms
+// window would drain at 8 bytes/s against 30 arriving, so the buffer would grow without
+// bound, the submits would land minutes after the key was pressed, and the eventual boundary
+// flush would dump the backlog into one instant -- past the relay's MailboxAppendPerMin. A
+// run keeps output rate equal to input rate, and a frame of nothing but submit bytes carries
+// no text for the paste heuristic to swallow.
+//
+// Insert never comes through here, so a paste keeps its own newlines (PB-INPUT-6).
+//
+// Separate frames are NECESSARY and not sufficient: the heuristic keys on co-arrival in one
+// read tick at the PTY, and the relay's batched delivery compresses this window away. The
+// gap itself is made at the last hop that can guarantee it (remotegw.LeaseConn.WriteDataIn).
+func frameLen(buf []byte) int {
+	submit := isSubmit(buf[0])
+	n := 1
+	for n < len(buf) && isSubmit(buf[n]) == submit {
+		n++
+	}
+	return min(n, MaxInputPayload)
+}
+
+// isSubmit reports whether b is a byte a CLI reads as "run what I typed".
+func isSubmit(b byte) bool { return b == '\r' || b == '\n' }
 
 // copyBytes copies a payload out of the buffer, so the emitted frame never aliases bytes a
 // later append may reuse.
