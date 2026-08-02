@@ -55,10 +55,25 @@ echo "building $out for $SWARM_AAR_ABIS (androidapi $SWARM_ANDROID_API)"
 # cost -- an SBOM tool can no longer read the dependency list out of the .so -- accepted
 # because go.mod and go.sum are tracked and authoritative, and because an artifact whose
 # bytes depend on where it was built is not reproducible in any useful sense.
+#
+# -extldflags reaches lld, and asks it for 16 KB pages. Play REJECTS AT UPLOAD an app
+# targeting API 35 or higher whose native libraries are linked for smaller pages
+# (developer.android.com/guide/practices/page-sizes, in force since 2025-11-01); measured with
+# llvm-readelf, every LOAD segment in both shipped libgojni.so files had align 0x1000 while
+# CameraX's own libraries already had 0x4000. NDK r28 emits 16 KB by default and r27, which
+# toolchain.env pins, does not -- so it is asked for here rather than by moving a pin that is
+# load-bearing for gomobile's -androidapi and its supported range.
+#
+# It rides inside the SAME -ldflags as -X above because gomobile forwards that flag once, as a
+# single argument; a second -ldflags would silently replace the first. go build then splits the
+# value on spaces, and neither piece contains one.
+#
+# This is NOT the property `zipalign -c -P 16 4` measures. That one is the offset at which the
+# .so sits inside the APK's zip, and it was already correct while this was not.
 exec gomobile bind \
     -target "$targets" \
     -androidapi "$SWARM_ANDROID_API" \
     -trimpath \
-    -ldflags "-X=runtime.modinfo=" \
+    -ldflags "-X=runtime.modinfo= -extldflags=-Wl,-z,max-page-size=16384" \
     -o "$out" \
     ./mobile

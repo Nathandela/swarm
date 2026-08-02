@@ -513,7 +513,7 @@ func builtAARSurface(t *testing.T, path string) map[string]bool {
 // are the runtime's plumbing for calling Kotlin implementations back, not bound surface.
 func aarClasses(t *testing.T, path string) []*classFile {
 	t.Helper()
-	jar := zipEntry(t, path, "classes.jar")
+	jar := zipEntry(t, path, "classes.jar", "PB-BIND-7")
 
 	inner, err := zip.NewReader(bytes.NewReader(jar), int64(len(jar)))
 	if err != nil {
@@ -551,11 +551,15 @@ func aarClasses(t *testing.T, path string) []*classFile {
 	return out
 }
 
-func zipEntry(t *testing.T, path, want string) []byte {
+// zipEntry reads one member out of the AAR. The requirement is a parameter because the
+// artifact is measured by more than one gate -- PB-BIND-7 reads classes.jar, the 16 KB page
+// gate reads jni/<abi>/libgojni.so -- and a failure that names the wrong requirement sends
+// its reader to the wrong document.
+func zipEntry(t *testing.T, path, want, requirement string) []byte {
 	t.Helper()
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		t.Fatalf("PB-BIND-7: %s is not a readable zip: %v", mustRel(t, path), err)
+		t.Fatalf("%s: %s is not a readable zip: %v", requirement, mustRel(t, path), err)
 	}
 	defer r.Close()
 	for _, f := range r.File {
@@ -564,17 +568,17 @@ func zipEntry(t *testing.T, path, want string) []byte {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			t.Fatalf("PB-BIND-7: open %s in %s: %v", want, mustRel(t, path), err)
+			t.Fatalf("%s: open %s in %s: %v", requirement, want, mustRel(t, path), err)
 		}
 		defer rc.Close()
 		b, err := io.ReadAll(rc)
 		if err != nil {
-			t.Fatalf("PB-BIND-7: read %s in %s: %v", want, mustRel(t, path), err)
+			t.Fatalf("%s: read %s in %s: %v", requirement, want, mustRel(t, path), err)
 		}
 		return b
 	}
-	t.Fatalf("PB-BIND-7: %s holds no %s, so it is not an AAR this gate can read",
-		mustRel(t, path), want)
+	t.Fatalf("%s: %s holds no %s, so it is not an AAR this gate can read",
+		requirement, mustRel(t, path), want)
 	return nil
 }
 
