@@ -34,9 +34,10 @@ sessions running on a computer you own.
 <h2>The short version</h2>
 <p>
 The app collects no personal information about you. It has no accounts, no analytics, no
-advertising and no crash reporting. The only data it transmits off your phone is (a) a push
-notification token, when push is available, and (b) end-to-end encrypted traffic to your own
-computer.
+advertising and no crash reporting. Three kinds of data leave your phone: a push notification
+token, when push is available; your session traffic, which is end-to-end encrypted so that only
+your own computer can read it; and the routing information the relay needs in order to deliver
+that traffic — which device is talking to which computer, and when. Each is described below.
 </p>
 
 <h2>What is collected</h2>
@@ -46,8 +47,10 @@ wake your phone in the background. When push is available, the app requests a to
 installation and sends it to the relay server so your computer can wake your phone; the token
 identifies this app installation, not you. If push is not available on a given build or at a
 given time, the app works normally without a token — it simply will not receive background
-wake notifications. The token is deleted when you revoke the device, or when you turn off
-notifications for this app in its settings.
+wake notifications. The token is deleted when you revoke the device, and when you turn
+notifications off in the app's own settings. Turning notifications off in Android's system
+settings stops them being displayed but does not by itself delete the token — use the app's
+setting, or revoke the device, if you want it removed.
 </p>
 <p>
 <strong>Session content, end-to-end encrypted.</strong> Terminal output and the input you send
@@ -104,9 +107,21 @@ No data is sold, and none is shared with anyone else.
 
 <h2>Deleting your data</h2>
 <p>
-Revoke the device — from the app, or from the swarm interface on your computer — to delete its
-push token and purge its relay-side state. Uninstalling the app removes everything held
-locally. There is no server-side copy of your content to request.
+Revoke the device — from the app, or from the swarm interface on your computer — to end the
+pairing. This deletes the pairing itself and any messages the revoking side had queued that the
+other side had not yet collected. Your push token is deleted once no pairing remains that could
+still need to wake this device; if another computer is still paired with this phone, the token
+stays so that pairing keeps working.
+</p>
+<p>
+One thing is kept on purpose and is not deleted: a small record that this pairing was revoked.
+Without it, the revocation could be undone by replaying data the other side already holds, so the
+record is what makes revoking permanent. It identifies the ended pairing and nothing else — it
+contains none of your content.
+</p>
+<p>
+Uninstalling the app removes everything held locally. There is no server-side copy of your
+content to request.
 </p>
 
 <h2>Children</h2>
