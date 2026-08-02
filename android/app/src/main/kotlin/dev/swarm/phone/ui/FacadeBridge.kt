@@ -175,6 +175,28 @@ class FacadeBridge(private val app: App) {
     )
 
     /**
+     * All four repair channels, for the one screen whose subject is the link itself.
+     *
+     * PER STREAM AND NEVER GLOBAL, which is PB-APP-8's whole discipline: the journal can have an
+     * unrepaired hole while the terminal is live, and a single mark either understates the first
+     * or slanders the second. So this returns four verdicts and not a boolean, and the screen
+     * renders four rows.
+     *
+     * IT IS EIGHT LOCAL READS AND NO ROUND TRIP. `App.StreamState` reads the core's stale map and
+     * `App.ResyncPending` reads a mutex-guarded map on the facade; neither goes near the relay.
+     * That is what makes this callable from a render at all, and it is the distinction
+     * android/unbound-verbs.tsv draws around `App.Presence`, which is a blocking relay round-trip
+     * and stays unbound for exactly that reason.
+     */
+    // `map { streamView(it) }` AND NOT `map(::streamView)`. The two are the same call and only one
+    // of them is visible to android/gate/boundverbledger_test.go, which matches a call by NAME
+    // followed by a paren -- a method reference carries no paren, so the bound-method reachability
+    // walk reported `streamView` as reached by nothing while this line called it four times. The
+    // gate's limit is written down in its own header; the fix is to write the call, not to widen
+    // the matcher until a shadowed local wrapper satisfies it too.
+    fun streamViews(): List<StreamView> = REPAIR_CHANNELS.map { streamView(it) }
+
+    /**
      * PB-TIME-1's verdict, PULLED rather than remembered from an event.
      *
      * A screen that opens after the measurement -- which on Android is most of them, because the
@@ -253,6 +275,27 @@ class FacadeBridge(private val app: App) {
     internal companion object {
         /** `App.StreamState` answers "stale" or "live". */
         const val STREAM_STALE = "stale"
+
+        /**
+         * PB-SYNC-1's four repair channels, spelled ONCE.
+         *
+         * THE NAMES CROSS AS BARE STRINGS AND THE READ FAILS OPEN, which is why they are gathered
+         * here rather than typed at the call site. `App.StreamState` does not validate its
+         * argument: it falls through to a stale map that was never given the key and answers
+         * "live", so a mistyped channel renders as healthy forever over a stream nobody is
+         * watching. Its sibling `App.Resync` validates the same four and FAILS CLOSED, in its own
+         * words -- "a caller that mistyped one of the four would see exactly what a working resync
+         * looks like" -- and that argument is stronger for the read, because the read is what a
+         * screen draws.
+         *
+         * Kotlin cannot see `internal/phonecore.StreamJournal` and the Go toolchain cannot see
+         * this list, so the two spellings are joined by
+         * `android/gate/pbapp8_repairchannels_test.go`, which set-compares them and fails in
+         * either direction. That is `android/gate/pairingstates_test.go`'s shape, and it exists
+         * for the same reason: PB-PAIR-5's alphabet moved on the Go side and the screen's did not,
+         * with every check on both sides green.
+         */
+        val REPAIR_CHANNELS: List<String> = listOf("journal", "terminal", "reply", "grant")
 
         /**
          * Whether a refusal means the machine simply has not sent this session's grid yet.

@@ -3,6 +3,12 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.TextView
+import dev.swarm.phone.ui.kit.sectionLabel
+import dev.swarm.phone.ui.kit.sessionList
+import dev.swarm.phone.ui.kit.settingsRow
+import dev.swarm.phone.ui.kit.statusLabel
 
 /**
  * Phase B slice S25 -- PB-DS-6 and PB-DS-9: the link section, composed from the component kit.
@@ -71,7 +77,52 @@ fun linkPanelView(
     context: Context,
     panel: LinkPanel,
     below: View? = null,
-): View = TODO("agents-tracker-ah2: RED")
+): View {
+    val column = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
+
+    column.addView(sectionLabel(context, panel.heading).apply { tag = LinkTag.SECTION_LABEL })
+
+    // NO VIEW AT ALL RATHER THAN AN EMPTY ONE, which is `settingsRow`'s rule for its own second
+    // line and holds harder here: an always-attached notice is either a permanent warning over a
+    // phone whose clock is fine, or a permanent blank line where one goes.
+    if (panel.clockNotice.isNotEmpty()) {
+        column.addView(
+            TextView(context).apply {
+                tag = LinkTag.CLOCK
+                text = panel.clockNotice
+                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            },
+        )
+    }
+
+    // `sessionList` IS `.prows`, and it is a REUSE for `ActivityPanelView`'s reason: it carries
+    // the gap and the side padding, and building either here would be the PB-DS-6 violation the
+    // kit exists to stop -- a screen typing spacing.
+    column.addView(
+        sessionList(context).apply {
+            panel.channels.forEach { channel ->
+                addView(
+                    settingsRow(
+                        context = context,
+                        label = channel.stream,
+                        sublabel = channel.notice,
+                        // The liveness label, or NOTHING. `statusLabel` is `--p-hero` and row 15
+                        // spells out that hero is the liveness claim, so a stale channel gets no
+                        // trailing view rather than a differently-inked one -- which would be
+                        // this file choosing an ink for a state.
+                        trailing = channel.liveLabel?.let { statusLabel(context, it) },
+                    ).apply { tag = LinkTag.CHANNEL },
+                )
+            }
+        },
+    )
+
+    below?.let { column.addView(it) }
+    return column
+}
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

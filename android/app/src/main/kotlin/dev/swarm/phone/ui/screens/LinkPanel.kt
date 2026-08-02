@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.ClockBanner
+import dev.swarm.phone.ui.StreamBadge
 import dev.swarm.phone.ui.StreamView
 
 /**
@@ -155,5 +156,22 @@ object LinkPanelScreen {
         channels = streams.map(::rowFor),
     )
 
-    private fun rowFor(view: StreamView): ChannelRow = TODO("agents-tracker-ah2: RED")
+    /**
+     * The badge decides which of the row's two slots is filled, in an EXHAUSTIVE `when`.
+     *
+     * Exhaustive rather than an `if (badge == LIVE)`, because the two are the same today and only
+     * one of them stays honest: a fourth `StreamBadge` value would fall through an `if` into the
+     * unhealthy arm and be described by whatever `notice` happened to return, where this fails the
+     * build until somebody decides what the new state says.
+     */
+    private fun rowFor(view: StreamView): ChannelRow = when (view.badge) {
+        StreamBadge.LIVE -> ChannelRow(stream = view.stream, liveLabel = LIVE, notice = null)
+
+        // BOTH UNHEALTHY STATES TAKE THE SAME ARM, AND NEITHER GETS THE LABEL. A repair in flight
+        // does not clear the hole -- `App.Resync` marks the request and the mark clears when the
+        // repair LANDS -- so a repairing channel is a channel with a hole in it that is being
+        // worked on. `StreamView.notice` is what says which of the two it is.
+        StreamBadge.STALE, StreamBadge.RESYNCING ->
+            ChannelRow(stream = view.stream, liveLabel = null, notice = view.notice)
+    }
 }

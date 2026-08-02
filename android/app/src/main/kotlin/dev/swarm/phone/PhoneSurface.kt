@@ -37,6 +37,8 @@ import dev.swarm.phone.ui.screens.InboxTab
 import dev.swarm.phone.ui.screens.LaunchFieldId
 import dev.swarm.phone.ui.screens.LaunchPanel
 import dev.swarm.phone.ui.screens.LaunchPanelScreen
+import dev.swarm.phone.ui.screens.LinkPanel
+import dev.swarm.phone.ui.screens.LinkPanelScreen
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PeekPanel
 import dev.swarm.phone.ui.screens.PeekPanelScreen
@@ -45,6 +47,7 @@ import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
+import dev.swarm.phone.ui.screens.linkPanelView
 import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.sessionDetailView
@@ -396,6 +399,9 @@ class PhoneSurface(
 
     /** What the activity screen last drew, for [inboxDrawn]'s reason. */
     private var activityDrawn: ActivityPanel? = null
+
+    /** What the machines screen's link section last drew, for [inboxDrawn]'s reason. */
+    private var machinesDrawn: LinkPanel? = null
 
     /**
      * The destination the content host currently holds.
@@ -905,7 +911,7 @@ class PhoneSurface(
                 null -> drawInbox(inbox)
                 else -> drawDetail(open)
             }
-            Destination.MACHINES -> drawMachines()
+            Destination.MACHINES -> drawMachines(bridge)
             Destination.ACTIVITY -> drawActivity(bridge)
             Destination.SETTINGS -> drawSettings()
         }
@@ -1049,10 +1055,38 @@ class PhoneSurface(
      * crash. So the tab shows the kit's `emptyState` carrying [MachinesPanelScreen.UNAVAILABLE_COPY],
      * which is the screen's own copy and says what is true of this phone without claiming anything
      * about the machine.
+     *
+     * **AND ABOVE THAT SENTENCE IS NOW THE HALF OF THIS SCREEN THAT NEEDS NO RELAY**
+     * (agents-tracker-ah2). The two gaps above are both about verbs that must ask the relay or
+     * that have no accessor at all; PB-TIME-1's clock verdict and PB-APP-8's per-channel staleness
+     * are neither. `App.ClockVerdict` reads a mutex-guarded field, `App.StreamState` and
+     * `App.ResyncPending` read local core state, and none of the three costs a round trip -- so
+     * [dev.swarm.phone.ui.screens.LinkPanelScreen] renders what this phone knows about its own
+     * link while the machine's own details stay out of reach. Both models had been fully built and
+     * drawn by nothing, which is the same defect one level down from the one this tab was already
+     * carrying.
+     *
+     * THE SENTENCE MOVES UNDER THE SECTION AND IS OTHERWISE UNCHANGED. It is the caveat about what
+     * is missing, and a caveat above the facts it qualifies would be read as the whole screen.
      */
-    private fun drawMachines() {
-        if (contentShows == Destination.MACHINES) return
-        hostContent(emptyState(activity, MachinesPanelScreen.UNAVAILABLE_COPY))
+    private fun drawMachines(bridge: FacadeBridge?) {
+        // PULLED PER DRAW, NEVER LATCHED. Both accessors say why in their own KDoc: on Android the
+        // process is killed and rebuilt constantly, so a screen that opens after the measurement
+        // was never sent the event, and one that latched the event has nothing to clear it with.
+        val panel = bridge?.let { LinkPanelScreen.of(it.clockBanner(), it.streamViews()) }
+        // THE EQUALITY CHECK IS [drawActivity]'s, AND IT REPLACES AN UNCONDITIONAL EARLY RETURN.
+        // This tab used to draw once and never again, which was right for a constant sentence and
+        // is wrong the moment the content is live: a clock corrected or a stream repaired while
+        // the tab is on screen has to reach it.
+        if (panel == machinesDrawn && contentShows == Destination.MACHINES) return
+        machinesDrawn = panel
+        val unavailable = emptyState(activity, MachinesPanelScreen.UNAVAILABLE_COPY)
+        hostContent(
+            when (panel) {
+                null -> unavailable
+                else -> linkPanelView(activity, panel, below = unavailable)
+            },
+        )
     }
 
     /**
