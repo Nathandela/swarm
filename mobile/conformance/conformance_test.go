@@ -168,8 +168,29 @@ func TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend(t *testing.T) {
 		t.Errorf("input frame bound session %q, want %q -- the machine routes by the id INSIDE "+
 			"the sealed frame, never by mutable focus state", in.Session, testSession)
 	}
-	if string(in.Data) != "ls\r" {
-		t.Errorf("input payload = %q, want %q", in.Data, "ls\r")
+	// THE CONCATENATION IS THE ASSERTION, for the reason the sibling covering this same path
+	// states at its own send site (s9_pbnet1_test.go): "the coalescer is free to merge or
+	// split what it holds -- what it is never free to do is reorder, drop, or duplicate the
+	// user's keystrokes." Since bead agents-tracker-r3p it always DOES split here: text and
+	// the carriage return that submits it must never share one PTY write, or Claude Code reads
+	// the pair as a multi-line paste, inserts a literal newline, and never submits the prompt.
+	// So "ls\r" in a single frame is not a stricter version of this assertion -- it is the
+	// defect, and no correct implementation can satisfy it. The frame BOUNDARY is fenced where
+	// it belongs, in internal/phonecore's coalescer tests; what PB-BIND-3 asks of this walk is
+	// that SendInput reached a real backend, bound to the right session, whole and in order.
+	var typed []byte
+	var frames int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.Drain()
+		if typed, frames = h.InputData(testSession); string(typed) == "ls\r" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if string(typed) != "ls\r" {
+		t.Errorf("the machine received %q across %d input frames, want the keystrokes whole and in order as %q",
+			typed, frames, "ls\r")
 	}
 	if err := app.Resize(testSession, 100, 30); err != nil {
 		t.Fatalf("Resize: %v", err)

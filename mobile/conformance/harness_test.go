@@ -454,6 +454,27 @@ func (h *harness) AwaitInput(kind string) remotegw.InputFrame {
 	return remotegw.InputFrame{}
 }
 
+// InputData concatenates the payloads of every "data" input frame the machine has received
+// for session, in arrival order, and reports how many frames carried them.
+//
+// It exists because the number of frames is NOT part of the contract and the bytes are: the
+// coalescer may merge or split what it holds, and since bead agents-tracker-r3p it always
+// splits a submit off the text it submits (a PTY write carrying both is read by Claude Code
+// as a paste, so the prompt is never sent). Callers assert on the reassembled stream, which
+// is the property that must never change -- no reordering, no loss, no duplication.
+func (h *harness) InputData(session string) (data []byte, frames int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, in := range h.Inputs {
+		if in.Kind != "data" || in.Session != session {
+			continue
+		}
+		data = append(data, in.Data...)
+		frames++
+	}
+	return data, frames
+}
+
 // eventually polls fn until it reports true, or fails with msg.
 func eventually(t *testing.T, msg string, fn func() bool) {
 	t.Helper()
