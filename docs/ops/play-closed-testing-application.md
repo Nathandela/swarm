@@ -366,7 +366,7 @@ question Yes.
 
 | Declaration | Answer |
 |---|---|
-| **Privacy policy URL** | Required — see §9 |
+| **Privacy policy URL** | Required — see §9. **PENDING PUBLICATION**: page drafted at `docs/ops/privacy-policy/index.html`, not yet hosted. Will be `https://nathandela.github.io/swarm/ops/privacy-policy/` once GitHub Pages is enabled (steps in `docs/ops/privacy-policy/README.md`). |
 | **Ads** — does your app contain ads? | **No** |
 | **App access** — is any functionality restricted? | **Yes → All functionality restricted.** See the reviewer instructions below. This is the single most important declaration for this app. |
 | **Content ratings** | §5 |
@@ -460,6 +460,44 @@ against whatever rule is live for your account.
 ---
 
 ## 9. Privacy policy — draft
+
+**Status: published as a corrected static page, not yet hosted.** The final copy lives at
+`docs/ops/privacy-policy/index.html`; publishing steps are in
+`docs/ops/privacy-policy/README.md`. **PENDING PUBLICATION** — the URL will be:
+
+```
+https://nathandela.github.io/swarm/ops/privacy-policy/
+```
+
+until someone enables GitHub Pages for this repo (steps in the README above; nobody has run
+them yet). Record that URL in §6's "Privacy policy URL" row once the page is confirmed live.
+
+The final page corrects three claims this draft below still makes, verified against source
+during that pass:
+
+- **Biometric protection — removed, not published.** ADR-007 B133 (`docs/adr/ADR-007-remote-access.md:7748`,
+  2026-07-31) deleted all phone-side user authentication; `PB-SEC-2` is now VOID
+  (`android/app/src/main/kotlin/dev/swarm/phone/keys/Provisioning.kt:19`,
+  `KeystoreSpecs.aesGcm` in the same package). There is no `BiometricPrompt` anywhere in
+  `android/app/src/main/kotlin/`. The published page does not claim biometric protection of
+  keys or sensitive actions; only this draft below still does.
+- **Push token — timing corrected.** `PushTokens.requestInitialToken` is called
+  unconditionally from `SwarmApplication.onCreate` (not gated on a notifications toggle), and
+  currently always throws `IllegalStateException` because no Firebase project is configured
+  (`android/app/build.gradle.kts:293`, `PushTokens.kt:52-70`) — no token is issued by the
+  shipped build today. The published page phrases token collection as conditional on push
+  being available, true whether or not Firebase gets configured before testers install.
+- **Relay retention — quantified.** The relay purges undelivered mailbox items after a fixed
+  7-day cap (`internal/remote/relay/config.go:106`, `server.go:1803` `SweepRetention`), not
+  merely "as long as needed" — the published page states the figure.
+
+The relay-operator blank below (`[WHO OPERATES IT]`) is resolved on the published page as
+"whoever operates the computer you pair with" — the codebase has no central relay service; a
+machine's owner runs `swarm-relay` themselves and provisions the URL via `swarm remote init`
+(`internal/remote/relaycfg/relaycfg.go`, `docs/operations/relay-runbook.md`). **If the closed
+test in fact routes testers through a relay the developer operates centrally**, that is a
+one-sentence addition the published page still needs — confirm before relying on this policy
+for real testers.
 
 Host at a stable public URL (GitHub Pages is fine). Replace the bracketed fields.
 
