@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <!--
+    CANDIDATE 1 - "Prompt Cap"
+
+    The literal reading of the brief. One uniform stroke weight, round caps and joins. The bar
+    lands directly on the chevron's top vertex, so the two strokes leave the same corner and the
+    junction is the S's top-left turn. The cursor is a single bar with one gentle wave in it - the
+    deviation is under two units, which is enough to see at store size and small enough that at
+    48dp the bar still reads as an underscore rather than a tilde.
+
+    S reading: bar (free end right) - diagonal down to the apex - diagonal back down-left to the
+    bottom-left terminal. Prompt reading: a capped `>` with `_` on the baseline after it.
+
+    Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
+    double hyphen, elided here because XML forbids that sequence inside a comment).
+    Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
+    Safe zone: all geometry including stroke sits inside the 66dp centre circle (max r = 30.1).
+  -->
+  <rect id="bg" width="108" height="108" fill="#08090A"/>
+  <g id="fg" fill="none" stroke="#53CE7C" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 72 38 L 34 38 L 57 54 L 34 70"/>
+    <path d="M 58 70.5 C 64 68 70 73 76 70.5"/>
+  </g>
+</svg>

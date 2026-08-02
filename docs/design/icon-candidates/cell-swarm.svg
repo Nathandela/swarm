@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <!--
+    CANDIDATE 4 - "Cell Swarm"
+
+    The swarm as multiplicity rather than motion: the cursor is three terminal cells of different
+    sizes, scattered off the baseline instead of one underscore. The S is built with the vertical
+    connector at the top left, so it resolves clearly, and the caps are flat so the cells and the
+    strokes belong to the same blocky family.
+
+    This is the candidate that bets the most on small detail, which is exactly the bet the 48dp
+    test is there to settle.
+
+    Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
+    double hyphen, elided here because XML forbids that sequence inside a comment).
+    Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
+    Safe zone: max r = 28.3.
+  -->
+  <rect id="bg" width="108" height="108" fill="#08090A"/>
+  <g id="fg">
+    <path d="M 70 37 L 35 37 L 35 45 L 56 57.5 L 35 70"
+          fill="none" stroke="#53CE7C" stroke-width="7.5" stroke-linecap="butt" stroke-linejoin="round"/>
+    <!-- Three cells, never closer than 4.5 units, which is the smallest gap that still shows at 48dp. -->
+    <g fill="#53CE7C">
+      <rect x="58" y="65" width="8" height="8"/>
+      <rect x="70.5" y="55" width="7" height="7"/>
+      <rect x="70.5" y="67" width="6.5" height="6.5"/>
+    </g>
+  </g>
+</svg>

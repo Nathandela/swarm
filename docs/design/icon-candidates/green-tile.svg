@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <!--
+    CANDIDATE 5 - "Green Tile"
+
+    The only candidate with a container. The tile is hero green and the mark is knocked out of it in
+    hero ink, which inverts the figure/ground of every other candidate and buys the most contrast
+    available from the palette at small sizes. The stroke is heavier than elsewhere because an ink
+    mark cut out of green needs more weight than a green mark on near-black to hold the same
+    presence. The cursor keeps the wave.
+
+    The rounded square drawn here is only so the shape is legible standing alone; on device the
+    launcher supplies the mask, so the real implementation is a flat hero-green background layer
+    with the ink group as the foreground.
+
+    Tokens: tile p-hero #53CE7C, mark p-hero-ink #06150C (internal/design/tokens.json; the token names carry a leading
+    double hyphen, elided here because XML forbids that sequence inside a comment).
+    Adaptive mapping: the group below is the foreground layer, p-hero is the background layer.
+    Safe zone: max r = 30.7.
+  -->
+  <rect id="bg" width="108" height="108" rx="24" fill="#53CE7C"/>
+  <g id="fg" fill="none" stroke="#06150C" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 71 37 L 34 37 L 34 46 L 56 57 L 34 68"/>
+    <path d="M 57 68.5 C 63 66 69 71 75 68.5"/>
+  </g>
+</svg>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <!--
+    CANDIDATE 6 - "Wide Rule"
+
+    The one that changes the composition rather than the details: instead of a cursor sitting after
+    the chevron, the swarm is a dashed rule running the full width underneath the whole mark, so the
+    prompt sits on a command line made of many cells. The S is smaller and higher, and the rule
+    carries the width, which gives the mark a stacked silhouette no other candidate has.
+
+    Four dashes at 7.5 units with 4-unit gaps is the coarsest dashing that still reads as plural
+    rather than as a solid rule once the icon is down to 48dp.
+
+    Tokens: mark and rule p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
+    double hyphen, elided here because XML forbids that sequence inside a comment).
+    Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
+    Safe zone: max r = 28.9.
+  -->
+  <rect id="bg" width="108" height="108" fill="#08090A"/>
+  <g id="fg" fill="none" stroke="#53CE7C">
+    <path d="M 70 31 L 38 31 L 60 46 L 38 61"
+          stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <g stroke-width="5.5" stroke-linecap="butt">
+      <path d="M 33 71 L 40.5 71"/>
+      <path d="M 44.5 71 L 52 71"/>
+      <path d="M 56 71 L 63.5 71"/>
+      <path d="M 67.5 71 L 75 71"/>
+    </g>
+  </g>
+</svg>
