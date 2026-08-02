@@ -634,6 +634,105 @@ func TestBoundVerbs_TheLedgerCannotOutliveTheSymbolsItExcuses(t *testing.T) {
 	}
 }
 
+// wiredLedgerRows are ledger entries excusing a symbol the app NOW REACHES.
+//
+// THE ROT CHECK ABOVE ONLY ASKS WHETHER THE SYMBOL STILL EXISTS, and that is the smaller half of
+// the question. A row survives a rename badly; it survives being WIRED silently. Every assertion
+// in this file treats the ledger as an escape hatch -- `unledgeredVerbs` skips a symbol the
+// moment a row exists for it -- so once a verb acquires a caller, its row goes on excusing
+// something that no longer needs excusing, and nothing anywhere fails.
+//
+// That is not a tidiness point. Two things depend on the file shrinking. PB-DS-9's exit criterion
+// is literally "android/unbound-verbs.tsv shrinks by the verbs the screens now reach", enforced
+// until now by somebody remembering. And a row's REASON is prose that stops being true when the
+// wiring lands: `App.Resync`'s said "the stale/repairing screen ... does not exist" for as long
+// as that was so, and a stale reason in an exemption file is worse than a missing one, because
+// the next reader takes it for a considered decision rather than a leftover.
+func wiredLedgerRows(rows []ledgerRow, reached map[string]bool) []ledgerRow {
+	var out []ledgerRow
+	for _, r := range rows {
+		if reached[r.Symbol] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// reachedSymbols is every ledgerable symbol production Kotlin can get to, namespaced the way the
+// ledger names them.
+//
+// EACH DIMENSION IS ASKED THE SAME WAY ITS OWN FORWARD ASSERTION ASKS IT, deliberately: a second
+// weaker notion of "reached" here could report a verb wired that
+// TestBoundVerbs_EveryBoundVerbIsCalledFromProductionKotlinOrLedgered still reports unwired, and
+// the two would demand opposite edits to the same row.
+func reachedSymbols(t *testing.T) map[string]bool {
+	t.Helper()
+	kotlin := stripKotlinComments(appKotlinSource(t))
+	out := map[string]bool{}
+
+	for _, v := range boundAppVerbs(t) {
+		if callsBoundVerb(kotlin, v) {
+			out["App."+v] = true
+		}
+	}
+	byType := boundTypeMethods(t)
+	for _, owner := range nonAppBoundTypes(byType) {
+		for _, m := range byType[owner] {
+			if callsBoundVerb(kotlin, m) {
+				out[owner+"."+m] = true
+			}
+		}
+	}
+	declared := facadeBridgeMethods(t)
+	bridge := stripKotlinComments(readFileOrFail(t, facadeBridgePath(t), "PB-BIND-3"))
+	elsewhere := stripKotlinComments(kotlinSourceExcept(t, facadeBridgePath(t)))
+	for m, live := range liveBridgeMethods(declared, bridge, elsewhere) {
+		if live {
+			out["FacadeBridge."+m] = true
+		}
+	}
+	return out
+}
+
+// TestBoundVerbs_TheLedgerCannotExcuseASymbolTheAppNowReaches is the rot check's other half.
+func TestBoundVerbs_TheLedgerCannotExcuseASymbolTheAppNowReaches(t *testing.T) {
+	for _, r := range wiredLedgerRows(readUnboundLedger(t), reachedSymbols(t)) {
+		t.Errorf("%s:%d excuses %s as deliberately unbound, and production Kotlin now calls it.\n"+
+			"Delete the row. While it stands, every check in this file treats the symbol as "+
+			"exempt -- so it is no longer covered by the control that would notice if the caller "+
+			"went away again -- and its stated reason is prose about a screen or a decision that "+
+			"has since changed, which the next reader will take for a live one.\nThe reason on "+
+			"the row today: %q",
+			mustRel(t, unboundLedgerPath(t)), r.Line, r.Symbol, r.Reason)
+	}
+}
+
+// TestBoundVerbs_TheWiredRowCheckSeesARowThatShouldHaveGone is that check's negative control,
+// driven synthetically for this file's stated reason: against the production tree a check that
+// understands nothing and a ledger with nothing wrong in it are indistinguishable.
+func TestBoundVerbs_TheWiredRowCheckSeesARowThatShouldHaveGone(t *testing.T) {
+	rows := []ledgerRow{
+		{Symbol: "App.Presence", Reason: "a blocking relay round trip", Line: 7},
+		{Symbol: "FacadeBridge.sessionRow", Reason: "no screen opens on one session", Line: 9},
+	}
+
+	if got := wiredLedgerRows(rows, map[string]bool{}); len(got) != 0 {
+		t.Errorf("the check reported %v over a ledger whose symbols nothing reaches; every row "+
+			"in a correct ledger would have to be deleted", got)
+	}
+
+	got := wiredLedgerRows(rows, map[string]bool{"FacadeBridge.sessionRow": true})
+	if len(got) != 1 || got[0].Symbol != "FacadeBridge.sessionRow" {
+		t.Fatalf("a row excusing a symbol the app now reaches was not reported: %v", got)
+	}
+
+	// AND THE NAMESPACE IS LOAD-BEARING. `sessionRow` is a FacadeBridge method and `SessionRow` is
+	// a model; a check comparing bare names would let a row about one be cleared by the other.
+	if got := wiredLedgerRows(rows, map[string]bool{"App.sessionRow": true}); len(got) != 0 {
+		t.Errorf("a row was reported wired by a same-named symbol on a different receiver: %v", got)
+	}
+}
+
 // TestBoundVerbs_TheScanHasEnoughToMeasure is defect class (i) turned on this file.
 //
 // Every assertion above is of the form "nothing was found wrong". A parser that stopped
