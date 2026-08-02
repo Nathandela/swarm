@@ -1,0 +1,77 @@
+package dev.swarm.phone.ui.screens
+
+import android.content.Context
+import android.view.View
+import android.view.ViewGroup
+
+/**
+ * Phase B slice S25 -- PB-DS-6 and PB-DS-9: the link section, composed from the component kit.
+ *
+ * WHAT IT COMPOSES. A `sectionLabel`, the clock verdict when there is one, and a `settingsRow` per
+ * repair channel inside a `sessionList`. It decides nothing about how any of them looks:
+ * `android/gate/s24_screens_test.go` fences this package to exactly that, so an `R.color`, an
+ * `R.dimen`, an `R.style`, a `setTextAppearance`, a `setPadding` or a `background =` here fails the
+ * build.
+ *
+ * **THE DESIGN HAS NO ROW FOR EITHER OF THESE THINGS, AND THAT IS SAID HERE RATHER THAN WORKED
+ * AROUND SILENTLY.** `docs/design/substrate-components.md` specifies no clock-skew notice and no
+ * per-channel arrival readout; Substrate's artifact draws neither and the retired mock draws
+ * neither. The alternative to what is below was inventing a component to carry them. What ships
+ * instead is derivation row 15 spent twice -- `settingsRow` is "a labelled row with an optional
+ * second line and an optional trailing control", and `statusLabel` is row 15's own other trailing
+ * form, "status text `Label.CardHead` / `--p-hero`". Both already exist with their own `derived:`
+ * citations, so this file adds no derivation and needs no annotation of its own.
+ *
+ * **THE LIVENESS LABEL IS ON THE LIVE CHANNELS AND NOWHERE ELSE.** `statusLabel` is `--p-hero`,
+ * and row 15 spells out that hero is the LIVENESS claim rather than a status colour -- its one
+ * other caller says "active" about encryption. A stale channel therefore gets no label at all
+ * rather than a differently-coloured one: this file makes no ink decision, and the absence is what
+ * `LinkPanelViewTest` asserts. What a stale channel gets instead is the second line, carrying
+ * `StreamView.notice` -- which says what is missing, where a colour could only say that something
+ * is.
+ *
+ * THE CLOCK LINE IS A BARE `TextView`, for the reason `ActivityPanelView`'s stale line is: there is
+ * no notice or body-copy component in the kit -- row 8's empty state is centred with 48 dp of
+ * vertical padding and is a different thing -- so it carries the model's copy and no appearance at
+ * all. That is the absence of a decision rather than one made here; reaching for `Body.Secondary`
+ * directly would be a screen choosing type.
+ *
+ * IT SITS UNDER THE HEADING AND ABOVE THE CHANNELS, which is the one placement decision here. The
+ * heading names the subject; a clock this phone cannot trust is the first thing true of it, and it
+ * is true of all four channels at once rather than of any one of them -- so it cannot attach to a
+ * row, and it has to be read before them rather than found among them.
+ *
+ * **NOTHING IN THIS FILE OWNS A CLICK**, and here that is a gap rather than the usual division.
+ * PB-SYNC-1's repair action is `App.Resync`, which stays unbound: it is rate-bounded per section
+ * 6.0 and its refusal needs rendering. So this screen reports and cannot repair, and [below] is
+ * where the rest of the Machines destination is hosted.
+ */
+object LinkTag {
+    /** `.plabel` over the four channels. */
+    const val SECTION_LABEL = "link.section.label"
+
+    /** PB-TIME-1: what the screen says when this phone's clock cannot be trusted. */
+    const val CLOCK = "link.clock"
+
+    /** One repair channel: derivation row 15. */
+    const val CHANNEL = "link.channel"
+
+    /** The parts whose ON-SCREEN ORDER is the recorded composition. */
+    val COMPOSITION: Set<String> = setOf(SECTION_LABEL, CLOCK, CHANNEL)
+}
+
+/**
+ * The link section as a view.
+ *
+ * @param below views this section does not own, hosted under it -- on the Machines destination
+ *  that is [MachinesPanelScreen.UNAVAILABLE_COPY], the sentence saying what this phone still
+ *  cannot read about its machine. Null is the shape this section has on its own.
+ */
+fun linkPanelView(
+    context: Context,
+    panel: LinkPanel,
+    below: View? = null,
+): View = TODO("agents-tracker-ah2: RED")
+
+private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

@@ -37,6 +37,11 @@ steps below are currently blocked on work that has not landed yet.
 
 - Fill in developer name (public, shown on all listings), contact email, and address details as
   prompted.
+- **Identity verification follows registration and can take several days.** Google verifies the
+  identity of every new developer account (government ID for an individual account, business
+  documents such as a D-U-N-S number for an organization account) before the account can publish
+  anything, including a closed test. This is not instant — schedule the rest of this walkthrough
+  assuming a multi-day gap between this step and step 2, not a same-day one.
 - **STOP — HAND BACK TO NATHAN.** Registration requires a **one-time USD 25 fee**, charged to a
   real payment method, and creates a persistent developer identity tied to this Google account.
   Confirm the payment and the account details with Nathan before submitting; this step is not

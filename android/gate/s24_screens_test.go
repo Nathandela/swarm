@@ -1183,6 +1183,26 @@ var s24ScreenComponents = map[string]map[string]string{
 		"sessionList": "`.prows` -- the rows' container, carrying the gap and the side padding",
 		"emptyState":  "derivation row 8 -- a heading over nothing is a section that lies",
 	},
+	// THE LINK SECTION HAS NO ROW OF ITS OWN, AND THAT IS WHY THE CLAIM IS WRITTEN OUT HERE. The
+	// derivation table specifies no clock-skew notice and no per-channel arrival readout --
+	// Substrate's artifact draws neither and the mock draws neither -- so the alternative to this
+	// claim was a new component invented to carry them. What ships instead is row 15 spent twice:
+	// `settingsRow` is a label with an optional second line, and `statusLabel` is row 15's own
+	// other trailing form, "status text `Label.CardHead` / `--p-hero`". Hero is the LIVENESS claim
+	// in this skin, which is exactly and only what a live channel is making -- so a stale channel
+	// gets no status label at all, and its absence is the assertion `LinkPanelViewTest` makes.
+	//
+	// The clock line is NOT claimed below, because it is not a component. It is a bare TextView
+	// carrying the model's copy and no appearance, which is what `ActivityPanelView` does with its
+	// stale notice and states in its own words as "the absence of a decision rather than one made
+	// here". There is no notice or body-copy component in the kit; row 8's empty state is centred
+	// with 48 dp of vertical padding and is a different thing.
+	"dev/swarm/phone/ui/screens/LinkPanelView.kt": {
+		"sectionLabel": "`.plabel` -- the one section, over the four repair channels",
+		"sessionList":  "`.prows` -- the rows' container, carrying the gap and the side padding",
+		"settingsRow":  "derivation row 15 -- one per channel: the channel, and what is true of it",
+		"statusLabel":  "row 15's status text, `--p-hero` -- the liveness claim, on live channels only",
+	},
 }
 
 // s24ScreenKitFaults reports what one screen source owes the requirement and does not spend.

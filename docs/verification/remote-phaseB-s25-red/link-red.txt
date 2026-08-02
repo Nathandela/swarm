@@ -1,0 +1,107 @@
+# S25 link section: failing-first run (GG-5), agents-tracker-ah2
+
+The defect: `ClockBanner` and `StreamView`/`StreamBadge` were fully modelled, fully unit-tested,
+reached by `FacadeBridge` -- and drawn by nothing. `FacadeBridge.clockBanner` and
+`FacadeBridge.streamView` had no caller outside the adapter and both were ledgered in
+android/unbound-verbs.tsv as models waiting for a screen.
+
+ONE CORRECTION TO THE BRIEF, recorded because it changes what was fixed. The bead names three
+models; `FacadeBridge.machineFreshness` is NOT one of them. It has a production caller at
+PhoneSurface.kt:790, on the inbox status line beside `connectionBanner().text`, and reaches the
+machines screen a second way through `MachinePane.presenceExplanation`. It is correspondingly
+absent from the unbound ledger. The orphans were two.
+
+Captured in two parts, because the two halves fail in different languages and only one of them
+can fail without compiling.
+
+
+## Part 1 -- the Go gates, written before any Kotlin existed
+
+The composition claim (`s24ScreenComponents`, android/gate/s24_screens_test.go) and the new
+channel-parity gate (android/gate/pbapp8_repairchannels_test.go) were written first. This is
+what they said with nothing behind them. It is the same form as machines-red.txt.
+
+    go test ./android/gate/ -count=1 -run "TestPBAPP8_TheChannelsTheScreenAsksAboutAreTheChannelsTheCoreRepairs|TestPBAPP8_NoChannelNameIsTypedOutsideTheAdapter|TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit" -v
+
+    branch design-system-substrate, 2026-08-02
+
+```
+=== RUN   TestPBAPP8_TheChannelsTheScreenAsksAboutAreTheChannelsTheCoreRepairs
+    pbapp8_repairchannels_test.go:134: PB-APP-8 / PB-SYNC-1: no `REPAIR_CHANNELS: List<String> = listOf(...)` in android/app/src/main/kotlin/dev/swarm/phone/ui/FacadeBridge.kt.
+        The four channels PB-SYNC-1 repairs cross the gomobile boundary as bare strings, so the app has to spell them somewhere. Spelled at a call site they are unfenced: `App.StreamState` does not validate its argument and answers "live" for a name it has never seen, so a typo renders a healthy channel over a stream nobody is watching.
+--- FAIL: TestPBAPP8_TheChannelsTheScreenAsksAboutAreTheChannelsTheCoreRepairs (0.02s)
+=== RUN   TestPBAPP8_NoChannelNameIsTypedOutsideTheAdapter
+--- PASS: TestPBAPP8_NoChannelNameIsTypedOutsideTheAdapter (0.02s)
+=== RUN   TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit
+    s24_screens_test.go:1267: PB-DS-6: 1 screens are not built out of the kit:
+        dev/swarm/phone/ui/screens/LinkPanelView.kt: the composition table claims this screen and the file does not exist, so its components are checked against nothing
+--- FAIL: TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.975s
+FAIL
+```
+
+The one PASS is a negative control that happened to be meaningful: no production Kotlin spelled
+a repair channel anywhere, which is what made the missing declaration the whole finding rather
+than one of several.
+
+
+## Part 2 -- the Kotlin suites
+
+A Kotlin test naming a class that does not exist is a COMPILE error, which is evidence that a
+file is absent and no evidence at all about behaviour. So `LinkPanelScreen.of`, its `rowFor` and
+`linkPanelView` were declared and left as `TODO()`. Every one of the 19 assertions below
+therefore failed at RUNTIME, on the absence of the behaviour it asserts.
+
+    ./gradlew --no-daemon :app:testDebugUnitTest --rerun-tasks --no-build-cache \
+        --tests "dev.swarm.phone.ui.screens.LinkPanel*"
+
+    19 tests completed, 19 failed
+    31 actionable tasks: 31 executed
+
+```
+## dev.swarm.phone.ui.screens.LinkPanelTest  (tests=10 failures=10 errors=0)
+  a stale channel never carries the liveness word, and says what is missing
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  every channel gets a row, healthy ones included, in the order asked
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  every row fills exactly one of its two slots
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a skewed clock and a holed channel are both reported
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a channel with no hole in it carries the liveness word and no notice
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  the section has a heading, and it is not the transport's word
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a skewed clock carries the verdict verbatim
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a clock inside its budget produces no notice at all
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  each row is named by its wire token and not by an invented phrase
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a repairing channel is still not live, and says a repair is in flight
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+
+## dev.swarm.phone.ui.screens.LinkPanelViewTest  (tests=9 failures=9 errors=0)
+  no row draws a liveness label and a hole in the same row
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  only a channel with no hole in it carries the kit's liveness label
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  no control is on this section, because nothing here can repair anything
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  every part carries the model's own copy
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  the link section is composed of the kit components row 15 names
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  what this section does not own is hosted under it, not instead of it
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a healthy clock draws no view at all, not an empty one
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  a holed channel says what is missing on its second line, and a whole one has none
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+  the section reads heading, then the clock, then the channels
+      kotlin.NotImplementedError: An operation is not implemented: agents-tracker-ah2: RED
+```
+
+Extracted from app/build/test-results/testDebugUnitTest/TEST-*.xml of that run rather than
+retyped, so the list is the run's own and not a transcription of it.
