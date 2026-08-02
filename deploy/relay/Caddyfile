@@ -26,9 +26,9 @@
 # PinnedSPKISHA256 forever after (mobile/relay.go). Without this directive, the first ACME
 # renewal -- roughly 60 days after deployment, unattended -- presents a new key, the SPKI
 # changes, and BOTH the phone and the machine start failing with ErrPinMismatch at once. The
-# phone words that failure as "the relay presented a certificate the machine did not pin; the
-# pairing connection is being intercepted", so a routine renewal reads to the user as an
-# active attack.
+# phone shows its RELAY_UNTRUSTED banner (ui/ConnectionUi.kt) -- "it is not presenting the
+# identity your machine published when you paired" -- with no spinner, because this is not a
+# link that comes back on its own. A routine renewal reads to the user as a security failure.
 #
 # Caddy documents this option as "against industry best practices" and "subject to removal in
 # a future version". That is a real risk and the reason relay-vps-deploy.md carries a recovery

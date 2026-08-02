@@ -188,13 +188,75 @@ This is SHA-256 over the certificate's SubjectPublicKeyInfo — the value `relay
 (`internal/remote/relaycfg/relaycfg.go`) expects: base64 of exactly 32 raw bytes. It is **not** the
 certificate fingerprint.
 
-**Caddy's automatic HTTPS renews the certificate on its own schedule and, per Caddy's default
-behavior, reuses the same private key across a renewal** unless the key is deliberately rotated —
-so the SPKI pin computed here is expected to survive routine renewal the same way
-`docs/operations/relay-runbook.md` section 8 requires. This project has not run that renewal
-against a live Caddy instance and is not claiming to have verified it; treat it as the same
-necessary-but-unverified claim section 8 already makes about `certbot --reuse-key`, and re-run
-this command to confirm the pin is unchanged after your first renewal.
+**This pin survives renewal only because the Caddyfile asks it to.** Caddy's documented default is
+to rotate: *"a new key is created for every new certificate to mitigate pinning and reduce the
+scope of key compromise"* (<https://caddyserver.com/docs/caddyfile/directives/tls>). Under that
+default the pin computed here would go stale at the first ACME renewal — unattended, roughly 60
+days after deployment — and break the phone and the machine in the same minute. `deploy/relay/Caddyfile`
+therefore sets `tls { reuse_private_keys }`, and that directive is the only reason the value below
+is durable. **If you edited the Caddyfile by hand, confirm the block is still there before you
+pin anything.**
+
+Caddy documents that option as *"against industry best practices"* and *"subject to removal in a
+future version"*, so treat pin stability as a property to re-check, not a guarantee: re-run the
+command above after your first renewal to confirm the value is unchanged, and read §9a now so the
+failure is recognisable if it ever arrives. This project has not executed a renewal against a live
+Caddy instance and does not claim to have verified the directive's effect end to end.
+
+## 9a. Recovery: the pin changed, and the phone says it does not trust the relay
+
+Do not skip this because §9 is configured correctly. `reuse_private_keys` is documented as
+removable, a Caddy upgrade can reset it, and restoring the VPS from a backup that predates the
+certificate can strand the pin too. This section is what to do when it happens.
+
+**What you will see.** The phone stops connecting and shows a banner with no spinner
+(`android/app/src/main/kotlin/dev/swarm/phone/ui/ConnectionUi.kt`, `RELAY_UNTRUSTED`):
+
+> This phone will not connect to that relay: it is not presenting the identity your machine
+> published when you paired. Pair this phone again.
+
+The machine fails at the same moment, on every dial path, with `relay: server certificate does not
+match the pin` (`relay.ErrPinMismatch`). Both endpoints break together because both check the same
+pin — the phone against the copy it stored at pairing, the machine against `relay.json`. **Two
+endpoints failing simultaneously is the signature of a rotated key, not of an attack on one of
+them.**
+
+**Step 1 — decide whether it is a renewal or a real interception.** These are distinguishable, and
+guessing is not necessary:
+
+```bash
+openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+  openssl x509 -noout -issuer -subject -dates -fingerprint -sha256
+```
+
+A routine renewal shows your own hostname in the subject, your ACME CA in the issuer (Let's Encrypt
+by default), and a `notBefore` within the last few days. Cross-check it against Caddy's own record
+of the event:
+
+```bash
+sudo journalctl -u caddy --no-pager | grep -i "certificate obtained\|renew"
+```
+
+A renewal logged by your Caddy, at a time matching `notBefore`, for your hostname, from your CA, is
+a renewal. Treat it as an interception if any of those disagree — an unexpected issuer, a hostname
+that is not yours, a `notBefore` with no corresponding Caddy log line — and in that case do **not**
+re-pin: you would be pinning the attacker. Investigate the VPS and the network path first.
+
+**Step 2 — re-pin the machine.** Recompute and rewrite the pin with the §11 command; `swarm remote
+init` overwrites `<stateDir>/remote/relay.json` in place.
+
+**Step 3 — re-pair the phone.** This step is not optional and cannot be skipped by editing anything
+on the phone. **A pin reaches a handset through the pairing exchange (msg2) and through no other
+channel** — the pairing QR has no field for one, so there is no way to hand a phone a corrected pin
+short of pairing again. Run `swarm remote pair` on the machine and scan the QR. The phone's banner
+above already names this remedy, and the phone deliberately keeps retrying while a pairing is in
+flight so the recovery is not cut off midway.
+
+**Step 4 — prevent the next one.** Confirm `tls { reuse_private_keys }` is present in
+`/etc/caddy/Caddyfile`, `sudo systemctl reload caddy`, and re-run §9 to record the new baseline
+pin. If a Caddy upgrade removed support for the directive, Caddy will fail to load the config and
+say so — check `sudo systemctl status caddy` and `journalctl -u caddy` rather than assuming the
+reload succeeded.
 
 ## 10. Verify the WebSocket upgrade end to end
 
