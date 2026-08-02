@@ -8,8 +8,16 @@ the install step.
 `docs/operations/release-signing.md` is **not** this document: it produces an `app-release.aab`,
 and `adb` cannot install an AAB.
 
-Everything below is read from the tree. Nothing below has been run on a handset — the app has
-never started on one (`docs/operations/operator-runbook.md` §3, ADR-007 B31).
+Everything below is read from the tree, and no step in THIS document has been executed. But the
+claim that used to sit here — that the app has never started on a handset, citing ADR-007 B31 —
+is **false and was superseded before this file was written**. ADR-007 B131 and B132 record two
+bring-ups: B132 put this APK on an **Android 16 (SDK 36) Galaxy A26 5G**, serial `RZGL41Y3E1A`,
+where it installed, launched, rendered its surface and had its view hierarchy dumped
+(`docs/adr/ADR-007-remote-access.md:7665`).
+
+That matters for reading everything below. The status-bar overlap B132 found is already fixed
+(`PhoneActivity.kt:103-109`), so this is not first contact with hardware — it is the first
+END-TO-END run: pair, roster, take control, type, and watch a real agent receive it.
 
 ---
 
@@ -188,7 +196,9 @@ back, from a phone that contains the fix. Build all three binaries from this bra
 
 ## 6. Troubleshooting the first launch
 
-Nothing else in the repository covers this, and the app has never started on a physical device.
+Nothing else in the repository covers this. The app HAS started on a physical device twice
+(ADR-007 B131, B132 — a Galaxy A26 5G on Android 16), so the failures below are not speculative
+for the launch path; what has never run is everything past pairing.
 
 ### 6a. Every control is dead and there is a message about keys
 
