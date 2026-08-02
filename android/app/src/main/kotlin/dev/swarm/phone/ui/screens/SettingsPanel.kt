@@ -50,10 +50,38 @@ data class SettingsPanel(
      * a user reads about the same condition is how they drift.
      */
     val notices: List<String>,
-)
+    /**
+     * agents-tracker-64rf's pairing entry point, or null on a phone with no machine.
+     *
+     * IT IS A FIELD OF ITS OWN RATHER THAN A ROW SQUEEZED INTO A [SettingsSection], because that
+     * type's `rows` is `List<SettingsRow>` -- a list of push toggles -- and a [PairedMachineRow] is
+     * not one. Reshaping the section to hold both would change what every existing reader of
+     * `sections` sees, for a reason that has nothing to do with what they read it for.
+     */
+    val machineSection: MachineSection? = null,
+) {
+    /**
+     * The section headings top to bottom, which is where "the pairing section leads" is a fact
+     * something can read rather than an accident of two fields being declared in a given order.
+     *
+     * "Which computer am I attached to" is the question this screen exists to answer for an owner
+     * who could not find the pairing entry point at all, so it leads and the preferences follow.
+     */
+    val sectionHeadingsInOrder: List<String>
+        get() = listOfNotNull(machineSection?.heading) + sections.map { it.heading }
+}
 
 /** One `.seclabel` and the rows under it. */
 data class SettingsSection(val heading: String, val rows: List<SettingsRow>)
+
+/**
+ * The paired machine's `.seclabel` and the one row under it.
+ *
+ * ITS HEADING IS THE WORD THIS APP ALREADY USES -- `PairingSurface`, `PairingFlow`,
+ * `PairingPanel`, and the `Pair a computer` step title -- so an owner who came from that flow
+ * meets the same word again rather than a new one invented for this heading alone.
+ */
+data class MachineSection(val heading: String, val row: PairedMachineRow)
 
 /**
  * One settings row: derivation table row 15.
@@ -116,6 +144,9 @@ object SettingsPanelScreen {
     /** Inventory C6.2's `.seclabel`. */
     private const val NOTIFICATIONS = "Notifications"
 
+    /** The paired machine's `.seclabel`. See [MachineSection]. */
+    private const val PAIRING = "Pairing"
+
     fun labelFor(toggle: PushToggle): String = checkNotNull(ROW_LABELS[toggle]) {
         "PB-DS-9: no settings label for $toggle. A switch with no words beside it is a control " +
             "nobody can identify, so this fails loudly rather than rendering a blank row."
@@ -128,8 +159,13 @@ object SettingsPanelScreen {
     /**
      * @param settings what [SettingsScreen] says is true now. Read once, so the panel cannot
      *  disagree with itself between two rows.
+     * @param machine the machine this phone is pinned to, or null when it is pinned to none. The
+     *  two absences are different facts and are not collapsed: NULL is "there is no pairing to
+     *  show a row about", and EMPTY is "there is one and this phone cannot read its name", which
+     *  [PairedMachineRowScreen] renders as `Paired`. Defaulting to null is what lets every call
+     *  site written before this row existed keep meaning what it meant.
      */
-    fun of(settings: SettingsScreen): SettingsPanel = SettingsPanel(
+    fun of(settings: SettingsScreen, machine: String? = null): SettingsPanel = SettingsPanel(
         title = TITLE,
         sections = listOf(
             SettingsSection(
@@ -142,6 +178,9 @@ object SettingsPanelScreen {
         // user is told what has been saved before being told it is inert.
         notices = listOf(settings.notificationsBlockedNotice, settings.pendingNotice)
             .filter { it.isNotEmpty() },
+        machineSection = machine?.let {
+            MachineSection(heading = PAIRING, row = PairedMachineRowScreen.of(it))
+        },
     )
 
     private fun rowFor(settings: SettingsScreen, toggle: PushToggle): SettingsRow {

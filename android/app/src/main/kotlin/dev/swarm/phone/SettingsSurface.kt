@@ -117,7 +117,7 @@ class SettingsSurface(
                 outcome.visibility = View.GONE
             }
 
-            is PhoneStartup.Ready -> draw(read(startup.app))
+            is PhoneStartup.Ready -> draw(read(startup.app), machineOf(startup.app))
         }
     }
 
@@ -155,6 +155,24 @@ class SettingsSurface(
         )
     }
 
+    /**
+     * The machine this phone is pinned to, or null when it is pinned to none.
+     *
+     * NULL IS ALSO WHAT AN UNREADABLE STATE ANSWERS, and that is the same composition
+     * `PairingSurface` already makes rather than a disagreement with it: there, `isPinned` answers
+     * false when `stateSummary` throws, so an unreadable state is not a pairing and `machineOf`'s
+     * `""` never reaches the screen. Here the two questions are one call, and the honest answer to
+     * "is there a pairing to offer a replace control over" when nothing can be read is no.
+     *
+     * EMPTY IS NOT NULL AND IS NOT SYNTHESISED HERE. A pairing whose name this phone cannot read
+     * is [PairedMachineRowScreen]'s `Paired`; a machine with no name is not a machine.
+     */
+    private fun machineOf(app: App): String? = try {
+        app.stateSummary().machine.takeIf { it.isNotEmpty() }
+    } catch (unreadable: Exception) {
+        null
+    }
+
     /** True once the outcome for the op this panel issued has landed. */
     private fun machineAnswered(bridge: FacadeBridge): Boolean {
         val id = pendingOp ?: return false
@@ -175,9 +193,9 @@ class SettingsSurface(
      * one would take the switch out from under the finger that just moved it. [SettingsPanel] is
      * a data class of data classes, so "has anything a user can see changed" is one comparison.
      */
-    private fun draw(next: SettingsScreen) {
+    private fun draw(next: SettingsScreen, machine: String?) {
         screen = next
-        val panel = SettingsPanelScreen.of(next)
+        val panel = SettingsPanelScreen.of(next, machine)
         outcome.visibility = if (outcome.text.isEmpty()) View.GONE else View.VISIBLE
         if (panel == drawn && host.childCount > 0) return
         drawn = panel
@@ -240,7 +258,7 @@ class SettingsSurface(
         } catch (refused: Exception) {
             outcome.text = ErrorRouter.route(refused.message.orEmpty()).message
         }
-        draw(next)
+        draw(next, machineOf(app))
     }
 
     /**
