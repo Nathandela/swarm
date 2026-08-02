@@ -22,6 +22,23 @@ nothing that serves. `docs/operations/relay-runbook.md` section 0 says the same.
 proxy terminating real TLS in front of a loopback-only relay is not one option among several — it
 is the only way to get `wss://` at all.
 
+**This document overrides a standing security recommendation, and that is recorded here rather than
+left as a silent contradiction.** `docs/ops/play-closed-testing-application.md` §0 says to run the
+relay on a **private** network for the closed test — localhost, Tailscale, WireGuard or an SSH
+tunnel — because every per-identity bound in the relay is a bound on nothing when minting an
+identity is free, and global per-bucket caps and connection-rate admission control are recorded as
+production blockers and are **not** done. Standing it up on the public internet, as everything below
+does, is a deliberate departure: a handset on cellular cannot reach a LAN relay, and the app carries
+no VPN or tunnel client of its own, so a publicly reachable `wss://` endpoint is the only thing such
+a phone can dial. What you accept in exchange is that any stranger who reaches the hostname can mint
+identities freely and grow `relay.db` without bound, and **the hostname is not a secret**: Caddy gets
+its certificate through ACME, and every ACME issuance is published in Certificate Transparency logs
+within minutes, so the name is discoverable by anyone watching a CT feed and obscurity is not a
+defence. Take the recommendation instead whenever the handset is on Wi-Fi you control; when you
+cannot, restrict inbound 443 to known addresses if your provider's firewall allows it, and alarm on
+`relay.db` size — unexpected growth is the first symptom of every defect in this class, and there
+have been five.
+
 ---
 
 ## 0. Prerequisites
