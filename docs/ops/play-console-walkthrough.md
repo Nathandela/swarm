@@ -37,6 +37,17 @@ steps below are currently blocked on work that has not landed yet.
 
 - Fill in developer name (public, shown on all listings), contact email, and address details as
   prompted.
+- **Decide account type: Individual or Organization — this needs Nathan, not this script.** The
+  registration form asks which one to create, and the two paths are not symmetric:
+  - `docs/ops/play-closed-testing-application.md` §8 notes an Organization account is exempt from
+    the 12-tester/14-day continuous-opt-in requirement that otherwise gates promotion to
+    production; an Individual account is not.
+  - Converting an existing account from Individual to Organization later is a supported Play
+    Console flow. There is **no supported path the other way** — undoing an Organization choice
+    means creating an entirely new developer account and transferring every app to it, not a
+    setting to flip back.
+  This script does not recommend one — get Nathan's choice before submitting the registration
+  form, not after.
 - **Identity verification follows registration and can take several days.** Google verifies the
   identity of every new developer account (government ID for an individual account, business
   documents such as a D-U-N-S number for an organization account) before the account can publish
@@ -67,7 +78,7 @@ declarations this script can source individually.
 
 This "Create app" action itself is low-stakes: an app shell with no uploaded build is normally
 deletable from Console if abandoned. **The action that actually locks anything in is the first AAB
-upload in step 12, not this one.**
+upload in step 13, not this one.**
 
 ## 3. Play App Signing — automatic, not a decision point
 
@@ -292,6 +303,15 @@ Source: §8 step 4; `agents-tracker-2qm` description.
    `agents-tracker-xfw`). **If the AAB in step 13 is built on or after August 31, 2026, confirm
    `agents-tracker-xfw` has landed before uploading it** — an AAB built at 35 past that date will
    be rejected at upload regardless of everything else in this script being correct.
+5. **The developer account exists and identity verification has actually completed**, not merely
+   been submitted. Step 1 requires this and it can take several days — confirm the account can
+   publish (Console will say so) before assuming step 2 can start today.
 
-If any of these four is not true, stop before opening Play Console at all — every step above that
+If any of these five is not true, stop before opening Play Console at all — every step above that
 depends on them is marked `BLOCKED` for exactly this reason.
+
+**A green checklist means the prerequisites exist — it does not mean the rest of this script can
+run unattended.** Three fields are deliberately left for Nathan to answer live, because nothing in
+the repo sources them: the public store-listing contact email (step 4), the release notes text
+(step 13), and the countries list (step 14). Expect to stop for those three even once every item
+above is satisfied.
