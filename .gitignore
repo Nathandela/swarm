@@ -23,8 +23,15 @@
 *.db
 .beads-credential-key
 
-# build artifacts
+# build artifacts. Every cmd/ target compiles to the repo root under an unqualified
+# `go build ./cmd/...`, and this tree has six recorded incidents of a stray artifact reaching
+# a commit. /swarm-relay was left here by a runbook verification that built the binary to
+# prove its config template actually boots -- the right thing to do, needing the right guard.
 /swarm
+/swarm-relay
+/swarm-remote
+/swarm-char
+/swarm-fake-agent
 
 # Android (S13)
 android/.gradle/
