@@ -234,7 +234,7 @@ swarm lets you keep an eye on the coding agents running on your own computer, fr
 phone.
 
 Agents work for a long time and then stop to ask you something. If you are not at your desk,
-they wait. swarm sends that question to your phone, shows you what the agent is doing, and
+they wait. swarm shows you that question on your phone, shows you what the agent is doing, and
 lets you answer -- so the work carries on.
 
 WHAT IT DOES
@@ -242,7 +242,6 @@ WHAT IT DOES
 - See every agent session running on your machine, live.
 - Read the terminal output as it happens.
 - Answer an agent that is blocked waiting on a decision.
-- Get a notification the moment a session needs you.
 - Stop a session that has gone the wrong way.
 
 HOW IT IS BUILT
@@ -275,6 +274,21 @@ client and it is not a remote desktop -- it is a window onto processes you alrea
 ```
 
 *(Trim the last paragraph if you would rather not set that expectation in a closed test.)*
+
+> **This listing promised push until 2026-08-02 and the build cannot deliver it.** The bullet
+> *"Get a notification the moment a session needs you."* was removed, and the opening paragraph's
+> "swarm sends that question to your phone" became "shows you that question on your phone", because
+> neither is true of what ships. No Firebase project exists and the `com.google.gms.google-services`
+> plugin is deliberately not applied, so `FirebaseApp` never initialises and
+> `FirebaseMessagingService` is never invoked (`android/app/build.gradle.kts:285-303`). An APK built
+> from this module installs, runs, registers no token and receives no wake. The privacy policy in §9
+> hedges this correctly — "when push is available" — and this listing did not; a store listing is a
+> claim made to Google and to every tester.
+>
+> **Restore both when, and only when, blocker 2 is closed** — create the Firebase project, add
+> `google-services.json`, apply the plugin, and confirm a wake actually arrives on a handset
+> (§10 item 2). Background wake is "the feature the phone exists for" per §0, so this is a listing
+> that should get its bullet back rather than one that never had a right to it.
 
 **Graphic assets — all mandatory, none currently exist in the repo**
 
