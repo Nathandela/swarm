@@ -173,6 +173,28 @@ class SettingsSurface(
      */
     val touchFilteredActions: List<View> = listOf(needsInput, finished, replace)
 
+    /**
+     * Called once a `Replace this computer` press has settled, so the window that hosts this panel
+     * can redraw itself (agents-tracker-2lz5).
+     *
+     * WHY THE PANEL CANNOT JUST REDRAW. The press changes the answer to a question asked one level
+     * up: `PhoneSurface.renderReady` decides whether this handset is shown the app at all, and a
+     * revoke makes that answer PAIR_ONLY. [render] is the settings panel and nothing above it, so
+     * a settle that ended there left the screen in a four-tab scaffold whose gate was never
+     * re-asked -- and the next redraw would come from a journal event, which is exactly what the
+     * revoke just stopped arriving.
+     *
+     * IT IS A CALLBACK RATHER THAN A CALL INTO THE SURFACE, which is the same shape the mirror
+     * event already uses: `PhoneSurface` assigns `pairing.onPaired = ::render` so that a pairing
+     * SUCCESS swaps the window at the moment it happens. This is the other direction of the same
+     * transition, and the surface owns both wirings -- a panel reaching up into its host would be
+     * the coupling that taking [dispatch] as a parameter exists to avoid.
+     *
+     * NULL IS A PANEL NOBODY HOSTS, which is the default instance's true condition rather than an
+     * error to report: it is never attached, so there is no window to redraw.
+     */
+    var onReplaced: (() -> Unit)? = null
+
     fun render() {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> {
@@ -235,9 +257,13 @@ class SettingsSurface(
      *
      * EMPTY IS NOT NULL AND IS NOT SYNTHESISED HERE. A pairing whose name this phone cannot read
      * is [PairedMachineRowScreen]'s `Paired`; a machine with no name is not a machine.
+     *
+     * A REVOKED PAIRING IS NO PAIRING (agents-tracker-d0b8). The pinned machine survives a revoke
+     * by design -- `phonecore` filters the durable blob on it -- so the name alone would go on
+     * offering a `Replace this computer` control over a registration that has already ended.
      */
     private fun machineOf(app: App): String? = try {
-        app.stateSummary().machine.takeIf { it.isNotEmpty() }
+        app.stateSummary().takeIf { it.paired }?.machine?.takeIf { it.isNotEmpty() }
     } catch (unreadable: Exception) {
         null
     }
@@ -345,10 +371,21 @@ class SettingsSurface(
      * go with the registration, and neither comes back without pairing again (ADR-007 B133
      * decision 3).
      *
-     * IT NAVIGATES NOWHERE. A revoked phone is an unpaired phone, and `PhoneSurface.renderReady`
-     * gates on `PairOnlyScreen.presentationOf` before anything else -- so the next draw is the
-     * screen an unpaired phone gets, with one offer on it, and [render] is the whole of the second
-     * half. A "now go and pair" step would be a second thing to keep in agreement with that gate.
+     * IT NAVIGATES NOWHERE, AND THE TWO FACTS THAT MAKES TRUE WERE BOTH MISSING. This comment used
+     * to assert them -- "a revoked phone is an unpaired phone, and `PhoneSurface.renderReady` gates
+     * on `PairOnlyScreen.presentationOf` before anything else, so the next draw is the screen an
+     * unpaired phone gets" -- and neither half held. The gate read the pinned machine, which
+     * nothing clears, so a revoked phone answered FULL_APP forever (agents-tracker-d0b8); and the
+     * settle called an unqualified `render()`, which binds to [render] and redraws this panel
+     * alone, so the gate was not re-asked by the press that changes its answer
+     * (agents-tracker-2lz5). Between them the phone was left in the app shell with both key tiers
+     * destroyed and the pairing entry point on a screen it would never be shown -- unrecoverable
+     * short of clearing the app's data, which is strictly worse than the burial 64rf fixed.
+     *
+     * BOTH ARE NOW LOAD-BEARING RATHER THAN ASSERTED. `App.StateSummary.paired` is a fact the
+     * revoke's purge clears durably, and [onReplaced] is the whole-window redraw that re-asks the
+     * gate in the same frame. A "now go and pair" step would still be a second thing to keep in
+     * agreement with that gate; what changed is that the gate now agrees with the press.
      */
     private fun onReplace(control: View) {
         val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
@@ -373,7 +410,11 @@ class SettingsSurface(
                 answer.onFailure {
                     outcome.text = FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
                 }
-                render()
+                // THE WHOLE WINDOW, not this panel. The purge ran in the `finally` above whether
+                // or not the command reached the machine, so the presentation gate's answer has
+                // already changed and something has to ask it again -- see [onReplaced]. It
+                // redraws this surface on its way past, so there is no second `render()` here.
+                onReplaced?.invoke() ?: render()
             },
         )
     }

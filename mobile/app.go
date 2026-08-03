@@ -626,6 +626,25 @@ func (a *App) ConnectionState() (state string, err error) {
 // one coordinate that says how to REACH the machine, and phonecore.State's own doc records that
 // a phone missing it holds a valid content key, a valid send-seq and no destination with
 // nothing failing loudly. That is exactly the condition this flag exists to surface.
+//
+// PAIRED IS THE FACT THE PRESENTATION GATE TURNS ON, and it is a field because inferring it from
+// the machine name was agents-tracker-d0b8. `PhoneSurface.renderReady` asks
+// `PairOnlyScreen.presentationOf` whether this handset is shown the app at all, and it asked
+// `Machine != ""` -- reasonable on its face, since a completed pairing clears the attempt record
+// and the pinned machine is the trace it leaves. But the machine endpoint id is a COORDINATE:
+// phonecore filters the durable blob on it and every mutating verb signs over it, so nothing
+// clears it, and the revoke behind "Replace this computer" -- which deregisters the device,
+// rotates the epoch, severs the gateway and destroys both key tiers -- left it exactly where it
+// was. The gate answered "show the app" for a handset with no registration, and the pairing entry
+// point lives on the settings screen inside that app. There was no way back short of clearing the
+// app's data.
+//
+// IT IS THE OLD CRITERION PLUS THE MISSING ONE, deliberately, rather than a better criterion. A
+// pairing is still what makes Machine non-empty on a handset (Config.MachineID is "" on a phone,
+// so nothing else can), and phonecore.State.Disowned is the durable record of the owner ending it.
+// Deriving Paired from something else -- Restored, or key material -- would change which phones
+// read as paired TODAY, and that is not this defect's subject: the phones that work must go on
+// working, and the revoked one must stop.
 func (a *App) StateSummary() (sum *StateSummary, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -644,6 +663,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 		PendingOps:  pending,
 		Restored:    len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
 		Reconciled:  reconciled,
+		Paired:      st.Machine != "" && !st.Disowned,
 	}, nil
 }
 
@@ -685,43 +705,48 @@ func (a *App) InstallContentKey(key []byte) (err error) {
 	return core.Mutate(func(st *phonecore.State) { copy(st.Keys.ContentKey[:], key) })
 }
 
-// PurgeKeys is PB-KEY-7's lock purge. It is the verb the Android lifecycle layer calls on
-// every InvalidationEvent -- backgrounding, screen off, auth expiry -- and it must never be
-// reached from an exported component (PB-SEC-11); see dev.swarm.phone.runtime.ContentLock.
+// PurgeKeys is PB-KEY-7's REVOKE/UNPAIR purge, and it must never be reached from an exported
+// component (PB-SEC-11).
 //
-// WHAT IT DOES. Zeroize the live epoch CONTENT key, unbind MailboxRouter from it, drop the
-// decrypted session/snapshot/reply caches from memory AND destroy their sealed container at
-// rest, and forget the content-tier coordinates this process can no longer re-seal. The
-// content tier is left LOCKED -- exactly where a process woken by a push already is.
+// ITS TRIGGER MOVED AND THIS COMMENT DID NOT, which is worth recording because the stale version
+// described the opposite verb. It used to read "PB-KEY-7's lock purge ... the verb the Android
+// lifecycle layer calls on every InvalidationEvent -- backgrounding, screen off, auth expiry",
+// and it listed as deliberate non-behaviour the two things this verb now does. ADR-007 B133
+// removed every phone-side user authentication mechanism, so there is no lock event to call it:
+// dev.swarm.phone.SwarmApplication records that nothing observes the screen lock any more, and
+// the only caller left is the revoke behind Settings' "Replace this computer".
 //
-// WHAT IT DELIBERATELY DOES NOT DO, per ADR-007 B35/B36. It does not destroy the sealed
-// content key at rest, and it does not touch the wake tier at all. Destroying the content key
-// is a permanent brick: the handset holds no other source for those bytes and the grant
-// watermark refuses the machine's re-appended grant as a replay, so the first screen lock
-// would land the phone in PB-KEY-3's terminal state. Destroying the wake key stops the handset
-// being wakeable, because a push arrives with nobody there to authorize anything (B9/B16).
+// WHAT IT DOES. Zeroize BOTH tier keys, unbind MailboxRouter from the content key, drop the
+// decrypted session/snapshot/reply caches from memory AND destroy their sealed containers at
+// rest, drop the push token, and record the unpair durably (phonecore.State.Disowned) so the
+// presentation gate stops showing the app to a handset with no registration.
 //
-// RECOVERY IS UnlockContent -- a fresh Keystore unwrap, which is PB-KEY-7's own recovery
-// clause and the round trip PB-SEC-2's 60-second window is enforced at.
+// IT IS NOT RECOVERABLE IN PLACE, which is the inversion B133 makes rather than an oversight.
+// While the trigger was a screen lock, sparing the sealed content key and the whole wake tier was
+// correct: PB-KEY-10 leaves nothing on the handset that could re-derive those bytes and the grant
+// watermark refuses the machine's re-appended grant as a replay, so destroying them made the
+// first lock a permanent brick (ADR-007 B35/B36). For a revoke the same fact reads the other way
+// -- the pairing is the thing being destroyed, a revoked handset must not stay wakeable, and
+// re-pairing mints a fresh epoch and fresh keys anyway. UnlockContent opens nothing afterwards.
 //
-// An error means the DECRYPTED CACHES at rest survived (a full disk, a read-only data
-// directory). The memory half has happened regardless: it cannot fail, PB-KEY-7 lists it
-// first, and gating it behind a write that can fail left the key live with the screen locked.
+// An error means the material AT REST survived (a full disk, a read-only data directory). The
+// memory half has happened regardless: it cannot fail, PB-KEY-7 lists it first, and gating it
+// behind a write that can fail left the key live and bound on a device the owner has revoked.
 func (a *App) PurgeKeys() (err error) {
 	defer barrier(&err)
 	core, err := a.ready()
 	if err != nil {
 		return err
 	}
-	// An EXPLICIT purge, not a Save whose keys happen to be zero: with the content tier
-	// locked -- which is exactly where a screen lock leaves the phone -- custody cannot tell
-	// a purge from the wake path holding a key it could not read, and would keep the sealed
-	// blob (phonecore.Store.PurgeKeys).
+	// An EXPLICIT purge, not a Save whose keys happen to be zero: a process that came up on a
+	// push holds zeros for a content key it merely could not read and Saves constantly, so
+	// custody cannot tell the two apart from the bytes and would keep the sealed blob
+	// (phonecore.Store.PurgeKeys). It is also what records the unpair, which no Save can.
 	//
 	// The facade's own decrypted caches go whether or not the durable half succeeded, for the
 	// same reason the core purges its memory unconditionally: clearing them cannot fail, and
-	// returning first left the app rendering decrypted session content with the screen
-	// locked. The error still reaches the caller -- the blobs at rest survived.
+	// returning first left the app rendering decrypted session content on a handset its owner
+	// has just revoked. The error still reaches the caller -- the blobs at rest survived.
 	err = core.PurgeKeys()
 	a.mu.Lock()
 	a.journal = nil

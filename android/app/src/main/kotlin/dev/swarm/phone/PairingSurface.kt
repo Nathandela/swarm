@@ -561,12 +561,19 @@ class PairingSurface(
     }
 
     /**
-     * Whether a machine is pinned -- the durable fact a completed pairing leaves behind, and the
-     * only thing that distinguishes a paired phone from one that has never paired once the
-     * attempt record is cleared.
+     * Whether this phone is paired -- the durable fact a completed pairing leaves behind, and what
+     * distinguishes a paired phone from one that has never paired once the attempt record is
+     * cleared.
+     *
+     * IT READS `paired` AND NOT THE PINNED MACHINE (agents-tracker-d0b8), and here that difference
+     * is the way OUT rather than the way in. This is what makes [render] construct a `PAIRED`
+     * attempt -- "you are already paired", no scan offered -- so a phone whose registration the
+     * owner revoked would arrive from [dev.swarm.phone.ui.screens.PairOnlyScreen]'s one offer at a
+     * panel telling it there is nothing to do. The machine endpoint id survives a revoke by design;
+     * the pairing does not.
      */
     private fun isPinned(startup: PhoneStartup.Ready): Boolean = try {
-        startup.app.stateSummary().machine.isNotEmpty()
+        startup.app.stateSummary().paired
     } catch (unreadable: Exception) {
         false
     }

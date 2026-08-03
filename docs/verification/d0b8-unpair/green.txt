@@ -1,0 +1,44 @@
+=== GREEN: go build ./... && go vet ./... ===
+clean
+
+=== GREEN: the three suites this change is fenced by ===
+ok  	github.com/Nathandela/swarm/internal/phonecore	9.065s
+ok  	github.com/Nathandela/swarm/mobile	15.592s
+ok  	github.com/Nathandela/swarm/mobile/conformance	183.828s
+ok  	github.com/Nathandela/swarm/android/gate	6.246s
+
+=== GREEN: golangci-lint run ===
+level=error msg="[formatter] gci: command \"go env -json GOMOD\": exec: \"go\": executable file not found in $PATH: "
+level=warning msg="Failed to discover go env: command \"go env -json GOCACHE GOROOT\": exec: \"go\": executable file not found in $PATH: "
+=== GREEN: golangci-lint run ===
+clean (no findings)
+
+=== go test ./... (full) -- only non-ok lines shown ===
+--- FAIL: TestPBDOC7_EveryEnforcedClauseCanFail (1.47s)
+    --- FAIL: TestPBDOC7_EveryEnforcedClauseCanFail/orphan_slice (0.07s)
+        phaseb_manifest_test.go:218: PB-DOC-7: the checker ACCEPTED a tree with a orphan slice:
+            slices: 32 (27 on the S19 exit path, terminal: ['S20', 'S21', 'S22', 'S23', 'S24'])
+            spec: 162 active requirements (1 withdrawn) | manifest: 162 owned
+            section 11: 32 readable rows cross-checked (contradictions only; --strict-section11 also requires completeness)
+            manifest OK: every requirement owned exactly once
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/verify	11.063s
+FAIL
+(the single failure above is internal/verify's PB-DOC-7 orphan-slice NEGATIVE CONTROL.
+ It is PRE-EXISTING at main HEAD 00b2c82 -- reproduced on a pristine detached worktree of
+ HEAD with no local changes -- and is unrelated to this work. Filed as its own bd issue.)
+
+=== GREEN: Kotlin, :app:testDebugUnitTest --rerun (forced, not up-to-date) ===
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL in 1m 6s
+suites=85 tests=680 failures=0 errors=0 skipped=0
+
+(--rerun is deliberate: agents-tracker-4ok records that `gradlew test` can exit 0 having run
+ ZERO tests after a build collision, and the un-forced run before this one finished in 3s with
+ the task UP-TO-DATE. The tally is read from app/build/test-results/testDebugUnitTest/*.xml, so
+ "green" here means 680 tests ran and none failed rather than "the build succeeded".)
+
+=== The AAR was rebuilt (android/build-aar.sh) ===
+StateSummary gained an exported field, so the checked-out artifact the Kotlin module compiles
+against had to be regenerated, and mobile/testdata/exported_surface.golden with it. The golden's
+whole diff is one line: `field StateSummary.Paired bool`.

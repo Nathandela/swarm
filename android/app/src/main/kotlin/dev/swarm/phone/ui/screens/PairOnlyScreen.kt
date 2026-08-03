@@ -14,7 +14,7 @@ enum class Presentation {
     /** One offer to pair, and nothing else. [pairOnlyView] draws it. */
     PAIR_ONLY,
 
-    /** Today's four-tab scaffold, which a pinned machine is what makes appear. */
+    /** Today's four-tab scaffold, which a live pairing is what makes appear. */
     FULL_APP,
 }
 
@@ -54,11 +54,22 @@ object PairOnlyScreen {
     /**
      * Which screen this phone gets.
      *
-     * THE FACT ARRIVES AS A READER AND NOT AS A BOOLEAN because reading it can THROW -- a state
-     * directory that will not open, a core newer than this build -- and the interesting case is
-     * exactly the one a Boolean would have decided at the call site: a phone that cannot tell.
-     * `mobile/pairing.go` clears the attempt record on `paired`, so the pinned machine is the only
-     * thing left distinguishing a paired phone from one that has never paired.
+     * THE FACT ARRIVES AS A READER because reading it can THROW -- a state directory that will not
+     * open, a core newer than this build -- and the interesting case is exactly the one a plain
+     * parameter would have decided at the call site: a phone that cannot tell. Three call sites
+     * each catch that separately today, and a value passed in would leave the decision testable at
+     * none of them.
+     *
+     * WHAT IT READS IS WHETHER THIS PHONE IS PAIRED, AND IT USED TO READ THE MACHINE'S NAME. The
+     * inference was that `mobile/pairing.go` clears the attempt record on `paired`, so the pinned
+     * machine is the only trace a completed pairing leaves. The trace is real; the inference was
+     * wrong. The machine endpoint id is a COORDINATE -- `phonecore.OpenStore` filters the durable
+     * blob on it and every mutating verb signs over it -- so nothing clears it, including
+     * [dev.swarm.phone.SettingsSurface]'s `Replace this computer`, which deregisters the device,
+     * rotates the epoch, severs the gateway and destroys both key tiers. This gate answered
+     * FULL_APP for a handset with no registration left, and the pairing entry point is inside the
+     * app it was therefore shown: unpairable short of clearing the app's data
+     * (agents-tracker-d0b8). `App.StateSummary.paired` states the fact instead of implying it.
      *
      * **"I CANNOT TELL" ANSWERS [Presentation.PAIR_ONLY], AND THE ASYMMETRY IS THE POINT.**
      * Guessing [Presentation.FULL_APP] lands a handset in a four-tab shell whose every screen
@@ -67,10 +78,10 @@ object PairOnlyScreen {
      * PAIR_ONLY lands it on the one screen that can get it out of that state. The costs are not
      * symmetric, so the default is not a coin toss.
      *
-     * @param machineReader the machine pinned to this phone, or "" -- `stateSummary().machine`.
+     * @param pairedReader whether this phone is usably paired -- `stateSummary().paired`.
      */
-    fun presentationOf(machineReader: () -> String): Presentation = try {
-        if (machineReader().isEmpty()) Presentation.PAIR_ONLY else Presentation.FULL_APP
+    fun presentationOf(pairedReader: () -> Boolean): Presentation = try {
+        if (pairedReader()) Presentation.FULL_APP else Presentation.PAIR_ONLY
     } catch (unreadable: Exception) {
         Presentation.PAIR_ONLY
     }

@@ -290,6 +290,11 @@ type PushPreference struct {
 // StateSummary is what a restart actually restored. It exists so a test -- and the debug
 // screen -- can observe that the phone resumed its durable coordinates rather than
 // silently starting from zero.
+//
+// Paired is the one field here that is a PRODUCT FACT rather than a restored coordinate, and it
+// is here because this is the type the screens already read. Every other field describes what the
+// pairing pinned; Paired says whether that pairing is still one. See App.StateSummary for what it
+// is derived from and why the machine NAME was the wrong thing to infer it from.
 type StateSummary struct {
 	Machine     string
 	EpochID     int64
@@ -298,6 +303,7 @@ type StateSummary struct {
 	PendingOps  int
 	Restored    bool
 	Reconciled  bool
+	Paired      bool
 }
 
 // Freshness is PB-APP-11's verdict: how recently the MACHINE last spoke, and whether what

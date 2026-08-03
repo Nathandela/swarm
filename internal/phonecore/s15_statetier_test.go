@@ -154,6 +154,7 @@ func s15State() State {
 		PushPreference:      PushPreference{Alerts: true},
 		ReconciledEpoch:     s15ReconciledEpoch,
 		LastHeardAt:         s15LastHeardAt,
+		Disowned:            true,
 	}
 	return st
 }
@@ -352,6 +353,16 @@ func s15Inventory() []s15Tier {
 		{field: "ReconciledEpoch", needles: s15Num(uint64(s15ReconciledEpoch), 4),
 			why: "records that a fold of the machine's rollback authorities happened; adopting one " +
 				"needs the content key, so nothing reads it while locked"},
+
+		{field: "Disowned", needles: s15Str(`"disowned":true`),
+			why: "the revoke's own verdict: this registration is over (PB-KEY-7, agents-tracker-d0b8). " +
+				"It is the record that the pairing ENDED rather than anything the pairing protected -- " +
+				"the same class as Stale and LastHeardAt -- and it must be readable with the content " +
+				"tier locked, which after a revoke is where the phone permanently is: the purge " +
+				"destroyed the tier, so a verdict sealed under it could never be read again and every " +
+				"launch would come up believing the phone is paired. THE NEEDLE IS THE KEY AND THE " +
+				"VALUE TOGETHER, which no other row needs: a Boolean has no distinctive byte form of " +
+				"its own, so `true` alone would match any other flag on disk"},
 	}
 }
 

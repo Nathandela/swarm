@@ -193,7 +193,13 @@ class PhoneSurface(
     // the phone's one destructive verb now, and a revoke settling onto a window nobody is holding
     // is what the attach/detach pair exists to stop -- the default instance is never detached by
     // anyone.
-    private val settings = SettingsSurface(activity, runtime, dispatch)
+    //
+    // AND THE REDRAW, for the reason the line above it gives in the other direction. A revoke ends
+    // the pairing, so it changes what [renderReady]'s gate answers -- and the settle inside the
+    // panel can only redraw the panel, inside a window still made of the app the phone has just
+    // stopped being entitled to. Nothing else would ask again: the next redraw would come from a
+    // journal event, and the revoke is what stops those arriving (agents-tracker-2lz5).
+    private val settings = SettingsSurface(activity, runtime, dispatch).also { it.onReplaced = ::render }
 
     /**
      * IT REMEMBERS THE OPERATION IT ISSUED, which is what makes PB-INPUT-2's lease a fact rather
@@ -784,7 +790,7 @@ class PhoneSurface(
      */
     private fun converge(app: App) {
         val paired = try {
-            app.stateSummary().machine.isNotEmpty()
+            app.stateSummary().paired
         } catch (unreadable: Exception) {
             return
         }
@@ -865,7 +871,12 @@ class PhoneSurface(
         // nothing is waiting on the user, which is a claim about a machine this phone is in no
         // position to make. [PairOnlyScreen] owns the decision, including the case where the state
         // cannot be read at all.
-        if (PairOnlyScreen.presentationOf { startup.app.stateSummary().machine } ==
+        //
+        // THE FACT IS `paired` AND NOT THE MACHINE'S NAME (agents-tracker-d0b8). Nothing clears the
+        // pinned machine -- phonecore filters the durable blob on it -- so a gate that read it
+        // showed the app to a handset whose owner had just revoked it, with the pairing entry point
+        // on the settings screen inside.
+        if (PairOnlyScreen.presentationOf { startup.app.stateSummary().paired } ==
             Presentation.PAIR_ONLY
         ) {
             drawPairOnly()

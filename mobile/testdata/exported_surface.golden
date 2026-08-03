@@ -69,6 +69,7 @@ field Snapshot.Stale bool
 field Snapshot.Text string
 field StateSummary.EpochID int64
 field StateSummary.Machine string
+field StateSummary.Paired bool
 field StateSummary.PendingOps int
 field StateSummary.Reconciled bool
 field StateSummary.RelayCursor int64

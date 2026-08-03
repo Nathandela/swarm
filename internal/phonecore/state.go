@@ -87,7 +87,16 @@ import (
 // That is the lie PB-APP-8 forbids, and the whole point of the coordinate is that NOTHING ELSE
 // on the phone can notice the condition: a withholding relay leaves no gap, answers every poll,
 // and is itself the source of the only other liveness signal (ADR-007 B121).
-const StateSchemaVersion = 8
+// v9 adds disowned, the record that the OWNER ended this registration (PB-KEY-7's revoke, ADR-007
+// B133). The bump is required for the same reason v8's was, and the failure it prevents is the
+// worse one: a build one version back drops the field, so the first launch on it comes up
+// believing the phone is paired -- in the four-tab scaffold, holding no key of either tier,
+// reading a roster from a machine that deregistered it, with the pairing entry point on a screen
+// the presentation gate will not show. That is agents-tracker-d0b8 restored by a downgrade, and it
+// is unrecoverable short of clearing the app's data. The field is omitempty, so an INSTALLED v8
+// blob loads as not-disowned, which is the correct reading of a phone that was paired and never
+// revoked.
+const StateSchemaVersion = 9
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -140,20 +149,55 @@ type State struct {
 	// willing to reach the machine through, and it must survive a restart because pairing
 	// is the ONE authenticated moment it can be learned.
 	RelaySPKIPin []byte
-	RoutingID    string                    // this phone's relay routing id
-	EpochID      uint32                    // current epoch the content key belongs to
-	Keys         crypto.EpochKeys          // wake + content keys for EpochID
-	SendSeq      map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive      map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch   uint32                    // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq     uint64                    // highest accepted grant seq for GrantEpoch
-	WakeReplay   uint64                    // highest accepted push-wake counter
-	RelayCursor  uint64                    // relay mailbox read cursor the next poll resumes from
-	Sessions     []CachedSession           // journal-derived session model
-	Snapshots    []Snapshot                // server-rendered terminal grids, latest per session
-	PendingOps   []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
-	OpOutcomes   map[string]schema.Control // durable operation outcomes, keyed by operation id
-	Stale        map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	// Disowned records that the OWNER ENDED this registration -- the revoke behind "Replace
+	// this computer" (PB-KEY-7's trigger, ADR-007 B133). Every coordinate above says what the
+	// pairing pinned; this is the only one that says the pairing is over, and without it "is
+	// this phone usably paired" has no answer on a handset whose keys were destroyed
+	// (agents-tracker-d0b8).
+	//
+	// IT IS A COORDINATE OF ITS OWN RATHER THAN AN EMPTIED Machine, and that is forced rather
+	// than preferred. Machine is what OpenStore FILTERS the durable blob on, so a store that
+	// wrote an empty one would write a blob it discards on the next process start -- the
+	// pairing, the epoch, the sealed content key, the relay cursor and the send-seq ceilings,
+	// silently, on the first Android process death. That is S9, and OpenStore's initialiser
+	// paragraph exists to make it unwritable; clearing the field from a caller puts it back by
+	// another door. Machine is also what every mutating verb signs over
+	// (crypto.Command.Canonical refuses an empty one), so a cleared name outlives the revoke
+	// as a phone that cannot author anything even once it has paired again.
+	//
+	// NOR IS IT DERIVABLE FROM KEY MATERIAL, which is the other shape it could have taken and
+	// the one that needs no new field. Holding no content key is the ORDINARY condition of a
+	// push-woken process (PB-KEY-2) and of a paired phone between an epoch rotation and the
+	// grant that fills it: hasSealedContentKey answers false for a blob left over from the
+	// previous epoch, which is exactly where mobile.App.pin leaves a pairing that lands in a
+	// new one. A gate derived from key material shows the pairing screen to a phone that has
+	// just finished pairing.
+	//
+	// IT IS CLEARTEXT for StaleStreams' and LastHeardAt's reason: it is a record ABOUT the
+	// registration and not content under it, and the load path has to read it with the content
+	// tier locked -- which is where a revoked phone permanently is, the purge having destroyed
+	// the tier.
+	//
+	// IT IS NOT MONOTONIC, unlike the replay guards it sits near. A pairing CLEARS it, because
+	// a pairing is the owner acting and is the one act that makes a disowned registration
+	// current again -- a flag that could only be set would replace an unpairable phone with a
+	// permanently unpairable one. What protects it from a writer that has not noticed the
+	// revoke is the purge stamp rather than a merge rule; see Save and disown.
+	Disowned    bool
+	RoutingID   string                    // this phone's relay routing id
+	EpochID     uint32                    // current epoch the content key belongs to
+	Keys        crypto.EpochKeys          // wake + content keys for EpochID
+	SendSeq     map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive     map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch  uint32                    // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq    uint64                    // highest accepted grant seq for GrantEpoch
+	WakeReplay  uint64                    // highest accepted push-wake counter
+	RelayCursor uint64                    // relay mailbox read cursor the next poll resumes from
+	Sessions    []CachedSession           // journal-derived session model
+	Snapshots   []Snapshot                // server-rendered terminal grids, latest per session
+	PendingOps  []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	OpOutcomes  map[string]schema.Control // durable operation outcomes, keyed by operation id
+	Stale       map[Bucket]bool           // buckets whose content may not be trusted until reconciled
 	// StaleStreams are the REPAIR CHANNELS whose content may not be trusted (PB-SYNC-1).
 	// It is a second set rather than a view over Stale because marking and clearing happen
 	// at different granularities and one bit cannot carry both: a gap in the SHARED bucket
@@ -270,7 +314,16 @@ type Store interface {
 	Load() State
 	Save(State) error
 	// PurgeKeys is PB-KEY-7's REVOKE/UNPAIR purge: it destroys BOTH tier keys and everything
-	// sealed under either of them, in memory and at rest.
+	// sealed under either of them, in memory and at rest, and RECORDS THE UNPAIR durably
+	// (State.Disowned).
+	//
+	// The record is part of the purge rather than a caller's follow-up because nothing else can
+	// witness it: every coordinate a pairing pinned is still there afterwards -- it has to be,
+	// since one of them is what the durable blob is filtered on -- so a phone that destroyed
+	// both tiers and kept quiet about it goes on describing itself as paired. That is
+	// agents-tracker-d0b8, and the cost is not cosmetic: the presentation gate reads that
+	// description, so the handset stays in the app shell and the pairing entry point is on a
+	// screen it will not be shown.
 	//
 	// IT DESTROYS THE SEALED BLOBS, and the history of that clause is worth carrying because
 	// it flipped twice. It first said so; ADR-007 B44 struck it, correctly, while the trigger
@@ -359,8 +412,13 @@ type stateFile struct {
 	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
 	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
 	RelaySPKIPin        []byte `json:"relay_spki_pin,omitempty"`
-	RoutingID           string `json:"routing_id"`
-	EpochID             uint32 `json:"epoch_id"`
+	// Disowned is the revoke's durable verdict (see State.Disowned). It is cleartext beside
+	// the machine id rather than inside a container because the two are read together: the
+	// coordinate says which registration this is and this says whether it is still one, and a
+	// revoked phone has no content tier left to open.
+	Disowned  bool   `json:"disowned,omitempty"`
+	RoutingID string `json:"routing_id"`
+	EpochID   uint32 `json:"epoch_id"`
 
 	PushPreference  PushPreference `json:"push_preference,omitzero"`
 	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
@@ -616,8 +674,16 @@ func (s *fileStore) Save(st State) error {
 	// 2's "a real key always wins" makes its stale keys win over the purge. Re-apply what the
 	// purge destroyed instead: the rest of the snapshot still lands, because refusing the
 	// whole Save would hold the purge by losing every unrelated coordinate with it.
+	//
+	// IT RE-APPLIES THE UNPAIR TOO, and that is the same clause rather than a second one. The
+	// revoke arrives from an Android lifecycle callback while the drain, the op queue and the
+	// send path all hold snapshots taken before it, and State.Disowned is adopted as given like
+	// every other non-guard field -- so the first of them to finish would put the phone back in
+	// the app shell holding no keys, which is the brick with one extra step. The purge stamp is
+	// what tells the two apart, and it already does: a caller with a CURRENT stamp has seen the
+	// revoke, which is what makes a pairing able to clear the flag through an ordinary Save.
 	if st.purgeGen < s.purgeGen {
-		st = dropAllKeyMaterial(st)
+		st = disown(st)
 	}
 	// A CALLER ARRIVING WITH A REAL CONTENT KEY HAS PROVED THE TIER IS OPEN, and the containers
 	// have to be told. resealTier's "a real key always wins" branch is about to seal that key
@@ -800,6 +866,23 @@ func dropAllKeyMaterial(st State) State {
 	return st
 }
 
+// disown returns st holding no key material of either tier AND the durable record that the owner
+// ENDED this registration. It is the whole of what a revoke leaves behind, in one place, because
+// the two halves are one act: a phone that destroyed its keys and still describes itself as paired
+// is the brick agents-tracker-d0b8 records -- in the app shell, with the pairing entry point on a
+// screen the presentation gate will not show it, unrecoverable short of clearing the app's data.
+//
+// IT IS SEPARATE FROM dropAllKeyMaterial because that function models a phone that HOLDS nothing,
+// which a locked or push-woken process also does, and the record here is not about holding
+// anything. Keeping them apart is what lets the flag be set by the revoke and only by the revoke.
+//
+// State.Disowned carries why this is a coordinate rather than an emptied Machine.
+func disown(st State) State {
+	st = dropAllKeyMaterial(st)
+	st.Disowned = true
+	return st
+}
+
 // PurgeKeys is PB-KEY-7's purge: BOTH tiers are destroyed and everything sealed under either
 // one goes with them, in memory and at rest. Nothing is unsealed and neither KEK is consulted
 // -- destroying a blob has never required being able to read it, which is what lets the purge
@@ -841,7 +924,7 @@ func (s *fileStore) PurgeKeys() error {
 	defer s.mu.Unlock()
 
 	s.purgeGen++
-	s.st = dropAllKeyMaterial(s.st.clone())
+	s.st = disown(s.st.clone())
 	s.st.purgeGen = s.purgeGen
 	s.wakeTier, s.contentTier = sealedTier{opened: true}, sealedTier{opened: true}
 	s.wakeState = stateTier{opened: true}
@@ -1108,6 +1191,7 @@ func (s *fileStore) load() error {
 		MachineSignPub:      f.MachineSignPub,
 		MachineRelayAuthPub: f.MachineRelayAuthPub,
 		RelaySPKIPin:        f.RelaySPKIPin,
+		Disowned:            f.Disowned,
 		RoutingID:           f.RoutingID,
 		EpochID:             f.EpochID,
 		PushPreference:      f.PushPreference,
@@ -1340,6 +1424,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		MachineSignPub:      st.MachineSignPub,
 		MachineRelayAuthPub: st.MachineRelayAuthPub,
 		RelaySPKIPin:        st.RelaySPKIPin,
+		Disowned:            st.Disowned,
 		RoutingID:           st.RoutingID,
 		EpochID:             st.EpochID,
 		PushPreference:      st.PushPreference,

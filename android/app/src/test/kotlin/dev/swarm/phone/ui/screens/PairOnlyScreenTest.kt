@@ -23,15 +23,26 @@ import org.junit.Test
  * decision can be checked without a window. This is the same shape one level out -- which SCREEN
  * the window holds.
  *
- * ## Why the fact arrives as a reader and not as a Boolean
+ * ## Why the fact arrives as a reader and not as a plain value
  *
- * The pinned machine is the durable trace a completed pairing leaves: `mobile/pairing.go` clears
- * the attempt record on `paired`, so after a success the ONLY thing distinguishing a paired phone
- * from one that has never paired is `stateSummary().machine`. Reading it can THROW -- a state
- * directory that will not open, a core newer than this build -- and today three call sites each
- * catch that separately (`PairingSurface.isPinned`, `PhoneSurface.converge`, and the caller this
- * change adds would be the third). A Boolean parameter would leave the interesting case, the one
- * where the phone cannot tell, decided at each of those call sites and testable at none of them.
+ * Reading the phone's durable state can THROW -- a state directory that will not open, a core
+ * newer than this build -- and today three call sites each catch that separately
+ * (`PairingSurface.isPinned`, `PhoneSurface.converge`, and the caller this change adds would be
+ * the third). A plain parameter would leave the interesting case, the one where the phone cannot
+ * tell, decided at each of those call sites and testable at none of them. A reader keeps it here,
+ * which is the whole reason this decision is a function and not a Boolean at the call site.
+ *
+ * ## Why the fact is "is this phone paired" and not "what is its machine called"
+ *
+ * It read the machine NAME first (`stateSummary().machine`), on the reasoning that a completed
+ * pairing clears the attempt record and the pinned machine is the only trace left. The trace is
+ * real and the inference was wrong: the machine endpoint id is a COORDINATE -- `phonecore`
+ * filters the durable blob on it and every mutating verb signs over it -- so nothing clears it,
+ * including the revoke behind `Replace this computer`, which destroys both key tiers and leaves
+ * the name exactly where it was. This gate answered FULL_APP for a handset whose registration was
+ * gone, and the pairing entry point lives on the screen it was refusing to show
+ * (agents-tracker-d0b8). The summary now states whether the phone is USABLY paired, and the
+ * asymmetry below is unchanged by that: it is a better fact read the same way.
  *
  * THE ANSWER TO "I CANNOT TELL" IS PAIR_ONLY AND THAT IS A DELIBERATE ASYMMETRY. Guessing FULL_APP
  * lands a handset in a four-tab shell whose every screen reads a roster it has no connection to
@@ -43,22 +54,46 @@ class PairOnlyScreenTest {
 
     @Test
     fun `unpaired phone is offered only the pairing screen`() {
-        // No pinned machine is what "never paired" looks like once the attempt record is cleared.
+        // Not paired is what a fresh install looks like once the attempt record is cleared.
         assertEquals(
             "a phone with no machine pinned to it is shown the full app: four tabs, a triage " +
                 "inbox over an empty roster, and the pairing screen somewhere below the fold",
             Presentation.PAIR_ONLY,
-            PairOnlyScreen.presentationOf { "" },
+            PairOnlyScreen.presentationOf { false },
         )
     }
 
     @Test
-    fun `a pinned machine is what makes the rest of the app appear`() {
+    fun `a pairing is what makes the rest of the app appear`() {
         assertEquals(
             "a paired phone is still being offered the pairing screen, so a user who has paired " +
                 "cannot reach their sessions",
             Presentation.FULL_APP,
-            PairOnlyScreen.presentationOf { "nathans-mbp" },
+            PairOnlyScreen.presentationOf { true },
+        )
+    }
+
+    /**
+     * agents-tracker-d0b8, at the level of the decision.
+     *
+     * A REVOKED PHONE READS THE SAME AS ONE THAT NEVER PAIRED, and that is the design rather than a
+     * simplification of it: what this screen has to offer is identical in both cases -- one offer
+     * to pair -- and the difference between "never had a machine" and "had one until this morning"
+     * is a fact for the words on the screen to carry, not for the gate to branch on. What the gate
+     * needs is that the two are not told apart in the WRONG direction, which is what happened: the
+     * revoked phone read as paired, and the one screen that could have repaired it was the one it
+     * was refused.
+     */
+    @Test
+    fun `a phone whose registration was revoked is offered the pairing screen again`() {
+        assertEquals(
+            "a phone whose owner pressed Replace this computer is still shown the full app. Both " +
+                "key tiers are destroyed, the machine has deregistered it and no journal event " +
+                "will ever arrive again -- and the pairing entry point lives on the settings " +
+                "screen inside the shell it is being kept in. There is no way out short of " +
+                "clearing the app's data",
+            Presentation.PAIR_ONLY,
+            PairOnlyScreen.presentationOf { false },
         )
     }
 
@@ -66,7 +101,7 @@ class PairOnlyScreenTest {
     fun `a phone that cannot read its own pairing state is treated as unpaired`() {
         // Every failure the read can produce, answered the same way. The class of the throw is not
         // the point -- what matters is that no branch of it reaches the app shell.
-        val unreadable = listOf<() -> String>(
+        val unreadable = listOf<() -> Boolean>(
             { throw IllegalStateException("the state directory could not be opened") },
             { throw RuntimeException("the core refused") },
             { throw NoSuchElementException("no summary") },

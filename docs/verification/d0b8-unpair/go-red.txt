@@ -1,0 +1,61 @@
+=== RED: internal/phonecore (agents-tracker-d0b8) ===
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/d0b8_unpair_test.go:55:18: core.State().Disowned undefined (type State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:62:19: core.State().Disowned undefined (type State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:68:28: readStateFile(t, dir).Disowned undefined (type stateFile has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:72:72: reopened.Disowned undefined (type State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:139:19: core.State().Disowned undefined (type State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:144:28: readStateFile(t, dir).Disowned undefined (type stateFile has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:167:45: st.Disowned undefined (type *State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:171:18: core.State().Disowned undefined (type State has no field or method Disowned)
+internal/phonecore/d0b8_unpair_test.go:175:71: reopened.Disowned undefined (type State has no field or method Disowned)
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+=== RED: mobile/conformance (agents-tracker-d0b8) ===
+# github.com/Nathandela/swarm/mobile/conformance_test [github.com/Nathandela/swarm/mobile/conformance.test]
+mobile/conformance/d0b8_unpair_test.go:38:13: before.Paired undefined (type *swarmmobile.StateSummary has no field or method Paired)
+mobile/conformance/d0b8_unpair_test.go:54:11: after.Paired undefined (type *swarmmobile.StateSummary has no field or method Paired)
+mobile/conformance/d0b8_unpair_test.go:99:9: sum.Paired undefined (type *swarmmobile.StateSummary has no field or method Paired)
+FAIL	github.com/Nathandela/swarm/mobile/conformance [build failed]
+FAIL
+
+=== RED: android/gate (agents-tracker-d0b8, agents-tracker-2lz5) ===
+--- FAIL: TestD0B8_ThePresentationGateAsksWhetherThePhoneIsPairedAndNotWhatItsMachineIsCalled (0.01s)
+    d0b8_unpair_test.go:124: agents-tracker-d0b8: the presentation gate reads { startup.app.stateSummary().machine }. Whether this phone is USABLY paired is the question it decides, and after a revoke the honest answer is no -- while every other fact on the summary still describes the registration that ended. A gate that reads the machine's NAME answers FULL_APP for a handset whose keys are destroyed, whose machine deregistered it, and whose only way out is the screen this gate is refusing to show
+--- FAIL: TestD0B8_TheRePairingFlowAgreesWithTheGate (0.00s)
+    d0b8_unpair_test.go:145: agents-tracker-d0b8: PairingSurface.isPinned reads {
+                startup.app.stateSummary().machine.isNotEmpty()
+            }. It decides whether the pairing panel offers the SCAN flow or reports that this phone is already paired, so reading a coordinate the revoke does not clear sends the revoked handset from the pair-only screen to a panel that refuses to pair it
+--- FAIL: TestPB2LZ5_TheReplaceSettleReachesTheWholeWindowAndNotOnlyTheSettingsPanel (0.00s)
+    d0b8_unpair_test.go:172: agents-tracker-2lz5: the replace settle is {
+                val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+                
+                
+                outcome.text = ""
+                dispatch.press(
+                    control,
+                    SendPlane.COMMAND,
+                    work = {
+                        try {
+                            app.revokeThisDevice()
+                        } finally {
+                            
+                            
+                            runtime.purgeKeys()
+                        }
+                    },
+                    settle = { answer ->
+                        
+                        
+                        answer.onFailure {
+                            outcome.text = FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
+                        }
+                        render()
+                    },
+                )
+            }. `render()` here is `SettingsSurface.render` -- the settings panel and nothing above it -- so the presentation gate is not re-evaluated by the press that changes its answer. The screen stays on the four-tab scaffold until the next onResume, and journal events stop arriving precisely because the revoke severed the link
+    d0b8_unpair_test.go:181: agents-tracker-2lz5: PhoneSurface wires nothing to the settings surface's replace callback, so the callback exists and fires into nobody. `pairing.onPaired = ::render` is the same wiring for the mirror event, and it is one line above where the settings surface is built
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.868s
+FAIL

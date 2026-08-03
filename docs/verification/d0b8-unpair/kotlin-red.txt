@@ -1,0 +1,7 @@
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:62:45 Return type mismatch: expected 'String', actual 'Boolean'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:72:45 Return type mismatch: expected 'String', actual 'Boolean'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:96:45 Return type mismatch: expected 'String', actual 'Boolean'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairOnlyScreenTest.kt:117:47 Argument type mismatch: actual type is '() -> Boolean', but '() -> String' was expected.
+FAILURE: Build failed with an exception.
+BUILD FAILED in 5s

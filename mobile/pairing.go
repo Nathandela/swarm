@@ -851,6 +851,16 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		if out.Machine.MachineEndpointID != "" {
 			st.Machine = out.Machine.MachineEndpointID
 		}
+		// THE UNPAIR ENDS HERE, and it is the reason a revoke can be recorded durably at all
+		// (phonecore.State.Disowned). A flag the revoke sets and nothing clears would replace an
+		// unpairable phone with a permanently unpairable one -- the handset would complete this
+		// handshake and still be shown the pairing screen, for good.
+		//
+		// It is CLEARED RATHER THAN MERGED, and the Save behind this Mutate is what makes that
+		// safe: a pre-revoke writer arrives with an older purge stamp and has the unpair
+		// re-applied, while this state was read after it. So the one act that can clear the flag
+		// is the one act that proves it has seen it, which is the owner pairing again.
+		st.Disowned = false
 		newEpoch = st.EpochID != out.Machine.EpochID
 		if newEpoch {
 			st.Keys = crypto.EpochKeys{}

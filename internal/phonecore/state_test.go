@@ -104,6 +104,7 @@ func fullState() State {
 		Stale:               map[Bucket]bool{replyBucket(7): true},
 		StaleStreams:        map[string]bool{StreamJournal: true},
 		LastHeardAt:         1753900000000,
+		Disowned:            true,
 	}
 }
 
@@ -444,6 +445,16 @@ const stateV7Fixture = `{"schema_version":7,"machine":"m1","machine_static":"oaG
 // poll, and is itself the source of the only other liveness signal (ADR-007 B121).
 const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"hPJbGpYBeXu34Ub3WP7aZ1tJB3D9iqeNhT7TTnXIrK8P6sGdWFuy9xwbpRW/FKCR/wpjAXP90vcitbQn","content_key":"AwfT5hR5qtbhxGZGYrz1UpBREKgZZVwBzdZmlhwnh2qOuTgH9Q3eyHgd44QB+lOOeLEmB81RHtQQpwKR","wake_state":"phivocSvyexkNimLclLozrWLhBwtNKBR62NlSbpfQcBdKBhO74q0qkZJcTUcOjWdY0KaiaoE4NxUGeCmL3S3ih0t2q9Gm5yLUlA=","content_kept":"HbPSffp/swWt4sNhdsxM9ee7HiedO/iID0toRsT86lpBWOqe9ML1U9ncv2oRm1n6dG5kuKmBwpsaUzCVfTEQMB+7bXqHFBshprbXQQlTfS5cme/FPEw9bkNyT/+0FYzwPlQ6F+UfWK+WWVG3ZZwRWYQ+zENzfS74A+i9Nzc5iGCEghYBo7lb2tuQKY/DHl+y1Aj6ruvdGoCrNKEi3vn56XKu25rC0Psep1D0zDqM2sbmKP7L8IAy3sC1BkLBvUgM4Vl3OvSHSWOMVXTe4jI/nP1UMeSrMGdhzjshlFVbKHm7wcVZTyuA98abyZboLTCI4tBJroNAYLaP/OfCm7y5r+uIJDtAKUtbEVpzc0txeUY4m2reVLLlhkZFJ4Xg7D8YEJ0+L8yC6qI03YcAp+/938pxOvLPfNvkjjPBv8xvE2tYOWfSSx2fA00nkR7rX+aqsHNE2TaEnWIeFd3hRR5V+4Sqctjw/E2KLxuE75e3DUuG8D8Zn08fap9ES9T8uk5IeOKIPXPt/J3r2tRC7Tr155XP1fBD","content_purgeable":"ERUT6HrGCfcR6YOQS1tqoSkPQeY6gqI2WmJmXriI9Sfe43f1NJvy2BRrb/ZE2HBb/HUd1R79v8BNvfae5lyrH2wfGx3snbMQmwRd84ZwY7wugMa4PQyMaaEVBiPgHYrCwyFejONtYOS9sGZZMd0tnOXwt1XZuSa7JTv6k27VSnM4cq1EJY8jj3zHPW49kICbZPCmSIjYg+7nx38leMjPSb6gcj43WxxRzly9B/ic/7mTRDhjsulfp1NlK4xa0XwiaJEtPIU3ljxSKTTFEsK9/bQflwAYdVVIOsMa3UAWIpBjSZzyxqieOBdYeLukrLTM62iqnjOEVF8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
+// stateV9Fixture is the PINNED v9 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v9 adds disowned, PB-KEY-7's record that the OWNER ended this registration
+// (ADR-007 B133). A build one version back drops it, and what comes up is agents-tracker-d0b8
+// exactly: a phone that believes it is paired, holding no key of either tier, in a four-tab shell
+// reading a roster from a machine that deregistered it, with the pairing entry point on the one
+// screen the presentation gate will not show. Every other coordinate a pairing pinned survives a
+// revoke by design -- one of them is what the blob is FILTERED on -- so this field is the only
+// thing that can carry the fact.
+const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"9A8+xA7qCVgjeQmNLMlmphMYLglEdfmvDlMC3Z0xyKFQHKICgvCTC6Y/qtXno2uPRkgFAcj9ZXIaKd6+","content_key":"z+o0S1vblLNcliSxEpKgiX7c2HbabSse8BoxlDiXvcUBsQVIo5yIAtZ7+bt6HKWKAQQ3RrqBCUADAwU5","wake_state":"VIaWolwwUV1eygdw8dkwzyTAurcQEJtZd0cqh0nyTblN5TlnH6LyZNgZhI4Mz1zg3YgfiplYONEZzoyBEkzjQXMXggGtV5/F3qE=","content_kept":"WQtT1MV2/CT6tSlSemtn/ksK7RnblCFENQi35DzNuYeGHAwxfn4344S3cXRFqyb4+rPy34Sgihgp8/sCpC4TMtPhen+Ha0l7F9VXfFW5hhNTtvYBUYehUJNue+3/KZLqsq60CeZ9yJDf2yYI9oh6VFpfFx/FMOxQRDNckAdVRW0MRJ1bPXTyFUr3A18kbPzVfiZo8u5xkpE/+iJ0q/skNXdFJ8eXJDDQc99XvzTITGl+uvQL72lE7BfT5gIF9Y3iWUWEPri8HTdoEtKLdaeaW2SZgSEILwa0rOCLVPVFqCAd+JRADLZ20jT7GVwD79w5or5cGXArfNXVw9K9XRL0NCxy55u2gpJZsc7pCre8PCGAMXA9Skwf+GJQq5qek8JKYqZXy302wOyiK8jGvZV1aHxOWOAalSK7dEjYUF07RSKGbg6CfXazHESNF+zbJatzrcQm+h/zfh+tE1VCwSefzHelOAIIlA0juS1Rzel99z18/rAyN7/Np27/nNGUjHpvEmTa6OSsFjA3V4uv/YXtDGK0MY1f","content_purgeable":"dSBXI9e9MQVcUcwpfuPkaRP4vT1ADKOIT+8I7umnrMV77yqworL08cH/jGP3ZGHgMZprckW5eGpZjmJ1cdF/iQ5F+wapazgFwEmCZkHVy/tp9r6lvSt1aviIopZfIaGUzLLRxAWhJIl+O+RMIVyFv1CsXySA8/zlh+llDJ1iq3U3vtIXbnx2wf6AtfV7bMp+pSQIQoW0B9mTF9cKSjGoy+XKOt8j0SzIYK2XVYJJCvOGl/MD0u7QOgSHV02zyQWAYYnumpdUDl2qvPzjERxbnBgHQZPT6/oRtZ2au5w8JImOwfcmxKDRt0KnGd9LSdcmtXZP8APK6/BXjeklrQmD9EGxAQ==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
 var stateFixtures = map[int]string{
 	1: stateV1Fixture,
 	4: stateV4Fixture,
@@ -451,6 +462,7 @@ var stateFixtures = map[int]string{
 	6: stateV6Fixture,
 	7: stateV7Fixture,
 	8: stateV8Fixture,
+	9: stateV9Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
