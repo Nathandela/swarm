@@ -13,3 +13,8 @@ The suites this slice adds or touches:
   dev.swarm.phone.ui.screens.PairingGuidanceViewTest: tests=12 failures=0 errors=0
   dev.swarm.phone.ui.screens.PairingPanelScreenTest: tests=19 failures=0 errors=0
   dev.swarm.phone.ui.screens.PairingPanelViewTest: tests=11 failures=0 errors=0
+
+The PB-E2E-2 label ledger in PhoneSurfaceControlsTest sources the scan control's words
+from PairingPanelScreen.SCAN_CTA (team-lead ruling). Verified to still fail when the
+surface stops carrying those words: reverting PairingSurface to the old literal produced
+failures=1 in that suite.
