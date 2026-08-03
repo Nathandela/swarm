@@ -10,8 +10,10 @@
     The cap is the chevron's bottom stroke repeated, and the whole three-leg zigzag sits in the
     y 38-70 box the original `>` occupied alone, so the S kept the prompt's proportions.
 
-    The cursor is the wiggle made SQUARE: one bar with a single step in it, mitred, which is what a
-    terminal cursor mid-blink looks like rather than what a brush stroke looks like.
+    The cursor is a STRAIGHT bar on the S's own baseline (owner direction, 2026-08-03). It was
+    stepped, and before that waved; both were the mark trying to be swarmy in the one place a
+    terminal is not. An underscore in a prompt is flat, and the letter beside it is already doing
+    the moving.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
@@ -24,6 +26,6 @@
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg" fill="none" stroke="#53CE7C" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter">
     <path d="M 57 38 L 34 48.7 L 57 59.3 L 34 70"/>
-    <path d="M 59 73 L 67 73 L 67 67 L 77 67"/>
+    <path d="M 61 70 L 79 70"/>
   </g>
 </svg>

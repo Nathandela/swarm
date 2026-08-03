@@ -15,6 +15,8 @@
     supplies the mask, so the real implementation is a flat hero-green background layer with the
     ink group as the foreground.
 
+    The cursor is a STRAIGHT bar on the S's own baseline (owner direction, 2026-08-03).
+
     Tokens: tile p-hero #53CE7C, mark p-hero-ink #06150C (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-hero is the background layer.
@@ -26,6 +28,6 @@
   <rect id="bg" width="108" height="108" rx="16" fill="#53CE7C"/>
   <g id="fg" fill="none" stroke="#06150C" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter">
     <path d="M 56 36 L 34 48 L 56 60 L 34 72"/>
-    <path d="M 58 74 L 66 74 L 66 68 L 76 68"/>
+    <path d="M 60 72 L 78 72"/>
   </g>
 </svg>

@@ -10,8 +10,9 @@
     from 10 to 8.5 - enough that the three legs keep an open channel between them at 48dp instead
     of fusing into a slab. The box grew slightly (y 36-72) for the same reason.
 
-    The cursor is a solid bar with a step in it - the wiggle, made blocky - and it is the one
-    filled shape here, which is what keeps it reading as a cursor beside a stroked letter.
+    The cursor is a STRAIGHT solid bar on the S's own baseline (owner direction, 2026-08-03),
+    and it is the one filled shape here, which is what keeps it reading as a cursor beside a
+    stroked letter without needing a step to distinguish it.
 
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
@@ -25,7 +26,7 @@
   <g id="fg">
     <path d="M 57 36 L 34 48 L 57 60 L 34 72"
           fill="none" stroke="#53CE7C" stroke-width="8.5" stroke-linecap="butt" stroke-linejoin="miter"/>
-    <!-- The cursor: one bar, stepped. -->
-    <path d="M 60 65 L 69 65 L 69 69 L 78 69 L 78 76 L 69 76 L 69 72 L 60 72 Z" fill="#53CE7C"/>
+    <!-- The cursor: one straight bar, on the zigzag's own baseline. -->
+    <rect x="62" y="67.75" width="18" height="8.5" fill="#53CE7C"/>
   </g>
 </svg>
