@@ -150,7 +150,12 @@ object PairingPanelScreen {
             // a scanner offered mid-handshake is the dead end PB-PAIR-4 describes: BeginPairing
             // fail-fasts while a device is registered, so the scan leads to a refusal the user
             // cannot resolve from the handset.
-            if (scanner == ScannerState.SCANNING) controls += PairingControl.SCAN
+            // ASKABLE, not "already ours". This read `scanner == ScannerState.SCANNING`, so the
+            // control was offered only where the permission was already granted -- and the app's
+            // only `requestPermissions(CAMERA)` is that control's listener, so nothing could ever
+            // ask for it. A fresh install resolves to PERMISSION_DENIED and got a paste field and
+            // no camera, for the life of the install (agents-tracker-qx9m).
+            if (PairingFlow.offersScanner(scanner)) controls += PairingControl.SCAN
             if (PairingFlow.offersManualEntry(scanner)) {
                 controls += PairingControl.TYPED_PAYLOAD
                 controls += PairingControl.USE_TYPED_PAYLOAD

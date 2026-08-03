@@ -1,0 +1,12 @@
+# Gate green: the same gate on the fixed tree.
+
+=== RUN   TestQX9M_TheOnlyCameraAskHangsOffTheScanControl
+--- PASS: TestQX9M_TheOnlyCameraAskHangsOffTheScanControl (0.03s)
+=== RUN   TestQX9M_ThePairingPanelDecidesNoScannerStateOfItsOwn
+--- PASS: TestQX9M_ThePairingPanelDecidesNoScannerStateOfItsOwn (0.00s)
+=== RUN   TestQX9M_TheReachabilityScanDiscriminates
+--- PASS: TestQX9M_TheReachabilityScanDiscriminates (0.00s)
+=== RUN   TestQX9M_ThePanelScanSeesAnInlinedCameraState
+--- PASS: TestQX9M_ThePanelScanSeesAnInlinedCameraState (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/android/gate	0.725s

@@ -1,5 +1,7 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.PairingAttempt
 import dev.swarm.phone.ui.PairingFlow
 import dev.swarm.phone.ui.PairingStep
@@ -130,11 +132,19 @@ class PairingPanelScreenTest {
     }
 
     @Test
-    fun `a denied camera withdraws the scanner and offers the typed fallback`() {
-        // PB-PAIR-2: a denied camera must not be a dead end. And an ORDINARY denial is re-askable,
-        // so it does not send the user to a Settings screen where nothing is wrong.
+    fun `an ordinary denial keeps the typed fallback and still offers the re-askable scanner`() {
+        // PB-PAIR-2 HAS TWO CLAUSES AND THIS STATE IS WHERE BOTH LAND. A denied camera must not
+        // be a dead end -- hence the fallback -- and the permission must be REQUESTED, which is
+        // the clause that was never tested: the app's only `requestPermissions(CAMERA)` is this
+        // control's click listener, so withdrawing the control here is what made the ask
+        // unreachable (agents-tracker-qx9m). An ORDINARY denial is re-askable, which is the same
+        // reason it does not send the user to a Settings screen where nothing is wrong.
         assertEquals(
-            setOf(PairingControl.TYPED_PAYLOAD, PairingControl.USE_TYPED_PAYLOAD),
+            setOf(
+                PairingControl.SCAN,
+                PairingControl.TYPED_PAYLOAD,
+                PairingControl.USE_TYPED_PAYLOAD,
+            ),
             panel(
                 PairingStep.SCAN,
                 holding = false,
@@ -144,7 +154,10 @@ class PairingPanelScreenTest {
     }
 
     @Test
-    fun `only a permanent denial routes to system settings`() {
+    fun `only a permanent denial routes to system settings, and it withdraws the scanner`() {
+        // The one state that takes the scan control away, and the only one that may: Android will
+        // not show the prompt again, so a scan button here could only fail silently -- and the
+        // route that can actually undo it is the one offered instead.
         assertEquals(
             setOf(
                 PairingControl.TYPED_PAYLOAD,
@@ -157,6 +170,103 @@ class PairingPanelScreenTest {
                 scanner = ScannerState.PERMISSION_PERMANENTLY_DENIED,
             ).controls,
         )
+    }
+
+    // ---- what a phone that has NEVER BEEN ASKED is offered ------------------
+
+    /**
+     * The camera as a REAL PHONE ANSWERS IT, resolved rather than named.
+     *
+     * Every assertion above hands this file a `ScannerState` by hand, and that is precisely how a
+     * screen with no reachable camera shipped: the suite never once asked what state a phone that
+     * has never been asked for the permission is actually in. It is DENIED --
+     * `PermissionStateResolver` answers `!hasAskedBefore -> DENIED`, and that row exists because
+     * `shouldShowRequestPermissionRationale` is false before the first ask as well as after a
+     * permanent one.
+     */
+    private fun camera(granted: Boolean, asked: Boolean, rationale: Boolean) =
+        PairingFlow.scannerState(
+            PermissionStateResolver.resolve(
+                permission = AppPermission.CAMERA,
+                sdkInt = 35,
+                granted = granted,
+                hasAskedBefore = asked,
+                showRationale = rationale,
+            ),
+        )
+
+    @Test
+    fun `a fresh install is offered the control that requests the camera`() {
+        // THE FIELD REPORT, AS A TEST (agents-tracker-qx9m). The owner installed the
+        // internal-testing build on a real handset and found no camera and no scan button -- only
+        // the paste field. The catch-22 is closed at both ends: this state has no permission, the
+        // only code in the app that can request one is the scan control's listener, and the panel
+        // did not draw the control.
+        val controls = panel(
+            PairingStep.SCAN,
+            holding = false,
+            scanner = camera(granted = false, asked = false, rationale = false),
+        ).controls
+
+        assertTrue(
+            "a phone that has never been asked for the camera is offered no way to ask, so QR " +
+                "pairing is unreachable for the entire life of the install",
+            PairingControl.SCAN in controls,
+        )
+    }
+
+    @Test
+    fun `granting the camera leads to the scanner`() {
+        // The other half of the loop, and the half that proves the first one goes somewhere: the
+        // press asks, the answer is yes, and the next draw is the scanner itself.
+        val granted = camera(granted = true, asked = true, rationale = false)
+
+        assertEquals(ScannerState.SCANNING, granted)
+        assertEquals(
+            setOf(PairingControl.SCAN),
+            panel(PairingStep.SCAN, holding = false, scanner = granted).controls,
+        )
+    }
+
+    @Test
+    fun `a permanently denied phone is offered the settings route and no scanner`() {
+        // The state where a scan button would be a lie: the prompt will not appear again, so the
+        // control that requests the permission cannot get it and the system settings screen is
+        // the only thing that can.
+        val controls = panel(
+            PairingStep.SCAN,
+            holding = false,
+            scanner = camera(granted = false, asked = true, rationale = false),
+        ).controls
+
+        assertTrue(
+            "a permanently denied camera is offered a scan button that can do nothing",
+            PairingControl.SCAN !in controls,
+        )
+        assertTrue(
+            "the one route that can undo a permanent denial is not offered",
+            PairingControl.OPEN_SYSTEM_SETTINGS in controls,
+        )
+    }
+
+    @Test
+    fun `the typed fallback survives every state a withheld camera can be in`() {
+        // PB-PAIR-2's fallback is scoped to the denial paths ("denied or permanently denied"), and
+        // the un-asked state is one of them -- it resolves to DENIED. A user who declines the
+        // prompt needs the paste field on the very next draw, and it is the only path left on a
+        // handset whose camera does not work.
+        listOf(
+            camera(granted = false, asked = false, rationale = false),
+            camera(granted = false, asked = true, rationale = true),
+            camera(granted = false, asked = true, rationale = false),
+        ).forEach { state ->
+            val controls = panel(PairingStep.SCAN, holding = false, scanner = state).controls
+            assertTrue(
+                "$state offers no way to pair without a camera",
+                PairingControl.TYPED_PAYLOAD in controls &&
+                    PairingControl.USE_TYPED_PAYLOAD in controls,
+            )
+        }
     }
 
     @Test

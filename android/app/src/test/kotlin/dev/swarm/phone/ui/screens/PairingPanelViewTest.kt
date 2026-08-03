@@ -4,7 +4,10 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.PairingFlow
 import dev.swarm.phone.ui.PairingAttempt
 import dev.swarm.phone.ui.PairingStep
 import dev.swarm.phone.ui.SasStep
@@ -216,6 +219,43 @@ class PairingPanelViewTest {
         assertTrue(
             "a permanently denied camera still offers the scanner",
             PairingControl.SCAN !in onScreen,
+        )
+    }
+
+    @Test
+    fun `a fresh install has the scan button ON SCREEN`() {
+        // THE FIELD REPORT WAS ABOUT WHAT WAS DRAWN (agents-tracker-qx9m): "i don't see any open
+        // camera for qr code scanning button whatsoever. only enter code". The model test says the
+        // step offers the control; this says the control reaches the tree, which is the claim the
+        // owner could check on a handset and the suite could not.
+        //
+        // THE CAMERA STATE IS RESOLVED, NEVER NAMED. Passing `ScannerState` by hand is what every
+        // test in this file does and is exactly how this shipped: nothing asked what a phone that
+        // has never been asked for the permission actually gets.
+        val freshInstall = PairingFlow.scannerState(
+            PermissionStateResolver.resolve(
+                permission = AppPermission.CAMERA,
+                sdkInt = 35,
+                granted = false,
+                hasAskedBefore = false,
+                showRationale = false,
+            ),
+        )
+        val root = pairingPanelView(
+            context,
+            panel(PairingStep.SCAN, holding = false, scanner = freshInstall),
+            Stubs(context).slots,
+        )
+
+        assertNotNull(
+            "the scan button is not on screen for a phone that has never been asked for the " +
+                "camera, so the only control that can request the permission is undrawable and " +
+                "QR pairing is unreachable for the life of the install",
+            root.kitFind(PairingTag.control(PairingControl.SCAN)),
+        )
+        assertNotNull(
+            "the paste fallback went with it",
+            root.kitFind(PairingTag.control(PairingControl.TYPED_PAYLOAD)),
         )
     }
 

@@ -210,6 +210,30 @@ object PairingFlow {
         )
     }
 
+    /**
+     * PB-PAIR-2's first clause: the permission is REQUESTED. Offered wherever the camera is still
+     * ASKABLE -- which is not the same question as whether this app already holds it.
+     *
+     * A PERMISSION NOBODY HAS ASKED FOR RESOLVES TO [ScannerState.PERMISSION_DENIED], because
+     * [dev.swarm.phone.runtime.PermissionStateResolver] answers `!hasAskedBefore -> DENIED` and
+     * that row is deliberate: `shouldShowRequestPermissionRationale` is false before the first ask
+     * as well as after a permanent one. So a fresh install arrives at this screen DENIED, and the
+     * app's ONLY `requestPermissions(CAMERA)` call is the scan control's own click listener
+     * (`PairingSurface.beginScanning`, which already branches correctly on both denials).
+     *
+     * Answering this on GRANTED alone was therefore a closed loop: no permission, so no control;
+     * no control, so nothing could ask; nothing asked, so no permission. The owner's handset
+     * showed a paste field and no camera on the internal-testing build, and no sequence of taps
+     * could have produced one (agents-tracker-qx9m).
+     *
+     * A PERMANENT DENIAL IS THE ONE STATE THAT WITHDRAWS IT, and it must stay withdrawn: Android
+     * will not show the prompt again, so the control could only fail silently and leave the user
+     * pressing a button that does nothing. [routesToSystemSettings] answers that state with the
+     * only route that can undo it.
+     */
+    fun offersScanner(state: ScannerState): Boolean =
+        state != ScannerState.PERMISSION_PERMANENTLY_DENIED
+
     /** PB-PAIR-2: a denied camera must not be a dead end. */
     fun offersManualEntry(state: ScannerState): Boolean = state != ScannerState.SCANNING
 

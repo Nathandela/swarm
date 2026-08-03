@@ -1,0 +1,75 @@
+Starting a Gradle Daemon, 1 busy Daemon could not be reused, use --status for details
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:requireSwarmAar
+> Task :app:preBuild
+> Task :app:preDebugBuild
+> Task :app:checkDebugAarMetadata
+> Task :app:processDebugNavigationResources
+> Task :app:generateDebugResValues
+> Task :app:compileDebugNavigationResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mergeDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :app:preDebugUnitTestBuild
+> Task :app:javaPreCompileDebug
+> Task :app:javaPreCompileDebugUnitTest
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :app:processDebugUnitTestManifest
+> Task :app:processDebugManifestForPackage
+> Task :app:policyTestResources
+> Task :app:processDebugResources
+> Task :app:packageDebugUnitTestForUnitTest
+> Task :app:generateDebugUnitTestConfig
+> Task :app:compileDebugKotlin
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/CtaButton.kt:139:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/FocusRing.kt:124:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/StatusDot.kt:46:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:96:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:130:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:178:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:202:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Toggle.kt:55:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:processDebugJavaRes
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:bundleDebugClassesToRuntimeJar
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/PairingFlowTest.kt:78:25 Unresolved reference 'offersScanner'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/PairingFlowTest.kt:91:32 Unresolved reference 'offersScanner'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/PairingFlowTest.kt:92:32 Unresolved reference 'offersScanner'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/PairingFlowTest.kt:96:25 Unresolved reference 'offersScanner'.
+
+[Incubating] Problems report is available at: file:///Users/Nathan/Code/swarm/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 1m 27s
+29 actionable tasks: 29 executed

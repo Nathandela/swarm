@@ -50,6 +50,54 @@ class PairingPermissionTest {
     }
 
     /**
+     * PB-PAIR-2's FIRST clause, which had no test: the permission is REQUESTED.
+     *
+     * A permission nobody has asked for resolves to DENIED -- `PermissionStateResolver` answers
+     * `!hasAskedBefore -> DENIED` and that row is deliberate, because `showRationale` is false
+     * before the first ask as well as after a permanent one. So a fresh install arrives at this
+     * screen DENIED, and the app's only `requestPermissions(CAMERA)` call is the scan control's
+     * own click listener. Offering that control on GRANTED alone makes the button that asks for
+     * the permission require the permission it exists to ask for: the owner's handset showed a
+     * paste field and no camera, and no sequence of taps could have produced one
+     * (agents-tracker-qx9m).
+     *
+     * THE STATE IS RESOLVED HERE RATHER THAN NAMED. Every test that had this screen's permission
+     * behaviour under it passed a `ScannerState` in by hand, so the suite never once asked what a
+     * phone that has never been asked actually gets -- which is exactly the state that shipped
+     * broken.
+     */
+    @Test
+    fun `a camera nobody has asked for still offers the control that asks for it`() {
+        val freshInstall = PermissionStateResolver.resolve(
+            AppPermission.CAMERA, sdkInt = 35, granted = false, hasAskedBefore = false, showRationale = false,
+        )
+        assertEquals(ScannerState.PERMISSION_DENIED, PairingFlow.scannerState(freshInstall))
+        assertTrue(
+            "a fresh install is offered no scanner, and the only code in the app that can " +
+                "request CAMERA is that control's listener -- so the permission can never be granted",
+            PairingFlow.offersScanner(PairingFlow.scannerState(freshInstall)),
+        )
+    }
+
+    /**
+     * The other two answers, and the one that must stay a refusal.
+     *
+     * A PERMANENT denial is the single state that withdraws the scanner: Android will not show
+     * the prompt again, so the control could only fail silently -- and [PairingFlow
+     * .routesToSystemSettings] answers that state with the one route that can undo it.
+     */
+    @Test
+    fun `the scanner is offered wherever the camera is still askable and nowhere else`() {
+        assertTrue(PairingFlow.offersScanner(ScannerState.SCANNING))
+        assertTrue(PairingFlow.offersScanner(ScannerState.PERMISSION_DENIED))
+        assertFalse(
+            "a permanently denied camera is offered a scan button that cannot work, and Android " +
+                "will never show the prompt it would trigger",
+            PairingFlow.offersScanner(ScannerState.PERMISSION_PERMANENTLY_DENIED),
+        )
+    }
+
+    /**
      * A denied camera must not be a dead end. PB-PAIR-2 requires a manual-entry fallback, and
      * PB-RUN-2 already names what is lost when CAMERA is withheld.
      */

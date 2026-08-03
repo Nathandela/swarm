@@ -1,0 +1,17 @@
+# Gate red: android/gate/qx9m_camerareach_test.go against the DEFECTIVE PairingPanel.kt (git HEAD)
+# Procedure: git show HEAD:<panel> > <panel>; go test ./android/gate/ -run TestQX9M; restore.
+
+=== RUN   TestQX9M_TheOnlyCameraAskHangsOffTheScanControl
+--- PASS: TestQX9M_TheOnlyCameraAskHangsOffTheScanControl (0.05s)
+=== RUN   TestQX9M_ThePairingPanelDecidesNoScannerStateOfItsOwn
+    qx9m_camerareach_test.go:208: agents-tracker-qx9m: dev/swarm/phone/ui/screens/PairingPanel.kt decides a camera state of its own (ScannerState.SCANNING).
+        
+        The three answers about the scanner -- is it offered, is manual entry offered, does this route to Settings -- belong together in `PairingFlow`, where a reader sees them as a set. The defect was exactly one of them inlined here: `scanner == ScannerState.SCANNING` offered the scan control only where the permission was ALREADY GRANTED, and that control's listener is the only code in the app that can request it.
+--- FAIL: TestQX9M_ThePairingPanelDecidesNoScannerStateOfItsOwn (0.00s)
+=== RUN   TestQX9M_TheReachabilityScanDiscriminates
+--- PASS: TestQX9M_TheReachabilityScanDiscriminates (0.00s)
+=== RUN   TestQX9M_ThePanelScanSeesAnInlinedCameraState
+--- PASS: TestQX9M_ThePanelScanSeesAnInlinedCameraState (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.755s
+FAIL
