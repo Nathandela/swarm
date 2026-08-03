@@ -139,6 +139,20 @@ class PairingPanelScreenTest {
         // control's click listener, so withdrawing the control here is what made the ask
         // unreachable (agents-tracker-qx9m). An ORDINARY denial is re-askable, which is the same
         // reason it does not send the user to a Settings screen where nothing is wrong.
+        //
+        // THIS TEST REPLACED ONE THAT ASSERTED THE OPPOSITE, and the reason is recorded here
+        // because the next reader needs the argument and not just the new expectation. The old
+        // assertion -- `a denied camera withdraws the scanner and offers the typed fallback`,
+        // requiring SCAN to be ABSENT here -- made PB-PAIR-2's "requested" clause literally
+        // unimplementable: the only control that can request the permission was withheld until
+        // the permission was already held. It also contradicted its own stated intent, which read
+        // "a denied camera must not be a dead end" above an assertion that created exactly that
+        // dead end. It was not weakened to make an implementation pass; it was re-pointed at the
+        // requirement, and its surviving half is asserted in the neighbouring test.
+        //
+        // NO TEST FOUND THIS. The owner found it on a real handset, on the internal-testing build,
+        // because every test in this file handed the panel a ScannerState by hand and none of them
+        // ever described a new install.
         assertEquals(
             setOf(
                 PairingControl.SCAN,
