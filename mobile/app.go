@@ -645,24 +645,24 @@ func (a *App) ConnectionState() (state string, err error) {
 // -- would change which phones read as paired TODAY, and that is not this defect's subject: the
 // phones that work must go on working, and the ones with no registration left must stop.
 //
-// IT TAKES TWO FACTS BECAUSE THERE ARE TWO KINDS OF ENDING, and covering one was the first version
-// of this fix being wrong in a way that looked complete:
+// EVERY WAY A REGISTRATION ENDS REACHES ONE DURABLE FACT, phonecore.State.Disowned, and covering
+// only the first of them was this fix's first version being wrong in a way that looked complete:
 //
-//	THE PHONE ENDED IT. phonecore.State.Disowned, written by PB-KEY-7's purge. It is DURABLE
-//	  because that purge runs whether or not the command reached the machine -- the situation
-//	  "Replace this computer" exists for is a handset that cannot reach it -- so no transport
-//	  error will ever arrive to re-derive it, and Android SIGKILLs this app as routine behaviour.
-//	SOMETHING ELSE ENDED IT. transportEndsPairing over the live connection state. `swarm remote
-//	  revoke` on the machine is the documented way to remove a device and nothing on the phone
-//	  runs for it; a destroyed relay-auth key (PB-KEY-6) is the same shape one layer down. Both
-//	  are TERMINAL, both already carry Remedy.RE_PAIR in the shipped error table, and until this
-//	  the app was instructing a recovery its own gate refused to allow.
+//	THE PHONE ENDED IT. "Replace this computer" -> App.PurgeKeys, which records the unpair as
+//	  part of the purge. It runs whether or not the command reached the machine, because the
+//	  situation that control exists for is a handset that cannot reach it.
+//	SOMETHING ELSE ENDED IT. `swarm remote revoke` on the machine is the documented way to remove
+//	  a device and NOTHING on the phone runs for it; a destroyed relay-auth key (PB-KEY-6) is the
+//	  same shape one layer down. The phone learns from a refused handshake, and recordUnpaired
+//	  writes it down at that moment. Both states are TERMINAL, both already carried
+//	  Remedy.RE_PAIR in the shipped error table, and until this the app was instructing a
+//	  recovery its own gate refused to allow.
 //
-// THE SECOND IS NOT PERSISTED and transportEndsPairing carries the argument: the relay is not
-// trusted, and PB-STATE-10 makes a revoked verdict precisely the kind a pairing can make stale.
-// The two compose rather than overlap -- a phone that saw a revoke, was killed, and came back
-// OFFLINE reads as paired again and is not stranded by it, because "Replace this computer" is on
-// the settings screen it is shown and now ends the registration durably.
+// transportEndsPairing IS STILL READ, and it is not redundant with the write. It answers in the
+// window before the write lands, it answers if the write was refused by a full disk or a read-only
+// data directory, and it costs nothing: the durable flag alone would make a phone whose disk
+// refused look paired for the rest of the process. What it must NOT do is fire inside
+// rearmAfterPairing's window -- PB-STATE-10 -- and that guard is stated once, in the function.
 func (a *App) StateSummary() (sum *StateSummary, err error) {
 	defer barrier(&err)
 	core, err := a.ready()

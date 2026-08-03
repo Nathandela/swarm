@@ -271,6 +271,38 @@ func transportEndsPairing(state string, graceUntil, now time.Time) bool {
 	}
 }
 
+// recordUnpaired writes down what the transport has just established: this handset's registration
+// is over. It is called from the two TERMINAL arms of the dial loop and from nowhere else.
+//
+// WHY IT IS WRITTEN DOWN AT ALL, when transportEndsPairing already reads the live state. A
+// connection state is process memory and Android SIGKILLs this app as routine behaviour. The
+// handset comes back somewhere it cannot reach the relay -- no signal, aeroplane mode, a relay
+// that is down -- and nothing re-derives the verdict: it reads as paired again, in the four-tab
+// scaffold, holding a registration the machine deleted, with nothing on screen suggesting the
+// user go looking for "Replace this computer". The live reading is the same fact with a shorter
+// life, and it is kept because it cannot fail: it answers in the window before this write lands,
+// and it still answers if the write is refused by a full disk or a read-only data directory.
+//
+// IT IS NOT A PURGE, and the line is deliberate. PB-KEY-7 destroys both key tiers irreversibly and
+// its trigger is the OWNER acting on this handset (ADR-007 B133). Running it here would let the
+// relay -- which this design trusts with no plaintext, no ordering and no authority -- destroy a
+// user's cached content by answering one handshake with `revoked`; and on the connRepairRequired
+// arm it would destroy content over a platform fault that is not a revocation at all. What is
+// recorded is the fact the gate needs. The purge stays the owner's, and the owner's route to it is
+// the pairing this now makes reachable.
+//
+// IT IS CLEARED BY PAIRING AGAIN, unconditionally and without asking what set it -- mobile/pairing
+// .go's pin. A flag the transport could set and only a local press could clear would be a brick the
+// other way round: the handset would complete the ceremony and still be shown the pairing screen.
+//
+// THE ERROR IS SWALLOWED because there is nobody to tell. This runs on the transport goroutine
+// after the loop has already decided to end, there is no screen on this path, and the live reading
+// covers the process either way. What a failure costs is exactly what not writing at all used to
+// cost -- the next launch comes up paired -- and the next terminal dial writes again.
+func (a *App) recordUnpaired() {
+	_ = a.core.Mutate(func(st *phonecore.State) { st.Disowned = true })
+}
+
 func (a *App) setConn(state string) {
 	a.mu.Lock()
 	changed := a.connState != state
@@ -351,6 +383,7 @@ func (a *App) run(ctx context.Context) {
 				// is a real fix and is what the state says: it re-provisions the key
 				// without the authenticator that is refusing.
 				a.setConn(connRepairRequired)
+				a.recordUnpaired()
 				a.setClient(nil)
 				return
 			case errors.Is(err, relay.ErrRevoked):
@@ -367,6 +400,7 @@ func (a *App) run(ctx context.Context) {
 				if a.withinPairingGrace() {
 					continue
 				}
+				a.recordUnpaired()
 				a.setClient(nil)
 				return
 			case errors.Is(err, relay.ErrPinMismatch),

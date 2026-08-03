@@ -1,0 +1,15 @@
+=== RED (round 3): the transport verdict must survive process death ===
+
+=== RUN   TestD0B8_AnOwnerSideRevokeSurvivesTheProcessDeathThatFollowsIt
+    d0b8_transportunpair_test.go:178: agents-tracker-d0b8: the next launch comes up believing the phone is paired. The owner revoked it from the machine, the phone SAW that on its last dial, and the verdict went no further than process memory -- so a handset that cannot reach the relay is back in the four-tab shell holding a registration the machine deleted, with no signal that anything is wrong and no reason to go looking for Replace this computer
+--- FAIL: TestD0B8_AnOwnerSideRevokeSurvivesTheProcessDeathThatFollowsIt (0.20s)
+=== RUN   TestD0B8_PairingAgainClearsATransportSideUnpair
+--- PASS: TestD0B8_PairingAgainClearsATransportSideUnpair (0.21s)
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	1.346s
+FAIL
+
+(The second case PASSES here and is not vacuous: with only the live reading, a re-pair
+ clears the verdict because the connection goes back to online. It becomes a real guard the
+ moment the verdict is written down -- pin must clear the durable flag too, and that is
+ the brick-the-other-way-round this file exists to prevent.)

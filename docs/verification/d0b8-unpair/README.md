@@ -14,34 +14,50 @@ the change, plus `go build`, `go vet`, `golangci-lint` and the whole Go and Kotl
 The acceptance criterion is not "Replace works". It is that **no path that ends a registration
 leaves the phone unable to reach the pairing screen.**
 
-| # | How it ends | What the phone runs | What the gate reads | Test |
+| # | How it ends | What the phone runs | Writes `Disowned` | Test |
 |---|---|---|---|---|
-| 1 | `Replace this computer` on the phone | `App.PurgeKeys`, in a `finally`, whether or not the command reached the machine | `State.Disowned`, **durable** | `mobile/conformance` x2, `internal/phonecore` x4 |
-| 2 | `swarm remote revoke <device-id>` on the machine | **nothing** | `connRevoked`, live | `TestD0B8_AnOwnerSideRevokeAlsoUnpairsThePhone` (real `DeviceRevoke` through the real relay) |
-| 3 | this handset's relay-auth key destroyed (PB-KEY-6) | **nothing** | `connRepairRequired`, live | `TestD0B8_ADestroyedRelayAuthKeyAlsoUnpairsThePhone` |
+| 1 | `Replace this computer` on the phone | `App.PurgeKeys`, in a `finally`, whether or not the command reached the machine | `disown()`, inside the purge | `mobile/conformance` x2, `internal/phonecore` x4 |
+| 2 | `swarm remote revoke <device-id>` on the machine | **nothing until its next dial** | `recordUnpaired()`, at the refused handshake | `…AnOwnerSideRevokeAlsoUnpairsThePhone`, `…SurvivesTheProcessDeathThatFollowsIt` (real `DeviceRevoke`, real relay) |
+| 3 | this handset's relay-auth key destroyed (PB-KEY-6) | **nothing until its next dial** | `recordUnpaired()` | `…ADestroyedRelayAuthKeyAlsoUnpairsThePhone` |
+| — | pairing again, after any of the above | `pin` | clears it, unconditionally | `…PairingAgainClearsATransportSideUnpair` (real ceremony), `…PairingAgainClearsTheUnpair` |
 
 Path 2 is the one a real owner takes — it is what the machine-side runbook names and the only
-mitigation ADR-007 B133 leaves for a lost handset — and nothing on the phone purges for it. Paths 2
-and 3 already carried `Remedy.RE_PAIR` in the shipped error table, so before this change the app
-was instructing a recovery its own gate refused to allow.
+mitigation ADR-007 B133 leaves for a lost handset — and nothing on the phone runs for it until the
+relay refuses its next handshake. Paths 2 and 3 already carried `Remedy.RE_PAIR` in the shipped
+error table, so before this change the app was instructing a recovery its own gate refused to allow.
 
-## Why the two facts are not one
+## One durable fact, reached two ways, read with a live fallback
 
-The durable flag cannot cover 2 and 3: no code on the phone runs for either. The transport reading
-cannot cover 1: the purge runs whether or not the phone can reach its machine, so on an offline
-Replace no transport error ever arrives, and Android SIGKILLs the app as routine behaviour.
+`Paired = Machine != "" && !Disowned && !transportEndsPairing(...)`.
 
-The transport reading is deliberately **not** persisted. `relay.ErrRevoked` comes from the relay,
-which this design trusts for nothing else, and PB-STATE-10 records that a revoked verdict is
-exactly the kind a pairing makes stale — a copy on disk would outlive the recovery that disproves
-it, which is "the brick reached through the remedy" the requirement is named for. The residual is
-stated rather than hidden: a phone that saw a revoke, was killed and came back OFFLINE reads as
-paired again. It is not stranded, because `Replace this computer` is on the settings screen it is
-shown and now ends the registration durably.
+Every path ends at the same durable coordinate. The live transport reading is kept beside it
+because it cannot fail: it answers in the window before the write lands, and it answers if the
+write was refused by a full disk or a read-only data directory. The durable write is what survives
+the SIGKILL — a handset that observes a revoke and then comes back somewhere with no signal has
+nothing to re-derive the verdict from, which is what `…SurvivesTheProcessDeathThatFollowsIt`
+asserts by restarting the app **without dialling**.
 
-`TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone` is what makes the reading safe
-to act on: inside `rearmAfterPairing`'s window a stale `revoked` must not unpair the phone, because
-the machine's authorization races the phone's first dial after a re-pair.
+Two guards keep the durable write from becoming a brick of its own:
+
+- **PB-STATE-10's window.** Inside `rearmAfterPairing`'s grace a `revoked` verdict is explicitly
+  allowed to be stale — the machine's authorize races the phone's first dial after a re-pair — so
+  neither the read nor the write fires there. `TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone`
+  pins the decision; `TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace` (which
+  still passes) drives the race end to end.
+- **Pairing clears it unconditionally.** `pin` does not ask what set the flag, so a transport-side
+  unpair is ended by the same ceremony as a press-side one. Without that, a phone could complete
+  the pairing and still be shown the pairing screen — a worse brick than the one being fixed.
+
+## What is deliberately NOT done on the transport path
+
+`PurgeKeys` is not called. It destroys both key tiers irreversibly and its trigger is the OWNER
+acting on this handset (ADR-007 B133). Running it on `relay.ErrRevoked` would let the relay — a
+party this design trusts with no plaintext, no ordering and no authority — destroy a user's cached
+content by answering one handshake with `revoked`; on the `connRepairRequired` arm it would destroy
+content over a platform fault that is not a revocation at all. The consequence is stated rather
+than hidden: after an owner-side revoke the phone records the unpair and keeps its key material
+until the next pairing. That is no worse than before this change, when nothing happened at all, and
+closing it is a security decision of its own — filed separately, not taken here.
 
 ## What was red, and why each failure is the right one
 

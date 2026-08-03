@@ -74,3 +74,37 @@ ok  	github.com/Nathandela/swarm/internal/phonecore	1.026s
 
 --- Kotlin: :app:testDebugUnitTest --rerun (forced) ---
 suites=85 tests=680 failures=0 errors=0 skipped=0
+
+=== ROUND 3 GREEN (the transport verdict is now durable) ===
+
+--- mobile/conformance: all six d0b8 cases ---
+--- PASS: TestD0B8_AnOwnerSideRevokeSurvivesTheProcessDeathThatFollowsIt (0.25s)
+--- PASS: TestD0B8_PairingAgainClearsATransportSideUnpair (0.32s)
+--- PASS: TestD0B8_TheSummaryReportsAnUnpairedPhoneAfterARevoke (0.12s)
+--- PASS: TestD0B8_TheUnpairSurvivesTheProcessDeathThatMakesItABrick (0.10s)
+--- PASS: TestD0B8_AnOwnerSideRevokeAlsoUnpairsThePhone (0.12s)
+--- PASS: TestD0B8_ADestroyedRelayAuthKeyAlsoUnpairsThePhone (0.12s)
+ok  	github.com/Nathandela/swarm/mobile/conformance	2.168s
+
+--- PB-STATE-10's recovery chain, which a durable verdict could have broken ---
+--- PASS: TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace (0.78s)
+ok  	github.com/Nathandela/swarm/mobile/conformance	1.619s
+--- PASS: TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery (0.27s)
+--- PASS: TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice (0.22s)
+--- PASS: TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery (0.23s)
+--- PASS: TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState (0.31s)
+--- PASS: TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody (0.25s)
+--- PASS: TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset (0.39s)
+--- PASS: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.39s)
+ok  	github.com/Nathandela/swarm/cmd/swarm	3.151s
+
+--- mobile (internal): which transport states end a pairing ---
+--- PASS: TestD0B8_OnlyTheTerminalTransportStatesEndAPairing (0.00s)
+--- PASS: TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone (0.00s)
+ok  	github.com/Nathandela/swarm/mobile	0.803s
+
+--- Kotlin: :app:testDebugUnitTest --rerun (forced) ---
+suites=85 tests=680 failures=0 errors=0 skipped=0
+
+--- golangci-lint ---
+clean (no findings)
