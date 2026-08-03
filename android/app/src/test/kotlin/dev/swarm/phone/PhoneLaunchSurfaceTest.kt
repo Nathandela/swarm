@@ -244,9 +244,9 @@ class PhoneLaunchSurfaceTest {
         /**
          * The number of pressable controls the surface carries WITH NO PANEL OPEN.
          *
-         * It is 3 -- "send line", "launch a session", "revoke this device" -- and the file's
-         * standing rule is that this number never moves without NAMING the control that moved and
-         * saying where it went. Twice now:
+         * It is 2 -- "send line", "launch a session" -- and the file's standing rule is that this
+         * number never moves without NAMING the control that moved and saying where it went.
+         * Three times now:
          *
          *  - 5 -> 4: **Take control** left, into `peekPanelView`, which `peekHost` holds only while
          *    there is a peek to control. Offering it to someone who is not looking at a terminal
@@ -257,8 +257,15 @@ class PhoneLaunchSurfaceTest {
          *    `killRequiresConfirmation` reaching nothing; it is now on the screen that names the
          *    session it ends, behind that confirmation. PB-APP-3's **Stop** landed beside it and
          *    does NOT raise this number, because it is on the same screen and is never loose.
+         *  - 3 -> 2: **Revoke this device** left, into the Settings destination, where it is the
+         *    "Replace this computer" control on `SettingsSurface` (agents-tracker-64rf). It was
+         *    loose in this column for the same reason the pairing panel was, and the owner could
+         *    not find either on a real handset. Unpairing is now reachable from the screen that
+         *    NAMES the machine it unpairs, and the revoke keeps PB-SEC-12 clause 1's touch filter
+         *    because `SettingsSurface` builds it and contributes it through
+         *    `settings.touchFilteredActions` -- the coverage moved, it never lapsed.
          *
-         * BOTH MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
+         * ALL THREE MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
          * floor exists to draw is between "the surface shrank" and "the walk stopped reading the
          * window", and on each run that failed here the walk was reading perfectly -- it named
          * every control it found, and every label assertion in this file passed.
@@ -268,6 +275,6 @@ class PhoneLaunchSurfaceTest {
          * ceiling nobody can justify -- and the label assertions above, not this count, are what
          * actually pin the launch screen.
          */
-        const val CONTROL_FLOOR = 3
+        const val CONTROL_FLOOR = 2
     }
 }

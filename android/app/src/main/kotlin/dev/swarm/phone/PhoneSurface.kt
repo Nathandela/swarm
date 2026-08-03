@@ -280,43 +280,6 @@ class PhoneSurface(
     }
 
     /**
-     * PB-SEC-7's panic action, and the reason it is on this minimal surface at all: it is the
-     * one control whose whole value is being reachable on a handset its owner no longer trusts.
-     * It revokes THIS device. The kill switch is owner-tier only and this app can never set it,
-     * so revoke is the phone-side response to a lost device (mobile/screen_coverage.tsv).
-     *
-     * IT IS NOW THE ONLY SURVIVING MITIGATION ON THIS SIDE, which is what ADR-007 B133 accepts
-     * and what makes the purge below mandatory rather than tidy: with no local authentication
-     * anywhere, a handset the owner no longer trusts is answered by revoking it from the machine
-     * or by this control, and nothing else.
-     *
-     * THE KEYS GO WITH THE REGISTRATION (B133 decision 3). A revoke that left the epoch keys
-     * live would leave a device its owner has disowned still holding the material to open the
-     * session content it already received. Both tiers go and neither comes back without pairing
-     * again, which is the point.
-     *
-     * THE PURGE IS IN A `finally`, AND THAT IS THE PANIC ACTION'S SEMANTICS RATHER THAN
-     * defensive style. `App.RevokeThisDevice` drops the push token durably and then issues a
-     * signed command; the command can refuse, and the whole situation this control exists for is
-     * one where the phone may not reach its machine. A purge that ran only on success would
-     * leave the live keys on exactly the handset the user was trying to disarm.
-     */
-    private val revoke = actionButton("Revoke this device") {
-        Press(
-            SendPlane.COMMAND,
-            verb = { app ->
-                try {
-                    app.revokeThisDevice()
-                } finally {
-                    // Off the looper with the verb, and it belongs there: `PhoneRuntime` is
-                    // `@Synchronized` throughout, and a purge is Keystore work of its own.
-                    runtime.purgeKeys()
-                }
-            },
-        )
-    }
-
-    /**
      * PB-APP-6's two REQUIRED fields, and the third the spec carries.
      *
      * `LaunchScreen.submit` refuses a draft without a non-blank agent and a non-blank working
@@ -576,6 +539,14 @@ class PhoneSurface(
      * `android/gate/pairingentry_test.go` fences the panel out of this column and out of everything
      * the tab scaffold hosts, so it cannot come back to a list.
      *
+     * **REVOKE HAS LEFT IT FOR THE SAME BURIAL AND IS NOW SETTINGS' "Replace this computer"**
+     * ([SettingsSurface]). PB-SEC-7's panic action -- the one control whose whole value is being
+     * reachable on a handset its owner no longer trusts -- was a loose button in this column, which
+     * is to say at the bottom of the same scroll the pairing panel was lost in. It is one control
+     * rather than two because revoking IS what replacing starts with: a revoked device is an
+     * unpaired one, [PairOnlyScreen] answers `PAIR_ONLY` for it, and the next draw is the screen
+     * that pairs a new computer -- so the second half needs no navigation and nothing here.
+     *
      * KILL SESSION HAS LEFT IT, and inventory C2 is where it went. It was a loose button acting on
      * whichever session the surface happened to be targeting, one tap from ending it; it is now the
      * session detail's escalation, behind [SessionDetailPanel.killConfirmation], on the screen that
@@ -604,7 +575,7 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
             status, notice, peekHost,
-            typed, send, launchHost, revoke, outcome,
+            typed, send, launchHost, outcome,
         )) {
             addView(child)
         }
@@ -653,8 +624,11 @@ class PhoneSurface(
      * missed, with nothing failing -- so a new panel contributes its own set here rather than
      * being remembered about.
      */
+    // REVOKE IS IN HERE THROUGH [SettingsSurface] AND NOT BY NAME, which is the sentence above
+    // working: the control moved to the screen that owns it and arrived back in this list with the
+    // panel's own set, so the phone's one destructive action never stopped filtering obscured taps.
     val touchFilteredActions: List<View> =
-        listOf(takeControl, send, stop, kill, launch, revoke) +
+        listOf(takeControl, send, stop, kill, launch) +
             pairing.touchFilteredActions + settings.touchFilteredActions
 
     /**
@@ -1574,10 +1548,10 @@ class PhoneSurface(
      * rather than acting on one.
      */
     private fun setActionsEnabled(enabled: Boolean) {
-        // Revoke stays live: it is the panic action, and a phone whose session list is empty
-        // (or whose machine is unreachable) is exactly the state its owner may need it in.
-        // dropPushToken persists before it speaks to the relay, so an offline revoke still
-        // deletes the token that would otherwise let a machine wake a disowned handset.
+        // REVOKE IS NOT AMONG THEM AND NEVER WAS SUBJECT TO THIS, which is why it is Settings' now
+        // rather than a control this function has to remember to leave alone: it is the panic
+        // action, and a phone whose session list is empty -- or whose machine is unreachable -- is
+        // exactly the state its owner may need it in.
         takeControl.enable(enabled)
         // The session detail's two, which cannot in fact be on screen while this is false -- an
         // open drill-down IS the target, so the roster cannot be empty under one. They are here
