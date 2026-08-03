@@ -1,0 +1,74 @@
+LAUNCHER ICON RED EVIDENCE -- the app ships the placeholder chevron, not the chosen candidate
+=============================================================================================
+
+GG-5 requires the failing-first run to be evidenced. Everything below is actual output from
+the run that produced it. Nothing here is predicted or reconstructed.
+
+Repo /Users/Nathan/Code/swarm, branch main, HEAD 9453fd6.
+File added: android/gate/appicon_test.go (new test file; no other file touched at this point).
+
+TASK: the owner chose "Solid Wedge" from six candidates in docs/design/icon-candidates/. The
+app's launcher icon is still the placeholder shell prompt -- a white chevron and a rounded
+cursor rule -- so the gate that says "the shipped mark IS the chosen candidate" fails.
+
+WHAT THE FOUR ROWS ASSERT, and why two of them are green before any artwork moves:
+
+  TestLauncherForegroundIsTheChosenIconCandidate   RED. The geometry join. It parses
+      solid-wedge.svg and ic_launcher_foreground.xml, evaluates both path dialects into
+      absolute points, and compares. It fails at the structural step: the candidate is one
+      stroke-only path plus one fill-only path, the placeholder is two stroked paths and no
+      filled shape at all.
+
+  TestLauncherForegroundSpendsOnlyTokenColours     RED. The colour join, SVG literal -> token
+      -> resource. The placeholder is painted @color/swarm_text_primary (--p-ink, #FFF7F8F8);
+      the candidate paints #FF53CE7C, which is --p-hero. Both paths are reported.
+
+  TestLauncherAdaptiveIconDeclaresAllThreeLayers   GREEN, and honestly so. The two mipmap
+      files already declare background, foreground and monochrome, and the background already
+      resolves through design-tokens.tsv to --p-bg, which is the colour the candidate's ground
+      rect paints. This row is a fence over a fact that already holds: replacing the artwork
+      must not lose the Android 13 themed-icon layer. It is written now rather than after,
+      because the value of a fence is that it is standing before the thing it guards moves.
+
+  TestLauncherIconComparisonCanActuallyFail        GREEN. The negative control. Every other row
+      is "these two files agree", which passes both when they agree and when the comparator
+      cannot tell them apart. This drives the same comparator with seven perturbed geometries
+      (a coordinate moved a tenth of a dp, the stroke back at 10, rounded caps, rounded joins,
+      a wider cursor, a closed zigzag, a 96 canvas) and requires each to be rejected, plus two
+      pairs of paths spelled differently in the two dialects that must compare EQUAL. It is
+      perturbed IN MEMORY: the working tree is shared with other agents.
+
+COMMAND AND OUTPUT
+------------------
+
+$ go test ./android/gate/ -run TestLauncher -v -count=1
+=== RUN   TestLauncherForegroundIsTheChosenIconCandidate
+    appicon_test.go:565: ic_launcher_foreground.xml does not hold exactly one stroke-only path (the zigzag: the candidate paints it fill=none) and one fill-only path (the cursor: it is the one filled shape in the candidate, which is what keeps it reading as a cursor beside a stroked letter). Found stroked=true filled=false
+--- FAIL: TestLauncherForegroundIsTheChosenIconCandidate (0.01s)
+=== RUN   TestLauncherForegroundSpendsOnlyTokenColours
+    appicon_test.go:616: <vector>/path[0]'s android:strokeColor is @color/swarm_text_primary (token --p-ink) = #FFF7F8F8, but docs/design/icon-candidates/solid-wedge.svg paints it #FF53CE7C. The drawable is a transcription of the candidate and the two must be the same colour.
+    appicon_test.go:616: <vector>/path[1]'s android:strokeColor is @color/swarm_text_primary (token --p-ink) = #FFF7F8F8, but docs/design/icon-candidates/solid-wedge.svg paints it #FF53CE7C. The drawable is a transcription of the candidate and the two must be the same colour.
+--- FAIL: TestLauncherForegroundSpendsOnlyTokenColours (0.01s)
+=== RUN   TestLauncherAdaptiveIconDeclaresAllThreeLayers
+--- PASS: TestLauncherAdaptiveIconDeclaresAllThreeLayers (0.00s)
+=== RUN   TestLauncherIconComparisonCanActuallyFail
+--- PASS: TestLauncherIconComparisonCanActuallyFail (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.717s
+FAIL
+
+NOTE ON A FINDING MADE WHILE READING THE SOURCE OF TRUTH, recorded here because it changes a
+number the task brief carried. solid-wedge.svg's comment states "Safe zone: max r = 32.5
+against the 33 the launcher mask guarantees, MEASURED from rendered pixels". Re-measured from
+rendered pixels at 10x (rsvg-convert, 1080x1080, mark pixels only):
+
+    mark bbox x 24.95..79.95  y 32.35..76.15
+    max radius from centre = 34.12 at (79.95, 76.15)      [safe circle r = 33]
+
+The corner is the CURSOR BAR's bottom-right, at exactly (80, 76.25) -> r = 34.22. The 32.5 in
+the comment is the radius of the PREVIOUS cursor, the stepped shape still drawn in
+comparison.html, whose far corner is (78, 76) -> r = 32.56. The straight-bar cursor (owner
+direction, 2026-08-03) moved it and the comment was not re-measured. The artwork is
+reproduced at the candidate's own coordinates regardless -- it is the approved drawing, and
+docs/design/store-assets/icon-512.png renders the same coordinates -- and the overrun is
+filed rather than silently corrected, because moving an approved mark is the owner's call.

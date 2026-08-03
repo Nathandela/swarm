@@ -17,10 +17,17 @@
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 32.5 against the 33 the launcher mask guarantees, MEASURED from rendered
-    pixels rather than derived. The hand-derived figure here said 30.3 and was wrong: a mitred
-    join reaches past the path's own end, so the arithmetic that ignores it understates every
-    corner. Re-measure rather than re-derive if these are ever tightened.
+    Safe zone: max r = 34.2 against the 33 the launcher mask guarantees, MEASURED from rendered
+    pixels rather than derived (rsvg-convert at 1080x1080, mark pixels only: bbox x 24.95..79.95,
+    y 32.35..76.15, furthest point the cursor bar's bottom-right corner at (80, 76.25)).
+    Re-measure rather than re-derive if these are ever tightened; two figures here have been wrong
+    for two different reasons. The hand-derived 30.3 ignored what a mitred join does past the
+    path's own end, which understates every corner. The 32.5 that replaced it was measured
+    correctly but on the PREVIOUS cursor, the stepped shape comparison.html still draws, whose far
+    corner is (78, 76) = 32.56; the straight bar of 2026-08-03 moved the corner out and nothing
+    re-measured. The 1.2 overrun is filed as agents-tracker-aww2 for the owner: it clips under no
+    mask in practice (a 72 circle reaches 36, and the corner sits inside a 72 squircle's rounding),
+    but it is past the radius Android guarantees against an arbitrary one.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg">
