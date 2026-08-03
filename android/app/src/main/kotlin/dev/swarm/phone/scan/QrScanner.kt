@@ -1,21 +1,16 @@
 package dev.swarm.phone.scan
 
+import android.util.Size
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.PreviewView
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.ChecksumException
-import com.google.zxing.DecodeHintType
-import com.google.zxing.FormatException
-import com.google.zxing.NotFoundException
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
-import com.google.zxing.qrcode.QRCodeReader
 import dev.swarm.phone.ui.kit.scanReticle
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -97,10 +92,14 @@ class QrScanner(private val activity: AppCompatActivity) {
                 // The newest frame, never a backlog: a queue of stale frames would decode a
                 // code the user has already moved away from.
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setResolutionSelector(analysisResolution())
                 .build()
             analysis.setAnalyzer(executor) { image ->
                 val payload = try {
-                    decode(image)
+                    val plane = image.planes[0]
+                    val luma = ByteArray(plane.buffer.remaining())
+                    plane.buffer.get(luma)
+                    decoder.payload(luma, plane.rowStride, image.width, image.height)
                 } finally {
                     // Not closing an ImageProxy stalls the whole analysis pipeline after two
                     // frames, which looks exactly like a camera that does not work.
@@ -138,54 +137,34 @@ class QrScanner(private val activity: AppCompatActivity) {
     }
 
     /**
-     * One frame through ZXing.
-     *
-     * The Y plane of a YUV_420_888 frame IS the luminance image ZXing wants, so there is no
-     * colour conversion here and no bitmap allocated per frame.
-     *
-     * `rowStride` rather than `width` is the data width, and that is not a detail: the camera
-     * pads rows to a hardware alignment, so a source built with `width` reads the padding of
-     * row n as the start of row n+1 and decodes nothing at all on the devices that pad.
+     * The decode half, split out so it can be fed frames on a JVM (agents-tracker-v5qc): the
+     * Y plane of a YUV_420_888 frame IS the luminance image ZXing wants, and [FrameDecoder]
+     * takes it as bytes with no camera type in its signature.
      */
-    private fun decode(image: ImageProxy): String? {
-        val plane = image.planes[0]
-        val buffer = plane.buffer
-        val data = ByteArray(buffer.remaining())
-        buffer.get(data)
+    private val decoder = FrameDecoder()
 
-        val stride = plane.rowStride
-        if (stride <= 0 || image.width > stride) return null
-        val rows = minOf(image.height, data.size / stride)
-        if (rows <= 0) return null
-
-        val source = PlanarYUVLuminanceSource(
-            data, stride, rows, 0, 0, image.width, rows, false,
-        )
-        return try {
-            reader.decode(BinaryBitmap(HybridBinarizer(source)), HINTS).text
-        } catch (absent: NotFoundException) {
-            // No code in this frame. The overwhelmingly common case: every frame before the
-            // user has the code in shot lands here.
-            null
-        } catch (damaged: ChecksumException) {
-            null
-        } catch (malformed: FormatException) {
-            null
-        } finally {
-            // QRCodeReader keeps per-decode state; a reader that is not reset returns the
-            // previous frame's result on the next call.
-            reader.reset()
-        }
-    }
-
-    private val reader = QRCodeReader()
-
-    private companion object {
+    companion object {
         /**
-         * TRY_HARDER, because the alternative here is the user retyping a 200-character payload
-         * by hand. It costs decode time on a frame that has no code in it, which is time the
-         * analysis pipeline was going to spend waiting for the next frame anyway.
+         * The analysis resolution, and it is the fix for the owner's handset scanning nothing
+         * (agents-tracker-v5qc): CameraX's unconfigured ImageAnalysis default is a 640x480
+         * bound, a quarter the area of the preview the user watches, which put a version-6/7
+         * ECC-L pairing symbol at two or three pixels per module -- below what ZXing locks
+         * onto, while the preview looked sharp. 1280x720 is Signal's number for the same job;
+         * CLOSEST_HIGHER_THEN_LOWER so a sensor without 720p yields the next size up rather
+         * than quietly down.
+         *
+         * The aspect strategy is set WITH the bound because it outranks it: CameraX sorts
+         * candidates by aspect strategy first, and the default 4:3 strategy would steer the
+         * pick away from the 16:9 size the bound names.
          */
-        val HINTS: Map<DecodeHintType, Any> = mapOf(DecodeHintType.TRY_HARDER to true)
+        internal fun analysisResolution(): ResolutionSelector = ResolutionSelector.Builder()
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(1280, 720),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                ),
+            )
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .build()
     }
 }

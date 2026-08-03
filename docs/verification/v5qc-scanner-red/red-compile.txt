@@ -1,0 +1,6 @@
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/FrameDecoderTest.kt:78:31 Unresolved reference 'FrameDecoder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/FrameDecoderTest.kt:90:31 Unresolved reference 'FrameDecoder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/FrameDecoderTest.kt:101:13 Unresolved reference 'FrameDecoder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/FrameDecoderTest.kt:108:20 Unresolved reference 'FrameDecoder'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/QrScannerConfigTest.kt:31:34 Unresolved reference 'analysisResolution'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/scan/QrScannerConfigTest.kt:43:32 Unresolved reference 'analysisResolution'.
