@@ -32,6 +32,7 @@
 /swarm-remote
 /swarm-char
 /swarm-fake-agent
+/swarm-publish
 
 # Android (S13)
 android/.gradle/

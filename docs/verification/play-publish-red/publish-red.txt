@@ -1,0 +1,28 @@
+RED RUN -- swarm-publish / internal/play
+Date: 2026-08-03T07:02:40Z
+Commit: 4a42aa6
+Command: go test ./internal/play/... ./cmd/swarm-publish/...
+
+Tests are written; no implementation exists. Every failure below is an undefined
+symbol -- the RIGHT reason to be red (GG-5), not a syntax error in the tests.
+
+# github.com/Nathandela/swarm/cmd/swarm-publish [github.com/Nathandela/swarm/cmd/swarm-publish.test]
+cmd/swarm-publish/main_test.go:35:14: undefined: run
+cmd/swarm-publish/main_test.go:55:9: undefined: run
+cmd/swarm-publish/main_test.go:81:9: undefined: run
+cmd/swarm-publish/main_test.go:101:9: undefined: run
+# github.com/Nathandela/swarm/internal/play [github.com/Nathandela/swarm/internal/play.test]
+internal/play/publish_test.go:205:56: undefined: Config
+internal/play/publish_test.go:208:9: undefined: Config
+internal/play/publish_test.go:225:14: undefined: Publish
+internal/play/publish_test.go:265:15: undefined: Publish
+internal/play/publish_test.go:290:15: undefined: Publish
+internal/play/publish_test.go:313:9: undefined: Config
+internal/play/publish_test.go:322:15: undefined: Publish
+internal/play/publish_test.go:396:15: undefined: Publish
+internal/play/publish_test.go:435:14: undefined: Publish
+internal/play/publish_test.go:467:12: undefined: Publish
+internal/play/publish_test.go:467:12: too many errors
+FAIL	github.com/Nathandela/swarm/internal/play [build failed]
+FAIL	github.com/Nathandela/swarm/cmd/swarm-publish [build failed]
+FAIL

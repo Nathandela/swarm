@@ -50,7 +50,7 @@ func (t accessToken) usableAt(now time.Time) bool {
 
 // fetchAccessToken performs one JWT-bearer exchange against the account's token_uri.
 func (f *FCM) fetchAccessToken(ctx context.Context, now time.Time) (accessToken, error) {
-	assertion, err := f.signAssertion(now)
+	assertion, err := f.acct.SignJWT(messagingScope, now)
 	if err != nil {
 		return accessToken{}, err
 	}
@@ -86,17 +86,24 @@ func (f *FCM) fetchAccessToken(ctx context.Context, now time.Time) (accessToken,
 	return accessToken{value: tok.AccessToken, expiresAt: now.Add(time.Duration(tok.ExpiresIn) * time.Second)}, nil
 }
 
-// signAssertion builds the RS256 JWT the token endpoint verifies against the service
-// account's registered public key.
-func (f *FCM) signAssertion(now time.Time) (string, error) {
+// SignJWT builds the RS256 assertion the token endpoint verifies against the service
+// account's registered public key, requesting exactly scope and nothing more.
+//
+// WHY IT TAKES THE SCOPE. Two APIs in this tree are asserted against with the same
+// credential SHAPE and different scopes -- messaging here, androidpublisher in
+// internal/play. Copying a signer to vary one string would put the credential crypto in
+// two places, and a signing bug fixed in one copy is a signing bug still shipped in the
+// other. The narrow-scope discipline messagingScope documents is preserved by each caller
+// passing its own single scope, not by fixing one here.
+func (a *ServiceAccount) SignJWT(scope string, now time.Time) (string, error) {
 	header := map[string]string{"alg": "RS256", "typ": "JWT"}
-	if f.acct.PrivateKeyID != "" {
-		header["kid"] = f.acct.PrivateKeyID
+	if a.PrivateKeyID != "" {
+		header["kid"] = a.PrivateKeyID
 	}
 	claims := map[string]any{
-		"iss":   f.acct.ClientEmail,
-		"scope": messagingScope,
-		"aud":   f.acct.TokenURI,
+		"iss":   a.ClientEmail,
+		"scope": scope,
+		"aud":   a.TokenURI,
 		"iat":   now.Unix(),
 		"exp":   now.Add(assertionValidity).Unix(),
 	}
@@ -111,7 +118,7 @@ func (f *FCM) signAssertion(now time.Time) (string, error) {
 	enc := base64.RawURLEncoding
 	signingInput := enc.EncodeToString(headerJSON) + "." + enc.EncodeToString(claimsJSON)
 	digest := sha256.Sum256([]byte(signingInput))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, f.acct.key, crypto.SHA256, digest[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, a.key, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", err
 	}

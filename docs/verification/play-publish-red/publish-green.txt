@@ -1,0 +1,47 @@
+GREEN RUN -- swarm-publish / internal/play
+Date: 2026-08-03T07:10:16Z
+Commit: 4a42aa6 (working tree)
+Command: go test -race -v ./internal/play/... ./cmd/swarm-publish/...
+
+=== RUN   TestPublishRunsTheFullEditFlowInOrder
+--- PASS: TestPublishRunsTheFullEditFlowInOrder (0.23s)
+=== RUN   TestPublishUploadsTheBundleBytesAsAnOctetStream
+--- PASS: TestPublishUploadsTheBundleBytesAsAnOctetStream (0.07s)
+=== RUN   TestPublishAuthorizesEveryAPICallWithTheMintedToken
+--- PASS: TestPublishAuthorizesEveryAPICallWithTheMintedToken (0.06s)
+=== RUN   TestPublishSignsAnAssertionThatVerifiesAgainstTheAccountKey
+--- PASS: TestPublishSignsAnAssertionThatVerifiesAgainstTheAccountKey (0.05s)
+=== RUN   TestPublishReleasesWithCompletedStatus
+--- PASS: TestPublishReleasesWithCompletedStatus (0.08s)
+=== RUN   TestDryRunDoesEverythingExceptCommit
+--- PASS: TestDryRunDoesEverythingExceptCommit (0.31s)
+=== RUN   TestDuplicateVersionCodeIsReportedAsAnUploadThatAlreadyLanded
+--- PASS: TestDuplicateVersionCodeIsReportedAsAnUploadThatAlreadyLanded (0.08s)
+=== RUN   TestAPIErrorsSurfaceGooglesMessage
+--- PASS: TestAPIErrorsSurfaceGooglesMessage (0.07s)
+=== RUN   TestTokenExchangeFailureNeverEchoesTheAssertion
+--- PASS: TestTokenExchangeFailureNeverEchoesTheAssertion (0.27s)
+=== RUN   TestErrorsNeverCarryTheAccessToken
+--- PASS: TestErrorsNeverCarryTheAccessToken (0.06s)
+=== RUN   TestMissingBundleFailsBeforeAnyNetworkCall
+--- PASS: TestMissingBundleFailsBeforeAnyNetworkCall (0.09s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/play	3.459s
+=== RUN   TestRunRequiresEveryFlag
+=== RUN   TestRunRequiresEveryFlag/no_flags_at_all
+=== RUN   TestRunRequiresEveryFlag/no_aab
+=== RUN   TestRunRequiresEveryFlag/no_key
+=== RUN   TestRunRequiresEveryFlag/no_package
+--- PASS: TestRunRequiresEveryFlag (0.01s)
+    --- PASS: TestRunRequiresEveryFlag/no_flags_at_all (0.00s)
+    --- PASS: TestRunRequiresEveryFlag/no_aab (0.00s)
+    --- PASS: TestRunRequiresEveryFlag/no_key (0.00s)
+    --- PASS: TestRunRequiresEveryFlag/no_package (0.00s)
+=== RUN   TestRunRejectsAnUnknownTrack
+--- PASS: TestRunRejectsAnUnknownTrack (0.00s)
+=== RUN   TestRunRejectsABrokenCredentialWithoutLeakingIt
+--- PASS: TestRunRejectsABrokenCredentialWithoutLeakingIt (0.00s)
+=== RUN   TestRunRejectsAMissingCredentialFile
+--- PASS: TestRunRejectsAMissingCredentialFile (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm-publish	1.840s
