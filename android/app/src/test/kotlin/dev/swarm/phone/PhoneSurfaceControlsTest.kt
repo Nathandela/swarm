@@ -8,6 +8,7 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import dev.swarm.phone.ui.kit.CtaSurface
+import dev.swarm.phone.ui.screens.PairingPanelScreen
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,20 +40,33 @@ class PhoneSurfaceControlsTest {
     /**
      * PB-E2E-2's five in-app actions, as the labels that perform them.
      *
-     * THE LITERALS ARE DELIBERATELY NOT `PairingPanelScreen`'s CONSTANTS. A reference would follow
-     * a rename and this ledger would stop being able to notice one, which is the whole of what it
-     * is for: an independent copy of the label, compared against the app's.
+     * ## Why one entry is a constant and six are literals
      *
-     * `Scan QR code` WAS `Scan the code on your machine` (agents-tracker-qx9m). The owner's guided
-     * pairing screen renames it -- the old label restated, word for word, the sentence
-     * `PairingFlow.messageFor(SCAN)` already puts two lines above the button, so a reader had
-     * nothing to tell them apart. Changed HERE as well as in the screen model because a label
-     * changed on one side and not the other is exactly the drift this file exists to catch; the
-     * instrumented smoke does not press this control (it takes the typed path), so there is no
-     * third copy.
+     * The scan control's words are [PairingPanelScreen.SCAN_CTA] -- SOURCED, not transcribed -- and
+     * the rest are literals. The split is not inconsistency; it is where each label's second copy
+     * lives.
+     *
+     * THE SIX LITERALS HAVE A COPY THIS FILE CANNOT SEE. `Use this code`, `Join this destination`,
+     * `They match`, `Take control` and `Send line` are pressed BY LITERAL in the instrumented smoke
+     * (`PbE2E2PairAndTypeTest`, `PbE2E2ResumeTest`), which runs on a device and cannot be typechecked
+     * against the app. For those, this ledger's independent transcription is the cheap half of a
+     * two-sided pin: a label changed in `PairingSurface` and not in the smoke fails HERE, on a JVM in
+     * two seconds, rather than on an emulator ten minutes into a run -- which is what the class
+     * comment above promises.
+     *
+     * THE SCAN CONTROL HAS NO SUCH COPY. The smoke never presses it; it takes the typed path
+     * (`PbE2E2PairAndTypeTest` presses `Use this code`). So a transcription here would be pinning
+     * the words against nothing but themselves, and the words are the SCREEN MODEL'S -- PB-DS-9 puts
+     * copy there and this codebase argues everywhere that it exists once. Sourcing the constant
+     * keeps the assertion that matters (a touch-filtered control that starts a scan exists and is
+     * reachable) and drops only the ability to notice a deliberate re-wording, which is not a defect.
+     *
+     * `Scan QR code` WAS `Scan the code on your machine` (agents-tracker-qx9m). The old label
+     * restated, word for word, the sentence `PairingFlow.messageFor(SCAN)` already puts two lines
+     * above the button, so a reader had nothing to tell them apart.
      */
     private val requiredControls = mapOf(
-        "Scan QR code" to
+        PairingPanelScreen.SCAN_CTA to
             "\"pairs against a local relay + daemon\": there is no way to start a scan",
         "Use this code" to
             "PB-PAIR-2's manual-entry fallback, which is also how the smoke hands the QR over",
