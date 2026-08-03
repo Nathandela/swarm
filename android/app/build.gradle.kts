@@ -194,8 +194,20 @@ android {
         applicationId = "dev.swarm.phone"
         minSdk = pinnedApiLevel("SWARM_ANDROID_MIN_SDK")
         targetSdk = pinnedApiLevel("SWARM_ANDROID_TARGET_SDK")
-        versionCode = 1
-        versionName = "0.1.0"
+        // BUMP THIS ON EVERY UPLOAD. Google Play rejects a bundle whose versionCode already
+        // exists on any track, and 1 is spent -- it is the internal-testing release of
+        // 2026-08-02. The rejection is loud and harmless ("You've already submitted this
+        // version of the app"), so a forgotten bump costs a round trip rather than a bad
+        // release; treat that message as confirmation the PREVIOUS upload landed, not as a
+        // failure of this one.
+        //
+        // It is a hand-edited number and not derived from `git rev-list --count`, which is the
+        // obvious automation: that reads a monotonic counter off the branch you happen to be
+        // on, so a build from a branch behind main emits a LOWER code than one already
+        // published and Play refuses it for a reason that has nothing to do with the change.
+        // A number a person types is a number a person can reconcile with the Console.
+        versionCode = 2
+        versionName = "0.2.0"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and
         // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
