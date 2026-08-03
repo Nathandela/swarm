@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.PairingStep
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -110,6 +111,79 @@ class PairedMachineRowTest {
             row.sublabel.contains("ends", ignoreCase = true) &&
                 row.sublabel.contains("pairing", ignoreCase = true),
         )
+    }
+
+    // ---- the confirmation ----------------------------------------------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5) for agents-tracker-mrq5. `Replace this computer` deregisters
+    // this handset, rotates the epoch, severs the gateway and destroys BOTH key tiers -- the purge
+    // is in a `finally`, so it runs whether or not the command reached the machine -- and it did all
+    // of that on one tap of a chip in a row's trailing slot. `kill`, which ends ONE session, has
+    // asked since S24. The question is the row's because PB-DS-9 puts copy on the screen model, and
+    // because the row is the only thing here that knows WHICH machine is about to be replaced.
+
+    @Test
+    fun `the row asks before it replaces, and the question names the machine`() {
+        val question = PairedMachineRowScreen.of("nathans-mbp").replaceConfirmation
+
+        assertTrue(
+            "the confirmation does not name the machine it ends the pairing with: '$question'. " +
+                "'Are you sure?' asks the user to confirm something the sentence never told them, " +
+                "and the row already knows the name",
+            question.contains("nathans-mbp"),
+        )
+        assertTrue(
+            "the confirmation is not a question: '$question'",
+            question.contains("?"),
+        )
+    }
+
+    @Test
+    fun `the confirmation names what replacing destroys, not just what it does`() {
+        // SessionDetailScreen.KILL_CONFIRMATION's ruling, and it applies harder here: a
+        // confirmation that stated the ACTION would read the same as every other one in the app,
+        // which is how a user learns to dismiss the one that matters. Both halves are irreversible
+        // on this phone -- the registration ends on the machine, and PhoneRuntime.purgeKeys
+        // destroys the key tiers in a `finally` beside the verb.
+        val question = PairedMachineRowScreen.of("nathans-mbp").replaceConfirmation
+
+        assertTrue(
+            "the confirmation does not say the pairing ends: '$question'",
+            question.contains("pairing", ignoreCase = true),
+        )
+        assertTrue(
+            "the confirmation does not say this phone's keys are destroyed: '$question'. That is " +
+                "the half a user cannot see and cannot undo -- both tiers go, whether or not the " +
+                "command ever reached the machine",
+            question.contains("keys", ignoreCase = true),
+        )
+    }
+
+    @Test
+    fun `a machine whose name this phone cannot read still gives the question a subject`() {
+        // PairingSurface.machineOf answers "" rather than a placeholder, and the label above
+        // already renders that as `Paired` rather than a dangling `Paired with `. The question has
+        // the same obligation: `Replace ?` is worse than no confirmation, because it is the one
+        // sentence standing between the user and an action nothing here can undo.
+        val question = PairedMachineRowScreen.of("").replaceConfirmation
+
+        assertFalse(
+            "the confirmation rendered a dangling subject for an unreadable machine name: " +
+                "'$question'",
+            question.contains("Replace ?") || question.contains("Replace?"),
+        )
+        assertTrue(
+            "the confirmation lost its question for an unreadable machine name: '$question'",
+            question.contains("?"),
+        )
+    }
+
+    @Test
+    fun `the confirmation is a second sentence and not the row's own copy repeated`() {
+        val row = PairedMachineRowScreen.of("nathans-mbp")
+
+        assertNotEquals(row.sublabel, row.replaceConfirmation)
+        assertNotEquals(row.replaceLabel, row.replaceConfirmation)
     }
 
     @Test

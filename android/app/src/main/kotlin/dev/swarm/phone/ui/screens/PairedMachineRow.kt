@@ -28,6 +28,11 @@ import dev.swarm.phone.ui.PairingStep
  * revoke-then-pair as the remedy. So there is no "add another computer" here: that control would
  * promise something the daemon refuses on the first press. There is replace, and it says what it
  * costs before anyone presses it.
+ *
+ * AND IT ASKS (agents-tracker-mrq5). Saying what it costs is what the row does at rest; the
+ * confirmation is what it does at the moment of the press, and the two are not the same sentence --
+ * [PairedMachineRow.replaceConfirmation] names the machine and names the key purge, which the
+ * sublabel does not, because a user reading a dialog has stopped reading the row underneath it.
  */
 data class PairedMachineRow(
     /** [PairingPanelScreen.titleFor] for a completed pairing: the machine, named. */
@@ -36,6 +41,14 @@ data class PairedMachineRow(
     val sublabel: String,
     /** The one control the row offers. */
     val replaceLabel: String,
+    /**
+     * What the confirmation asks before the revoke goes out (agents-tracker-mrq5).
+     *
+     * IT IS THE ONE FIELD ON THIS ROW THAT NAMES THE MACHINE TWICE OVER, and that is the point: a
+     * confirmation is read in a second window, over a screen the user has stopped looking at, and
+     * "Are you sure?" asks them to confirm something the sentence never told them.
+     */
+    val replaceConfirmation: String,
 )
 
 object PairedMachineRowScreen {
@@ -60,6 +73,38 @@ object PairedMachineRowScreen {
     private const val COST = "Replacing ends the current pairing, then pairs a new computer."
 
     /**
+     * The confirmation's subject when this phone cannot read the machine's name.
+     *
+     * `Replace ?` is worse than no confirmation at all: it is the one sentence standing between a
+     * user and an action nothing on this handset can undo. [labelFor]'s `Paired` answers the same
+     * absence on the line above, and this answers it here rather than interpolating an empty string
+     * into a question.
+     */
+    private const val UNNAMED = "the paired computer"
+
+    /**
+     * What replacing costs, in the register [SessionDetailScreen]'s kill confirmation set: the
+     * CONSEQUENCE and not the action.
+     *
+     * BOTH HALVES ARE IRREVERSIBLE ON THIS PHONE AND ONLY ONE OF THEM IS ON THE ROW. [COST] says
+     * the pairing ends, which is the part a user can predict; the key purge is the part they cannot
+     * see, and it is not conditional on the revoke succeeding -- `SettingsSurface` runs
+     * `PhoneRuntime.purgeKeys` in a `finally`, deliberately, because the situation this control
+     * exists for is one where the phone may not reach its machine at all (ADR-007 B133 decision 3).
+     * A confirmation that named only the pairing would be describing the recoverable half.
+     *
+     * THE LAST CLAUSE IS THE WAY BACK, and it is stated because there is one and it is not on this
+     * handset. Pairing again needs the code the computer shows, so a phone whose owner is nowhere
+     * near their machine has just made itself useless until they are.
+     */
+    private const val CONFIRM_COST = "This ends the pairing and destroys this phone's keys; " +
+        "pairing again needs a new code from the computer."
+
+    /** [CONFIRM_COST], asked about the machine that is actually about to be replaced. */
+    private fun confirmationFor(machine: String): String =
+        "Replace ${machine.ifEmpty { UNNAMED }}? $CONFIRM_COST"
+
+    /**
      * @param machine the machine this phone is pinned to. Empty is not a placeholder and not "no
      *  pairing": it is a pairing whose name this phone cannot read, and the label says `Paired`
      *  rather than the dangling `Paired with ` a naive interpolation renders. Whether there is a
@@ -72,5 +117,6 @@ object PairedMachineRowScreen {
         },
         sublabel = COST,
         replaceLabel = REPLACE,
+        replaceConfirmation = confirmationFor(machine),
     )
 }

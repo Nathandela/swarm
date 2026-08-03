@@ -1,0 +1,117 @@
+# agents-tracker-mrq5: the confirmation behind `Replace this computer` -- failing-first run (GG-5)
+
+    HEAD e7c0770, branch main, 2026-08-03T06:25:51Z
+
+Recorded before `PairedMachineRow.replaceConfirmation` carried a sentence and before
+`SettingsSurface` asked anything. What the control did at this commit: one tap on a `denyChip` in
+the settings screen's paired-machine row called `App.RevokeThisDevice`, which deregisters this
+handset, rotates the epoch and severs the gateway -- with `PhoneRuntime.purgeKeys` in a `finally`
+beside it, so both key tiers are destroyed whether or not the command ever reached the machine.
+Nothing asked. `kill`, which ends ONE session, has asked since S24.
+
+The three tests below are in three places because the facts are in three places, and one of them
+is not reachable from a JVM at all.
+
+
+## Part 1 -- the wiring, over the source (Go)
+
+`PhoneRuntime.phone()` answers `PhoneStartup.Unavailable` on every JVM run: the phone core is a
+native library cross-compiled for Android ABIs, so `SettingsSurface.render` takes the Unavailable
+branch, the settings panel is never drawn, `drawn` is never written, and no press can be driven as
+far as a dialog -- let alone to a settle. A Robolectric test asserting "the first press did not
+revoke" would pass against a surface with NO confirmation at all, because the press it drove did
+nothing either way. That is the same line android/gate/d0b8_unpair_test.go draws over the same
+function, and its header records the reasoning at length.
+
+So which function the chip's listener reaches, which function reaches the verb, which view takes
+the confirming tap, and what the dismiss does are fenced over the source.
+
+## Command
+
+    go test ./android/gate/ -run "TestMRQ5" -v
+
+## Output
+
+```
+=== RUN   TestMRQ5_TheFirstPressOnReplaceDoesNotRevoke
+    mrq5_replaceconfirm_test.go:372: agents-tracker-mrq5: the `Replace this computer` chip calls onReplace() straight from its click listener. One tap on a chip in a row's trailing slot then deregisters this handset, rotates the epoch, severs the gateway and destroys both key tiers -- on a screen people browse to change a notification toggle, with no way back that does not involve walking to the computer. `kill`, which ends ONE session, has asked since S24
+--- FAIL: TestMRQ5_TheFirstPressOnReplaceDoesNotRevoke (0.01s)
+=== RUN   TestMRQ5_TheConfirmingPressIsWhatRevokes
+    mrq5_replaceconfirm_test.go:387: agents-tracker-mrq5: SettingsSurface.kt asks nothing before it revokes
+--- FAIL: TestMRQ5_TheConfirmingPressIsWhatRevokes (0.00s)
+=== RUN   TestMRQ5_TheControlThatTakesTheConfirmingTapCarriesTheOverlayFilter
+    mrq5_replaceconfirm_test.go:407: agents-tracker-mrq5: the confirmation hands the dialog no view of its own, so the confirming tap lands on a platform button in a window this surface does not own. filterTouchesWhenObscured is a property of a View, and PB-SEC-12 clause 1 is the only defence left standing on revoke since ADR-007 B133
+--- FAIL: TestMRQ5_TheControlThatTakesTheConfirmingTapCarriesTheOverlayFilter (0.00s)
+=== RUN   TestMRQ5_DismissingTheConfirmationLeavesThePairingIntact
+    mrq5_replaceconfirm_test.go:434: agents-tracker-mrq5: the confirmation offers no way out. A dialog whose only control performs the destructive action is a confirmation that cannot be answered no
+--- FAIL: TestMRQ5_DismissingTheConfirmationLeavesThePairingIntact (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.885s
+FAIL
+```
+
+Four assertions, four failures, and NO negative control fired. Each of the four scans is a
+function over source text, and each test feeds the SAME function a perturbed fixture -- a chip that
+presses straight through, a confirmation whose positive answer performs nothing, a question typed
+at the call site, a confirming control built fresh for the dialog, a control the declaration list
+does not name, a control declared but never gated, and a dismiss that revokes. All seven were
+caught, so the four failures above are the surface and not the scan.
+
+
+## Part 2 -- the copy, on a plain JVM (Kotlin)
+
+A Kotlin test naming a symbol that does not exist is a COMPILE error, which is evidence about a
+symbol and none at all about what a user reads. So the two missing members were declared and left
+as `TODO()` -- `PairedMachineRow.replaceConfirmation` and `SettingsSurface.confirmReplace` -- and
+every assertion below failed at RUNTIME, on the absence of the behaviour it asserts. That is the
+technique docs/verification/remote-phaseB-s25-red/link-red.txt used for the same reason.
+
+## Command
+
+    . android/toolchain.env
+    cd android && ./gradlew --no-daemon :app:testDebugUnitTest --rerun-tasks --no-build-cache \
+        --tests "dev.swarm.phone.ui.screens.PairedMachineRowTest" \
+        --tests "dev.swarm.phone.SettingsSurfaceReplaceTest"
+
+    13 tests completed, 5 failed
+    31 actionable tasks: 31 executed
+
+Counted from android/app/build/test-results/testDebugUnitTest/*.xml, not from the console:
+
+    dev.swarm.phone.SettingsSurfaceReplaceTest:            tests=2  failures=1  errors=0
+    dev.swarm.phone.ui.screens.PairedMachineRowTest:       tests=11 failures=4  errors=0
+    TOTAL                                                  tests=13 failures=5  errors=0
+
+## Output
+
+```
+SettingsSurfaceReplaceTest > the control that confirms a replace is one the surface declares FAILED
+    kotlin.NotImplementedError at SettingsSurfaceReplaceTest.kt:51
+
+PairedMachineRowTest > the confirmation is a second sentence and not the row's own copy repeated FAILED
+    kotlin.NotImplementedError at PairedMachineRowTest.kt:185
+
+PairedMachineRowTest > the confirmation names what replacing destroys, not just what it does FAILED
+    kotlin.NotImplementedError at PairedMachineRowTest.kt:148
+
+PairedMachineRowTest > a machine whose name this phone cannot read still gives the question a subject FAILED
+    kotlin.NotImplementedError at PairedMachineRowTest.kt:168
+
+PairedMachineRowTest > the row asks before it replaces, and the question names the machine FAILED
+    kotlin.NotImplementedError at PairedMachineRowTest.kt:127
+
+13 tests completed, 5 failed
+```
+
+## The two that were GREEN in this run, and why that is the honest result
+
+`PairedMachineRowTest`'s other seven assertions read `label`, `sublabel` and `replaceLabel`, which
+all exist. They are untouched by this change and stayed green, which is what a scaffolded red is
+supposed to leave behind: the four new assertions failed alone.
+
+`SettingsSurfaceReplaceTest.every control the settings surface declares filters obscured touches`
+PASSED here, over the three controls the surface declared at this commit -- the two push switches
+and the replace chip. It is the anti-vacuity half of its file and it GAINS its subject with the
+fix: once the confirming control is in `touchFilteredActions`, that sweep is what asserts the
+overlay filter reaches the view an overlay attack would actually be mounted against. Recorded as
+green rather than quietly omitted.

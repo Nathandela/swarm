@@ -10,6 +10,7 @@ import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import dev.swarm.phone.push.PushTokens
 import dev.swarm.phone.runtime.AppPermission
@@ -111,26 +112,41 @@ class SettingsSurface(
      * IT CARRIES NO WORDS AT CONSTRUCTION. Its label is [PairedMachineRow.replaceLabel] and it is
      * written on every draw by [replaceFor] -- a string typed here would be the second copy of copy
      * the model already owns, which is the drift PB-DS-9 assigns copy to one place to prevent.
+     *
+     * AND ITS PRESS ASKS RATHER THAN REVOKES (agents-tracker-mrq5). It called [onReplace] straight
+     * from this listener, so one tap on a chip in a row's trailing slot ended the pairing and
+     * destroyed both key tiers, on a screen people open to change a notification toggle. What it
+     * runs now is [confirmThenReplace].
      */
-    private val replace: TextView = SecureWindow.gate(
-        denyChip(activity, "").apply {
-            setOnClickListener { control -> onReplace(control) }
-            // A `TextView` announces itself as text, and the kit cannot fix that: `CtaButton`'s
-            // KDoc records the same gap, because a component with no click has no role to declare.
-            // The role goes where the click is, which is here.
-            setAccessibilityDelegate(
-                object : View.AccessibilityDelegate() {
-                    override fun onInitializeAccessibilityNodeInfo(
-                        host: View,
-                        info: AccessibilityNodeInfo,
-                    ) {
-                        super.onInitializeAccessibilityNodeInfo(host, info)
-                        info.className = Button::class.java.name
-                    }
-                },
-            )
-        },
-    )
+    private val replace: TextView = actionChip().apply {
+        setOnClickListener { confirmThenReplace() }
+    }
+
+    /**
+     * The view that takes the CONFIRMING tap (agents-tracker-mrq5).
+     *
+     * IT IS A CONTROL THIS SURFACE BUILDS, AND THAT IS THE WHOLE REASON IT EXISTS RATHER THAN
+     * `AlertDialog`'s OWN POSITIVE BUTTON. `PhoneSurface.confirmThenPress` records the gap in its
+     * own KDoc: the tap that OPENS a platform dialog is filtered, and the dialog's buttons live in
+     * a window that surface does not own, so `filterTouchesWhenObscured` -- a property of a View
+     * instance -- reaches none of them. A confirmation built out of them would move the destructive
+     * tap from a defended view to an undefended one, which is the overlay defence being spent on
+     * the harmless press. Since ADR-007 B133 there is nothing else behind revoke.
+     *
+     * SO IT IS BUILT AT CONSTRUCTION, gated once, and named in [touchFilteredActions] -- the same
+     * three reasons [replace] and the switches are, and the dialog is handed this instance rather
+     * than a chip made for it.
+     *
+     * INTERNAL, so `SettingsSurfaceReplaceTest` has a subject. That test is the runtime half of the
+     * join: the source fence in android/gate/mrq5_replaceconfirm_test.go says this view is the one
+     * the dialog receives, and the Kotlin test says this view carries the filter.
+     *
+     * ITS LISTENER IS THE ONE THING [confirmThenReplace] WRITES RATHER THAN THIS DECLARATION, so
+     * that the question, the control that answers it and what answering does are one function a
+     * reader can check against itself. `setOnClickListener` replaces, so nothing stacks -- and what
+     * has to survive the redraw is the view, which does.
+     */
+    internal val confirmReplace: TextView = actionChip()
 
     /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
     private var drawn: SettingsPanel? = null
@@ -170,8 +186,14 @@ class SettingsSurface(
      * that revokes this device. [replace] is the one authorising control on this screen and, with
      * ADR-007 B133's removal of phone-side authentication, the filter is the only thing left
      * standing between it and a tap the user could not see.
+     *
+     * IT NAMES TWO CHIPS AND NOT ONE (agents-tracker-mrq5). [replace] opens the question and
+     * [confirmReplace] answers it, and the second is the one that reaches the verb -- so a list
+     * holding only the first would be filtering the harmless press. `PhoneSurface.confirmThenPress`
+     * records why a platform dialog cannot close this gap: its buttons are in a window this surface
+     * does not own, and the filter is a property of a View in one.
      */
-    val touchFilteredActions: List<View> = listOf(needsInput, finished, replace)
+    val touchFilteredActions: List<View> = listOf(needsInput, finished, replace, confirmReplace)
 
     /**
      * Called once a `Replace this computer` press has settled, so the window that hosts this panel
@@ -355,8 +377,55 @@ class SettingsSurface(
     }
 
     /**
+     * Put the question the row wrote in front of the user, and revoke only if they answer it
+     * (agents-tracker-mrq5).
+     *
+     * IT IS A DIALOG AND NOT A ROW, which is `PhoneSurface.confirmThenPress`'s own ruling for the
+     * two questions that already existed: a confirmation is a second window over the screen rather
+     * than something composed into it, so it is built here and [settingsPanelView] never learns it
+     * happened.
+     *
+     * THE CONFIRMING CONTROL IS THIS SURFACE'S AND THE CANCEL IS THE PLATFORM'S, and the asymmetry
+     * is the whole point. `confirmThenPress` records what a platform dialog cannot carry: its
+     * buttons live in a window that surface does not own, so PB-SEC-12 clause 1's touch filter --
+     * a property of a View instance -- reaches neither of them, and a confirmation built out of
+     * them moves the destructive tap onto the one undefended view in the flow. So the YES is
+     * [confirmReplace], gated at construction and named in [touchFilteredActions]; the NO is
+     * Android's own localised `cancel`, because nothing happens when it is pressed and an overlay
+     * has nothing to steal.
+     *
+     * NO ROW MEANS NO QUESTION AND NO PRESS. [drawn] is what is on screen, and the machine section
+     * is absent exactly when this phone is pinned to nothing -- a chip that is not being shown
+     * cannot be tapped, so this is the state after a revoke rather than a case to handle.
+     */
+    private fun confirmThenReplace() {
+        val row = drawn?.machineSection?.row ?: return
+        // The chip was inside the LAST confirmation, and a dismissed dialog is still a parent.
+        (confirmReplace.parent as? ViewGroup)?.removeView(confirmReplace)
+        // The words are the row's, here as in [replaceFor]: what the user is agreeing to is what
+        // the control they pressed said it would do.
+        confirmReplace.text = row.replaceLabel
+        val asked = AlertDialog.Builder(activity)
+            .setMessage(row.replaceConfirmation)
+            .setView(confirmReplace)
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        confirmReplace.setOnClickListener {
+            asked.dismiss()
+            // THE CONTROL THE PRESS IS MARKED ON IS THE ROW'S CHIP AND NOT THIS ONE.
+            // `VerbDispatch.press` disables the control until the answer lands, so that a control
+            // which has been tapped does not look untapped -- and this chip is leaving the screen
+            // with the dialog. [replace] is the one still on it.
+            onReplace(replace)
+        }
+    }
+
+    /**
      * Replace this computer: revoke this device, off the looper, and let the next draw be whatever
      * an unpaired phone is.
+     *
+     * IT IS NO LONGER WHAT THE CHIP'S PRESS RUNS (agents-tracker-mrq5). [confirmThenReplace] is,
+     * and this is what answering it does.
      *
      * THE VERB CANNOT RUN ON THE MAIN THREAD. `revokeThisDevice` seals a signed command and
      * resolves through `sendContext`, whose `awaitConn` polls for up to five seconds -- a tap
@@ -457,6 +526,37 @@ class SettingsSurface(
             PushTokens.requestInitialToken(activity)
         }
     }
+
+    /**
+     * A destructive chip this surface owns: the deny treatment, the role a `TextView` cannot
+     * announce for itself, and PB-SEC-12 clause 1's filter, applied ONCE.
+     *
+     * IT IS A FACTORY BECAUSE THERE ARE TWO OF THEM NOW (agents-tracker-mrq5) -- the one in the row
+     * and the one that confirms it -- and both are gated, both are announced as buttons, and both
+     * have to be the same instance every draw. [touchFilteredSwitch] is the same shape for the same
+     * reason, one member above.
+     *
+     * IT CARRIES NO CLICK. What each chip does is its own declaration's, because the two do
+     * different things and a factory that took a listener would still have to be read twice.
+     */
+    private fun actionChip(): TextView = SecureWindow.gate(
+        denyChip(activity, "").apply {
+            // A `TextView` announces itself as text, and the kit cannot fix that: `CtaButton`'s
+            // KDoc records the same gap, because a component with no click has no role to declare.
+            // The role goes where the click is, which is here.
+            setAccessibilityDelegate(
+                object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfo,
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.className = Button::class.java.name
+                    }
+                },
+            )
+        },
+    )
 
     private fun touchFilteredSwitch(toggle: PushToggle): SwitchCompat = SecureWindow.gate(
         SwitchCompat(activity).apply {
