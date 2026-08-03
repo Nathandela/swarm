@@ -1,0 +1,10 @@
+agents-tracker-qun0 RED, 2026-08-03: four re-pointed tests fail against the shipped behaviour
+(PairingFlow.offersManualEntry(state) = state != ScannerState.SCANNING).
+
+PairingPermissionTest > every state offers manual entry, granted camera included FAILED
+PairingPanelScreenTest > granting the camera leads to the scanner FAILED
+  expected:<[SCAN, REVEAL_TYPED_PAYLOAD]> but was:<[SCAN]>
+PairingPanelScreenTest > with no attempt in this process the scanner and the collapsed fallback are offered FAILED
+  expected:<[SCAN, REVEAL_TYPED_PAYLOAD]> but was:<[SCAN]>
+PairingPanelScreenTest > the typed fallback survives every state the camera can be in FAILED
+  SCANNING offers no way to pair without a camera, collapsed or otherwise

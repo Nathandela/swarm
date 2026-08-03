@@ -234,8 +234,18 @@ object PairingFlow {
     fun offersScanner(state: ScannerState): Boolean =
         state != ScannerState.PERMISSION_PERMANENTLY_DENIED
 
-    /** PB-PAIR-2: a denied camera must not be a dead end. */
-    fun offersManualEntry(state: ScannerState): Boolean = state != ScannerState.SCANNING
+    /**
+     * Always (agents-tracker-qun0). This answered `state != SCANNING`, reading PB-PAIR-2's "a
+     * denied camera must not be a dead end" as scoping the fallback to the denial states --
+     * and a GRANTED camera pointed at a symbol that would not decode was a dead end with no
+     * typed path at all, which is where the 640x480 analyzer (agents-tracker-v5qc) left the
+     * owner: permission held, preview live, nothing decoding, nothing else on screen. The
+     * permission state knows who may open the camera; whether frames DECODE is a fact about
+     * optics and symbols it cannot see, so the fallback is unconditional. The parameter stays
+     * because the seam's shape is the fence android/gate/qx9m_camerareach_test.go holds: the
+     * screen asks this flow, and the flow is where the answer changed.
+     */
+    fun offersManualEntry(state: ScannerState): Boolean = true
 
     /** Only a permanent denial. An ordinary one is re-askable, and Settings is a detour. */
     fun routesToSystemSettings(state: ScannerState): Boolean =

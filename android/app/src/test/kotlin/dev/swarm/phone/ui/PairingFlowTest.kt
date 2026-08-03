@@ -98,14 +98,22 @@ class PairingPermissionTest {
     }
 
     /**
-     * A denied camera must not be a dead end. PB-PAIR-2 requires a manual-entry fallback, and
-     * PB-RUN-2 already names what is lost when CAMERA is withheld.
+     * A camera that cannot deliver a payload must not be a dead end. PB-PAIR-2 requires a
+     * manual-entry fallback, and PB-RUN-2 already names what is lost when CAMERA is withheld.
      */
     @Test
-    fun `both denial paths offer manual entry`() {
+    fun `every state offers manual entry, granted camera included`() {
         assertTrue(PairingFlow.offersManualEntry(ScannerState.PERMISSION_DENIED))
         assertTrue(PairingFlow.offersManualEntry(ScannerState.PERMISSION_PERMANENTLY_DENIED))
-        assertFalse(PairingFlow.offersManualEntry(ScannerState.SCANNING))
+        // THIS ASSERTION WAS `assertFalse`, and the owner overruled it from the field
+        // (agents-tracker-qun0). The old reading scoped the fallback to the denial states,
+        // reasoning that a granted camera has the scanner and needs nothing else -- and the
+        // day the scanner ran at 640x480 (agents-tracker-v5qc), a granted camera pointed at a
+        // symbol that would not decode had no typed path at all: permission held, preview
+        // live, nothing decoding, nothing else on screen. "Not working" is a fact about
+        // optics and symbols the permission state cannot see, so the fallback is
+        // unconditional.
+        assertTrue(PairingFlow.offersManualEntry(ScannerState.SCANNING))
         assertEquals(
             DegradedCapability.QR_PAIRING,
             PermissionStateResolver.degradedCapability(AppPermission.CAMERA, PermissionState.DENIED),

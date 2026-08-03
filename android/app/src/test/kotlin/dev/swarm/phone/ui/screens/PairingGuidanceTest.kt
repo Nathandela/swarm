@@ -263,18 +263,30 @@ class PairingGuidanceTest {
     }
 
     @Test
-    fun `a granted camera offers no typed fallback at all, revealed or not`() {
-        // `PairingFlow.offersManualEntry` is false while the camera works, and that predates this
-        // screen. The reveal control must not smuggle the fallback back in: a phone that can scan
-        // is offered the scanner, and a second way in is a second thing to explain.
-        listOf(true, false).forEach { revealed ->
-            val controls = panel(scanner = ScannerState.SCANNING, revealed = revealed).controls
-            assertEquals(
-                "a working camera was offered the typed fallback (revealed=$revealed)",
-                setOf(PairingControl.SCAN),
-                controls,
-            )
-        }
+    fun `a granted camera keeps the typed fallback, collapsed until asked for`() {
+        // THIS TEST ASSERTED THE OPPOSITE and the owner overruled it from the field
+        // (agents-tracker-qun0). Its argument was simplicity -- "a phone that can scan is
+        // offered the scanner, and a second way in is a second thing to explain" -- and the
+        // case that argument missed is the one that happened: a granted camera pointed at a
+        // symbol that would not decode (agents-tracker-v5qc's 640x480 analyzer) left the
+        // owner with a live preview, a code on their terminal, and no way to type it. The
+        // permission state cannot see whether frames decode, so the fallback is
+        // unconditional -- collapsed behind the reveal here, because beside a working
+        // scanner it is the fallback and not the primary.
+        assertEquals(
+            "a working camera hides the fallback until asked",
+            setOf(PairingControl.SCAN, PairingControl.REVEAL_TYPED_PAYLOAD),
+            panel(scanner = ScannerState.SCANNING, revealed = false).controls,
+        )
+        assertEquals(
+            "asking for the fallback opens the field and keeps the scanner",
+            setOf(
+                PairingControl.SCAN,
+                PairingControl.TYPED_PAYLOAD,
+                PairingControl.USE_TYPED_PAYLOAD,
+            ),
+            panel(scanner = ScannerState.SCANNING, revealed = true).controls,
+        )
     }
 
     // ---- a permanently denied camera ----------------------------------------

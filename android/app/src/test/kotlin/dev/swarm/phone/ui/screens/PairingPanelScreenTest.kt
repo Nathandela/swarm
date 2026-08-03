@@ -124,9 +124,14 @@ class PairingPanelScreenTest {
     // ---- which control is offered, and when --------------------------------
 
     @Test
-    fun `with no attempt in this process the scanner is offered and nothing else is`() {
+    fun `with no attempt in this process the scanner and the collapsed fallback are offered`() {
+        // `setOf(SCAN)` UNTIL agents-tracker-qun0: the reveal control was withdrawn wherever
+        // the camera was granted, so the owner -- permission held, scanner not decoding --
+        // had no way to type the code their machine was printing. The fallback is
+        // unconditional now; collapsed behind its reveal here, because beside a working
+        // scanner it is the fallback and not the primary.
         assertEquals(
-            setOf(PairingControl.SCAN),
+            setOf(PairingControl.SCAN, PairingControl.REVEAL_TYPED_PAYLOAD),
             panel(PairingStep.SCAN, holding = false).controls,
         )
     }
@@ -260,7 +265,7 @@ class PairingPanelScreenTest {
 
         assertEquals(ScannerState.SCANNING, granted)
         assertEquals(
-            setOf(PairingControl.SCAN),
+            setOf(PairingControl.SCAN, PairingControl.REVEAL_TYPED_PAYLOAD),
             panel(PairingStep.SCAN, holding = false, scanner = granted).controls,
         )
     }
@@ -287,15 +292,19 @@ class PairingPanelScreenTest {
     }
 
     @Test
-    fun `the typed fallback survives every state a withheld camera can be in`() {
-        // PB-PAIR-2's fallback is scoped to the denial paths ("denied or permanently denied"), and
-        // the un-asked state is one of them -- it resolves to DENIED. A user who declines the
-        // prompt needs the paste field on the very next draw, and it is the only path left on a
-        // handset whose camera does not work.
+    fun `the typed fallback survives every state the camera can be in`() {
+        // THE GRANTED STATE IS IN THIS LIST BECAUSE THE OWNER GOT STUCK IN IT
+        // (agents-tracker-qun0). This test's first version scoped PB-PAIR-2's fallback to the
+        // denial paths, reading "a denied camera must not be a dead end" as the whole
+        // requirement -- and a GRANTED camera pointed at a symbol that would not decode
+        // (agents-tracker-v5qc's 640x480 analyzer) was a dead end with no typed path at all.
+        // The permission state knows who may open the camera; it knows nothing about whether
+        // frames decode. The fallback is unconditional.
         listOf(
             camera(granted = false, asked = false, rationale = false),
             camera(granted = false, asked = true, rationale = true),
             camera(granted = false, asked = true, rationale = false),
+            camera(granted = true, asked = true, rationale = false),
         ).forEach { state ->
             val controls = panel(PairingStep.SCAN, holding = false, scanner = state).controls
             // REACHABLE, COLLAPSED OR OTHERWISE. The guided screen collapses the field behind
