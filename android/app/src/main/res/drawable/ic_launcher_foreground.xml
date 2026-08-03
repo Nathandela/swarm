@@ -55,6 +55,6 @@
 
     <!-- The cursor: one straight bar on the zigzag's own baseline, and the only filled shape. -->
     <path
-        android:pathData="M62,67.75 L80,67.75 L80,76.25 L62,76.25 Z"
+        android:pathData="M61,67.75 L77,67.75 L77,76.25 L61,76.25 Z"
         android:fillColor="@color/swarm_hero" />
 </vector>
