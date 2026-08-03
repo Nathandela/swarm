@@ -199,8 +199,17 @@ object KitOrigin {
      * table cell and a token can be restated in it, so taking the first match would make the
      * expected value depend on the order someone wrote a sentence in.
      */
-    fun rowToken(component: String, field: String): String {
-        val row = derivationRow(component)
+    fun rowToken(component: String, field: String): String =
+        tokenIn(derivationRow(component), component, field)
+
+    /**
+     * [rowToken] over a row the caller already has, so §4's table can be read by the same rule.
+     *
+     * The split exists because §3 and §4 are found DIFFERENTLY -- see [adjacentRow] -- and the
+     * reading of a found row is identical. One reader for both is what stops the two tables
+     * acquiring two ideas of what `field \`--p-token\`` means.
+     */
+    fun tokenIn(row: String, component: String, field: String): String {
         val matches = Regex("\\b${Regex.escape(field)}\\s+`(--p-[a-z0-9-]+)`").findAll(row)
             .map { it.groupValues[1] }
             .toList()
@@ -212,6 +221,37 @@ object KitOrigin {
         }
         return matches.first()
     }
+
+    /**
+     * One row of §4's adjacent-derivations table, found by its leading component cell.
+     *
+     * IT IS A SECOND READER RATHER THAN A WIDENING OF [derivationRow], for the reason
+     * `s23FindRow` gives in `android/gate/s23_kit_test.go`: §3's rows are numbered and §4's are
+     * not, so the component cell sits at a different index in each -- `| 14 | Activity row | ...`
+     * against `| Drill-down nav header | ...`. A reader that tried both indexes would answer a
+     * name that exists in both tables from whichever section it reached first, which is exactly
+     * the ambiguity that had `ActivityRow.kt` reading §3's row while citing §4's.
+     *
+     * The search is SCOPED to §4 and an ambiguous name is a failure rather than a choice, for the
+     * same reason: a value read out of a row nobody chose is a value nobody chose.
+     */
+    fun adjacentRow(component: String): String {
+        val doc = readResource(COMPONENTS_DOC)
+        val start = doc.indexOf(SECTION_4)
+        require(start >= 0) { "$COMPONENTS_DOC has no `$SECTION_4` heading to search under" }
+        val rows = doc.substring(start).substringBefore("\n## ").lineSequence()
+            .filter { it.startsWith("|") && it.split("|").getOrNull(1)?.trim() == component }
+            .toList()
+        require(rows.size == 1) {
+            "§4 of $COMPONENTS_DOC declares ${rows.size} rows for `$component`, and this reader " +
+                "needs exactly one: no row is a value read out of nothing, and two is a value " +
+                "read out of whichever one came first"
+        }
+        return rows.first()
+    }
+
+    /** §4's heading, literal so that renaming the section fails loudly rather than silently. */
+    private const val SECTION_4 = "## 4. Adjacent derivations the same screens need"
 
     /**
      * The token a derivation row's named COLUMN specifies -- `--p-ink` for row 23's `Surface`.

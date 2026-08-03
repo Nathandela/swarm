@@ -1,0 +1,40 @@
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:84:50 Unresolved reference 'RETICLE_ARM_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:100:34 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:103:33 Unresolved reference 'RETICLE_ARM_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:133:34 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:135:33 Unresolved reference 'RETICLE_ARM_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:156:34 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:158:27 Unresolved reference 'scanReticle'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:194:39 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:195:39 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:202:34 Unresolved reference 'RETICLE_FRAME_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:207:41 Unresolved reference 'RETICLE_STROKE_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:213:48 Unresolved reference 'RETICLE_ARM_DP'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:232:21 Unresolved reference 'scanReticle'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/ScanReticleTest.kt:247:40 Unresolved reference 'RETICLE_FRAME_DP'.
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+
+[Incubating] Problems report is available at: file:///Users/Nathan/Code/swarm/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 13s
+20 actionable tasks: 20 executed

@@ -1,0 +1,8 @@
+--- FAIL: TestPBDS6_EveryInboxComponentIsAKitFactory (0.02s)
+    s23_kit_test.go:515: PB-DS-6: the kit has no ScanReticle.kt, which is where scanReticle() lives.
+        	the framing square over the QR preview -- the thing that tells a person where to point the phone, which the pairing screen has never had. It is a DRAWABLE and not a view, and that is the whole of its safety argument rather than a style: a view laid over a live camera preview is a thing that can be made clickable, and PB-SEC-12 clause 1 exists because a clickable thing over content the user is reading is the tapjacking surface. A foreground drawable cannot take a touch at all, and it cannot outlive the preview it is the foreground OF -- `QrScanner.stop()` sets that view GONE, so the reticle goes with it rather than hanging green over a dead camera. Substrate draws no scanner, and row 6's `.qr` is the code TILE rather than the viewfinder pointed at one, so §4 is the whole specification -- which is also where its three numbers come from, all cited by field.
+--- FAIL: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+    s23_kit_test.go:626: PB-DS-6: PB-DS-6/PB-DS-7, by s23OwnedFiles in this file claims dev/swarm/phone/ui/kit/ScanReticle.kt and no such file exists. A claim over nothing makes the forward direction above pass by having less to check: the scans skip the missing name, report no fault, and the inventory goes on describing a kit that is not there.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.165s
+FAIL

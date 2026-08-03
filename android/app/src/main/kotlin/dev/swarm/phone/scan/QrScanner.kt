@@ -16,6 +16,7 @@ import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
+import dev.swarm.phone.ui.kit.scanReticle
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -45,8 +46,16 @@ class QrScanner(private val activity: AppCompatActivity) {
     /**
      * The viewfinder. It is a real preview and not an ornament: ZXing has no auto-zoom, so
      * aiming is the user's job and they cannot do it blind.
+     *
+     * AND AIMING IS THE USER'S JOB, SO IT CARRIES THE MARK THAT SAYS WHERE. `scanReticle` is
+     * derivation §4's framing square, and it is the preview's FOREGROUND for two reasons that are
+     * both about this class rather than about the drawing. It cannot take a touch, so nothing over
+     * the live camera image can swallow one (PB-SEC-12 clause 1). And it cannot outlive the
+     * preview: [stop] hides this view, which takes the reticle with it in the same statement --
+     * where a sibling view in the pairing screen's scanner host would have been a second thing to
+     * hide, and a green frame over a released camera is worse than no frame at all.
      */
-    val view: PreviewView = PreviewView(activity)
+    val view: PreviewView = PreviewView(activity).apply { foreground = scanReticle(activity) }
 
     /**
      * The decode runs off the main thread -- a QR decode on a 1080p frame is tens of

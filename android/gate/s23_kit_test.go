@@ -245,6 +245,22 @@ var s23Inbox = []s23Component{
 			"than restating either.",
 	},
 	{
+		Factory: "scanReticle",
+		File:    "ScanReticle.kt",
+		Derived: "§4 Scanner reticle",
+		Why: "the framing square over the QR preview -- the thing that tells a person where to " +
+			"point the phone, which the pairing screen has never had. It is a DRAWABLE and not a " +
+			"view, and that is the whole of its safety argument rather than a style: a view laid " +
+			"over a live camera preview is a thing that can be made clickable, and PB-SEC-12 " +
+			"clause 1 exists because a clickable thing over content the user is reading is the " +
+			"tapjacking surface. A foreground drawable cannot take a touch at all, and it cannot " +
+			"outlive the preview it is the foreground OF -- `QrScanner.stop()` sets that view " +
+			"GONE, so the reticle goes with it rather than hanging green over a dead camera. " +
+			"Substrate draws no scanner, and row 6's `.qr` is the code TILE rather than the " +
+			"viewfinder pointed at one, so §4 is the whole specification -- which is also where " +
+			"its three numbers come from, all cited by field.",
+	},
+	{
 		Factory: "focusRing",
 		File:    "FocusRing.kt",
 		Derived: "#23 Focus ring",
@@ -2760,9 +2776,14 @@ var s23LiteralExemptions = map[string]string{
 		"where row 4 writes the exception out in those words -- \"radius = half the track (14) and " +
 		"half the thumb (12)\". A radius is half a diameter by the definition of a circle rather " +
 		"than by a decision anyone made, and row 4's pill is that definition applied to a capsule. " +
-		"BOTH SITES ARE NAMED rather than one being left to borrow the other's argument, because " +
+		"EVERY SITE IS NAMED rather than one being left to borrow another's argument, because " +
 		"an exemption is a thing a reader has to agree with and a reader cannot agree with a use " +
-		"the row does not mention.",
+		"the row does not mention. The other two are the same definition applied to a STROKE: " +
+		"`strokePx / 2f` in FocusRingDrawable and in ScanReticleDrawable insets a stroke by half " +
+		"its own width so that `Canvas.drawRoundRect`, which centres a stroke on the path it is " +
+		"given, paints the stated width inside the bounds rather than half of it astride them. " +
+		"ScanReticleDrawable takes a third half for the same reason a radius does -- a square " +
+		"centred on a point reaches half its side in each direction.",
 	"100": "Badge's overflow threshold. Three digits either overflow the 16 dp pill or push the " +
 		"type below PB-DS-12's 10 sp floor, so the count saturates at `99+`; the 16 dp is the " +
 		"checked constant and this is the consequence of it.",

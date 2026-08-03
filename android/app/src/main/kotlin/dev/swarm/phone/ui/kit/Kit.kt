@@ -430,6 +430,47 @@ internal object KitMetrics {
      * origin: --p-cta-fx alpha
      */
     const val CTA_BLOOM_ALPHA = 0.20f
+
+    /**
+     * The scanner reticle's square: the size the code should look in the shot.
+     *
+     * IT IS ROW 6's TILE, which is the whole derivation rather than a size that framed well. Row 6
+     * draws the pairing symbol at 180x180, and the mark that says "hold the phone so the code fills
+     * this" is that same square seen from the other end of the same pairing. The §4 row states it,
+     * because row 6 specifies the tile and says nothing about a viewfinder.
+     *
+     * A FIXED LENGTH RATHER THAN A FRACTION OF THE PREVIEW, and that is the point of it: the
+     * preview is the screen's width, so a fraction would ask the user to hold the phone at a
+     * different distance on a different handset. What the reticle actually communicates is an
+     * absolute size, and it is clamped rather than scaled when the preview is the smaller of the
+     * two -- see [scanReticle].
+     *
+     * derived: docs/design/substrate-components.md §4 Scanner reticle { frame }
+     */
+    const val RETICLE_FRAME_DP = 180f
+
+    /**
+     * How far each of the reticle's brackets runs from its corner, along both edges.
+     *
+     * IT IS WHAT MAKES THE FRAME OPEN. Four corners are an aiming mark and a closed rectangle is a
+     * border -- the §4 row says so, and this constant is the number that difference is made of.
+     *
+     * derived: docs/design/substrate-components.md §4 Scanner reticle { arm }
+     */
+    const val RETICLE_ARM_DP = 24f
+
+    /**
+     * The reticle's stroke.
+     *
+     * IT IS NOT [HAIRLINE_DP] AND NOT [RAIL_DP] AND NOT [FOCUS_RING_DP], which is the same argument
+     * the focus ring already makes one constant up: this kit now has four values that are 1 dp or
+     * 2 dp and they are four because they would be one only until one of them moved. What is
+     * particular to this one is what sits behind it -- a moving photograph rather than a flat
+     * surface -- which is why a hairline is not enough and the §4 row states the rail's weight.
+     *
+     * derived: docs/design/substrate-components.md §4 Scanner reticle { stroke }
+     */
+    const val RETICLE_STROKE_DP = 2f
 }
 
 /**

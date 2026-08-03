@@ -1,0 +1,30 @@
+Scanner reticle (derivation §4 "Scanner reticle") -- GREEN, after the two red runs in this
+directory.
+
+RED, captured first:
+  gate-red.txt    go test ./android/gate/ -run 'TestPBDS6|TestPBDS7|TestPBDS12'
+                  PB-DS-6: the kit has no ScanReticle.kt, which is where scanReticle() lives.
+                  PB-DS-6: ... claims dev/swarm/phone/ui/kit/ScanReticle.kt and no such file exists.
+  kotlin-red.txt  ./gradlew :app:compileDebugUnitTestKotlin --rerun-tasks
+                  Unresolved reference 'scanReticle', 'ScanReticleDrawable', 'RETICLE_FRAME_DP',
+                  'RETICLE_ARM_DP', 'RETICLE_STROKE_DP'.
+
+GREEN:
+  go build ./...                          ok
+  go vet ./...                            ok
+  go test ./android/gate/                 ok  (4.8s)
+  go test ./...                           one FAIL, PRE-EXISTING and filed:
+                                          internal/verify TestPBDOC7_EveryEnforcedClauseCanFail
+                                          /orphan_slice -- agents-tracker-dvjr. Untouched here.
+  gofmt -l android/gate/s23_kit_test.go   clean
+
+  ./gradlew test --rerun-tasks            BUILD SUCCESSFUL, both variants
+  counted from the result XMLs at the repo root:
+    testDebugUnitTest    91 classes  739 tests  0 failures/errors
+    testReleaseUnitTest  91 classes  739 tests  0 failures/errors
+  Baseline was 730/0. The nine added are ScanReticleTest (6) and QrScannerReticleTest (3).
+
+WHAT IS NOT BUILT, and it is a decision rather than an omission: the decode-confirmation flash.
+docs/design/substrate-components.md §8.9 records both reasons -- it would be a fourth motion
+against ADR-007 B134 decision 3, and it could not be seen in any case, because QrScanner's
+hand-off and PairingSurface's teardown of the preview happen inside one main-thread message.

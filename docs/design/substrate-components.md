@@ -250,6 +250,7 @@ them. Same cell rules.
 | In-card CTA pair | `.card .cfoot button` | Two buttons, equal weight, gap `space_8`, padding `space_10`, `--p-btn-r` 9, `Label.Button`. Approve = `.a2-ok` **without `--p-cta-fx`**: the card sets `overflow: hidden`, so an 18 dp bloom inside it is clipped at the card edge and looks broken. The bloom belongs to the full-width sheet CTA. Deny = `.a2-no` unchanged |
 | Status dots, B134 mapping | `.dot.g-*` | `NeedsInput` `--p-att` + glow `0 0 9 #B3F1A10D`; `Working` `--p-work` + glow `0 0 9 #8C00C2D7`; `ReadyForReview` `--p-ok`, no glow; `Completed` `--p-ink3`, no glow; machine online `--p-ok`, offline `--p-ink3`. All 7 dp, `--p-dot-r`. The mock's `pulse 1.6s` working animation does not ship (B134). Both glows are `Paint.setShadowLayer(9, 0, 0, colour)` on a software layer, the same conversion as `--p-cta-fx` |
 | Docked bottom sheet | `.sheet` | `--p-elev`, 1 dp `--p-hair`, `--p-sheet-r` 14 **top corners only** (mock 22), padding `space_14` sides and top, bottom `space_14` + the navigation-bar inset (the mock's 34 was the iPhone home indicator). translateY 100% -> 0, 350 ms `cubic-bezier(0.32,0.72,0,1)`. Substrate's `.sheet2` is an inline card with four rounded corners because the directions page has no phone chrome to dock it to; the product ships the docked form |
+| Scanner reticle | — (the mock draws no scanner) | The framing square over the camera preview: where to point the phone and how close to hold it. Ink: brackets `--p-hero` (`#FF53CE7C`), the token `android/design-tokens.tsv` glosses as brand *and live*, and a viewfinder is the most literal live surface this app has. **`--p-ink` is rejected on scannability, not on meaning** — row 6 draws the symbol this frames as a `#FFFFFFFF` tile, so a white reticle over a code held to fill it is a white line on white. The four status tokens are out for §1.1's reason (they mean state) and `--p-ink2` / `--p-ink3` are 5.87 and 3.30:1 against a *surface*, before a photograph is behind them at all. Geometry: frame 180, which is the size row 6 draws this same symbol at, centred and clamped to the preview when the preview is the smaller of the two; stroke 2, `.prow.attention`'s rail weight rather than the 1 dp hairline, because what is behind it is a moving image and not a flat surface; arm 24, so each corner paints `space_24` along both its edges and the middle of every edge stays open — a closed rectangle is a border, and what says *aim here* is four corners. Radius `--p-card-r` 9: row 6's, because this frames row 6's tile. **It is not a control.** No fill, no click, no focus, and no touch target of its own — it is a `Drawable` foreground rather than a view precisely so it cannot acquire one, since a view over a live preview that could take a tap is what PB-SEC-12 clause 1 exists for. **And it does not move**: ADR-007 B134 keeps three motions and this is not among them. A decode-confirmation flash was specified with it and is not built — §8.9 |
 
 ---
 
@@ -421,6 +422,24 @@ its design and still be lying.** All three of these would have rendered correctl
 have been a green test over a value the product does not possess. The fences in `android/gate/` catch
 a colour that entered without provenance; nothing catches a *claim* that entered without one. These
 were caught by reading.
+
+**8.9 The scanner's decode-confirmation flash is specified nowhere and is not built.** The reticle in
+§4 was asked for with a brief flash on a successful decode, before the screen advances. It is in
+neither the row nor the kit, for two independent reasons and either alone would be enough.
+
+*It would be a fourth motion.* ADR-007 B134 decision 3 enumerates what moves — the sheet, the banner,
+the streaming caret — and the list is exhaustive; `android/gate/s23_motion_test.go` enforces it by
+refusing the animation vocabulary in every production Kotlin file but `ui/kit/Motion.kt`. A flash is
+not a liveness signal the way the caret is: it is feedback on a completed action, which is the
+decoration B134 removed. Adding one is an ADR, not a component.
+
+*And it could not be seen if it were built.* `QrScanner`'s analyzer hands the payload on with
+`activity.runOnUiThread { onPayload(payload) }`, and `PairingSurface.acceptScannedPayload` calls
+`stopScanning()` on its second line — so the preview is hidden inside the same main-thread message
+that decoded the code, with no frame drawn in between. Making a flash visible means posting the
+hand-off behind a delay, which is latency added to pairing in order to animate how fast pairing was.
+*Recommendation:* leave it out. If a confirmation is wanted, the honest one is the destination step
+the payload already advances to — a screen the user reads rather than an effect they may miss.
 
 ---
 
