@@ -120,6 +120,18 @@ func TestD0B8_ThePresentationGateAsksWhetherThePhoneIsPairedAndNotWhatItsMachine
 	if !ok {
 		t.Fatal("agents-tracker-d0b8: the presentationOf call site passes no lambda this fence can read")
 	}
+	// ONE FACT AND NOT A COMPOSITION. `paired` is computed in Go over the durable unpair AND the
+	// terminal transport states, because there is more than one way for a registration to end and
+	// only one of them runs on this handset. A call site that rebuilt the answer here -- reading
+	// the machine name, or the connection state, or both -- would be a second gate to keep in
+	// agreement with the first, which is how the machine name came to be the fact in the first
+	// place.
+	if strings.Contains(reader, "machine") || strings.Contains(reader, "connection") {
+		t.Errorf("agents-tracker-d0b8: the presentation gate composes its own answer from %s. The fact "+
+			"is App.StateSummary.paired and it is assembled where the coordinates live; a screen that "+
+			"rebuilds it holds a second opinion that has to be kept in step with the first",
+			strings.TrimSpace(reader))
+	}
 	if !strings.Contains(reader, "paired") {
 		t.Errorf("agents-tracker-d0b8: the presentation gate reads %s. Whether this phone is USABLY "+
 			"paired is the question it decides, and after a revoke the honest answer is no -- while "+

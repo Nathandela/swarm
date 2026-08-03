@@ -50,6 +50,12 @@ object PairedMachineRowScreen {
      * The cost, stated in the daemon's own order: the current pairing ends FIRST, and the new one
      * is what the revoke makes room for. A row that only said "replace" would let a user find out
      * afterwards that the machine they had is gone.
+     *
+     * THE SECOND HALF WAS A PROMISE THE APP COULD NOT KEEP until agents-tracker-d0b8. Ending the
+     * pairing worked; "then pairs a new computer" did not, because the presentation gate read the
+     * pinned machine -- which the revoke does not clear -- and went on showing the four-tab shell,
+     * with the pairing entry point on the settings screen inside it. The press now leaves the phone
+     * reading unpaired and redraws the whole window, so the sentence describes what happens.
      */
     private const val COST = "Replacing ends the current pairing, then pairs a new computer."
 

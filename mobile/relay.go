@@ -229,6 +229,48 @@ const (
 	connRelayInsecure  = "relay_insecure"
 )
 
+// transportEndsPairing reports whether a transport state means this handset can no longer act as
+// a paired phone. It is half of what App.StateSummary's Paired answers, and it is the half that
+// covers every way a registration ends WITHOUT this phone being the one that ended it.
+//
+// WHY THE LINK IS ASKED AT ALL. App.PurgeKeys has exactly one production caller -- the Settings
+// "Replace this computer" press -- so phonecore.State.Disowned records the path the PHONE takes
+// and no other. The path the OWNER takes is `swarm remote revoke <device-id>` on the machine,
+// which is the documented one and the only mitigation ADR-007 B133 leaves for a lost handset.
+// Nothing on the phone runs for it. What the phone gets is a refused handshake, and these two
+// states are where that lands (agents-tracker-d0b8).
+//
+// ONLY THE TERMINAL TWO QUALIFY, and the boundary is the one PB-APP-10 already drew: a state
+// nothing on this device can recover from, whose remedy is therefore pairing again. Every other
+// state here is a link condition, and ending a pairing on one would take the app away from a phone
+// whose relay is merely down. connRelayUntrusted and connRelayInsecure are the two that look
+// terminal and are NOT -- ADR-007 B58 has the first arriving on the ORDINARY first pairing, where
+// a handset holding no pin yet is refused on every dial until the pairing it is running completes,
+// and the second is the machine's configuration, which pairing again does not change.
+//
+// IT IS NOT WRITTEN DOWN, and that is the whole reason it is a live reading rather than a second
+// durable flag. relay.ErrRevoked comes from the RELAY, which this design trusts for nothing else,
+// and PB-STATE-10 records that a terminal revoked verdict is exactly the kind a pairing can make
+// STALE. A verdict on disk would outlive the recovery that disproves it -- "the brick reached
+// through the remedy", which is the sentence that requirement is named for. Held in memory it is
+// re-formed on every dial: a relay that answers differently tomorrow is answered differently.
+//
+// THE GRACE IS THE REVOKE'S ALONE. rearmAfterPairing opens it because the two ends of a recovery
+// cannot be ordered -- the machine opens this device's relay route over a connection of its own,
+// just after the phone learns the pairing succeeded -- so a first dial that arrives before the ban
+// is lifted must not send the handset back to the screen it has just come from. None of that bears
+// on a destroyed Keystore entry, and a pairing cannot complete over a key that will not sign.
+func transportEndsPairing(state string, graceUntil, now time.Time) bool {
+	switch state {
+	case connRepairRequired:
+		return true
+	case connRevoked:
+		return graceUntil.IsZero() || !now.Before(graceUntil)
+	default:
+		return false
+	}
+}
+
 func (a *App) setConn(state string) {
 	a.mu.Lock()
 	changed := a.connState != state

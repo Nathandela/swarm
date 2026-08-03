@@ -5,8 +5,43 @@
 than asserted, and because this defect is one two agents and a full green suite already walked
 past: the code carried a comment stating the behaviour that was missing.
 
-`green.txt` is the same subjects after the change, plus `go build`, `go vet`, `golangci-lint` and
-the whole Go and Kotlin suites.
+`go-red-round2.txt` is the second RED, captured after review widened the scope: the first version
+of the fix covered one of the three ways a registration ends. `green.txt` is every subject after
+the change, plus `go build`, `go vet`, `golangci-lint` and the whole Go and Kotlin suites.
+
+## The three ways a registration ends, and what covers each
+
+The acceptance criterion is not "Replace works". It is that **no path that ends a registration
+leaves the phone unable to reach the pairing screen.**
+
+| # | How it ends | What the phone runs | What the gate reads | Test |
+|---|---|---|---|---|
+| 1 | `Replace this computer` on the phone | `App.PurgeKeys`, in a `finally`, whether or not the command reached the machine | `State.Disowned`, **durable** | `mobile/conformance` x2, `internal/phonecore` x4 |
+| 2 | `swarm remote revoke <device-id>` on the machine | **nothing** | `connRevoked`, live | `TestD0B8_AnOwnerSideRevokeAlsoUnpairsThePhone` (real `DeviceRevoke` through the real relay) |
+| 3 | this handset's relay-auth key destroyed (PB-KEY-6) | **nothing** | `connRepairRequired`, live | `TestD0B8_ADestroyedRelayAuthKeyAlsoUnpairsThePhone` |
+
+Path 2 is the one a real owner takes — it is what the machine-side runbook names and the only
+mitigation ADR-007 B133 leaves for a lost handset — and nothing on the phone purges for it. Paths 2
+and 3 already carried `Remedy.RE_PAIR` in the shipped error table, so before this change the app
+was instructing a recovery its own gate refused to allow.
+
+## Why the two facts are not one
+
+The durable flag cannot cover 2 and 3: no code on the phone runs for either. The transport reading
+cannot cover 1: the purge runs whether or not the phone can reach its machine, so on an offline
+Replace no transport error ever arrives, and Android SIGKILLs the app as routine behaviour.
+
+The transport reading is deliberately **not** persisted. `relay.ErrRevoked` comes from the relay,
+which this design trusts for nothing else, and PB-STATE-10 records that a revoked verdict is
+exactly the kind a pairing makes stale — a copy on disk would outlive the recovery that disproves
+it, which is "the brick reached through the remedy" the requirement is named for. The residual is
+stated rather than hidden: a phone that saw a revoke, was killed and came back OFFLINE reads as
+paired again. It is not stranded, because `Replace this computer` is on the settings screen it is
+shown and now ends the registration durably.
+
+`TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone` is what makes the reading safe
+to act on: inside `rearmAfterPairing`'s window a stale `revoked` must not unpair the phone, because
+the machine's authorization races the phone's first dial after a re-pair.
 
 ## What was red, and why each failure is the right one
 

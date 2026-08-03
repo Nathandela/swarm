@@ -74,27 +74,45 @@ class PairOnlyScreenTest {
     }
 
     /**
-     * agents-tracker-d0b8, at the level of the decision.
+     * agents-tracker-d0b8, at the level of the decision, for EVERY way a registration ends.
      *
      * A REVOKED PHONE READS THE SAME AS ONE THAT NEVER PAIRED, and that is the design rather than a
-     * simplification of it: what this screen has to offer is identical in both cases -- one offer
+     * simplification of it: what this screen has to offer is identical in every case -- one offer
      * to pair -- and the difference between "never had a machine" and "had one until this morning"
      * is a fact for the words on the screen to carry, not for the gate to branch on. What the gate
-     * needs is that the two are not told apart in the WRONG direction, which is what happened: the
+     * needs is that they are not told apart in the WRONG direction, which is what happened: the
      * revoked phone read as paired, and the one screen that could have repaired it was the one it
      * was refused.
+     *
+     * THE CAUSES ARE LISTED BECAUSE THE POPULATION IS THE DEFECT. The first version of this fix
+     * covered the local press alone, which is the path almost nobody takes: `swarm remote revoke`
+     * on the machine is the documented way to remove a device and the only mitigation ADR-007 B133
+     * leaves for a lost handset, and nothing on the phone purges for it. Each cause reaches this
+     * decision through `App.StateSummary.paired`, and each is proved to reach it by its own case in
+     * `mobile/conformance/d0b8_unpair_test.go` -- what is asserted here is the presentation the
+     * user is then given.
      */
     @Test
-    fun `a phone whose registration was revoked is offered the pairing screen again`() {
-        assertEquals(
-            "a phone whose owner pressed Replace this computer is still shown the full app. Both " +
-                "key tiers are destroyed, the machine has deregistered it and no journal event " +
-                "will ever arrive again -- and the pairing entry point lives on the settings " +
-                "screen inside the shell it is being kept in. There is no way out short of " +
-                "clearing the app's data",
-            Presentation.PAIR_ONLY,
-            PairOnlyScreen.presentationOf { false },
+    fun `every way a registration ends leads back to the pairing screen`() {
+        val ended = listOf(
+            "the owner pressed Replace this computer, so both key tiers were destroyed and the " +
+                "unpair was recorded durably",
+            "the owner ran `swarm remote revoke` on the machine, so the relay refuses this " +
+                "phone's handshake and no journal event will ever arrive again",
+            "this handset's relay-auth key was destroyed, and ADR-007 B133 removed the " +
+                "authentication that used to be offered for it",
         )
+
+        for (cause in ended) {
+            assertEquals(
+                "a phone is still being shown the full app after its registration ended -- $cause. " +
+                    "The pairing entry point lives on the settings screen INSIDE the shell it is " +
+                    "being kept in, and the app's own error banner tells this user to pair again. " +
+                    "There is no way out short of clearing the app's data",
+                Presentation.PAIR_ONLY,
+                PairOnlyScreen.presentationOf { false },
+            )
+        }
     }
 
     @Test

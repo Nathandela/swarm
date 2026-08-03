@@ -42,3 +42,35 @@ suites=85 tests=680 failures=0 errors=0 skipped=0
 StateSummary gained an exported field, so the checked-out artifact the Kotlin module compiles
 against had to be regenerated, and mobile/testdata/exported_surface.golden with it. The golden's
 whole diff is one line: `field StateSummary.Paired bool`.
+
+=== ROUND 2 GREEN (scope widened: every path that ends a registration) ===
+
+--- mobile (internal): which transport states end a pairing ---
+=== RUN   TestD0B8_OnlyTheTerminalTransportStatesEndAPairing
+--- PASS: TestD0B8_OnlyTheTerminalTransportStatesEndAPairing (0.00s)
+=== RUN   TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone
+--- PASS: TestPBSTATE10_AStaleRevokedVerdictDoesNotUnpairAFreshlyPairedPhone (0.00s)
+ok  	github.com/Nathandela/swarm/mobile	0.797s
+
+--- mobile/conformance: all three endings, end to end ---
+--- PASS: TestD0B8_TheSummaryReportsAnUnpairedPhoneAfterARevoke (0.16s)
+--- PASS: TestD0B8_TheUnpairSurvivesTheProcessDeathThatMakesItABrick (0.11s)
+--- PASS: TestD0B8_AnOwnerSideRevokeAlsoUnpairsThePhone (0.12s)
+--- PASS: TestD0B8_ADestroyedRelayAuthKeyAlsoUnpairsThePhone (0.12s)
+ok  	github.com/Nathandela/swarm/mobile/conformance	1.588s
+
+--- android/gate: the Kotlin wiring ---
+--- PASS: TestD0B8_ThePresentationGateAsksWhetherThePhoneIsPairedAndNotWhatItsMachineIsCalled (0.00s)
+--- PASS: TestD0B8_TheRePairingFlowAgreesWithTheGate (0.00s)
+--- PASS: TestPB2LZ5_TheReplaceSettleReachesTheWholeWindowAndNotOnlyTheSettingsPanel (0.00s)
+ok  	github.com/Nathandela/swarm/android/gate	0.764s
+
+--- internal/phonecore: the durable half ---
+--- PASS: TestD0B8_ARevokeRecordsTheUnpairDurably (0.09s)
+--- PASS: TestD0B8_TheUnpairDoesNotDisarmTheMachineIdFilter (0.07s)
+--- PASS: TestD0B8_AWriterThatHasNotNoticedTheRevokeCannotUndoIt (0.09s)
+--- PASS: TestD0B8_PairingAgainClearsTheUnpair (0.09s)
+ok  	github.com/Nathandela/swarm/internal/phonecore	1.026s
+
+--- Kotlin: :app:testDebugUnitTest --rerun (forced) ---
+suites=85 tests=680 failures=0 errors=0 skipped=0

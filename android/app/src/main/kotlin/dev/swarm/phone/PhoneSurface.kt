@@ -986,6 +986,13 @@ class PhoneSurface(
      * content host is what the tab scaffold wraps around; putting this screen there would leave an
      * unpaired phone looking at four tabs again, three of which lead to screens with nothing to
      * show it. This screen IS the window while it is up.
+     *
+     * "AN UNPAIRED PHONE" INCLUDES A REVOKED ONE, WHICH IT DID NOT UNTIL agents-tracker-d0b8. The
+     * body below already assumed it -- it clears two early-return guards because "a phone whose
+     * device was revoked lands here" -- and no revoked phone could: the gate read the pinned
+     * machine, which nothing clears. Now `App.StateSummary.paired` is false for all three endings
+     * (the local Replace, the owner's `swarm remote revoke`, a destroyed relay-auth key), so that
+     * sentence is load-bearing rather than aspirational.
      */
     private fun drawPairOnly() {
         if (pairOnlyDrawn == pairingStarted && host.childCount > 0) return

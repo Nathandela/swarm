@@ -639,12 +639,30 @@ func (a *App) ConnectionState() (state string, err error) {
 // point lives on the settings screen inside that app. There was no way back short of clearing the
 // app's data.
 //
-// IT IS THE OLD CRITERION PLUS THE MISSING ONE, deliberately, rather than a better criterion. A
+// IT KEEPS THE OLD CRITERION AND ADDS THE MISSING ONES, deliberately, rather than replacing it. A
 // pairing is still what makes Machine non-empty on a handset (Config.MachineID is "" on a phone,
-// so nothing else can), and phonecore.State.Disowned is the durable record of the owner ending it.
-// Deriving Paired from something else -- Restored, or key material -- would change which phones
-// read as paired TODAY, and that is not this defect's subject: the phones that work must go on
-// working, and the revoked one must stop.
+// so nothing else can). Deriving Paired from something else instead -- Restored, or key material
+// -- would change which phones read as paired TODAY, and that is not this defect's subject: the
+// phones that work must go on working, and the ones with no registration left must stop.
+//
+// IT TAKES TWO FACTS BECAUSE THERE ARE TWO KINDS OF ENDING, and covering one was the first version
+// of this fix being wrong in a way that looked complete:
+//
+//	THE PHONE ENDED IT. phonecore.State.Disowned, written by PB-KEY-7's purge. It is DURABLE
+//	  because that purge runs whether or not the command reached the machine -- the situation
+//	  "Replace this computer" exists for is a handset that cannot reach it -- so no transport
+//	  error will ever arrive to re-derive it, and Android SIGKILLs this app as routine behaviour.
+//	SOMETHING ELSE ENDED IT. transportEndsPairing over the live connection state. `swarm remote
+//	  revoke` on the machine is the documented way to remove a device and nothing on the phone
+//	  runs for it; a destroyed relay-auth key (PB-KEY-6) is the same shape one layer down. Both
+//	  are TERMINAL, both already carry Remedy.RE_PAIR in the shipped error table, and until this
+//	  the app was instructing a recovery its own gate refused to allow.
+//
+// THE SECOND IS NOT PERSISTED and transportEndsPairing carries the argument: the relay is not
+// trusted, and PB-STATE-10 makes a revoked verdict precisely the kind a pairing can make stale.
+// The two compose rather than overlap -- a phone that saw a revoke, was killed, and came back
+// OFFLINE reads as paired again and is not stranded by it, because "Replace this computer" is on
+// the settings screen it is shown and now ends the registration durably.
 func (a *App) StateSummary() (sum *StateSummary, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -654,6 +672,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 	st := core.State()
 	a.mu.Lock()
 	reconciled, pending := a.reconciled, len(a.inflight)
+	ended := transportEndsPairing(a.connState, a.pairingGraceUntil, time.Now())
 	a.mu.Unlock()
 	return &StateSummary{
 		Machine:     st.Machine,
@@ -663,7 +682,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 		PendingOps:  pending,
 		Restored:    len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
 		Reconciled:  reconciled,
-		Paired:      st.Machine != "" && !st.Disowned,
+		Paired:      st.Machine != "" && !st.Disowned && !ended,
 	}, nil
 }
 

@@ -1,0 +1,20 @@
+=== RED (round 2, scope widened to every revoke path) ===
+
+--- mobile (internal): which transport states end a pairing ---
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+mobile/d0b8_transport_test.go:33:7: undefined: transportEndsPairing
+mobile/d0b8_transport_test.go:51:6: undefined: transportEndsPairing
+mobile/d0b8_transport_test.go:70:5: undefined: transportEndsPairing
+mobile/d0b8_transport_test.go:75:6: undefined: transportEndsPairing
+mobile/d0b8_transport_test.go:83:6: undefined: transportEndsPairing
+FAIL	github.com/Nathandela/swarm/mobile [build failed]
+FAIL
+
+--- mobile/conformance: owner-side revoke and destroyed relay-auth key ---
+--- FAIL: TestD0B8_AnOwnerSideRevokeAlsoUnpairsThePhone (0.10s)
+    d0b8_unpair_test.go:180: agents-tracker-d0b8: the phone still reports itself as paired after the OWNER revoked it from the machine. Nothing on this handset purges for that path, so a fix that only watches the local Replace press covers the half of the population that never happens: the shipped banner already tells this user to pair again, and the gate is what decides whether they can
+--- FAIL: TestD0B8_ADestroyedRelayAuthKeyAlsoUnpairsThePhone (0.09s)
+    d0b8_unpair_test.go:226: agents-tracker-d0b8: a phone whose relay-auth key is destroyed still reports itself as paired. Its own error banner says to pair this device again, and the gate is what decides whether the screen that does so can be reached -- so the product is instructing a recovery it has removed
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	1.508s
+FAIL
