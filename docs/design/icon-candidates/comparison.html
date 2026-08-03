@@ -1,0 +1,847 @@
+<title>swarm launcher icon: six candidates</title>
+
+<style>
+  /*
+    The palette is not a choice made here. Every value is a token from internal/design/tokens.json,
+    the shipped substrate skin, because this page's whole job is to show marks against the ground
+    they will actually sit on. The page is deliberately single-theme: a light ground would make the
+    contrast in every specimen well a lie, so the viewer's theme toggle is honoured by keeping the
+    tokens fixed rather than by inverting them.
+  */
+  :root {
+    --bg:    #08090a;  /* p-bg    */
+    --card:  #0f1011;  /* p-card  */
+    --elev:  #141516;  /* p-elev  */
+    --well:  #060708;  /* p-well  */
+    --hair:  #23252a;  /* p-hair  */
+    --ink:   #f7f8f8;  /* p-ink   */
+    --ink2:  #8a8f98;  /* p-ink2  */
+    --ink3:  #62666d;  /* p-ink3  */
+    --hero:  #53ce7c;  /* p-hero  */
+    --att:   #f1a10d;  /* p-att   */
+    --err:   #ff6369;  /* p-err   */
+    --ok:    #4cc38a;  /* p-ok    */
+
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;  /* p-font */
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;                     /* p-mono */
+
+    --r-card: 9px;   /* p-card-r */
+    --r-chip: 8px;   /* p-chip-r */
+
+    color-scheme: dark;
+  }
+  :root[data-theme="light"], :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: -0.008em; /* p-body-tr */
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ---------- type ---------- */
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    margin: 0;
+  }
+
+  h1 {
+    font-size: clamp(2.1rem, 5.2vw, 3.3rem);
+    font-weight: 650;             /* p-display-wt */
+    letter-spacing: -0.025em;     /* p-display-tr */
+    line-height: 1.06;
+    margin: 14px 0 0;
+    text-wrap: balance;
+  }
+
+  h2 {
+    font-size: 1.45rem;
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+
+  p { margin: 0; max-width: 66ch; }
+
+  .lede { color: var(--ink2); font-size: 1.06rem; }
+
+  a { color: var(--hero); text-decoration-color: color-mix(in srgb, var(--hero) 40%, transparent); }
+  a:focus-visible, input:focus-visible, button:focus-visible {
+    outline: 2px solid var(--hero);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+  code { color: var(--ink); background: var(--elev); padding: 0.1em 0.38em; border-radius: 5px; }
+
+  /* ---------- header ---------- */
+
+  header { padding: 72px 0 0; }
+
+  .brief {
+    margin: 34px 0 0;
+    padding: 20px 0 20px 22px;
+    border-left: 2px solid var(--hero);
+    max-width: 62ch;
+  }
+  .brief p { font-size: 1.12rem; color: var(--ink); letter-spacing: -0.014em; }
+  .brief .attrib {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    margin-top: 12px;
+  }
+
+  .header-notes {
+    display: grid;
+    gap: 14px;
+    margin-top: 30px;
+  }
+
+  /* ---------- the rig ---------- */
+
+  section { margin-top: 72px; }
+
+  .rule {
+    height: 1px;
+    background: var(--hair);
+    border: 0;
+    margin: 0 0 28px;
+  }
+
+  .rig {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 40px;
+    align-items: start;
+    margin-top: 24px;
+  }
+  @media (max-width: 720px) { .rig { grid-template-columns: minmax(0, 1fr); } }
+
+  .views { display: grid; gap: 16px; margin: 0; padding: 0; list-style: none; }
+  .views li { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 16px; }
+  .views .k {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--hero);
+    padding-top: 3px;
+  }
+  .views .v { color: var(--ink2); font-size: 0.95rem; }
+
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 26px;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink2);
+    background: var(--elev);
+    border: 1px solid var(--hair);
+    border-radius: var(--r-chip);
+    padding: 9px 14px;
+    cursor: pointer;
+  }
+  .toggle input { accent-color: var(--hero); margin: 0; width: 14px; height: 14px; }
+
+  /* ---------- specimens ---------- */
+
+  .cand {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 34px;
+    background: var(--card);
+    border: 1px solid var(--hair);
+    border-radius: var(--r-card);
+    padding: 26px;
+    margin-top: 20px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.045); /* p-card-fx */
+  }
+  @media (max-width: 780px) { .cand { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+  .spec-col { display: grid; gap: 14px; align-content: start; }
+
+  .canvas {
+    width: 100%;
+    max-width: 216px;
+    aspect-ratio: 1;
+    border: 1px solid var(--hair);
+    border-radius: 6px;
+    overflow: hidden;
+    display: block;
+  }
+  .canvas svg { display: block; width: 100%; height: 100%; }
+
+  .overlay { opacity: 0; transition: opacity 140ms ease; }
+  :root.show-safe .overlay { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .overlay { transition: none; } }
+
+  .geom {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.75;
+    color: var(--ink3);
+    font-variant-numeric: tabular-nums;
+  }
+  .geom b { color: var(--ink2); font-weight: 400; }
+
+  /* ---------- candidate body ---------- */
+
+  .cand-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 16px;
+  }
+  .file {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--ink3);
+  }
+
+  .body-col { display: grid; gap: 18px; align-content: start; }
+  .body-col p { color: var(--ink2); font-size: 0.98rem; }
+  .body-col p strong { color: var(--ink); font-weight: 550; }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink2);
+    border: 1px solid var(--hair);
+    border-radius: 999px;
+    padding: 5px 12px 5px 10px;
+    white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.ok   { background: var(--ok); }
+  .dot.warn { background: var(--att); }
+  .dot.bad  { background: var(--err); }
+
+  /* ---------- launcher rack ---------- */
+
+  .rack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 26px;
+    align-items: flex-end;
+    padding: 18px 20px;
+    background: var(--well);
+    border: 1px solid var(--hair);
+    border-radius: 6px;
+  }
+  .slot { display: grid; gap: 9px; justify-items: center; }
+  .slot .cap {
+    font-family: var(--mono);
+    font-size: 0.63rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    text-align: center;
+  }
+  .mask { overflow: hidden; display: block; flex: none; }
+  .mask svg { display: block; }
+  .mask.circle   { border-radius: 50%; }
+  .mask.squircle { border-radius: 26%; }
+  .mask.rsquare  { border-radius: 16%; }
+
+  .zoom {
+    width: 168px;
+    height: 168px;
+    image-rendering: pixelated;
+    border-radius: 50%;
+    display: block;
+  }
+
+  /* ---------- verdict ---------- */
+
+  .verdict {
+    background: var(--card);
+    border: 1px solid var(--hair);
+    border-left: 2px solid var(--hero);
+    border-radius: var(--r-card);
+    padding: 30px;
+    display: grid;
+    gap: 22px;
+  }
+  .verdict p { color: var(--ink2); }
+  .verdict p strong { color: var(--ink); font-weight: 550; }
+
+  .picks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  @media (max-width: 640px) { .picks { grid-template-columns: minmax(0, 1fr); } }
+  .pick {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    background: var(--elev);
+    border: 1px solid var(--hair);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .pick .name { font-weight: 600; letter-spacing: -0.015em; color: var(--ink); }
+  .pick p { font-size: 0.9rem; margin-top: 4px; }
+
+  /* ---------- colophon ---------- */
+
+  .colophon { display: grid; gap: 12px; }
+  .colophon dl {
+    display: grid;
+    grid-template-columns: 152px minmax(0, 1fr);
+    gap: 10px 20px;
+    margin: 0;
+    font-size: 0.9rem;
+  }
+  @media (max-width: 620px) { .colophon dl { grid-template-columns: minmax(0, 1fr); gap: 4px 0; } }
+  .colophon dt {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    padding-top: 3px;
+  }
+  .colophon dd { margin: 0; color: var(--ink2); }
+  .colophon dd .mono { color: var(--ink); }
+</style>
+
+<!-- The six marks, defined once in 108dp adaptive-canvas space and referenced by every view. -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <g id="m-prompt-cap">
+      <rect width="108" height="108" fill="#08090A"/>
+      <g fill="none" stroke="#53CE7C" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter">
+        <path d="M 57 38 L 34 48.7 L 57 59.3 L 34 70"/>
+        <path d="M 59 73 L 67 73 L 67 67 L 77 67"/>
+      </g>
+    </g>
+
+    <g id="m-trail-echo">
+      <rect width="108" height="108" fill="#08090A"/>
+      <g fill="none" stroke="#53CE7C" stroke-linecap="butt" stroke-linejoin="miter">
+        <path d="M 57 38 L 34 48.7" stroke-width="4.5"/>
+        <path d="M 34 48.7 L 57 59.3 L 34 70" stroke-width="7"/>
+        <path d="M 59 70 L 69 70" stroke-width="7"/>
+        <path d="M 73 70 L 78 70" stroke-width="7"/>
+      </g>
+    </g>
+
+    <g id="m-solid-wedge">
+      <rect width="108" height="108" fill="#08090A"/>
+      <path d="M 57 36 L 34 48 L 57 60 L 34 72"
+            fill="none" stroke="#53CE7C" stroke-width="8.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+      <path d="M 60 65 L 69 65 L 69 69 L 78 69 L 78 76 L 69 76 L 69 72 L 60 72 Z" fill="#53CE7C"/>
+    </g>
+
+    <g id="m-cell-swarm">
+      <rect width="108" height="108" fill="#08090A"/>
+      <path d="M 56 38 L 34 48.7 L 56 59.3 L 34 70"
+            fill="none" stroke="#53CE7C" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter"/>
+      <g fill="#53CE7C">
+        <rect x="60" y="66" width="8" height="8"/>
+        <rect x="72.5" y="56" width="7" height="7"/>
+        <rect x="72.5" y="68" width="6.5" height="6.5"/>
+      </g>
+    </g>
+
+    <g id="m-green-tile">
+      <rect width="108" height="108" rx="16" fill="#53CE7C"/>
+      <g fill="none" stroke="#06150C" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter">
+        <path d="M 56 36 L 34 48 L 56 60 L 34 72"/>
+        <path d="M 58 74 L 66 74 L 66 68 L 76 68"/>
+      </g>
+    </g>
+
+    <g id="m-wide-rule">
+      <rect width="108" height="108" fill="#08090A"/>
+      <g fill="none" stroke="#53CE7C" stroke-linecap="butt" stroke-linejoin="miter">
+        <path d="M 59 31 L 40 41 L 59 51 L 40 61" stroke-width="5.5"/>
+        <g stroke-width="5">
+          <path d="M 33 71 L 40.5 71"/>
+          <path d="M 44.5 71 L 52 71"/>
+          <path d="M 56 71 L 63.5 71"/>
+          <path d="M 67.5 71 L 75 71"/>
+        </g>
+      </g>
+    </g>
+
+    <!-- The two boundaries every candidate is drawn against. -->
+    <g id="safe-overlay" fill="none">
+      <rect x="18" y="18" width="72" height="72" stroke="#62666d" stroke-width="0.6" stroke-dasharray="3 3"/>
+      <circle cx="54" cy="54" r="33" stroke="#f1a10d" stroke-width="0.8"/>
+    </g>
+  </defs>
+</svg>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">swarm &middot; android launcher icon &middot; six candidates</p>
+    <h1>The prompt that is also an S</h1>
+
+    <div class="brief">
+      <p>&ldquo;A S with a slightly wiggling bar after it (like the design of a terminal, using the
+        green elegant color of the app) and add a bar on top of the &gt; that gives a S vibe, and the
+        _ is slightly swarmy.&rdquo;</p>
+      <p class="attrib">The brief, verbatim</p>
+    </div>
+
+    <div class="header-notes">
+      <p class="lede">Every candidate below is the same two marks seen two ways. The S is a
+        three-leg zigzag whose cap is the chevron's own bottom stroke repeated above it; the lower
+        two legs are the terminal prompt's <code>&gt;</code>, and the mark after them is its cursor.
+        The double reading is the design. A mark you have to be told the S is in has failed, and so
+        has one that is just an S standing next to a cursor.</p>
+      <p class="lede">The palette is fixed and comes from the shipped tokens, not from taste: hero
+        green <code>#53CE7C</code>, hero ink <code>#06150C</code>, app ground <code>#08090A</code>.
+        No candidate introduces a colour that is not already in
+        <code>internal/design/tokens.json</code>. All six are cut rather than drawn: flat butt
+        caps, mitred joins, no rounding anywhere, so the reversals are points and the diagonal
+        terminals come off at a blade angle.</p>
+    </div>
+  </header>
+
+  <section>
+    <hr class="rule">
+    <p class="eyebrow">The test</p>
+    <h2 style="margin-top:8px">What decides it is 48dp, not 512</h2>
+
+    <div class="rig">
+      <ul class="views">
+        <li>
+          <span class="k">As drawn</span>
+          <span class="v">The full 108dp adaptive canvas, which is the file, not the icon. Nothing
+            here is what anyone sees.</span>
+        </li>
+        <li>
+          <span class="k">As launched</span>
+          <span class="v">The centre 72dp that a launcher actually displays, masked to a circle and
+            to a squircle, drawn at true 48dp. This is the home screen.</span>
+        </li>
+        <li>
+          <span class="k">At the pixel</span>
+          <span class="v">That same 48dp render, magnified without resampling. Detail that merges
+            here is detail the design does not have.</span>
+        </li>
+        <li>
+          <span class="k">Safe zone</span>
+          <span class="v">Only the centre 66dp circle survives every launcher mask. All six measure
+            clear of it; the toggle draws the boundary on every canvas.</span>
+        </li>
+      </ul>
+
+      <label class="toggle">
+        <input type="checkbox" id="safe-toggle">
+        Show 66dp safe circle
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <hr class="rule">
+    <p class="eyebrow">The candidates</p>
+    <h2 style="margin-top:8px">One letterform, six ways to carry it</h2>
+
+    <!-- 1 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Prompt Cap, as drawn on the 108dp canvas">
+            <use href="#m-prompt-cap"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 6 uniform<br>
+          <b>caps</b> butt, mitred joins<br>
+          <b>max radius</b> 27.9 / 33 dp<br>
+          <b>tokens</b> p-hero on p-bg
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Prompt Cap</h3>
+          <span class="file">prompt-cap.svg</span>
+          <span class="chip"><span class="dot ok"></span>Survives</span>
+        </div>
+        <p><strong>The brief taken literally.</strong> One weight throughout, and the whole
+          three-leg zigzag folded into the <code>y 38&ndash;70</code> box the bare <code>&gt;</code>
+          occupied on its own, so the S inherits the prompt's proportions instead of growing to fit
+          a letter. The cursor is the wiggle made square: one bar with a single step in it, which is
+          what a terminal cursor mid-blink looks like rather than what a brush stroke looks like.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Prompt Cap masked to a circle at 48dp"><use href="#m-prompt-cap"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Prompt Cap masked to a squircle at 48dp"><use href="#m-prompt-cap"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Prompt Cap rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAD8UlEQVR42uVay08TWxz+5kxbWoRKEREqYjtojaE+KCleV2rUhYmae00gEcTErUvjyqgxceM/4NKFEY1GfMRUF2q898b4iC1VmxIf97alVCwlhUKhD4cydaES0ZnSgZnpGM9yzm/O+b45v+f8DgUJh95Qni9GLptJU1LtSSkFWi4yVClAS0mGqAX8Qtem1AB8MadB1AhezJ5EjeDF7E3UCr5YDETN4IvBQtQOfj5M5FcAXwgbkXtTY1MNDHVG2dan5Pr61RtXgul2YsVWBhGXH75z92WJEZSU4ClCoXarFU3dbTBtMM8+53Ic/m6/gOzIpOQkNFIsRrQ0zLvWgelqQ6W1+ud5DYG13YE35/+VXIUWRUBTrkXjnxth7WiFfnmFoFzCN4S4JyyfDYhVH12VAZYDm2Fpb4HWqOcXygNxzyAGrnsRexKULV8SdQLl5qWwdDjQuM8OWq/lleFyHKIP3yHQ8wKToVHZXWtRBIy2WqzpdqJuuw0U4U8Sc2kWH1x+BK96kYklFYsNVCH1+d4VCiXe7EQG4d5XCPW+xHQyq3hw0whZxvqj28B0thZ8eSqcwItjN5AZTqJUg9ZotWf4JuLuMGKP/4dGr0OldRmv6uiqDFj91yZUNFZjKjwKdkL5E6CK8UBLGkywHnSgYU8z6DL+Q8tzeQz/8x6Byx5MvI2pi4Ao9/nV7wd63Ig9DQJ5FRGYNRyDFubd68F0tmLJKpOgXDIYR+iKBx8fvAWX49RDYPZlmsC8ywam0wnjmuWCcpnhJELXvIi4/MilWfUQEOtyp1MsPtzrR6DHjU/xKXUR+DbqdtjQcnoPiI4WlMmlWfSduIO4e7C0ydycaM3UgOlywrx7HSiav07i2BlEH73HfxefIzWYKF0y9/1Y5mgA0+VE7RarsOoksxjofYWBGy/BjmdKl8z9VLgcboPJbhaU+zSWwuAtH0LX+jCdmmu8+tpKmOz1BfdJ+KPzFkGahRQuTYfaUGGpFpRLRRII33yN8O3X4NgZXhmTvR6Os3sL7uc95UL0UREEspl0QWMmOhqW9hYwHQ6U1QgXLmO+IQQvuRF7Jn8AE1VS5nMcGvdv4AefB2LPgghcciPhG1JJNsqT54SuemE/vnNRhUtVcz0MKyq/qFDzXP3PjkxivD86NwDGJosnMJ8aRe76sfbIH6ANWkTu9iN4xSP6L0PTwVbU7bDxzo33R9F30iX6t4rmxwkhEhw7g76TLkwNjJakcBHqG4jyQqXQcdE2MJ8qLWaM+aMLmivUtaF+hd/rhVpORIlerpz9MqJUQ1quZh9RsqsuR6eSKH01QOo2K6WmRvdCPhZR+m6D1Gv/npc91HTd5jPMHrCfrJkEqgAAAABJRU5ErkJggg==">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 2 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Trail, as drawn on the 108dp canvas">
+            <use href="#m-trail-echo"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 7 chevron / 4.5 cap<br>
+          <b>caps</b> butt, mitred joins<br>
+          <b>max radius</b> 30.8 / 33 dp<br>
+          <b>tokens</b> p-hero on p-bg
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Trail</h3>
+          <span class="file">trail-echo.svg</span>
+          <span class="chip"><span class="dot warn"></span>Marginal</span>
+        </div>
+        <p><strong>The prompt-first pole, reached by weight rather than by geometry.</strong> The
+          chevron carries the heaviest stroke and its cap the lightest &mdash; the same diagonal,
+          echoed thinner above &mdash; so the eye lands on the <code>&gt;</code> and the S assembles
+          a beat later. The cursor is a block and one shorter echo: the swarm as motion rather than
+          as multiplicity. The cost is that the lightest stroke is also the one doing the S, and at
+          4.5 units it lands at roughly 2px on a 48dp screen.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Trail masked to a circle at 48dp"><use href="#m-trail-echo"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Trail masked to a squircle at 48dp"><use href="#m-trail-echo"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Trail rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADt0lEQVR42uWa209UVxTGf2fPMDhCBxiRYaSG4YyCCd4KHa3GNrE2vjUx2hZDIE3/BJO++h+0fe1Dm5ioEHvjoVGbNunlpQ0VQVsBL2U4pYwCknQYEWacyzl9GuI4w8wA50a6Hs/e55xv7fXttffa35bQ0ba4t2rl9EvElyW9/imZBdooZyQrQOvpjLAL+PV+W7ID8I1EQ9gR/Fr+KewIfi3/FnYFXy4GYWfw5WARdgdfCpPYDOCLYRNscpOMHP2ql+tofucgkkNi7OOfDFkjnEaAr2nz0fJeBztO7kESEmpaJXxpiMTjRd2olHXCqWcsfUdk5N4Q3v1NuTx1ChqPBfl74LbuFNqwA8Ip8L2xi2BPiJo2X06bpmo8HlQIX7xB9M4j4+bAeujjdFew8+19tJztwO3z5LSpqQwzPz4gfPl3FpV/Dd0vrTkCrho3gTMHCbz7ChWeLTlt6eUk09fGmOy/qRvfdaOQu9FD+7nj1B9qxuHKfS25EGfqm9soX98i9SRhbhotlz5HP+2i7oXJuRSJovQPE/lunEwybck6UPZCFr07l++9w4GodIKQsMrKjsDrF3rwtDYUbLM9hdz+Go593o2r1l20XzqeYvrqKMoXI8RnYvaKgHA52HGijWDvYaqb64r2zeb/iQuDLIzP2sOBlReERMORFna9f5jadn/pufPnQ8KXh5j7bRI0GzjwvG3r3EmwJ8T2UKDk8UDs/hzhvpvM/vwATdXs4UDWPMF65O4Q/rfaEM7iiS0+E0P58hb/fHuHTCJlDwdWHNm9nUOfnKbSW1Wy7/KjGDfODbAUiVq7mQNwebcSOHWAQFcHFdWVRfvqnXKljdQC1QEvcneIppN7EBWOEiO+wGT/MJHrY2Sepa3bzAF4WhuQuzpXCpZi9mRiHuXKMA9/uIeWUa2tB7z7m5B7Q/iOypanz7yauBiN3D4Pr350Co9cX3IBm/3lL8J9Q8Tu5e+dWro6qdtbeO0YOX8VgNp2P/LZzrznq9XFZUUgMb+Iw7U6x7MFzMTFQZ5OrZ5VvPv8NB5vLdx4PjtYL+F/szXv+YYopKkaypUR9n54Infvs5Ri+vook31DJOafWrIbdT4fkmI0mr42yu4PXqNyWxXJ6DJTA3+gfDVCavGZ6aALHquUckJNZrj/2a9ISES+H0dNZiwZ8Rd1A2kzHS0WckAYqSCaodoIo2VQoyUnYYaWa6ReJswSpI0S+4SZqroRSqUw+2qA3jKrZCehez2DJcy+26D3t/+flz3sdN3mP8Jkm9+cBR8wAAAAAElFTkSuQmCC">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 3 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Solid Wedge, as drawn on the 108dp canvas">
+            <use href="#m-solid-wedge"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 8.5, heaviest here<br>
+          <b>caps</b> butt, mitred joins<br>
+          <b>max radius</b> 32.4 / 33 dp<br>
+          <b>tokens</b> p-hero on p-bg
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Solid Wedge</h3>
+          <span class="file">solid-wedge.svg</span>
+          <span class="chip"><span class="dot ok"></span>Survives</span>
+        </div>
+        <p><strong>The S-first pole: the same zigzag at the heaviest weight the set allows</strong>,
+          so what survives downscaling is mass rather than detail. The weight is judged rather than
+          maximal &mdash; at 8.5 units the three legs still hold an open channel between them at
+          48dp, which is the thing that fails first when a mark like this is pushed heavier. Its
+          cursor is the one filled shape on the page, which is what keeps it reading as a cursor
+          beside a stroked letter.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Solid Wedge masked to a circle at 48dp"><use href="#m-solid-wedge"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Solid Wedge masked to a squircle at 48dp"><use href="#m-solid-wedge"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Solid Wedge rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADLElEQVR42uVaX0hTURj/nbPNPymToWspTWfZZrEomCY0Kgx6CH3wIagIQqKyhyDopZceewt66qEgpNB6CKuHMuipxKSaCVqC5ibmpjVxGlu6P7rd20MYlnM7dzv37o6+p3F3+O7vd7/vfOd3zncIOFpR8RaRZVw0Eia83kmUAi0XGZIL0DzJULWAz9Q3UQPwbKJB1QheyjupGsFLeTdVK3hWDFTN4FmwUDnBU50GpoM7ZCVB5QBPKEHlUSsOd59Fw802GOxVspEgvAlUNFZj9+Uj0NcZ/zwLfPTiw5UeWcqrlhf4isZq1F86hLJ608b/GqpR7jBjYcjHJQrrSZBswRvsVbBddKLcYU45Ljjmx9sLjwCR70KnzdRBmc0EW4cTxiYL25czlqJ4qx6RuRDXCiWZQGmNAdbzTlQ2W5mEyGooismHg/jaM4xEdJV7iSWs6VNs0qOu/QDMLXYQTXoFEg+vYPrpCDxdLsSXYrLppbQRKKwoxa72Jphb7aA6TVqniVgc009GMNntwkowIvsitykBnb4IO880wnJiPzRFurSOhLiAmZejcHe+R3R+SbFVmvybPrqSAlhOOVB70gFdSUFaB6IgYvbVGNyd7xD+FlRcZmxIZlEEhFj89w9G0xRqQShFLoxsNoHzNoXybRIT1hVYjWVUEgHVLmSZaiCpUiIWWIL7gQu+558hrCZyT0CqmFuzyFwInvsu+HpHISaE3BNYM2OTBbYOJ8psJqbxP6cWMXFvAP4+d1YKlVvxFgVBEhBCCQglyok5NaYQk5hT+yRWfD/guNGadNzQ9ReZE4hGwmknM6+FbFuzVfkt5fbje7D32rH82g+st4XhWdnFXMvA1aTPe5232AikSqPI9yB8vaOoaduXdD/gf+PGl7sDWJ75AaWP3pkPtgrLS9D8+Nxf0jow6MXY7T6EPPNZg2KNQMqDrZRlcGEZ3mefUHvagcCgF+N3+hEcn0OuTZssPJtFwdPlgr9/EosjM9yB+F9PZNS1IflwvJ6q5USV6OXK2S+jSjWk5Wr2USW76nJ0KqnSVwN4t1mJmhrdmXwsqvTdBt6+/8/LHmq6bvML5BG6Cx69wI0AAAAASUVORK5CYII=">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 4 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Cell Swarm, as drawn on the 108dp canvas">
+            <use href="#m-cell-swarm"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 6, mitred joins<br>
+          <b>cells</b> 8 / 7 / 6.5, gaps 4.5<br>
+          <b>max radius</b> 32.2 / 33 dp<br>
+          <b>tokens</b> p-hero on p-bg
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Cell Swarm</h3>
+          <span class="file">cell-swarm.svg</span>
+          <span class="chip"><span class="dot ok"></span>Survives</span>
+        </div>
+        <p><strong>The swarm as multiplicity instead of motion.</strong> The underscore is three
+          terminal cells of different sizes scattered off the baseline. This was always the blocky
+          candidate, so sharpening it mostly meant thinning the zigzag into the same weight class as
+          the cells beside it. It bets more on small detail than anything else here, and the bet pays
+          &mdash; the cells sit 4.5 units apart and all three still read as squares at 48dp.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Cell Swarm masked to a circle at 48dp"><use href="#m-cell-swarm"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Cell Swarm masked to a squircle at 48dp"><use href="#m-cell-swarm"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Cell Swarm rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAED0lEQVR42uVaW08TWxhds6fTm1gajqhFkIGWmgAqtoJGY6JEE+8aRSBH4RzjP9A3o4kPPvsHjJeAMWqMRi1qjFEToxFre8KxEAWaWgtWCEIFbaGXqS/noMgMTNuZMsZ5m5mdvdfae833fXvWpiDhpdXpk2LajUfClFRjUtkCLRcZai5AS0mGKAV8un1TSgCeyWoQJYJPZUyiRPCpjE2UCl4sBqJk8GKwEKWDnw0T+RXAz4SNyDkgM08NY7lJVlKUHLPPGLQoqVsFtt4GLhrH4wPnkJiIy5IjVFKCVxt1YPdVgW20g5mn/u+pBoXbK+C/2SGplP4noZKiQ3WeHqUNdrB1VaC1zLT3luYaBBwecLGE5BLKiIDOlAtzUzWKtlWAqGneNtFQBO9udoCiKPm+gVTloy/IBVtvQ/GeFcLAR8Lw3+iA76oLsa9R2eqllFZgfskfMB+qQcGWZaBo/gAWGRiF74ob72/9K+mHm5GEDNaFKPt7DRZtsIAi/FII94fgbXWi736XLFoXlNBM8jGU5cPSvAamTVbBwjvcH4L30isE2jxIJrisJzfBFSjeuxIVx2oFZxwAhl764Tp+G/FIbM6yM61imFN8Lz6/GUD/gzegNTQMlnxeIvolRizdvQIqLYPR7sGsSkeUhL5HHSPMTdUo3FYOwvBHndjoOHzX/8G7a27ExiaURUBswgKAeDiKQFsnvJecmBj6oiwCk0RydWD3V4FtsIHJ0fC24aIJ9N3vRM+FdowPjimLwGTRNl8Dtt6GkrpVYAxafiKxBPrudcHb6kT4Q2jWPksa7cirnFrBuk445CEwGcr0ahTtrIT54GpoFuTwtklySXx80oOe888x5hsW7Mt+eicWb7JOeda2/ox0/4WEdO+75saTxgsYeunnnylCwVRrxYaWv1C8d6UyirkfwS3eWAbrkXXIYfOE84bzPd6efYZQZ1A6AuORcNoyIgyNwq3lMDdVQ7/EKCidgae96LnYjtHuQcmLubSqUcLQKNi8DGWH184IfPCFD91nn0sOPO1qVKVjULRrOUr/XA1tPv/HysU5BB++RW/LC3zxj8ifB8RsKWm1CmyjDaUNdqiNOsG4H7jXCW+rE5HgZ8EBdzw7Ou2Z+6QDwUfdae2LRa1AkuNQvHs5L3ipE9bPeWDYE4TviiuzKMTFOXgvu1B5rPZ76IzEEHB4JC8Z8ipN0/KAT0wYnS0aBRyvYWmugUqvQeCuB70t7YgOh+ekhOb9rTIbCS6agOv4HXz1f5Jtj5uOb5BSFAp1ZZ6A3Cen1zUjnuAUzf94/XwvyqFR6v9RPteGyG2Dym05kWx4uXL6ZSRbhrRcZh/Jpqsuh1NJsn00QGqblVKS0Z3OZJFsn22Quu/f87CHko7bfANGz7qEXF/MeQAAAABJRU5ErkJggg==">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 5 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Green Tile, as drawn on the 108dp canvas">
+            <use href="#m-green-tile"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 7 ink, mitred<br>
+          <b>ground</b> hero green, full bleed<br>
+          <b>max radius</b> 28.0 / 33 dp<br>
+          <b>tokens</b> p-hero-ink on p-hero
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Green Tile</h3>
+          <span class="file">green-tile.svg</span>
+          <span class="chip"><span class="dot ok"></span>Survives</span>
+        </div>
+        <p><strong>The only container, and the only inversion.</strong> Hero green becomes the ground
+          and the mark is knocked out of it in hero ink, which buys more contrast than anything else
+          in this palette can. Ink cut out of green carries further than green on near-black, so
+          this reads as the heaviest of the thin candidates without being the heaviest drawn. The
+          rounded square is there only so the shape stands alone; on device the launcher supplies the
+          mask and the background layer is a flat green fill.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Green Tile masked to a circle at 48dp"><use href="#m-green-tile"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Green Tile masked to a squircle at 48dp"><use href="#m-green-tile"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Green Tile rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADeUlEQVR42uVaS08TURT+7u0MbSkFKQ9TDJYiFQoVTUEIEXBjDAouBMMCxcRXXPoHWLjAH+DOhWxM1BhDfESNC3ShGAP4AIKAFAREQSAgFrTvGTeKon1M25npGO9uMnfmft8553733HsugYit6VUbL6Rfp72diDUmkQu0VGRIIkCLSYYqBXys/yZKAB6PN6gSwUczJlUi+GjGpkoFLxQDVTJ4IVio5OB5aUkQqcC7FpxwXO+D2pCMwtYqydSJEdvdXqcbEzdf4N2t1+B8AaiSGJjqbNBk6SUJLyKW9QMeHybvDGD8Rh98a54N70wHbSg9t08SL5B4wfMcj7nucQxffgrXvDO4lSjB3kvHoDdliE4irhBa6J3EcEc3VqeWQsscq4KpoRRqg06SEIqJwMrYPIY7urHUPxM2OHNqLCg6sQe6nE2SSSyJJnx+Ksv7h0PgudCfGIqNsJ6ugaEkR/J8SZAHPE4XHNd6MX1vEJwvELKfPi8DxaeqkV1hlm2RC0sg4PVj8nZ/UGX5vWkyU7D9aCW21tlAKIGcjQQLH57jMdM1grdXnsO9uBryY1aXhILm3TAf3gWVmk1ImhEyF2I0bERr8hwP31cP+EDi8iRV8dna83+5hRDoTRnIayiFOlWLz6OfwHn/Rsn5OSy/mcWHRyNgtCzStmWDEJJ4AutEVBTpViNyD9jA+Tk4JxaDqo//mxfzPZOYezaO5M2p0G1JT+wciFtGrUZYz0gvo1ETUORCFk8CF00qYWmpgDpVqywCQpM5AGC0LPIO7YSlpRKMlpVnEguywA/FMtXvAKNh8cUxH3S1/qVYo2BTNEg1Z4qiWFQ0U/A8QAkQCRTPg/cHEpPMxRtC+UfKUNBcDlUSI28yp+RJLPl+wHqyGsnGtA2vZp848PLC/bBjGGssKG+rF0ag094uSI2UtB+IakvpXXVj7GrPv7cfWCew4sLU3QHwAU55+wGhxyqDF7sw/WAo5sUpUtwbrEZoslLWn9OtRuQ32iMeqzB/vghForC1Ch8fj8Lv9oMyFLn7S1B0vApJ6cmiWNLcaEdOrUW6kzm1QYf8pjKszSxLnqDFNQcieQEkcWCDVW2YUB2DkogDvDZbHzZEtNn6mEpOROkFjkj1MipXQVqqYh+Vs6ouRaWSyn01QOwyK1FSoTsWY1G57zaI/e//87KHkq7bfAd5lb7Arvpv0wAAAABJRU5ErkJggg==">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 6 -->
+    <article class="cand">
+      <div class="spec-col">
+        <div class="canvas">
+          <svg viewBox="0 0 108 108" role="img" aria-label="Wide Rule, as drawn on the 108dp canvas">
+            <use href="#m-wide-rule"/>
+            <g class="overlay"><use href="#safe-overlay"/></g>
+          </svg>
+        </div>
+        <div class="geom">
+          <b>stroke</b> 5.5 mark / 5 rule<br>
+          <b>rule</b> 4 dashes, gaps 4<br>
+          <b>max radius</b> 28.6 / 33 dp<br>
+          <b>tokens</b> p-hero on p-bg
+        </div>
+      </div>
+
+      <div class="body-col">
+        <div class="cand-head">
+          <h3>Wide Rule</h3>
+          <span class="file">wide-rule.svg</span>
+          <span class="chip"><span class="dot warn"></span>Reads, but</span>
+        </div>
+        <p><strong>The one that changes the composition rather than the details.</strong> Nothing
+          follows the chevron at all; the swarm is a dashed rule running the full width underneath, so
+          the prompt sits on a command line made of many cells. It gives the set its only stacked
+          silhouette and the dashes are coarse enough to stay plural at 48dp. It pays for that
+          composition twice: it is the thinnest mark in the set, so the S turns spindly at 48dp, and
+          with no cursor after the <code>&gt;</code> the rule reads as a progress bar under a logo
+          rather than as a terminal line.</p>
+        <div class="rack">
+          <div class="slot">
+            <span class="mask circle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Wide Rule masked to a circle at 48dp"><use href="#m-wide-rule"/></svg></span>
+            <span class="cap">48dp circle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <span class="mask squircle"><svg viewBox="18 18 72 72" width="48" height="48" role="img" aria-label="Wide Rule masked to a squircle at 48dp"><use href="#m-wide-rule"/></svg></span>
+            <span class="cap">48dp squircle<br>actual size</span>
+          </div>
+          <div class="slot">
+            <img class="zoom" alt="Wide Rule rendered at 48 pixels and magnified" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADYklEQVR42uVay08TQRz+Zrq1hVJCpTxKELBIC9IYQBsDNEHQC3owMcEYvBhDBKM3E0/iRf8GbcLBAwk3buLjgkQhigaVpEKpmFgrDwvYAqUPWloPaEJdFNjObte4x/1tZr5v5/ea+YaA4aPOyEzs5rtwKEhYzUmkAi0WGZIO0CzJULmAFzo2kQPwVFaDyhH8XuakcgS/l7mp2ODpPgXKztehprtVFBKcWOAJJSg8UYHKqzZkFuUAADyPHFga8wgi8aeYIMzBE6CgwQhTlw3ZRn2SyT8xj5ErfUCCXWBzLMHnHS9DZZcN2aZ8ni0RTyA44wenViIWigp2p99JcCyCLafagMpOG3KPHtjWvvjmCybvPceKy8s80Ekqf197MBcVl+thaDZt64w+xyym7CNYeueBWDWCCAGvKdbB1FEPw0kzCOUjX3F54bQPY2H0s+iFbk8upM7LgvGiFaVnj4DuU/DsAbcPn3pHMfN0Eom4NOVj1wQUKg6Wm6dQ0GDc1r7uD2H87hP4J+YkLXZkr+6jP1YCc2cjcg4b+MYEMD/kwlTPCAJunyT9EhGaOvXWElRda0J2Rd62KXN+6COc94cRnPXLk8DWamvubISmWMezx6Mb+Pr4A1w9LxH5viYOASb9DkdRfNoCU0c9VLkanj0WisLd/x7Tva8RC0TYxgDLbpPLUKK0rRbl7VYotSqePboSxnTvKNz949iIxORH4Nej1KpQ3m5FaVstuAwlf+kXAph+8AqeAQfisXhqqy9GcCU24oiuRYC/YKMqDqBEujogVxdiQiCdQcyx2LSkK42mREBvLUHV9SZkH0pfIRNMQKFWouZ2K1T7NWltJVJKo2XnalB9oyVp0+K0v8Cy85u8m7mtgdvUdwnryyE47cOCNutp74VU+ixEFgPpOjZCOBQkKRWydIJPqsQsz+ulPjvddRYytJh57+YGpza3mvla6CxFyRN4V+FzzAIAdJYiqPO1vA1/2Lu649jM0mjdnTO8dwM/J9FZDDz7/DMXxm5tEjBeqENhsynJ/rb7IeYGV3cce9fN3L/kRluxUrG0K6l0AyKn43QhBKiYCqIUqg0VWwYVW3KiUmi5YuplVCpBWiyxj0qpqouhVFKprwawllmJnIRuIT+LSn23gfXY/+dlDzldt/kBHyaeKhTISTsAAAAASUVORK5CYII=">
+            <span class="cap">the same 48dp<br>magnified</span>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section>
+    <hr class="rule">
+    <p class="eyebrow">The verdict</p>
+    <h2 style="margin-top:8px">Two survive the small-size test</h2>
+
+    <div class="verdict" style="margin-top:24px">
+      <div class="picks">
+        <div class="pick">
+          <span class="mask circle"><svg viewBox="18 18 72 72" width="64" height="64" role="img" aria-label="Solid Wedge"><use href="#m-solid-wedge"/></svg></span>
+          <div>
+            <div class="name">Solid Wedge</div>
+            <p>The only one whose silhouette still carries at arm's length. Weight is what survives
+              downscaling, and at 8.5 units it is heavy without fusing: the channels between the three
+              legs stay open and the stepped cursor keeps its step.</p>
+          </div>
+        </div>
+        <div class="pick">
+          <span class="mask circle"><svg viewBox="18 18 72 72" width="64" height="64" role="img" aria-label="Green Tile"><use href="#m-green-tile"/></svg></span>
+          <div>
+            <div class="name">Green Tile</div>
+            <p>The clearest S at 48dp by some margin, because contrast is doing work no stroke weight
+              can. It is also the only candidate that holds its own against a bright wallpaper rather
+              than disappearing into a dark one.</p>
+          </div>
+        </div>
+      </div>
+
+      <p><strong>Why those two and not the others.</strong> Prompt Cap and Cell Swarm both survive
+        &mdash; nothing merges, the cells stay three &mdash; they simply have less presence than the
+        two above at the same size. Trail is the one to watch: its cap leg is 4.5 units, roughly 2px
+        on a 48dp screen, and that leg is the entire difference between an S and a bare chevron, so
+        the lightest stroke in the set is carrying the heaviest idea. Wide Rule is the thinnest mark
+        here and spends its cursor on the composition, which costs it the prompt reading twice over.</p>
+
+      <p><strong>Green Tile is a treatment as much as a candidate.</strong> Its zigzag is the same
+        letterform as the others; what differs is the figure/ground. That makes this two decisions
+        rather than one &mdash; which mark, then green-on-dark or ink-on-green &mdash; and the tile
+        only answers the second. It can be applied to whichever mark wins.</p>
+
+      <p><strong>Two things worth fixing before anyone commits.</strong> First, the mitred joins
+        reach further than the files think: measured from rendered pixels, Solid Wedge sits at 32.4dp
+        and Cell Swarm at 32.2dp against a 33dp safe circle, where their own comments claim 30.3 and
+        28.7. Both are still legal, but Solid Wedge is inside its margin by 0.6dp, which is not the
+        margin those comments promise. Second, the S can be misread &mdash; a lightning bolt at
+        worst, a numeral 5 at a glance. What disambiguates it is the top leg running clear to the
+        right of the reversal below it, so any future tightening should not shorten that leg. If the
+        S ever has to be explained, the design has lost the thing it was for.</p>
+    </div>
+  </section>
+
+  <section>
+    <hr class="rule">
+    <p class="eyebrow">Colophon</p>
+    <div class="colophon" style="margin-top:20px">
+      <dl>
+        <dt>Candidates</dt>
+        <dd><span class="mono">docs/design/icon-candidates/</span> &mdash; six standalone SVGs, each
+          commented with its concept and its token sources. The safe-zone radius quoted in each file
+          is the author's estimate; the figures on this page are measured from rendered pixels and
+          are the ones to trust where the two disagree.</dd>
+
+        <dt>Palette source</dt>
+        <dd><span class="mono">internal/design/tokens.json</span> and
+          <span class="mono">android/app/src/main/res/values/colors.xml</span>. Three colours are
+          used across all six: <span class="mono">p-hero</span> #53CE7C,
+          <span class="mono">p-hero-ink</span> #06150C, <span class="mono">p-bg</span> #08090A.
+          Nothing outside that file appears in any candidate.</dd>
+
+        <dt>Geometry</dt>
+        <dd>108dp adaptive canvas, matching the conventions in
+          <span class="mono">ic_launcher_foreground.xml</span>. Safe-zone figures are measured from
+          rendered pixels, not estimated: every mark's furthest drawn point, stroke included, against
+          the 33dp radius the launcher mask guarantees.</dd>
+
+        <dt>Not touched</dt>
+        <dd>The shipped icon. Nothing under
+          <span class="mono">android/app/src/main/res/</span> was modified &mdash; these are
+          candidates to choose between, and adopting one is a separate change that also needs the
+          monochrome and themed-icon treatments checked.</dd>
+      </dl>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const toggle = document.getElementById('safe-toggle');
+  toggle.addEventListener('change', () => {
+    document.documentElement.classList.toggle('show-safe', toggle.checked);
+  });
+</script>
