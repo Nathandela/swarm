@@ -15,7 +15,10 @@
     Tokens: mark p-hero #53CE7C, ground p-bg #08090A (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
-    Safe zone: max r = 28.7.
+    Safe zone: max r = 32.3 against the 33 the launcher mask guarantees, MEASURED from rendered
+    pixels rather than derived. The hand-derived figure here said 28.7 and was wrong: a mitred
+    join reaches past the path's own end, so the arithmetic that ignores it understates every
+    corner. Re-measure rather than re-derive if these are ever tightened.
   -->
   <rect id="bg" width="108" height="108" fill="#08090A"/>
   <g id="fg">

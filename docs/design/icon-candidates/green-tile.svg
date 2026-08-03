@@ -18,7 +18,10 @@
     Tokens: tile p-hero #53CE7C, mark p-hero-ink #06150C (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-hero is the background layer.
-    Safe zone: max r = 29.1.
+    Safe zone: max r = 28.1 against the 33 the launcher mask guarantees, MEASURED from rendered
+    pixels rather than derived. The hand-derived figure here said 29.1 and was wrong: a mitred
+    join reaches past the path's own end, so the arithmetic that ignores it understates every
+    corner. Re-measure rather than re-derive if these are ever tightened.
   -->
   <rect id="bg" width="108" height="108" rx="16" fill="#53CE7C"/>
   <g id="fg" fill="none" stroke="#06150C" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter">
