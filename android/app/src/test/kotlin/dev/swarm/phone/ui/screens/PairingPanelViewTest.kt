@@ -253,9 +253,16 @@ class PairingPanelViewTest {
                 "QR pairing is unreachable for the life of the install",
             root.kitFind(PairingTag.control(PairingControl.SCAN)),
         )
-        assertNotNull(
-            "the paste fallback went with it",
-            root.kitFind(PairingTag.control(PairingControl.TYPED_PAYLOAD)),
+        // REACHABLE ON SCREEN, WHICH IS WHAT PB-PAIR-2 ASKS FOR. The guided screen draws the paste
+        // path as a quieter "Enter code instead" disclosure rather than an expanded field, so the
+        // assertion is that SOMETHING reaching the typed path is in the tree -- not that the field
+        // itself is. A collapsed fallback one labelled tap away is not the dead end; a fallback
+        // with no affordance at all would be.
+        assertTrue(
+            "the paste fallback went with it: neither the field nor the control that reveals it " +
+                "is on screen, so a phone whose camera cannot decode has no way to pair at all",
+            root.kitFind(PairingTag.control(PairingControl.REVEAL_TYPED_PAYLOAD)) != null ||
+                root.kitFind(PairingTag.control(PairingControl.TYPED_PAYLOAD)) != null,
         )
     }
 

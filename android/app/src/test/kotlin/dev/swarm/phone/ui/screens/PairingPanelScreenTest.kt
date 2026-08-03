@@ -153,17 +153,40 @@ class PairingPanelScreenTest {
         // NO TEST FOUND THIS. The owner found it on a real handset, on the internal-testing build,
         // because every test in this file handed the panel a ScannerState by hand and none of them
         // ever described a new install.
-        assertEquals(
-            setOf(
-                PairingControl.SCAN,
-                PairingControl.TYPED_PAYLOAD,
-                PairingControl.USE_TYPED_PAYLOAD,
-            ),
-            panel(
-                PairingStep.SCAN,
-                holding = false,
-                scanner = ScannerState.PERMISSION_DENIED,
-            ).controls,
+        //
+        // WIDENED FROM AN EXACT SET, DELIBERATELY AND BY ITS AUTHOR. The owner's guided pairing
+        // screen puts the paste field behind a quieter "Enter code instead" disclosure, because a
+        // field of equal weight beside the scan control is what made the owner read pasting as how
+        // this product pairs. That is compatible with PB-PAIR-2, which requires the fallback to be
+        // OFFERED and says nothing about whether it starts expanded: a labelled control that is
+        // always on screen and reaches the same typed path in one tap is not a dead end. What this
+        // test is about -- that the camera can be ASKED FOR in the state a fresh install is in --
+        // is unchanged and is the first assertion below.
+        val controls = panel(
+            PairingStep.SCAN,
+            holding = false,
+            scanner = ScannerState.PERMISSION_DENIED,
+        ).controls
+
+        assertTrue(
+            "the scan control is withheld in the state a fresh install is actually in, so the " +
+                "only code in the app that can request CAMERA is unreachable",
+            PairingControl.SCAN in controls,
+        )
+        assertTrue(
+            "a denied camera can reach no typed fallback at all, which is the dead end PB-PAIR-2 " +
+                "forbids. The field may be COLLAPSED behind the reveal control -- the paste path " +
+                "is the fallback, not the primary -- but something that reaches it must be ON " +
+                "SCREEN, or the fallback exists only in principle.",
+            PairingControl.REVEAL_TYPED_PAYLOAD in controls ||
+                PairingControl.TYPED_PAYLOAD in controls,
+        )
+        // THE EXACT SET WAS CARRYING THIS IMPLICITLY, so dropping it means stating it. An ordinary
+        // denial is re-askable, and routing it to Settings sends a user with nothing wrong to a
+        // screen where nothing is wrong.
+        assertTrue(
+            "an ordinary denial routes to a system settings screen where nothing is wrong",
+            PairingControl.OPEN_SYSTEM_SETTINGS !in controls,
         )
     }
 
@@ -275,10 +298,15 @@ class PairingPanelScreenTest {
             camera(granted = false, asked = true, rationale = false),
         ).forEach { state ->
             val controls = panel(PairingStep.SCAN, holding = false, scanner = state).controls
+            // REACHABLE, COLLAPSED OR OTHERWISE. The guided screen collapses the field behind
+            // "Enter code instead" wherever the camera is still askable, and leaves it expanded on
+            // a permanent denial, where the typed code is the only thing left that works without
+            // leaving the app. Both satisfy PB-PAIR-2; neither is a dead end.
             assertTrue(
-                "$state offers no way to pair without a camera",
-                PairingControl.TYPED_PAYLOAD in controls &&
-                    PairingControl.USE_TYPED_PAYLOAD in controls,
+                "$state offers no way to pair without a camera, collapsed or otherwise",
+                PairingControl.REVEAL_TYPED_PAYLOAD in controls ||
+                    (PairingControl.TYPED_PAYLOAD in controls &&
+                        PairingControl.USE_TYPED_PAYLOAD in controls),
             )
         }
     }
