@@ -1,0 +1,15 @@
+Counted from the RESULT XMLs under android/app/build/test-results/testDebugUnitTest/,
+from the repository root, after `./gradlew :app:testDebugUnitTest --rerun-tasks`.
+
+TOTAL tests=730 failures=0 errors=0 skipped=0
+
+The suites this slice adds or touches:
+
+  dev.swarm.phone.PhoneSurfaceControlsTest: tests=3 failures=0 errors=0
+  dev.swarm.phone.ui.PairingPermissionTest: tests=6 failures=0 errors=0
+  dev.swarm.phone.ui.PairingStepTest: tests=9 failures=0 errors=0
+  dev.swarm.phone.ui.kit.PairingStepRowTest: tests=8 failures=0 errors=0
+  dev.swarm.phone.ui.screens.PairingGuidanceTest: tests=17 failures=0 errors=0
+  dev.swarm.phone.ui.screens.PairingGuidanceViewTest: tests=12 failures=0 errors=0
+  dev.swarm.phone.ui.screens.PairingPanelScreenTest: tests=19 failures=0 errors=0
+  dev.swarm.phone.ui.screens.PairingPanelViewTest: tests=11 failures=0 errors=0

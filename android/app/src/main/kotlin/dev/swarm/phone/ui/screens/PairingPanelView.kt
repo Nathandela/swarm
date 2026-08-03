@@ -4,7 +4,10 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.emptyState
+import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
+import dev.swarm.phone.ui.kit.pairingStep
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the pairing screen, composed in inventory C7's order.
@@ -49,6 +52,12 @@ object PairingTag {
 
     /** The interrupted-attempt line or PB-PAIR-6's destination notice. */
     const val NOTICE = "pairing.notice"
+
+    /** The numbered steps saying how to get a code at all. */
+    const val STEPS = "pairing.steps"
+
+    /** Why the scanner is not on screen. Only a permanent denial has one; see [PairingPanel]. */
+    const val CAMERA_NOTICE = "pairing.camera.notice"
 
     /** PB-PAIR-6: the destination, in the design's code face. */
     const val DESTINATION = "pairing.destination"
@@ -112,6 +121,16 @@ fun pairingPanelView(
 
     column.addView(slots.body.tagged(PairingTag.BODY))
     if (panel.notice.isNotEmpty()) column.addView(slots.notice.tagged(PairingTag.NOTICE))
+    if (panel.steps.isNotEmpty()) column.addView(guidance(context, panel.steps))
+    // `emptyState` IS THE SENTENCE COMPONENT HERE, which is the reuse `PairOnlyView` already makes
+    // and for its stated reason: row 8's block is body copy centred with generous air, and what it
+    // says on this screen is what it says on that one -- there is nothing here, and here is why.
+    // The thing that is not here is the scanner.
+    if (panel.cameraNotice.isNotEmpty()) {
+        column.addView(
+            emptyState(context, panel.cameraNotice).apply { tag = PairingTag.CAMERA_NOTICE },
+        )
+    }
     // ALWAYS IN THE TREE, VISIBILITY THE SURFACE'S. The preview is created on the first scan --
     // CameraX allocates a provider the moment it exists and this screen is built on every launch
     // -- so whether it is showing is a fact about the camera rather than about the step, and the
@@ -141,6 +160,41 @@ fun pairingPanelView(
     below?.let { column.addView(it) }
     return column
 }
+
+/**
+ * The numbered steps saying how to get a pairing code, and the command well under the one that
+ * names a command.
+ *
+ * IT IS BUILT HERE AND NOT TAKEN FROM [PairingSlots], which is the opposite of every other block on
+ * this screen and is the point. The slots exist because `PairingSurface` MUST own those views --
+ * `SecureWindow.gate` applies PB-SEC-12 clause 1's touch filter at construction, the listeners are
+ * its own verbs, and `touchFilteredActions` has to name the views actually on screen. None of that
+ * is true of a step: it carries no click, authorises nothing, and holds no state across a redraw.
+ * What it needs is a fill, a type and an ink, and the kit is where a screen gets those -- so this
+ * is composed from `pairingStep` and `monoWell` rather than passed in.
+ *
+ * THE WELL IS THE KIT'S `.cmd` WELL AND NOT A SECOND ONE, which is row 18's own instruction:
+ * "Command line reuses the `.cmd` mono well verbatim ... so every mono block in the app is one
+ * component". It is the same component the destination confirmation spends one step later.
+ */
+private fun guidance(context: Context, steps: List<PairingGuidance>): View =
+    LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        tag = PairingTag.STEPS
+        steps.forEach { step ->
+            addView(
+                pairingStep(
+                    context = context,
+                    ordinal = step.ordinal,
+                    line = step.line,
+                    // Empty is not a placeholder: a step with no command gets no well, rather than
+                    // a well with nothing in it under a sentence that never mentioned one.
+                    detail = step.command.takeIf { it.isNotEmpty() }?.let { monoWell(context, it) },
+                ),
+            )
+        }
+    }
 
 /**
  * Tag a slot with the part it renders and detach it from whatever last held it.

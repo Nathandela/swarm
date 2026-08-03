@@ -1,0 +1,136 @@
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:requireSwarmAar
+> Task :app:preBuild
+> Task :app:preDebugBuild
+> Task :app:checkDebugAarMetadata
+> Task :app:processDebugNavigationResources
+> Task :app:compileDebugNavigationResources
+> Task :app:generateDebugResValues
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :app:mergeDebugResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :app:preDebugUnitTestBuild
+> Task :app:javaPreCompileDebug
+> Task :app:javaPreCompileDebugUnitTest
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :app:processDebugUnitTestManifest
+> Task :app:policyTestResources
+> Task :app:processDebugManifestForPackage
+> Task :app:processDebugResources
+> Task :app:packageDebugUnitTestForUnitTest
+> Task :app:generateDebugUnitTestConfig
+
+> Task :app:compileDebugKotlin
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/CtaButton.kt:139:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/FocusRing.kt:124:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/StatusDot.kt:46:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:96:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:130:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:178:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:202:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Toggle.kt:55:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:processDebugJavaRes
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:bundleDebugClassesToRuntimeJar
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:69:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:73:31 Unresolved reference 'STEP_ORDINAL'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:77:31 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:87:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:91:31 Unresolved reference 'STEP_ORDINAL'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:95:31 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:103:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:106:29 Unresolved reference 'STEP_ORDINAL'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:118:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:120:37 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:137:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:138:39 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:153:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:154:37 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:180:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:181:39 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/PairingStepRowTest.kt:190:20 Unresolved reference 'pairingStep'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:65:9 No parameter with name 'manualEntryRevealed' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:91:32 Unresolved reference 'REVEAL_TYPED_PAYLOAD'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:99:29 Unresolved reference 'steps'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:107:52 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:115:62 Unresolved reference 'COMMAND'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:117:32 Unresolved reference 'steps'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:117:47 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:118:86 Unresolved reference 'size'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:119:41 Unresolved reference 'COMMAND'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:119:68 Unresolved reference 'command'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:120:45 Unresolved reference 'ordinal'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:129:28 Unresolved reference 'GUIDANCE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:129:47 Cannot infer type for value parameter 'step'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:131:30 Unresolved reference 'ordinal'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:132:22 Unresolved reference 'line'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:137:32 Unresolved reference 'GUIDANCE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:137:47 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:145:41 Unresolved reference 'GUIDANCE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:145:59 Unresolved reference 'steps'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:162:27 Unresolved reference 'PairingGuidance'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:163:45 Unresolved reference 'steps'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:177:27 Unresolved reference 'PairingGuidance'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:178:46 Unresolved reference 'steps'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:193:57 Unresolved reference 'SCAN_CTA'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:227:28 Unresolved reference 'REVEAL_TYPED_PAYLOAD'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:229:63 Unresolved reference 'MANUAL_CTA'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:243:28 Unresolved reference 'REVEAL_TYPED_PAYLOAD'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:306:41 Unresolved reference 'CAMERA_BLOCKED'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:306:62 Unresolved reference 'cameraNotice'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:307:53 Unresolved reference 'cameraNotice'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:310:18 Unresolved reference 'cameraNotice'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:326:40 Unresolved reference 'cameraNotice'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceTest.kt:356:32 Unresolved reference 'REVEAL_TYPED_PAYLOAD'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:53:9 No parameter with name 'manualEntryRevealed' found.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:110:94 Unresolved reference 'STEPS'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:111:59 Unresolved reference 'STEP_ORDINAL'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:113:32 Unresolved reference 'GUIDANCE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:113:47 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:114:32 Unresolved reference 'STEP_LINE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:126:13 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:126:39 Unresolved reference 'COMMAND'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:136:46 Unresolved reference 'STEPS'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:151:75 Unresolved reference 'STEPS'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:160:78 Unresolved reference 'STEPS'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:176:51 Unresolved reference 'REVEAL_TYPED_PAYLOAD'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:244:37 Unresolved reference 'CAMERA_NOTICE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:248:38 Unresolved reference 'CAMERA_NOTICE'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/PairingGuidanceViewTest.kt:258:58 Unresolved reference 'CAMERA_NOTICE'.
+
+[Incubating] Problems report is available at: file:///Users/Nathan/Code/swarm/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 14s
+29 actionable tasks: 29 executed

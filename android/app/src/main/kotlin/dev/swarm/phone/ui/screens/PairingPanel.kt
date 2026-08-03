@@ -41,16 +41,49 @@ data class PairingPanel(
     val body: String,
     /** The interrupted-attempt line or the destination line, whichever is true. Never both. */
     val notice: String,
+    /**
+     * Why the scanner is not on screen, and empty in every state where it is.
+     *
+     * IT IS A SEPARATE FIELD FROM [notice] RATHER THAN A THIRD ARM OF IT. That one is documented
+     * "never both" and its two arms are genuinely disjoint -- an interrupted attempt and a
+     * destination confirmation cannot be the same draw. A blocked camera is disjoint from neither:
+     * a phone whose pairing was interrupted can also have had its camera turned off, and folding
+     * the two into one string would silently drop whichever arm lost the `when`.
+     */
+    val cameraNotice: String,
     /** PB-PAIR-6: the destination on screen, and empty until it is the step to show one. */
     val destination: String,
     /** PB-SAS-3's symbols, empty until the handshake has derived them. */
     val sas: List<String>,
     val sasInstruction: String,
+    /**
+     * How to get a code in the first place: empty everywhere but the step that has none yet.
+     *
+     * See [PairingPanelScreen.GUIDANCE] for what these say and why the screen has them at all.
+     */
+    val steps: List<PairingGuidance>,
     val controls: Set<PairingControl>,
 )
 
 /**
- * The eight controls the pairing screen can offer.
+ * One numbered step of "how do I get a pairing code".
+ *
+ * THE COMMAND IS A FIELD ON THE STEP AND NOT A SEPARATE PANEL PROPERTY, because it belongs to one
+ * step rather than to the screen: a `command` beside `steps` would let a composition draw the well
+ * under whichever step it liked, including the one that says a QR code has appeared.
+ *
+ * @param command the shell line this step is telling the user to run, or empty where the step is
+ *  telling them to do something else. Empty is not a placeholder -- it is what makes step 2 a
+ *  sentence rather than a sentence over an empty mono well.
+ */
+data class PairingGuidance(
+    val ordinal: String,
+    val line: String,
+    val command: String = "",
+)
+
+/**
+ * The nine controls the pairing screen can offer.
  *
  * THERE IS NO CONTROL THAT INGESTS A SAS, and the omission is the type's point rather than an
  * oversight: PB-SAS-3 requires the code to be COMPARED by the person who can see both screens and
@@ -62,13 +95,35 @@ enum class PairingControl {
     /** Start the camera. */
     SCAN,
 
+    /**
+     * Only a PERMANENT denial. An ordinary one is re-askable and Settings is a detour.
+     *
+     * IT SITS WHERE [SCAN] SITS BECAUSE IT IS THE CONTROL THAT REPLACES IT. `pairingPanelView`
+     * composes in THIS enum's order, and the two are never offered together -- a permanent denial
+     * is the one state that withdraws the scanner -- so putting this second is what makes the
+     * screen read as one that swapped its primary action rather than one that lost it.
+     */
+    OPEN_SYSTEM_SETTINGS,
+
+    /**
+     * "Enter code instead": the control that reveals [TYPED_PAYLOAD], and the reason the field is
+     * not open already.
+     *
+     * THE OWNER ASKED FOR THIS AND THE FIELD REPORT IS WHY. On the internal-testing build the
+     * pairing screen was a paste field and nothing else (agents-tracker-qx9m), and a person who has
+     * only ever seen that reads pasting as how this product pairs. The typed payload is PB-PAIR-2's
+     * FALLBACK -- for a camera that was denied or does not work -- and a fallback presented beside
+     * the primary path with equal weight is not a fallback.
+     *
+     * IT IS NOT OFFERED ONCE THE FIELD IS UP. A disclosure beside the thing it has already
+     * disclosed is a control with nothing left to do.
+     */
+    REVEAL_TYPED_PAYLOAD,
+
     /** PB-PAIR-2's fallback field, offered exactly when the camera is not. */
     TYPED_PAYLOAD,
 
     USE_TYPED_PAYLOAD,
-
-    /** Only a PERMANENT denial. An ordinary one is re-askable and Settings is a detour. */
-    OPEN_SYSTEM_SETTINGS,
 
     /** PB-PAIR-6: nothing is joined until this is pressed. */
     CONFIRM_DESTINATION,
@@ -104,6 +159,74 @@ object PairingPanelScreen {
         "This pairing was interrupted before it finished. Nothing was joined."
 
     /**
+     * The command a machine runs to produce a pairing code.
+     *
+     * IT IS WRITTEN DOWN ONCE AND `android/gate/guidedpairing_test.go` KEEPS IT THAT WAY. A person
+     * retypes this into a shell off a phone screen, so a second spelling is a second thing that can
+     * be a typo -- and the failure it produces is `command not found` on the machine they were told
+     * to run it on, with the phone still showing them the instruction they followed correctly.
+     */
+    const val COMMAND = "swarm remote pair"
+
+    /**
+     * How to get a code, in two steps, on the one screen that has none yet.
+     *
+     * ## Why the screen needs this at all
+     *
+     * The owner installed the internal-testing build, found the pairing screen, and it gave them a
+     * bare text field with no camera and no instructions (agents-tracker-qx9m). The camera half of
+     * that is the permission catch-22 `PairingFlow.offersScanner` closes. This is the other half,
+     * and it is not the same defect: even with a working scan button, nothing on the screen said
+     * where a code comes from. `PairingFlow.messageFor(SCAN)` says "Scan the code your machine is
+     * showing", which presupposes a machine that is already showing one -- and the phone is where a
+     * person is standing when they need to be told to go and make that happen.
+     *
+     * ## "your computer" and never "your Mac"
+     *
+     * The handset cannot know which desktop OS is on the other end. Nothing has been connected yet,
+     * and the pairing payload carries no such field -- so "On your Mac" is correct for the owner and
+     * wrong for everyone on Linux. A confidently wrong instruction is worse than a general one on
+     * the screen whose whole job is telling someone what to do first.
+     *
+     * ## Two steps and not three
+     *
+     * "Scan it below" is step 2's second sentence rather than a step 3, because the third thing is
+     * not something the user does on the computer -- it is the control directly beneath, and a step
+     * numbered for pressing the button under it reads as a list that has lost count of itself.
+     */
+    val GUIDANCE: List<PairingGuidance> = listOf(
+        PairingGuidance("1", "On your computer, run", COMMAND),
+        PairingGuidance("2", "It shows a QR code. Scan it below."),
+    )
+
+    /**
+     * The primary action, named for what it produces rather than for what it operates.
+     *
+     * It was "Scan the code on your machine", which is the same sentence
+     * [PairingFlow.messageFor] already puts on screen two lines above it. A button that restates
+     * the instruction above it gives a reader nothing to distinguish them by; this names the thing
+     * the user is looking for.
+     */
+    const val SCAN_CTA = "Scan QR code"
+
+    /** The fallback, worded as one: "instead" is the word doing the work. */
+    const val MANUAL_CTA = "Enter code instead"
+
+    /**
+     * Why the scanner is gone, in the one state that withdraws it for good.
+     *
+     * WITHOUT THIS THE SCREEN SIMPLY HAS A DIFFERENT BUTTON ON IT. A person who never saw the scan
+     * control has no reason to connect "Open this app's settings" to a camera permission they
+     * declined twice, possibly months ago -- and Android will not show the prompt again, so nothing
+     * else on the phone is going to tell them either.
+     *
+     * IT NAMES THE PASTE PATH TOO, because in this state that is the only thing on the screen that
+     * works without leaving the app.
+     */
+    const val CAMERA_BLOCKED = "This app cannot use the camera, so it cannot scan a code. Turn " +
+        "the camera on in Settings, or paste the code your machine printed."
+
+    /**
      * @param machine the machine this phone is pinned to, for the one heading that names it.
      *  Empty is not a placeholder -- a completed pairing whose machine this screen cannot read
      *  says `Paired` rather than `Paired with `, which is what a naive interpolation renders.
@@ -124,6 +247,10 @@ object PairingPanelScreen {
      * @param sas the derived code, or null while the handshake has not produced one. Null is not
      *  "no comparison": the core stays in `pairing` from the dial until the user answers, so the
      *  SAS is what says whether there is anything to compare yet.
+     * @param manualEntryRevealed whether the user has asked for the typed fallback. It is the
+     *  SURFACE's state and not the attempt's, because it is a fact about what someone has pressed
+     *  on this draw of this screen rather than about the pairing -- a resumed attempt has no
+     *  business remembering that a field was once open.
      */
     fun of(
         attempt: PairingAttempt,
@@ -131,6 +258,7 @@ object PairingPanelScreen {
         sas: SasStep?,
         holding: Boolean,
         machine: String = "",
+        manualEntryRevealed: Boolean = false,
     ): PairingPanel {
         val step = attempt.step
         // THE THREE MODES ARE COMPUTED ONCE AND SHARED. They were three functions each deriving
@@ -157,8 +285,20 @@ object PairingPanelScreen {
             // no camera, for the life of the install (agents-tracker-qx9m).
             if (PairingFlow.offersScanner(scanner)) controls += PairingControl.SCAN
             if (PairingFlow.offersManualEntry(scanner)) {
-                controls += PairingControl.TYPED_PAYLOAD
-                controls += PairingControl.USE_TYPED_PAYLOAD
+                // OPEN WHERE IT IS THE WHOLE SCREEN, BEHIND A CONTROL WHERE IT IS THE FALLBACK,
+                // AND THE ASYMMETRY IS THE DECISION. A permanent denial withdraws the scanner for
+                // good -- Android will not show the prompt again -- so the typed code is the only
+                // thing left that works without leaving the app, and collapsing it there would be
+                // the dead end PB-PAIR-2 forbids rather than a tidier default. Everywhere else the
+                // camera is still askable, the scan control is on screen, and a paste field of
+                // equal weight beside it is what made the owner read pasting as how this product
+                // pairs (agents-tracker-qx9m).
+                if (manualEntryRevealed || PairingFlow.routesToSystemSettings(scanner)) {
+                    controls += PairingControl.TYPED_PAYLOAD
+                    controls += PairingControl.USE_TYPED_PAYLOAD
+                } else {
+                    controls += PairingControl.REVEAL_TYPED_PAYLOAD
+                }
             }
             if (PairingFlow.routesToSystemSettings(scanner)) {
                 controls += PairingControl.OPEN_SYSTEM_SETTINGS
@@ -179,9 +319,28 @@ object PairingPanelScreen {
                 confirming -> attempt.destinationNotice
                 else -> ""
             },
+            // ONLY THE STATE THAT WITHDRAWS THE SCANNER EXPLAINS ITSELF. On an ordinary denial the
+            // scan control is right there and pressing it re-asks; a sentence about a blocked
+            // camera would be a warning about something that is not wrong, which is the same
+            // defect as sending a fresh install to a Settings screen.
+            cameraNotice = if (scanning && PairingFlow.routesToSystemSettings(scanner)) {
+                CAMERA_BLOCKED
+            } else {
+                ""
+            },
             destination = if (confirming) attempt.originShown else "",
             sas = if (comparing) checkNotNull(sas).symbols else emptyList(),
             sasInstruction = if (comparing) checkNotNull(sas).instruction else "",
+            // THE SCAN STEP AND NOTHING ELSE. Every terminal state's message was argued line by
+            // line under PB-PAIR-5 and each names a different next move -- "Ask your machine for a
+            // new one", "Approve it there, then pair again", "Wait a minute" -- so stacking a
+            // generic "run this command" over one of them is the second, shorter statement of a
+            // refusal that this file's own comment refuses for headings. And over a LIVE attempt
+            // it would be worse than redundant: an instruction to create a code, offered to a
+            // phone that already has one, reads as an invitation to start again -- which is the
+            // dead end PB-PAIR-4 describes, because BeginPairing fail-fasts while a device is
+            // registered.
+            steps = if (scanning && step == PairingStep.SCAN) GUIDANCE else emptyList(),
             controls = controls,
         )
     }

@@ -36,9 +36,23 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PhoneSurfaceControlsTest {
 
-    /** PB-E2E-2's five in-app actions, as the labels that perform them. */
+    /**
+     * PB-E2E-2's five in-app actions, as the labels that perform them.
+     *
+     * THE LITERALS ARE DELIBERATELY NOT `PairingPanelScreen`'s CONSTANTS. A reference would follow
+     * a rename and this ledger would stop being able to notice one, which is the whole of what it
+     * is for: an independent copy of the label, compared against the app's.
+     *
+     * `Scan QR code` WAS `Scan the code on your machine` (agents-tracker-qx9m). The owner's guided
+     * pairing screen renames it -- the old label restated, word for word, the sentence
+     * `PairingFlow.messageFor(SCAN)` already puts two lines above the button, so a reader had
+     * nothing to tell them apart. Changed HERE as well as in the screen model because a label
+     * changed on one side and not the other is exactly the drift this file exists to catch; the
+     * instrumented smoke does not press this control (it takes the typed path), so there is no
+     * third copy.
+     */
     private val requiredControls = mapOf(
-        "Scan the code on your machine" to
+        "Scan QR code" to
             "\"pairs against a local relay + daemon\": there is no way to start a scan",
         "Use this code" to
             "PB-PAIR-2's manual-entry fallback, which is also how the smoke hands the QR over",

@@ -1,0 +1,360 @@
+package dev.swarm.phone.ui.screens
+
+import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.PermissionStateResolver
+import dev.swarm.phone.ui.PairingAttempt
+import dev.swarm.phone.ui.PairingFlow
+import dev.swarm.phone.ui.PairingStep
+import dev.swarm.phone.ui.ScannerState
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * FAILING-FIRST (TDD RED, GG-5) for the GUIDED pairing screen -- the owner's design, recorded on
+ * agents-tracker-qx9m after they installed the internal-testing build.
+ *
+ * WHAT THE OWNER FOUND AND WHAT THIS FILE FENCES. `agents-tracker-qx9m`'s first half is the camera
+ * catch-22: the scan control was offered only where the permission was already granted, and the
+ * app's only `requestPermissions(CAMERA)` is that control's own listener, so nothing could ever
+ * ask. `PairingPanelScreenTest` fences that. Its SECOND half is what this file is for and it is a
+ * separate defect: even with a working scan button, the screen said nothing about where a code
+ * comes from. A person holding an unpaired phone was shown a paste field and expected to already
+ * know that a Mac has to run `swarm remote pair` first. A control nobody knows the precondition for
+ * is not more usable than a control that does not work.
+ *
+ * THE FLOW IS THE OWNER'S AND NOT THIS FILE'S. It was chosen from options and handed over drawn:
+ * the two numbered steps, the command in a mono well, the scanner as the primary action, and the
+ * typed code as a fallback that is REACHABLE but not open. This suite asserts that shape; it does
+ * not re-derive it.
+ *
+ * ## The one place this and `PairingPanelScreenTest` had to be reconciled
+ *
+ * That suite asserts the paste FIELD is on screen for every denial state, on PB-PAIR-2's "a denied
+ * camera must not be a dead end". The owner's design puts the field behind `Enter code instead`.
+ * Both cannot be literally true of an ordinary denial, and the reconciliation is that PB-PAIR-2's
+ * clause is about a DEAD END: a labelled control that reveals the field in one tap is not one. So
+ * the requirement is asserted here as REACHABILITY rather than as the field's presence --
+ * [assertManualPathIsReachable] below -- and the two suites now agree on the requirement rather
+ * than on one rendering of it.
+ *
+ * A PERMANENT DENIAL IS THE EXCEPTION AND IT IS DELIBERATE. There the scanner is withdrawn for
+ * good, so the typed path is the only thing left that works without leaving the app, and it is
+ * open by default. Collapsing it in the one state where it is the whole screen would be the dead
+ * end the requirement names.
+ */
+class PairingGuidanceTest {
+
+    private fun panel(
+        step: PairingStep = PairingStep.SCAN,
+        holding: Boolean = false,
+        scanner: ScannerState = ScannerState.PERMISSION_DENIED,
+        revealed: Boolean = false,
+    ) = PairingPanelScreen.of(
+        attempt = PairingAttempt(
+            step = step,
+            originShown = "",
+            originIsLocalNetwork = false,
+            explainsInterruptedAttempt = false,
+        ),
+        scanner = scanner,
+        sas = null,
+        holding = holding,
+        machine = "",
+        manualEntryRevealed = revealed,
+    )
+
+    /** The camera as a REAL PHONE answers it, never a state named by hand. */
+    private fun camera(granted: Boolean, asked: Boolean, rationale: Boolean) =
+        PairingFlow.scannerState(
+            PermissionStateResolver.resolve(
+                permission = AppPermission.CAMERA,
+                sdkInt = 35,
+                granted = granted,
+                hasAskedBefore = asked,
+                showRationale = rationale,
+            ),
+        )
+
+    /**
+     * PB-PAIR-2's fallback clause, asserted as what it says: the typed path can be REACHED.
+     *
+     * Either the field is on screen, or a named control that reveals it is. What the clause
+     * forbids is a state with neither, which is a camera denial the user cannot pair around.
+     */
+    private fun assertManualPathIsReachable(controls: Set<PairingControl>, where: String) {
+        assertTrue(
+            "$where offers no way to reach the typed code at all, so a camera denial is the dead " +
+                "end PB-PAIR-2 exists to forbid",
+            PairingControl.TYPED_PAYLOAD in controls ||
+                PairingControl.REVEAL_TYPED_PAYLOAD in controls,
+        )
+    }
+
+    // ---- the steps, and the command they name ------------------------------
+
+    @Test
+    fun `the scan step carries the two steps the owner drew`() {
+        val steps = panel().steps
+
+        assertEquals(
+            "the guided steps are not on the one screen that needs them, so an unpaired phone is " +
+                "still asking a person to already know where a pairing code comes from",
+            2,
+            steps.size,
+        )
+        assertEquals(listOf("1", "2"), steps.map { it.ordinal })
+    }
+
+    @Test
+    fun `the first step names the exact command and nothing else does`() {
+        // THE COMMAND IS ONE STRING IN ONE PLACE. A second spelling of it is a second thing that
+        // can be a typo, and this one is typed by a person reading it off a phone screen into a
+        // shell -- the failure mode is not a wrong pixel, it is `command not found`.
+        assertEquals("swarm remote pair", PairingPanelScreen.COMMAND)
+
+        val carrying = panel().steps.filter { it.command.isNotEmpty() }
+        assertEquals("the command is on more than one step, or on none", 1, carrying.size)
+        assertEquals(PairingPanelScreen.COMMAND, carrying.single().command)
+        assertEquals("1", carrying.single().ordinal)
+    }
+
+    @Test
+    fun `the steps say computer and never Mac, because this app cannot know which`() {
+        // The handset has no way to learn the desktop's OS -- nothing in the pairing payload
+        // carries it and the phone has not connected to anything yet. "On your Mac" is correct for
+        // the owner and wrong for every Linux user, and a wrong instruction is worse than a
+        // general one on the screen whose whole job is telling someone what to do first.
+        PairingPanelScreen.GUIDANCE.forEach { step ->
+            assertFalse(
+                "step ${step.ordinal} names a platform this app cannot know the user is on",
+                step.line.contains("Mac"),
+            )
+        }
+        assertTrue(
+            "no step says whose computer the command is run on",
+            PairingPanelScreen.GUIDANCE.any { it.line.contains("computer") },
+        )
+    }
+
+    @Test
+    fun `the guidance is the screen model's, never the view's`() {
+        // PB-DS-9: copy belongs to the screen and exists once, so a suite that asserts what is
+        // drawn cannot agree with a re-worded copy of itself.
+        assertEquals(PairingPanelScreen.GUIDANCE, panel().steps)
+    }
+
+    @Test
+    fun `a live attempt drops the steps, because they describe a pairing that has not started`() {
+        // "On your computer, run `swarm remote pair`" is an instruction to CREATE a code. A phone
+        // that is mid-handshake has one, and repeating the instruction over it would read as an
+        // invitation to start again -- which is the dead end PB-PAIR-4 describes: BeginPairing
+        // fail-fasts while a device is registered.
+        listOf(
+            PairingStep.CONFIRM_DESTINATION,
+            PairingStep.HANDSHAKING,
+            PairingStep.COMPARING_CODES,
+            PairingStep.AWAITING_MACHINE_DECISION,
+        ).forEach { step ->
+            assertEquals(
+                "$step still draws the how-to-start-pairing steps",
+                emptyList<PairingGuidance>(),
+                panel(step, holding = true).steps,
+            )
+        }
+    }
+
+    @Test
+    fun `a refusal keeps its own argued sentence and gets no generic steps above it`() {
+        // Every terminal state's message was argued line by line under PB-PAIR-5 and each names a
+        // different next move -- "Ask your machine for a new one", "Approve it there, then pair
+        // again", "Wait a minute". Stacking "1 On your computer, run ..." over that is the second,
+        // shorter statement of a refusal that `PairingPanel`'s own comment refuses for headings.
+        PairingStep.entries.filter { PairingFlow.isTerminal(it) }.forEach { step ->
+            assertEquals(
+                "$step drew the guided steps over the sentence PB-PAIR-5 wrote for it",
+                emptyList<PairingGuidance>(),
+                panel(step, holding = false).steps,
+            )
+        }
+    }
+
+    // ---- the primary control is the scanner ---------------------------------
+
+    @Test
+    fun `the scanner is the primary control on the screen a fresh install opens`() {
+        // A fresh install resolves to PERMISSION_DENIED -- `PermissionStateResolver` answers
+        // `!hasAskedBefore -> DENIED` -- so this IS the state the owner was looking at.
+        val controls = panel(scanner = camera(granted = false, asked = false, rationale = false))
+            .controls
+
+        assertTrue("the scan control is not offered", PairingControl.SCAN in controls)
+        assertEquals("Scan QR code", PairingPanelScreen.SCAN_CTA)
+    }
+
+    @Test
+    fun `the scan control is offered wherever the camera is still askable`() {
+        listOf(
+            camera(granted = true, asked = true, rationale = false),
+            camera(granted = false, asked = false, rationale = false),
+            camera(granted = false, asked = true, rationale = true),
+        ).forEach { state ->
+            assertTrue(
+                "$state offers no scan control, so the primary path is missing",
+                PairingControl.SCAN in panel(scanner = state).controls,
+            )
+        }
+    }
+
+    // ---- the typed code: reachable, and not expanded -------------------------
+
+    @Test
+    fun `the typed code is reachable and NOT expanded on the screen a fresh install opens`() {
+        val controls = panel(scanner = camera(granted = false, asked = false, rationale = false))
+            .controls
+
+        assertManualPathIsReachable(controls, "a fresh install")
+        assertTrue(
+            "the paste field is open before anyone asked for it. It is the fallback, not the " +
+                "primary path, and an open field beside a scan button is what made the owner " +
+                "read the paste box as the only way to pair",
+            PairingControl.TYPED_PAYLOAD !in controls &&
+                PairingControl.USE_TYPED_PAYLOAD !in controls,
+        )
+        assertTrue(
+            "nothing on screen offers to open the typed code",
+            PairingControl.REVEAL_TYPED_PAYLOAD in controls,
+        )
+        assertEquals("Enter code instead", PairingPanelScreen.MANUAL_CTA)
+    }
+
+    @Test
+    fun `revealing the typed code puts the field and its button on screen`() {
+        val controls = panel(revealed = true).controls
+
+        assertTrue(
+            "the reveal control leads nowhere, so the fallback is unreachable in practice",
+            PairingControl.TYPED_PAYLOAD in controls &&
+                PairingControl.USE_TYPED_PAYLOAD in controls,
+        )
+        assertTrue(
+            "the reveal control is still on screen beside the field it has already revealed",
+            PairingControl.REVEAL_TYPED_PAYLOAD !in controls,
+        )
+        assertTrue(
+            "revealing the fallback took the scanner away, so a person who opened the field to " +
+                "look at it can no longer scan",
+            PairingControl.SCAN in controls,
+        )
+    }
+
+    @Test
+    fun `the typed path stays reachable in every state a withheld camera can be in`() {
+        // PB-PAIR-2's fallback clause, over the same three states `PairingPanelScreenTest` walks.
+        // Asserted as reachability rather than as the field's presence; see the class comment.
+        listOf(
+            camera(granted = false, asked = false, rationale = false),
+            camera(granted = false, asked = true, rationale = true),
+            camera(granted = false, asked = true, rationale = false),
+        ).forEach { state ->
+            assertManualPathIsReachable(panel(scanner = state).controls, "$state")
+        }
+    }
+
+    @Test
+    fun `a granted camera offers no typed fallback at all, revealed or not`() {
+        // `PairingFlow.offersManualEntry` is false while the camera works, and that predates this
+        // screen. The reveal control must not smuggle the fallback back in: a phone that can scan
+        // is offered the scanner, and a second way in is a second thing to explain.
+        listOf(true, false).forEach { revealed ->
+            val controls = panel(scanner = ScannerState.SCANNING, revealed = revealed).controls
+            assertEquals(
+                "a working camera was offered the typed fallback (revealed=$revealed)",
+                setOf(PairingControl.SCAN),
+                controls,
+            )
+        }
+    }
+
+    // ---- a permanently denied camera ----------------------------------------
+
+    @Test
+    fun `a permanently denied camera offers settings instead of a dead scan button`() {
+        val controls = panel(scanner = camera(granted = false, asked = true, rationale = false))
+            .controls
+
+        assertTrue(
+            "a permanently denied camera is offered a scan button that can do nothing: Android " +
+                "will not show the prompt again, so the control could only fail silently",
+            PairingControl.SCAN !in controls,
+        )
+        assertTrue(
+            "the one route that can undo a permanent denial is not offered",
+            PairingControl.OPEN_SYSTEM_SETTINGS in controls,
+        )
+    }
+
+    @Test
+    fun `a permanently denied camera says WHY the scanner is gone`() {
+        // The owner's design: "this control is replaced by one that opens system settings, with
+        // copy saying why". Without the sentence the screen simply has a different button on it,
+        // and a person who never saw the scan control has no reason to connect `Open this app's
+        // settings` to a camera they turned off some time ago.
+        val page = panel(scanner = camera(granted = false, asked = true, rationale = false))
+
+        assertEquals(PairingPanelScreen.CAMERA_BLOCKED, page.cameraNotice)
+        assertTrue("the explanation is empty", page.cameraNotice.isNotEmpty())
+        assertTrue(
+            "the sentence does not mention the camera, which is the thing that is wrong",
+            page.cameraNotice.contains("camera"),
+        )
+    }
+
+    @Test
+    fun `only a permanent denial explains itself`() {
+        // On every other state the sentence would be a warning about a camera nothing is wrong
+        // with -- the same defect as sending a fresh install to a Settings screen.
+        listOf(
+            ScannerState.SCANNING,
+            camera(granted = false, asked = false, rationale = false),
+            camera(granted = false, asked = true, rationale = true),
+        ).forEach { state ->
+            assertEquals(
+                "$state carries an explanation for a camera that is not blocked",
+                "",
+                panel(scanner = state).cameraNotice,
+            )
+        }
+    }
+
+    @Test
+    fun `a permanently denied camera opens the typed field rather than collapsing it`() {
+        // THE ONE STATE WHERE THE FALLBACK IS THE SCREEN. The scanner is withdrawn for good, so
+        // the typed code is the only thing left that works without leaving the app; hiding it
+        // behind a disclosure there is the dead end PB-PAIR-2 forbids, not a tidier default.
+        val controls = panel(scanner = ScannerState.PERMISSION_PERMANENTLY_DENIED).controls
+
+        assertEquals(
+            setOf(
+                PairingControl.TYPED_PAYLOAD,
+                PairingControl.USE_TYPED_PAYLOAD,
+                PairingControl.OPEN_SYSTEM_SETTINGS,
+            ),
+            controls,
+        )
+    }
+
+    // ---- the reveal control cannot leak into a live attempt ------------------
+
+    @Test
+    fun `no step with a live attempt offers the reveal control`() {
+        PairingStep.entries.forEach { step ->
+            assertTrue(
+                "$step offers to open the typed code over a live attempt, which would begin a " +
+                    "second pairing while the first is mid-handshake",
+                PairingControl.REVEAL_TYPED_PAYLOAD !in panel(step, holding = true).controls,
+            )
+        }
+    }
+}

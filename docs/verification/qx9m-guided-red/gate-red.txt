@@ -1,0 +1,12 @@
+=== RUN   TestGuidedPairing_EveryControlThePanelOffersIsOneTheSurfaceCanPerform
+--- PASS: TestGuidedPairing_EveryControlThePanelOffersIsOneTheSurfaceCanPerform (0.00s)
+=== RUN   TestGuidedPairing_TheSurfaceSuppliesNoControlTheEnumDoesNotName
+--- PASS: TestGuidedPairing_TheSurfaceSuppliesNoControlTheEnumDoesNotName (0.00s)
+=== RUN   TestGuidedPairing_TheCommandIsWrittenDownOnce
+    guidedpairing_test.go:145: agents-tracker-qx9m: dev/swarm/phone/ui/screens/PairingPanel.kt does not declare the pairing command "swarm remote pair". The screen the owner opened had no instructions at all; the command is the instruction.
+--- FAIL: TestGuidedPairing_TheCommandIsWrittenDownOnce (0.00s)
+=== RUN   TestGuidedPairing_TheGuidedCopyIsTheScreenModels
+--- PASS: TestGuidedPairing_TheGuidedCopyIsTheScreenModels (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.910s
+FAIL

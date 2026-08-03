@@ -559,6 +559,20 @@ internal object KitTag {
      */
     const val ACTIVITY_TIME = "activity time"
     const val ACTIVITY_BODY = "activity body"
+
+    /**
+     * The pairing step's two cells, row 18's.
+     *
+     * Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.pair` is row 18's mock class
+     * and the shared Substrate block declares no rule for it at all, so a tag naming that selector
+     * would point a reader at a rule that does not exist.
+     *
+     * THERE IS NO TAG FOR THE DETAIL, and that is a fact about what it is. The command well under
+     * step 1 is a `monoWell`, which arrives already carrying [MONO_WELL] -- a second tag over it
+     * would rename the one component row 18 instructs the pairing scaffold to reuse verbatim.
+     */
+    const val STEP_ORDINAL = "pairing step ordinal"
+    const val STEP_LINE = "pairing step line"
 }
 
 /**

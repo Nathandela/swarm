@@ -11,6 +11,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -26,6 +27,8 @@ import dev.swarm.phone.ui.SasAnswer
 import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
+import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.PairingControl
@@ -171,7 +174,24 @@ class PairingSurface(
         visibility = View.GONE
     }
 
-    private val startScan = touchFilteredButton("Scan the code on your machine") { beginScanning() }
+    /**
+     * The primary action, as row 18's own CTA.
+     *
+     * PB-DS-11: it was a bare `Button` carrying the platform's default look, on a screen whose
+     * design row says "CTA is `.a2-ok` unchanged (`--p-cta-bg` / `--p-cta-ink` / `--p-cta-fx` /
+     * `--p-btn-r`)". It is now [ctaButton] with [CtaKind.APPROVE], which is that rule -- the same
+     * component the approval sheet's primary action spends, with the phosphor bloom row 18 asks for.
+     *
+     * IT STILL GOES THROUGH [touchFilteredButton], so PB-SEC-12 clause 1's filter is applied at
+     * construction exactly as before. What changed is the view the filter is applied to.
+     *
+     * A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records that gap and cannot close it -- it has
+     * no click to hang the role on -- so the role is set where the click is, which is
+     * `PairOnlyView`'s arrangement for the one control it owns.
+     */
+    private val startScan = ctaAction(PairingPanelScreen.SCAN_CTA, CtaKind.APPROVE) {
+        beginScanning()
+    }
 
     /**
      * PB-PAIR-2's fallback, and it takes the SAME payload the QR carries -- never a relay URL
@@ -183,6 +203,24 @@ class PairingSurface(
 
     private val useTypedPayload = touchFilteredButton("Use this code") {
         acceptScannedPayload(typedPayload.text.toString().trim())
+    }
+
+    /**
+     * "Enter code instead": the control that opens [typedPayload], and the reason it is not open.
+     *
+     * IT IS `.a2-more` AND NOT A SECOND HERO CTA, which is §2's reuse rule read literally: "every
+     * accent-text affordance in the mock becomes either a bordered control or a plain `--p-ink`
+     * glyph", and `.a2-more` is Substrate's one tertiary control. Two phosphor-green buttons on one
+     * screen would be two primary paths, which is exactly the reading the owner arrived at when the
+     * paste field was all there was (agents-tracker-qx9m).
+     *
+     * IT REVEALS AND NEVER HIDES. There is no way back to the collapsed state and that is
+     * deliberate: a disclosure that toggles would let a mis-tap take the field away with whatever
+     * the user had already pasted into it, and nothing on this screen is worth that.
+     */
+    private val revealTypedPayload = ctaAction(PairingPanelScreen.MANUAL_CTA, CtaKind.MORE) {
+        manualEntryRevealed = true
+        render()
     }
 
     private val openSystemSettings = touchFilteredButton("Open this app's settings") {
@@ -210,6 +248,17 @@ class PairingSurface(
 
     /** Set once the phone has been rebuilt for a completed pairing; see [renderReady]. */
     private var rebuilt = false
+
+    /**
+     * Whether the user has asked for the typed fallback.
+     *
+     * IT IS THIS SURFACE'S AND NOT THE ATTEMPT'S. What it records is a press on this draw of this
+     * screen, not a fact about a pairing -- and `PairingFlow.restore` rebuilds an attempt from a
+     * persisted step, so a resumed one that remembered an open field would be remembering something
+     * that was never about it. It resets with the process, which is the right lifetime: a person who
+     * relaunches the app is looking at the screen again from the top.
+     */
+    private var manualEntryRevealed = false
 
     /**
      * Told, once, that this phone is now paired.
@@ -253,6 +302,7 @@ class PairingSurface(
         scanner = scannerHost,
         controls = mapOf(
             PairingControl.SCAN to startScan,
+            PairingControl.REVEAL_TYPED_PAYLOAD to revealTypedPayload,
             PairingControl.TYPED_PAYLOAD to typedPayload,
             PairingControl.USE_TYPED_PAYLOAD to useTypedPayload,
             PairingControl.OPEN_SYSTEM_SETTINGS to openSystemSettings,
@@ -281,9 +331,18 @@ class PairingSurface(
 
     val root: View = host
 
-    /** PB-SEC-12 clause 1: every control here authorises something. */
+    /**
+     * PB-SEC-12 clause 1: every control here authorises something.
+     *
+     * [revealTypedPayload] IS FILTERED TOO, AND THAT IS ARGUED RATHER THAN ASSUMED. It authorises
+     * nothing by itself -- it opens a field -- so on `PairOnlyView`'s own reasoning about its hero
+     * CTA it could be left off. It is on because the field it opens is where a payload enters this
+     * screen: an overlay that stole this tap would have put a paste field in front of a user who
+     * did not ask for one, which is the first move of getting somebody to paste an attacker's code.
+     * The filter costs nothing and the alternative needs a longer argument than this one.
+     */
     val touchFilteredActions: List<View> = listOf(
-        startScan, useTypedPayload, openSystemSettings, confirmDestination,
+        startScan, revealTypedPayload, useTypedPayload, openSystemSettings, confirmDestination,
         codesMatch, codesDoNotMatch, stopPairing,
     )
 
@@ -485,6 +544,7 @@ class PairingSurface(
                 sas = sas?.let { SasStep(it) },
                 holding = holding,
                 machine = machineOf(startup),
+                manualEntryRevealed = manualEntryRevealed,
             ),
         )
         show(outcome, outcome.text.isNotEmpty())
@@ -700,6 +760,41 @@ class PairingSurface(
             Button(activity).apply {
                 this.text = text
                 setOnClickListener { onPress() }
+            },
+        )
+
+    /**
+     * The same control as [touchFilteredButton], drawn by the kit instead of by the platform.
+     *
+     * ROW 18 SPECIFIES THE PAIRING CTA AND THIS IS IT: "CTA is `.a2-ok` unchanged". The two
+     * controls that go through here are the ones the owner's design draws as buttons -- the scanner
+     * and the fallback that replaces it -- and they are the two variants Substrate already declares,
+     * so nothing is chosen here beyond which of them a control is.
+     *
+     * THE REST OF THIS SCREEN'S CONTROLS ARE STILL PLATFORM BUTTONS, and that is a scope statement
+     * rather than an oversight: `Join this destination`, the two SAS answers and `Stop pairing`
+     * belong to steps this slice did not redesign, and restyling the two controls that decide the
+     * only human-in-the-loop security check in the product (ADR-007 B133) is not a change to make
+     * in passing.
+     */
+    private fun ctaAction(text: String, kind: CtaKind, onPress: () -> Unit): TextView =
+        SecureWindow.gate(
+            ctaButton(activity, text, kind).apply {
+                setOnClickListener { onPress() }
+                // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close
+                // it -- it has no click to hang the role on -- so the role is set where the click
+                // is, which is `PairOnlyView`'s arrangement for the control it owns.
+                setAccessibilityDelegate(
+                    object : View.AccessibilityDelegate() {
+                        override fun onInitializeAccessibilityNodeInfo(
+                            host: View,
+                            info: AccessibilityNodeInfo,
+                        ) {
+                            super.onInitializeAccessibilityNodeInfo(host, info)
+                            info.className = Button::class.java.name
+                        }
+                    },
+                )
             },
         )
 

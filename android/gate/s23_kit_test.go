@@ -92,6 +92,24 @@ var s23Inbox = []s23Component{
 			"rendered on a handset.",
 	},
 	{
+		Factory: "pairingStep",
+		File:    "PairingStepRow.kt",
+		Derived: "#18 Pairing scaffold",
+		Why: "one numbered step of the pairing instructions, and the component the screen the " +
+			"owner opened had no way to build. agents-tracker-qx9m: they installed the " +
+			"internal-testing build, found the pairing screen, and it gave them a bare text " +
+			"field with no camera and no instructions -- a person was expected to already know " +
+			"that a computer has to run `swarm remote pair` first. It is a KIT component and not " +
+			"three views in the screen because s24_screens_test.go fences the screens package " +
+			"against R.dimen., setTextAppearance and setTextColor, so a list built there would " +
+			"have no gutter, no type and no ink AND the fence would pass -- the fence is what " +
+			"stops a screen choosing, so the choosing has to happen here. Row 18 specifies the " +
+			"body copy it is made of and the two steps it spends; what row 18 does not enumerate " +
+			"is the ORDINAL, because the artifact draws one pairing step at a time and never " +
+			"numbers them, so the ordinal takes the body's own style rather than a second one " +
+			"derived for it.",
+	},
+	{
 		Factory: "settingsRow",
 		File:    "SettingsRow.kt",
 		Derived: "#15 Settings row",

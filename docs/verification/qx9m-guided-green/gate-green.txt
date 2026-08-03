@@ -1,0 +1,15 @@
+Gate lane, from the repository root.
+
+=== RUN   TestGuidedPairing_EveryControlThePanelOffersIsOneTheSurfaceCanPerform
+--- PASS: TestGuidedPairing_EveryControlThePanelOffersIsOneTheSurfaceCanPerform (0.00s)
+=== RUN   TestGuidedPairing_TheSurfaceSuppliesNoControlTheEnumDoesNotName
+--- PASS: TestGuidedPairing_TheSurfaceSuppliesNoControlTheEnumDoesNotName (0.00s)
+=== RUN   TestGuidedPairing_TheCommandIsWrittenDownOnce
+--- PASS: TestGuidedPairing_TheCommandIsWrittenDownOnce (0.00s)
+=== RUN   TestGuidedPairing_TheGuidedCopyIsTheScreenModels
+--- PASS: TestGuidedPairing_TheGuidedCopyIsTheScreenModels (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/android/gate	(cached)
+
+=== the whole gate package ===
+ok  	github.com/Nathandela/swarm/android/gate	(cached)
