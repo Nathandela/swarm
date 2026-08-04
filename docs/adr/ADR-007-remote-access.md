@@ -8364,3 +8364,107 @@ bound field needs no Kotlin caller. The work is tracked as `agents-tracker-7tc` 
 separately because the Gradle lane is single-occupancy. Until it lands, this is a value that arrives
 correctly and is not yet drawn — which is the honest half of the B135 class, and the opposite of
 drawing something that cannot arrive.
+
+## B140. The short pairing code: the QR's secret, sized for a human hand (2026-08-03)
+
+The owner's directive, verbatim in intent: the 133-character manual payload "is not possibly
+written by a human"; pairing needs a code of about ten characters. This entry records how a
+ten-character code joins the protocol without changing it — and the one security delta it
+actually carries, argued against the paragraphs above that already own the relevant arithmetic.
+
+Tracked as agents-tracker-tr0n. Context that forced it: the terminal-rendered QR has failed to
+scan on the owner's handset through two rounds of scanner fixes (agents-tracker-v5qc fixed the
+640x480 analyzer, agents-tracker-av7k is the residue), and the only other path was transcribing
+133 base64url characters by hand across two machines. PB-PAIR-2 requires manual entry to be
+"specified, not improvised"; this is the specification.
+
+### The decision: the code is a second spelling of the same secret, not a second protocol
+
+`swarm remote pair` today mints a 16-byte rendezvous id and a 32-byte pairing secret
+independently from `crypto/rand` (internal/skeleton/pairing.go:167-174). The change is to how
+those two values are MINTED, and nowhere else:
+
+    code       = tag (3 chars) || secret (7 chars)      Crockford base32, 15 + 35 bits
+    id16       = HKDF-SHA256(ikm = tag,    salt = "swarm-remote/1 short-code-id")   -> 16 bytes
+    psk32      = HKDF-SHA256(ikm = secret, salt = "swarm-remote/1 short-code-psk",
+                             info = id16)                                            -> 32 bytes
+
+The session then proceeds EXACTLY as today: `id16` is the rendezvous id (hex on the wire, 32
+chars, the same length and alphabet the relay, the Noise prologue, and the ceremony binding
+already carry), `psk32` is the XXpsk0 PSK, and the QR encodes both in the unchanged v1 format.
+The code is displayed beside the QR, grouped for reading (`KQ3-M7ZR-TF9` shape, hyphens
+ignored on entry, Crockford's I/L/O foldings applied). One ceremony, one secret, two spellings:
+scan the QR or type the code, both arrive at the same `QRPayload` in memory.
+
+On the phone, the fork is the one seam the S24 map names: a typed entry that does not start
+with `swarm-pair:1:` is parsed as a code; the phone derives `id16`/`psk32` the same way, takes
+the relay URL from the remembered slot (`PhoneRuntime.rememberRelay`, which already exists and
+already survives before any pairing), and constructs the same in-memory payload. Everything
+downstream — origin display-and-confirm (PB-PAIR-6), the B45 pairing dial, `RunDevice`, the
+SAS gate, msg4 consent, commit-before-ack — is byte-identical and untouched.
+
+What this deliberately is NOT: a PAKE. SPAKE2-class machinery would make the code alone
+authenticate the exchange, and it was considered and declined for the same reason the
+2026-07-23 amendment declined the ephemeral pre-commitment — it is a large change to a frozen
+handshake, and the gates below hold without it. The owner chose this fork explicitly
+(2026-08-03): the existing SAS comparison and desktop confirm remain the tamper checks.
+
+### D3 re-read: "never touches the relay" survives
+
+D3's load-bearing sentence is that the pairing secret never touches the relay because the
+camera is the out-of-band channel. The short code KEEPS this property: the code crosses from
+the machine's screen to the phone through the same human, and the relay sees only `hex(id16)`
+— from which the secret half is not derivable, because `id16` is a function of the tag alone.
+Deriving the id from the full code was considered and rejected for exactly that reason: an id
+derived from the secret is an offline oracle (grind candidate codes through the KDF until the
+observed id matches), and 35 bits fall to an offline attack that never touches the network.
+With the split derivation there is nothing to test a guess against except a live handshake.
+
+### The security delta, quantified against the 2026-07-23 arithmetic
+
+The one real change: the PSK's underlying entropy drops from 256 bits to 35 when the code path
+is what the phone used. The attacks that matter:
+
+- **Active guess by the relay (or any on-path party).** To exploit a guessed PSK the attacker
+  must play msg2 against the claiming phone; a wrong guess fails the AEAD and burns the
+  single-use ceremony (R-PAIR.1, B47b's burn). One guess per `swarm remote pair` invocation,
+  p = 2^-35 each. The 60-second slot and the 600 ops/min metering mean the guess budget is set
+  by how many times a human re-runs the verb, not by attacker throughput.
+- **Offline recovery.** Nothing observable is a function of the secret half: not the id (tag
+  only), not msg1 (cleartext ephemeral), not msg2's ciphertext without breaking DH. The
+  2026-07-23 grind paragraph assumed the attacker HOLDS the full secret (a photographed QR); a
+  photographed code leaks identically, and the defenses are unchanged — the 36-bit SAS and the
+  mandatory desktop confirm.
+- **Rendezvous squatting.** 15 bits of id entropy means the id space is enumerable in
+  principle. A squatter must hold live claims to block a pairing: the per-source connection cap
+  (64) and `MaxConcurrentRendezvous` (1024) bound a blanket squat to 3% of the space, and a
+  targeted squat must predict which of 32768 tags the next invocation will mint inside its
+  60-second life. The failure mode is a denied pairing with a distinct cause, never a false
+  one. Accepted as a griefing surface of the same class the unauthenticated rendezvous ops
+  already carry (B61's ruling).
+
+Collision on mint (two concurrent pairings hashing to one id) is handled where it surfaces:
+`rendezvous_create` refuses a taken id and the CLI re-mints a fresh code, bounded retries.
+
+### What must move with it, named so the tests are re-pointed and not weakened
+
+- `PairingFlow.manualEntryIsQrPayload` (ui/PairingUi.kt): the typed path now accepts two
+  specified spellings of the same payload. The flag's WHY — one wire encoding, one DecodeQR —
+  survives as "one in-memory payload, one derivation, specified here".
+- `PairingFlow.manualEntryAcceptsSeparateFields = false` stays FALSE and its fence stays: the
+  relay URL is not a pairing-form field. It is the remembered slot, asked for once when absent
+  (first pairing), shown back and confirmed through the same PB-PAIR-6 destination step. A
+  relay URL remembered before any pairing carries no SPKI pin — exactly the B45/B48 posture
+  the QR path already has, adopted from msg2 on completion (B54).
+- `protocol.PairView` gains the code for the CLI to print (additive; version-skew safe).
+- PB-PAIR-7's ceiling derivation is unchanged (the QR still carries the URL); PB-PAIR-2's
+  "specified, not improvised" now points here.
+- New pairing failure causes land in B71(1)'s closed vocabulary, not on `PairFailInternal`:
+  a malformed code and a code whose rendezvous is gone are distinct, actionable refusals.
+
+### What this entry does not decide
+
+The exact screen copy and the first-run relay prompt's shape are the guided-pairing screen's
+to design under its existing fences (guidedpairing_test.go). Whether the terminal QR display
+survives at all is agents-tracker-av7k's question, not this one's; the code is correct beside
+a working scanner and beside a dead one.
