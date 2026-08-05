@@ -1198,12 +1198,27 @@ class PhoneSurface(
     // PB-DS-9: the triage inbox.
     // -----------------------------------------------------------------------
 
-    /** The inbox's model. It is built on every draw because the tab badge is counted from it. */
-    private fun inboxScreen(bridge: FacadeBridge): InboxScreen = TriageInboxScreen.of(
-        inbox = bridge.triageInbox(),
-        scope = scope,
-        selectedSession = chosen.takeIf { it.isNotEmpty() },
-    )
+    /**
+     * The inbox's model. It is built on every draw because the tab badge is counted from it.
+     *
+     * agents-tracker-3nx6: GUARDED, the way [FacadeBridge.terminalPeek] already guards `App.peek`
+     * (agents-tracker-9ds). This is called unconditionally from [renderReady], on the path
+     * [PhoneEvents.onEvent]'s `main.post` reaches on every journal event -- so a refusal from
+     * `bridge.triageInbox()` (the machine offline, revoked, rate-limited) used to propagate
+     * uncaught onto the main looper instead of reaching a screen. The fallback is [chromeTabs]'s
+     * own empty roster, and never a fabricated one: there is no honest inbox to show when the
+     * roster could not be read.
+     */
+    private fun inboxScreen(bridge: FacadeBridge): InboxScreen = try {
+        TriageInboxScreen.of(
+            inbox = bridge.triageInbox(),
+            scope = scope,
+            selectedSession = chosen.takeIf { it.isNotEmpty() },
+        )
+    } catch (refused: Exception) {
+        outcome.text = bridge.routeFacadeError(refused.message.orEmpty()).message
+        TriageInboxScreen.of(TriageInbox.from(emptyList(), journalStale = false))
+    }
 
     /**
      * The four tabs on a branch that has no roster to count one from.
@@ -1540,7 +1555,17 @@ class PhoneSurface(
      */
     private fun drawActivity(bridge: FacadeBridge?) {
         val panel = bridge?.let {
-            ActivityPanelScreen.of(it.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL))
+            // agents-tracker-3nx6: GUARDED, the way [FacadeBridge.terminalPeek] already guards
+            // `App.peek` (agents-tracker-9ds). Reachable from [PhoneEvents.onEvent]'s `main.post`
+            // on every journal event while the Activity tab is on screen; a refusal from
+            // `it.journal(...)` used to propagate uncaught onto the main looper instead of
+            // reaching this tab's own fallback below.
+            try {
+                ActivityPanelScreen.of(it.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL))
+            } catch (refused: Exception) {
+                outcome.text = it.routeFacadeError(refused.message.orEmpty()).message
+                null
+            }
         }
         if (panel == activityDrawn && contentShows == Destination.ACTIVITY) return
         activityDrawn = panel

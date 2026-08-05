@@ -65,13 +65,17 @@ class PhoneSurfaceEventPathGuardTest {
      * so this cannot be defeated by reformatting alone. It is not brace-matched either: `try {`
      * before the call and `catch (` after it, in that order, is what "the call is guarded" means
      * for a member with exactly one try/catch, which is what the fix adds to each of these two.
+     *
+     * [call] IS SEARCHED FOR ONLY AFTER `try {`, not from the start of [member] -- the fix's own
+     * KDoc, right beside the try/catch it documents, names the guarded call in backticks (for a
+     * reader), and a search from the start would match that prose instead of the code.
      */
     private fun guarded(member: String, call: String): Boolean {
         val text = member.filterNot { it.isWhitespace() }
         val tryAt = text.indexOf("try{")
         if (tryAt < 0) return false
-        val callAt = text.indexOf(call.filterNot { it.isWhitespace() })
-        if (callAt < tryAt) return false
+        val callAt = text.indexOf(call.filterNot { it.isWhitespace() }, tryAt)
+        if (callAt < 0) return false
         val catchAt = text.indexOf("catch(", callAt)
         return catchAt > callAt
     }
