@@ -403,6 +403,33 @@ class SettingsSurface(
     }
 
     /**
+     * The facade, or null with the reason already on screen (agents-tracker-po3x).
+     *
+     * WHY IT IS ONE FUNCTION AND NOT A GUARD AT EACH SITE. Both call sites run AFTER the user has
+     * acted -- one with a destructive confirmation already answered, one with the switch already
+     * moved under the finger -- and both used to spell the guard
+     * `(runtime.phone() as? PhoneStartup.Ready)?.app ?: return`, which does not handle the other
+     * case so much as elide it. `PhoneStartup` is sealed with exactly two, and the second carries
+     * the routed error PB-APP-9 wrote for this condition; `PhoneSurface.press` already shows it on
+     * its own outcome line, so there is nothing to invent here.
+     *
+     * THE WINDOW IS NARROW AND IT IS REAL. `PhoneRuntime` builds the core lazily and FAILABLY and
+     * does not cache a refusal, which is exactly why `PhoneActivity.onResume` retries it -- so the
+     * answer to `phone()` genuinely differs between the draw and the tap.
+     *
+     * WHAT IT DOES NOT DO IS RESTORE ANY CONTROL, because what needs restoring differs: the replace
+     * chip was never disabled (the press never reached [dispatch]), and the switch has moved. The
+     * caller knows which; see [restore].
+     */
+    private fun readyApp(): App? = when (val startup = runtime.phone()) {
+        is PhoneStartup.Ready -> startup.app
+        is PhoneStartup.Unavailable -> {
+            say(PressFeedback.ofRefusal(startup.error.message))
+            null
+        }
+    }
+
+    /**
      * Put one answer on screen: the persistent line, and derivation row 1's toast.
      *
      * IT IS `PhoneSurface.say`'S PROGRAM ON THIS PANEL'S OWN SEAM, and the toast is skipped where
@@ -580,7 +607,12 @@ class SettingsSurface(
      * agreement with that gate; what changed is that the gate now agrees with the press.
      */
     private fun onReplace(control: View) {
-        val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+        // AND THE ANSWER TO A DEGRADED RUNTIME IS SAID, NOT SWALLOWED (agents-tracker-po3x). This
+        // was `(runtime.phone() as? PhoneStartup.Ready)?.app ?: return`, reached with the
+        // destructive dialog already confirmed: a phone core that failed to build between the draw
+        // and the confirmation ended the flow in silence, on the one screen in this app where a
+        // user has just been asked whether they are sure.
+        val app = readyApp() ?: return
         // The line holds the LAST answer, and leaving it under a press in flight reads as this
         // press's -- `PhoneSurface.dispatchPress` clears it in the same place and for the reason.
         outcome.text = ""
@@ -650,7 +682,12 @@ class SettingsSurface(
             PushCategory.NEEDS_INPUT -> current.setAlerts(value)
             PushCategory.FINISHED -> current.setMentions(value)
         }
-        val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+        // THE SWITCH IS PUT BACK AND THE REASON IS SAID (agents-tracker-po3x). This was
+        // `?: return`, and the switch had already moved -- `SwitchCompat` changes its own position
+        // on touch and this listener runs afterwards -- so a runtime that degraded between the draw
+        // and the tap left a control showing a preference nothing recorded, with nothing on screen
+        // about it. [readyApp] says what is wrong; [restore] undoes what the finger did.
+        val app = readyApp() ?: return restore(toggle, current)
         try {
             val op = app.setPushPreference(
                 PushPreference().apply {
