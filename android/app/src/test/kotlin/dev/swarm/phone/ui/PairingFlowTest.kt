@@ -132,6 +132,46 @@ class PairingPermissionTest {
     }
 
     /**
+     * agents-tracker-nz9h: a handset with no camera at all, gated on
+     * `PackageManager.FEATURE_CAMERA_ANY` rather than on any permission answer -- the manifest
+     * already declares `android.hardware.camera` optional, so a device that answers "no camera"
+     * is not a denial the platform will ever re-ask about.
+     *
+     * ITS OWN STATE, NOT A REUSE OF [ScannerState.PERMISSION_PERMANENTLY_DENIED]. The two states
+     * withdraw the same control, but their REMEDY differs: a permanent denial is undone by the
+     * system settings screen this app can open, and nothing on the device undoes missing
+     * hardware, so the state that reports it must offer no settings route.
+     */
+    @Test
+    fun `a device with no camera offers no scanner and no settings route, but still offers manual entry`() {
+        assertFalse(
+            "a camera-less handset is offered a scan button that nothing can make work",
+            PairingFlow.offersScanner(ScannerState.NO_CAMERA),
+        )
+        assertFalse(
+            "nothing in Settings can add a camera, so routing there is a detour with no destination",
+            PairingFlow.routesToSystemSettings(ScannerState.NO_CAMERA),
+        )
+        assertTrue(
+            "the typed fallback is the only path left once the hardware is gone, and it must " +
+                "survive every camera state",
+            PairingFlow.offersManualEntry(ScannerState.NO_CAMERA),
+        )
+    }
+
+    /**
+     * The predicate `PairingPanelScreen` asks instead of naming `ScannerState.NO_CAMERA` itself
+     * (android/gate/qx9m_camerareach_test.go forbids that file any `ScannerState.*` literal).
+     */
+    @Test
+    fun `hasNoCamera answers true for exactly the one state`() {
+        assertTrue(PairingFlow.hasNoCamera(ScannerState.NO_CAMERA))
+        assertFalse(PairingFlow.hasNoCamera(ScannerState.SCANNING))
+        assertFalse(PairingFlow.hasNoCamera(ScannerState.PERMISSION_DENIED))
+        assertFalse(PairingFlow.hasNoCamera(ScannerState.PERMISSION_PERMANENTLY_DENIED))
+    }
+
+    /**
      * MANUAL ENTRY IS SPECIFIED, NOT IMPROVISED -- PB-PAIR-2's own words. The typed string is
      * the SAME payload the QR carries (internal/remote/pairing.EncodeQR's encoding), so it goes
      * to the same DecodeQR and reaches the same display-and-confirm step. An improvised

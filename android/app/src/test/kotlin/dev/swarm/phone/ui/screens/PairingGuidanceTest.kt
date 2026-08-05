@@ -375,6 +375,44 @@ class PairingGuidanceTest {
         )
     }
 
+    // ---- no camera hardware at all -------------------------------------------
+
+    /**
+     * agents-tracker-nz9h: a device with no camera hardware, gated on
+     * `PackageManager.FEATURE_CAMERA_ANY` rather than on any permission answer.
+     *
+     * THE PERMANENT-DENIAL BRANCH IS THE MODEL: the scanner is withdrawn for good, so the typed
+     * code is the only thing left that works without leaving the app, and it opens automatically
+     * rather than collapsing behind a disclosure a person would have to know to press.
+     */
+    @Test
+    fun `no camera hardware withdraws the scanner and opens the typed field automatically`() {
+        assertEquals(
+            setOf(PairingControl.TYPED_PAYLOAD, PairingControl.USE_TYPED_PAYLOAD),
+            panel(scanner = ScannerState.NO_CAMERA).controls,
+        )
+    }
+
+    /**
+     * The one difference from a permanent denial: nothing in Settings can add hardware a
+     * handset does not have, so this state's sentence must not send anyone there.
+     */
+    @Test
+    fun `no camera hardware says so, and offers no settings route`() {
+        val page = panel(scanner = ScannerState.NO_CAMERA)
+
+        assertEquals(PairingPanelScreen.NO_CAMERA_NOTICE, page.cameraNotice)
+        assertTrue("the explanation is empty", page.cameraNotice.isNotEmpty())
+        assertTrue(
+            "a camera-less handset reads the same sentence as a permission denial, which " +
+                "offers a settings route that fixes nothing here",
+            page.cameraNotice != PairingPanelScreen.CAMERA_BLOCKED,
+        )
+        assertTrue(
+            PairingControl.OPEN_SYSTEM_SETTINGS !in panel(scanner = ScannerState.NO_CAMERA).controls,
+        )
+    }
+
     // ---- a viewfinder that is looking, and says so ---------------------------
 
     /**
