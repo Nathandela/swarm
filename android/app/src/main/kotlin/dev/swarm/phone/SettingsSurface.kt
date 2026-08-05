@@ -1,8 +1,10 @@
 package dev.swarm.phone
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -14,6 +16,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import dev.swarm.phone.push.PushTokens
 import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.FacadeBridge
@@ -21,7 +24,9 @@ import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.ToastHost
+import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
@@ -150,6 +155,40 @@ class SettingsSurface(
      */
     internal val confirmReplace: TextView = actionChip()
 
+    /**
+     * agents-tracker-0dij's way out of a PERMANENTLY_DENIED notification permission.
+     *
+     * IT IS THE ONE STATE WITH NOTHING ELSE TO OFFER. On DENIED the platform still raises its
+     * dialog and the switch's own tap is what asks; on PERMANENTLY_DENIED it will not ask again,
+     * ever, and until this control existed the screen said "turn them on in system settings" with
+     * no way to get there -- advice, on a screen whose two switches were dead.
+     *
+     * IT GOES TO THE NOTIFICATION SCREEN AND NOT THE APP INFO PAGE.
+     * `ACTION_APPLICATION_DETAILS_SETTINGS` is what the pairing screen sends the camera to, because
+     * the camera permission has no screen of its own; notifications do, and
+     * `EXTRA_APP_PACKAGE` is what names this app on it. The difference is a control that fixes the
+     * problem against one that puts the user somewhere the problem can be fixed.
+     *
+     * IT IS BUILT HERE, gated once, and named in [touchFilteredActions] -- the same three reasons
+     * [replace] and the switches are. INTERNAL, so `SettingsSurfaceNotificationsTest` has a subject:
+     * the intent behind it is the one thing in this whole flow a JVM test can execute, because it
+     * reaches the platform rather than the phone core.
+     *
+     * ITS WORDS ARE THE MODEL'S and are written on every draw by [redirectFor], like the replace
+     * chip's: a string typed here would be a second copy of copy [SettingsScreen] already owns.
+     */
+    internal val openNotificationSettings: TextView = SecureWindow.gate(
+        ctaButton(activity, "", CtaKind.MORE).apply {
+            announceAsButton()
+            setOnClickListener {
+                activity.startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName),
+                )
+            }
+        },
+    )
+
     /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
     private var drawn: SettingsPanel? = null
 
@@ -194,8 +233,15 @@ class SettingsSurface(
      * holding only the first would be filtering the harmless press. `PhoneSurface.confirmThenPress`
      * records why a platform dialog cannot close this gap: its buttons are in a window this surface
      * does not own, and the filter is a property of a View in one.
+     *
+     * AND THE REDIRECT IS THE FOURTH (agents-tracker-0dij). It authorises nothing, but it LEAVES
+     * THE APP -- an overlay that swapped the tap under it would be launching an Activity the user
+     * did not choose -- and the list is what `PhoneActivity.touchFilteredViews()` publishes for
+     * `PhoneActivityWindowTest` to walk. A control outside it is one no fence in this module has
+     * ever looked at.
      */
-    val touchFilteredActions: List<View> = listOf(needsInput, finished, replace, confirmReplace)
+    val touchFilteredActions: List<View> =
+        listOf(needsInput, finished, replace, confirmReplace, openNotificationSettings)
 
     /**
      * Called once a `Replace this computer` press has settled, so the window that hosts this panel
@@ -274,9 +320,17 @@ class SettingsSurface(
                 granted = activity.checkSelfPermission(
                     AppPermission.POST_NOTIFICATIONS.manifestName,
                 ) == PackageManager.PERMISSION_GRANTED,
-                // The permission is requested on the notification path, not by this panel; what
-                // this panel owes is to say the switches change nothing while it is withheld.
-                hasAskedBefore = true,
+                // THE PERSISTED BIT, AND IT USED TO BE THE LITERAL `true` (agents-tracker-0dij).
+                // The comment beside it claimed "the permission is requested on the notification
+                // path" and no such path existed -- the app's only `requestPermissions` call was
+                // the camera's -- so on API 33+ every ungranted phone resolved PERMANENTLY_DENIED
+                // five seconds after install: both switches disabled, and a notice sending the
+                // owner to system settings where nothing was wrong. The ask is now [onToggled]'s,
+                // and this is the bit that tells a first run from a permanent refusal.
+                hasAskedBefore = PermissionAsks.hasAsked(
+                    activity,
+                    AppPermission.POST_NOTIFICATIONS,
+                ),
                 showRationale = activity.shouldShowRequestPermissionRationale(
                     AppPermission.POST_NOTIFICATIONS.manifestName,
                 ),
@@ -340,6 +394,7 @@ class SettingsSurface(
                 panel = panel,
                 rowFor = ::controlFor,
                 replaceFor = ::replaceFor,
+                redirectFor = ::redirectFor,
                 below = outcome,
             ),
         )
@@ -386,8 +441,15 @@ class SettingsSurface(
         return replace
     }
 
+    /** The redirect control, wearing the label the model decided to offer. See [replaceFor]. */
+    private fun redirectFor(label: String): View {
+        (openNotificationSettings.parent as? ViewGroup)?.removeView(openNotificationSettings)
+        openNotificationSettings.text = label
+        return openNotificationSettings
+    }
+
     private fun detachControls() {
-        for (control in listOf(needsInput, finished, replace, outcome)) {
+        for (control in listOf(needsInput, finished, replace, openNotificationSettings, outcome)) {
             (control.parent as? ViewGroup)?.removeView(control)
         }
     }
@@ -514,9 +576,31 @@ class SettingsSurface(
         )
     }
 
+    /**
+     * A switch has been moved. What that means is decided before anything is written.
+     *
+     * THE TAP IS THE ASK, ON THE ONE STATE WHERE THERE IS STILL SOMETHING TO ASK
+     * (agents-tracker-0dij). This app has no other place that requests POST_NOTIFICATIONS, and the
+     * switches are live under DENIED for exactly this reason -- Android delivers no touch to a
+     * disabled control, so a screen that greyed them out could never obtain the permission. It is
+     * `PairingSurface.beginScanning`'s shape verbatim: remember the ask, raise the dialog, and let
+     * the redraw come from the resume that follows it (nothing in this app overrides
+     * `onRequestPermissionsResult` -- see [askForNotifications]).
+     *
+     * AND THE PREFERENCE IS NOT WRITTEN ON THAT TAP, which is the same flow's shape too: one tap
+     * does one thing, and the switch goes back where the machine has it until the user turns it on
+     * again over a permission that now exists. Persisting alongside the ask would put a
+     * "saved, waiting for your machine" notice on screen underneath a system dialog, about a
+     * preference whose only effect is a notification the phone still cannot display.
+     */
     private fun onToggled(toggle: PushToggle, value: Boolean) {
         if (drawing) return
         val current = screen ?: return
+        if (current.tapAsksForPermission(value)) {
+            askForNotifications()
+            restore(toggle, current)
+            return
+        }
         val next = when (current.toggleCategory(toggle)) {
             PushCategory.NEEDS_INPUT -> current.setAlerts(value)
             PushCategory.FINISHED -> current.setMentions(value)
@@ -536,6 +620,45 @@ class SettingsSurface(
             outcome.text = ErrorRouter.route(refused.message.orEmpty()).message
         }
         draw(next, machineOf(app))
+    }
+
+    /**
+     * Raise the platform's permission dialog, having recorded that it was raised.
+     *
+     * THE BIT IS WRITTEN FIRST AND THAT IS THE ONLY ORDER THAT WORKS. Nothing in this app overrides
+     * `onRequestPermissionsResult` -- there is no callback anywhere in the module -- so there is no
+     * "after the answer" to write in: what happens next is `PhoneActivity.onResume`, which redraws
+     * this panel, and [read] re-resolves the permission there. Without the bit that resolve reports
+     * PERMANENTLY_DENIED on a phone that has just been asked for the first time, because
+     * `shouldShowRequestPermissionRationale` is false before the first ask as well as after the
+     * last one. `SettingsSurfaceNotificationsTest` records that resume dependency as an assertion.
+     */
+    private fun askForNotifications() {
+        PermissionAsks.remember(activity, AppPermission.POST_NOTIFICATIONS)
+        activity.requestPermissions(
+            arrayOf(AppPermission.POST_NOTIFICATIONS.manifestName),
+            NOTIFICATIONS_ASK,
+        )
+    }
+
+    /**
+     * Put one switch back where the model has it, without the write coming back as a press.
+     *
+     * IT IS NEEDED BECAUSE THE USER HAS ALREADY MOVED IT. `SwitchCompat` changes its own position on
+     * touch; the listener runs afterwards. So every path that declines to persist -- the tap that
+     * asked for a permission instead (agents-tracker-0dij) and the tap that arrived after the
+     * runtime degraded (agents-tracker-po3x) -- leaves a control showing a value nothing recorded,
+     * and [draw]'s equality check cannot fix it: the model did not change, so the panel is equal to
+     * the drawn one and the view tree is not rebuilt.
+     */
+    private fun restore(toggle: PushToggle, current: SettingsScreen) {
+        val control = when (toggle) {
+            PushToggle.FIRST -> needsInput
+            PushToggle.SECOND -> finished
+        }
+        drawing = true
+        control.isChecked = current.checkedFor(toggle)
+        drawing = false
     }
 
     /**
@@ -566,23 +689,27 @@ class SettingsSurface(
      * different things and a factory that took a listener would still have to be read twice.
      */
     private fun actionChip(): TextView = SecureWindow.gate(
-        denyChip(activity, "").apply {
-            // A `TextView` announces itself as text, and the kit cannot fix that: `CtaButton`'s
-            // KDoc records the same gap, because a component with no click has no role to declare.
-            // The role goes where the click is, which is here.
-            setAccessibilityDelegate(
-                object : View.AccessibilityDelegate() {
-                    override fun onInitializeAccessibilityNodeInfo(
-                        host: View,
-                        info: AccessibilityNodeInfo,
-                    ) {
-                        super.onInitializeAccessibilityNodeInfo(host, info)
-                        info.className = Button::class.java.name
-                    }
-                },
-            )
-        },
+        denyChip(activity, "").apply { announceAsButton() },
     )
+
+    /**
+     * A `TextView` announces itself as TEXT, and the kit cannot fix that: `CtaButton`'s KDoc records
+     * the same gap, because a component with no click has no role to declare. The role goes where
+     * the click is, which is here -- for both chips and for the redirect.
+     */
+    private fun TextView.announceAsButton() {
+        setAccessibilityDelegate(
+            object : View.AccessibilityDelegate() {
+                override fun onInitializeAccessibilityNodeInfo(
+                    host: View,
+                    info: AccessibilityNodeInfo,
+                ) {
+                    super.onInitializeAccessibilityNodeInfo(host, info)
+                    info.className = Button::class.java.name
+                }
+            },
+        )
+    }
 
     private fun touchFilteredSwitch(toggle: PushToggle): SwitchCompat = SecureWindow.gate(
         SwitchCompat(activity).apply {
@@ -610,5 +737,14 @@ class SettingsSurface(
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+
+        /**
+         * The request code the platform hands back. NOTHING READS IT, and that is the fact
+         * [askForNotifications] depends on: there is no `onRequestPermissionsResult` in this module,
+         * so the answer arrives as a resume. It is distinct from `PairingSurface.CAMERA_ASK` anyway,
+         * because two screens sharing one code is the kind of thing that only matters on the day
+         * somebody adds the callback.
+         */
+        const val NOTIFICATIONS_ASK = 2
     }
 }

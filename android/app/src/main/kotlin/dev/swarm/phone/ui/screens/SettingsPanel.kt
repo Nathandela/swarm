@@ -59,6 +59,16 @@ data class SettingsPanel(
      * `sections` sees, for a reason that has nothing to do with what they read it for.
      */
     val machineSection: MachineSection? = null,
+    /**
+     * agents-tracker-0dij: the words on the control that leads out of a permanently blocked
+     * notification permission, or null on every other state.
+     *
+     * IT IS A LABEL AND NOT A CONTROL, for the reason [SettingsRow]'s toggle arrives as a parameter:
+     * pressing it leaves the app, so the Intent, PB-SEC-12 clause 1's touch filter and an identity
+     * that survives a redraw are the surface's. The words are [SettingsScreen]'s own and are not
+     * re-spelled here.
+     */
+    val permissionRedirectLabel: String? = null,
 ) {
     /**
      * The section headings top to bottom, which is where "the pairing section leads" is a fact
@@ -181,6 +191,7 @@ object SettingsPanelScreen {
         machineSection = machine?.let {
             MachineSection(heading = PAIRING, row = PairedMachineRowScreen.of(it))
         },
+        permissionRedirectLabel = settings.notificationRedirectLabel,
     )
 
     private fun rowFor(settings: SettingsScreen, toggle: PushToggle): SettingsRow {

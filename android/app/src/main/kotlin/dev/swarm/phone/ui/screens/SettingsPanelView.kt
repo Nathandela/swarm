@@ -5,7 +5,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.sectionLabel
@@ -73,6 +75,14 @@ object SettingsTag {
      */
     const val REPLACE = "settings.machine.replace"
 
+    /**
+     * agents-tracker-0dij's way out of a permanently blocked notification permission, WHEREVER IT
+     * WAS BUILT -- `SettingsSurface` builds the shipping one, because pressing it leaves the app and
+     * PB-SEC-12 clause 1's filter is applied at construction on an instance that outlives every
+     * redraw. The tag is how anything finds the one the panel actually placed.
+     */
+    const val PERMISSION_REDIRECT = "settings.permission.redirect"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, ROW)
 }
@@ -90,6 +100,11 @@ object SettingsTag {
  *  surface's. It takes the row so the words on the control are the MODEL'S and a caller cannot
  *  type a second copy of them. The default is the chip this screen would place if nobody owned the
  *  click: correct to look at, and attached to nothing.
+ * @param redirectFor the control that leads to the system's notification settings, for the label
+ *  [SettingsPanel.permissionRedirectLabel] carries. It is a parameter for [replaceFor]'s reasons:
+ *  the press starts an Activity, so it carries the touch filter and an identity that survives a
+ *  redraw, and both are the surface's. The default is the control this screen would place if nobody
+ *  owned the click -- correct to look at, and attached to nothing.
  * @param below views this slice has NOT recomposed, hosted under the panel. Null is the finished
  *  shape.
  */
@@ -98,6 +113,7 @@ fun settingsPanelView(
     panel: SettingsPanel,
     rowFor: (SettingsRow) -> View,
     replaceFor: (PairedMachineRow) -> View = { row -> denyChip(context, row.replaceLabel) },
+    redirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     below: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
@@ -155,6 +171,13 @@ fun settingsPanelView(
                 layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
             },
         )
+    }
+
+    // AFTER THE NOTICES, because the sentence is why the control is there: the blocked notice names
+    // this control in its own words (`SettingsScreen.OPEN_NOTIFICATION_SETTINGS` is interpolated
+    // into it), so a control drawn above the sentence would arrive before its reason.
+    panel.permissionRedirectLabel?.let { label ->
+        column.addView(redirectFor(label).apply { tag = SettingsTag.PERMISSION_REDIRECT })
     }
 
     below?.let { column.addView(it) }

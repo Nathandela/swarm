@@ -1,7 +1,6 @@
 package dev.swarm.phone
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -19,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.scan.QrScanner
 import dev.swarm.phone.ui.ErrorRouter
@@ -874,22 +874,21 @@ class PairingSurface(
             sdkInt = Build.VERSION.SDK_INT,
             granted = activity.checkSelfPermission(Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED,
-            hasAskedBefore = asks().getBoolean(ASKED_CAMERA, false),
+            hasAskedBefore = PermissionAsks.hasAsked(activity, AppPermission.CAMERA),
             showRationale = activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA),
         ),
     )
 
-    private fun rememberTheAsk() {
-        asks().edit().putBoolean(ASKED_CAMERA, true).apply()
-    }
-
     /**
-     * The bit lives in the app's own preferences, under the data root
-     * `res/xml/data_extraction_rules.xml` excludes from both cloud backup and device-to-device
-     * transfer (PB-SEC-10). It is a UX coordinate and carries nothing else -- no payload, no
-     * origin, no key material.
+     * IT IS [PermissionAsks]'S NOW AND NOT THIS FILE'S (agents-tracker-0dij). The bit, its store and
+     * the backup exclusion that covers it were three lines here and nothing at all on the settings
+     * screen, which hard-coded `hasAskedBefore = true` and made POST_NOTIFICATIONS unaskable for the
+     * life of an install. The decision is one decision, so it is written once and both surfaces
+     * spend it; what stays here is WHEN this screen asks.
      */
-    private fun asks() = activity.getSharedPreferences(ASK_STORE, Context.MODE_PRIVATE)
+    private fun rememberTheAsk() {
+        PermissionAsks.remember(activity, AppPermission.CAMERA)
+    }
 
     // -----------------------------------------------------------------------
 
@@ -969,7 +968,5 @@ class PairingSurface(
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         const val POLL_MILLIS = 400L
         const val CAMERA_ASK = 1
-        const val ASK_STORE = "swarm-permission-asks"
-        const val ASKED_CAMERA = "asked-camera"
     }
 }

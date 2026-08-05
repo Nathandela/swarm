@@ -69,6 +69,18 @@ Both files are a re-run of the **final** assertions, so what is recorded is the 
 ship with rather than an earlier draft's. The two assertions added after `a8d644e` — the
 alphabetical scope order and the singular badge announcement — are in both runs.
 
+## One recorded test name no longer exists (agents-tracker-0dij, 2026-08-05)
+
+`surfaces-red.txt` records `SettingsPanelScreenTest`'s
+`a withheld notification permission disables every row` failing on the `TODO()` stub. That
+assertion was rewritten as `only a permanently denied permission disables the rows`: it asserted
+both denials disable both rows, and DENIED is the state a fresh API 33+ install is in — the tap on
+the row's own switch is the app's only `POST_NOTIFICATIONS` request, and Android delivers no touch
+to a disabled control, so "disabled on DENIED" made the permission ungrantable for the life of the
+install. The transcript is left exactly as it was run: it is evidence of a run that happened, and
+editing it would make it evidence of nothing. This note is the pointer for a reader who goes looking
+for the name and does not find it.
+
 ## What is NOT evidenced here
 
 `TriageInboxViewTest` is Robolectric: it needs the Android lane, and it has not been run. What has
