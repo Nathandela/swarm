@@ -1,5 +1,7 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.CommandVerdict
+
 /**
  * Which screen the window holds: the whole app, or the one offer an unpaired phone gets.
  *
@@ -50,6 +52,71 @@ object PairOnlyScreen {
 
     /** The one thing a person can do here. */
     const val CTA = "Pair a computer"
+
+    /**
+     * What a revoke leaves this phone unable to say, said (agents-tracker-qlf9).
+     *
+     * **THE PURGE ORDERING IS NOT THE DEFECT AND IS NOT CHANGED.** `SettingsSurface.onReplace`
+     * destroys both key tiers in a `finally`, whether or not the command reached the machine, and
+     * that is ADR-007 B133 decision 3: the situation the panic action exists for is one where the
+     * phone may not reach its machine at all, and a purge that ran only on success would leave the
+     * live keys on the very handset whose registration its owner has just disowned. The Go side
+     * makes it structural too -- `App.RevokeThisDevice` records that a revoke "is the one command
+     * whose success DESTROYS the path its own reply would come back on", because the daemon
+     * removes the device and rotates the epoch in one transaction and the gateway then severs and
+     * exits. Waiting for the outcome before purging would hang forever on the path that WORKED.
+     *
+     * **SO WHAT WAS MISSING IS THE SENTENCE, NOT THE WAIT.** Nothing told the user which of the
+     * two states they are in, and they are very different: `swarm remote pair` is refused while
+     * the machine still has this device registered (PB-STATE-10, single-device v1), so a user
+     * whose revoke was refused walks into a pairing that fails with the reason on no screen at
+     * all. It lives HERE because this is the screen the revoke drops them on and the screen the
+     * next pairing attempt starts from.
+     *
+     * **THE REMEDY IS SPELLED THE WAY [dev.swarm.phone.ui.ErrorRouter] ALREADY SPELLS IT** for
+     * `swarm/state-corrupt`, which is the same recovery: find the device, unregister it, pair
+     * again. Two wordings for one pair of commands is two things for a reader to reconcile at the
+     * moment they are least able to.
+     */
+    const val REVOKE_UNCONFIRMED = "This phone has unpaired itself, and your machine has not " +
+        "confirmed that it removed the device. If pairing is refused, run `swarm remote devices` " +
+        "on your machine to find this device and `swarm remote revoke <device-id>` to unregister " +
+        "it first."
+
+    /** The head of the refused sentence; the machine's own reason follows it. */
+    private const val REVOKE_REFUSED = "Your machine refused to remove this device"
+
+    /**
+     * What is true of the handset once the revoke did not land, in either way it can fail to.
+     *
+     * IT IS ONE TAIL FOR BOTH because the fact is one fact: the purge ran, so the phone is
+     * unpaired and the machine is not.
+     */
+    private const val STILL_REGISTERED = " This phone has unpaired itself anyway, so run " +
+        "`swarm remote devices` on your machine to find this device and `swarm remote revoke " +
+        "<device-id>` to unregister it before pairing again."
+
+    /**
+     * The machine's answer to the revoke this phone issued, as the screen states it.
+     *
+     * A CONFIRMED REMOVAL SAYS NOTHING. Both sides agree, so there is no divergence to report, and
+     * a warning shown over a state that is fine teaches the user to ignore the one that is not.
+     */
+    fun revokeNoticeFor(verdict: CommandVerdict): String = when {
+        verdict.accepted -> ""
+        verdict.answered -> verdict.sentence(REVOKE_REFUSED) + STILL_REGISTERED
+        else -> REVOKE_UNCONFIRMED
+    }
+
+    /**
+     * The revoke that never reached the wire at all.
+     *
+     * @param routed PB-APP-9's own sentence for the failure, carried VERBATIM rather than
+     *  re-worded: it is the one that names the remedy, and a second copy here is two files
+     *  deciding what a transport failure reads as. What this adds is the half the router cannot
+     *  know -- that the purge ran regardless, so the machine has kept the device for certain.
+     */
+    fun revokeUnsentNotice(routed: String): String = routed + STILL_REGISTERED
 
     /**
      * Which screen this phone gets.

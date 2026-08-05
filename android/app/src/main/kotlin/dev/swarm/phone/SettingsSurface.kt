@@ -23,6 +23,7 @@ import dev.swarm.phone.runtime.NotificationDelivery
 import dev.swarm.phone.runtime.NotificationDeliveryResolver
 import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionStateResolver
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.PushCategory
@@ -33,12 +34,14 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
+import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
 import dev.swarm.phone.ui.screens.SettingsPanelScreen
 import dev.swarm.phone.ui.screens.SettingsRow
 import dev.swarm.phone.ui.screens.settingsPanelView
 import swarmmobile.App
+import swarmmobile.Op
 import swarmmobile.PushPreference
 
 /**
@@ -323,6 +326,24 @@ class SettingsSurface(
      * no window to float one over.
      */
     internal var toasts: ToastHost? = null
+
+    /**
+     * What the revoke left this phone unable to confirm, or empty where it left nothing
+     * (agents-tracker-qlf9).
+     *
+     * IT IS A PROPERTY THIS PANEL WRITES AND THE HOST READS, rather than a second callback beside
+     * [onReplaced]. The revoke ENDS this panel: a revoked phone is an unpaired phone and
+     * `PhoneSurface.drawPairOnly` replaces the whole scaffold, so [outcome] and this surface's
+     * toast host both leave the screen with it -- and the sentence they would have carried is the
+     * one a user needs LATER, at the pairing that `swarm remote pair` may refuse. So the host
+     * takes it and puts it on the screen the user actually lands on, and clears it when the app
+     * comes back.
+     *
+     * IT IS NOT WHAT THE VERB THREW. A revoke can fail in two ways -- refused by the machine, or
+     * never sent at all -- and both leave this handset purged while the registration stands. Both
+     * are composed by [dev.swarm.phone.ui.screens.PairOnlyScreen], which owns the copy.
+     */
+    internal var unpairNotice: String = ""
 
     fun render() {
         when (val startup = runtime.phone()) {
@@ -721,21 +742,37 @@ class SettingsSurface(
                 }
             },
             settle = { answer ->
-                // Every facade refusal arrives as an exception whose message carries the error
-                // class as a prefix, so it routes through the table rather than being shown raw.
+                // THE MACHINE'S VERDICT IS CLAIMED, AND WHAT IT CANNOT SAY IS SAID INSTEAD
+                // (agents-tracker-qlf9). This used to read `answer.onFailure { ... }` and nothing
+                // else, so the only revoke that reported anything was one that never left the
+                // handset. A revoke the machine REFUSED -- a kill switch, a device it no longer
+                // authorises -- returned an `Op` like any success and was reported as one, while
+                // the purge above had already destroyed both key tiers: a phone locally unpaired
+                // and still registered, which is exactly the state `swarm remote pair` fail-fasts
+                // on (PB-STATE-10), with the reason on no screen in the product.
                 //
+                // AND THE ORDINARY CASE IS THE UNCONFIRMED ONE, which is why this is a NOTICE
+                // rather than only an error path. `signedCommand` seals, appends and returns; the
+                // reply lands later if it lands at all -- `App.RevokeThisDevice`'s own doc records
+                // that a successful revoke DESTROYS the path its reply would come back on. So the
+                // honest report at this moment is that the machine has not confirmed it, and
+                // [PairOnlyScreen] carries that sentence onto the screen this press lands on.
+                unpairNotice = answer.fold(
+                    onSuccess = { issued -> PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued)) },
+                    // Every facade refusal arrives as an exception whose message carries the error
+                    // class as a prefix, so it routes through the table rather than being shown raw.
+                    onFailure = { refused ->
+                        PairOnlyScreen.revokeUnsentNotice(
+                            FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message,
+                        )
+                    },
+                )
                 // AND IT IS SAID TWICE, which is `PhoneSurface.dispatchPress`'s decision applied
                 // to the one press this panel owns: the line keeps the remedy, and the toast puts
                 // it where the chip that was pressed is. A refused revoke is the worst message in
                 // this app to leave in a view somebody has to scroll to -- the situation the
                 // control exists for is one where the phone may not reach its machine at all.
-                answer.onFailure {
-                    say(
-                        PressFeedback.ofRefusal(
-                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
-                        ),
-                    )
-                }
+                if (unpairNotice.isNotEmpty()) say(PressFeedback.ofRefusal(unpairNotice))
                 // THE WHOLE WINDOW, not this panel. The purge ran in the `finally` above whether
                 // or not the command reached the machine, so the presentation gate's answer has
                 // already changed and something has to ask it again -- see [onReplaced]. It
@@ -743,6 +780,35 @@ class SettingsSurface(
                 onReplaced?.invoke() ?: render()
             },
         )
+    }
+
+    /**
+     * PB-SYNC-2's answer for the revoke this panel issued, claimed by operation id.
+     *
+     * IT IS READ ONCE AND NOT POLLED, which is the difference from [settleWithTheMachine] and is
+     * forced rather than chosen: a push preference settles onto a panel that is still on screen,
+     * and this one ends the screen. There is no later draw of this surface to ask again from --
+     * the phone is unpaired the moment the purge above finishes.
+     *
+     * AN UNREADABLE OR UNRESOLVED ANSWER IS [CommandVerdict.UNANSWERED], and that is not "fine":
+     * [PairOnlyScreen.revokeNoticeFor] renders it as the divergence it is. Silence here would be
+     * the screen asserting a removal nobody confirmed.
+     *
+     * @param answer what the verb returned, which is a `swarmmobile.Op`. Typed as `Any?` because
+     *  `VerbDispatch.press` is generic over the work's result; a change to the return type
+     *  therefore fails to claim rather than failing to compile, which is why the cast cannot throw.
+     */
+    private fun revokeVerdict(app: App, answer: Any?): CommandVerdict {
+        val issued = (answer as? Op)?.operationID.orEmpty()
+        return try {
+            CommandVerdict.of(
+                FacadeBridge(app).launchOutcome(issued),
+                issued,
+                CommandVerdict.ACCEPTED_OK,
+            )
+        } catch (unreadable: Exception) {
+            CommandVerdict.UNANSWERED
+        }
     }
 
     /**

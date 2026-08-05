@@ -228,5 +228,32 @@ object ControlLease {
     /** protocol.OpLease -- the daemon's grant, which is what a take_control is answered with. */
     private const val GRANTED = "lease"
 
-    fun confirmedBy(outcome: OperationOutcome): Boolean = outcome.code == GRANTED
+    /**
+     * Whether the machine GRANTED the lease, which is the one clause the keyboard turns on.
+     *
+     * IT IS DERIVED FROM [verdictOf] AND NOT A SECOND READING OF THE SAME REPLY. The boolean and
+     * the sentence the screen shows beside it come from one table, so a phone cannot end up with a
+     * shut keyboard and a notice claiming control -- which is this issue's own defect one level
+     * down.
+     */
+    fun confirmedBy(outcome: OperationOutcome): Boolean =
+        verdictOf(outcome, outcome.operationId).accepted
+
+    /**
+     * The machine's FULL answer to the take_control [operationId] (agents-tracker-qlf9).
+     *
+     * WHAT [confirmedBy] ALONE COULD NOT SAY. Every refusal collapsed to `false`, so the screen
+     * showed "your machine has not confirmed control of this session ... Take control first" to a
+     * user whose take_control had just been REFUSED -- copy that reads as "you have not pressed
+     * the button yet" and names as the remedy the very step that was declined. The reply's code
+     * and message are what tell a kill switch from a revoked device from a policy, and the three
+     * have three different remedies.
+     *
+     * A SEVERANCE STAYS A SEVERANCE. [CommandVerdict] keeps `protocol.OpDetach` in its own arm for
+     * the reason this object's own comment gives: the detach notice rides the take_control's
+     * operation id, so an ordinary lease that ended leaves a `detach` here -- and reporting it as
+     * a refusal would accuse the machine of declining a lease it had granted.
+     */
+    fun verdictOf(outcome: OperationOutcome, operationId: String): CommandVerdict =
+        CommandVerdict.of(outcome, operationId, accepted = GRANTED)
 }

@@ -17,6 +17,7 @@ import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
 import dev.swarm.phone.ui.CapabilityNotice
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
@@ -302,7 +303,16 @@ class PhoneSurface(
         ask = { detailDrawn?.killConfirmation.orEmpty() },
     ) {
         val target = session
-        Press(SendPlane.COMMAND, verb = { app -> app.kill(target) })
+        Press(
+            SendPlane.COMMAND,
+            verb = { app -> app.kill(target) },
+            // AND IT REMEMBERS THE OPERATION (agents-tracker-qlf9). Without this the press took
+            // the default settle, which discards the `Op`, so the id the machine keys its answer
+            // by was gone before the answer existed -- and the answer to a kill is the one this
+            // screen cannot infer from anything else it draws: a refused session and a killed one
+            // both sit in the roster until the next event arrives.
+            settle = { answer -> rememberKill(answer) },
+        )
     }
 
     /**
@@ -518,7 +528,10 @@ class PhoneSurface(
      * event, and rebuilding this screen re-parents the pairing flow -- which on the step that
      * matters is a live camera preview.
      */
-    private var pairOnlyDrawn: Boolean? = null
+    // THE NOTICE IS PART OF THE KEY (agents-tracker-qlf9). A revoke lands the phone on this screen
+    // and the sentence explaining what it left behind arrives with it; keyed on `pairingStarted`
+    // alone, the early return would keep drawing the screen the phone had before the revoke.
+    private var pairOnlyDrawn: Pair<Boolean, String>? = null
 
     /**
      * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
@@ -565,6 +578,35 @@ class PhoneSurface(
     private var leaseOp: String = ""
 
     private var leaseSession: String = ""
+
+    /**
+     * The kill this surface issued, so its answer can be claimed by operation id
+     * (agents-tracker-qlf9).
+     *
+     * IT HAD NO SETTLE AT ALL. The press took [Press]'s default, which drops what the verb
+     * returned, so the operation id the machine keys the outcome by was thrown away at the one
+     * control whose refusal is hardest to see: the session stays in the inbox either way, and the
+     * outcome line is cleared at press time, so a refused kill and a kill still crossing and a
+     * kill that worked all draw the same screen.
+     *
+     * NO SESSION IS REMEMBERED BESIDE IT, which is the difference from [leaseSession]. A lease is
+     * a standing fact about a session the surface re-derives every draw, so attributing one by
+     * proximity would open the keyboard over the wrong terminal; a kill's answer is a one-shot
+     * report about the operation, said once and not carried.
+     */
+    private var killOp: String = ""
+
+    /**
+     * The operations whose verdict has already been put on screen, so it is said ONCE.
+     *
+     * [render] runs on every journal event and the outcome stays in the core's durable map, so a
+     * verdict claimed per draw would re-fire its toast at whatever rate the user's agents produce
+     * events. Two fields rather than one, because a kill answered after a refused take_control
+     * must not un-say the take_control.
+     */
+    private var killSaid: String = ""
+
+    private var leaseSaid: String = ""
 
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
@@ -1008,6 +1050,10 @@ class PhoneSurface(
 
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
+        // BEFORE ANYTHING IS DRAWN, because the session detail composes whatever is on the outcome
+        // line and a verdict claimed after it would reach the screen one journal event late
+        // (agents-tracker-qlf9).
+        renderVerdicts(bridge)
         // PB-APP-11 rides the same line as the connection banner, and it has to: the banner is
         // the TRANSPORT's opinion, and a relay that answers every poll with an empty page while
         // withholding the machine's frames leaves it reading "Connected to your machine." with
@@ -1077,8 +1123,12 @@ class PhoneSurface(
         // PB-INPUT-2: the lease is what the MACHINE answered this screen's own take_control with,
         // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
         // every user they held nothing while Send stayed live from a different fact entirely.
-        val view = bridge.terminalPeek(session, leaseHeld = leaseConfirmedFor(session, bridge))
-        drawPeek(PeekPanelScreen.of(view))
+        val lease = leaseVerdictFor(session, bridge)
+        val view = bridge.terminalPeek(session, leaseHeld = lease.accepted)
+        // AND THE REST OF THE MACHINE'S ANSWER GOES WITH IT (agents-tracker-qlf9). The peek used to
+        // be handed a boolean, so a refused take_control drew the sentence written for one nobody
+        // had asked for.
+        drawPeek(PeekPanelScreen.of(view, lease))
         setActionsEnabled(true)
         // EVERY ONE OF THE THREE PROPERTIES IS THE MODEL'S, which is what [PeekPanel] carries:
         // `keyboardEnabled` is `leaseHeld && online`, and the second half is a separate clause --
@@ -1128,8 +1178,14 @@ class PhoneSurface(
      * sentence is load-bearing rather than aspirational.
      */
     private fun drawPairOnly() {
-        if (pairOnlyDrawn == pairingStarted && host.childCount > 0) return
-        pairOnlyDrawn = pairingStarted
+        // WHAT THE REVOKE LEFT BEHIND, READ FROM THE PANEL THAT ISSUED IT (agents-tracker-qlf9).
+        // The settings panel is gone by the time this draws -- a revoked phone is an unpaired one
+        // and this screen replaces the whole scaffold -- so the one sentence explaining why the
+        // pairing about to be attempted may be refused has nowhere else to land.
+        val revoked = settings.unpairNotice
+        val next = pairingStarted to revoked
+        if (pairOnlyDrawn == next && host.childCount > 0) return
+        pairOnlyDrawn = next
         // THE SCAFFOLD IS COMING DOWN, SO WHAT IT LAST DREW SAYS NOTHING ABOUT WHAT IS ON SCREEN.
         // Both are cleared rather than left, because both guard early returns: a phone whose device
         // was revoked lands here with a bar and a destination already recorded, and would then be
@@ -1146,6 +1202,7 @@ class PhoneSurface(
                     pairingStarted = true
                     render()
                 },
+                notice = revoked,
             ),
         )
     }
@@ -1164,6 +1221,10 @@ class PhoneSurface(
         // back to the sentence explaining why its app is empty, not to a camera it did not ask for.
         pairOnlyDrawn = null
         pairingStarted = false
+        // AND THE REVOKE'S DIVERGENCE IS SPENT (agents-tracker-qlf9). The app being on screen means
+        // this handset is usably paired again, so a warning that its machine may still hold a
+        // registration it no longer has is a warning about a state that has ended.
+        settings.unpairNotice = ""
         val next = tabs to destination
         if (next == barDrawn && host.childCount > 0) return
         barDrawn = next
@@ -1281,7 +1342,7 @@ class PhoneSurface(
     private fun detailPanel(bridge: FacadeBridge?): SessionDetailPanel? {
         val open = detail ?: return null
         if (bridge == null) return null
-        val lease = leaseConfirmedFor(open, bridge)
+        val lease = leaseVerdictFor(open, bridge).accepted
         val grid = bridge.terminalPeek(open, leaseHeld = lease)
         val log = bridge.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
         return SessionDetailScreen.of(
@@ -1635,6 +1696,12 @@ class PhoneSurface(
         leaseSession = target
     }
 
+    /** Latch the kill this surface issued, so [renderKillVerdict] can claim its answer. */
+    private fun rememberKill(answer: Any?) {
+        val issued = answer as? Op ?: return
+        killOp = issued.operationID
+    }
+
     /** Hand [LaunchScreen] the operation id the MACHINE keyed this launch by. See [rememberLease]. */
     private fun submitLaunch(draft: LaunchDraft, answer: Any?) {
         val issued = answer as? Op ?: return
@@ -1654,22 +1721,76 @@ class PhoneSurface(
         .orEmpty()
 
     /**
-     * Whether the MACHINE has confirmed a control lease for [session].
+     * What the MACHINE said about the control lease for [session].
      *
      * IT ASKS ABOUT ONE OPERATION -- the take_control this surface issued -- and refuses to
      * answer about any other session, because an outcome attributed by proximity is the error
      * PB-SYNC-2's operation ids exist to prevent. A phone that has taken control of nothing, or
      * whose target moved to a different first row, holds no lease and says so.
+     *
+     * IT RETURNS THE VERDICT AND NOT A BOOLEAN (agents-tracker-qlf9). `ControlLease.confirmedBy`
+     * answered the keyboard's question correctly and threw away the rest of the reply, so every
+     * refusal reached the screen as "your machine has not confirmed control ... Take control
+     * first" -- which reads as "you have not pressed the button yet" and offers as the remedy the
+     * step that was just declined. [PeekPanelScreen.leaseNoticeFor] is what needs the rest.
      */
-    private fun leaseConfirmedFor(session: String, bridge: FacadeBridge): Boolean {
-        if (leaseOp.isEmpty() || session != leaseSession) return false
+    private fun leaseVerdictFor(session: String, bridge: FacadeBridge): CommandVerdict {
+        if (leaseOp.isEmpty() || session != leaseSession) return CommandVerdict.UNANSWERED
         return try {
-            ControlLease.confirmedBy(bridge.launchOutcome(leaseOp))
+            ControlLease.verdictOf(bridge.launchOutcome(leaseOp), leaseOp)
         } catch (unreadable: Exception) {
             // A facade that cannot answer has not confirmed anything, and fail-closed here is a
             // shut keyboard rather than a keystroke sent against a lease nobody vouched for.
-            false
+            CommandVerdict.UNANSWERED
         }
+    }
+
+    /**
+     * PB-APP-9 for the two session controls that used to answer with nothing: the machine's
+     * verdict on the kill and on the take_control this surface issued (agents-tracker-qlf9).
+     *
+     * IT IS `renderLaunch`'S PROGRAM ON THE OTHER TWO VERBS. The launch form polls its outcome per
+     * draw and resolves it by operation id; kill and take_control reached the same facade method
+     * and read none of it. This runs BEFORE [drawContent] because the session detail draws
+     * whatever is on the outcome line, and a verdict written after it lands on screen a whole
+     * event later.
+     *
+     * SAID ONCE PER OPERATION. The outcome stays in the core's durable map, so an unlatched claim
+     * would re-toast on every journal record for as long as the app is open.
+     */
+    private fun renderVerdicts(bridge: FacadeBridge) {
+        renderKillVerdict(bridge)
+        renderLeaseVerdict(bridge)
+    }
+
+    private fun renderKillVerdict(bridge: FacadeBridge) {
+        if (killOp.isEmpty() || killOp == killSaid) return
+        val verdict = try {
+            CommandVerdict.of(bridge.launchOutcome(killOp), killOp, CommandVerdict.ACCEPTED_OK)
+        } catch (unreadable: Exception) {
+            // Unresolved is the honest state, and the next draw asks again.
+            return
+        }
+        if (!verdict.answered) return
+        killSaid = killOp
+        // A KILL THE MACHINE CARRIED OUT SAYS NOTHING. The session leaving the roster is the
+        // confirmation, and [SessionDetailScreen] is where that silence is decided rather than
+        // here -- `remote-control-mock.html` wrote no toast for a kill.
+        val notice = SessionDetailScreen.killNoticeFor(verdict)
+        if (notice.isNotEmpty()) say(PressFeedback.ofRefusal(notice))
+    }
+
+    private fun renderLeaseVerdict(bridge: FacadeBridge) {
+        if (leaseOp.isEmpty() || leaseOp == leaseSaid) return
+        val verdict = leaseVerdictFor(leaseSession, bridge)
+        if (!verdict.answered) return
+        leaseSaid = leaseOp
+        if (verdict.accepted) return
+        // THE PEEK SHOWS THIS SENTENCE TOO, and that is [PressFeedback]'s rule rather than a
+        // duplication: the line and the peek keep the message where it can be re-read, and the
+        // toast puts it in front of the eye that was on the control -- which on this surface may
+        // be the session detail's Stop, on a screen the peek is not composed into at all.
+        say(PressFeedback.ofRefusal(PeekPanelScreen.leaseNoticeFor(confirmed = false, verdict)))
     }
 
     /**

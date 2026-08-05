@@ -8,6 +8,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
@@ -53,6 +54,16 @@ object PairOnlyTag {
 
     /** Where the pairing flow is hosted once the offer has been taken up. */
     const val PAIRING = "pairOnly.pairing"
+
+    /**
+     * What a revoke left behind, when it left anything (agents-tracker-qlf9).
+     *
+     * IT IS ABOVE EVERYTHING ELSE ON THE SCREEN, which is the rule `sessionDetailView` already
+     * follows: a notice goes above what it qualifies, and what this one qualifies is the pairing
+     * the user is about to attempt -- one that the machine may refuse for a reason no other screen
+     * in this product can state.
+     */
+    const val NOTICE = "pairOnly.notice"
 }
 
 /**
@@ -64,16 +75,34 @@ object PairOnlyTag {
  * @param started whether the offer has been taken up. The two states are exclusive on purpose;
  *  see the class comment.
  * @param onStartPairing what the one control does.
+ * @param notice what a revoke left this phone unable to confirm, or empty where there is nothing
+ *  to say. It is drawn in BOTH states and above both, because the state it warns about is the one
+ *  the pairing flow is walking into -- see [PairOnlyTag.NOTICE]. It is LAST and defaulted so the
+ *  existing call sites are unaffected, which is the shape `phoneScaffoldView`'s banner took.
  */
 fun pairOnlyView(
     context: Context,
     pairing: View,
     started: Boolean,
     onStartPairing: () -> Unit,
+    notice: String = "",
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
+
+    // DRAWN ONLY WHEN IT HAS SOMETHING TO SAY, which is `sessionDetailView`'s rule for its own
+    // three notices: a blank warning line over a phone that has revoked nothing is a warning
+    // nobody wrote.
+    if (notice.isNotEmpty()) {
+        column.addView(
+            TextView(context).apply {
+                tag = PairOnlyTag.NOTICE
+                text = notice
+                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            },
+        )
     }
 
     if (started) {

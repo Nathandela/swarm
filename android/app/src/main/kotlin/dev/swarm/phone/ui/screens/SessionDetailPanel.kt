@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.JournalRow
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.StopAction
@@ -138,6 +139,23 @@ object SessionDetailScreen {
         "End this session? The agent stops and the session is gone; this cannot be undone."
 
     /**
+     * What the screen says when the machine REFUSED the kill (agents-tracker-qlf9).
+     *
+     * WHY THIS ONE MATTERS MOST OF THE THREE. The control is behind [KILL_CONFIRMATION], which
+     * states the consequence, so a user who answers it has decided something irreversible is about
+     * to happen. What a refusal showed them was a cleared outcome line and the session still in
+     * the inbox -- indistinguishable from a kill that succeeded one redraw before the roster
+     * caught up. The next thing that user does is press it again, or walk away believing the agent
+     * is dead.
+     *
+     * IT SAYS WHAT IS TRUE OF THE SESSION rather than naming the verb. "Kill failed" is a report
+     * about a button; "your machine did not end this session" is the fact the user acted on, and
+     * the machine's own reason follows it because a kill switch, a revoked device and a policy
+     * refusal end in three different places.
+     */
+    private const val KILL_REFUSED = "Your machine did not end this session"
+
+    /**
      * PB-APP-8's sentence for one session's chronology, in the register the other screens set.
      *
      * A transcript reads as complete unless it says otherwise, and for a chronology the honest
@@ -149,6 +167,20 @@ object SessionDetailScreen {
 
     /** §4's back control, by where it goes rather than by a glyph a screen reader cannot read. */
     private const val BACK = "Back to inbox"
+
+    /**
+     * The machine's answer to the kill this screen issued, or NOTHING where it has none to give.
+     *
+     * SILENCE ON SUCCESS IS DELIBERATE and is [PressFeedback]'s rule: the session leaving the
+     * roster IS the confirmation, and `remote-control-mock.html` wrote no toast for a kill. A
+     * "done" nobody specified is a sentence invented to fill a gap, at the one seam PB-DS-9 keeps
+     * copy out of.
+     *
+     * SILENCE WHILE PENDING IS THE SAME RULE ONE STEP EARLIER. An unresolved operation is neither
+     * a success nor a failure, and saying either is worse than saying nothing.
+     */
+    fun killNoticeFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.sentence(KILL_REFUSED) else ""
 
     /** The separator between a record's type and its group. `PeekPanelScreen` set the idiom. */
     private const val FIELD_SEPARATOR = " · "

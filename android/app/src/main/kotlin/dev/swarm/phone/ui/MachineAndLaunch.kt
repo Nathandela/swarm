@@ -164,41 +164,44 @@ class LaunchScreen {
         return op
     }
 
+    /**
+     * THE CODE TABLE IS [CommandVerdict]'S NOW AND IS NOT COPIED HERE (agents-tracker-qlf9). It
+     * was this function's, and it was right -- a policy rejection apart from every other refusal
+     * because retrying changes nothing, a rate limit apart from both because waiting is what
+     * helps, and the machine's own words carried through all of them. Kill, take_control and
+     * revoke needed the same reading and had none; a second table beside this one is two readings
+     * of a taxonomy that belongs to the machine, and the failure would be silent on whichever of
+     * them nobody revisited.
+     *
+     * A success carries the reply op rather than an error code (`mobile/app.go`'s `outcomeOf`
+     * falls back to `Control.Op` when `ErrorCode` is empty), and the reply op for an accepted
+     * command is `protocol.OpOK`.
+     */
     fun resolve(outcome: OperationOutcome): LaunchRendering {
-        if (outcome.operationId != inFlight?.operationId || outcome.code.isBlank()) {
-            return LaunchRendering(LaunchResult.PENDING, reason = "", retryable = false)
-        }
-        return when (outcome.code) {
-            CODE_POLICY -> LaunchRendering(
-                LaunchResult.REJECTED_BY_POLICY, outcome.message, retryable = false,
-            )
-
-            CODE_RATE_LIMIT -> LaunchRendering(
-                LaunchResult.REFUSED_TRANSIENTLY, outcome.message, retryable = true,
-            )
-
-            // A success carries the reply op rather than an error code (mobile/app.go
-            // outcomeOf falls back to Control.Op when ErrorCode is empty), and the reply op
-            // for an accepted command is protocol.OpOK.
-            CODE_OK -> LaunchRendering(
-                LaunchResult.LAUNCHED, outcome.message, retryable = false,
-            )
-
-            // Every other refusal the machine can seal -- kill_switch, not_authorized,
-            // stale_approval, invalid_field. NOT folded into REJECTED_BY_POLICY: a kill-switch
-            // refusal ends when the owner flips a switch, and telling that user their launch
-            // was against policy sends them to change a spec that was fine.
-            else -> LaunchRendering(LaunchResult.REFUSED, outcome.message, retryable = false)
-        }
+        val verdict = CommandVerdict.of(
+            outcome,
+            operationId = inFlight?.operationId.orEmpty(),
+            accepted = CommandVerdict.ACCEPTED_OK,
+        )
+        return LaunchRendering(
+            result = when (verdict.result) {
+                CommandResult.PENDING -> LaunchResult.PENDING
+                CommandResult.ACCEPTED -> LaunchResult.LAUNCHED
+                CommandResult.REJECTED_BY_POLICY -> LaunchResult.REJECTED_BY_POLICY
+                CommandResult.REFUSED_TRANSIENTLY -> LaunchResult.REFUSED_TRANSIENTLY
+                // A LAUNCH HAS NO GRANT TO LOSE, so `protocol.OpDetach` cannot land on one: the
+                // severance notice is sealed under a take_control's operation id and nothing else
+                // issues one. It is folded here rather than given a launch state that no reply can
+                // produce, because a dead branch's wording is trusted by the next reader.
+                CommandResult.ENDED, CommandResult.REFUSED -> LaunchResult.REFUSED
+            },
+            reason = verdict.reason,
+            retryable = verdict.retryable,
+        )
     }
 
     private companion object {
         /** schema.ActionLaunch. */
         const val ACTION_LAUNCH = "launch"
-
-        /** protocol.OpOK, schema.CodePolicy, schema.CodeRateLimit. */
-        const val CODE_OK = "ok"
-        const val CODE_POLICY = "policy"
-        const val CODE_RATE_LIMIT = "rate_limit"
     }
 }

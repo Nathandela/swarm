@@ -1,5 +1,7 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.CommandResult
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.TerminalPeek
 
 /**
@@ -77,10 +79,45 @@ object PeekPanelScreen {
         "Your machine has not confirmed control of this session, so the keyboard stays shut " +
             "-- anything typed would be dropped without a word. Take control first."
 
-    fun leaseNoticeFor(confirmed: Boolean): String =
-        if (confirmed) LEASE_CONFIRMED else LEASE_NOT_CONFIRMED
+    /**
+     * The two sentences a REFUSAL and a SEVERANCE get instead (agents-tracker-qlf9).
+     *
+     * [LEASE_NOT_CONFIRMED] was shown for both, and it is wrong for both in the same way: it reads
+     * as "you have not pressed the button yet", and the step it offers is the one that was just
+     * declined. The machine's own words follow, because a kill switch, a revoked device and a
+     * policy refusal have three different remedies and only the reply says which one this is.
+     *
+     * THEY ARE TWO SENTENCES AND NOT ONE. A lease the machine GRANTED and later ended is not a
+     * lease it refused; `internal/remotegw/lease_sever.go` seals the detach under the
+     * take_control's own operation id, so the difference arrives on this very outcome and a single
+     * wording would accuse the machine of declining a lease it had given.
+     */
+    private const val LEASE_REFUSED = "Your machine refused this phone control of the session"
 
-    fun of(peek: TerminalPeek): PeekPanel = PeekPanel(
+    private const val LEASE_ENDED = "Your machine ended this phone's control of the session"
+
+    /** What every not-granted state shares, said once rather than in each sentence. */
+    private const val KEYBOARD_SHUT = " The keyboard stays shut."
+
+    /**
+     * @param verdict the machine's answer to the take_control THIS screen issued. It is defaulted
+     *  to [CommandVerdict.UNANSWERED] rather than required, because a phone that has asked for no
+     *  lease has not been refused one -- and the two must not read the same.
+     */
+    fun leaseNoticeFor(
+        confirmed: Boolean,
+        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+    ): String = when {
+        // THE PEEK IS THE AUTHORITY ON WHETHER A LEASE IS HELD and this clause is first for that
+        // reason: `leaseHeld` is what shuts the keyboard, and a notice announcing control over a
+        // shut keyboard is the contradiction PB-INPUT-2's "visibly" exists to prevent.
+        confirmed -> LEASE_CONFIRMED
+        verdict.result == CommandResult.ENDED -> verdict.sentence(LEASE_ENDED) + KEYBOARD_SHUT
+        verdict.refused -> verdict.sentence(LEASE_REFUSED) + KEYBOARD_SHUT
+        else -> LEASE_NOT_CONFIRMED
+    }
+
+    fun of(peek: TerminalPeek, lease: CommandVerdict = CommandVerdict.UNANSWERED): PeekPanel = PeekPanel(
         back = BACK,
         title = "${peek.sessionId} · ${peek.cols}x${peek.rows}",
         snapshot = listOf(peek.staleNotice, peek.rendered)
@@ -88,8 +125,9 @@ object PeekPanelScreen {
             .joinToString("\n"),
         note = NOTE,
         // THE VERDICT IS THE MODEL'S, not the press's. `showsRelease` is `leaseHeld`, which is
-        // what the MACHINE answered this screen's own take_control with, claimed by operation id.
-        leaseNotice = leaseNoticeFor(peek.showsRelease),
+        // what the MACHINE answered this screen's own take_control with, claimed by operation id
+        // -- and [lease] is the rest of that same answer, which used to be discarded on the way in.
+        leaseNotice = leaseNoticeFor(peek.showsRelease, lease),
         offersTakeControl = peek.showsTakeControl,
         // BOTH CLAUSES, and they are the model's. `keyboardEnabled` is `leaseHeld && online`; a
         // screen that enabled the keyboard from its own lease flag would satisfy the requirement's
