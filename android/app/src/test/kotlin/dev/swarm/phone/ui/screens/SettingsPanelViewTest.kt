@@ -260,6 +260,67 @@ class SettingsPanelViewTest {
         }
     }
 
+    // ---- agents-tracker-2yfn: the way out of a blocked channel --------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). It is a SECOND control beside the permission redirect and not
+    // the same one wearing different words: the two Intents go to different system screens, and the
+    // Intent is fixed inside a listener installed at construction, so one view cannot be both.
+
+    private fun channelBlocked(): SettingsPanel = SettingsPanelScreen.of(
+        SettingsScreen(alerts = true, mentions = true)
+            .withNotificationPermission(PermissionState.GRANTED)
+            .withNotificationDelivery(dev.swarm.phone.runtime.NotificationDelivery.CHANNEL_BLOCKED),
+    )
+
+    @Test
+    fun `the channel redirect is the caller's control, placed under the notice that names it`() {
+        val supplied = View(context)
+        val root = settingsPanelView(
+            context = context,
+            panel = channelBlocked(),
+            rowFor = { stubControl(context) },
+            deliveryRedirectFor = { supplied },
+        )
+
+        val placed = root.allTagged(SettingsTag.DELIVERY_REDIRECT)
+        assertEquals(
+            "agents-tracker-2yfn: the panel named a channel redirect and drew none, or drew more " +
+                "than one -- so the one state the permission check cannot see has no way out of it",
+            1,
+            placed.size,
+        )
+        assertSame(
+            "the redirect on screen is not the control the surface supplied, so the touch filter " +
+                "and the Intent behind it belong to a view nobody wired",
+            supplied,
+            placed.single(),
+        )
+
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let {
+                if (it == SettingsTag.NOTICE || it == SettingsTag.DELIVERY_REDIRECT) order += it
+            }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        assertEquals(
+            "the control comes before the sentence that explains why it is there",
+            listOf(SettingsTag.NOTICE, SettingsTag.DELIVERY_REDIRECT),
+            order,
+        )
+    }
+
+    @Test
+    fun `a panel with no channel to un-block draws no channel redirect`() {
+        assertEquals(
+            "a channel redirect was drawn over a phone whose channel delivers, sending its owner " +
+                "to a system page to fix nothing",
+            0,
+            view(panel()).allTagged(SettingsTag.DELIVERY_REDIRECT).size,
+        )
+    }
+
     @Test
     fun `what this slice has not recomposed is hosted under the panel, not instead of it`() {
         val trailing = View(context)

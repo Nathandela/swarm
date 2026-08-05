@@ -251,4 +251,56 @@ class SettingsPanelScreenTest {
         assertEquals(emptyList<String>(), panel.notices)
         assertEquals(listOf(true, true), rows(panel).map { it.enabled })
     }
+
+    // ---- agents-tracker-2yfn: the blocked channel reaches the panel ---------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). The model can decide a channel is blocked and be entirely
+    // right about it while nothing on screen says so -- which is this screen's own recorded defect
+    // class ("the model is beautiful and nothing renders it"). What this suite owes is that the
+    // panel carries the model's sentence and the model's label, and re-words neither.
+
+    private fun blockedChannel() = screen()
+        .withNotificationDelivery(dev.swarm.phone.runtime.NotificationDelivery.CHANNEL_BLOCKED)
+
+    @Test
+    fun `a blocked channel is carried to the panel in the model's own words`() {
+        val settings = blockedChannel()
+
+        assertEquals(
+            "agents-tracker-2yfn: the panel drops the delivery notice, so a phone whose channel " +
+                "is blocked shows two live switches and no explanation -- the permission is " +
+                "GRANTED in this state, so no other notice can appear either",
+            listOf(settings.deliveryBlockedNotice),
+            SettingsPanelScreen.of(settings).notices,
+        )
+        assertEquals(
+            "the panel names no channel redirect, so the sentence describes a control that is " +
+                "not on screen",
+            settings.deliveryRedirectLabel,
+            SettingsPanelScreen.of(settings).deliveryRedirectLabel,
+        )
+    }
+
+    @Test
+    fun `a blocked channel and a pending change are both said, blocked first`() {
+        // The same order and the same reason as the permission case above: the block is why nothing
+        // will happen, and the pending notice is about a change that cannot take effect until it is
+        // fixed. Read the other way round the user is told what has been saved before being told it
+        // is inert.
+        val settings = blockedChannel().setAlerts(false)
+
+        assertEquals(
+            listOf(settings.deliveryBlockedNotice, settings.pendingNotice),
+            SettingsPanelScreen.of(settings).notices,
+        )
+    }
+
+    @Test
+    fun `a channel nobody has resolved yet offers no redirect`() {
+        assertNull(
+            "a channel redirect was offered over a phone whose channel nothing has inspected, so " +
+                "its owner is sent to a system page about a fault nobody found",
+            SettingsPanelScreen.of(screen()).deliveryRedirectLabel,
+        )
+    }
 }

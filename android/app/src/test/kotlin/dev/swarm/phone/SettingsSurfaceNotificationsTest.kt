@@ -3,6 +3,7 @@ package dev.swarm.phone
 import android.app.Activity
 import android.provider.Settings
 import androidx.test.core.app.ActivityScenario
+import dev.swarm.phone.push.WakeNotifications
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -121,6 +122,70 @@ class SettingsSurfaceNotificationsTest {
                 "reasoning there rather than deleting it",
             "onRequestPermissionsResult" !in declared,
         )
+    }
+
+    // ---- agents-tracker-2yfn: the way out of a blocked channel --------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). The channel block is the state POST_NOTIFICATIONS cannot see:
+    // the user long-presses a wake, blocks `Agent updates`, and the permission stays GRANTED while
+    // the framework drops every wake. The press is assertable here for the same reason the
+    // permission redirect's is -- it leaves the app through `Activity.startActivity`, which
+    // Robolectric records, and it reaches no phone core on the way.
+
+    /**
+     * The control offered over a blocked channel goes to THAT CHANNEL's page.
+     *
+     * `ACTION_APP_NOTIFICATION_SETTINGS` -- where the permission redirect goes -- is the app's
+     * notification list, on which `Agent updates` is one row among however many an app has. The
+     * platform ships a screen for one channel and it needs two extras: `EXTRA_APP_PACKAGE` to name
+     * the app, and `EXTRA_CHANNEL_ID` to name the channel. Without the second the intent resolves to
+     * nothing at all.
+     */
+    @Test
+    fun `the channel redirect opens the wake channel's own settings`() {
+        withSettingsSurface { activity, surface ->
+            surface.openChannelSettings.performClick()
+
+            val started = shadowOf(activity).nextStartedActivity
+            assertNotNull(
+                "agents-tracker-2yfn: pressing the channel redirect started nothing, so a user " +
+                    "who has blocked the wake channel has no way back -- and nothing else in the " +
+                    "app can tell, because the permission stays GRANTED",
+                started,
+            )
+            assertEquals(
+                "the channel redirect does not open the channel settings screen",
+                Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS,
+                started.action,
+            )
+            assertEquals(
+                "the intent names no package, so it opens whichever app the system feels like",
+                activity.packageName,
+                started.getStringExtra(Settings.EXTRA_APP_PACKAGE),
+            )
+            assertEquals(
+                "the intent names no channel, so `ACTION_CHANNEL_NOTIFICATION_SETTINGS` has " +
+                    "nothing to show and resolves to nothing",
+                WakeNotifications.CHANNEL_ID,
+                started.getStringExtra(Settings.EXTRA_CHANNEL_ID),
+            )
+        }
+    }
+
+    /** It is one of the surface's declared controls and it carries the filter, like the other one. */
+    @Test
+    fun `the channel redirect is a control the surface declares and filters`() {
+        withSettingsSurface { _, surface ->
+            assertTrue(
+                "agents-tracker-2yfn: the channel redirect is not among the surface's declared " +
+                    "action views, so no fence in this module has ever looked at it",
+                surface.touchFilteredActions.contains(surface.openChannelSettings),
+            )
+            assertTrue(
+                "PB-SEC-12 clause 1: the channel redirect does not filter obscured touches",
+                surface.openChannelSettings.filterTouchesWhenObscured,
+            )
+        }
     }
 
     /**

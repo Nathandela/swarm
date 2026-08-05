@@ -401,4 +401,131 @@ class SettingsScreenTest {
         )
         assertTrue(SettingsScreen.SYNC_REFUSED.isNotBlank())
     }
+
+    // ---- agents-tracker-2yfn: the block the permission cannot see -----------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). A user who long-presses a wake and blocks `Agent updates`
+    // leaves POST_NOTIFICATIONS GRANTED -- blocking a channel does not revoke a permission -- so
+    // every check this screen made answered "fine" while the framework dropped every wake. Push is
+    // the sole path to a backgrounded phone (ADR-007 B16), so the product stopped working with two
+    // live switches on screen and no sentence anywhere about why.
+    //
+    // IT IS A DISTINCT NOTICE BECAUSE THE REMEDY IS DISTINCT, which is the same argument
+    // agents-tracker-0dij makes for splitting ASK from SYSTEM_SETTINGS: a channel block is undone
+    // on the CHANNEL's own page, an app-level disable on the APP's, and a withheld permission by a
+    // prompt. Copy that named the wrong one would read as a step the user has failed to find.
+
+    private fun deliveryOf(
+        state: dev.swarm.phone.runtime.NotificationDelivery?,
+        permission: dev.swarm.phone.runtime.PermissionState =
+            dev.swarm.phone.runtime.PermissionState.GRANTED,
+    ): SettingsScreen = SettingsScreen(alerts = true, mentions = true)
+        .withNotificationPermission(permission)
+        .let { if (state == null) it else it.withNotificationDelivery(state) }
+
+    /** The defect's own state: permission intact, channel blocked, nothing on screen said so. */
+    @Test
+    fun `a blocked channel is said, and the sentence names the control that fixes it`() {
+        val blocked = deliveryOf(dev.swarm.phone.runtime.NotificationDelivery.CHANNEL_BLOCKED)
+
+        assertTrue(
+            "agents-tracker-2yfn: a channel the user set to None produces no notice. The " +
+                "permission is GRANTED and stays GRANTED in this state, so this sentence is the " +
+                "only thing in the product that can tell the owner why nothing arrives",
+            blocked.deliveryBlockedNotice.isNotEmpty(),
+        )
+        assertEquals(
+            "the way out of a blocked channel is not offered",
+            SettingsScreen.OPEN_CHANNEL_SETTINGS,
+            blocked.deliveryRedirectLabel,
+        )
+        assertTrue(
+            "the notice does not name the control beside it, so the two can drift into a " +
+                "sentence describing an action the screen does not offer",
+            SettingsScreen.OPEN_CHANNEL_SETTINGS in blocked.deliveryBlockedNotice,
+        )
+    }
+
+    /**
+     * The channel's page and the app's page are two different destinations, so they are two
+     * different labels: a single one would put the same words on controls that go elsewhere.
+     */
+    @Test
+    fun `an app-level block is sent to the app's own notification screen, not the channel's`() {
+        val blocked = deliveryOf(dev.swarm.phone.runtime.NotificationDelivery.APP_BLOCKED)
+
+        assertTrue(
+            "agents-tracker-2yfn: areNotificationsEnabled() is false and the screen says nothing",
+            blocked.deliveryBlockedNotice.isNotEmpty(),
+        )
+        assertNull(
+            "an app-level disable offers the CHANNEL's page, whose one switch cannot undo it",
+            blocked.deliveryRedirectLabel,
+        )
+        assertEquals(
+            "an app-level disable offers no way out at all",
+            SettingsScreen.OPEN_NOTIFICATION_SETTINGS,
+            blocked.notificationRedirectLabel,
+        )
+        assertNotEquals(
+            "the two blocks share one sentence, so a user reads about a category page that is " +
+                "not where their problem is",
+            blocked.deliveryBlockedNotice,
+            deliveryOf(dev.swarm.phone.runtime.NotificationDelivery.CHANNEL_BLOCKED)
+                .deliveryBlockedNotice,
+        )
+    }
+
+    /**
+     * A CHANNEL NOBODY HAS INSPECTED IS NOT A BLOCKED ONE, and neither is one that delivers.
+     *
+     * Null is the state before anything has looked -- the same convention `notificationPermission`
+     * already uses, and for the reason its own KDoc gives: claiming a state nobody checked is how a
+     * screen ends up reporting a fault on a phone where nothing is wrong.
+     */
+    @Test
+    fun `a channel that delivers, or that nobody has resolved, says nothing`() {
+        for (state in listOf(null, dev.swarm.phone.runtime.NotificationDelivery.DELIVERABLE)) {
+            val quiet = deliveryOf(state)
+            assertEquals(
+                "a delivery notice was drawn over the state `$state`, which reports no fault",
+                "",
+                quiet.deliveryBlockedNotice,
+            )
+            assertNull(quiet.deliveryRedirectLabel)
+        }
+    }
+
+    /**
+     * WHILE THE PERMISSION IS THE REASON, THE PERMISSION IS THE NOTICE -- one sentence, not two.
+     *
+     * On API 33+ the app-level notification toggle IS POST_NOTIFICATIONS, so a global disable makes
+     * both facts true at once and both notices would appear together, saying the same thing twice
+     * over two switches. The permission notice is the one that survives because it is the one whose
+     * remedy the screen can still offer: on DENIED the platform will still prompt, and a redirect
+     * shown there walks the user past the prompt that would have fixed it.
+     */
+    @Test
+    fun `a withheld permission is reported once, not twice`() {
+        for (permission in listOf(
+            dev.swarm.phone.runtime.PermissionState.DENIED,
+            dev.swarm.phone.runtime.PermissionState.PERMANENTLY_DENIED,
+        )) {
+            val screen = deliveryOf(
+                dev.swarm.phone.runtime.NotificationDelivery.APP_BLOCKED,
+                permission = permission,
+            )
+            assertTrue(
+                "the permission notice went missing under $permission",
+                screen.notificationsBlockedNotice.isNotEmpty(),
+            )
+            assertEquals(
+                "agents-tracker-2yfn: under $permission the screen says the same thing twice -- " +
+                    "the app-level disable and the withheld permission are one fact on API 33+, " +
+                    "and two notices about it is two paragraphs over two switches",
+                "",
+                screen.deliveryBlockedNotice,
+            )
+        }
+    }
 }
