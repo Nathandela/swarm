@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchResult
 
@@ -85,7 +86,16 @@ object LaunchPanelScreen {
 
     private const val ACCEPTED = "Your machine started the session."
 
-    private const val RETRYABLE = " This one is worth trying again shortly."
+    /**
+     * What a refusal waiting would fix says about itself.
+     *
+     * IT IS READ FROM [CommandVerdict] RATHER THAN SPELLED AGAIN (agents-tracker-qlf9). This
+     * screen wrote the sentence first and it is not this screen's: kill, take_control and revoke
+     * append the same words to their own refusals, and it is a property of the ANSWER rather than
+     * of any one panel. Two copies of one piece of copy is the drift PB-DS-9 assigns copy to a
+     * single place to prevent; the value is unchanged to the character.
+     */
+    private const val RETRYABLE = CommandVerdict.RETRY_HINT
 
     fun hintFor(field: LaunchFieldId): String = checkNotNull(HINTS[field]) {
         "PB-DS-9: no hint for $field. The hint is this surface's only label, so a field without " +
