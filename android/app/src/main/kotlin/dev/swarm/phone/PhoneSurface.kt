@@ -1047,6 +1047,13 @@ class PhoneSurface(
             drawPairOnly()
             return
         }
+        // AND THE REVOKE'S DIVERGENCE IS SPENT HERE AND NOWHERE ELSE (agents-tracker-qlf9). The
+        // gate has just said this handset is usably paired, which is the one fact that ends the
+        // warning -- a machine that may still hold a registration this phone no longer has is a
+        // state a completed pairing resolves. It is NOT cleared beside the scaffold, because
+        // [renderUnavailable] draws that too: a phone core that failed to build says nothing about
+        // whether the revoke landed, and clearing there would drop the sentence on the way past.
+        settings.unpairNotice = ""
 
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
@@ -1221,10 +1228,6 @@ class PhoneSurface(
         // back to the sentence explaining why its app is empty, not to a camera it did not ask for.
         pairOnlyDrawn = null
         pairingStarted = false
-        // AND THE REVOKE'S DIVERGENCE IS SPENT (agents-tracker-qlf9). The app being on screen means
-        // this handset is usably paired again, so a warning that its machine may still hold a
-        // registration it no longer has is a warning about a state that has ended.
-        settings.unpairNotice = ""
         val next = tabs to destination
         if (next == barDrawn && host.childCount > 0) return
         barDrawn = next
