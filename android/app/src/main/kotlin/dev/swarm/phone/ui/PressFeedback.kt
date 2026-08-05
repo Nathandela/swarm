@@ -55,5 +55,23 @@ data class PressFeedback(
 
         /** @param routed the message [ErrorRouter] produced. It is what BOTH places show. */
         fun ofRefusal(routed: String): PressFeedback = PressFeedback(line = routed, toast = routed)
+
+        /**
+         * A press that never reached the wire, and whose screen already carries the sentence
+         * (agents-tracker-4lta).
+         *
+         * IT IS NOT A REFUSAL. Nothing refused an offline Stop -- the link is down, input is
+         * live-only (ADR-007 D7) and the keystroke is discarded rather than sent, so no machine
+         * ever saw it. The outcome line is what the MACHINE answered the last command, and putting
+         * these words there would report a refusal nobody made.
+         *
+         * THE TOAST IS WHY IT EXISTS AT ALL. PB-INPUT-1's not-sent notice is drawn ABOVE the
+         * transcript and Stop is drawn below it, so a user pressing the button at the bottom of a
+         * long session log would see the screen change somewhere they are not looking. Derivation
+         * row 1's toast is what puts the answer in front of the eye that was on the control.
+         *
+         * @param notice the screen model's own sentence for the state -- [dev.swarm.phone.ui.SessionDetail.NOT_SENT_NOTICE].
+         */
+        fun ofUnsent(notice: String): PressFeedback = PressFeedback(line = "", toast = notice)
     }
 }

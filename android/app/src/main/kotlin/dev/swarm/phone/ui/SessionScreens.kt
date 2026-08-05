@@ -97,6 +97,21 @@ data class SessionDetail(
     val leaseHeld: Boolean,
     val online: Boolean,
     val journalStale: Boolean,
+    /**
+     * Whether a Stop press on THIS session has already resolved to [StopAction.NOT_SENT]
+     * (agents-tracker-4lta).
+     *
+     * IT IS A PRESS AND NOT A LINK STATE, which is the whole of the fix. [notSentNotice] used to be
+     * a function of `online`, so a phone that merely lost its connection put "Stop did not reach
+     * your machine and was not held for later" on screen -- a sentence in the PAST TENSE about a
+     * Stop nobody had pressed. PB-INPUT-1's subject is what did not reach the machine, and a phone
+     * that sent nothing has lost nothing.
+     *
+     * IT IS THE SURFACE'S TO SET, because a press is not a fact about the session: `PhoneSurface`
+     * latches it when its Stop plan takes the NOT_SENT arm, per session, and drops it when a later
+     * press resolves to anything else or the drill-down closes.
+     */
+    val stopNotSent: Boolean = false,
 ) {
     val hasSnapshotCard: Boolean get() = snapshotText.isNotEmpty()
 
@@ -112,17 +127,35 @@ data class SessionDetail(
     /** Kill ends the session outright; it is never one tap away. */
     val killRequiresConfirmation: Boolean = true
 
-    /** PB-INPUT-1: the user must be TOLD what did not reach the machine. */
-    val notSentNotice: String
-        get() = if (online) {
-            ""
-        } else {
-            "Stop did not reach your machine and was not held for later. Try again once the " +
-                "connection is back."
-        }
+    /**
+     * PB-INPUT-1: the user must be TOLD what did not reach the machine.
+     *
+     * AND ONLY ONCE SOMETHING DID NOT (agents-tracker-4lta). This was `if (online) "" else ...`,
+     * which put a report of a failed Stop on screen the moment the link dropped -- before any
+     * press, in the past tense, about a keystroke the user had not sent. The requirement is
+     * unchanged; what changed is that it now answers a press rather than a connection.
+     */
+    val notSentNotice: String get() = if (stopNotSent) NOT_SENT_NOTICE else ""
 
-    fun stop(): StopAction =
-        if (leaseHeld) StopAction.CONFIRM else StopAction.ACQUIRE_LEASE_FIRST
+    /**
+     * What pressing Stop does NOW.
+     *
+     * THE LINK IS ASKED HERE AND NOT ONLY IN [confirmStop] (agents-tracker-4lta). This read the
+     * lease alone, so an offline press was answered with CONFIRM: the screen asked "Interrupt what
+     * this session is doing?" over a link that could not carry the interrupt, the user answered it,
+     * and [confirmStop] then resolved NOT_SENT -- a question whose answer did nothing. A
+     * confirmation is a promise that answering it acts; this one was answered by a no-op.
+     *
+     * THE LEASE IS STILL THE FIRST CLAUSE. PB-INPUT-2 refuses every keystroke until the machine
+     * confirms a lease, so an observer is shown the step that would make Stop work whatever the
+     * link is doing -- offering take-control's remedy after a link check would hide the one that is
+     * actually theirs.
+     */
+    fun stop(): StopAction = when {
+        !leaseHeld -> StopAction.ACQUIRE_LEASE_FIRST
+        !online -> StopAction.NOT_SENT
+        else -> StopAction.CONFIRM
+    }
 
     fun confirmStop(): StopAction = when {
         !leaseHeld -> StopAction.ACQUIRE_LEASE_FIRST
@@ -135,6 +168,23 @@ data class SessionDetail(
 
     companion object {
         const val INTERRUPT_BYTE: Byte = 0x03
+
+        /**
+         * What the screen says once a Stop press has resolved to [StopAction.NOT_SENT].
+         *
+         * IT IS A CONSTANT AS WELL AS A PROPERTY because the two readers reach it at different
+         * moments. The screen reads [notSentNotice], which is empty until the press is recorded;
+         * `PhoneSurface` needs the same words AT the press, before the panel carrying the record
+         * has been built, and a string typed there would be a second copy of this sentence with
+         * nothing joining them (PB-DS-9 assigns copy to the screen).
+         *
+         * IT PROMISES NO RETRY. ADR-007 D7 has no queue for input: an interrupt held for a
+         * reconnection would arrive after the user gave up and did something else, and would stop
+         * whatever is running then.
+         */
+        const val NOT_SENT_NOTICE =
+            "Stop did not reach your machine and was not held for later. Try again once the " +
+                "connection is back."
 
         /**
          * What a toast says once the interrupt is away.

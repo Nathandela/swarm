@@ -272,7 +272,8 @@ class PhoneSurface(
         when (detailDrawn?.confirmedStopAction) {
             // The one control on this surface whose two arms are on two different PLANES, which
             // is why the plane is chosen per press rather than per control.
-            StopAction.SEND_INTERRUPT ->
+            StopAction.SEND_INTERRUPT -> {
+                stopNotSentFor = ""
                 Press(
                     SendPlane.LIVE,
                     verb = { app -> app.interrupt(target) },
@@ -282,10 +283,25 @@ class PhoneSurface(
                     // back enabled either way.
                     confirmation = SessionDetail.INTERRUPT_SENT,
                 )
-            StopAction.ACQUIRE_LEASE_FIRST -> takeControlOf(target)
+            }
+            StopAction.ACQUIRE_LEASE_FIRST -> {
+                stopNotSentFor = ""
+                takeControlOf(target)
+            }
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
-            // D7). Nothing is sent and nothing is said HERE, because the screen already says it --
-            // `SessionDetail.notSentNotice` is on it for exactly this state.
+            // D7). IT USED TO BE `else -> null` (agents-tracker-4lta), deferring to a notice that
+            // was already on screen before the press -- so the press wrote nothing, sent nothing
+            // and left the screen identical, which is a dead control on a confirmed press. The
+            // press is now recorded, so PB-INPUT-1's notice becomes a report of something that
+            // happened, and it is said out loud where the finger was: Stop sits below the
+            // transcript and the notice above it.
+            StopAction.NOT_SENT -> {
+                stopNotSentFor = target
+                say(PressFeedback.ofUnsent(SessionDetail.NOT_SENT_NOTICE))
+                null
+            }
+            // CONFIRM never reaches here -- it is what `stop()` answers, and this reads the answer
+            // to the question it produced -- and KILL belongs to the other control entirely.
             else -> null
         }
     }
@@ -602,6 +618,21 @@ class PhoneSurface(
      * report about the operation, said once and not carried.
      */
     private var killOp: String = ""
+
+    /**
+     * The session whose Stop press resolved to NOT_SENT, or empty (agents-tracker-4lta).
+     *
+     * IT IS A PRESS AND NOT THE LINK. `SessionDetail.notSentNotice` was a function of `online`, so
+     * a dropped connection alone put "Stop did not reach your machine and was not held for later"
+     * on screen -- a report of a failure the user had not caused. This is the fact that makes it a
+     * report: it is written by the Stop plan's NOT_SENT arm and read by [detailPanel].
+     *
+     * THE SESSION IS REMEMBERED BESIDE IT, for [leaseSession]'s reason exactly: the target is
+     * re-derived every draw, and a press against one session must not put a notice on another.
+     * It is cleared by a later Stop press that resolves to anything else and by leaving the
+     * drill-down, so the sentence never outlives the press it reports.
+     */
+    private var stopNotSentFor: String = ""
 
     /**
      * The operations whose verdict has already been put on screen, so it is said ONCE.
@@ -1386,6 +1417,10 @@ class PhoneSurface(
                 // whether a confirmed Stop is sent or discarded.
                 online = grid.online,
                 journalStale = log.stale,
+                // PB-INPUT-1's notice answers a PRESS (agents-tracker-4lta), and this is where the
+                // press is read back: the Stop plan latched the session it could not send for, and
+                // a notice about another session's press would be the proximity error again.
+                stopNotSent = stopNotSentFor == open,
             ),
         )
     }
@@ -1579,6 +1614,10 @@ class PhoneSurface(
      */
     internal fun closeSessionDetail() {
         detail = null
+        // AND THE UNSENT PRESS IS FORGOTTEN WITH THE SCREEN THAT REPORTED IT. It is the answer to
+        // one press on one screen; carried across a departure it would greet the user on their
+        // return with a failure from before they left.
+        stopNotSentFor = ""
         render()
     }
 
