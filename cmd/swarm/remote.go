@@ -894,7 +894,24 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if sess.ExpiresAt != nil {
 		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
 	}
-	printPairingQR(stdout, sess.ShortCode, sess.QR)
+
+	// The PNG spelling of the same symbol (F3, ADR-007 B141). BEST-EFFORT: a failure to
+	// write an auxiliary artifact must not cost the pairing -- the terminal symbol and the
+	// codes still print. The remove runs on EVERY exit of this verb: the file carries the
+	// pairing secret and must not outlive the ceremony on disk.
+	pngPath := ""
+	if stateDir := resolveStateDir(); stateDir != "" {
+		remoteDir := filepath.Join(stateDir, "remote")
+		if err := os.MkdirAll(remoteDir, 0o700); err == nil {
+			if p, err := writePairingPNG(sess.QR, remoteDir, sess.RendezvousID); err == nil {
+				pngPath = p
+				defer os.Remove(p)
+			} else {
+				fmt.Fprintf(stderr, "remote pair: QR image not written (%v); the terminal symbol and codes still work\n", err)
+			}
+		}
+	}
+	printPairingQR(stdout, sess.ShortCode, pngPath, sess.QR)
 
 	// Block until the phone reaches the SAS gate. A terminal result arriving FIRST (a
 	// rendezvous/TTL failure or a dropped session, before any gate) unblocks here fail
@@ -1153,7 +1170,21 @@ const (
 // The last symbol row is left UNTERMINATED for the same reason: the newline that would
 // end it scrolls the terminal one row and costs the drawing its top. runRemotePair opens
 // the post-scan block with that newline instead.
-func printPairingQR(stdout io.Writer, shortCode, payload string) {
+// resolveStateDir mirrors every other remote verb's resolution: the env override, then the
+// platform default. Empty means no writable home; the caller treats that as "skip the
+// artifact", never as a failed pairing.
+func resolveStateDir() string {
+	if dir := os.Getenv(daemon.EnvStateDir); dir != "" {
+		return dir
+	}
+	dir, err := persist.DefaultDir()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+func printPairingQR(stdout io.Writer, shortCode, pngPath, payload string) {
 	cols, rows := terminalBox()
 	// The short code leads on BOTH paths (ADR-007 B140): it is the one spelling a human can
 	// carry to the phone by reading it, which is what the owner asked for after the
@@ -1162,6 +1193,12 @@ func printPairingQR(stdout io.Writer, shortCode, payload string) {
 	// nothing to type is worse than the old output.
 	if shortCode != "" {
 		fmt.Fprintf(stdout, "Type this code on your phone to pair: %s\n", shortCode)
+	}
+	// The image is the PROMISED scan target (F3): the terminal symbol depends on font
+	// metrics this product does not control. ABOVE the symbol, like everything else -- a
+	// row printed after it scrolls its finder patterns off a 24-row screen.
+	if pngPath != "" {
+		fmt.Fprintf(stdout, "Or scan the QR image at: %s\n", pngPath)
 	}
 	if r, err := renderPairingQR(payload, cols, rows); err == nil {
 		// The payload stays available for manual entry (PB-PAIR-2), WRAPPED to the terminal

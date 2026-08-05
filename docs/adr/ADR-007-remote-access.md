@@ -8468,3 +8468,58 @@ The exact screen copy and the first-run relay prompt's shape are the guided-pair
 to design under its existing fences (guidedpairing_test.go). Whether the terminal QR display
 survives at all is agents-tracker-av7k's question, not this one's; the code is correct beside
 a working scanner and beside a dead one.
+
+## B141. The PNG is the promised scan target; the terminal symbol is best effort (2026-08-05)
+
+Ruled by a three-member committee (codex gpt-5.6, Opus, Fable) over a real evidence base:
+the owner's handset never decodes the terminal symbol while the handset's stock scanner
+reads it instantly; a JVM bench (FrameDecoderCapabilityBenchTest, c21bdad) proving any
+>=1px periodic light seam defeats ZXing at EVERY scale while seamless symbols decode even
+at 2 px/module; and an emulator end-to-end run (docs/verification/av7k-emulator-e2e/)
+proving the installed pipeline decodes a clean 16px/module, 4-module-quiet-zone image and
+is granted exactly the 1280x720 it requests.
+
+### The position, stated rather than implied
+
+A terminal raster is built from font metrics this product does not control: cell aspect,
+block-glyph ink coverage, line leading. qrterm's symbol therefore CANNOT be promised
+scannable -- on the default 80x24 it also bargains the quiet zone down to three modules
+against the spec's four. `swarm remote pair` now writes the same symbol as a PNG (16
+px/module, four-module quiet zone, pure black on white -- the geometry the emulator run
+decoded) and prints its path above the symbol. The image is the promised path; the terminal
+drawing stays as the zero-friction best effort. The committee unanimously kept zxing-cpp
+off the table: no evidence justifies a native decoder dependency while the product can emit
+a clean symbol.
+
+### The artifact's lifecycle IS the security review
+
+The PNG carries the 32-byte pairing secret -- the first time D3's "never touches the relay"
+secret is ever PERSISTED anywhere. Conditions, all load-bearing: written under
+<stateDir>/remote (never a shared /tmp), 0600, O_EXCL (an existing file or planted symlink
+is a refusal, not a target), and removed on every exit of the pair verb -- the secret must
+not outlive the 60-second ceremony on disk. Best-effort: a write failure costs the artifact,
+never the pairing.
+
+Related note, recorded while the file is in view: the ten-character short code (B140) is
+easier to shoulder-surf or leak through screen-sharing than 133 base64url characters ever
+were. The defence is unchanged and stated: the desktop confirm and the SAS gate stand
+between a leaked code and an enrolment, and the code dies with its ceremony.
+
+### What was deferred, and what evidence un-defers it
+
+The decoder attempt ladder (morphological close retries inside FrameDecoder) is DEFERRED,
+two votes to one. The bench measured VERTICAL-only closing against screen-horizontal seams
+-- but the analyzer receives the sensor-native landscape buffer with no rotation handling,
+so a portrait-held phone presents those seams on the OTHER axis. The mitigation as benched
+is aimed at one hold orientation, and nobody has yet measured a single real frame from the
+owner's handset. The un-deferring evidence is named: a captured analysis frame (the scanner
+now dumps one on demand) or the owner's terminal screenshot/photo fed through FrameDecoder
+as fixtures. If those show seams, the ladder ships with per-polarity close and both seam
+phases (production quiet zone THREE shifts the phase the bench assumed); if they show
+exposure bloom, the fix is metering, not morphology, and the ladder dies.
+
+RendezvousTTL stays 60 seconds, unanimously: B140's guess-budget arithmetic is priced
+against it, ten characters type well inside it, and the first-run relay URL is asked
+OUTSIDE the ceremony clock (B140's ask-once step, now built). The committee noted without
+resolving it that B62(8)/residual 4.10 already questions the 60s derivation for the
+two-human-decision window B52 created; if the TTL is ever revisited it is revisited THERE.
