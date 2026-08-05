@@ -1,9 +1,12 @@
 package dev.swarm.phone
 
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.provider.Settings
 import androidx.test.core.app.ActivityScenario
 import dev.swarm.phone.push.WakeNotifications
+import dev.swarm.phone.runtime.NotificationDelivery
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -168,6 +171,55 @@ class SettingsSurfaceNotificationsTest {
                     "nothing to show and resolves to nothing",
                 WakeNotifications.CHANNEL_ID,
                 started.getStringExtra(Settings.EXTRA_CHANNEL_ID),
+            )
+        }
+    }
+
+    /**
+     * THE TWO FACTS ARE READ OFF THE PLATFORM, and this is the assertion that says so.
+     *
+     * `NotificationDeliveryResolver` is a pure function and its table is a plain JVM test, which
+     * leaves exactly one thing untested and it is the thing that has already gone wrong once in this
+     * very flow: agents-tracker-0dij was a correct resolver handed a LITERAL (`hasAskedBefore =
+     * true`), and every one of its unit tests stayed green while the app resolved every fresh
+     * install to PERMANENTLY_DENIED. A resolver called with a constant is a resolver that decides
+     * nothing.
+     *
+     * THIS SEAM IS REACHABLE WITHOUT A PHONE CORE, unlike `read`. `PhoneRuntime.phone()` answers
+     * Unavailable on every JVM run, so `read` is never entered here -- but the gather itself touches
+     * only NotificationManager, which Robolectric models, so it is split out and asserted directly.
+     */
+    @Test
+    fun `the surface reads the channel block off the platform, not off a constant`() {
+        withSettingsSurface { activity, surface ->
+            val manager = activity.getSystemService(NotificationManager::class.java)
+
+            WakeNotifications.ensureChannel(activity)
+            assertEquals(
+                "the wake channel is present and HIGH, and the surface calls it blocked",
+                NotificationDelivery.DELIVERABLE,
+                surface.deliveryNow(),
+            )
+
+            // What a user does with a long-press on the wake itself. `createNotificationChannel`
+            // cannot lower an existing channel, so the block is applied the way the platform
+            // applies it: the old channel goes and one at IMPORTANCE_NONE takes its id.
+            manager.deleteNotificationChannel(WakeNotifications.CHANNEL_ID)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    WakeNotifications.CHANNEL_ID,
+                    activity.getString(R.string.wake_channel_name),
+                    NotificationManager.IMPORTANCE_NONE,
+                ),
+            )
+
+            assertEquals(
+                "agents-tracker-2yfn: the wake channel is set to None and the surface still " +
+                    "reports deliverable, so the resolver is being handed something other than " +
+                    "what the platform says -- which is agents-tracker-0dij's defect exactly, " +
+                    "one field over",
+                NotificationDelivery.CHANNEL_BLOCKED,
+                surface.deliveryNow(),
             )
         }
     }
