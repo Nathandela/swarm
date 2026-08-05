@@ -8523,3 +8523,28 @@ against it, ten characters type well inside it, and the first-run relay URL is a
 OUTSIDE the ceremony clock (B140's ask-once step, now built). The committee noted without
 resolving it that B62(8)/residual 4.10 already questions the 60s derivation for the
 two-human-decision window B52 created; if the TTL is ever revisited it is revisited THERE.
+
+## B142. The attempt ladder ships: the field capture named the disease (2026-08-05)
+
+B141 deferred the decoder ladder until a real capture said which axis and which radius. The
+capture arrived the same day: the owner's VS Code terminal screenshot, structurally PERFECT
+by measurement (finders and timing patterns exact, the extracted grid re-renders and decodes
+first-attempt) and yet unreadable by the shipped decoder at any scale -- because VS Code
+leaves a ~3px unpainted strip between LINE BOXES at 28px cadence, which cell background
+cannot cover (B141's repaint reaches the cell, not the gap between lines), and which slices
+every vertical and diagonal finder cross-check. Both binarizers die at detection. The stock
+scanner's ML detector reads through it. Every field observation now has one mechanism.
+
+The mitigation was measured on those bytes BEFORE it was built: morphological close radius 2
+decodes the native capture (a 3px gap needs 2r >= 3), radius 1 decodes the quarter-scale
+capture (where radius 2 over-closes 3.6px modules). Complementary windows, exactly where the
+synthetic bench put them. FrameDecoder now runs plain (both polarities) every frame, then
+escalates by consecutive-plain-failure streak: radius 1 joins from the second, radius 2 from
+the third; the close is isotropic (nothing rotates the sensor-native buffer, so seams arrive
+on either axis), per-polarity (invert-then-close, never close-then-invert), stride-stripped
+before morphology, scratch-buffered. A success resets the streak. Both captures are
+committed as fixtures (android/app/src/test/resources/field-capture-vscode-*), so the field
+failure is now a red test forever.
+
+The PNG remains the promised path; the ladder is what makes the best-effort terminal path
+actually work on the one terminal the owner uses.
