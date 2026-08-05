@@ -726,6 +726,13 @@ class PhoneSurface(
     fun release() {
         pairing.release()
 
+        // THE THIRD THING THAT CAN OUTLIVE THIS SCREEN, and the cheapest to forget: row 1's toast
+        // is a view plus a queued `Handler` callback, and `PairingSurface.release` clears its own
+        // poller for exactly this reason. A message shown as the user leaves is one they did not
+        // read; waiting for them with whatever is left of 3.2 seconds, over whatever the screen
+        // says by then, is worse than not having said it.
+        toasts.dismiss()
+
         // The sink goes FIRST and unconditionally. It is the only thing that can outlive this
         // screen: PhoneRuntime caches the App across Activity instances, so a listener still
         // pointed at these views would redraw a window nobody is holding -- and would keep this
