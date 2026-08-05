@@ -2,8 +2,11 @@ package dev.swarm.phone
 
 import android.view.View
 import android.view.ViewGroup
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
+import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ToastHost
+import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -80,6 +83,35 @@ class PhoneSurfaceToastTest {
                     "the toast overlay is not attached to the window, so nothing it is asked to " +
                         "say can be drawn",
                     toasts.isAttachedToWindow,
+                )
+            }
+        }
+    }
+
+    /**
+     * The handler discipline this codebase already keeps: `PairingSurface.release` clears its
+     * poller, because a callback queued against a screen nobody is holding is the one thing that
+     * outlives it.
+     *
+     * WHAT IT COSTS TO SKIP, which is small and is still wrong in the way that matters: a toast
+     * shown as the user leaves is a message they did not read, and it would be waiting for them
+     * -- with whatever is left of 3.2 seconds -- on a screen they come back to minutes later, over
+     * whatever it says by then.
+     */
+    @Test
+    fun leaving_the_screen_takes_down_a_toast_that_was_up() {
+        ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                requireNotNull(hostIn(activity)).show("Interrupt sent")
+            }
+            scenario.moveToState(Lifecycle.State.CREATED)
+            scenario.onActivity { activity ->
+                val toast = requireNotNull(hostIn(activity)).kitRequire(KitTag.TOAST)
+                assertEquals(
+                    "the surface was released with a toast still up, and its expiry still queued " +
+                        "against the view",
+                    View.GONE,
+                    toast.visibility,
                 )
             }
         }
