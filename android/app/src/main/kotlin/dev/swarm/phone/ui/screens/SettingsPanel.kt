@@ -51,6 +51,18 @@ data class SettingsPanel(
      */
     val notices: List<String>,
     /**
+     * agents-tracker-u7sl: ADR-007 B143's battery-saver/Doze push-delay disclosure.
+     *
+     * A SEPARATE FIELD FROM [notices] AND NOT A THIRD ENTRY IN IT. `notices` is filtered to what
+     * a fault produced -- read [notices]'s own KDoc -- and this is not one: battery saver and
+     * Doze delaying a push is the product working as B16 designed it, not a malfunction, so it
+     * renders every time this section does rather than only when a switch is blocked.
+     *
+     * THE STRING IS [SettingsScreen]'S OWN, for [notices]'s reason: two files deciding what a
+     * user reads about the same fact is how they drift.
+     */
+    val disclosure: String,
+    /**
      * agents-tracker-64rf's pairing entry point, or null on a phone with no machine.
      *
      * IT IS A FIELD OF ITS OWN RATHER THAN A ROW SQUEEZED INTO A [SettingsSection], because that
@@ -208,6 +220,7 @@ object SettingsPanelScreen {
             settings.deliveryBlockedNotice,
             settings.pendingNotice,
         ).filter { it.isNotEmpty() },
+        disclosure = settings.pushDelayDisclosure,
         machineSection = machine?.let {
             MachineSection(heading = PAIRING, row = PairedMachineRowScreen.of(it))
         },

@@ -62,6 +62,13 @@ object SettingsTag {
     const val NOTICE = "settings.notice"
 
     /**
+     * agents-tracker-u7sl: ADR-007 B143's push-delay disclosure. NOT [NOTICE] -- that tag is for
+     * a fault this phone detected, and battery saver/Doze delaying a push is unconditional, so it
+     * is drawn every time the section is rather than only when a switch is blocked.
+     */
+    const val DISCLOSURE = "settings.disclosure"
+
+    /**
      * agents-tracker-64rf's paired-machine row. It is NOT [ROW]: that tag marks the push toggles,
      * and a caller reaching for them must not be handed a row whose control revokes a pairing.
      */
@@ -175,6 +182,16 @@ fun settingsPanelView(
             )
         }
     }
+
+    // UNCONDITIONAL AND SO DRAWN BEFORE THE NOTICES: the disclosure is not the reason a switch is
+    // dead, so it does not belong under the sentence that is.
+    column.addView(
+        TextView(context).apply {
+            tag = SettingsTag.DISCLOSURE
+            text = panel.disclosure
+            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        },
+    )
 
     panel.notices.forEach { notice ->
         column.addView(

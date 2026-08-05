@@ -292,6 +292,20 @@ data class SettingsScreen(
         }
 
     /**
+     * ADR-007 B143: battery saver and Doze delay the wake push, disclosed rather than left to be
+     * discovered. B16 itself: "[nothing observes while the phone is in a pocket] ... should be
+     * stated in the docs rather than discovered: the phone is a remote control, not a monitor."
+     * This is that sentence, moved onto the screen the two switches live on.
+     *
+     * UNLIKE EVERY NOTICE ABOVE, IT DOES NOT DEPEND ON [notificationPermission] OR
+     * [notificationDelivery] -- it is not a fault this phone detected. Battery saver and Doze
+     * delaying a push is the product working as B16 designed it, not a malfunction, so it is
+     * fixed rather than conditional.
+     */
+    val pushDelayDisclosure: String
+        get() = PUSH_DELAY_DISCLOSURE
+
+    /**
      * Whether this tap must ASK for the permission instead of persisting a preference
      * (agents-tracker-0dij).
      *
@@ -354,6 +368,18 @@ data class SettingsScreen(
          * [SettingsSurface]'s controls make about carrying no words at construction.
          */
         const val OPEN_CHANNEL_SETTINGS = "Open the alert category"
+
+        /**
+         * ADR-007 B143's disclosure, once -- [pushDelayDisclosure] interpolates this constant.
+         *
+         * IT NAMES NO REMEDY, unlike [OPEN_NOTIFICATION_SETTINGS] and [OPEN_CHANNEL_SETTINGS]:
+         * there is no system screen that turns Doze or battery saver off for one app, and B16's
+         * decision was to drop the connection rather than fight them, so the sentence states the
+         * behaviour rather than offering a way around it.
+         */
+        const val PUSH_DELAY_DISCLOSURE =
+            "This phone disconnects in the background. Battery saver and Doze can delay the " +
+                "push that would otherwise wake it, so these notifications may arrive late."
 
         /**
          * What a refusal says when the machine sent no words with it (agents-tracker-os37).
