@@ -348,14 +348,20 @@ class SettingsSurface(
     fun render() {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> {
-                // NOTHING, rather than an empty settings screen. `PhoneSurface` renders the routed
-                // startup failure; a panel of switches over a phone that could not start would
-                // offer preferences nothing can carry to a machine.
+                // agents-tracker-j171: THE ROUTED FAILURE, rather than an empty settings screen. A
+                // panel of switches over a phone that could not start would offer preferences
+                // nothing can carry to a machine -- but `PhoneSurface`'s own copy of this sentence
+                // only reaches the Inbox tab (`status` is a child of `unrecomposedControls`, hosted
+                // under the inbox's sections and detached on every other destination), so a phone
+                // whose core refused construction showed this tab completely blank whenever the
+                // user had navigated here.
                 screen = null
                 drawn = null
                 detachControls()
                 host.removeAllViews()
-                outcome.visibility = View.GONE
+                outcome.text = startup.error.message
+                outcome.visibility = View.VISIBLE
+                host.addView(outcome)
             }
 
             is PhoneStartup.Ready -> draw(read(startup.app), machineOf(startup.app))

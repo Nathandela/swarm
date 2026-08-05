@@ -1544,7 +1544,15 @@ class PhoneSurface(
         }
         if (panel == activityDrawn && contentShows == Destination.ACTIVITY) return
         activityDrawn = panel
-        hostContent(panel?.let { activityPanelView(activity, it) })
+        // agents-tracker-j171: SOMETHING RATHER THAN NOTHING on the branch with no panel, for
+        // [drawMachines]' reason exactly -- a blank primary tab reads as a crash. `bridge == null`
+        // is reachable only from [renderUnavailable], which has already written PB-APP-9's routed
+        // failure onto [status]; this is the same sentence the Inbox tab already carries, not a
+        // second one invented here.
+        hostContent(
+            panel?.let { activityPanelView(activity, it) }
+                ?: emptyState(activity, status.text.toString()),
+        )
     }
 
     /**
