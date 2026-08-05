@@ -271,4 +271,134 @@ class SettingsScreenTest {
         assertFalse(screen.checkedFor(PushToggle.FIRST))
         assertTrue(screen.checkedFor(PushToggle.SECOND))
     }
+
+    // ---- agents-tracker-os37: the machine's answer, read rather than counted ------------------
+    //
+    // THE DEFECT. `SettingsSurface.machineAnswered` read `outcome.code.isNotEmpty()` and threw the
+    // code and the message away, so ANY answer cleared `pendingSync` and removed the notice. A
+    // machine that REFUSED the push_prefs command was indistinguishable on screen from one that
+    // accepted it: the switch read as settled while notifications kept arriving -- which is the
+    // exact failure `setAlerts`'s own KDoc says `pendingSync` exists to prevent. The gateway seals a
+    // reply on every exit (`internal/remotegw/command_loop.go`: "an unanswered push_prefs leaves the
+    // phone's settings screen waiting forever"), so the refusal was always there to read.
+
+    /**
+     * The three answers the screen can get, told apart by the CODE.
+     *
+     * `ok` is `protocol.OpOK`, which is what `mobile/app.go`'s `outcomeOf` falls back to when the
+     * reply carries no `ErrorCode`; a refused push_prefs replies `protocol.OpError` and carries the
+     * machine's reason in `Error`. PB-SYNC-2 claims an outcome BY OPERATION ID, never by proximity,
+     * so somebody else's answer leaves this one pending -- which is the honest state, as
+     * `LaunchScreen.resolve` already argues for the same reason.
+     */
+    @Test
+    fun `the machine's answer is read as a code and not as its presence`() {
+        val id = "op-push-prefs-1"
+
+        assertEquals(
+            PushSync.ACCEPTED,
+            SettingsScreen.syncAnswer(OperationOutcome(id, code = "ok", message = "ok"), id),
+        )
+        assertEquals(
+            "agents-tracker-os37: a refusal read as an acceptance. The switch then shows as " +
+                "settled while the machine goes on sending what the user turned off",
+            PushSync.REFUSED,
+            SettingsScreen.syncAnswer(
+                OperationOutcome(id, code = "error", message = "no durable preference custody"),
+                id,
+            ),
+        )
+        assertEquals(
+            "an outcome with no code yet is not an answer",
+            PushSync.PENDING,
+            SettingsScreen.syncAnswer(OperationOutcome(id, code = "", message = ""), id),
+        )
+        assertEquals(
+            "PB-SYNC-2: an outcome for somebody else's operation was claimed by this one",
+            PushSync.PENDING,
+            SettingsScreen.syncAnswer(
+                OperationOutcome("op-launch-9", code = "ok", message = "ok"),
+                id,
+            ),
+        )
+    }
+
+    /**
+     * A refusal puts the switch back where the machine has it.
+     *
+     * Leaving it where the user dragged it is the same lie as clearing the notice: the preference
+     * the machine holds is the one that decides what is delivered (PB-PUSH-8 suppresses at the
+     * sender), so a switch showing the refused position is a screen reporting a setting nobody has.
+     */
+    @Test
+    fun `a refused change puts the switches back where the machine has them`() {
+        val settled = SettingsScreen(alerts = true, mentions = true)
+        val pending = settled.setAlerts(false)
+
+        val refused = pending.refused()
+        assertTrue(
+            "agents-tracker-os37: the switch stayed where the user dragged it after the machine " +
+                "refused the change, so the screen shows a preference the machine does not hold",
+            refused.alerts,
+        )
+        assertTrue(refused.mentions)
+        assertFalse("a refusal is an answer: nothing is still pending", refused.pendingSync)
+        assertTrue(refused.pendingNotice.isBlank())
+    }
+
+    /**
+     * TWO FLIPS BEFORE ONE ANSWER GO BACK TO THE LAST SETTLED VALUES, not to the previous flip. The
+     * surface watches one operation id at a time, so an answer that arrives after a second flip is
+     * about the first: the only position the machine is known to hold is the one before either.
+     */
+    @Test
+    fun `a refusal after several flips reverts to what the machine last confirmed`() {
+        val settled = SettingsScreen(alerts = true, mentions = true)
+
+        val refused = settled.setAlerts(false).setMentions(false).refused()
+
+        assertTrue(refused.alerts)
+        assertTrue(refused.mentions)
+    }
+
+    /** An acknowledgement clears the revert point too: what is on screen IS what the machine has. */
+    @Test
+    fun `an acknowledged change has nothing left to revert to`() {
+        val acknowledged = SettingsScreen(alerts = true, mentions = true)
+            .setAlerts(false)
+            .acknowledged()
+
+        assertFalse(acknowledged.pendingSync)
+        assertFalse("the acknowledged value is the value", acknowledged.alerts)
+        assertFalse(
+            "a later refusal reverted to a snapshot the machine has already superseded",
+            acknowledged.refused().alerts,
+        )
+    }
+
+    /**
+     * The machine's own words are what the user reads, and there is a sentence for the refusal that
+     * carries none.
+     *
+     * `refusePushPrefs` seals its reply with `Error` set and NO error code -- "none of the six in
+     * the taxonomy describes a machine-side custody failure" -- so the message is the only thing
+     * that says what happened. An empty one still has to say something, or the switch snaps back
+     * with no explanation at all, which is the silent failure this issue is about wearing a
+     * different coat.
+     */
+    @Test
+    fun `a refusal says what the machine said, or says that it said nothing`() {
+        assertEquals(
+            "the machine's reason was discarded, so the user is told a change failed and not why",
+            "push_prefs: no durable preference custody configured",
+            SettingsScreen.refusalNotice(
+                OperationOutcome("op-1", code = "error", message = "push_prefs: no durable preference custody configured"),
+            ),
+        )
+        assertEquals(
+            SettingsScreen.SYNC_REFUSED,
+            SettingsScreen.refusalNotice(OperationOutcome("op-1", code = "error", message = "")),
+        )
+        assertTrue(SettingsScreen.SYNC_REFUSED.isNotBlank())
+    }
 }
