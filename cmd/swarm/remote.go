@@ -894,6 +894,14 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if sess.ExpiresAt != nil {
 		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
 	}
+	// The relay address, SPELLED (agents-tracker-3fkm): the phone's first-run prompt asks
+	// for it once, and it otherwise lives only inside the payload and the symbol -- places a
+	// person typing a ten-character code cannot read it from. Skipped when the daemon's QR
+	// is not a decodable payload (an older daemon, a scripted test host): a line this verb
+	// cannot vouch for is worse than no line.
+	if qp, err := pairing.DecodeQR(sess.QR); err == nil {
+		fmt.Fprintf(stdout, "relay: %s\n", qp.RelayURL)
+	}
 
 	// The PNG spelling of the same symbol (F3, ADR-007 B141). BEST-EFFORT: a failure to
 	// write an auxiliary artifact must not cost the pairing -- the terminal symbol and the

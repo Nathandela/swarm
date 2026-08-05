@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/remote/pairing"
 )
 
 func runPairWithView(t *testing.T, qr, shortCode string) string {
@@ -60,5 +62,26 @@ func TestRemotePair_OmitsTheShortCodeLineForADaemonThatPredatesIt(t *testing.T) 
 	if strings.Contains(out, "Type this code on your phone") {
 		t.Fatalf("an empty PairView.ShortCode still printed a code prompt -- a client newer "+
 			"than its daemon invents a line with nothing to type.\nOutput:\n%s", out)
+	}
+}
+
+func TestRemotePair_SpellsTheRelayAddressForTheFirstRunTypist(t *testing.T) {
+	// The phone's first-run prompt asks for the relay address once (agents-tracker-3fkm) --
+	// so the machine that sent the user there must SAY it. It lives inside the payload and
+	// the symbol; a person completing a first pairing by typing has neither.
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("COLUMNS", "80")
+	t.Setenv("LINES", "24")
+
+	payload := realPairingPayload(t)
+	qp, err := pairing.DecodeQR(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runPairWithView(t, payload, "K73-M2QF-9TD")
+	if !strings.Contains(out, "relay: "+qp.RelayURL) {
+		t.Fatalf("`swarm remote pair` never spells the relay address %q, so the phone's "+
+			"first-run prompt asks a question the machine does not answer.\nOutput:\n%s",
+			qp.RelayURL, out)
 	}
 }
