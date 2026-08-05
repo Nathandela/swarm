@@ -51,6 +51,16 @@ data class PairingPanel(
      * the two into one string would silently drop whichever arm lost the `when`.
      */
     val cameraNotice: String,
+    /**
+     * Why this screen is asking for a relay address, and empty everywhere it is not asking.
+     *
+     * A THIRD SENTENCE FIELD RATHER THAN AN ARM OF [notice] OR [cameraNotice], for the reason
+     * recorded on the second one: these are not disjoint. A permanently denied camera on a fresh
+     * install draws both -- the scanner is gone for good AND the phone has no relay yet -- and
+     * folding them together would silently drop whichever arm lost the `when`, on the one screen
+     * where the typed path is the entire product.
+     */
+    val relayNotice: String,
     /** PB-PAIR-6: the destination on screen, and empty until it is the step to show one. */
     val destination: String,
     /** PB-SAS-3's symbols, empty until the handshake has derived them. */
@@ -83,7 +93,7 @@ data class PairingGuidance(
 )
 
 /**
- * The nine controls the pairing screen can offer.
+ * The ten controls the pairing screen can offer.
  *
  * THERE IS NO CONTROL THAT INGESTS A SAS, and the omission is the type's point rather than an
  * oversight: PB-SAS-3 requires the code to be COMPARED by the person who can see both screens and
@@ -122,6 +132,22 @@ enum class PairingControl {
 
     /** PB-PAIR-2's fallback field, offered exactly when the camera is not. */
     TYPED_PAYLOAD,
+
+    /**
+     * Where the relay address goes on the ONE pairing that has to be told it
+     * (agents-tracker-3fkm).
+     *
+     * IT SITS BETWEEN THE CODE AND THE BUTTON because the composition walks this enum in order,
+     * and the order is the form's: the thing you were told to type, the thing it needs, then the
+     * single action that takes both. A field below `Use this code` is a field a person meets
+     * after pressing the button that wanted it.
+     *
+     * IT IS NOT A SECOND PAIRING-FORM FIELD ([PairingFlow.manualEntryAcceptsSeparateFields] is
+     * still false). The typed code IS the QR's payload in another spelling; this is remembered
+     * configuration, asked for when absent and kept afterwards, and the address it collects is
+     * displayed and confirmed through PB-PAIR-6 exactly like a scanned one.
+     */
+    RELAY_URL,
 
     USE_TYPED_PAYLOAD,
 
@@ -227,6 +253,26 @@ object PairingPanelScreen {
         "the camera on in Settings, or paste the code your machine printed."
 
     /**
+     * Why a first pairing asks for a relay address, and why only the first one does.
+     *
+     * IT DOES NOT SAY "the address your machine printed", WHICH WOULD BE THE FRIENDLIER
+     * SENTENCE AND IS NOT TRUE. `swarm remote pair` prints the short code, the QR and the long
+     * payload; the relay URL is inside the payload and the symbol, and no line of that output
+     * spells it on its own (cmd/swarm/remote.go, printPairingQR). Telling a user to copy
+     * something that is not on their screen is the guided screen's original defect
+     * (agents-tracker-qx9m) in a new place, so this asks for what the phone needs and says what
+     * becomes of it. That the desktop should print the address beside the code is filed
+     * separately; the copy will follow the output, never lead it.
+     *
+     * THE SECOND CLAUSE IS THE ONE THAT MATTERS TO A PERSON HOLDING A PHONE. This is a
+     * configuration question in the middle of a ceremony, and the honest reassurance is that it
+     * is asked once: the address is remembered on the confirm step, so a pairing that fails
+     * afterwards costs a re-run of the desktop verb and ten characters, not this field again.
+     */
+    const val RELAY_ASK = "This phone does not know your relay yet. Enter its address once; it " +
+        "is remembered after this pairing."
+
+    /**
      * @param machine the machine this phone is pinned to, for the one heading that names it.
      *  Empty is not a placeholder -- a completed pairing whose machine this screen cannot read
      *  says `Paired` rather than `Paired with `, which is what a naive interpolation renders.
@@ -251,6 +297,16 @@ object PairingPanelScreen {
      *  SURFACE's state and not the attempt's, because it is a fact about what someone has pressed
      *  on this draw of this screen rather than about the pairing -- a resumed attempt has no
      *  business remembering that a field was once open.
+     * @param relayKnown whether this phone already has a relay address to dial
+     *  (`PhoneRuntime.knownRelay`). IT CARRIES NO DEFAULT, deliberately: "false" is the state of
+     *  every fresh install and the state the typed short code cannot pair from without being
+     *  asked, and this screen has now shipped three defects whose common shape is a first-run
+     *  state no test ever constructed (agents-tracker-qx9m, -qun0, -v5qc). A caller that has to
+     *  say which phone it means cannot forget that there are two.
+     * @param typedEntryCarriesItsOwnRelay what `PairingFlow.entryCarriesItsOwnRelay` answers
+     *  about the text in the field right now. The decision is the FLOW's and the fact is the
+     *  SURFACE's; what arrives here is the answer, so no composition has to look at a field to
+     *  know what the screen offers.
      */
     fun of(
         attempt: PairingAttempt,
@@ -259,6 +315,8 @@ object PairingPanelScreen {
         holding: Boolean,
         machine: String = "",
         manualEntryRevealed: Boolean = false,
+        relayKnown: Boolean,
+        typedEntryCarriesItsOwnRelay: Boolean = false,
     ): PairingPanel {
         val step = attempt.step
         // THE THREE MODES ARE COMPUTED ONCE AND SHARED. They were three functions each deriving
@@ -299,6 +357,19 @@ object PairingPanelScreen {
                 } else {
                     controls += PairingControl.REVEAL_TYPED_PAYLOAD
                 }
+                // THE ADDRESS TEN CHARACTERS CANNOT CARRY (agents-tracker-3fkm). Asked only where
+                // there is a code field to type into -- a relay box beside a collapsed fallback
+                // is half a form -- and only where the answer is not already held: the URL is
+                // remembered on the PB-PAIR-6 confirm, so a second ask would be this screen
+                // asking for something it has, whose obvious answer is to retype it differently.
+                // A pasted LONG payload carries its own, and asking beside it would collect a
+                // value the string already holds and then ignore it.
+                if (PairingControl.TYPED_PAYLOAD in controls &&
+                    !relayKnown &&
+                    !typedEntryCarriesItsOwnRelay
+                ) {
+                    controls += PairingControl.RELAY_URL
+                }
             }
             if (PairingFlow.routesToSystemSettings(scanner)) {
                 controls += PairingControl.OPEN_SYSTEM_SETTINGS
@@ -328,6 +399,10 @@ object PairingPanelScreen {
             } else {
                 ""
             },
+            // THE SENTENCE FOLLOWS THE FIELD, so the two cannot disagree: a screen that carried
+            // the explanation without the box, or the box without the explanation, would be one
+            // decision written down twice.
+            relayNotice = if (PairingControl.RELAY_URL in controls) RELAY_ASK else "",
             destination = if (confirming) attempt.originShown else "",
             sas = if (comparing) checkNotNull(sas).symbols else emptyList(),
             sasInstruction = if (comparing) checkNotNull(sas).instruction else "",

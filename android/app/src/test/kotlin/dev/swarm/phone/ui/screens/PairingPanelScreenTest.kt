@@ -43,6 +43,12 @@ class PairingPanelScreenTest {
         explainsInterruptedAttempt = interrupted,
     )
 
+    /**
+     * @param relayKnown defaults to a phone that HAS one. Every assertion in this file predates
+     *  the typed short code (ADR-007 B140), and the relay is learned from a pairing's confirm
+     *  step -- so the handset each of them describes is one that has paired at least once. The
+     *  fresh install with no relay is stated where it is the subject, in `PairingGuidanceTest`.
+     */
     private fun panel(
         step: PairingStep,
         holding: Boolean,
@@ -52,12 +58,14 @@ class PairingPanelScreenTest {
         localNetwork: Boolean = false,
         interrupted: Boolean = false,
         machine: String = "",
+        relayKnown: Boolean = true,
     ) = PairingPanelScreen.of(
         attempt = attempt(step, origin, localNetwork, interrupted),
         scanner = scanner,
         sas = sas,
         holding = holding,
         machine = machine,
+        relayKnown = relayKnown,
     )
 
     // ---- the heading -------------------------------------------------------
@@ -117,7 +125,8 @@ class PairingPanelScreenTest {
 
         assertEquals(
             live.destinationNotice,
-            PairingPanelScreen.of(live, ScannerState.SCANNING, null, holding = true).notice,
+            PairingPanelScreen.of(live, ScannerState.SCANNING, null, holding = true, relayKnown = true)
+                .notice,
         )
     }
 

@@ -147,6 +147,34 @@ class PairingPermissionTest {
             PairingFlow.manualEntryAcceptsSeparateFields,
         )
     }
+
+    /**
+     * WHICH OF THE TWO SPELLINGS THE TYPED ENTRY IS -- the question the screen has to answer
+     * before it knows whether it needs a relay address at all (ADR-007 B140, agents-tracker-3fkm).
+     *
+     * THE PREFIX IS THE WHOLE TEST AND IT IS THE PAYLOAD'S OWN ANNOUNCEMENT. `EncodeQR` writes
+     * it, so a string that begins with it is claiming to be the long form and is handed to
+     * `DecodeQR`, which is the only thing that can judge it. Anything else is read as the
+     * ten-character code, which carries no relay and needs one supplied.
+     *
+     * IT IS ASKED HERE AND NOT IN THE SURFACE because the surface already asks it twice -- once
+     * to choose the facade verb, once to decide whether the relay field is on screen -- and two
+     * spellings of one prefix is the defect this object exists to prevent.
+     */
+    @Test
+    fun `the wire prefix is what tells the long payload from the ten-character code`() {
+        assertTrue(PairingFlow.entryCarriesItsOwnRelay("swarm-pair:v1:example"))
+        assertTrue(
+            "a pasted payload with the whitespace a paste brings is still the long form",
+            PairingFlow.entryCarriesItsOwnRelay("  swarm-pair:v1:example\n"),
+        )
+        assertFalse(
+            "a short code was read as carrying a relay, so the screen would never ask for one " +
+                "and a fresh install could not pair by typing at all",
+            PairingFlow.entryCarriesItsOwnRelay("K73-M2QF-9TD"),
+        )
+        assertFalse("an empty field carries no relay", PairingFlow.entryCarriesItsOwnRelay(""))
+    }
 }
 
 class PairingStepTest {

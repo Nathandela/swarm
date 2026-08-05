@@ -53,6 +53,8 @@ class PairingPanelViewTest {
         origin: String = "",
         interrupted: Boolean = false,
         machine: String = "",
+        // A phone that has paired before; the relay ask is `PairingGuidanceViewTest`'s subject.
+        relayKnown: Boolean = true,
     ) = PairingPanelScreen.of(
         attempt = PairingAttempt(
             step = step,
@@ -64,6 +66,7 @@ class PairingPanelViewTest {
         sas = sas,
         holding = holding,
         machine = machine,
+        relayKnown = relayKnown,
     )
 
     /**

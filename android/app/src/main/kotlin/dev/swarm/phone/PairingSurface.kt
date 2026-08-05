@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -201,6 +203,24 @@ class PairingSurface(
      */
     private val typedPayload = textField(activity, "Paste the pairing code your machine printed")
 
+    /**
+     * The relay address, on the one pairing that has to be told it (agents-tracker-3fkm).
+     *
+     * WHY THERE IS A SECOND FIELD ON A SCREEN WHOSE COMMENT ABOVE SAYS THERE MUST NOT BE. The
+     * rule that stays is [PairingFlow.manualEntryAcceptsSeparateFields]: a pairing MESSAGE is
+     * never split into fields the user asserts. This is not half of a message. The ten-character
+     * code derives the whole ceremony -- the same rendezvous and the same secret the QR carries
+     * -- and what it cannot carry is the address of the relay to meet at, which is configuration
+     * this handset simply does not have yet. It is asked for when absent, remembered on the
+     * PB-PAIR-6 confirm, and never asked again.
+     *
+     * THE DESTINATION IS STILL DISPLAYED AND CONFIRMED. What is typed here reaches the core as
+     * `payload.RelayURL`, comes back out as `Pairing.origin()`, and is rendered into
+     * [destination] for the same confirm step a scanned QR goes through. A typed address gets no
+     * shortcut through the step that exists to make a destination something the user has read.
+     */
+    private val relayUrl = textField(activity, "Relay address, like wss://host:8443")
+
     private val useTypedPayload = touchFilteredButton("Use this code") {
         acceptScannedPayload(typedPayload.text.toString().trim())
     }
@@ -261,6 +281,37 @@ class PairingSurface(
     private var manualEntryRevealed = false
 
     /**
+     * Whether what is in [typedPayload] right now announces itself as the long payload.
+     *
+     * IT IS WATCHED RATHER THAN READ AT THE PRESS, because it decides what is ON SCREEN: the
+     * relay field is for the code spelling and would be noise beside a pasted payload that
+     * carries its own address. Read only when the button is pressed, the screen would be showing
+     * a box for a value it had already decided to ignore.
+     *
+     * THE WATCHER REDRAWS ON THE ANSWER AND NOT ON THE KEYSTROKE. Every draw re-derives the step
+     * from the Go core, so a render per character would be a facade call per character; what
+     * changes the screen is the answer flipping, which happens at most twice in a paste.
+     */
+    private var typedEntryCarriesItsOwnRelay = false
+
+    init {
+        typedPayload.addTextChangedListener(
+            object : TextWatcher {
+                override fun afterTextChanged(entry: Editable?) {
+                    val carries = PairingFlow.entryCarriesItsOwnRelay(entry?.toString().orEmpty())
+                    if (carries == typedEntryCarriesItsOwnRelay) return
+                    typedEntryCarriesItsOwnRelay = carries
+                    render()
+                }
+
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            },
+        )
+    }
+
+    /**
      * Told, once, that this phone is now paired.
      *
      * IT PUSHES AND IS NOT POLLED, which is [PhoneSurface.onDrillDownChanged]'s reason and one this
@@ -304,6 +355,7 @@ class PairingSurface(
             PairingControl.SCAN to startScan,
             PairingControl.REVEAL_TYPED_PAYLOAD to revealTypedPayload,
             PairingControl.TYPED_PAYLOAD to typedPayload,
+            PairingControl.RELAY_URL to relayUrl,
             PairingControl.USE_TYPED_PAYLOAD to useTypedPayload,
             PairingControl.OPEN_SYSTEM_SETTINGS to openSystemSettings,
             PairingControl.CONFIRM_DESTINATION to confirmDestination,
@@ -388,9 +440,12 @@ class PairingSurface(
             // the wire prefix, so anything else is read as the ten-character code, completed
             // by the relay this phone already knows. A code arriving before any relay is
             // known is refused by the facade with a routed message -- words on this screen,
-            // naming the two paths that do work -- rather than a handle with no address.
-            val started = if (payload.startsWith("swarm-pair:")) app.beginPairing(payload)
-            else app.beginPairingWithCode(payload, runtime.knownRelay())
+            // naming the two paths that do work -- rather than a handle with no address. On a
+            // fresh install that address comes from the field beside the code
+            // (agents-tracker-3fkm), so the refusal is now what a person sees only when they
+            // have left it empty.
+            val started = if (PairingFlow.entryCarriesItsOwnRelay(payload)) app.beginPairing(payload)
+            else app.beginPairingWithCode(payload, relayForTypedCode())
             handle = started
             attempt = PairingFlow.begin(payload, started.origin(), started.originIsPrivate())
             outcome.text = ""
@@ -400,6 +455,18 @@ class PairingSurface(
         }
         render()
     }
+
+    /**
+     * The relay a typed code is completed with: the one just entered, else the one this phone
+     * already knows.
+     *
+     * THE TWO ARE NEVER BOTH SET THROUGH THE SCREEN -- the field is offered only while
+     * [PhoneRuntime.knownRelay] is empty -- so the order matters for one case only, and it is the
+     * right way round for it: a person who has just typed an address is told about THAT address,
+     * never about a value they cannot see.
+     */
+    private fun relayForTypedCode(): String =
+        relayUrl.text.toString().trim().ifEmpty { runtime.knownRelay() }
 
     // -----------------------------------------------------------------------
     // The four controls PB-E2E-2 names.
@@ -551,6 +618,11 @@ class PairingSurface(
                 holding = holding,
                 machine = machineOf(startup),
                 manualEntryRevealed = manualEntryRevealed,
+                // ASKED OF THE RUNTIME ON EVERY DRAW, never latched: the URL is written during
+                // this screen's own confirm step, so a value cached at construction would keep
+                // the field on screen for the rest of a session that had already answered it.
+                relayKnown = runtime.knownRelay().isNotEmpty(),
+                typedEntryCarriesItsOwnRelay = typedEntryCarriesItsOwnRelay,
             ),
         )
         show(outcome, outcome.text.isNotEmpty())
@@ -605,9 +677,17 @@ class PairingSurface(
 
         if (panel == drawn && host.childCount > 0) return
         drawn = panel
+        // A REBUILD MUST NOT TAKE THE KEYBOARD AWAY FROM SOMEONE STILL TYPING. Every slot is
+        // detached and re-added below, which drops focus and closes the soft keyboard -- and this
+        // screen now has a draw that happens WHILE a field is being filled: pasting the long
+        // payload withdraws the relay field mid-entry (agents-tracker-3fkm). The view is the same
+        // instance across the rebuild, so asking for focus back is asking for the field the user
+        // was in; a view the new panel dropped is no longer in the tree and quietly refuses.
+        val focused = host.findFocus()
         (outcome.parent as? ViewGroup)?.removeView(outcome)
         host.removeAllViews()
         host.addView(pairingPanelView(activity, panel, slots, outcome))
+        focused?.requestFocus()
     }
 
     // -----------------------------------------------------------------------

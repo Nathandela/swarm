@@ -261,8 +261,36 @@ object PairingFlow {
      * An improvised "type the relay URL and a code" form would be a SECOND WIRE ENCODING, and
      * it would bypass PB-PAIR-6 by arriving as fields the user typed rather than as a
      * destination the phone must show them.
+     *
+     * IT STAYS FALSE WITH THE FIRST-RUN RELAY PROMPT (agents-tracker-3fkm), and the distinction
+     * is the whole of ADR-007 B140's argument. What that prompt asks for is not half of an
+     * encoding: the ten-character code IS the payload, derived into exactly the rendezvous and
+     * secret the QR carries. The relay address is REMEMBERED CONFIGURATION this handset lacks on
+     * its first pairing -- asked for once, kept afterwards, and still displayed and confirmed
+     * through PB-PAIR-6 like every other destination. A form where a URL and a code are two
+     * fields of one pairing message is what this stays false about.
      */
     val manualEntryAcceptsSeparateFields: Boolean = false
+
+    /**
+     * Whether a typed entry is the LONG payload, which carries its own relay URL, or the
+     * ten-character code, which cannot (ADR-007 B140).
+     *
+     * THE PAYLOAD ANNOUNCES ITSELF. `internal/remote/pairing.EncodeQR` writes the prefix, so a
+     * string that begins with it is claiming to be the long form and belongs to `DecodeQR`, which
+     * is the only thing that can judge it. Everything else is read as the code -- including
+     * nonsense, which the shared derivation then refuses with a sentence about a code.
+     *
+     * IT IS ONE SPELLING OF THE PREFIX AND THIS IS WHY IT IS HERE. The screen asks the question
+     * twice -- to pick the facade verb, and to decide whether the relay field is on screen -- and
+     * two literals would be two things to get wrong, in a comparison whose wrong answer sends a
+     * pasted payload down the short-code path.
+     */
+    fun entryCarriesItsOwnRelay(entry: String): Boolean =
+        entry.trim().startsWith(QR_PAYLOAD_PREFIX)
+
+    /** `EncodeQR`'s wire prefix. See [entryCarriesItsOwnRelay]. */
+    private const val QR_PAYLOAD_PREFIX = "swarm-pair:"
 
     /**
      * The first step after a scan is confirming the destination -- never the handshake.

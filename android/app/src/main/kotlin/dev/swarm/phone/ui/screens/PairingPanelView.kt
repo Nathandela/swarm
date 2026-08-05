@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.pairingStep
+import dev.swarm.phone.ui.kit.readOnlyNote
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the pairing screen, composed in inventory C7's order.
@@ -58,6 +59,9 @@ object PairingTag {
 
     /** Why the scanner is not on screen. Only a permanent denial has one; see [PairingPanel]. */
     const val CAMERA_NOTICE = "pairing.camera.notice"
+
+    /** Why a first pairing is being asked for a relay address. */
+    const val RELAY_NOTICE = "pairing.relay.notice"
 
     /** PB-PAIR-6: the destination, in the design's code face. */
     const val DESTINATION = "pairing.destination"
@@ -149,6 +153,23 @@ fun pairingPanelView(
     // implementation happened to insert them -- and "They match" / "They do not match" swapping
     // places between draws is the one pair in this product where a mis-tap is a security event.
     PairingControl.entries.filter { it in panel.controls }.forEach { control ->
+        // THE RELAY SENTENCE IS COMPOSED WITH ITS FIELD AND NOT ABOVE THE STACK. Every other
+        // block on this screen belongs to the STEP; this one belongs to one box, and a sentence
+        // about a relay address drawn above `Scan QR code` is a sentence about nothing the reader
+        // can see yet. So the control loop is where it lands, immediately before the field.
+        //
+        // `readOnlyNote` IS BORROWED FOR ITS FORM AND THE DIFFERENCE IS STATED. Row 22 derives it
+        // as the note under a block a user cannot type into, and this one labels a field they
+        // must; what carries over is the shape the row actually specifies -- a small centred
+        // `Body.Secondary` line bound to the block it is about, with the row's own margins. The
+        // alternative in the kit is `emptyState`, which this file already spends on the camera
+        // notice, and its 48 dp of vertical air is written for a section that holds nothing
+        // rather than for a caption on a text field.
+        if (control == PairingControl.RELAY_URL && panel.relayNotice.isNotEmpty()) {
+            column.addView(
+                readOnlyNote(context, panel.relayNotice).apply { tag = PairingTag.RELAY_NOTICE },
+            )
+        }
         column.addView(
             requireNotNull(slots.controls[control]) {
                 "PB-DS-9: the pairing panel offers $control and the surface supplied no view for " +

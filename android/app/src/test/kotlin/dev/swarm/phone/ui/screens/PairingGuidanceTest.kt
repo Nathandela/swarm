@@ -46,11 +46,22 @@ import org.junit.Test
  */
 class PairingGuidanceTest {
 
+    /**
+     * @param relayKnown defaults to a phone that HAS one, because that is the phone every test
+     *  written before agents-tracker-3fkm was about: the relay is learned from the first
+     *  pairing's confirm step, so every assertion here that predates the typed short code
+     *  describes a handset on its second pairing or later. The fresh install -- the state the
+     *  first-run prompt exists for -- is stated by the tests that are about it, never defaulted
+     *  into, because a default is how the state that shipped broken went unconstructed the last
+     *  three times (agents-tracker-qx9m, -qun0, -v5qc).
+     */
     private fun panel(
         step: PairingStep = PairingStep.SCAN,
         holding: Boolean = false,
         scanner: ScannerState = ScannerState.PERMISSION_DENIED,
         revealed: Boolean = false,
+        relayKnown: Boolean = true,
+        typedEntry: String = "",
     ) = PairingPanelScreen.of(
         attempt = PairingAttempt(
             step = step,
@@ -63,6 +74,11 @@ class PairingGuidanceTest {
         holding = holding,
         machine = "",
         manualEntryRevealed = revealed,
+        relayKnown = relayKnown,
+        // RESOLVED THE WAY THE SURFACE RESOLVES IT, never named by hand: the surface asks
+        // PairingFlow what the field holds, and a test that answered the question itself would
+        // agree with a screen that had stopped asking.
+        typedEntryCarriesItsOwnRelay = PairingFlow.entryCarriesItsOwnRelay(typedEntry),
     )
 
     /** The camera as a REAL PHONE answers it, never a state named by hand. */
@@ -354,6 +370,111 @@ class PairingGuidanceTest {
                 PairingControl.OPEN_SYSTEM_SETTINGS,
             ),
             controls,
+        )
+    }
+
+    // ---- the relay a ten-character code cannot carry -------------------------
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-3fkm.
+     *
+     * WHAT THE CLI PROMISES AND A FRESH INSTALL CANNOT KEEP. `swarm remote pair` prints "Type
+     * this code on your phone to pair: XXX-XXXX-XXX", and the phone routes any entry without the
+     * wire prefix to `BeginPairingWithCode(code, knownRelay())`. On a fresh install that second
+     * argument is empty, and the facade refuses -- correctly, because ten characters name a
+     * rendezvous and no address to reach it at. The screen therefore had one path the desktop
+     * advertises and the handset cannot walk.
+     *
+     * WHY A FIELD AND NOT A SECOND PAIRING FORM. [PairingFlow.manualEntryAcceptsSeparateFields]
+     * stays false and its test stays with it: the typed CODE is one spelling of the QR's payload,
+     * and a form that took a URL and a code as equal fields would be a second wire encoding
+     * arriving as things the user asserted. The relay address is not part of that encoding -- it
+     * is REMEMBERED CONFIGURATION this phone lacks, asked for once, outside the ceremony, and
+     * still displayed and confirmed through PB-PAIR-6 like every other destination.
+     */
+    @Test
+    fun `a fresh install typing a code is asked for the relay address`() {
+        val page = panel(revealed = true, relayKnown = false, typedEntry = "K73-M2QF-9TD")
+
+        assertTrue(
+            "a phone with no relay is offered nowhere to put one, so the ten-character code the " +
+                "desktop just printed cannot be used on the install that most needs it",
+            PairingControl.RELAY_URL in page.controls,
+        )
+        assertTrue(
+            "the field appears with no sentence saying what it wants or that it is asked once",
+            page.relayNotice.isNotEmpty(),
+        )
+        assertEquals(PairingPanelScreen.RELAY_ASK, page.relayNotice)
+    }
+
+    @Test
+    fun `a phone that already knows its relay is never asked for it again`() {
+        // THE ASK IS ONCE. The URL is written on the PB-PAIR-6 confirm and read back at the next
+        // launch, so a second ask would be this screen asking for something it is already holding
+        // -- and the obvious way to answer it is to retype it slightly differently.
+        val page = panel(revealed = true, relayKnown = true, typedEntry = "K73-M2QF-9TD")
+
+        assertTrue(
+            "a phone that knows its relay is asked for it anyway",
+            PairingControl.RELAY_URL !in page.controls,
+        )
+        assertEquals("", page.relayNotice)
+    }
+
+    @Test
+    fun `a pasted long payload carries its own relay, so nothing is asked for`() {
+        // The other spelling. `swarm-pair:` announces the payload that CONTAINS the relay URL, so
+        // asking for one beside it would be asking the user to supply a value the string they
+        // just pasted already holds -- and whichever they typed, the payload's is what gets used.
+        val page = panel(
+            revealed = true,
+            relayKnown = false,
+            typedEntry = "swarm-pair:v1:example",
+        )
+
+        assertTrue(
+            "the long payload was asked for a relay address it already carries",
+            PairingControl.RELAY_URL !in page.controls,
+        )
+        assertEquals("", page.relayNotice)
+    }
+
+    @Test
+    fun `the relay ask never appears without the field it belongs to`() {
+        // A field for the relay beside a screen with nowhere to type the CODE is a form with one
+        // half missing. Collapsed, and mid-attempt, are the two states where that would happen.
+        assertTrue(
+            "the collapsed fallback shows a relay field with no code field under it",
+            PairingControl.RELAY_URL !in panel(revealed = false, relayKnown = false).controls,
+        )
+        PairingStep.entries.forEach { step ->
+            assertTrue(
+                "$step offers the relay ask over a live attempt, whose destination is already " +
+                    "decided and already on screen",
+                PairingControl.RELAY_URL !in
+                    panel(step = step, holding = true, relayKnown = false).controls,
+            )
+        }
+    }
+
+    @Test
+    fun `a permanently denied camera on a fresh install offers the whole typed path`() {
+        // THE TWO FIRST-RUN DEFECTS MEET HERE and this is the screen that has to work: no camera
+        // ever, no relay yet, and a code on the terminal. It is the one state where the typed
+        // path is the entire product, so every part of it has to be on screen at once.
+        assertEquals(
+            setOf(
+                PairingControl.TYPED_PAYLOAD,
+                PairingControl.RELAY_URL,
+                PairingControl.USE_TYPED_PAYLOAD,
+                PairingControl.OPEN_SYSTEM_SETTINGS,
+            ),
+            panel(
+                scanner = ScannerState.PERMISSION_PERMANENTLY_DENIED,
+                relayKnown = false,
+                typedEntry = "K73-M2QF-9TD",
+            ).controls,
         )
     }
 

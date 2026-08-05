@@ -39,6 +39,7 @@ class PairingGuidanceViewTest {
         holding: Boolean = false,
         scanner: ScannerState = ScannerState.PERMISSION_DENIED,
         revealed: Boolean = false,
+        relayKnown: Boolean = true,
     ) = PairingPanelScreen.of(
         attempt = PairingAttempt(
             step = step,
@@ -51,6 +52,7 @@ class PairingGuidanceViewTest {
         holding = holding,
         machine = "",
         manualEntryRevealed = revealed,
+        relayKnown = relayKnown,
     )
 
     /** One view per slot and one per control, all distinct, so an assertion can tell them apart. */
@@ -74,9 +76,10 @@ class PairingGuidanceViewTest {
         holding: Boolean = false,
         scanner: ScannerState = ScannerState.PERMISSION_DENIED,
         revealed: Boolean = false,
+        relayKnown: Boolean = true,
     ): View = pairingPanelView(
         context,
-        panel(step, holding, scanner, revealed),
+        panel(step, holding, scanner, revealed, relayKnown),
         Stubs(context).slots,
     )
 
@@ -213,6 +216,56 @@ class PairingGuidanceViewTest {
             ),
             order,
         )
+    }
+
+    // ---- the relay a fresh install has to be asked for -----------------------
+
+    @Test
+    fun `the relay field is drawn between the code field and the button that sends both`() {
+        // THE ORDER IS THE FORM'S: what you type, then what it needs, then the one action that
+        // takes them. A relay field below "Use this code" is a field a person reaches after
+        // pressing the button that needed it.
+        val order = draw(revealed = true, relayKnown = false)
+            .tags()
+            .filter { it.startsWith("pairing.control.") }
+
+        assertEquals(
+            listOf(
+                PairingTag.control(PairingControl.SCAN),
+                PairingTag.control(PairingControl.TYPED_PAYLOAD),
+                PairingTag.control(PairingControl.RELAY_URL),
+                PairingTag.control(PairingControl.USE_TYPED_PAYLOAD),
+            ),
+            order,
+        )
+    }
+
+    @Test
+    fun `the sentence explaining the relay ask is drawn above the field it is about`() {
+        val root = draw(revealed = true, relayKnown = false)
+        val order = root.tags()
+
+        assertNotNull(
+            "the relay field appeared with nothing on screen saying what it wants",
+            root.kitFind(PairingTag.RELAY_NOTICE),
+        )
+        assertTrue(
+            "the explanation is drawn below the field it explains, where a person meets the " +
+                "question after the box they had to answer it in",
+            order.indexOf(PairingTag.RELAY_NOTICE) <
+                order.indexOf(PairingTag.control(PairingControl.RELAY_URL)),
+        )
+    }
+
+    @Test
+    fun `a phone that knows its relay draws neither the field nor the sentence`() {
+        val root = draw(revealed = true, relayKnown = true)
+
+        assertNull(
+            "the relay field is drawn for a phone that already has one",
+            root.kitFind(PairingTag.control(PairingControl.RELAY_URL)),
+        )
+        assertNull(root.kitFind(PairingTag.RELAY_NOTICE))
     }
 
     // ---- the permanently denied camera --------------------------------------
