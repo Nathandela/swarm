@@ -101,6 +101,16 @@ enum class PairingStep {
     RATE_LIMITED,
 
     /**
+     * The dial died before a single handshake byte: this phone could not REACH the relay.
+     *
+     * Its own value by PB-PAIR-5's rule -- the user's next move differs from every state
+     * here: fix the network, not the code (agents-tracker-n4vs). The field event that minted
+     * it: a relay on the home LAN dialled from cellular, and a FAILED message that sent the
+     * owner to regenerate a code that was never the problem.
+     */
+    RELAY_UNREACHABLE,
+
+    /**
      * The handshake failed for a reason none of the states above name.
      *
      * It is the LAST resort and not a bucket: every condition the core can distinguish has its
@@ -359,6 +369,7 @@ object PairingFlow {
         PairingStep.QR_EXPIRED,
         PairingStep.DIFFERENT_MACHINE,
         PairingStep.RATE_LIMITED,
+        PairingStep.RELAY_UNREACHABLE,
         PairingStep.FAILED,
         -> true
     }
@@ -418,6 +429,13 @@ object PairingFlow {
         PairingStep.RATE_LIMITED ->
             "Too many pairing attempts from here. Wait a minute, then ask your machine for a " +
                 "new code and try again."
+
+        // The one failure where a new code is NOT the remedy, and the message must not offer
+        // it: the field event behind this state was a phone on cellular dialling a home-LAN
+        // relay, told to regenerate a code that failed identically (agents-tracker-n4vs).
+        PairingStep.RELAY_UNREACHABLE ->
+            "This phone could not reach your relay. If the relay runs on your home network, " +
+                "connect this phone to that WiFi, then pair again."
 
         PairingStep.FAILED ->
             "The pairing did not finish and nothing was joined. Ask your machine for a new " +

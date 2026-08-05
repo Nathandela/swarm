@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -74,6 +75,13 @@ const (
 	pairRateLimited = "rate_limited"
 	pairFailed      = "failed"
 
+	// pairRelayUnreachable is the dial dying before a single handshake byte: the phone could
+	// not REACH the relay at all (agents-tracker-n4vs). Its own value by PB-PAIR-5's rule --
+	// the user's next move differs from every state above: fix the network, not the code.
+	// The field event that minted it: a LAN relay dialled from cellular, and a screen that
+	// said "ask your machine for a new code" about a code that was never the problem.
+	pairRelayUnreachable = "relay_unreachable"
+
 	// pairOriginMismatch is what a confirmation naming a DIFFERENT destination from the one
 	// displayed leaves behind. It is terminal and it is not "cancelled": the user said yes to
 	// one URL and something offered another, which is a security event.
@@ -104,6 +112,12 @@ var errLateCancel = classed(ErrClassPairingFailed, errors.New(
 var errDifferentMachine = classed(ErrClassPairingFailed, errors.New(
 	"swarmmobile: this QR belongs to a machine other than the one this phone is paired to; "+
 		"nothing was pinned and the machine was not acknowledged"))
+
+// errRelayUnreachable marks a pairing dial that died before a single handshake byte
+// crossed the wire (agents-tracker-n4vs). Attached at the dial site -- the only place that
+// knows the stage -- and consumed by finish(), which knows the vocabulary.
+var errRelayUnreachable = classed(ErrClassPairingFailed, errors.New(
+	"swarmmobile: this phone could not reach the relay"))
 
 // pairingTTL is how long the phone will wait on a rendezvous before declaring
 // rendezvous_timeout.
@@ -482,6 +496,13 @@ func (p *Pairing) join(base context.Context) {
 	// from the session dial.
 	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, relay.PairingSecurity())
 	if err != nil {
+		// THE STAGE IS THE CLASSIFICATION (agents-tracker-n4vs): nothing has crossed the
+		// wire yet, so whatever the dial's own error says -- refused, no route, a connect
+		// timeout on a black-holed LAN address, a listener that is not TLS -- the fact the
+		// user can act on is that this phone could not reach the relay. The sentinel is
+		// attached HERE because only this site knows no handshake byte was spent; finish()
+		// knows the vocabulary, not the stage.
+		err = classed(ErrClassPairingFailed, fmt.Errorf("%w: %w", errRelayUnreachable, err))
 		p.finish(nil, err, ctx)
 		return
 	}
@@ -631,6 +652,14 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 		next = pairDeclined
 	case errors.Is(err, pairing.ErrRateLimited):
 		next = pairRateLimited
+	case errors.Is(err, errRelayUnreachable):
+		// BEFORE the ctx cases deliberately: the cellular-against-a-LAN-relay failure is a
+		// connect timeout, so the pairing window is often already expired when the dial
+		// returns -- and "your machine did not answer in time" would be a second wrong story
+		// about a machine that was awake all along. No handshake byte was spent; the network
+		// is the story (agents-tracker-n4vs).
+		next = pairRelayUnreachable
+		failErr = err
 	case errors.Is(err, relay.ErrRendezvousExpired), errors.Is(err, relay.ErrRendezvousBurned):
 		// The rendezvous is gone: its TTL elapsed, or the QR was already used. Both look
 		// identical from here and lead to the same place -- ask the machine for a fresh QR --

@@ -835,6 +835,7 @@ class PairingSurface(
         "declined" -> PairingStep.DECLINED
         "sas_mismatch" -> PairingStep.SAS_MISMATCH
         "rendezvous_timeout" -> PairingStep.RENDEZVOUS_TIMEOUT
+        "relay_unreachable" -> PairingStep.RELAY_UNREACHABLE
         "expired" -> PairingStep.QR_EXPIRED
         "cancelled" -> PairingStep.CANCELLED
         "refused_origin_mismatch" -> PairingStep.REFUSED_ORIGIN_MISMATCH

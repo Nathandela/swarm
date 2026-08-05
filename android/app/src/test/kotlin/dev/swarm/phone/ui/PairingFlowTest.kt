@@ -339,3 +339,28 @@ class PairingStepTest {
         assertFalse(fresh.explainsInterruptedAttempt)
     }
 }
+
+/**
+ * agents-tracker-n4vs: the unreachable-relay failure has its own words, and the words must
+ * not offer the wrong remedy. The field event: a phone on cellular dialling a home-LAN relay
+ * was told to "ask your machine for a new code" -- a code that failed identically, because
+ * the network was the story.
+ */
+class PairingRelayUnreachableMessageTest {
+    @org.junit.Test
+    fun `the unreachable message names the network and never offers a new code`() {
+        val msg = PairingFlow.messageFor(PairingStep.RELAY_UNREACHABLE)
+        org.junit.Assert.assertTrue(
+            "the message does not mention the network/WiFi, so the user cannot act on it",
+            msg.contains("WiFi") || msg.contains("network"),
+        )
+        org.junit.Assert.assertTrue(
+            "the message offers a new code, which is the exact wrong remedy this state exists to stop",
+            !msg.contains("new code"),
+        )
+        org.junit.Assert.assertTrue(
+            "an unreachable relay is terminal for this attempt",
+            PairingFlow.isTerminal(PairingStep.RELAY_UNREACHABLE),
+        )
+    }
+}
