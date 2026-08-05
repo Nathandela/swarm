@@ -224,6 +224,39 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
 )
 
 /**
+ * Derivation row 1's toast: the ELEVATED surface, with the card's hairline, radius and key light.
+ *
+ * **IT IS A SEPARATE RECIPE FROM [cardSurface] OVER ONE CELL, AND THAT CELL IS THE COMPONENT.**
+ * Three of the four values are the card's, so the obvious implementation is to call `cardSurface`
+ * and be done -- and the fill is the whole difference between a block sitting IN the page and one
+ * floating over it. Substrate bans drop shadows outright, so "one ladder step lighter" is the only
+ * elevation this skin has; a toast painted `--p-card` is a card that happens to be in the way.
+ *
+ * IT KEEPS THE KEY LIGHT, which row 1 states in as many words ("`--p-card-fx` key-light as on
+ * every card; no drop shadow (banned)"). That is the one place the row asks for the card's
+ * treatment rather than the elevated surface's own, and it is why this is not `wellSurface`'s
+ * shape with a different fill.
+ *
+ * OPAQUE, which is §2's ruling rather than this file's: the mock makes the banner, the toast and
+ * the quick chips 95% translucent over an 18-20 px blur, and over bright content that lets ghosted
+ * text bleed through them. The two bars that carry `--p-tabbg` are the only translucency left.
+ */
+internal fun toastSurface(context: Context): SubstrateSurface = surface(
+    SurfaceSpec(
+        fill = Kit.colour(context, R.color.swarm_surface_elevated),
+        stroke = Kit.colour(context, R.color.swarm_hairline),
+        strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        // The card's own recipe: `--p-card-fx`'s RGB is white and its alpha is the checked
+        // constant, exactly as `cardSurface` spends them.
+        keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
+        rail = null,
+        railPx = 0f,
+    ),
+)
+
+/**
  * `.chip`, and `.chip.on` when it is the selected scope.
  *
  * NO KEY LIGHT: the design gives `box-shadow: var(--p-card-fx)` to `.prow`, `.sheet2` and `.tcard`

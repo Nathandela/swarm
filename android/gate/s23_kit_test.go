@@ -181,6 +181,20 @@ var s23Inbox = []s23Component{
 			"swarmmobile.JournalEntry carries no time at all.",
 	},
 	{
+		Factory: "toast",
+		File:    "Toast.kt",
+		Derived: "#1 Toast",
+		Why: "the one sentence the app says about something that has just happened, and the " +
+			"component whose absence left every press answer in a persistent text line -- two of " +
+			"which are children of PhoneSurface's unrecomposed column, visible only at the " +
+			"bottom of the Inbox tab. Substrate draws no `.toast` rule at all (it is the retired " +
+			"mock's class), so row 1 is the whole specification: `--p-elev` OPAQUE rather than " +
+			"the card fill every other block in this kit takes, because a toast floats over the " +
+			"screen and one ladder step lighter is the only elevation a skin with no drop " +
+			"shadows has. Its mono suffix is a SPAN and not a second view, which is the mock's " +
+			"own template (`msg + \" \" + <span class=\"m\">mono</span>`).",
+	},
+	{
 		Factory: "readOnlyNote",
 		File:    "ReadOnlyNote.kt",
 		Derived: "#22 Read-only note",
@@ -1341,6 +1355,12 @@ var s23DerivedSpacing = []struct {
 	{"MachineRow.kt", "#11 Machine row", "padding-x", "swarm_space_14"},
 	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "padding-y", "swarm_space_12"},
 	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "padding-x", "swarm_space_14"},
+	// Row 1's two steps, which are the widest horizontal padding in this kit -- `space_16` where
+	// every row spends 12 or 14. That is the row's, and it is what makes a floating block read as
+	// one line of speech rather than as a card that has come loose: it has no neighbours to be
+	// consistent with and nothing but its own padding separating it from the screen behind it.
+	{"Toast.kt", "#1 Toast", "padding-y", "swarm_space_10"},
+	{"Toast.kt", "#1 Toast", "padding-x", "swarm_space_16"},
 	// Row 13's padding is the same pair again, and the device row spends it through `settingsRow`
 	// rather than through a component of its own -- so the join that holds it is row 15's, above.
 	// DenyChip.kt is absent from this table for a different reason: row 13 states the chip's

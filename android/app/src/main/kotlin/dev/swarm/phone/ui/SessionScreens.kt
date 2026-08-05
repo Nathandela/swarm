@@ -135,6 +135,22 @@ data class SessionDetail(
 
     companion object {
         const val INTERRUPT_BYTE: Byte = 0x03
+
+        /**
+         * What a toast says once the interrupt is away.
+         *
+         * IT IS THE MOCK'S OWN WORDS, `toast("Interrupt sent")`, and it is here rather than in the
+         * surface because copy belongs to the screen model (PB-DS-9). It is the ONLY press on this
+         * surface the design wrote a confirmation for that is not one of the two
+         * agents-tracker-qlf9 owns; the rest stay silent, because a "done" nobody specified is a
+         * sentence invented to fill a gap.
+         *
+         * IT SAYS "SENT" AND NOT "STOPPED", which is the whole of what this phone knows. The
+         * interrupt is 0x03 on the live plane; whether the agent honoured it is a fact that
+         * arrives later, in the journal, and a confirmation claiming otherwise would be the screen
+         * asserting an outcome it has not been told.
+         */
+        const val INTERRUPT_SENT = "Interrupt sent"
     }
 }
 

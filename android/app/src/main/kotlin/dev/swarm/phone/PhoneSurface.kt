@@ -22,10 +22,12 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
+import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.textField
@@ -188,6 +190,21 @@ class PhoneSurface(
     // earned it rather than the next time they happen to leave and come back.
     private val pairing = PairingSurface(activity, runtime).also { it.onPaired = ::render }
 
+    /**
+     * Derivation row 1, which this app has never had: what a press's answer says WHERE THE PRESS
+     * HAPPENED.
+     *
+     * IT IS NOT A CHILD OF [host], AND THAT IS WHAT MAKES IT SURVIVE. Both draw paths call
+     * `host.removeAllViews()` and both guard on `host.childCount`, so an overlay parented there
+     * would be destroyed by the next journal event to arrive -- which is the clock this surface
+     * redraws on -- and would break the two guards on its way past. It hangs beside the app in
+     * [windowRoot] instead, which nothing rebuilds.
+     *
+     * IT IS DECLARED BEFORE [settings] BECAUSE THAT PANEL IS HANDED IT. Kotlin initialises
+     * properties in declaration order, so a later one would be null in the `also` block below.
+     */
+    private val toasts = ToastHost(activity)
+
     // IT IS HANDED THIS SURFACE'S DISPATCH, which is the half of the lifecycle that panel cannot
     // know: [release] detaches, and only this file is told when the screen goes away. Settings owns
     // the phone's one destructive verb now, and a revoke settling onto a window nobody is holding
@@ -199,7 +216,14 @@ class PhoneSurface(
     // panel can only redraw the panel, inside a window still made of the app the phone has just
     // stopped being entitled to. Nothing else would ask again: the next redraw would come from a
     // journal event, and the revoke is what stops those arriving (agents-tracker-2lz5).
-    private val settings = SettingsSurface(activity, runtime, dispatch).also { it.onReplaced = ::render }
+    //
+    // AND THE TOAST OVERLAY, for the reason it is one overlay rather than one per surface: the
+    // settings panel is hosted INSIDE the tab scaffold, so a toast of its own would be drawn under
+    // the tab bar and would go with the panel on the redraw a revoke causes.
+    private val settings = SettingsSurface(activity, runtime, dispatch).also {
+        it.onReplaced = ::render
+        it.toasts = toasts
+    }
 
     /**
      * IT REMEMBERS THE OPERATION IT ISSUED, which is what makes PB-INPUT-2's lease a fact rather
@@ -230,7 +254,15 @@ class PhoneSurface(
             // The one control on this surface whose two arms are on two different PLANES, which
             // is why the plane is chosen per press rather than per control.
             StopAction.SEND_INTERRUPT ->
-                Press(SendPlane.LIVE, verb = { app -> app.interrupt(target) })
+                Press(
+                    SendPlane.LIVE,
+                    verb = { app -> app.interrupt(target) },
+                    // The one press on this surface the design wrote a confirmation for. Without
+                    // it, an interrupt that reached the machine and an interrupt still crossing
+                    // look identical: the outcome line is cleared for both and the button comes
+                    // back enabled either way.
+                    confirmation = SessionDetail.INTERRUPT_SENT,
+                )
             StopAction.ACQUIRE_LEASE_FIRST -> takeControlOf(target)
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
             // D7). Nothing is sent and nothing is said HERE, because the screen already says it --
@@ -604,8 +636,13 @@ class PhoneSurface(
     }
 
     /**
-     * The window's one child: [dev.swarm.phone.ui.screens.phoneScaffoldView] -- the destination
-     * above the tab bar. The bar is rebuilt into it when the badge or the destination changes.
+     * The APP: [dev.swarm.phone.ui.screens.phoneScaffoldView] -- the destination above the tab
+     * bar. The bar is rebuilt into it when the badge or the destination changes.
+     *
+     * IT IS NO LONGER THE WINDOW'S ONE CHILD. It is rebuilt from nothing on every tab change and
+     * on every paired/unpaired transition, and both draw paths ask `host.childCount` whether
+     * anything is on screen -- so anything that must OUTLIVE a redraw cannot be in here. The toast
+     * overlay is the first such thing, and [windowRoot] is where it hangs.
      */
     private val host = FrameLayout(activity).apply {
         // A glowing dot and the tab badge are drawn outside their own views.
@@ -614,7 +651,27 @@ class PhoneSurface(
         layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
     }
 
-    val root: View = host
+    /**
+     * The window: the app, and the toast overlay above it.
+     *
+     * THE ORDER IS THE Z-ORDER, which is the whole of what "above the tab bar" means in a
+     * `FrameLayout`: [toasts] is added last, so it draws over the bar rather than behind it. It
+     * takes no touches (see [ToastHost]), so the app underneath stays usable while a toast is up.
+     *
+     * IT IS ALSO WHAT `PhoneActivity.insetTheSystemBars` PADS, which is why the overlay is inside
+     * it rather than beside it: row 1 measures `toast_bottom` from the bottom of the frame the app
+     * draws in, and the gesture-nav inset is part of that frame (derivation row 19 -- an iPhone
+     * constant yields to the platform's own measurement).
+     */
+    private val windowRoot = FrameLayout(activity).apply {
+        clipChildren = false
+        clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+        addView(host)
+        addView(toasts)
+    }
+
+    val root: View = windowRoot
 
     /**
      * The controls PB-SEC-12 clause 1 is about, exposed so the assertion has a named subject
@@ -1704,12 +1761,19 @@ class PhoneSurface(
      *  deliberately does not (ADR-007 D7), and the two must not share a lane.
      * @param verb the facade call, and NOTHING else. It runs on a lane. It must not touch a View.
      * @param settle what the answer changes on screen, back on the looper. It runs only if the
-     *  verb returned; a refusal goes to the outcome line instead.
+     *  verb returned; a refusal goes to the outcome line and the toast instead.
+     * @param confirmation what a toast says when the verb RETURNS, or null where the design wrote
+     *  no words for this press -- which is most of them, and which is silence rather than a
+     *  sentence made up here. `remote-control-mock.html` fires a toast for seven actions and for
+     *  nothing else; a confirmation authored at this seam would be copy invented in the one place
+     *  PB-DS-9 keeps copy out of. It is PER PRESS and not per control for [plane]'s reason: Stop
+     *  is two different actions behind one button, and only one of them is an interrupt.
      */
     private class Press(
         val plane: SendPlane,
         val verb: (App) -> Any?,
         val settle: (Any?) -> Unit = {},
+        val confirmation: String? = null,
     )
 
     /**
@@ -1737,11 +1801,24 @@ class PhoneSurface(
      *
      * THE OUTCOME LINE IS CLEARED FIRST. It holds the LAST command's answer, and a control that
      * is now responsive would otherwise leave that answer sitting under a press in flight, where
-     * it reads as this press's. Empty is the same thing a success shows, which is the honest
-     * limit of what this surface can say: docs/design/substrate-components.md has no in-flight
-     * state in any of its 25 rows, so the only thing separating "still crossing" from "done" is
-     * that [VerbDispatch] holds the control disabled until the answer lands (derivation row 24's
-     * pair, which the kit already paints off the view's own drawable state).
+     * it reads as this press's. Empty is still what an unconfirmed success shows: there is no
+     * in-flight state in any of the 25 rows of docs/design/substrate-components.md, so what
+     * separates "still crossing" from "done" is that [VerbDispatch] holds the control disabled
+     * until the answer lands (derivation row 24's pair, which the kit already paints off the
+     * view's own drawable state) -- and that is DELIBERATELY UNCHANGED here.
+     *
+     * WHAT IS NEW IS WHERE THE ANSWER LANDS. The outcome line is a child of
+     * [unrecomposedControls], which is hosted at the bottom of the Inbox tab -- so a refusal
+     * produced by a control on Machines, Activity or a session detail was written to a view the
+     * user could not see. Row 1's toast is shown over whatever screen is up, and the line KEEPS
+     * the message it always had: a routed error frequently names a remedy ("try again once the
+     * connection is back"), and a remedy that scrolls away in 3.2 seconds is worse than one that
+     * sits still. [PressFeedback] is where that decision is written down and tested; this is the
+     * one place it is spent.
+     *
+     * THE FEEDBACK IS APPLIED BEFORE [Press.settle] RATHER THAN AFTER, so that a settle which has
+     * something of its own to say about the same press -- a launch answer, a field cleared -- is
+     * writing over the generic answer rather than under it.
      */
     private fun dispatchPress(control: View, app: App, planned: Press) {
         outcome.text = ""
@@ -1751,18 +1828,36 @@ class PhoneSurface(
             work = { planned.verb(app) },
             settle = { answer ->
                 answer.fold(
-                    onSuccess = { planned.settle(it) },
+                    onSuccess = {
+                        say(PressFeedback.ofSuccess(planned.confirmation))
+                        planned.settle(it)
+                    },
                     // Everything the facade refuses arrives as an exception whose message carries
                     // the error class as a prefix, so it routes through the same table as every
                     // other failure rather than being shown raw.
                     onFailure = {
-                        outcome.text =
-                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
+                        say(
+                            PressFeedback.ofRefusal(
+                                FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
+                            ),
+                        )
                     },
                 )
                 render()
             },
         )
+    }
+
+    /**
+     * Put one press's answer on screen: the persistent line, and row 1's toast.
+     *
+     * A TOAST IS SHOWN ONLY WHEN THERE IS SOMETHING TO SAY. An empty one is a 92 dp-high box that
+     * flashes over the tab bar for 3.2 seconds carrying nothing, which is what an unconfirmed
+     * success would produce if this asked no question.
+     */
+    private fun say(feedback: PressFeedback) {
+        outcome.text = feedback.line
+        if (!feedback.saysNothing) toasts.show(feedback.toast)
     }
 
     /**

@@ -460,6 +460,26 @@ internal object KitMetrics {
     const val RETICLE_ARM_DP = 24f
 
     /**
+     * How long a toast stays on screen, in milliseconds.
+     *
+     * **IT IS THE ONE CONSTANT IN THIS OBJECT THAT IS NOT A LENGTH, and it is here for the same
+     * reason every length is: the resource table cannot carry it.** There is no `integers.xml` in
+     * this app and a duration is not a `<dimen>`, so a toast's lifetime typed at its own call site
+     * would be the only number in the kit with no design behind it. Row 1 states it -- "3200 ms
+     * then hidden, no transition" -- and the Go gate reads that cell.
+     *
+     * **IT IS NOT A MOTION CONSTANT AND MUST NOT MOVE TO Motion.kt.** ADR-007 B134 keeps three
+     * animations (the sheet, the banner, the caret) and row 1 spends none of them: the toast
+     * appears and disappears instantly. What this measures is how long a message is READABLE,
+     * which is why §8.7 can say in the same breath that the announcement must outlast it -- a
+     * duration nobody interpolates over is not an animation, and putting it beside `NAV_EASE`
+     * would invite one.
+     *
+     * derived: docs/design/substrate-components.md #1 Toast { ms }
+     */
+    const val TOAST_LIFETIME_MS = 3200L
+
+    /**
      * The reticle's stroke.
      *
      * IT IS NOT [HAIRLINE_DP] AND NOT [RAIL_DP] AND NOT [FOCUS_RING_DP], which is the same argument
@@ -600,6 +620,17 @@ internal object KitTag {
      */
     const val ACTIVITY_TIME = "activity time"
     const val ACTIVITY_BODY = "activity body"
+
+    /**
+     * The toast. Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.toast` is the
+     * retired mock's class and the shared Substrate block declares no rule for it at all, so a tag
+     * naming that selector would point a reader at something that does not exist.
+     *
+     * THERE IS NO TAG FOR THE MONO SUFFIX, for the reason the activity row's emphasis has none:
+     * row 1's `Mono.CodeSmall` is a SPAN inside the toast's own text rather than a view, so it has
+     * no `tag` to carry and what finds it is the span range on that text.
+     */
+    const val TOAST = "toast"
 
     /**
      * The pairing step's two cells, row 18's.

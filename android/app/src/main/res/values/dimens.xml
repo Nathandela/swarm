@@ -54,6 +54,20 @@
     <dimen name="swarm_tabbar_height">74dp</dimen>
 
     <!--
+      The fourth frame constant, and the first one that is DERIVED rather than read: §5 of
+      docs/design/substrate-components.md states toast_bottom as tabbar_height + space_18, which
+      is 74 + 18 = 92. It preserves the mock's 18dp clearance over a bar Substrate shrank by 8dp,
+      and the mock's own 100px literal is what the derivation replaces, because that number was
+      measured against an 82dp bar this app does not have.
+
+      IT IS NOT A SPACING STEP even though 92 is an even number of dp. The scale places things
+      relative to each other; this places one overlay absolutely inside the frame, which is the
+      same distinction that keeps the mock's `.ptime { left: 30px }` out of PB-DS-1's ledger. The
+      three constants above are the same kind of value and are named for the same reason.
+    -->
+    <dimen name="swarm_toast_bottom">92dp</dimen>
+
+    <!--
       PB-DS-4: the shape scale. Each of these IS its token in internal/design/tokens.json
       (p-card-r, p-sheet-r, p-btn-r, p-chip-r), and the gate joins them to it in both directions
       so a corner cannot be chosen by eye here.

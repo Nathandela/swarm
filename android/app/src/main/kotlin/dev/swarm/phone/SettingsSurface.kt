@@ -17,9 +17,11 @@ import dev.swarm.phone.runtime.AppPermission
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.FacadeBridge
+import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
@@ -216,6 +218,20 @@ class SettingsSurface(
      * error to report: it is never attached, so there is no window to redraw.
      */
     var onReplaced: (() -> Unit)? = null
+
+    /**
+     * Where this panel's answers are SAID, which is a view it does not own (derivation row 1).
+     *
+     * IT IS THE HOST'S AND NOT THIS PANEL'S, for the same reason [onReplaced] is a callback: this
+     * screen is drawn INSIDE the tab scaffold, so a toast built here would be laid out under the
+     * tab bar and would go with the panel on the redraw a revoke causes. `PhoneSurface` hangs one
+     * overlay beside the app and hands it to whoever needs it.
+     *
+     * NULL IS A PANEL NOBODY HOSTS -- the default instance's true condition, as [onReplaced]
+     * records. Its refusals still reach [outcome]; what they lose is the toast, because there is
+     * no window to float one over.
+     */
+    internal var toasts: ToastHost? = null
 
     fun render() {
         when (val startup = runtime.phone()) {
@@ -476,8 +492,18 @@ class SettingsSurface(
             settle = { answer ->
                 // Every facade refusal arrives as an exception whose message carries the error
                 // class as a prefix, so it routes through the table rather than being shown raw.
+                //
+                // AND IT IS SAID TWICE, which is `PhoneSurface.dispatchPress`'s decision applied
+                // to the one press this panel owns: the line keeps the remedy, and the toast puts
+                // it where the chip that was pressed is. A refused revoke is the worst message in
+                // this app to leave in a view somebody has to scroll to -- the situation the
+                // control exists for is one where the phone may not reach its machine at all.
                 answer.onFailure {
-                    outcome.text = FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message
+                    val feedback = PressFeedback.ofRefusal(
+                        FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
+                    )
+                    outcome.text = feedback.line
+                    if (!feedback.saysNothing) toasts?.show(feedback.toast)
                 }
                 // THE WHOLE WINDOW, not this panel. The purge ran in the `finally` above whether
                 // or not the command reached the machine, so the presentation gate's answer has
