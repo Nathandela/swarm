@@ -31,9 +31,19 @@ import org.junit.Test
  * below shows seams NOT breaking the decoder, that is the finding, and it moves the
  * investigation to the camera pipeline instead.
  *
- * Seam phase is fixed: module row 0 is assumed to be the top half of a character cell, which
- * is what an even quiet zone (qrterm draws 2 or 4) produces. An odd quiet zone shifts every
- * seam by one module row.
+ * Seam phase is fixed: module row 0 is assumed to be the top half of a character cell, which is
+ * what an EVEN quiet zone produces. This note used to say qrterm draws 2 or 4, and production
+ * draws THREE: `qrterm.Render` tries 4, then 3, then 2 and takes the widest that fits, and on the
+ * 80x24 box `terminalBox` falls back to, a version-6 symbol is 41 modules -- 47 columns and 24
+ * character rows at a quiet zone of 3, where 4 would need 25 rows and does not fit
+ * (cmd/swarm/remote.go states the same arithmetic). So the shipped rendering is the ODD case and
+ * every seam in it sits one module row off the phase swept below.
+ *
+ * WHAT THAT DOES AND DOES NOT COST. The map's shape is unaffected in kind -- a seam still falls
+ * at every second module row, which is what the sweep measures -- so the px/module and seam-width
+ * axes read the same. What it means is that no cell here is the shipped frame exactly, and a
+ * mitigation chosen on a phase boundary would be chosen on the wrong one. The bench is a
+ * capability map, not a reproduction, and that is the difference this correction protects.
  */
 class FrameDecoderCapabilityBenchTest {
 
