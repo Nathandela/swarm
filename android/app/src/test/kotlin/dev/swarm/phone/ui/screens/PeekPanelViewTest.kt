@@ -123,19 +123,62 @@ class PeekPanelViewTest {
 
     // ---- what the well carries ---------------------------------------------
 
+    /**
+     * THE BANNER HAS LEFT THE WELL, and agents-tracker-0qe7 is why. This asserted the opposite:
+     *
+     *     assertTrue(
+     *         "the well holds the grid and not the banner, so a snapshot the phone knows is out of " +
+     *             "date reads as live:\n$well",
+     *         well.lines().size > 1,
+     *     )
+     *
+     * -- that a one-line stale grid renders as two lines in the well, the extra one being the
+     * warning. The well is the one surface in this app that prints the machine's output byte for
+     * byte (ADR-007 D2 keeps the VT emulator on the machine for exactly that reason), so a sentence
+     * of English inside it is indistinguishable from something the agent typed. The subject is
+     * unchanged and is asserted harder: the snapshot must still be marked, and the well must still
+     * hold only the grid.
+     */
     @Test
-    fun `the stale banner is inside the well, above the grid`() {
-        // The model's own decision, and its KDoc argues it: a stale snapshot is still the
-        // snapshot, so the warning belongs where the thing it warns about is rather than on a
-        // line the eye skips on its way to the grid.
-        val stale = PeekPanelScreen.of(peek(text = "$ go test ./...", stale = true))
-        val well = textOf(view(stale).kitRequire(PeekTag.WELL))
+    fun `the stale banner is a notice above the well, not a line inside the grid`() {
+        val grid = "$ go test ./..."
+        val stale = PeekPanelScreen.of(peek(text = grid, stale = true))
+        val root = view(stale)
+        val well = textOf(root.kitRequire(PeekTag.WELL))
 
-        assertEquals(stale.snapshot, well)
-        assertTrue(
-            "the well holds the grid and not the banner, so a snapshot the phone knows is out of " +
-                "date reads as live:\n$well",
-            well.lines().size > 1,
+        assertEquals(
+            "the well holds a sentence about the view as well as the view, printed in the " +
+                "machine's own register where a reader cannot tell it from output:\n$well",
+            grid,
+            well,
+        )
+        assertEquals(
+            "a snapshot the phone knows is out of date is drawn with no mark at all, so it reads " +
+                "as live",
+            stale.staleNotice,
+            textOf(root.kitFind(PeekTag.STALE)),
+        )
+
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let { if (it == PeekTag.STALE || it == PeekTag.WELL) order += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        assertEquals(
+            "the notice is drawn after the grid it qualifies, which is a warning the eye reaches " +
+                "having already read the thing it warns about",
+            listOf(PeekTag.STALE, PeekTag.WELL),
+            order,
+        )
+    }
+
+    @Test
+    fun `a fresh snapshot draws no stale notice at all`() {
+        assertNull(
+            "a blank stale notice is drawn over a current snapshot, which is a warning nobody " +
+                "wrote -- the same call `sessionDetailView` makes for its own notices",
+            view(PeekPanelScreen.of(peek(stale = false))).kitFind(PeekTag.STALE),
         )
     }
 

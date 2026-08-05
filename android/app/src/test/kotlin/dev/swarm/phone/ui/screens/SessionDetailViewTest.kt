@@ -49,6 +49,7 @@ class SessionDetailViewTest {
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
+        snapshotStale: Boolean = false,
     ) = SessionDetailScreen.of(
         SessionDetail(
             sessionId = "mbp/api",
@@ -58,6 +59,7 @@ class SessionDetailViewTest {
             online = online,
             journalStale = journalStale,
             stopNotSent = stopNotSent,
+            snapshotStale = snapshotStale,
         ),
     )
 
@@ -197,6 +199,42 @@ class SessionDetailViewTest {
         assertTrue(textOf(pressed.kitFind(DetailTag.NOT_SENT)).isNotEmpty())
     }
 
+    /**
+     * FAILING-FIRST for agents-tracker-0qe7 as DRAWN: the mark goes beside the card, and it is a
+     * notice rather than a line inside the grid.
+     *
+     * THE WELL PRINTS THE MACHINE'S OUTPUT BYTE FOR BYTE. `monoWell(terminal = true)` renders
+     * `swarmmobile.Snapshot.Text` as the daemon sanitized it, so a sentence written into the text
+     * would be an English line in the machine's own register -- which is the defect this issue
+     * reports on the peek, and there is no reason to repeat it here.
+     */
+    @Test
+    fun `a stale snapshot is marked beside its card, not inside the grid`() {
+        val frozen = view(panel(snapshotStale = true, snapshotText = "$ git push"))
+        val fresh = view(panel(snapshotStale = false, snapshotText = "$ git push"))
+
+        assertTrue(
+            "the snapshot card carries no stale mark, so a grid the phone knows is out of date " +
+                "reads as what the session is doing now",
+            textOf(frozen.kitFind(DetailTag.SNAPSHOT_STALE)).isNotEmpty(),
+        )
+        assertEquals(
+            "the stale sentence was written into the grid, in the well that prints the machine's " +
+                "own output byte for byte",
+            "$ git push",
+            textOf(frozen.kitFind(DetailTag.SNAPSHOT)),
+        )
+        assertNull(
+            "a stale mark is drawn over a snapshot the machine is still sending frames for",
+            fresh.kitFind(DetailTag.SNAPSHOT_STALE),
+        )
+        assertNull(
+            "a stale mark is drawn for a session that has sent no frame at all, which warns about " +
+                "a card that is not on screen",
+            view(panel(snapshotStale = true, snapshotText = "")).kitFind(DetailTag.SNAPSHOT_STALE),
+        )
+    }
+
     @Test
     fun `a holed journal says so above the records it is missing from`() {
         val whole = view(panel(journalStale = false))
@@ -257,8 +295,14 @@ class SessionDetailViewTest {
         // `stopNotSent` joins the state this draws from because the not-sent line is press-gated
         // (agents-tracker-4lta): a panel that is merely offline no longer draws it, and a part
         // this asserts the ORDER of has to be on screen for the order to mean anything.
+        // `snapshotStale` joins it for the same reason, one part later (agents-tracker-0qe7).
         val root = view(
-            panel = panel(journalStale = true, online = false, stopNotSent = true),
+            panel = panel(
+                journalStale = true,
+                online = false,
+                stopNotSent = true,
+                snapshotStale = true,
+            ),
             outcome = "Your machine refused that.",
         )
 

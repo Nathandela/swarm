@@ -69,16 +69,39 @@ class PeekPanelScreenTest {
         assertEquals("line one\nline two", panel.snapshot)
     }
 
+    /**
+     * THE BANNER IS NO LONGER PART OF THE SNAPSHOT, and agents-tracker-0qe7 is why. This read:
+     *
+     *     assertEquals("${view.staleNotice}\nline one", panel.snapshot)
+     *
+     * which is a sentence ABOUT the view rendered INSIDE the view. The well it lands in prints
+     * `swarmmobile.Snapshot.Text` byte for byte -- ADR-007 D2 puts the VT emulator on the machine
+     * precisely so the phone shows what the daemon rendered and nothing else -- and this put an
+     * English sentence in the machine's own register, in the machine's own monospace, where a
+     * reader has no way to tell it from output. It is a notice of its own now, and the two
+     * assertions below are the same subject split: the grid is the grid, and the wording is still
+     * the model's rather than a second one invented here.
+     */
     @Test
-    fun `a stale snapshot carries the model's own banner above the grid`() {
+    fun `a stale snapshot is the grid, with the model's own banner beside it`() {
         val view = peek(text = "line one", stale = true)
         val panel = PeekPanelScreen.of(view)
 
-        assertEquals("${view.staleNotice}\nline one", panel.snapshot)
-        assertTrue(
+        assertEquals(
+            "the stale sentence is inside the snapshot, so a line of English is printed in the " +
+                "mono well that renders the machine's output byte for byte",
+            "line one",
+            panel.snapshot,
+        )
+        assertEquals(
             "the panel invented its own wording for a stale snapshot instead of carrying the " +
                 "model's, so two files now decide what the user reads",
-            panel.snapshot.startsWith(view.staleNotice),
+            view.staleNotice,
+            panel.staleNotice,
+        )
+        assertTrue(
+            "a fresh snapshot carries a stale notice, which warns about a view that is current",
+            PeekPanelScreen.of(peek(text = "line one", stale = false)).staleNotice.isEmpty(),
         )
     }
 

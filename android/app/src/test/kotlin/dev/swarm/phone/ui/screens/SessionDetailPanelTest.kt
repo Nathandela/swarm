@@ -43,6 +43,7 @@ class SessionDetailPanelTest {
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
+        snapshotStale: Boolean = false,
     ) = SessionDetail(
         sessionId = "mbp/api",
         journal = journal,
@@ -51,6 +52,7 @@ class SessionDetailPanelTest {
         online = online,
         journalStale = journalStale,
         stopNotSent = stopNotSent,
+        snapshotStale = snapshotStale,
     )
 
     // ---- what the screen is about -----------------------------------------
@@ -188,6 +190,46 @@ class SessionDetailPanelTest {
             whole.staleNotice,
         )
         assertTrue(holed.staleNotice.isNotEmpty())
+    }
+
+    /**
+     * FAILING-FIRST for agents-tracker-0qe7's second half: **the snapshot's staleness is the
+     * snapshot's, and this screen only carried the journal's.**
+     *
+     * [SessionDetailPanel.staleNotice] is PB-APP-8 over the CHRONOLOGY -- "some records are
+     * missing ... this is not a complete log of the session" -- and it is the only stale mark on
+     * the screen. The card above it prints a grid the machine may have stopped sending frames for,
+     * and a terminal is the one surface a user reads AS live: a snapshot with no mark is taken for
+     * what the session is doing now. The two facts are independent (a repaired journal beside a
+     * frozen grid is an ordinary state) and they have different remedies, so one sentence cannot
+     * stand for both.
+     */
+    @Test
+    fun `the snapshot carries its own stale mark and not the journal's verdict`() {
+        val fresh = SessionDetailScreen.of(detail(snapshotStale = false, journalStale = false))
+        val frozen = SessionDetailScreen.of(detail(snapshotStale = true, journalStale = false))
+
+        assertEquals(
+            "a snapshot mark is drawn over a grid the machine is still sending frames for",
+            "",
+            fresh.snapshotStaleNotice,
+        )
+        assertTrue(
+            "the snapshot card has no stale mark of its own, so a grid the phone knows is out of " +
+                "date is read as what the session is doing now",
+            frozen.snapshotStaleNotice.isNotEmpty(),
+        )
+        assertEquals(
+            "the snapshot's mark is the JOURNAL's verdict, which is a different fact with a " +
+                "different remedy: an unrepaired event stream says nothing about whether the last " +
+                "frame is current",
+            "",
+            frozen.staleNotice,
+        )
+        assertNotEquals(
+            SessionDetailScreen.of(detail(journalStale = true)).staleNotice,
+            frozen.snapshotStaleNotice,
+        )
     }
 
     @Test
