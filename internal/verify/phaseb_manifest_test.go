@@ -95,6 +95,11 @@ const (
 	slicesDoc   = "docs/specifications/remote-phaseB-slices.tsv"
 )
 
+// orphanProbe is the slice id the orphan negative control invents. It MUST NOT be a slice the
+// DAG already declares -- redeclaring an existing one produces a duplicate row, not an orphan --
+// which is what TestPBDOC7_TheOrphanControlInventsItsSlice exists to keep true.
+const orphanProbe = "S99"
+
 // TestPBDOC7_TheRepositoryPasses is the positive control for every negative control below: if
 // the pristine copy did not pass, a rejection would prove nothing about the mutation.
 func TestPBDOC7_TheRepositoryPasses(t *testing.T) {
@@ -168,11 +173,24 @@ func TestPBDOC7_EveryEnforcedClauseCanFail(t *testing.T) {
 			token:  "CYCLE",
 		},
 		{
+			// The injected slice hangs off S1, so it has no dangling edge and no cycle: the
+			// only thing wrong with it is that nothing on the S19 exit path pulls it in.
 			clause: "orphan slice",
 			file:   slicesDoc,
 			old:    "S20\tS19\n",
-			new:    "S20\tS19\nS22\tS1\n",
-			token:  "ORPHAN    S22",
+			new:    "S20\tS19\n" + orphanProbe + "\tS1\n",
+			token:  "ORPHAN    " + orphanProbe,
+		},
+		{
+			// Two rows for one slice: the DAG the checker validates is then decided by line
+			// order rather than by the file, and one of the two dependency sets is dropped on
+			// the floor unseen. This is also the shape the orphan control silently decayed
+			// into once S22 became a real slice -- see TestPBDOC7_TheOrphanControlInventsItsSlice.
+			clause: "duplicate slice declaration",
+			file:   slicesDoc,
+			old:    "S22\tS13,S16\n",
+			new:    "S22\tS13,S16\nS22\tS1\n",
+			token:  "DUPSLICE  S22",
 		},
 		{
 			clause: "wildcard ownership in section 11's requirements column",
@@ -224,10 +242,34 @@ func TestPBDOC7_EveryEnforcedClauseCanFail(t *testing.T) {
 		})
 	}
 
-	if len(cases) < 13 {
+	if len(cases) < 14 {
 		t.Fatalf("PB-DOC-7: only %d clauses are exercised; PB-DOC-7 enumerates unowned id, "+
 			"duplicate owner, wildcard, dangling edge and cycle, and the checker enforces more",
 			len(cases))
+	}
+}
+
+// TestPBDOC7_TheOrphanControlInventsItsSlice keeps the orphan negative control from decaying the
+// way it did between 60ed08d and 9b90704.
+//
+// The control was written against a DAG that ended at S21, so injecting "S22" added a slice the
+// file had never declared: unreachable from S19, absent from the terminal list, an orphan. Five
+// days later 9b90704 made S22 a real terminal slice, and the same injection became a second row
+// for an existing exempt slice -- which last-wins parsing discards outright, leaving the checker's
+// output byte-identical to the pristine run. The clause was still enforced; the mutation had
+// stopped expressing it, and the control reported that as "the checker ACCEPTED an orphan".
+//
+// A mutation test can only be as honest as its mutation, so this asserts the premise directly:
+// the probe id is one slices.tsv has never heard of.
+func TestPBDOC7_TheOrphanControlInventsItsSlice(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), slicesDoc))
+	if err != nil {
+		t.Fatalf("read %s: %v", slicesDoc, err)
+	}
+	if strings.Contains(string(body), orphanProbe) {
+		t.Fatalf("PB-DOC-7: the orphan negative control injects %s as a slice the DAG has never "+
+			"heard of, but %s now mentions it. Redeclaring an existing slice is a duplicate row, "+
+			"not an orphan: give the control a fresh id.", orphanProbe, slicesDoc)
 	}
 }
 
