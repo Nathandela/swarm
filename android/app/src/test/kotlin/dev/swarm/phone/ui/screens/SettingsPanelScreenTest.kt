@@ -5,6 +5,7 @@ import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -124,15 +125,67 @@ class SettingsPanelScreenTest {
 
     // ---- what the panel says when the switches are inert -------------------
 
+    /**
+     * REWRITTEN BY agents-tracker-0dij, and what it used to say is worth stating because the old
+     * assertion was the defect.
+     *
+     * It read `listOf(DENIED, PERMANENTLY_DENIED).forEach { ... listOf(false, false) }` -- both
+     * denials disable both rows -- and that is the closed loop the bug report describes.
+     * `PermissionStateResolver` answers `!hasAskedBefore -> DENIED`, so a fresh API 33+ install is
+     * in DENIED before anyone has been asked anything; the app's ONLY POST_NOTIFICATIONS request is
+     * issued from the switch's own tap; and Android delivers no tap to a disabled control. Disabled
+     * on DENIED therefore means the permission can never be requested for the life of the install,
+     * which is exactly what the owner reported ("the toggles do nothing").
+     *
+     * So the row's live/dead split moves to the one state that is really dead: PERMANENTLY_DENIED,
+     * where the platform will not prompt again and [SettingsPanel.permissionRedirectLabel] is what
+     * the screen offers instead.
+     */
     @Test
-    fun `a withheld notification permission disables every row`() {
-        listOf(PermissionState.DENIED, PermissionState.PERMANENTLY_DENIED).forEach { state ->
-            assertEquals(
-                "a row stayed live under $state, so the screen offers a switch that changes nothing",
-                listOf(false, false),
-                rows(SettingsPanelScreen.of(screen(permission = state))).map { it.enabled },
+    fun `only a permanently denied permission disables the rows`() {
+        assertEquals(
+            "agents-tracker-0dij: a row is dead under DENIED. That is the state a fresh install " +
+                "is in, and the tap on the row's own switch is the app's only way to ask for the " +
+                "permission -- a disabled control receives no tap, so nothing can ever ask",
+            listOf(true, true),
+            rows(SettingsPanelScreen.of(screen(permission = PermissionState.DENIED)))
+                .map { it.enabled },
+        )
+        assertEquals(
+            "a row stayed live under PERMANENTLY_DENIED, so the screen offers a switch that " +
+                "changes nothing and no way to fix it",
+            listOf(false, false),
+            rows(SettingsPanelScreen.of(screen(permission = PermissionState.PERMANENTLY_DENIED)))
+                .map { it.enabled },
+        )
+    }
+
+    /**
+     * The panel carries the model's redirect, on the one state that has one.
+     *
+     * IT IS A LABEL AND NOT A CONTROL, for the reason the toggle and the replace chip are
+     * parameters: pressing it leaves the app, so it carries PB-SEC-12 clause 1's touch filter and
+     * an identity that survives a redraw, and both of those are `SettingsSurface`'s. What the model
+     * owes is the words and the decision to offer them at all.
+     */
+    @Test
+    fun `a permanently denied permission is the one state that offers a way out`() {
+        val blocked = screen(permission = PermissionState.PERMANENTLY_DENIED)
+        assertEquals(
+            "the panel invented its own wording for the redirect instead of carrying the model's",
+            blocked.notificationRedirectLabel,
+            SettingsPanelScreen.of(blocked).permissionRedirectLabel,
+        )
+
+        for (state in listOf(PermissionState.DENIED, PermissionState.GRANTED, PermissionState.NOT_APPLICABLE)) {
+            assertNull(
+                "$state offers a settings redirect. On DENIED the platform still prompts, so a " +
+                    "redirect walks the user past the prompt that would have fixed it; on the " +
+                    "other two there is nothing to fix",
+                SettingsPanelScreen.of(screen(permission = state)).permissionRedirectLabel,
             )
         }
+        assertNull(SettingsPanelScreen.of(screen(permission = null)).permissionRedirectLabel)
     }
 
     @Test

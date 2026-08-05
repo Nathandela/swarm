@@ -204,6 +204,62 @@ class SettingsPanelViewTest {
         )
     }
 
+    // ---- agents-tracker-0dij: the way out of a blocked permission ------------
+
+    /**
+     * The redirect is the caller's control, placed and tagged -- never one this file builds.
+     *
+     * IT LEAVES THE APP, so it is `SettingsSurface`'s for the three reasons the toggle and the
+     * replace chip are: PB-SEC-12 clause 1's touch filter is applied at CONSTRUCTION and must reach
+     * the instance actually on screen, the surface is what starts the Activity, and the control has
+     * to survive a redraw. What this file owes is that the panel's own decision -- the label is
+     * present -- puts that control on screen, under the sentence that names it.
+     */
+    @Test
+    fun `the settings redirect is the caller's control, placed under the notice that names it`() {
+        val blocked = panel(permission = PermissionState.PERMANENTLY_DENIED)
+        val supplied = View(context)
+        val root = settingsPanelView(
+            context = context,
+            panel = blocked,
+            rowFor = { stubControl(context) },
+            redirectFor = { supplied },
+        )
+
+        val placed = root.allTagged(SettingsTag.PERMISSION_REDIRECT)
+        assertEquals("the panel named a redirect and drew none, or drew more than one", 1, placed.size)
+        assertSame(
+            "the redirect on screen is not the control the surface supplied, so the touch filter " +
+                "and the Intent behind it belong to a view nobody wired",
+            supplied,
+            placed.single(),
+        )
+
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let { if (it == SettingsTag.NOTICE || it == SettingsTag.PERMISSION_REDIRECT) order += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        assertEquals(
+            "the control comes before the sentence that explains why it is there",
+            listOf(SettingsTag.NOTICE, SettingsTag.PERMISSION_REDIRECT),
+            order,
+        )
+    }
+
+    @Test
+    fun `a panel with no redirect to offer draws no control`() {
+        for (permission in listOf(PermissionState.GRANTED, PermissionState.DENIED)) {
+            assertEquals(
+                "a settings redirect was drawn under $permission. On DENIED the platform still " +
+                    "prompts, so the control would walk the user past the prompt that fixes it",
+                0,
+                view(panel(permission = permission)).allTagged(SettingsTag.PERMISSION_REDIRECT).size,
+            )
+        }
+    }
+
     @Test
     fun `what this slice has not recomposed is hosted under the panel, not instead of it`() {
         val trailing = View(context)
