@@ -44,12 +44,24 @@ import dev.swarm.phone.ui.kit.readOnlyNote
  * facade call. A peek panel that enabled views it does not own would be the second statement of a
  * fact the model already makes.
  *
- * **The back control's destination.** [PeekPanel.back] names one and this product has nowhere to
- * send it: there is one scrolling surface, the peek is composed under the inbox rather than pushed
- * over it, and inventory C2 -- the screen C3 actually drills down FROM -- does not exist. The
- * chevron is drawn because §4 and the model both state it; no listener is attached, because a back
- * control that scrolled somewhere would be a navigation this product has not designed. Recorded as
- * unmet rather than wired to something plausible.
+ * **The back control.** IT IS NOT DRAWN AT ALL, and that is this issue's resolution
+ * (agents-tracker-joe7) rather than the omission that stood here. What stood here was the chevron
+ * drawn "because §4 and the model both state it" with no listener attached, "recorded as unmet
+ * rather than wired to something plausible" -- and the record did not help the user: the kit gives
+ * that control a 48 dp target, a focus ring and a destination label, so what shipped on the Inbox
+ * tab of every paired phone with a session was a fully-drawn control that does nothing, beside a
+ * visually identical one on the session detail that works.
+ *
+ * THERE IS STILL NOWHERE TO SEND IT, which is why the fix is subtraction. This screen is composed
+ * UNDER the inbox list rather than pushed over it, so nothing was pushed and nothing can be popped;
+ * the label named the Inbox, which is the screen the user is standing on. Inventory C2 -- the
+ * screen C3 actually drills down FROM -- now exists, and it is a DIFFERENT screen with its own
+ * wired header ([sessionDetailView]), reached by tapping a session row. Wiring this control to
+ * scroll somewhere would be the invented navigation the old note already refused; wiring it to the
+ * detail would be a "back" that goes forward.
+ *
+ * [navHeaderDrill] takes a null destination for exactly this, so the header keeps §4's type, its
+ * three padding steps and its title, and loses only the promise it could not keep.
  */
 object PeekTag {
     /** C3.1 -- the drill-down header, per derivation §4. */
@@ -95,7 +107,10 @@ fun peekPanelView(
     }
 
     column.addView(
-        navHeaderDrill(context, back = panel.back, title = panel.title)
+        // `back = null`: this screen has no destination, so it draws no back control. See the
+        // paragraph above -- the affordance was the promise, and it was one this composition could
+        // not keep.
+        navHeaderDrill(context, back = null, title = panel.title)
             .apply { tag = PeekTag.NAV },
     )
     // THE STALE MARK IS A NOTICE ABOVE THE WELL AND NOT A LINE INSIDE IT (agents-tracker-0qe7).

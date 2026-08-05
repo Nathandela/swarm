@@ -1142,7 +1142,9 @@ var s24ScreenComponents = map[string]map[string]string{
 		"emptyState":     "derivation row 8 -- a heading over no records is a section that lies",
 	},
 	"dev/swarm/phone/ui/screens/PeekPanelView.kt": {
-		"navHeaderDrill": "C3.1 `.navhead` -- the back control and the session title, per §4",
+		// The session title alone: this screen is composed under the inbox rather than pushed over
+		// it, so it names no destination and the header draws no back control (agents-tracker-joe7).
+		"navHeaderDrill": "C3.1 `.navhead` -- the session title, per §4, with no destination",
 		"monoWell":       "C3.2 `.term` -- the escape-filtered VT snapshot, in `terminal_peek.fg`",
 		"readOnlyNote":   "C3.3 `.ro-note` -- derivation row 22, and PB-INPUT-2's lease sentence",
 	},

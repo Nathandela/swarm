@@ -16,10 +16,15 @@ import dev.swarm.phone.ui.TerminalPeek
  *
  * ## Three places C3's recorded composition and this product disagree
  *
- * - **The back label is `Inbox`, not the artifact's `Chat`.** C3 draws the peek as a drill-down
- *   from the session-detail screen. There is no session-detail screen in this product -- inventory
- *   C2 is unbuilt -- and the peek hangs under the inbox, so a back control labelled `Chat` would
- *   name a destination that does not exist.
+ * - **There is no back control at all, where C3 draws `< Chat`** (agents-tracker-joe7). C3 draws the
+ *   peek as a drill-down from the session-detail screen; this screen is not a drill-down. It is
+ *   composed UNDER the inbox list, in `PhoneSurface`'s own column, so it is not pushed over
+ *   anything and there is nothing to pop. The label was `Inbox` for a while -- chosen because
+ *   `Chat` named a screen that did not exist -- and that reasoning finishes the job: `Inbox` names
+ *   the screen the user is already standing on. The affordance is expensive (§4 gives it a 48 dp
+ *   target, a focus ring and a chevron) and it is a promise; drawn with no listener behind it, as
+ *   it was, it is a control that looks like a control and does not act. `navHeaderDrill` takes a
+ *   null destination for exactly this, and the rest of §4's header is unchanged.
  * - **The header's second field is the GRID, not the word `grid`.** C3 writes the title as
  *   `{proj} - grid`; `{proj}` is plainly a placeholder and the neighbouring field is read the same
  *   way, because a literal word "grid" beside a project name tells a reader nothing and the
@@ -33,8 +38,6 @@ import dev.swarm.phone.ui.TerminalPeek
  *   copy standing in for recorded copy, and the button says what it does.
  */
 data class PeekPanel(
-    /** The destination the back control returns to. The chevron is the component's, not copy. */
-    val back: String,
     /** C3.1: the session and the grid the machine is rendering it at. */
     val title: String,
     /**
@@ -66,9 +69,6 @@ data class PeekPanel(
 )
 
 object PeekPanelScreen {
-
-    /** Inventory C3.1, retargeted -- see the class comment. */
-    private const val BACK = "Inbox"
 
     /** Inventory C3.3, first line, verbatim. */
     private const val NOTE = "Read-only · escape-filtered VT snapshot"
@@ -129,7 +129,6 @@ object PeekPanelScreen {
     }
 
     fun of(peek: TerminalPeek, lease: CommandVerdict = CommandVerdict.UNANSWERED): PeekPanel = PeekPanel(
-        back = BACK,
         title = "${peek.sessionId} · ${peek.cols}x${peek.rows}",
         snapshot = peek.rendered,
         // THE MODEL'S OWN WORDING, carried rather than re-decided: `TerminalPeek.staleNotice` is

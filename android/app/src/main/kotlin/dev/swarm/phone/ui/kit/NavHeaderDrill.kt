@@ -48,13 +48,25 @@ import dev.swarm.phone.R
  * and passes data. The back control is [KitTag.DRILL_BACK] so the screen that owns a destination
  * can find it.
  *
+ * **AND A SCREEN WITH NO DESTINATION GETS NO CONTROL** (agents-tracker-joe7). `back` is nullable
+ * for one reason: the affordance §4 draws is expensive -- a 48 dp target, a focus ring, a chevron
+ * and a label -- and it is a promise. The terminal peek is composed UNDER the inbox rather than
+ * pushed over it, so it has nowhere to go back TO, and it shipped that whole affordance with no
+ * listener behind it. The two alternatives were a screen omitting the header's first child by hand,
+ * which is a screen deciding a component's composition, and a second header factory differing from
+ * this one by one view. What is not on the list is drawing a control that does nothing.
+ *
+ * THE REST OF §4 IS UNCONDITIONAL. A destination-less header still carries the same type, the same
+ * three padding steps and the same title behaviour: whether a screen can go back is not a fact
+ * about what kind of screen it is.
+ *
  * **THE 48 dp TARGET IS THE BACK CONTROL'S AND NOT THIS HEADER'S**, which is why it is set in
  * [backControl] rather than here. A full-width header holding a 24 dp glyph and §4's padding is
  * over 48 dp tall the moment it exists, so a floor asserted on the container would be met by the
  * container while the thing under the finger stayed 24 dp -- the wrapper that satisfies a rule
  * nothing else obeys.
  */
-fun navHeaderDrill(context: Context, back: CharSequence, title: CharSequence): LinearLayout =
+fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): LinearLayout =
     KitStack(
         context,
         LinearLayout.HORIZONTAL,
@@ -73,7 +85,10 @@ fun navHeaderDrill(context: Context, back: CharSequence, title: CharSequence): L
         )
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 
-        addView(backControl(context, back))
+        // Null is a screen with nowhere to go, and it draws nothing rather than a control that
+        // does nothing. The title below takes the whole row in that case, which is what it already
+        // does with whatever width the control leaves it.
+        back?.let { addView(backControl(context, it)) }
         addView(
             TextView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Title_Sheet)
