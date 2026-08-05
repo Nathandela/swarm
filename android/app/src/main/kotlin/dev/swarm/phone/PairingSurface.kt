@@ -384,7 +384,13 @@ class PairingSurface(
         stopScanning()
         try {
             // DECODES AND STOPS. Nothing is dialled here; see the class comment.
-            val started = app.beginPairing(payload)
+            // TWO SPELLINGS, ONE SEAM (ADR-007 B140): the QR's payload announces itself with
+            // the wire prefix, so anything else is read as the ten-character code, completed
+            // by the relay this phone already knows. A code arriving before any relay is
+            // known is refused by the facade with a routed message -- words on this screen,
+            // naming the two paths that do work -- rather than a handle with no address.
+            val started = if (payload.startsWith("swarm-pair:")) app.beginPairing(payload)
+            else app.beginPairingWithCode(payload, runtime.knownRelay())
             handle = started
             attempt = PairingFlow.begin(payload, started.origin(), started.originIsPrivate())
             outcome.text = ""

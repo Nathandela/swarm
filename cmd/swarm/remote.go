@@ -894,7 +894,7 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if sess.ExpiresAt != nil {
 		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
 	}
-	printPairingQR(stdout, sess.QR)
+	printPairingQR(stdout, sess.ShortCode, sess.QR)
 
 	// Block until the phone reaches the SAS gate. A terminal result arriving FIRST (a
 	// rendezvous/TTL failure or a dropped session, before any gate) unblocks here fail
@@ -1153,13 +1153,21 @@ const (
 // The last symbol row is left UNTERMINATED for the same reason: the newline that would
 // end it scrolls the terminal one row and costs the drawing its top. runRemotePair opens
 // the post-scan block with that newline instead.
-func printPairingQR(stdout io.Writer, payload string) {
+func printPairingQR(stdout io.Writer, shortCode, payload string) {
 	cols, rows := terminalBox()
+	// The short code leads on BOTH paths (ADR-007 B140): it is the one spelling a human can
+	// carry to the phone by reading it, which is what the owner asked for after the
+	// 133-character payload ("not possibly written by a human", agents-tracker-tr0n). Empty
+	// from a daemon that predates it, and then this line does not print -- a prompt with
+	// nothing to type is worse than the old output.
+	if shortCode != "" {
+		fmt.Fprintf(stdout, "Type this code on your phone to pair: %s\n", shortCode)
+	}
 	if r, err := renderPairingQR(payload, cols, rows); err == nil {
 		// The payload stays available for manual entry (PB-PAIR-2), WRAPPED to the terminal
 		// width — a line long enough to reflow would displace the symbol — and printed
 		// ABOVE it, where it costs the symbol no rows.
-		fmt.Fprintln(stdout, "Or enter this pairing code manually:")
+		fmt.Fprintln(stdout, "Or paste this full code:")
 		for _, line := range chunkLines(payload, cols) {
 			fmt.Fprintln(stdout, line)
 		}
@@ -1168,7 +1176,7 @@ func printPairingQR(stdout io.Writer, payload string) {
 		return
 	}
 	fmt.Fprintln(stdout, qrFallbackReason(payload, cols, rows))
-	fmt.Fprintln(stdout, "Enter this pairing code on your phone:")
+	fmt.Fprintln(stdout, "Or paste this full code:")
 	// UNWRAPPED here: there is no symbol above to protect, and manual entry wants one
 	// unbroken token to read or copy.
 	fmt.Fprintln(stdout, payload)

@@ -2257,7 +2257,8 @@ func (cc *clientConn) handlePairStart(c Control) {
 	// host's background goroutine); both go through writeMu, so they are serialized
 	// and the test classifies the two frames by Op.
 	_ = cc.writeControl(Control{Op: OpPairStart, EndpointID: cc.endpointID,
-		Pairing: &PairingControl{QR: view.QR, RendezvousID: view.RendezvousID, ExpiresAt: view.ExpiresAt}})
+		Pairing: &PairingControl{QR: view.QR, RendezvousID: view.RendezvousID,
+			ExpiresAt: view.ExpiresAt, ShortCode: view.ShortCode}})
 }
 
 // handlePairConfirm routes a pair_confirm's decision to this connection's in-flight

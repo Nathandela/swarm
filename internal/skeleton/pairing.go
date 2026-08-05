@@ -161,16 +161,36 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		return protocol.PairView{}, err
 	}
 
-	// Mint the rendezvous id + single-use pairing secret (crypto/rand). They are
-	// INDEPENDENT: the relay only ever sees the id; the secret is the out-of-band
-	// camera channel (the QR), never on the wire.
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return protocol.PairView{}, fmt.Errorf("mint rendezvous id: %w", err)
-	}
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
-		return protocol.PairView{}, fmt.Errorf("mint pairing secret: %w", err)
+	// Mint the ceremony as a short code (ADR-007 B140): the rendezvous id derives from
+	// the code's public tag, the single-use pairing secret from its secret half. They are
+	// no longer independent random values -- the code IS the ceremony, and the QR and the
+	// ten typed characters are two spellings of it. What still holds, and is the load-
+	// bearing part of the old comment: the relay only ever sees the id, and the secret
+	// half crosses out-of-band (camera or human), never on the wire.
+	//
+	// The mint and the rendezvous open are ONE retried unit: a 15-bit tag can collide
+	// with a live ceremony on the relay, and the remedy for a refused id is a fresh code,
+	// not a failed pairing. Three mints bound the loop -- a relay that refuses three
+	// independent ids has a problem re-minting will not fix, and its error surfaces.
+	var (
+		shortCode string
+		id        [16]byte
+		secret    [32]byte
+		transport pairing.RendezvousTransport
+	)
+	for attempt := 0; ; attempt++ {
+		var err error
+		shortCode, id, secret, err = pairing.MintShortCode(rand.Reader)
+		if err != nil {
+			return protocol.PairView{}, fmt.Errorf("mint pairing short code: %w", err)
+		}
+		transport, err = cfg.NewRendezvous(ctx, id)
+		if err == nil {
+			break
+		}
+		if attempt == 2 {
+			return protocol.PairView{}, fmt.Errorf("open rendezvous: %w", err)
+		}
 	}
 
 	// The QR a real phone scans to recover the relay endpoint, the rendezvous id, and the
@@ -187,11 +207,6 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 	})
 	if err != nil {
 		return protocol.PairView{}, fmt.Errorf("encode pairing qr: %w", err)
-	}
-
-	transport, err := cfg.NewRendezvous(ctx, id)
-	if err != nil {
-		return protocol.PairView{}, fmt.Errorf("open rendezvous: %w", err)
 	}
 
 	mp := pairing.MachineParams{
@@ -352,6 +367,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		QR:           qr,
 		RendezvousID: hex.EncodeToString(id[:]),
 		ExpiresAt:    &expiresAt,
+		ShortCode:    shortCode,
 	}, nil
 }
 

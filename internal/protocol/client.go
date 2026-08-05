@@ -368,6 +368,7 @@ type PairingSession struct {
 	QR           string
 	RendezvousID string
 	ExpiresAt    *time.Time
+	ShortCode    string
 
 	pending chan PairingPending // SAS-gate pushes (pair_pending), buffered
 	result  chan PairingResult  // the single terminal outcome (pair_result / fail-closed)
@@ -417,6 +418,7 @@ func (c *Client) StartPairing(req PairStartReq) (*PairingSession, error) {
 	sess.QR = resp.Pairing.QR
 	sess.RendezvousID = resp.Pairing.RendezvousID
 	sess.ExpiresAt = resp.Pairing.ExpiresAt
+	sess.ShortCode = resp.Pairing.ShortCode
 	return sess, nil
 }
 

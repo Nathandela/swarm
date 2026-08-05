@@ -159,6 +159,9 @@ type PairingControl struct {
 	QR           string     `json:"qr,omitempty"`
 	RendezvousID string     `json:"rendezvous_id,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	// ShortCode is the pair_start reply's human-typeable spelling of the same ceremony
+	// (ADR-007 B140). Additive and omitempty on both sides of the version skew.
+	ShortCode string `json:"short_code,omitempty"`
 	SAS          []string   `json:"sas,omitempty"`
 	DeviceName   string     `json:"device_name,omitempty"`
 	Allow        bool       `json:"allow,omitempty"`

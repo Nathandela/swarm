@@ -24,6 +24,10 @@ type PairView struct {
 	QR           string
 	RendezvousID string
 	ExpiresAt    *time.Time
+	// ShortCode is the human-typeable spelling of the same ceremony (ADR-007 B140):
+	// ten Crockford characters deriving the SAME rendezvous id and pairing secret the
+	// QR carries. Empty from a daemon that predates it, and the CLI prints nothing then.
+	ShortCode string
 }
 
 // PairResult is the terminal pairing outcome the host reports via the result

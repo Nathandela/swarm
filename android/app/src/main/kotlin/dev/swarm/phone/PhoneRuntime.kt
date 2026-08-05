@@ -81,6 +81,15 @@ class PhoneRuntime(private val context: Context) {
     }
 
     /**
+     * The relay this phone already knows, or empty. The short-code pairing spelling (ADR-007
+     * B140) needs it BEFORE any pairing exists: ten typed characters cannot carry a URL, so
+     * the remembered slot stands in for the QR's relay field, and the Go facade refuses a
+     * code arriving with an empty one -- with words, on the pairing screen.
+     */
+    @Synchronized
+    fun knownRelay(): String = rememberedRelay()
+
+    /**
      * Throw away the built phone so the URL [rememberRelay] just learned takes effect.
      *
      * WITHOUT THIS A FRESH INSTALL CANNOT USE THE PAIRING IT JUST COMPLETED. `mobile.Config

@@ -87,6 +87,7 @@ ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
 method App.BeginPairing(string) (*Pairing, error)
+method App.BeginPairingWithCode(string, string) (*Pairing, error)
 method App.ClearUndeliveredInputs() error
 method App.ClockVerdict() (string, error)
 method App.Close() error

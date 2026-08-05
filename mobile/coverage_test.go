@@ -20,8 +20,12 @@ import (
 // (op.outcome, key_custody.install, callbacks). It is hard-coded HERE, not read from
 // the TSV, so deleting a row from the table cannot make the requirement disappear.
 var requiredScreenElements = []string{
-	// pairing (QR decode, SAS, confirm, cancel)
+	// pairing (QR decode, short code, SAS, confirm, cancel)
 	"pairing.qr_decode",
+	// The ten-character spelling, ADR-007 B140 (agents-tracker-tr0n): required so the
+	// fence DEMANDS the row -- a surface that dropped BeginPairingWithCode would fail
+	// here, not just lose an untraced-verb row.
+	"pairing.short_code",
 	"pairing.sas",
 	"pairing.confirm",
 	"pairing.cancel",

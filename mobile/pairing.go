@@ -210,7 +210,48 @@ func (a *App) BeginPairing(qr string) (p *Pairing, err error) {
 	if err != nil {
 		return nil, classed(ErrClassPairingFailed, err)
 	}
+	return a.beginWith(core, payload)
+}
 
+// BeginPairingWithCode is BeginPairing for the ten-character spelling (ADR-007 B140): the
+// typed code plus the relay URL this phone already knows construct the SAME payload the QR
+// would have carried, and everything downstream is the QR path, byte for byte. It JOINS
+// NOTHING, exactly like BeginPairing -- the handle comes back in confirm_destination, and the
+// destination the confirm sheet renders is this relayURL, so PB-PAIR-6's display-then-confirm
+// covers the remembered value the same way it covers a scanned one.
+func (a *App) BeginPairingWithCode(code, relayURL string) (p *Pairing, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	payload, err := payloadFromShortCode(code, relayURL)
+	if err != nil {
+		return nil, err
+	}
+	return a.beginWith(core, payload)
+}
+
+// payloadFromShortCode derives the ceremony from its typed spelling. The relay URL is the
+// one thing the code cannot carry; refusing its absence HERE keeps the failure a routed
+// message on the pairing screen rather than a handle holding a ceremony with no address to
+// dial (PB-PAIR-7's state, reached from the other side).
+func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
+	url := strings.TrimSpace(relayURL)
+	if url == "" {
+		return pairing.QRPayload{}, classed(ErrClassPairingFailed,
+			errors.New("this phone has no relay yet: scan the QR once, or paste the full code"))
+	}
+	id, psk, err := pairing.DeriveShortCode(code)
+	if err != nil {
+		return pairing.QRPayload{}, classed(ErrClassPairingFailed, err)
+	}
+	return pairing.QRPayload{RelayURL: url, RendezvousID: id, PairingSecret: psk}, nil
+}
+
+// beginWith is the shared tail of the two spellings: the handle in confirm_destination,
+// nothing dialled, the locked-handset refusal before the attempt is recorded.
+func (a *App) beginWith(core *phonecore.Core, payload pairing.QRPayload) (*Pairing, error) {
 	// NO CONTEXT AND NO CANCEL FUNC YET, because there is nothing to cancel: the handshake
 	// context is created by join(), which is the only thing that dials. Cancel before then is
 	// a state change and a file write.
@@ -232,7 +273,7 @@ func (a *App) BeginPairing(qr string) (p *Pairing, err error) {
 	// rather than handshaking with a nil handle (ADR-007 B14). It is resolved BEFORE the
 	// attempt is recorded, so a locked handset is refused without leaving a pairing the next
 	// launch would offer to resume.
-	if _, err = core.KeyStore().NoiseStatic(); err != nil {
+	if _, err := core.KeyStore().NoiseStatic(); err != nil {
 		return nil, err
 	}
 	pr.persist(pairConfirmDestination)
