@@ -208,6 +208,28 @@ data class ClockBanner(
 data class StatusBanner(
     /** The transport's, or empty while the link is quiet. */
     val connection: String,
+    /**
+     * PB-SYNC-7's fail-closed hold, or empty once the machine has published the rollback
+     * authorities a mutating op needs (agents-tracker-pxz8).
+     *
+     * IT IS READ PROACTIVELY, WHICH IS THE WHOLE OF THE FIX. `StateSummary.Reconciled` crosses
+     * the boundary and, until this field existed, was read by no Kotlin at all -- only `.paired`
+     * and `.machine` were. So the hold was invisible until a mutating press ran into
+     * `swarm/unreconciled`, and the screen that answer landed on read as THAT PRESS failing
+     * rather than as a state the phone was already sitting in before it was pressed. The
+     * sentence is [ErrorRouter]'s own for `ErrClassUnreconciled`, taken rather than re-typed, so
+     * a user reads the same words whether this banner catches them first or a press does.
+     *
+     * IT IS ITS OWN FACT AND NOT [connection]'S. Every row [ConnectionBanner] can hold is either
+     * a healthy link or one this phone cannot use at all; this reports a link that works FOR
+     * READING throughout, with only writes on hold, which is a third condition neither of that
+     * type's two states can express.
+     *
+     * DEFAULTED FOR [pairAgain]'S REASON. `StatusBanner(connection = ..., freshness = ..., stale
+     * = ...)` is how the suites that predate this fact build one directly, and a banner assembled
+     * without naming it should not silently start claiming a hold nobody asked for.
+     */
+    val syncing: String = "",
     /** The machine's own clock, or empty while it is inside section 6.0's budget. */
     val freshness: String,
     /** The journal stream's, or empty while the roster is whole. */
@@ -228,19 +250,21 @@ data class StatusBanner(
     val pairAgain: String = "",
 ) {
     /**
-     * The lines to draw, in the order a reader meets them: the link, then the machine, then the
-     * list. Outward from the phone -- a link that is down explains a machine that is silent, which
-     * in turn explains a list that is holed, and the reverse order asks the reader to work
-     * backwards.
+     * The lines to draw, in the order a reader meets them: the link, then the write-hold, then
+     * the machine, then the list. Outward from the phone -- a link that is down explains a
+     * machine that is silent, which in turn explains a list that is holed, and the reverse order
+     * asks the reader to work backwards. The write-hold sits second because, like the link, it
+     * bears on what the user can DO rather than on what the screen can be trusted to show.
      */
-    val lines: List<String> get() = listOf(connection, freshness, stale).filter { it.isNotEmpty() }
+    val lines: List<String>
+        get() = listOf(connection, syncing, freshness, stale).filter { it.isNotEmpty() }
 
     /** True when the phone has nothing to warn about. The banner draws no air in that state. */
     val silent: Boolean get() = lines.isEmpty()
 
     companion object {
         /** Nothing to say -- the state a phone with no core to ask is honestly in. */
-        val NONE = StatusBanner(connection = "", freshness = "", stale = "")
+        val NONE = StatusBanner(connection = "", syncing = "", freshness = "", stale = "")
 
         /**
          * What the pair-again control reads (agents-tracker-agre).
@@ -268,29 +292,42 @@ data class StatusBanner(
          *  formatter carrying the user's locale and time zone -- which is that method's own
          *  arrangement and is why this model needs no clock to be testable.
          * @param staleNotice [TriageInbox.staleNotice], which decided the wording in S16.
+         * @param reconciled `StateSummary.Reconciled` (agents-tracker-pxz8): true once the machine
+         *  has published the rollback authorities PB-SYNC-7 requires before it accepts a mutating
+         *  op. IT DEFAULTS TO TRUE -- "nothing held" -- so a caller built from the three facts
+         *  above alone, as every suite predating this fact already is, keeps reading as silent on
+         *  this one rather than as a phone permanently waiting on a machine it never asked.
          */
         fun of(
             connection: ConnectionBanner,
             freshness: String?,
             staleNotice: String,
+            reconciled: Boolean = true,
         ): StatusBanner = StatusBanner(
             connection = if (connection.visible) connection.text else "",
-            // A TERMINAL LINK SILENCES THE TWO WAITING FACTS (agents-tracker-agre).
+            // A TERMINAL LINK SILENCES ALL THREE WAITING FACTS (agents-tracker-agre,
+            // agents-tracker-pxz8).
             //
             // `ConnectionBanner.showsSpinner` has said since S16 that "a spinner is a promise that
             // waiting is enough", and the requirement was met vacuously: this app draws no spinner,
             // so nothing ever read `terminal` to stop looking busy -- while the app went on looking
-            // busy IN WORDS. Both of these end in a promise. The roster's is "some of your
-            // machine's activity has not arrived yet"; the machine's is "Not heard from your
-            // machine yet" (and, past the budget, a timestamp that will never advance). Under a
-            // transport that has STOPPED RETRYING neither resolves, ever, and both are strictly
-            // weaker than the line above them -- which names the cause and the remedy.
+            // busy IN WORDS. All three end in a promise. The roster's is "some of your machine's
+            // activity has not arrived yet"; the machine's is "Not heard from your machine yet"
+            // (and, past the budget, a timestamp that will never advance); the hold's is "changes
+            // are held until it does" -- and under a transport that has STOPPED RETRYING none of
+            // the three resolves, ever. Each is strictly weaker than the line above it, which names
+            // the cause and the remedy.
             //
-            // IT IS SUPPRESSION AND NOT RE-WORDING. The sentences belong to `TriageInbox` and
-            // `MachineFreshness`; a tense written for this case would be copy authored here, at
-            // the seam PB-DS-9 keeps copy out of. The emptiness rule this model already owns is
-            // "a fact with nothing to say says nothing", and a fact whose tense the transport has
-            // just falsified has nothing to say.
+            // IT IS SUPPRESSION AND NOT RE-WORDING. The sentences belong to `TriageInbox`,
+            // `MachineFreshness` and `ErrorRouter`; a tense written for this case would be copy
+            // authored here, at the seam PB-DS-9 keeps copy out of. The emptiness rule this model
+            // already owns is "a fact with nothing to say says nothing", and a fact whose tense the
+            // transport has just falsified has nothing to say.
+            syncing = if (connection.terminal || reconciled) {
+                ""
+            } else {
+                ErrorRouter.route(SwarmErrorTokens.SYNCING).message
+            },
             freshness = if (connection.terminal) "" else freshness.orEmpty(),
             stale = if (connection.terminal) "" else staleNotice,
             // THE REMEDY BECOMES A CONTROL, and `visible` gates it for the reason it gates the

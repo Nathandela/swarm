@@ -1155,6 +1155,8 @@ class PhoneSurface(
                 // a session, an exit or a needs_input, and the one screen that must never present
                 // that as live is the one a person triages from.
                 staleNotice = inbox.staleNotice,
+                // PB-SYNC-7's hold, shown before anyone presses anything (agents-tracker-pxz8).
+                reconciled = reconciledOf(startup),
             ),
         )
         // AND THE STARTUP LINE IS CLEARED, because the other branch writes it. A core that
@@ -1219,6 +1221,27 @@ class PhoneSurface(
         // its own lease flag would satisfy the requirement's first clause and drop the second,
         // silently, while the model that states it stayed green and unread.
         setKeyboardEnabled(view.keyboardEnabled)
+    }
+
+    /**
+     * PB-SYNC-7's fail-closed hold, for [StatusBanner.of]'s fourth fact (agents-tracker-pxz8).
+     *
+     * `StateSummary.Reconciled` crosses the boundary and, before this line, was read by no
+     * Kotlin at all -- only `.paired` (read above, through [PairOnlyScreen.presentationOf]) and
+     * `.machine` were. So the hold was invisible until a mutating press ran into
+     * `swarm/unreconciled`, and the screen that answer landed on read as THAT press failing
+     * rather than as a state the phone was already sitting in before it was pressed.
+     *
+     * UNREADABLE READS AS UNRECONCILED, for PB-SYNC-7's own reason: a state this phone cannot
+     * confirm is not one it should tell the user is fine. In practice this branch is moot by the
+     * time it runs -- [converge] and the `paired` read above it have already proven
+     * `stateSummary()` readable this draw -- but defaulting the other way here would be a second
+     * place this fact can disagree with itself.
+     */
+    private fun reconciledOf(startup: PhoneStartup.Ready): Boolean = try {
+        startup.app.stateSummary().reconciled
+    } catch (unreadable: Exception) {
+        false
     }
 
     // -----------------------------------------------------------------------
