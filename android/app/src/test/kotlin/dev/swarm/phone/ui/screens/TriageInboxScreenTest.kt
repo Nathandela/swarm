@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.SessionRow
 import dev.swarm.phone.ui.TriageInbox
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -238,6 +239,55 @@ class TriageInboxScreenTest {
         val screen = screenOf(listOf(row("mbp/finished", "completed")))
 
         assertNull("a `0 LIVE` counter is a number nobody needs", screen.live)
+    }
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-e6mi.
+     *
+     * A HOLED ROSTER LABELLED `LIVE` IS THE ONE CLAIM THIS SCREEN MUST NOT MAKE. The list is
+     * rendered from the journal stream, and [TriageInbox.stale] says that stream has an unrepaired
+     * hole -- so a session, an exit or a needs_input may be missing, and the counter over it is an
+     * arithmetic result presented as a fact. The stale notice said so at the BOTTOM of the column
+     * while `.pnav .live` asserted `3 LIVE` at the top of the same screen, which is the two halves
+     * of one screen disagreeing.
+     *
+     * IT IS QUALIFIED RATHER THAN SUPPRESSED, which is [TriageInbox]'s own rule about an empty
+     * section applied to a number: dropping it makes "nothing is in flight" indistinguishable from
+     * "we are not sure", and the count is still the most useful thing the screen has. The mark is
+     * the model's copy, read from the model here rather than transcribed, so a change of wording
+     * fails at the source rather than silently disagreeing with the screen.
+     */
+    @Test
+    fun `a counter over a holed roster is not presented as a whole one`() {
+        val rows = listOf(
+            row("mbp/blocked", "needs_input"),
+            row("mbp/busy", "working"),
+            row("mbp/also-busy", "working"),
+        )
+
+        val whole = screenOf(rows, stale = false).live
+        val holed = screenOf(rows, stale = true).live
+
+        assertEquals("3 LIVE", whole)
+        assertNotEquals(
+            "the counter reads the same over a roster the phone knows is incomplete as over one " +
+                "it knows is whole, so the screen asserts a liveness it cannot have counted",
+            whole,
+            holed,
+        )
+        assertNotNull("the counter vanished rather than being qualified", holed)
+        assertTrue(
+            "the qualified counter no longer carries the count, so the screen traded a claim it " +
+                "could not support for no information at all: \"$holed\"",
+            holed!!.contains("3"),
+        )
+    }
+
+    @Test
+    fun `a holed roster with nothing in flight still shows no counter`() {
+        // The qualification does not resurrect the counter the model already refuses: a `0 LIVE`
+        // is a number nobody needs, and a qualified zero is that number with a mark on it.
+        assertNull(screenOf(listOf(row("mbp/finished", "completed")), stale = true).live)
     }
 
     @Test
