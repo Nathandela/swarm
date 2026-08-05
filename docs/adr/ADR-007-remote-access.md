@@ -8548,3 +8548,47 @@ failure is now a red test forever.
 
 The PNG remains the promised path; the ladder is what makes the best-effort terminal path
 actually work on the one terminal the owner uses.
+
+## B143. Disclosed, not discovered: battery saver and Doze delay pushes (2026-08-06)
+
+**The gap.** `runtime/ConnectivityPolicy.kt` already models three background states --
+`DOZE`, `APP_STANDBY`, `BATTERY_SAVER` -- each of which closes the socket and falls back to
+B16's wake-path push. Nothing reads those three rows: no `PowerManager` observation exists
+anywhere in the app, and no screen ever says so either. PB-RUN-3's subject is the socket, not
+the person holding the phone, and a repo-wide search for "power save" or "standby bucket" turns
+up nothing outside `ConnectivityPolicy.kt` itself (agents-tracker-u7sl).
+
+**B16 already ruled on this, in words, before any code modeled the states it describes:**
+
+> Nothing observes while the phone is in a pocket. That is the correct behaviour for this
+> product and should be stated in the docs rather than discovered: the phone is a remote
+> control, not a monitor.
+
+That sentence is a decision, not an aside, and this entry is the part of it that was never
+executed: the docs it names.
+
+**Decision: disclose, unconditionally, on the Settings screen the two push switches already
+live on.** `SettingsScreen` gains one fixed sentence -- `pushDelayDisclosure` /
+`PUSH_DELAY_DISCLOSURE` -- carried unreworded through `SettingsPanel.disclosure` and rendered
+every time the Notifications section is. IT IS DELIBERATELY NOT A THIRD NOTICE beside
+`notificationsBlockedNotice` and `deliveryBlockedNotice`: both of those are conditional on
+`PermissionState` / `NotificationDelivery` because they report a fault this phone detected, and
+there is no fault to detect here -- battery saver and Doze delaying a push is the product
+working exactly as B16 designed it. Folding it into that list would have it vanish on a
+settled, permitted screen, which is precisely the phone an owner is most likely to be looking
+at when a push arrives late and they wonder why.
+
+**What this entry does NOT decide, and records as the upgrade path instead.** A fixed sentence
+is a ceiling: it cannot tell a user reading it today whether battery saver is on right now, only
+that it can matter. Reading that live needs `PowerManager.isPowerSaveMode()` for battery saver
+and `PowerManager.isDeviceIdleMode()` for Doze, sampled where the screen is built and, to stay
+current while the screen stays open, refreshed off `ACTION_POWER_SAVE_MODE_CHANGED` and
+`ACTION_DEVICE_IDLE_MODE_CHANGED`. `APP_STANDBY`'s live equivalent is `UsageStatsManager`'s
+standby bucket, which needs `PACKAGE_USAGE_STATS` -- a much heavier ask for one hint, and worth
+questioning rather than assuming when that observation is built. None of it lands in this pass
+(agents-tracker-u7sl's own scope line explicitly defers it), so it is named here for whoever
+picks it up rather than half-built now.
+
+**NEEDS OWNER REVIEW.** This entry and its copy have not been read by Nathan; they are written
+to unblock the tracked issue, not as a ruling. If the wording in `SettingsScreen.kt` is wrong,
+the fix is that sentence -- not this record of why one exists.
