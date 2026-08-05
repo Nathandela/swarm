@@ -303,4 +303,39 @@ class SettingsPanelScreenTest {
             SettingsPanelScreen.of(screen()).deliveryRedirectLabel,
         )
     }
+
+    // ---- agents-tracker-u7sl: the panel carries the model's push-delay disclosure ------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). It is a SEPARATE field from `notices` and not folded into
+    // it: `notices` is filtered to what a fault produced (see `a settled, permitted screen says
+    // nothing extra` above), and the disclosure is unconditional -- it must survive on a settled,
+    // permitted screen exactly where every notice above is asserted empty.
+
+    @Test
+    fun `the disclosure is the model's own sentence, unreworded`() {
+        val settings = screen()
+
+        assertEquals(
+            "the panel invented its own wording for the push-delay disclosure instead of " +
+                "carrying the model's, so two files now decide what the user reads",
+            settings.pushDelayDisclosure,
+            SettingsPanelScreen.of(settings).disclosure,
+        )
+    }
+
+    @Test
+    fun `the disclosure survives every state that empties the notices list`() {
+        for (settings in listOf(
+            screen(),
+            screen(permission = PermissionState.DENIED),
+            screen(permission = null),
+        )) {
+            assertEquals(
+                "agents-tracker-u7sl: the disclosure went missing on a state where every notice " +
+                    "is correctly empty, so a battery-saver phone reads nothing about pushes at all",
+                settings.pushDelayDisclosure,
+                SettingsPanelScreen.of(settings).disclosure,
+            )
+        }
+    }
 }

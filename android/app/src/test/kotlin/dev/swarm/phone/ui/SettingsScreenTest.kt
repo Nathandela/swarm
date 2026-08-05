@@ -528,4 +528,39 @@ class SettingsScreenTest {
             )
         }
     }
+
+    // ---- agents-tracker-u7sl: battery saver and Doze are disclosed, not discovered -----------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). ADR-007 B16 already ruled that this "should be stated in
+    // the docs rather than discovered", and B143 executes that ruling as screen copy. UNLIKE
+    // `notificationsBlockedNotice` and `deliveryBlockedNotice`, this is not a fault this phone
+    // detected -- battery saver and Doze delaying a push is the product working as B16 designed
+    // it -- so it does not depend on `notificationPermission` or `notificationDelivery` at all.
+
+    @Test
+    fun `the push-delay disclosure is the fixed sentence, regardless of state`() {
+        val settled = SettingsScreen(alerts = true, mentions = true)
+        val blocked = settled
+            .withNotificationPermission(dev.swarm.phone.runtime.PermissionState.PERMANENTLY_DENIED)
+        val channelBlocked = settled
+            .withNotificationPermission(dev.swarm.phone.runtime.PermissionState.GRANTED)
+            .withNotificationDelivery(dev.swarm.phone.runtime.NotificationDelivery.CHANNEL_BLOCKED)
+
+        for (screen in listOf(settled, blocked, channelBlocked)) {
+            assertEquals(
+                "agents-tracker-u7sl: the disclosure changed with state, so it read as a fault " +
+                    "notice rather than the unconditional fact B16 records",
+                SettingsScreen.PUSH_DELAY_DISCLOSURE,
+                screen.pushDelayDisclosure,
+            )
+        }
+    }
+
+    @Test
+    fun `the disclosure is never blank, unlike the notices it sits beside`() {
+        assertTrue(
+            "an empty disclosure renders as a blank line nobody wrote",
+            SettingsScreen(alerts = true, mentions = true).pushDelayDisclosure.isNotEmpty(),
+        )
+    }
 }

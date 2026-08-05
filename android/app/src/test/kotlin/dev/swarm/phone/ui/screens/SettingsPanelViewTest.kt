@@ -321,6 +321,47 @@ class SettingsPanelViewTest {
         )
     }
 
+    // ---- agents-tracker-u7sl: the push-delay disclosure is always on screen -----------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). UNLIKE `SettingsTag.NOTICE`, this line is not conditional --
+    // ADR-007 B143 disclosed it unconditionally -- so, unlike
+    // `a notice is drawn only when the panel has one to make`, this asserts exactly one is drawn
+    // on a settled, permitted screen too.
+
+    @Test
+    fun `the push-delay disclosure renders on a settled screen, not only a blocked one`() {
+        val settled = panel()
+
+        val drawn = view(settled).allTagged(SettingsTag.DISCLOSURE)
+        assertEquals(
+            "the disclosure was drawn more than once, or not at all, on a screen with no faults",
+            listOf(settled.disclosure),
+            drawn.map { textOf(it) },
+        )
+    }
+
+    @Test
+    fun `the disclosure comes before the fault notices it is not one of`() {
+        val blocked = panel(permission = PermissionState.PERMANENTLY_DENIED)
+        val root = view(blocked)
+
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let {
+                if (it == SettingsTag.DISCLOSURE || it == SettingsTag.NOTICE) order += it
+            }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+
+        assertEquals(
+            "the disclosure is not the reason the switches are dead, so it belongs above the " +
+                "notice that is",
+            listOf(SettingsTag.DISCLOSURE, SettingsTag.NOTICE),
+            order,
+        )
+    }
+
     @Test
     fun `what this slice has not recomposed is hosted under the panel, not instead of it`() {
         val trailing = View(context)
