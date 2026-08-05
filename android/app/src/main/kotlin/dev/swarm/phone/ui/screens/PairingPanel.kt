@@ -266,6 +266,17 @@ object PairingPanelScreen {
         "the camera on in Settings, or paste the code your machine printed."
 
     /**
+     * Why the scanner is gone on a device with no camera at all, and why -- unlike
+     * [CAMERA_BLOCKED] -- it names no settings route (agents-tracker-nz9h).
+     *
+     * NOTHING IN SETTINGS ADDS HARDWARE A HANDSET DOES NOT HAVE. Sending this device to the same
+     * sentence [CAMERA_BLOCKED] uses would be the identical defect this screen already avoids for
+     * a permission nobody withheld: a control that leads nowhere useful.
+     */
+    const val NO_CAMERA_NOTICE = "This device has no camera, so it cannot scan a code. Paste " +
+        "the code your machine printed."
+
+    /**
      * Why a first pairing asks for a relay address, and why only the first one does.
      *
      * IT DOES NOT SAY "the address your machine printed", WHICH WOULD BE THE FRIENDLIER
@@ -390,7 +401,11 @@ object PairingPanelScreen {
                 // camera is still askable, the scan control is on screen, and a paste field of
                 // equal weight beside it is what made the owner read pasting as how this product
                 // pairs (agents-tracker-qx9m).
-                if (manualEntryRevealed || PairingFlow.routesToSystemSettings(scanner)) {
+                // OPEN AUTOMATICALLY WHEREVER THE SCANNER IS WITHDRAWN FOR GOOD -- a permanent
+                // denial and no camera hardware alike (agents-tracker-nz9h) -- because in both
+                // states the typed path is the only thing left that works without leaving the
+                // app, and collapsing it there is the dead end PB-PAIR-2 forbids.
+                if (manualEntryRevealed || !PairingFlow.offersScanner(scanner)) {
                     controls += PairingControl.TYPED_PAYLOAD
                     controls += PairingControl.USE_TYPED_PAYLOAD
                 } else {
@@ -429,14 +444,15 @@ object PairingPanelScreen {
                 confirming -> attempt.destinationNotice
                 else -> ""
             },
-            // ONLY THE STATE THAT WITHDRAWS THE SCANNER EXPLAINS ITSELF. On an ordinary denial the
-            // scan control is right there and pressing it re-asks; a sentence about a blocked
+            // ONLY THE STATES THAT WITHDRAW THE SCANNER EXPLAIN THEMSELVES. On an ordinary denial
+            // the scan control is right there and pressing it re-asks; a sentence about a blocked
             // camera would be a warning about something that is not wrong, which is the same
-            // defect as sending a fresh install to a Settings screen.
-            cameraNotice = if (scanning && PairingFlow.routesToSystemSettings(scanner)) {
-                CAMERA_BLOCKED
-            } else {
-                ""
+            // defect as sending a fresh install to a Settings screen. The two withdrawn states
+            // read differently (agents-tracker-nz9h): only a permanent denial names Settings.
+            cameraNotice = when {
+                scanning && PairingFlow.routesToSystemSettings(scanner) -> CAMERA_BLOCKED
+                scanning && PairingFlow.hasNoCamera(scanner) -> NO_CAMERA_NOTICE
+                else -> ""
             },
             // THE SENTENCE FOLLOWS THE FIELD, so the two cannot disagree: a screen that carried
             // the explanation without the box, or the box without the explanation, would be one

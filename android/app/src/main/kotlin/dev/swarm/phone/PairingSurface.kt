@@ -532,7 +532,19 @@ class PairingSurface(
             // the Go core for its state several times a second and rebuild the tree under the
             // running preview. The screen model still owns the words.
             onFrames = { seen -> scanProgress.text = PairingPanelScreen.scanProgress(seen) },
+            onError = { failure -> scanFailed(failure) },
         )
+    }
+
+    /**
+     * A camera that started binding and then failed -- no available camera, a lifecycle already
+     * gone, anything CameraX itself refuses -- routed to the same outcome line every other
+     * pairing failure reaches instead of crashing the app (agents-tracker-nz9h).
+     */
+    private fun scanFailed(failure: Exception) {
+        stopScanning()
+        outcome.text = routed(failure)
+        render()
     }
 
     /**
@@ -862,22 +874,32 @@ class PairingSurface(
     // -----------------------------------------------------------------------
 
     /**
-     * PB-RUN-2's resolution, with the persisted "have we asked" bit the platform does not offer.
+     * PB-RUN-2's resolution, with the persisted "have we asked" bit the platform does not offer
+     * -- but only once there is a camera to ask a permission ABOUT at all (agents-tracker-nz9h).
+     * The manifest declares `android.hardware.camera` optional, so a handset that answers no to
+     * [hasCameraHardware] is checked here, before any permission is resolved: every permission
+     * question is moot once the hardware itself is absent, and answering PERMANENTLY_DENIED for
+     * it would offer a Settings route that fixes nothing.
      *
      * `shouldShowRequestPermissionRationale` is false BEFORE the first ask as well as after a
      * permanent denial, so reading it alone reports PERMANENTLY_DENIED on a fresh install and
      * sends a user with nothing wrong to a Settings screen.
      */
-    private fun scannerState(): ScannerState = PairingFlow.scannerState(
-        PermissionStateResolver.resolve(
-            permission = AppPermission.CAMERA,
-            sdkInt = Build.VERSION.SDK_INT,
-            granted = activity.checkSelfPermission(Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED,
-            hasAskedBefore = PermissionAsks.hasAsked(activity, AppPermission.CAMERA),
-            showRationale = activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA),
-        ),
-    )
+    private fun scannerState(): ScannerState {
+        if (!hasCameraHardware(activity.packageManager)) return ScannerState.NO_CAMERA
+        return PairingFlow.scannerState(
+            PermissionStateResolver.resolve(
+                permission = AppPermission.CAMERA,
+                sdkInt = Build.VERSION.SDK_INT,
+                granted = activity.checkSelfPermission(Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED,
+                hasAskedBefore = PermissionAsks.hasAsked(activity, AppPermission.CAMERA),
+                showRationale = activity.shouldShowRequestPermissionRationale(
+                    Manifest.permission.CAMERA,
+                ),
+            ),
+        )
+    }
 
     /**
      * IT IS [PermissionAsks]'S NOW AND NOT THIS FILE'S (agents-tracker-0dij). The bit, its store and
@@ -970,3 +992,19 @@ class PairingSurface(
         const val CAMERA_ASK = 1
     }
 }
+
+/**
+ * Whether this handset has any camera at all, the fact [PairingSurface.scannerState] gates on
+ * before it asks anything about the CAMERA permission (agents-tracker-nz9h).
+ *
+ * `FEATURE_CAMERA_ANY` IS THE AGGREGATE, not `FEATURE_CAMERA` -- the manifest already declares
+ * `android.hardware.camera` optional (a rear camera specifically), and a handset with only a
+ * front camera must not be told it has none.
+ *
+ * EXTRACTED TO A TOP-LEVEL FUNCTION so it has a seam a test can drive without a live phone core:
+ * [PairingSurface] takes an `AppCompatActivity` and has no unit test of its own for the reason
+ * every render comment in that class gives -- `PhoneRuntime.phone()` never resolves to `Ready`
+ * on this unit-test JVM, so `scannerState`'s caller is unreachable here.
+ */
+internal fun hasCameraHardware(packageManager: PackageManager): Boolean =
+    packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)

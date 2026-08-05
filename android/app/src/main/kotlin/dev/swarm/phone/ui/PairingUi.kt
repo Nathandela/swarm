@@ -14,7 +14,7 @@ import dev.swarm.phone.runtime.PermissionState
  * destination is displayed before anything is joined.
  */
 
-/** The three states PB-PAIR-2 enumerates for the scanner screen. */
+/** The scanner screen's states: PB-PAIR-2's three permission answers, plus NO_CAMERA. */
 enum class ScannerState {
     SCANNING,
 
@@ -23,6 +23,16 @@ enum class ScannerState {
 
     /** Not re-askable: only the system settings screen can undo this one. */
     PERMISSION_PERMANENTLY_DENIED,
+
+    /**
+     * No camera hardware at all (`PackageManager.FEATURE_CAMERA_ANY` is absent).
+     *
+     * ITS OWN STATE, NOT A REUSE OF [PERMISSION_PERMANENTLY_DENIED] (agents-tracker-nz9h). The
+     * two withdraw the same control, but their remedy differs: a permanent denial is undone by
+     * the system settings screen this app can open, and nothing on the device undoes missing
+     * hardware -- so [PairingFlow.routesToSystemSettings] must answer false for this one alone.
+     */
+    NO_CAMERA,
 }
 
 /**
@@ -242,7 +252,7 @@ object PairingFlow {
      * only route that can undo it.
      */
     fun offersScanner(state: ScannerState): Boolean =
-        state != ScannerState.PERMISSION_PERMANENTLY_DENIED
+        state != ScannerState.PERMISSION_PERMANENTLY_DENIED && state != ScannerState.NO_CAMERA
 
     /**
      * Always (agents-tracker-qun0). This answered `state != SCANNING`, reading PB-PAIR-2's "a
@@ -257,9 +267,27 @@ object PairingFlow {
      */
     fun offersManualEntry(state: ScannerState): Boolean = true
 
-    /** Only a permanent denial. An ordinary one is re-askable, and Settings is a detour. */
+    /**
+     * Only a permanent denial. An ordinary one is re-askable, and Settings is a detour.
+     *
+     * [ScannerState.NO_CAMERA] IS EXCLUDED ON PURPOSE (agents-tracker-nz9h): nothing in Settings
+     * can add hardware a handset does not have, so routing there would be a detour with no
+     * destination.
+     */
     fun routesToSystemSettings(state: ScannerState): Boolean =
         state == ScannerState.PERMISSION_PERMANENTLY_DENIED
+
+    /**
+     * Whether the camera is missing entirely, as opposed to merely withheld by a permission
+     * answer.
+     *
+     * A THIRD SETTLED PREDICATE ALONGSIDE [offersScanner] AND [routesToSystemSettings], for the
+     * same reason those two exist as predicates rather than as comparisons written where they
+     * are read: android/gate/qx9m_camerareach_test.go forbids `ui/screens/PairingPanel.kt` any
+     * `ScannerState.*` literal of its own, so the panel asks this object which sentence to draw
+     * instead of naming the state.
+     */
+    fun hasNoCamera(state: ScannerState): Boolean = state == ScannerState.NO_CAMERA
 
     /**
      * The manual fallback takes the SAME payload the code carries, so it reaches the same

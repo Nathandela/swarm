@@ -100,8 +100,16 @@ class QrScanner(private val activity: AppCompatActivity) {
      *  [SCREEN_EVERY] frames. It is throttled here rather than at the screen because the caller
      *  cannot throttle what it is not told: at thirty frames a second an un-throttled callback is
      *  thirty main-thread posts a second for a line of text that a person reads at reading speed.
+     * @param onError called on the MAIN thread if the camera never starts -- `future.get()` or
+     *  `bindToLifecycle` throwing (agents-tracker-nz9h). Both can fail on a device whose camera
+     *  is missing, busy, or refused by CameraX for a reason this class cannot resolve, and the
+     *  caller decides what a person sees; this class only stops trying.
      */
-    fun start(onPayload: (String) -> Unit, onFrames: (Long) -> Unit = {}) {
+    fun start(
+        onPayload: (String) -> Unit,
+        onFrames: (Long) -> Unit = {},
+        onError: (Exception) -> Unit = {},
+    ) {
         if (frames != null) return
         val executor = Executors.newSingleThreadExecutor()
         frames = executor
@@ -116,7 +124,12 @@ class QrScanner(private val activity: AppCompatActivity) {
             // initialisation on first use and takes a moment. Binding a use case to a destroyed
             // lifecycle throws; checking here is cheaper than catching it.
             if (frames !== executor) return@addListener
-            val cameraProvider = future.get()
+            val cameraProvider = try {
+                future.get()
+            } catch (unavailable: Exception) {
+                failToStart(executor, unavailable, onError)
+                return@addListener
+            }
             provider = cameraProvider
 
             val preview = Preview.Builder().build()
@@ -187,13 +200,40 @@ class QrScanner(private val activity: AppCompatActivity) {
             }
 
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                activity,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                analysis,
-            )
+            try {
+                cameraProvider.bindToLifecycle(
+                    activity,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    analysis,
+                )
+            } catch (unsupported: IllegalArgumentException) {
+                // Thrown by CameraSelector.select when no camera matches DEFAULT_BACK_CAMERA --
+                // a camera-less handset above all (agents-tracker-nz9h), where nothing here
+                // caught it and it crashed the main thread this listener runs on.
+                failToStart(executor, unsupported, onError)
+            }
         }, activity.mainExecutor)
+    }
+
+    /**
+     * A camera that never started, routed to the caller instead of crashing the main thread it
+     * was about to bind on (agents-tracker-nz9h). `future.get()` and `bindToLifecycle` are the
+     * two call sites that reach here, and neither has a local recovery.
+     *
+     * FRAMES IS CLEARED HERE TOO, not only in [stop]: a failed start must not leave [start]
+     * refusing every later call forever -- the guard at its top reads [frames] to decide whether
+     * a scan is already running, and a run that never started is not one.
+     */
+    private fun failToStart(
+        executor: ExecutorService,
+        failure: Exception,
+        onError: (Exception) -> Unit,
+    ) {
+        provider = null
+        if (frames === executor) frames = null
+        executor.shutdown()
+        onError(failure)
     }
 
     /**
