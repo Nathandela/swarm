@@ -236,17 +236,57 @@ func (a *App) BeginPairingWithCode(code, relayURL string) (p *Pairing, err error
 // one thing the code cannot carry; refusing its absence HERE keeps the failure a routed
 // message on the pairing screen rather than a handle holding a ceremony with no address to
 // dial (PB-PAIR-7's state, reached from the other side).
+//
+// THE URL IS TYPED BY A PERSON NOW (agents-tracker-3fkm), which is why it is validated and not
+// merely present. Until the first-run prompt existed this string could only have come from a QR
+// this app had already decoded; it now arrives from a phone keyboard, copied off a terminal
+// across the room, so a typo is an ordinary event rather than an impossible one. Caught here it
+// is a sentence on the pairing screen naming the shape an address has. Passed through, it is a
+// ceremony whose confirm step asks the user to approve their own typo, followed by a transport
+// failure with nothing actionable in it.
 func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
-	url := strings.TrimSpace(relayURL)
-	if url == "" {
+	trimmed := strings.TrimSpace(relayURL)
+	if trimmed == "" {
 		return pairing.QRPayload{}, classed(ErrClassPairingFailed,
 			errors.New("this phone has no relay yet: scan the QR once, or paste the full code"))
+	}
+	dest, err := relayAddress(trimmed)
+	if err != nil {
+		// Already classed by relayAddress, which is where its sentence is written.
+		return pairing.QRPayload{}, err
 	}
 	id, psk, err := pairing.DeriveShortCode(code)
 	if err != nil {
 		return pairing.QRPayload{}, classed(ErrClassPairingFailed, err)
 	}
-	return pairing.QRPayload{RelayURL: url, RendezvousID: id, PairingSecret: psk}, nil
+	return pairing.QRPayload{RelayURL: dest, RendezvousID: id, PairingSecret: psk}, nil
+}
+
+// relayAddress is the typed relay URL as something dialable, or the sentence the typist gets.
+//
+// `ws://` IS ACCEPTED ALONGSIDE `wss://`. PB-OPS-1's demonstration is a phone reaching a laptop
+// over the LAN, where there is no certificate to be had, and PB-PAIR-6 already displays the
+// destination and LABELS a private address rather than forbidding it. Refusing the unencrypted
+// scheme here would refuse that case one layer below the step built to judge it.
+//
+// It returns the PARSED form, so a scheme typed in capitals reaches the transport in the one
+// spelling the transport reads. Everything else is preserved as written -- the string the confirm
+// step shows has to be the address the user can compare against their terminal.
+func relayAddress(raw string) (string, error) {
+	shape := classed(ErrClassPairingFailed, errors.New("that is not a relay address: it looks "+
+		"like wss://host:port (or ws:// on your own network), and your machine printed the "+
+		"whole thing"))
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", shape
+	}
+	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+		return "", shape
+	}
+	if parsed.Host == "" {
+		return "", shape
+	}
+	return parsed.String(), nil
 }
 
 // beginWith is the shared tail of the two spellings: the handle in confirm_destination,
