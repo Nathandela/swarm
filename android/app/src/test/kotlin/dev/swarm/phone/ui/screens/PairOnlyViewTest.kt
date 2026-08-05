@@ -207,4 +207,40 @@ class PairOnlyViewTest {
             )
         }
     }
+
+    /**
+     * agents-tracker-w6o3: the reason reaches the screen, or the model decided it for nobody.
+     *
+     * [PairOnlyTerminalReasonTest] argues WHAT each terminal state says. This is the other half and
+     * the one the defect actually was: a phone whose owner revoked it opened on the fresh-install
+     * screen because nothing between the transport and this composition carried the reason. A model
+     * that answers correctly into a view drawing three constants is the same screen it was.
+     */
+    @Test
+    fun `the reason the pairing ended is what the screen says`() {
+        for (reason in PairOnlyReason.entries) {
+            val copy = PairOnlyScreen.copyFor(reason)
+            val root = pairOnlyView(
+                context,
+                pairing = flow(),
+                started = false,
+                onStartPairing = {},
+                copy = copy,
+            )
+
+            assertEquals(
+                "the screen draws its own heading over a phone in $reason, so the model's " +
+                    "decision reaches nobody",
+                copy.title,
+                textOf(root.kitFind(PairOnlyTag.TITLE)),
+            )
+            assertEquals(
+                "the screen draws the first-run sentence over a phone in $reason -- the defect " +
+                    "this issue is, one level further out",
+                copy.body,
+                textOf(root.kitFind(PairOnlyTag.BODY)),
+            )
+            assertEquals(copy.cta, textOf(root.kitFind(PairOnlyTag.CTA)))
+        }
+    }
 }
