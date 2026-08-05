@@ -24,6 +24,7 @@ import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.StatusBanner
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
@@ -56,6 +57,7 @@ import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.sessionDetailView
+import dev.swarm.phone.ui.screens.statusBannerView
 import dev.swarm.phone.ui.screens.triageInboxView
 import java.util.Date
 import swarmmobile.App
@@ -149,6 +151,20 @@ class PhoneSurface(
     private val dispatch: VerbDispatch = VerbDispatch.background(),
 ) {
 
+    /**
+     * PB-APP-9's routed startup failure, on the branch where the phone core refused construction.
+     *
+     * IT NO LONGER CARRIES THE LINK'S NEWS, and that move is agents-tracker-e6mi. This label used
+     * to hold the connection banner, the machine's freshness verdict and the roster's stale notice
+     * as well -- three sentences joined into one, on a view hosted under the inbox's sections and
+     * therefore detached on every other destination. Those three are [bannerHost]'s now, above the
+     * scaffold's content, where a tab change cannot reach them.
+     *
+     * WHAT IS LEFT IS THE ONE THING THAT IS NOT ABOUT THE LINK. A core that would not start is not
+     * a machine that cannot be reached: there is no phone to ask, no roster, and no drill-down --
+     * [renderUnavailable] closes all of it -- so the sentence belongs with the screen that branch
+     * draws rather than in the standing banner, which reports on a link this handset does not have.
+     */
     private val status = label(heading = true)
 
     /**
@@ -477,6 +493,14 @@ class PhoneSurface(
     private var barDrawn: Pair<List<InboxTab>, Destination>? = null
 
     /**
+     * What the scaffold's banner last said, for [inboxDrawn]'s reason.
+     *
+     * It is NOT keyed on the destination, and that is the whole point of the slot: the banner says
+     * the same thing wherever the user is standing, so nothing about navigation invalidates it.
+     */
+    private var bannerDrawn: StatusBanner? = null
+
+    /**
      * Whether the offer on the unpaired phone's screen has been taken up.
      *
      * IT IS A FACT ABOUT THIS SCREEN AND NOT ABOUT THE PAIRING STATE, which is why it is here and
@@ -565,8 +589,16 @@ class PhoneSurface(
      *
      * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
      * [launchHost] are composed panels rather than loose views. What is genuinely unrecomposed is
-     * the status line, the capability notice, the outcome line, and the KEYBOARD -- the field and
+     * the startup line, the capability notice, the outcome line, and the KEYBOARD -- the field and
      * Send.
+     *
+     * **THE LINK'S NEWS HAS LEFT IT, AND THAT IS THE DEFECT agents-tracker-e6mi REPORTS.** The
+     * connection banner, the machine's freshness verdict and the roster's stale notice were three
+     * sentences joined into [status], which is a child of this column -- so PB-APP-8's whole
+     * subject was legible at the bottom of one of four tabs and nowhere else, and a link that
+     * dropped while the user was reading a session changed nothing they could see. They are
+     * [bannerHost]'s now, above the scaffold's content and outside its scroll, and they are three
+     * lines rather than one paragraph.
      *
      * **THE PAIRING PANEL HAS LEFT IT, AND THAT IS THE DEFECT agents-tracker-64rf REPORTS.** It was
      * a child of this column, which is hosted BELOW the session list on the Inbox destination -- so
@@ -632,6 +664,26 @@ class PhoneSurface(
         // A glowing dot is drawn outside its own view.
         clipChildren = false
         clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
+    }
+
+    /**
+     * agents-tracker-e6mi: where PB-APP-8's connection states, PB-APP-11's freshness verdict and
+     * the roster's PB-APP-8 notice are drawn, above the destination and outside its scroll.
+     *
+     * IT IS A HOST THE SURFACE OWNS, for [contentHost]'s reason exactly. What the banner says
+     * changes whenever the transport, the machine's clock or the journal stream does -- which is
+     * to say on every event -- and the scaffold is rebuilt only when the bar changes. Handing the
+     * scaffold a fresh banner per draw would rebuild the bar at the rate the agents produce
+     * events, and re-parent the destination under whoever is using it.
+     *
+     * WHAT IT REPLACES IS A LINE ON THE INBOX. The three facts were written to [status], a child
+     * of [unrecomposedControls], which `triageInboxView` hosts UNDER its four Group sections --
+     * so `hostContent`'s `detachHostedViews` took them off screen on the way to Machines,
+     * Activity, Settings and into every session drill-down. The link dropping changed nothing on
+     * screen for a user standing anywhere else, which is the moment PB-APP-8 exists for.
+     */
+    private val bannerHost = FrameLayout(activity).apply {
         layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
     }
 
@@ -881,6 +933,13 @@ class PhoneSurface(
         // a remedy, and `detail` exists for a bug report rather than for a person.
         status.text = startup.error.message
 
+        // AND THE BANNER SAYS NOTHING, which is the honest answer here rather than an omission.
+        // Every line it can carry is read from the phone core -- the transport's state, the
+        // machine's own stamp, the journal stream's completeness -- and on this branch there is no
+        // core to ask. A banner reporting "not connected" would be a claim about a machine this
+        // handset is in no position to make, which is [drawContent]'s own argument for drawing no
+        // inbox here.
+        drawBanner(StatusBanner.NONE)
         notice.text = ""
         session = ""
         // AND NO DRILL-DOWN. The detail is read from the phone core, so a handset whose core
@@ -960,17 +1019,27 @@ class PhoneSurface(
         drawContent(bridge, inbox)
         drawScaffold(inbox.tabs)
 
-        status.text = listOfNotNull(
-            bridge.connectionBanner().text,
-            bridge.machineFreshness().notice { millis ->
-                DateFormat.getTimeFormat(status.context).format(Date(millis))
-            },
-            // PB-APP-8 for the roster. `TriageInbox.staleNotice` decided the wording in S16 and
-            // reached no user until now: a list drawn from a holed journal may be missing a
-            // session, an exit or a needs_input, and the one screen that must never present that
-            // as live is the one a person triages from.
-            inbox.staleNotice,
-        ).filter { it.isNotEmpty() }.joinToString(" ")
+        // THREE FACTS, THREE LINES, ON A SLOT NO TAB CHANGE REACHES (agents-tracker-e6mi). This
+        // was `listOfNotNull(...).joinToString(" ")` onto [status] -- one run-on paragraph, on a
+        // view hosted under the inbox's sections and detached on every other destination.
+        // [StatusBanner] owns the order and the emptiness rule; [bannerHost] owns the place.
+        drawBanner(
+            StatusBanner.of(
+                connection = bridge.connectionBanner(),
+                freshness = bridge.machineFreshness().notice { millis ->
+                    DateFormat.getTimeFormat(activity).format(Date(millis))
+                },
+                // PB-APP-8 for the roster. `TriageInbox.staleNotice` decided the wording in S16
+                // and reached no user until now: a list drawn from a holed journal may be missing
+                // a session, an exit or a needs_input, and the one screen that must never present
+                // that as live is the one a person triages from.
+                staleNotice = inbox.staleNotice,
+            ),
+        )
+        // AND THE STARTUP LINE IS CLEARED, because the other branch writes it. A core that
+        // refused once and started on the next resume would otherwise leave its refusal standing
+        // under a working app.
+        status.text = ""
         notice.text = CapabilityNotice.of(startup.anomalies)
 
         // THE TARGET IS THE ROW ON SCREEN. It used to be
@@ -1098,7 +1167,12 @@ class PhoneSurface(
         val next = tabs to destination
         if (next == barDrawn && host.childCount > 0) return
         barDrawn = next
+        // BOTH HOSTS SURVIVE THE REBUILD, and both have to be taken out of the scaffold that is
+        // about to be discarded: Android refuses an `addView` of a child that still claims a
+        // parent. The banner joined the content host here rather than in `detachHostedViews`
+        // because it is not hosted IN the content -- that is the whole of the fix.
         (contentHost.parent as? ViewGroup)?.removeView(contentHost)
+        (bannerHost.parent as? ViewGroup)?.removeView(bannerHost)
         host.removeAllViews()
         host.addView(
             phoneScaffoldView(
@@ -1107,8 +1181,30 @@ class PhoneSurface(
                 tabs = tabs,
                 destination = destination,
                 onSelectDestination = ::selectDestination,
+                banner = bannerHost,
             ),
         )
+    }
+
+    /**
+     * Draw what the app has to say about its link, redrawn only when it has changed.
+     *
+     * THE EQUALITY CHECK IS [drawInbox]'s AND SHARPER HERE. This runs on every resume, after every
+     * action and on every journal event, and the banner sits above a destination somebody may be
+     * scrolling; rebuilding it unconditionally would re-lay out the whole column at whatever rate
+     * their agents produce events. [StatusBanner] is a data class of three strings, so "has
+     * anything a user can read changed" is one comparison.
+     *
+     * THE HOST IS ALWAYS FILLED, INCLUDING WITH SILENCE. A silent banner is a tagged container
+     * holding no lines rather than no container at all, which costs nothing on screen -- it has no
+     * fill, no border and no padding of its own -- and keeps the slot findable, so a test can tell
+     * "the phone has nothing to report" from "the slot went away again".
+     */
+    private fun drawBanner(banner: StatusBanner) {
+        if (banner == bannerDrawn && bannerHost.childCount > 0) return
+        bannerDrawn = banner
+        bannerHost.removeAllViews()
+        bannerHost.addView(statusBannerView(activity, banner))
     }
 
     /**

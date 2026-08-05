@@ -26,7 +26,12 @@ import dev.swarm.phone.ui.TriageInbox
 data class InboxScreen(
     /** `.pnav .big`. Inventory C1.1. */
     val title: String,
-    /** `.pnav .live`, or null when nothing is in flight -- a counter reading zero says nothing. */
+    /**
+     * `.pnav .live`, or null when nothing is in flight -- a counter reading zero says nothing.
+     *
+     * It carries a MARK when the roster it was counted from is holed; [TriageInboxScreen.liveCount]
+     * argues why it is qualified rather than dropped.
+     */
     val live: String?,
     val scopes: List<ScopeChip>,
     val sections: List<InboxSection>,
@@ -36,9 +41,14 @@ data class InboxScreen(
      *
      * IT IS NOT RENDERED BY THE INBOX VIEW and that is a scope statement rather than an omission:
      * inventory C1's composition is four elements and none of them is a notice, and the design's
-     * only body-copy block (derivation row 8) is the empty state. `PhoneSurface` renders this on
-     * the line it already gives the connection banner and the freshness notice, which is where a
-     * user reads everything else the transport has to say.
+     * only body-copy block (derivation row 8) is the empty state.
+     *
+     * IT IS RENDERED ON THE SCAFFOLD'S BANNER, one line of three, above whichever destination is
+     * on screen (agents-tracker-e6mi). It used to be joined to the connection banner and the
+     * freshness verdict as one sentence on a line hosted UNDER this screen's own sections, which
+     * is to say on one of four tabs -- so the notice qualifying this list was not on screen for a
+     * user who had navigated away from it, and [live] went on asserting a count over the same
+     * holed roster at the top of the same screen.
      */
     val staleNotice: String,
 )
@@ -191,13 +201,44 @@ object TriageInboxScreen {
         val blocked = sections.filter { it.group == BLOCKED }.sumOf { it.rows.size }
         return InboxScreen(
             title = TITLE,
-            live = if (inFlight == 0) null else "$inFlight LIVE",
+            live = liveCount(inFlight, whole = !inbox.stale),
             scopes = scopesOf(inbox, scope),
             sections = sections,
             tabs = tabsOf(blocked),
             staleNotice = inbox.staleNotice,
         )
     }
+
+    /**
+     * `.pnav .live`, and whether it may be stated as a fact.
+     *
+     * A HOLED ROSTER LABELLED `LIVE` IS THE ONE CLAIM THIS SCREEN MUST NOT MAKE (agents-tracker-
+     * e6mi). The list is rendered from the journal stream, so [TriageInbox.stale] means a session,
+     * an exit or a needs_input may be missing -- and the counter over it is arithmetic over an
+     * incomplete list presented as a count of what is running. The stale notice said so at the
+     * BOTTOM of the column while this asserted `3 LIVE` at the top of the same screen; the notice
+     * is now on the scaffold's banner, above every destination, and this is the other half of that
+     * sentence agreeing with it.
+     *
+     * IT IS QUALIFIED RATHER THAN SUPPRESSED, which is [TriageInbox]'s own rule about an empty
+     * section applied to a number. Dropping the counter makes "nothing is in flight"
+     * indistinguishable from "we are not sure", and the count is still the most useful thing this
+     * screen has -- it is a floor a person can act on. [PARTIAL_MARK] is the standard "about", it
+     * is one character in a cell the design gives ten sans-serif characters of room, and it says
+     * the one thing that is true: this number was counted from a list the phone knows is incomplete.
+     *
+     * A QUALIFIED ZERO IS STILL NO COUNTER. The mark does not resurrect the readout this model
+     * already refuses -- `0 LIVE` is a number nobody needs, and marking it approximate does not
+     * make it worth the space.
+     */
+    private fun liveCount(inFlight: Int, whole: Boolean): String? = when {
+        inFlight == 0 -> null
+        whole -> "$inFlight LIVE"
+        else -> "$PARTIAL_MARK$inFlight LIVE"
+    }
+
+    /** What a count carries when the roster it was counted from may be missing rows. */
+    private const val PARTIAL_MARK = "~"
 
     /**
      * The machine a session belongs to, or null when its id does not name one.
