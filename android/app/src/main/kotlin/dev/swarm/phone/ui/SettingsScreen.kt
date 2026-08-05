@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui
 
+import dev.swarm.phone.runtime.NotificationDelivery
 import dev.swarm.phone.runtime.PermissionState
 
 /**
@@ -115,6 +116,21 @@ data class SettingsScreen(
      * both.
      */
     val settled: SettingsSnapshot? = null,
+    /**
+     * Whether the FRAMEWORK will show what this app posts, or null until something has asked
+     * (agents-tracker-2yfn).
+     *
+     * IT IS A SECOND, INDEPENDENT FACT and not a restatement of [notificationPermission]. A user who
+     * long-presses a wake and blocks `Agent updates` leaves POST_NOTIFICATIONS GRANTED -- blocking a
+     * channel does not revoke a permission -- so every check this screen made answered "fine" while
+     * every wake was dropped before the app was started. Push is the sole path to a backgrounded
+     * phone (ADR-007 B16), so nothing else in the product would ever have said so.
+     *
+     * NULL IS THE STATE BEFORE ANYTHING HAS LOOKED, which is [notificationPermission]'s convention
+     * and carries its reason: claiming a state nobody checked is how a screen reports a fault on a
+     * phone where nothing is wrong.
+     */
+    val notificationDelivery: NotificationDelivery? = null,
 ) {
     fun toggleCategory(toggle: PushToggle): PushCategory = when (toggle) {
         PushToggle.FIRST -> PushCategory.NEEDS_INPUT
@@ -167,6 +183,9 @@ data class SettingsScreen(
     fun withNotificationPermission(state: PermissionState): SettingsScreen =
         copy(notificationPermission = state)
 
+    fun withNotificationDelivery(state: NotificationDelivery): SettingsScreen =
+        copy(notificationDelivery = state)
+
     /**
      * PB-RUN-2. Below API 33 the permission does not exist and notifications work, which is a
      * THIRD answer and not a convenience -- PermissionStateResolver already models it, and
@@ -209,8 +228,65 @@ data class SettingsScreen(
      * decision to offer them at all.
      */
     val notificationRedirectLabel: String?
-        get() = if (notificationRemedy == NotificationRemedy.SYSTEM_SETTINGS) {
+        get() = if (notificationRemedy == NotificationRemedy.SYSTEM_SETTINGS ||
+            blockedDelivery == NotificationDelivery.APP_BLOCKED
+        ) {
+            // THE APP-LEVEL BLOCK REUSES THIS CONTROL rather than getting one of its own
+            // (agents-tracker-2yfn). Its remedy IS this screen's destination -- the app's own
+            // notification page -- and the two states cannot both hold, because a permission notice
+            // suppresses the delivery one (see [blockedDelivery]). A second control to the same
+            // place would be a second thing to keep in agreement with this one.
             OPEN_NOTIFICATION_SETTINGS
+        } else {
+            null
+        }
+
+    /**
+     * The delivery fault this screen should report, or null where there is none to report
+     * (agents-tracker-2yfn).
+     *
+     * A PERMISSION NOTICE SUPPRESSES THIS ONE, and that is the whole of the de-duplication. On API
+     * 33+ the app-level notification toggle IS POST_NOTIFICATIONS, so a global disable makes both
+     * facts true at once and two notices would say the same thing twice over two switches. The
+     * permission's is the one that survives because it is the one whose remedy the screen can still
+     * offer: on DENIED the platform will still prompt, and a redirect shown there would walk the
+     * user past the prompt that fixes it.
+     */
+    val blockedDelivery: NotificationDelivery?
+        get() = notificationDelivery
+            ?.takeIf { it != NotificationDelivery.DELIVERABLE }
+            ?.takeIf { notificationRemedy == null }
+
+    /**
+     * What the screen says about a wake the framework will drop, in words of its own.
+     *
+     * IT IS NOT THE PERMISSION'S SENTENCE AND MUST NOT BE. The remedies differ -- a channel block is
+     * undone on the channel's own page, an app-level disable on the app's, a withheld permission by
+     * a prompt -- and copy naming an action the screen does not offer reads as a step the user has
+     * failed to find. Each sentence here names the control its own state puts on screen, which is
+     * [notificationsBlockedNotice]'s rule applied to the state that rule could not see.
+     */
+    val deliveryBlockedNotice: String
+        get() = when (blockedDelivery) {
+            NotificationDelivery.APP_BLOCKED ->
+                "Android is not showing notifications from this app, so these switches change " +
+                    "nothing. $OPEN_NOTIFICATION_SETTINGS to turn them back on."
+
+            NotificationDelivery.CHANNEL_BLOCKED ->
+                "Android has this app's alert category switched off, so wakes are dropped before " +
+                    "they reach you and these switches change nothing. $OPEN_CHANNEL_SETTINGS to " +
+                    "turn it back on."
+
+            NotificationDelivery.DELIVERABLE, null -> ""
+        }
+
+    /**
+     * The words on the control that leads to the WAKE CHANNEL's own page, or null where that is not
+     * where the problem is. See [notificationRedirectLabel], whose reasoning this shares.
+     */
+    val deliveryRedirectLabel: String?
+        get() = if (blockedDelivery == NotificationDelivery.CHANNEL_BLOCKED) {
+            OPEN_CHANNEL_SETTINGS
         } else {
             null
         }
@@ -260,6 +336,24 @@ data class SettingsScreen(
          * cannot drift apart -- [notificationsBlockedNotice] interpolates this constant.
          */
         const val OPEN_NOTIFICATION_SETTINGS = "Open notification settings"
+
+        /**
+         * The channel redirect's words, once, for [OPEN_NOTIFICATION_SETTINGS]'s reason --
+         * [deliveryBlockedNotice] interpolates this constant, so the sentence and the control cannot
+         * drift apart.
+         *
+         * IT IS DIFFERENT WORDS BECAUSE IT IS A DIFFERENT DESTINATION (agents-tracker-2yfn). The
+         * other label leads to this app's notification list, on which the wake category is one row;
+         * this one leads to that row's own page, which is the only place a blocked category can be
+         * turned back on. Two controls wearing one label is a screen that cannot say where either
+         * goes.
+         *
+         * IT DOES NOT NAME THE CATEGORY. `Agent updates` is a string RESOURCE
+         * (`R.string.wake_channel_name`) because it is what the system settings screen displays, and
+         * a second copy typed here would be a second copy that drifts -- the same argument
+         * [SettingsSurface]'s controls make about carrying no words at construction.
+         */
+        const val OPEN_CHANNEL_SETTINGS = "Open the alert category"
 
         /**
          * What a refusal says when the machine sent no words with it (agents-tracker-os37).

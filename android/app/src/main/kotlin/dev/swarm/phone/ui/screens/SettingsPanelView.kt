@@ -83,6 +83,13 @@ object SettingsTag {
      */
     const val PERMISSION_REDIRECT = "settings.permission.redirect"
 
+    /**
+     * agents-tracker-2yfn's way out of a blocked wake CHANNEL, WHEREVER IT WAS BUILT -- for
+     * [PERMISSION_REDIRECT]'s reasons, which it shares exactly. It is NOT that tag: the two open
+     * different system screens, and a caller reaching for one must not be handed the other.
+     */
+    const val DELIVERY_REDIRECT = "settings.delivery.redirect"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, ROW)
 }
@@ -105,6 +112,11 @@ object SettingsTag {
  *  the press starts an Activity, so it carries the touch filter and an identity that survives a
  *  redraw, and both are the surface's. The default is the control this screen would place if nobody
  *  owned the click -- correct to look at, and attached to nothing.
+ * @param deliveryRedirectFor the control that leads to the WAKE CHANNEL's own page, for the label
+ *  [SettingsPanel.deliveryRedirectLabel] carries. A second parameter rather than a second use of
+ *  [redirectFor] because the two open different system screens and the Intent is fixed inside a
+ *  listener installed at construction, so one control cannot be both. Its default is this screen's
+ *  own, for [redirectFor]'s reason: correct to look at, and attached to nothing.
  * @param below views this slice has NOT recomposed, hosted under the panel. Null is the finished
  *  shape.
  */
@@ -114,6 +126,7 @@ fun settingsPanelView(
     rowFor: (SettingsRow) -> View,
     replaceFor: (PairedMachineRow) -> View = { row -> denyChip(context, row.replaceLabel) },
     redirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
+    deliveryRedirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     below: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
@@ -178,6 +191,13 @@ fun settingsPanelView(
     // into it), so a control drawn above the sentence would arrive before its reason.
     panel.permissionRedirectLabel?.let { label ->
         column.addView(redirectFor(label).apply { tag = SettingsTag.PERMISSION_REDIRECT })
+    }
+
+    // BESIDE IT AND UNDER THE NOTICES, for the same reason and by the same arrangement. The two are
+    // never both present -- a permission notice suppresses the delivery one -- so what this places
+    // is whichever way out the live fault has.
+    panel.deliveryRedirectLabel?.let { label ->
+        column.addView(deliveryRedirectFor(label).apply { tag = SettingsTag.DELIVERY_REDIRECT })
     }
 
     below?.let { column.addView(it) }

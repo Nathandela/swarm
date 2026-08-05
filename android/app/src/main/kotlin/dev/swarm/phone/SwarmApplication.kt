@@ -2,6 +2,7 @@ package dev.swarm.phone
 
 import android.app.Application
 import dev.swarm.phone.push.PushTokens
+import dev.swarm.phone.push.WakeNotifications
 import dev.swarm.phone.theme.SwarmTheme
 
 /**
@@ -26,6 +27,22 @@ class SwarmApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         SwarmTheme.applyDefaultNightMode()
+        // THE WAKE CHANNEL EXISTS FROM THE START OF THE PROCESS, NOT FROM THE FIRST WAKE
+        // (agents-tracker-2yfn). `ensureChannel`'s only caller was `SwarmMessagingService`, so
+        // before a push had ever arrived there was no channel at all: `getNotificationChannel`
+        // answered null and anything that wanted to ask whether delivery was blocked had nothing to
+        // ask about. The settings screen is precisely somewhere a user goes BEFORE any wake -- it is
+        // where the two switches are turned on -- so the one screen that reports on notifications
+        // could not see the object it reports on.
+        //
+        // THE PER-WAKE CALL IS KEPT and this is IN ADDITION to it. `WakeNotifications`'s own KDoc
+        // gives the reason and it still holds: the process handling a wake is routinely a fresh one
+        // Android built for that message alone. Two calls to an idempotent creator is the same
+        // guarantee made at both moments it has to be true.
+        //
+        // IT IS SAFE HERE for the reason stated below about the token: it touches NotificationManager
+        // and nothing that can refuse -- no Keystore, no filesystem, no native library.
+        WakeNotifications.ensureChannel(this)
         // NOTHING OBSERVES THE SCREEN LOCK ANY MORE (ADR-007 B133). This used to install
         // `ContentLockTriggers` here, so that a lock or a backgrounding purged the content tier
         // and the user re-authenticated on the way back. The trust boundary is now the WIRE, and

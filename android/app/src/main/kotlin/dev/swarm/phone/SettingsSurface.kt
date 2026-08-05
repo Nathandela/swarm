@@ -1,6 +1,7 @@
 package dev.swarm.phone
 
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -14,8 +15,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.app.NotificationManagerCompat
 import dev.swarm.phone.push.PushTokens
+import dev.swarm.phone.push.WakeNotifications
 import dev.swarm.phone.runtime.AppPermission
+import dev.swarm.phone.runtime.NotificationDelivery
+import dev.swarm.phone.runtime.NotificationDeliveryResolver
 import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.FacadeBridge
@@ -189,6 +194,37 @@ class SettingsSurface(
         },
     )
 
+    /**
+     * agents-tracker-2yfn's way out of a blocked wake CHANNEL.
+     *
+     * IT IS A SECOND CONTROL BESIDE [openNotificationSettings] AND NOT THE SAME ONE RE-LABELLED,
+     * because the two open different system screens and the Intent is fixed in a listener installed
+     * at construction -- which is what makes both of them the same view every draw, and what
+     * PB-SEC-12 clause 1's filter is applied to. The other leads to this app's notification LIST, on
+     * which the wake category is one row among however many; this leads to that row's own page,
+     * which is the only place a blocked category can be turned back on.
+     *
+     * `EXTRA_CHANNEL_ID` IS NOT OPTIONAL. `ACTION_CHANNEL_NOTIFICATION_SETTINGS` needs both extras:
+     * the package names the app, and the channel id names the page. Without the second the intent
+     * has nothing to show and resolves to nothing at all.
+     *
+     * Built here, gated once, named in [touchFilteredActions], INTERNAL so
+     * `SettingsSurfaceNotificationsTest` has a subject, and carrying no words at construction -- the
+     * same five decisions [openNotificationSettings] records, for the same reasons.
+     */
+    internal val openChannelSettings: TextView = SecureWindow.gate(
+        ctaButton(activity, "", CtaKind.MORE).apply {
+            announceAsButton()
+            setOnClickListener {
+                activity.startActivity(
+                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, WakeNotifications.CHANNEL_ID),
+                )
+            }
+        },
+    )
+
     /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
     private var drawn: SettingsPanel? = null
 
@@ -241,7 +277,16 @@ class SettingsSurface(
      * ever looked at.
      */
     val touchFilteredActions: List<View> =
-        listOf(needsInput, finished, replace, confirmReplace, openNotificationSettings)
+        listOf(
+            needsInput,
+            finished,
+            replace,
+            confirmReplace,
+            openNotificationSettings,
+            // AND THE CHANNEL REDIRECT IS THE FIFTH (agents-tracker-2yfn), for the fourth's reason
+            // exactly: it authorises nothing and it LEAVES THE APP.
+            openChannelSettings,
+        )
 
     /**
      * Called once a `Replace this computer` press has settled, so the window that hosts this panel
@@ -335,8 +380,40 @@ class SettingsSurface(
                     AppPermission.POST_NOTIFICATIONS.manifestName,
                 ),
             ),
-        )
+        ).withNotificationDelivery(deliveryNow())
     }
+
+    /**
+     * Whether the framework will actually show a wake, asked of the platform on every draw
+     * (agents-tracker-2yfn).
+     *
+     * THE PERMISSION CHECK ABOVE CANNOT SEE THIS. A user who long-presses a wake and blocks
+     * `Agent updates` leaves POST_NOTIFICATIONS GRANTED -- blocking a channel does not revoke a
+     * permission -- so `checkSelfPermission` goes on answering GRANTED while every wake is dropped
+     * before this app is started. Push is the sole path to a backgrounded phone (ADR-007 B16), so
+     * without this call nothing in the product would ever say so.
+     *
+     * IT IS SPLIT OUT OF [read] BECAUSE THE GATHER IS WHAT GOES WRONG. agents-tracker-0dij was a
+     * correct resolver handed a LITERAL (`hasAskedBefore = true`), green across every unit test
+     * while the app resolved every fresh install to PERMANENTLY_DENIED -- so the two arguments below
+     * have an assertion of their own in `SettingsSurfaceNotificationsTest`. [read] cannot carry it:
+     * `PhoneRuntime.phone()` answers Unavailable on every JVM run, so [read] is never entered there,
+     * while this touches only NotificationManager, which Robolectric models.
+     *
+     * NULL IS A CHANNEL THAT DOES NOT EXIST and is passed on as such rather than defaulted. See
+     * [NotificationDeliveryResolver.resolve]: it is not a block, and reading it as one would report
+     * a fault on a phone where nothing is wrong.
+     *
+     * RE-ASKED EVERY DRAW, so `PhoneActivity.onResume` is the whole of the re-check after a trip to
+     * the system settings -- the same free ride the permission resolve takes, and the reason neither
+     * needs a callback.
+     */
+    internal fun deliveryNow(): NotificationDelivery = NotificationDeliveryResolver.resolve(
+        notificationsEnabled = NotificationManagerCompat.from(activity).areNotificationsEnabled(),
+        channelImportance = activity.getSystemService(NotificationManager::class.java)
+            .getNotificationChannel(WakeNotifications.CHANNEL_ID)
+            ?.importance,
+    )
 
     /**
      * The machine this phone is pinned to, or null when it is pinned to none.
@@ -467,6 +544,7 @@ class SettingsSurface(
                 rowFor = ::controlFor,
                 replaceFor = ::replaceFor,
                 redirectFor = ::redirectFor,
+                deliveryRedirectFor = ::deliveryRedirectFor,
                 below = outcome,
             ),
         )
@@ -520,8 +598,22 @@ class SettingsSurface(
         return openNotificationSettings
     }
 
+    /** The channel redirect, wearing the label the model decided to offer. See [redirectFor]. */
+    private fun deliveryRedirectFor(label: String): View {
+        (openChannelSettings.parent as? ViewGroup)?.removeView(openChannelSettings)
+        openChannelSettings.text = label
+        return openChannelSettings
+    }
+
     private fun detachControls() {
-        for (control in listOf(needsInput, finished, replace, openNotificationSettings, outcome)) {
+        for (control in listOf(
+            needsInput,
+            finished,
+            replace,
+            openNotificationSettings,
+            openChannelSettings,
+            outcome,
+        )) {
             (control.parent as? ViewGroup)?.removeView(control)
         }
     }

@@ -69,6 +69,18 @@ data class SettingsPanel(
      * re-spelled here.
      */
     val permissionRedirectLabel: String? = null,
+    /**
+     * agents-tracker-2yfn: the words on the control that leads to the WAKE CHANNEL's own page, or
+     * null wherever that is not where the problem is.
+     *
+     * IT IS A SECOND FIELD AND NOT A SECOND VALUE FOR [permissionRedirectLabel], because the two
+     * lead to two different system screens and the destination is fixed inside a listener installed
+     * at construction -- so one control cannot be both, and a single label would leave the panel
+     * unable to say which one it is asking for. What is shared is the reason both are labels rather
+     * than controls: pressing either leaves the app, so the Intent, PB-SEC-12 clause 1's touch
+     * filter and an identity that survives a redraw are the surface's.
+     */
+    val deliveryRedirectLabel: String? = null,
 ) {
     /**
      * The section headings top to bottom, which is where "the pairing section leads" is a fact
@@ -186,12 +198,21 @@ object SettingsPanelScreen {
         // BLOCKED FIRST. It is the reason nothing will happen; the pending notice is about a
         // change that will not take effect until it is fixed, so read in the other order the
         // user is told what has been saved before being told it is inert.
-        notices = listOf(settings.notificationsBlockedNotice, settings.pendingNotice)
-            .filter { it.isNotEmpty() },
+        //
+        // THE DELIVERY NOTICE IS BLOCKED-FIRST TOO AND SITS BESIDE THE PERMISSION'S
+        // (agents-tracker-2yfn). The two cannot both be non-empty -- a permission notice suppresses
+        // the delivery one, see `SettingsScreen.blockedDelivery` -- so this is one slot filled from
+        // whichever of the two facts is the live one, rather than two paragraphs about one fault.
+        notices = listOf(
+            settings.notificationsBlockedNotice,
+            settings.deliveryBlockedNotice,
+            settings.pendingNotice,
+        ).filter { it.isNotEmpty() },
         machineSection = machine?.let {
             MachineSection(heading = PAIRING, row = PairedMachineRowScreen.of(it))
         },
         permissionRedirectLabel = settings.notificationRedirectLabel,
+        deliveryRedirectLabel = settings.deliveryRedirectLabel,
     )
 
     private fun rowFor(settings: SettingsScreen, toggle: PushToggle): SettingsRow {

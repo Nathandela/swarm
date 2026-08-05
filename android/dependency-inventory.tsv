@@ -42,7 +42,7 @@ androidx.camera:camera-view	Ships in the APK. PreviewView, the viewfinder the us
 androidx.collection:collection	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat, com.google.firebase:firebase-messaging; no source in this module names it directly.	PB-SEC-8
 androidx.concurrent:concurrent-futures	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat, com.google.firebase:firebase-messaging; no source in this module names it directly.	PB-SEC-8
 androidx.concurrent:concurrent-futures-ktx	Test classpath only (the junit, Robolectric and androidx.test closure). It is on no runtime classpath of any variant, so it is never packaged into the APK.	PB-TOOL-6
-androidx.core:core	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat, com.google.firebase:firebase-messaging; no source in this module names it directly.	PB-SEC-8
+androidx.core:core	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat, com.google.firebase:firebase-messaging, and NAMED DIRECTLY since agents-tracker-2yfn: NotificationManagerCompat.areNotificationsEnabled is how SettingsSurface asks whether the framework will show a wake at all, which is the half of PB-RUN-2 the POST_NOTIFICATIONS check cannot see.	PB-SEC-8,PB-RUN-2
 androidx.core:core-ktx	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat; no source in this module names it directly.	PB-SEC-8
 androidx.cursoradapter:cursoradapter	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat; no source in this module names it directly.	PB-SEC-8
 androidx.customview:customview	Ships in the APK. Pulled in transitively by androidx.appcompat:appcompat; no source in this module names it directly.	PB-SEC-8
