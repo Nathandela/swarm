@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -65,7 +66,7 @@ class NavHeaderDrillTest {
     }
 
     private fun header(
-        back: CharSequence = "Inbox",
+        back: CharSequence? = "Inbox",
         title: CharSequence = "mbp/quanthome · 80x24",
     ): LinearLayout = navHeaderDrill(context, back, title)
 
@@ -124,6 +125,43 @@ class NavHeaderDrillTest {
             "the header itself is focusable, which puts the ring around the screen instead of " +
                 "around the control",
             header.isFocusable,
+        )
+    }
+
+    /**
+     * FAILING-FIRST for agents-tracker-joe7: **a screen with nowhere to go gets no back control.**
+     *
+     * §4 DRAWS THE CONTROL FOR SCREENS THAT HAVE A DESTINATION, and the component drew it for every
+     * caller -- so the terminal peek, which is composed UNDER the inbox rather than pushed over it,
+     * shipped a 48 dp target with a focus ring, a chevron and the label `Inbox` and no listener
+     * behind any of it. The alternative to this parameter was a screen omitting the header's first
+     * child by hand, which is a screen deciding a component's composition, or a second header
+     * factory differing from this one by one view. What is NOT allowed is the third option nobody
+     * chose on purpose: drawing the affordance and hoping the user does not press it.
+     *
+     * THE TITLE AND THE FRAME ARE UNCHANGED, which is the point of doing it here: the peek is still
+     * a screen below a root screen, so it still carries §4's `Title.Sheet` and its three padding
+     * steps rather than the root header's 27 sp display title.
+     */
+    @Test
+    fun `a header with no destination draws no back control at all`() {
+        val nowhere = header(back = null)
+
+        assertNull(
+            "the header drew a back control for a screen that named no destination, which is the " +
+                "48 dp affordance with nothing behind it that agents-tracker-joe7 reports",
+            nowhere.kitFind(KitTag.DRILL_BACK),
+        )
+        assertEquals(
+            "the title went with the back control, so a header with no destination has nothing on " +
+                "it at all",
+            "mbp/quanthome · 80x24",
+            titleOf(nowhere).text.toString(),
+        )
+        assertNotNull(
+            "a header WITH a destination stopped drawing its back control, which takes the way " +
+                "back off the one screen that has one",
+            header().kitFind(KitTag.DRILL_BACK),
         )
     }
 

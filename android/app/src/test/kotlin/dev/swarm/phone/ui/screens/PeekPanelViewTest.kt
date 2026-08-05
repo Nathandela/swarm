@@ -89,12 +89,34 @@ class PeekPanelViewTest {
         assertNotNull("PB-INPUT-2 -- the lease sentence is not drawn", root.kitFind(PeekTag.LEASE))
     }
 
+    /**
+     * THE BACK CONTROL IS GONE, and agents-tracker-joe7 is why. This asserted it was drawn:
+     *
+     *     assertEquals("Inbox", textOf(nav.kitRequire(KitTag.DRILL_BACK)))
+     *
+     * -- a full 48 dp target with a focus ring, a chevron and a destination label, and no listener
+     * behind any of it, on the Inbox tab of every paired phone with a session. The omission was
+     * documented rather than hidden (`peekPanelView`'s own KDoc: "no listener is attached, because
+     * a back control that scrolled somewhere would be a navigation this product has not designed"),
+     * and a documented dead control is still a dead control: the visually identical chevron on the
+     * session detail IS wired, two screens apart. There is nowhere for this one to go -- the peek
+     * is composed UNDER the inbox list rather than pushed over it -- so the affordance is not drawn.
+     *
+     * THE HEADER ITSELF STAYS §4's. The title is still `Title.Sheet` on the drill header rather
+     * than the root header's 27 sp `.pnav .big`, which is what the last assertion has always said
+     * and is unchanged: this screen sits below a root screen whether or not it can go back.
+     */
     @Test
-    fun `the header is the drill-down header, with the model's destination and title`() {
+    fun `the header is the drill-down header, and it offers no back control`() {
         val panel = PeekPanelScreen.of(peek(session = "mbp/quanthome", cols = 120, rows = 40))
         val nav = view(panel).kitRequire(PeekTag.NAV)
 
-        assertEquals("Inbox", textOf(nav.kitRequire(KitTag.DRILL_BACK)))
+        assertNull(
+            "the peek draws a back control -- 48 dp, focusable, chevron and destination -- with " +
+                "no navigation behind it. A control that looks like a control and does not act is " +
+                "worse than no control: the user learns the screen is broken",
+            nav.kitFind(KitTag.DRILL_BACK),
+        )
         assertEquals("mbp/quanthome · 120x40", textOf(nav.kitRequire(KitTag.DRILL_TITLE)))
         assertNull(
             "the ROOT header's display title was drawn on a drill-down screen. `.pnav .big` is " +

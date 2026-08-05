@@ -45,11 +45,39 @@ class PeekPanelScreenTest {
 
     // ---- the header --------------------------------------------------------
 
+    /**
+     * THE MODEL NAMES NO DESTINATION AT ALL NOW, and agents-tracker-joe7 is why. This read:
+     *
+     *     // C3 draws `< Chat`, which is the session-detail screen. Inventory C2 is unbuilt, so a
+     *     // back control labelled Chat would name a screen that does not exist.
+     *     assertEquals("Inbox", PeekPanelScreen.of(peek()).back)
+     *
+     * and its own reasoning is what undoes it one step further: `Inbox` was chosen because `Chat`
+     * named a screen that did not exist -- but the peek is composed UNDER the inbox list, in
+     * `PhoneSurface`'s own column, so `Inbox` names the screen the user is already on. There was
+     * never anywhere to go, which is why no listener was ever attached, and a label that names a
+     * destination is what makes a dead chevron read as a control. The affordance is gone and the
+     * model carries no destination for anything to draw one from.
+     */
     @Test
-    fun `the back control names a destination this product actually has`() {
-        // C3 draws `< Chat`, which is the session-detail screen. Inventory C2 is unbuilt, so a
-        // back control labelled Chat would name a screen that does not exist.
-        assertEquals("Inbox", PeekPanelScreen.of(peek()).back)
+    fun `the peek names no destination, because it is not a drill-down`() {
+        val panel = PeekPanelScreen.of(peek())
+
+        assertTrue(
+            "the peek's copy still names a destination to go back to, and this screen is composed " +
+                "under the inbox rather than pushed over it -- so the destination it names is the " +
+                "screen the user is standing on",
+            listOf(panel.title, panel.note, panel.leaseNotice, panel.staleNotice)
+                .none { it.contains("Inbox") },
+        )
+        // THE FIELD ITSELF, asked of the class rather than of one instance: a destination the model
+        // still carried would be a destination the next composition draws a control for, and the
+        // view test one file over can only see what this composition happens to do today.
+        assertTrue(
+            "PeekPanel still carries a `back` destination, which is what the dead chevron was " +
+                "drawn from -- and the peek has nowhere to send it",
+            PeekPanel::class.java.methods.none { it.name == "getBack" },
+        )
     }
 
     @Test
