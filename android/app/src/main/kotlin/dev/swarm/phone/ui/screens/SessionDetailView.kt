@@ -111,6 +111,15 @@ object DetailTag {
     /** PB-INPUT-1: what did not reach the machine. */
     const val NOT_SENT = "detail.notsent"
 
+    /**
+     * PB-APP-8 for the grid: what the screen says when the machine has stopped sending frames.
+     *
+     * IT IS BESIDE THE CARD AND NOT INSIDE IT (agents-tracker-0qe7). The well prints
+     * `swarmmobile.Snapshot.Text` byte for byte, so a sentence written into the text would be
+     * English in the machine's own register -- which is the defect that issue reports on the peek.
+     */
+    const val SNAPSHOT_STALE = "detail.snapshot.stale"
+
     /** C2.2 -- the daemon-rendered grid. Absent entirely when no frame has arrived. */
     const val SNAPSHOT = "detail.snapshot"
 
@@ -143,7 +152,7 @@ object DetailTag {
 
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> =
-        setOf(NAV, STALE, NOT_SENT, SNAPSHOT, SECTION_LABEL, ROW, OUTCOME, STOP)
+        setOf(NAV, STALE, NOT_SENT, SNAPSHOT_STALE, SNAPSHOT, SECTION_LABEL, ROW, OUTCOME, STOP)
 }
 
 /**
@@ -202,6 +211,12 @@ fun sessionDetailView(
     // than a well containing nothing, which would present "we have not heard from this session" as
     // "this session's screen is blank".
     if (panel.hasSnapshot) {
+        // AND THE MARK GOES WITH THE CARD, drawn only where there is a card to mark: a warning
+        // that the grid is out of date, over a session that has sent no grid at all, describes
+        // something that is not on screen.
+        if (panel.snapshotStaleNotice.isNotEmpty()) {
+            column.addView(notice(context, panel.snapshotStaleNotice, DetailTag.SNAPSHOT_STALE))
+        }
         column.addView(
             monoWell(context, panel.snapshot, terminal = true).apply { tag = DetailTag.SNAPSHOT },
         )

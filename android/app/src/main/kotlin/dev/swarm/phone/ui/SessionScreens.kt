@@ -112,11 +112,33 @@ data class SessionDetail(
      * press resolves to anything else or the drill-down closes.
      */
     val stopNotSent: Boolean = false,
+    /**
+     * Whether the machine has stopped sending frames for the grid in [snapshotText]
+     * (agents-tracker-0qe7).
+     *
+     * IT IS A SECOND FACT AND NOT [journalStale]. That one is PB-APP-8 over the CHRONOLOGY -- the
+     * event stream had a gap -- and the two are independent: a repaired journal beside a frozen
+     * grid is an ordinary state, and so is the reverse. They also have different remedies, so one
+     * sentence standing for both would send the user after the wrong one.
+     *
+     * IT IS `TerminalPeek.stale`, which this screen was already reading the grid from and dropping.
+     */
+    val snapshotStale: Boolean = false,
 ) {
     val hasSnapshotCard: Boolean get() = snapshotText.isNotEmpty()
 
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale
+
+    /**
+     * What the screen says beside a snapshot card whose grid has gone quiet.
+     *
+     * THE WORDS ARE [TerminalPeek]'s AND ARE NOT WRITTEN AGAIN HERE. The peek and this card show
+     * the same object -- `swarmmobile.Snapshot.Text` for the same session -- so a second sentence
+     * would be two files deciding what one fact reads as, and they would drift the first time
+     * either was edited.
+     */
+    val snapshotStaleNotice: String get() = if (snapshotStale) TerminalPeek.STALE_NOTICE else ""
 
     /** Stop is PERSISTENT -- on screen in every state, per PB-APP-3. */
     val stopVisible: Boolean = true
@@ -238,12 +260,25 @@ data class TerminalPeek(
      * A stale grid is banner-marked and the keyboard STAYS available: the hole is in what the
      * phone was shown, not in what it can send.
      */
-    val staleNotice: String
-        get() = if (stale) {
+    val staleNotice: String get() = if (stale) STALE_NOTICE else ""
+
+    companion object {
+
+        /**
+         * The one sentence this product has for a grid the machine has stopped refreshing.
+         *
+         * IT IS A CONSTANT BECAUSE TWO SCREENS SHOW THE SAME OBJECT (agents-tracker-0qe7): the
+         * terminal peek and the session detail's snapshot card are both
+         * `swarmmobile.Snapshot.Text` for a session, so [SessionDetail.snapshotStaleNotice] reads
+         * it here rather than writing a second wording of the same fact.
+         *
+         * IT SAYS THE VIEW IS OLD AND NOT THAT THE SESSION IS IDLE, which is the whole of what the
+         * phone knows: no frame has arrived, and what the agent is doing meanwhile is a fact this
+         * handset has not been told.
+         */
+        const val STALE_NOTICE =
             "This view of the terminal is out of date; the machine has not sent a fresh one yet."
-        } else {
-            ""
-        }
+    }
 }
 
 /**

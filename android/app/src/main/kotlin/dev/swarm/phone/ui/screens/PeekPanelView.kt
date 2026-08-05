@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.readOnlyNote
@@ -54,8 +55,11 @@ object PeekTag {
     /** C3.1 -- the drill-down header, per derivation §4. */
     const val NAV = "peek.nav"
 
-    /** C3.2 `.term` -- the escape-filtered VT snapshot, stale banner and all. */
+    /** C3.2 `.term` -- the escape-filtered VT snapshot, and only the snapshot. */
     const val WELL = "peek.well"
+
+    /** PB-APP-8: what the screen says when the grid on it is not the current one. */
+    const val STALE = "peek.stale"
 
     /** C3.3 `.ro-note` -- derivation row 22's first line. */
     const val NOTE = "peek.note"
@@ -67,7 +71,7 @@ object PeekTag {
     const val LEASE = "peek.lease"
 
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
-    val COMPOSITION: Set<String> = setOf(NAV, WELL, NOTE, TAKE_CONTROL, LEASE)
+    val COMPOSITION: Set<String> = setOf(NAV, STALE, WELL, NOTE, TAKE_CONTROL, LEASE)
 }
 
 /**
@@ -94,10 +98,27 @@ fun peekPanelView(
         navHeaderDrill(context, back = panel.back, title = panel.title)
             .apply { tag = PeekTag.NAV },
     )
+    // THE STALE MARK IS A NOTICE ABOVE THE WELL AND NOT A LINE INSIDE IT (agents-tracker-0qe7).
+    // The banner used to be joined to the grid and printed with it, which put a sentence about the
+    // view inside the view -- and this well is the one place in the app that renders the machine's
+    // output byte for byte, so English in it reads as something the agent typed. It is drawn only
+    // when there is something to warn about, which is the call every other notice here makes.
+    //
+    // IT IS A BARE `TextView` CARRYING NO APPEARANCE, for `ActivityPanelView`'s stale line's
+    // reason: there is no notice or body-copy component in the kit -- row 8's empty state is
+    // centred with 48 dp of vertical padding and is a different thing -- so this renders at the
+    // theme's default until there is one. Reaching for `Body.Secondary` here would be a screen
+    // choosing type, which `android/gate/s24_screens_test.go` fences this package against.
+    if (panel.staleNotice.isNotEmpty()) {
+        column.addView(
+            TextView(context).apply {
+                tag = PeekTag.STALE
+                text = panel.staleNotice
+                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            },
+        )
+    }
     // `terminal = true` is where `tokens.json`'s `terminal_peek.fg` pin finally reaches a pixel.
-    // The stale banner is INSIDE this block rather than above it, which is the model's decision
-    // and its own KDoc argues it: a stale snapshot is still the snapshot, so the warning belongs
-    // where the thing it warns about is.
     column.addView(monoWell(context, panel.snapshot, terminal = true).apply { tag = PeekTag.WELL })
     column.addView(readOnlyNote(context, panel.note).apply { tag = PeekTag.NOTE })
 

@@ -1421,6 +1421,11 @@ class PhoneSurface(
                 // press is read back: the Stop plan latched the session it could not send for, and
                 // a notice about another session's press would be the proximity error again.
                 stopNotSent = stopNotSentFor == open,
+                // THE SNAPSHOT'S OWN STALENESS (agents-tracker-0qe7), which rides the read the
+                // grid already came on. It was dropped here, so the card was drawn with only the
+                // JOURNAL's verdict beside it -- a different fact, with a different remedy, about
+                // a different stream.
+                snapshotStale = grid.stale,
             ),
         )
     }

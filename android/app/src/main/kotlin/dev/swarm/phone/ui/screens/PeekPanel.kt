@@ -38,14 +38,25 @@ data class PeekPanel(
     /** C3.1: the session and the grid the machine is rendering it at. */
     val title: String,
     /**
-     * What goes in the mono well: the stale banner, then the grid.
+     * What goes in the mono well: the grid the machine rendered, and nothing else.
      *
-     * THE BANNER IS ABOVE THE GRID AND INSIDE THE SAME BLOCK. A stale snapshot is still the
-     * snapshot -- `TerminalPeek` is explicit that the keyboard STAYS available, because the hole
-     * is in what the phone was shown rather than in what it can send -- so the warning belongs
-     * where the thing it warns about is, not on a line the eye skips on its way to the grid.
+     * IT USED TO CARRY THE STALE BANNER TOO (agents-tracker-0qe7), joined to the grid with a
+     * newline on the argument that a stale snapshot is still the snapshot, so the warning belonged
+     * where the thing it warns about is. The argument is right about WHERE and wrong about WHAT:
+     * this well prints `swarmmobile.Snapshot.Text` byte for byte -- ADR-007 D2 keeps the VT
+     * emulator on the machine precisely so the phone shows what the daemon rendered and nothing
+     * else -- so a sentence of English inside it is in the machine's own register, in the machine's
+     * own monospace, indistinguishable from something the agent printed. [staleNotice] is the same
+     * warning in the same place, one view up.
      */
     val snapshot: String,
+    /**
+     * PB-APP-8's mark for the snapshot, ABOVE the well rather than inside it.
+     *
+     * Empty when the grid is current, which is the same call every other notice on this app makes:
+     * a blank warning line over a healthy view is a warning nobody wrote.
+     */
+    val staleNotice: String,
     /** C3.3's first line, verbatim. */
     val note: String,
     /** PB-INPUT-2's "visibly", in whichever of the two states the machine has put the user in. */
@@ -120,9 +131,11 @@ object PeekPanelScreen {
     fun of(peek: TerminalPeek, lease: CommandVerdict = CommandVerdict.UNANSWERED): PeekPanel = PeekPanel(
         back = BACK,
         title = "${peek.sessionId} · ${peek.cols}x${peek.rows}",
-        snapshot = listOf(peek.staleNotice, peek.rendered)
-            .filter { it.isNotEmpty() }
-            .joinToString("\n"),
+        snapshot = peek.rendered,
+        // THE MODEL'S OWN WORDING, carried rather than re-decided: `TerminalPeek.staleNotice` is
+        // the sentence, and a second one written here would be two files deciding what the user
+        // reads about one fact.
+        staleNotice = peek.staleNotice,
         note = NOTE,
         // THE VERDICT IS THE MODEL'S, not the press's. `showsRelease` is `leaseHeld`, which is
         // what the MACHINE answered this screen's own take_control with, claimed by operation id

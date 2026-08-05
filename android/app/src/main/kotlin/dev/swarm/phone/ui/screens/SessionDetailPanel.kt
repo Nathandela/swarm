@@ -80,6 +80,15 @@ data class SessionDetailPanel(
     val notSentNotice: String,
     /** PB-APP-8: what the screen says when the journal has a hole in it. */
     val staleNotice: String,
+    /**
+     * PB-APP-8 for the SNAPSHOT, which is a different fact (agents-tracker-0qe7).
+     *
+     * [staleNotice] is the journal's verdict -- the event stream had a gap -- and it was the only
+     * stale mark on this screen, so a grid the machine had stopped sending frames for was drawn
+     * with nothing beside it. A terminal is the one surface a user reads AS live, and the two
+     * facts are independent: a repaired journal beside a frozen grid is an ordinary state.
+     */
+    val snapshotStaleNotice: String,
 )
 
 /** The per-session journal: a heading, its rows, and what it says when it holds none. */
@@ -210,6 +219,10 @@ object SessionDetailScreen {
         // ends up promising a delivery this transport never makes.
         notSentNotice = detail.notSentNotice,
         staleNotice = if (detail.stale) STALE_NOTICE else "",
+        // THE MODEL'S SENTENCE AGAIN, and it is `TerminalPeek`'s: the peek and this card show the
+        // same object for the same session, so the wording is read from one place rather than
+        // written twice.
+        snapshotStaleNotice = detail.snapshotStaleNotice,
     )
 
     /**
