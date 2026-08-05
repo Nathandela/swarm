@@ -394,6 +394,133 @@ func TestRender_DrawsTheSymbolDarkOnLight(t *testing.T) {
 	}
 }
 
+// TestRender_PaintsDarknessAsBackgroundNotInk pins HOW darkness reaches the screen, which
+// PB-PAIR-1(a) left open and which turns out to decide whether the symbol decodes at all.
+//
+// A terminal fills a cell with the background colour and then draws the glyph inside it,
+// and the two do not cover the same area: fonts vary in how completely a half-block glyph
+// covers its half of the cell, and the terminal's own line leading sits between rows where
+// no glyph reaches. Drawing a both-dark cell as INK therefore lets a light seam open
+// through an unbroken vertical dark run, cutting it every two module rows -- the shape the
+// decoder bench proved fatal. Painting it as BACKGROUND cannot: the background fills the
+// whole cell, leading included.
+//
+// The claim is bounded, and the bound is the honest part. A MIXED cell -- one dark module,
+// one light -- still renders its dark module as glyph ink, so a font whose half-block
+// under-covers can still misregister that one cell's internal split. This removes the
+// pathological case; it does not make the drawing seam-free.
+//
+// The assertions read the ANSI stream rather than Rendering.Image, because Image is the
+// renderer's own account of the picture and cannot catch a drawing that paints something
+// else. Image itself is checked against the symbol by TestRender_DrawsTheSymbolDarkOnLight;
+// here it is checked against what was actually drawn.
+func TestRender_PaintsDarknessAsBackgroundNotInk(t *testing.T) {
+	sym, err := Encode(realisticPayload(t))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	r, err := sym.Render(80, 24)
+	if err != nil {
+		t.Fatalf("Render(80, 24): %v", err)
+	}
+	grid := parseCells(t, r.Text)
+
+	if len(grid) != r.Rows {
+		t.Fatalf("the drawing has %d rows of cells but Rendering.Rows = %d", len(grid), r.Rows)
+	}
+	for y, row := range grid {
+		if len(row) != r.Cols {
+			t.Fatalf("drawn row %d has %d cells but Rendering.Cols = %d", y, len(row), r.Cols)
+		}
+	}
+
+	// The seam property. A cell whose two modules agree must be painted entirely by the
+	// background, so no part of its colour depends on how far the glyph's ink reaches.
+	for y, row := range grid {
+		for x, c := range row {
+			upper, lower := c.modules(t)
+			if bgDark := c.bg == shadeDark; upper == lower && bgDark != upper {
+				t.Fatalf("cell (%d,%d) has two %s modules but a %s background: the cell's colour "+
+					"is carried by GLYPH INK, so line leading and half-block undercoverage can open "+
+					"a seam across it. A uniform cell must be pure background paint",
+					x, y, shadeName(upper), shadeName(bgDark))
+			}
+		}
+	}
+
+	// The drawing is one glyph throughout, which is what makes the property above hold for
+	// every cell rather than only for the ones a particular symbol happens to produce: with
+	// UPPER HALF BLOCK everywhere, foreground always means the upper module and background
+	// always the lower, so a uniform cell is background on both halves by construction.
+	for y, row := range grid {
+		for x, c := range row {
+			if c.glyph != '▀' {
+				t.Fatalf("cell (%d,%d) is drawn with %q (U+%04X); every cell must be UPPER HALF "+
+					"BLOCK (U+2580), foreground painting the upper module and background the lower",
+					x, y, c.glyph, c.glyph)
+			}
+		}
+	}
+
+	// What was drawn is the picture Image claims, module for module. The bottom half of an
+	// odd-sided drawing's last cell row has no module and is light, which only widens the
+	// bottom margin.
+	side := len(r.Image)
+	for y, row := range grid {
+		for x, c := range row {
+			upper, lower := c.modules(t)
+			wantUpper := r.Image[2*y][x]
+			wantLower := 2*y+1 < side && r.Image[2*y+1][x]
+			if upper != wantUpper || lower != wantLower {
+				t.Fatalf("cell (%d,%d) draws modules (upper %s, lower %s) but Rendering.Image "+
+					"says (upper %s, lower %s); the drawing and its own account of the picture disagree",
+					x, y, shadeName(upper), shadeName(lower), shadeName(wantUpper), shadeName(wantLower))
+			}
+		}
+	}
+}
+
+// TestRender_EmitsAColourPairOnlyWhenItChanges is output-size discipline. Every cell now
+// carries its own (foreground, background) pair, and the obvious implementation writes an
+// SGR sequence per cell: on the 47x24 drawing a standard terminal gets that is over a
+// thousand sequences and roughly ten times the bytes, for a picture that looks identical.
+// A QR symbol is long runs of one colouring, so emitting only where the pair CHANGES costs
+// nothing and saves most of it.
+//
+// This is a guard rather than a red-first assertion: the old single-colour drawing
+// satisfied it trivially with one sequence per row. It is here because per-cell colours are
+// what make the regression possible.
+func TestRender_EmitsAColourPairOnlyWhenItChanges(t *testing.T) {
+	sym, err := Encode(realisticPayload(t))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	r, err := sym.Render(80, 24)
+	if err != nil {
+		t.Fatalf("Render(80, 24): %v", err)
+	}
+	grid := parseCells(t, r.Text)
+
+	for i, ln := range strings.Split(r.Text, "\n") {
+		row := grid[i]
+		runs := 0
+		for j, c := range row {
+			if j == 0 || c.fg != row[j-1].fg || c.bg != row[j-1].bg {
+				runs++
+			}
+		}
+		if got, want := countSGR(ln), runs+1; got != want {
+			t.Errorf("drawn row %d emits %d SGR sequences for %d colour runs; want %d — one per "+
+				"run, plus the reset that ends the row (one per cell would be %d)",
+				i, got, runs, want, len(row)+1)
+		}
+		if !strings.HasSuffix(ln, "\x1b[0m") {
+			t.Errorf("drawn row %d does not end by restoring the terminal's colours; the painted "+
+				"background leaks into whatever is printed next", i)
+		}
+	}
+}
+
 // TestRender_RefusesABoxItDoesNotFit pins the failure mode PB-PAIR-1(c)'s fallback is
 // built on: too small a terminal must be a refusal, never a cropped, scaled or wrapped
 // symbol that looks scannable and is not.
@@ -407,6 +534,134 @@ func TestRender_RefusesABoxItDoesNotFit(t *testing.T) {
 		t.Fatalf("Render(10, 4) = (%dx%d, %v); want ErrTooLarge — a symbol that does not fit "+
 			"must be refused, not cropped", r.Cols, r.Rows, err)
 	}
+}
+
+// shade is a colour a drawn cell can be painted in, at the only resolution a scanner cares
+// about. shadeUnset means the drawing has not chosen one and the terminal's own theme shows
+// through.
+type shade int
+
+const (
+	shadeUnset shade = iota
+	shadeLight
+	shadeDark
+)
+
+func shadeName(dark bool) string {
+	if dark {
+		return "dark"
+	}
+	return "light"
+}
+
+// cell is one drawn terminal cell: the glyph, and the colours in force when it was written.
+type cell struct {
+	glyph  rune
+	fg, bg shade
+}
+
+// modules is the pair of module colours a CAMERA sees in the cell, upper then lower. The
+// GLYPH decides which half the foreground paints and which half the background does, so
+// this reads the drawing the way the physical picture does, without assuming a glyph
+// family: a renderer that switched to lower half blocks would still be read correctly, and
+// would fail the assertions that are actually about paint.
+func (c cell) modules(t *testing.T) (upper, lower bool) {
+	t.Helper()
+	switch c.glyph {
+	case '▀': // UPPER HALF BLOCK: ink on top, background below
+		return c.fg == shadeDark, c.bg == shadeDark
+	case '▄': // LOWER HALF BLOCK: background on top, ink below
+		return c.bg == shadeDark, c.fg == shadeDark
+	case '█': // FULL BLOCK: ink over the whole cell
+		return c.fg == shadeDark, c.fg == shadeDark
+	case ' ': // no ink at all: background over the whole cell
+		return c.bg == shadeDark, c.bg == shadeDark
+	}
+	t.Fatalf("the drawing carries glyph %q (U+%04X), which is not a half-block glyph this test "+
+		"can read as two modules", c.glyph, c.glyph)
+	return false, false
+}
+
+// parseCells replays the drawing's SGR stream and returns the cells it draws, row by row.
+func parseCells(t *testing.T, text string) [][]cell {
+	t.Helper()
+	var grid [][]cell
+	for i, ln := range strings.Split(text, "\n") {
+		var row []cell
+		fg, bg := shadeUnset, shadeUnset
+		for j := 0; j < len(ln); {
+			if ln[j] == 0x1b {
+				var params []string
+				params, j = sgrParams(t, ln, j, i)
+				fg, bg = applySGR(t, params, fg, bg, i)
+				continue
+			}
+			r, w := utf8.DecodeRuneInString(ln[j:])
+			j += w
+			if fg == shadeUnset || bg == shadeUnset {
+				t.Fatalf("drawn row %d: cell %d is written before both colours are set; an "+
+					"unpainted cell shows the terminal's own theme through, and §5 pins that "+
+					"theme dark (PB-PAIR-1(a))", i, len(row))
+			}
+			row = append(row, cell{glyph: r, fg: fg, bg: bg})
+		}
+		grid = append(grid, row)
+	}
+	return grid
+}
+
+// sgrParams reads the CSI...m sequence starting at byte i of ln, returning its parameters
+// and the index just past it.
+func sgrParams(t *testing.T, ln string, i, row int) ([]string, int) {
+	t.Helper()
+	if i+1 >= len(ln) || ln[i+1] != '[' {
+		t.Fatalf("drawn row %d: the escape at byte %d does not start a CSI sequence", row, i)
+	}
+	j := i + 2
+	for j < len(ln) && (ln[j] < 0x40 || ln[j] > 0x7e) {
+		j++
+	}
+	if j >= len(ln) || ln[j] != 'm' {
+		t.Fatalf("drawn row %d: the CSI sequence at byte %d is not an SGR (it does not end in 'm'); "+
+			"the drawing may only colour cells, not move the cursor or clear the screen", row, i)
+	}
+	return strings.Split(ln[i+2:j], ";"), j + 1
+}
+
+// applySGR folds one SGR sequence into the (foreground, background) state. Only the resets
+// and the black/white colours the drawing is built from are understood: a new palette has
+// to be taught to this test deliberately rather than silently read as something else.
+func applySGR(t *testing.T, params []string, fg, bg shade, row int) (shade, shade) {
+	t.Helper()
+	for _, p := range params {
+		switch p {
+		case "", "0":
+			fg, bg = shadeUnset, shadeUnset
+		case "30", "90":
+			fg = shadeDark
+		case "37", "97":
+			fg = shadeLight
+		case "40", "100":
+			bg = shadeDark
+		case "47", "107":
+			bg = shadeLight
+		default:
+			t.Fatalf("drawn row %d: SGR parameter %q is neither a reset nor one of the black and "+
+				"white colours the drawing is built from", row, p)
+		}
+	}
+	return fg, bg
+}
+
+// countSGR is the number of SGR sequences in one drawn row.
+func countSGR(ln string) int {
+	n := 0
+	for i := 0; i < len(ln); i++ {
+		if ln[i] == 0x1b {
+			n++
+		}
+	}
+	return n
 }
 
 // stripANSI removes CSI escape sequences so a drawing's true cell width can be counted.
