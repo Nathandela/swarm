@@ -31,6 +31,29 @@ data class PressFeedback(
     val line: String,
     /** What the toast says, or empty when the press has nothing to announce. */
     val toast: String,
+    /**
+     * Whether this answer leaves the screen owing the user the TAKE-CONTROL press
+     * (agents-tracker-agre).
+     *
+     * **THE REFUSAL KNOWS SOMETHING THE SCREEN DOES NOT.** `swarm/no-lease` is what the machine
+     * answers a keystroke it will not carry, and [ControlLease]'s own KDoc records why the screen
+     * cannot have worked it out: a lease that lapsed at its horizon "still reads as confirmed",
+     * because the horizon does not ride the take_control's outcome. So the session detail goes on
+     * drawing `Stop` rather than `Take control to stop this`, the user presses it, and the same
+     * refusal comes back -- with the remedy on screen as a sentence the whole time ("Take control
+     * to type or to stop it; retrying is the one thing that cannot help").
+     *
+     * **IT IS A FLAG AND NOT A CONTROL**, for
+     * `dev.swarm.phone.ui.screens.SettingsPanel.permissionRedirectLabel`'s reason: the
+     * control already exists, on two screens, with its own words and its own operation id. What was
+     * missing is the fact that this press earned it, which is a value -- and a value is the only
+     * thing a JVM suite can reach, since the phone core is a gomobile AAR that does not load here.
+     *
+     * It is DEFAULTED FALSE so that every answer built from a screen's own sentence -- a refused
+     * kill, a severed lease, a refused push preference -- offers nothing. A control inferred from
+     * prose would be a guess about a remedy nobody classified.
+     */
+    val offersTakeControl: Boolean = false,
 ) {
 
     /**
@@ -55,6 +78,25 @@ data class PressFeedback(
 
         /** @param routed the message [ErrorRouter] produced. It is what BOTH places show. */
         fun ofRefusal(routed: String): PressFeedback = PressFeedback(line = routed, toast = routed)
+
+        /**
+         * The same refusal, WITH the remedy the router decided for it (agents-tracker-agre).
+         *
+         * IT IS AN OVERLOAD AND NOT A REPLACEMENT, because the three other callers of [ofRefusal]
+         * hand this model a SCREEN's own sentence rather than a routed failure -- a kill the
+         * machine declined, a lease it severed, a push preference it refused. Those have no
+         * [Remedy] behind them at all, and requiring one would have meant inventing a row per call
+         * site: the exact "a routed state whose remedy nobody chose" the taxonomy's own set-equality
+         * gate exists to prevent.
+         *
+         * @param routed the failure the wire produced, classified. The words shown are unchanged --
+         *  [RoutedError.message] is what the line and the toast have always carried.
+         */
+        fun ofRefusal(routed: RoutedError): PressFeedback = PressFeedback(
+            line = routed.message,
+            toast = routed.message,
+            offersTakeControl = routed.offersTakeControl,
+        )
 
         /**
          * A press that never reached the wire, and whose screen already carries the sentence

@@ -30,6 +30,18 @@ data class ConnectionBanner(
     /** The app has stopped retrying and must say so rather than looking busy forever. */
     val terminal: Boolean,
 ) {
+    /**
+     * Whether this state's remedy IS the pairing flow (agents-tracker-agre).
+     *
+     * IT IS [RoutedError.offersPairing]'S QUESTION, ASKED OF THE TRANSPORT. The two types carry the
+     * same [Remedy] enum and only one of them could be asked, so a banner that told the user to
+     * pair again had no way to become a control -- and the states where that matters are the two
+     * this banner is the ONLY speaker for: `RELAY_UNTRUSTED` and `RELAY_INSECURE` are terminal and
+     * do NOT end a pairing, so `mobile/relay.go`'s `transportEndsPairing` leaves the handset inside
+     * the app with this sentence and nothing to press.
+     */
+    val offersPairing: Boolean get() = remedy.offersPairing
+
     companion object {
 
         fun of(state: ConnectionState): ConnectionBanner = when (state) {
@@ -200,6 +212,20 @@ data class StatusBanner(
     val freshness: String,
     /** The journal stream's, or empty while the roster is whole. */
     val stale: String,
+    /**
+     * The words on the CONTROL this banner offers, or empty where it offers none
+     * (agents-tracker-agre).
+     *
+     * IT IS NOT A FOURTH FACT AND IT IS DELIBERATELY OUT OF [lines]. The three above are sentences
+     * a reader reads; this is a thing a finger presses, and folding it into the list would render
+     * it as a fourth paragraph -- the defect it exists to end, one level down. The view draws it
+     * from this field and the surface says where it leads.
+     *
+     * WHY IT IS DEFAULTED. `StatusBanner(connection = ..., freshness = ..., stale = ...)` is how
+     * the suites build one directly, and a banner assembled from three facts alone offers no
+     * control -- the offer is derived in [of], from the transport's own remedy, and nowhere else.
+     */
+    val pairAgain: String = "",
 ) {
     /**
      * The lines to draw, in the order a reader meets them: the link, then the machine, then the
@@ -217,6 +243,26 @@ data class StatusBanner(
         val NONE = StatusBanner(connection = "", freshness = "", stale = "")
 
         /**
+         * What the pair-again control reads (agents-tracker-agre).
+         *
+         * IT NAMES WHERE IT GOES RATHER THAN WHAT IT WISHES IT DID, and the difference is
+         * PB-STATE-10. The banner offering it is drawn over a handset that is STILL PAIRED --
+         * `RELAY_UNTRUSTED` and `RELAY_INSECURE` do not end a pairing -- and `swarm remote pair` is
+         * refused while a device is registered, so a button labelled "Pair again" would promise an
+         * act the machine declines and land the user back on this same banner. What the app does
+         * have is the Settings destination, whose leading section is `Pairing`
+         * ([dev.swarm.phone.ui.screens.SettingsPanel.machineSection]) and whose one control clears
+         * the registration the re-pair is blocked on. The word is that section's own, so the
+         * screen the press opens says what the button said.
+         *
+         * `RELAY_INSECURE` REACHES THE SAME PLACE FOR A DIFFERENT REASON, and it is why the label
+         * is not an instruction: that state's remedy begins on the MACHINE (its relay.json names a
+         * cleartext URL, and pairing again re-delivers it), so the banner's own sentence carries
+         * the order and this control only opens the screen the sentence ends at.
+         */
+        const val PAIR_AGAIN = "Go to Pairing"
+
+        /**
          * @param freshness [MachineFreshness.notice]'s answer: null while the machine is inside
          *  its budget. It arrives already formatted because the TIME is the caller's -- an Android
          *  formatter carrying the user's locale and time zone -- which is that method's own
@@ -229,8 +275,29 @@ data class StatusBanner(
             staleNotice: String,
         ): StatusBanner = StatusBanner(
             connection = if (connection.visible) connection.text else "",
-            freshness = freshness.orEmpty(),
-            stale = staleNotice,
+            // A TERMINAL LINK SILENCES THE TWO WAITING FACTS (agents-tracker-agre).
+            //
+            // `ConnectionBanner.showsSpinner` has said since S16 that "a spinner is a promise that
+            // waiting is enough", and the requirement was met vacuously: this app draws no spinner,
+            // so nothing ever read `terminal` to stop looking busy -- while the app went on looking
+            // busy IN WORDS. Both of these end in a promise. The roster's is "some of your
+            // machine's activity has not arrived yet"; the machine's is "Not heard from your
+            // machine yet" (and, past the budget, a timestamp that will never advance). Under a
+            // transport that has STOPPED RETRYING neither resolves, ever, and both are strictly
+            // weaker than the line above them -- which names the cause and the remedy.
+            //
+            // IT IS SUPPRESSION AND NOT RE-WORDING. The sentences belong to `TriageInbox` and
+            // `MachineFreshness`; a tense written for this case would be copy authored here, at
+            // the seam PB-DS-9 keeps copy out of. The emptiness rule this model already owns is
+            // "a fact with nothing to say says nothing", and a fact whose tense the transport has
+            // just falsified has nothing to say.
+            freshness = if (connection.terminal) "" else freshness.orEmpty(),
+            stale = if (connection.terminal) "" else staleNotice,
+            // THE REMEDY BECOMES A CONTROL, and `visible` gates it for the reason it gates the
+            // line: ONLINE's remedy is NONE, so this is belt and braces there -- but a state added
+            // later that is quiet AND carries a remedy would otherwise put a button on a banner
+            // with no sentence to explain it.
+            pairAgain = if (connection.visible && connection.offersPairing) PAIR_AGAIN else "",
         )
     }
 }

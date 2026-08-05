@@ -122,6 +122,32 @@ enum class Remedy {
     WAIT_AND_RETRY,
     RETRY_PAIRING,
     FIX_CLOCK,
+    ;
+
+    /**
+     * Whether carrying this remedy out MEANS opening the pairing flow (agents-tracker-agre).
+     *
+     * IT LIVES ON THE REMEDY AND NOT ON ITS TWO HOLDERS, because both hold one. [RoutedError] asked
+     * it of itself and [ConnectionBanner] could not ask it at all, so the transport's remedy -- the
+     * one a still-paired handset in `RELAY_UNTRUSTED` gets -- had no way to become a control
+     * without a second copy of this comparison. Two copies of a two-row predicate is two rows to
+     * get wrong, and the failure is silent in the direction that matters: a screen offering the
+     * pairing flow for [MACHINE_REGRANT] sends the user to a `BeginPairing` that fail-fasts while
+     * this device is still registered (PB-STATE-10).
+     *
+     * [CLEAR_DATA_AND_RE_PAIR] IS STILL NOT ONE OF THEM, for the reason its own KDoc gives.
+     */
+    val offersPairing: Boolean get() = this == PAIR || this == RE_PAIR
+
+    /**
+     * Whether carrying this remedy out MEANS pressing the take-control this app already has.
+     *
+     * It is one row rather than two, and it is named anyway for the reason above: the caller that
+     * needs it is [PressFeedback], which sees a refusal and must decide whether the screen owes the
+     * user a control. A bare `== TAKE_CONTROL` at that seam is a routing decision written where
+     * nothing reviews it against this table.
+     */
+    val offersTakeControl: Boolean get() = this == TAKE_CONTROL
 }
 
 /**
@@ -137,7 +163,19 @@ data class RoutedError(
     val remedy: Remedy,
     val message: String,
 ) {
-    val offersPairing: Boolean get() = remedy == Remedy.PAIR || remedy == Remedy.RE_PAIR
+    val offersPairing: Boolean get() = remedy.offersPairing
+
+    /**
+     * Whether this failure's remedy is the take-control press (agents-tracker-agre).
+     *
+     * WHY IT IS ASKED OF THE FAILURE AND NOT OF THE SCREEN. `swarm/no-lease` is what the MACHINE
+     * answers a keystroke it will not carry, and it is newer information than anything the screen
+     * knows: `ControlLease` records that a lease which lapsed at its horizon "still reads as
+     * confirmed", because the horizon does not ride the take_control's outcome. So the screen goes
+     * on showing Stop, the user presses it, and the same refusal comes back. The refusal itself is
+     * the only thing on the phone that knows the lease is gone.
+     */
+    val offersTakeControl: Boolean get() = remedy.offersTakeControl
 }
 
 /**

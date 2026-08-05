@@ -603,6 +603,25 @@ class PhoneSurface(
     private var leaseSession: String = ""
 
     /**
+     * The session whose last press the MACHINE refused for want of a lease, or empty
+     * (agents-tracker-agre).
+     *
+     * IT IS NEWER INFORMATION THAN [leaseOp]'S OUTCOME, which is the whole reason it exists.
+     * `ControlLease` records the window in its own KDoc: a lease that lapsed at its horizon "still
+     * reads as confirmed", because the horizon does not ride the take_control's outcome. So the
+     * durable outcome says granted, the screen draws `Stop`, the machine refuses the interrupt with
+     * `swarm/no-lease`, and the next press earns the same refusal -- with the remedy on screen as a
+     * sentence throughout. [PressFeedback.offersTakeControl] is what says the refusal was that one;
+     * this is where the screen remembers it.
+     *
+     * THE SESSION IS REMEMBERED BESIDE IT, for [leaseSession]'s reason exactly: the target is
+     * re-derived on every draw, and a refusal against one session must not shut the keyboard on
+     * another. It is cleared by [rememberLease], so the next take_control -- the very step this
+     * makes available -- takes the screen's answer back off it.
+     */
+    private var leaseRefusedFor: String = ""
+
+    /**
      * The kill this surface issued, so its answer can be claimed by operation id
      * (agents-tracker-qlf9).
      *
@@ -1180,7 +1199,15 @@ class PhoneSurface(
         // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
         // every user they held nothing while Send stayed live from a different fact entirely.
         val lease = leaseVerdictFor(session, bridge)
-        val view = bridge.terminalPeek(session, leaseHeld = lease.accepted)
+        // THE REFUSAL OUTRANKS THE GRANT (agents-tracker-agre) -- [detailPanel]'s clause, on the
+        // screen that owns the Take control button. A peek drawn as held over a machine that has
+        // just refused a keystroke for want of a lease leaves the keyboard open and the one control
+        // that would fix it off screen, which is `PeekPanel.offersTakeControl` reading a fact the
+        // wire has already contradicted.
+        val view = bridge.terminalPeek(
+            session,
+            leaseHeld = lease.accepted && leaseRefusedFor != session,
+        )
         // AND THE REST OF THE MACHINE'S ANSWER GOES WITH IT (agents-tracker-qlf9). The peek used to
         // be handed a boolean, so a refused take_control drew the sentence written for one nobody
         // had asked for.
@@ -1336,12 +1363,22 @@ class PhoneSurface(
      * holding no lines rather than no container at all, which costs nothing on screen -- it has no
      * fill, no border and no padding of its own -- and keeps the slot findable, so a test can tell
      * "the phone has nothing to report" from "the slot went away again".
+     *
+     * WHERE THE ONE CONTROL LEADS IS DECIDED HERE (agents-tracker-agre), because navigation is the
+     * surface's and the composition cannot know it. The two states that offer it -- `RELAY_UNTRUSTED`
+     * and `RELAY_INSECURE` -- are terminal AND still paired, so the offer must not be `BeginPairing`:
+     * `swarm remote pair` is refused while this device is registered (PB-STATE-10), and a control
+     * that walked into that refusal would be PB-APP-10's failure loop one step further along. The
+     * Settings destination leads with the `Pairing` section, whose one control clears the
+     * registration first; [StatusBanner.PAIR_AGAIN] is named for it.
      */
     private fun drawBanner(banner: StatusBanner) {
         if (banner == bannerDrawn && bannerHost.childCount > 0) return
         bannerDrawn = banner
         bannerHost.removeAllViews()
-        bannerHost.addView(statusBannerView(activity, banner))
+        bannerHost.addView(
+            statusBannerView(activity, banner) { selectDestination(Destination.SETTINGS) },
+        )
     }
 
     /**
@@ -1418,7 +1455,11 @@ class PhoneSurface(
     private fun detailPanel(bridge: FacadeBridge?): SessionDetailPanel? {
         val open = detail ?: return null
         if (bridge == null) return null
-        val lease = leaseVerdictFor(open, bridge).accepted
+        // AND A REFUSAL FOR WANT OF A LEASE ENDS IT (agents-tracker-agre). The verdict is the
+        // machine's answer to a take_control that may be older than the refusal this session's last
+        // press just earned; without this clause the panel goes on labelling the control `Stop`,
+        // and pressing it collects `swarm/no-lease` again.
+        val lease = leaseVerdictFor(open, bridge).accepted && leaseRefusedFor != open
         val grid = bridge.terminalPeek(open, leaseHeld = lease)
         val log = bridge.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
         return SessionDetailScreen.of(
@@ -1801,6 +1842,11 @@ class PhoneSurface(
         val issued = answer as? Op ?: return
         leaseOp = issued.operationID
         leaseSession = target
+        // AND THE REFUSAL THAT SENT THE USER HERE IS SPENT (agents-tracker-agre). The step the
+        // no-lease refusal offered has now been taken, so what decides the lease from here is the
+        // machine's answer to THIS operation; leaving the latch up would hold the keyboard shut
+        // over a lease the machine goes on to grant.
+        leaseRefusedFor = ""
     }
 
     /** Latch the kill this surface issued, so [renderKillVerdict] can claim its answer. */
@@ -2167,11 +2213,16 @@ class PhoneSurface(
                     // the error class as a prefix, so it routes through the same table as every
                     // other failure rather than being shown raw.
                     onFailure = {
-                        say(
-                            PressFeedback.ofRefusal(
-                                FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
-                            ),
+                        val refusal = PressFeedback.ofRefusal(
+                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()),
                         )
+                        // PB-APP-9's remedy becomes the control it names (agents-tracker-agre).
+                        // `swarm/no-lease` says the machine will not carry this session's keystrokes,
+                        // which the screen's own lease fact cannot know -- see [leaseRefusedFor] --
+                        // so the answer is latched here and the next draw offers take control in
+                        // place of a Stop that would earn the same refusal.
+                        if (refusal.offersTakeControl) leaseRefusedFor = session
+                        say(refusal)
                     },
                 )
                 render()

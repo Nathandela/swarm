@@ -3,10 +3,14 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import dev.swarm.phone.ui.StatusBanner
+import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.TabItem
+import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.readOnlyNote
 import dev.swarm.phone.ui.kit.tabBar
 
@@ -58,6 +62,16 @@ object ScaffoldTag {
 
     /** One fact on the banner. Three of them are three lines, never one sentence. */
     const val BANNER_LINE = "scaffold.banner.line"
+
+    /**
+     * The banner's one CONTROL, which is a different thing from a line (agents-tracker-agre).
+     *
+     * IT HAS ITS OWN TAG BECAUSE IT IS NOT A FACT. [BANNER_LINE] names the sentences a reader
+     * reads; this names the thing a finger presses, and a test that found either under one tag
+     * could assert the remedy was "on screen" while it was drawn as a fourth paragraph -- which is
+     * precisely the defect the control exists to end.
+     */
+    const val BANNER_ACTION = "scaffold.banner.action"
 
     /**
      * The parts whose ON-SCREEN ORDER is the recorded composition: the banner, the content, then
@@ -201,14 +215,56 @@ fun phoneScaffoldView(
  * persistent chrome that says what is true right now and goes away when it stops being true; a
  * fill, a border and an entry animation would make a standing condition look like an event that
  * has just arrived.
+ *
+ * THE ONE CONTROL IS DRAWN LAST AND ONLY WHEN THE MODEL OFFERS ONE (agents-tracker-agre). PB-APP-10
+ * asks for "an explicit re-pair PROMPT, not a failure loop", and a prompt is something a person can
+ * press: a handset the transport has permanently refused reads "Pair this phone again" and, until
+ * this control, had nothing on screen to do it with. [StatusBanner.pairAgain] decides whether it is
+ * owed and what it reads; where it leads is the surface's, for [content]'s reason -- navigation is
+ * not something a composition can know.
+ *
+ * @param onPairAgain what [StatusBanner.pairAgain]'s control does. It is defaulted so the suites
+ *  that build a banner from three facts alone are unaffected; those banners offer no control, so
+ *  the default is never installed on anything.
  */
-fun statusBannerView(context: Context, banner: StatusBanner): View =
+fun statusBannerView(
+    context: Context,
+    banner: StatusBanner,
+    onPairAgain: () -> Unit = {},
+): View =
     LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         tag = ScaffoldTag.BANNER
         banner.lines.forEach { line ->
             addView(readOnlyNote(context, line).apply { tag = ScaffoldTag.BANNER_LINE })
+        }
+        // `CtaKind.MORE` IS THE NEUTRAL RULE AND THAT IS THE RIGHT ONE HERE. The press approves
+        // nothing and destroys nothing -- it opens the screen this banner's sentence sends the user
+        // to -- and `.a2-ok` on a warning would read as the app recommending the act.
+        if (banner.pairAgain.isNotEmpty()) {
+            addView(
+                ctaButton(context, banner.pairAgain, CtaKind.MORE).apply {
+                    tag = ScaffoldTag.BANNER_ACTION
+                    setOnClickListener { onPairAgain() }
+                    // A `TextView` ANNOUNCES ITSELF AS TEXT, which on this banner is the whole
+                    // distinction being drawn: three of these views ARE text, and a screen reader
+                    // that heard a fourth sentence would meet the same defect the sighted user
+                    // just stopped meeting. `pairOnlyView` sets the role at the click for the same
+                    // reason -- the kit has no click to hang it on.
+                    setAccessibilityDelegate(
+                        object : View.AccessibilityDelegate() {
+                            override fun onInitializeAccessibilityNodeInfo(
+                                host: View,
+                                info: AccessibilityNodeInfo,
+                            ) {
+                                super.onInitializeAccessibilityNodeInfo(host, info)
+                                info.className = Button::class.java.name
+                            }
+                        },
+                    )
+                },
+            )
         }
     }
 
