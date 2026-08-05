@@ -18,10 +18,10 @@ import dev.swarm.phone.push.PushTokens
 import dev.swarm.phone.runtime.AppPermission
 import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionStateResolver
-import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.PushCategory
+import dev.swarm.phone.ui.PushSync
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
 import dev.swarm.phone.ui.kit.CtaKind
@@ -309,7 +309,7 @@ class SettingsSurface(
         val bridge = FacadeBridge(app)
         val held = screen
         val base = if (held != null && held.pendingSync) {
-            if (machineAnswered(bridge)) held.acknowledged() else held
+            settleWithTheMachine(bridge, held)
         } else {
             bridge.pushSettings()
         }
@@ -360,16 +360,61 @@ class SettingsSurface(
         null
     }
 
-    /** True once the outcome for the op this panel issued has landed. */
-    private fun machineAnswered(bridge: FacadeBridge): Boolean {
-        val id = pendingOp ?: return false
-        val answered = try {
-            bridge.launchOutcome(id).code.isNotEmpty()
+    /**
+     * The machine's answer to the `push_prefs` this panel issued, applied to the screen it was
+     * issued from (agents-tracker-os37).
+     *
+     * IT USED TO ASK ONLY WHETHER AN ANSWER EXISTED. `machineAnswered` read
+     * `outcome.code.isNotEmpty()`, threw the code and the message away, and called
+     * [SettingsScreen.acknowledged] on ANY answer -- so a REFUSED command cleared the pending
+     * notice and left the switch reading settled while the machine went on sending what the user
+     * had turned off. That is the failure [SettingsScreen.setAlerts]'s own KDoc says `pendingSync`
+     * exists to prevent, arriving through the one path that was supposed to end it.
+     *
+     * THE REFUSAL IS SAID TWICE, which is `PhoneSurface.dispatchPress`'s decision and [PressFeedback]'s
+     * subject: the line keeps the machine's words where they can be re-read, and the toast puts them
+     * where the switch the user just moved is. Unlike a press, nobody is waiting on this frame -- the
+     * answer lands on a later render -- so a message that appeared only in a line under the panel
+     * could easily be a message nobody ever sees.
+     *
+     * AN UNREADABLE OUTCOME LEAVES THE OPERATION PENDING rather than resolving it. A facade that
+     * throws has told this screen nothing, and "nothing" is not an acceptance.
+     */
+    private fun settleWithTheMachine(bridge: FacadeBridge, held: SettingsScreen): SettingsScreen {
+        val id = pendingOp ?: return held
+        val answer = try {
+            bridge.launchOutcome(id)
         } catch (unreadable: Exception) {
-            false
+            return held
         }
-        if (answered) pendingOp = null
-        return answered
+        return when (SettingsScreen.syncAnswer(answer, id)) {
+            PushSync.PENDING -> held
+            PushSync.ACCEPTED -> {
+                pendingOp = null
+                held.acknowledged()
+            }
+
+            PushSync.REFUSED -> {
+                pendingOp = null
+                say(PressFeedback.ofRefusal(SettingsScreen.refusalNotice(answer)))
+                held.refused()
+            }
+        }
+    }
+
+    /**
+     * Put one answer on screen: the persistent line, and derivation row 1's toast.
+     *
+     * IT IS `PhoneSurface.say`'S PROGRAM ON THIS PANEL'S OWN SEAM, and the toast is skipped where
+     * there is nothing to say -- an empty one is a 92 dp box that flashes over the tab bar for
+     * 3.2 seconds carrying nothing. [outcome]'s visibility is set here as well as in [draw],
+     * because the paths that say something without redrawing would otherwise write into a view
+     * that is still GONE.
+     */
+    private fun say(feedback: PressFeedback) {
+        outcome.text = feedback.line
+        outcome.visibility = if (feedback.line.isEmpty()) View.GONE else View.VISIBLE
+        if (!feedback.saysNothing) toasts?.show(feedback.toast)
     }
 
     /**
@@ -561,11 +606,11 @@ class SettingsSurface(
                 // this app to leave in a view somebody has to scroll to -- the situation the
                 // control exists for is one where the phone may not reach its machine at all.
                 answer.onFailure {
-                    val feedback = PressFeedback.ofRefusal(
-                        FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
+                    say(
+                        PressFeedback.ofRefusal(
+                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()).message,
+                        ),
                     )
-                    outcome.text = feedback.line
-                    if (!feedback.saysNothing) toasts?.show(feedback.toast)
                 }
                 // THE WHOLE WINDOW, not this panel. The purge ran in the `finally` above whether
                 // or not the command reached the machine, so the presentation gate's answer has
@@ -615,9 +660,16 @@ class SettingsSurface(
             )
             pendingOp = op.operationID
             reconcileTheToken(next)
-            outcome.text = ""
+            say(PressFeedback.ofSuccess(null))
         } catch (refused: Exception) {
-            outcome.text = ErrorRouter.route(refused.message.orEmpty()).message
+            // THROUGH THE BRIDGE AND NOT THROUGH `ErrorRouter` DIRECTLY (agents-tracker-os37).
+            // This was the one call site in the app that routed a facade refusal on the Kotlin
+            // side's own token table: the message crosses JNI with the class stamped on it, but
+            // `FacadeBridge.routeFacadeError` asks GO to classify it (`App.ErrorClass`), which is
+            // the side that produced it. A token this build has never heard of degrades to
+            // UNKNOWN here and is classified correctly there, and UNKNOWN's remedy is "try again"
+            // -- advice that is wrong for every permanent class in the taxonomy.
+            say(PressFeedback.ofRefusal(FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message))
         }
         draw(next, machineOf(app))
     }

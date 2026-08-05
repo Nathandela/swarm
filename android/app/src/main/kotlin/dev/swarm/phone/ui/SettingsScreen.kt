@@ -43,6 +43,25 @@ enum class NotificationRemedy {
 }
 
 /**
+ * What the machine has said about the push_prefs command this screen issued (agents-tracker-os37).
+ *
+ * THREE ANSWERS AND NOT TWO. [PENDING] is both "no answer yet" and "an answer for somebody else's
+ * operation", which are the same fact about THIS one: nothing is known. Collapsing it into either
+ * of the others is how a screen resolves an operation by proximity, which PB-SYNC-2's whole
+ * outcome-by-id design exists to stop.
+ */
+enum class PushSync {
+    /** No answer this screen may claim. The switch stays where it is and the notice stands. */
+    PENDING,
+
+    /** `protocol.OpOK`. The machine holds what the screen shows. */
+    ACCEPTED,
+
+    /** Anything else the machine sealed. The switch goes back and the reason is shown. */
+    REFUSED,
+}
+
+/**
  * What each switch governs. The mapping to [PushToggle] is a BIJECTION on purpose: two controls
  * wired to one preference leaves the other category unreachable, and the user cannot tell.
  */
@@ -81,6 +100,21 @@ data class SettingsScreen(
      * toggles are live while POST_NOTIFICATIONS is denied.
      */
     val notificationPermission: PermissionState? = null,
+    /**
+     * The switch positions the MACHINE last confirmed, held while a change is unacknowledged and
+     * null the rest of the time (agents-tracker-os37).
+     *
+     * IT IS THE REVERT POINT AND IT HAS TO BE CARRIED, not recomputed. `PushPreference` answers
+     * what is persisted LOCALLY, which `setPushPreference` has already updated by the time an
+     * answer arrives, so re-reading the facade after a refusal returns the very value the machine
+     * rejected. This is the only record of what it holds.
+     *
+     * IT IS TAKEN ONCE PER PENDING RUN. Two flips before one answer revert to the position before
+     * EITHER: the surface watches one operation id at a time, so an answer landing after a second
+     * flip is about the first, and the last position the machine is known to hold is the one before
+     * both.
+     */
+    val settled: SettingsSnapshot? = null,
 ) {
     fun toggleCategory(toggle: PushToggle): PushCategory = when (toggle) {
         PushToggle.FIRST -> PushCategory.NEEDS_INPUT
@@ -96,11 +130,32 @@ data class SettingsScreen(
      * offline is a local value the machine has never seen, and showing it as settled would tell
      * the user notifications are off while they keep arriving.
      */
-    fun setAlerts(value: Boolean): SettingsScreen = copy(alerts = value, pendingSync = true)
+    fun setAlerts(value: Boolean): SettingsScreen =
+        copy(alerts = value, pendingSync = true, settled = settled ?: snapshot())
 
-    fun setMentions(value: Boolean): SettingsScreen = copy(mentions = value, pendingSync = true)
+    fun setMentions(value: Boolean): SettingsScreen =
+        copy(mentions = value, pendingSync = true, settled = settled ?: snapshot())
 
-    fun acknowledged(): SettingsScreen = copy(pendingSync = false)
+    /** The machine took it. What is on screen IS what it holds, so there is nothing to revert to. */
+    fun acknowledged(): SettingsScreen = copy(pendingSync = false, settled = null)
+
+    /**
+     * The machine REFUSED it, so the switches go back where it has them (agents-tracker-os37).
+     *
+     * LEAVING THEM WHERE THE USER DRAGGED THEM IS THE SAME LIE AS CLEARING THE NOTICE. Delivery is
+     * decided at the sender (PB-PUSH-8) from the preference the MACHINE holds, so a switch showing
+     * the refused position is a screen reporting a setting nobody has -- which is the defect this
+     * whole issue is about, one step later in the same flow.
+     *
+     * A REFUSAL IS AN ANSWER, so `pendingSync` clears with it. "Saved on this phone, waiting for
+     * your machine" over a change the machine has already declined is a wait with no end.
+     */
+    fun refused(): SettingsScreen = copy(
+        alerts = settled?.alerts ?: alerts,
+        mentions = settled?.mentions ?: mentions,
+        pendingSync = false,
+        settled = null,
+    )
 
     val pendingNotice: String
         get() = if (pendingSync) {
@@ -205,6 +260,46 @@ data class SettingsScreen(
          * cannot drift apart -- [notificationsBlockedNotice] interpolates this constant.
          */
         const val OPEN_NOTIFICATION_SETTINGS = "Open notification settings"
+
+        /**
+         * What a refusal says when the machine sent no words with it (agents-tracker-os37).
+         *
+         * IT IS NEEDED BECAUSE THE REPLY CAN CARRY NONE. `remotegw.refusePushPrefs` seals its reply
+         * with no error code at all -- "none of the six in the taxonomy describes a machine-side
+         * custody failure" -- so the message is the only thing that ever says what happened, and an
+         * empty one would put the switch back with no explanation, which is this defect in a
+         * different coat.
+         */
+        const val SYNC_REFUSED = "Your machine did not save this change."
+
+        /**
+         * PB-SYNC-2's answer for the push_prefs command [operationId], read as a CODE.
+         *
+         * THE OLD READING WAS `code.isNotEmpty()` AND THAT IS THE BUG. Any answer counted as an
+         * acceptance, so a refusal cleared the pending notice and left the switch reading settled
+         * while the machine went on sending what the user turned off.
+         *
+         * `ok` is `protocol.OpOK`: `mobile/app.go`'s `outcomeOf` falls back to the reply's `Op`
+         * when it carries no `ErrorCode`, and an accepted command replies OK. A refusal replies
+         * `protocol.OpError` with the reason in `Error`. Anything else the machine can seal is a
+         * refusal too -- kill switch, not authorized, invalid field -- for `LaunchScreen.resolve`'s
+         * reason: the codes are the machine's and this side must not claim to know the whole set.
+         *
+         * SOMEBODY ELSE'S OPERATION LEAVES THIS ONE PENDING, which is the honest state. PB-SYNC-2
+         * claims outcomes by id precisely so a screen never resolves one by proximity.
+         */
+        fun syncAnswer(outcome: OperationOutcome, operationId: String): PushSync = when {
+            outcome.operationId != operationId || outcome.code.isBlank() -> PushSync.PENDING
+            outcome.code == CODE_OK -> PushSync.ACCEPTED
+            else -> PushSync.REFUSED
+        }
+
+        /** The machine's own words about a refusal, or [SYNC_REFUSED] where it sent none. */
+        fun refusalNotice(outcome: OperationOutcome): String =
+            outcome.message.ifBlank { SYNC_REFUSED }
+
+        /** protocol.OpOK, as [LaunchScreen] holds it and for the same reason: the AAR is off-JVM. */
+        private const val CODE_OK = "ok"
 
         fun restore(snapshot: SettingsSnapshot): SettingsScreen = SettingsScreen(
             alerts = snapshot.alerts,
