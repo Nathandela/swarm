@@ -75,6 +75,40 @@ class PressFeedbackTest {
         assertTrue("silence is not silent", feedback.saysNothing)
     }
 
+    /**
+     * FAILING-FIRST for agents-tracker-4lta's third case: a press that never reached the wire.
+     *
+     * WHY IT IS NOT [PressFeedback.ofRefusal]. Nothing refused this press -- the link is down, so
+     * an offline Stop is discarded rather than sent (ADR-007 D7) and no machine ever saw it. The
+     * screen has a slot of its own for that fact, PB-INPUT-1's not-sent notice, and it is where the
+     * sentence sits from the press onward. Putting the same words on the outcome line as well would
+     * be one sentence in three places on one screen, and the line is for what the MACHINE answered.
+     *
+     * WHY THERE IS A TOAST AT ALL. Stop is drawn BELOW the transcript and the notice above it, so a
+     * user who pressed the button at the bottom of a long session log would see the screen change
+     * somewhere they are not looking. The toast is derivation row 1's component and it is what puts
+     * the answer in front of the eye that was on the control.
+     */
+    @Test
+    fun `a press that never reached the wire toasts and leaves the machine's line alone`() {
+        val notSent = "Stop did not reach your machine and was not held for later."
+        val feedback = PressFeedback.ofUnsent(notSent)
+
+        assertEquals(
+            "an unsent press says nothing where the finger was, so pressing Stop over a dead link " +
+                "looks exactly like pressing nothing",
+            notSent,
+            feedback.toast,
+        )
+        assertEquals(
+            "an unsent press wrote to the outcome line, which is what the MACHINE answered the " +
+                "last command -- and this press reached no machine. The screen's own not-sent " +
+                "notice already carries the sentence",
+            "",
+            feedback.line,
+        )
+    }
+
     @Test
     fun `a blank confirmation is silence rather than an empty toast`() {
         assertTrue(

@@ -1,0 +1,94 @@
+package dev.swarm.phone.ui
+
+import dev.swarm.phone.ui.screens.SessionDetailScreen
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+/**
+ * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-4lta: **a Stop that cannot be sent must not be
+ * put behind a question.**
+ *
+ * THE DEAD END THIS IS ABOUT, in the order a user meets it. `SessionDetail.stop()` reads the LEASE
+ * and nothing else, so a phone whose link is down answers CONFIRM; the surface asks "Interrupt what
+ * this session is doing? This sends Ctrl-C, the same key you would press at the terminal"; the user
+ * answers it; `confirmStop()` then reads the link and answers NOT_SENT; and the surface's plan has
+ * no arm for that value, so the press resolves to null. Nothing is sent, nothing is written, and
+ * the screen is pixel-identical to the one the question was asked over. A confirmation is a promise
+ * that answering it does something, and this one is answered by a no-op.
+ *
+ * WHAT THE FIX IS NOT. It is not a disabled Stop: PB-APP-3 makes the control PERSISTENT
+ * (`SessionDetail.stopVisible` is a `val`, not a condition) for the same reason the observer gets a
+ * different WORDING rather than a dead button -- a control that vanishes or greys out tells the
+ * user nothing about why. What changes is that the press resolves IMMEDIATELY to the outcome the
+ * link decides, with no question in front of it, and that outcome is said out loud.
+ *
+ * THE SEND PATH IS UNTOUCHED AND IS ASSERTED BELOW SO IT STAYS THAT WAY. `confirmStop()` still
+ * answers NOT_SENT while offline -- ADR-007 D7 has no queue for input and this screen must not
+ * invent one -- and a held lease on a live link still asks before interrupting a running agent.
+ *
+ * WHAT THIS FILE CANNOT SEE is the surface's own arm for the value: no JVM test can reach
+ * `PhoneStartup.Ready` (the phone core is a gomobile AAR of .so files cross-compiled for Android
+ * ABIs), so that the press SAYS something rather than resolving to null is fenced in
+ * android/gate/4lta_offlinestop_test.go, against checked-in source.
+ */
+class SessionStopOfflineTest {
+
+    private fun detail(
+        leaseHeld: Boolean = true,
+        online: Boolean = true,
+    ) = SessionDetail(
+        sessionId = "mbp/api",
+        journal = emptyList(),
+        snapshotText = "$ git push",
+        leaseHeld = leaseHeld,
+        online = online,
+        journalStale = false,
+    )
+
+    @Test
+    fun `an offline Stop resolves on the press rather than behind a question it cannot honour`() {
+        assertEquals(
+            "an offline Stop still resolves to CONFIRM, so the screen asks \"Interrupt what this " +
+                "session is doing?\" over a link that cannot carry the interrupt -- and the " +
+                "answer resolves to NOT_SENT with nothing sent and nothing written. A " +
+                "confirmation is a promise that answering it does something",
+            StopAction.NOT_SENT,
+            detail(leaseHeld = true, online = false).stop(),
+        )
+    }
+
+    @Test
+    fun `the lease is still the first question, offline or not`() {
+        // PB-INPUT-2 refuses every keystroke until the machine confirms a lease, so an observer is
+        // shown the step that would make Stop work whatever the link is doing. A link check that
+        // ran first would offer take-control's remedy to a user who cannot use it and hide the one
+        // that is actually theirs.
+        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, detail(leaseHeld = false, online = false).stop())
+        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, detail(leaseHeld = false, online = true).stop())
+    }
+
+    @Test
+    fun `a Stop that can be sent is still asked about first`() {
+        // The confirmation belongs to the press that INTERRUPTS A RUNNING AGENT and nothing here
+        // removes it: it names what will actually happen rather than asking "are you sure".
+        assertEquals(StopAction.CONFIRM, detail(leaseHeld = true, online = true).stop())
+        assertEquals(StopAction.SEND_INTERRUPT, detail(leaseHeld = true, online = true).confirmStop())
+    }
+
+    @Test
+    fun `an offline Stop is still never queued`() {
+        // ADR-007 D7: input is live-only. A Stop held for a reconnection arrives after the user
+        // gave up and did something else, and interrupts whatever is running then.
+        assertEquals(StopAction.NOT_SENT, detail(leaseHeld = true, online = false).confirmStop())
+    }
+
+    @Test
+    fun `the screen the surface reads carries the same refusal, so no dialog is built for it`() {
+        // `PhoneSurface.stopQuestion()` asks the panel and offers the confirmation only for
+        // CONFIRM. The panel is where that gate reads its answer, so the fix has to arrive here or
+        // the dialog is built anyway.
+        val offline = SessionDetailScreen.of(detail(leaseHeld = true, online = false))
+
+        assertEquals(StopAction.NOT_SENT, offline.stopAction)
+    }
+}

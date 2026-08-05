@@ -36,6 +36,7 @@ class SessionDetailTest {
         leaseHeld: Boolean = false,
         online: Boolean = true,
         journalStale: Boolean = false,
+        stopNotSent: Boolean = false,
     ) = SessionDetail(
         sessionId = "m/sess-1",
         journal = journal,
@@ -43,6 +44,7 @@ class SessionDetailTest {
         leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
+        stopNotSent = stopNotSent,
     )
 
     /** Journal events and snapshot cards are both present, and Stop is always reachable. */
@@ -85,6 +87,20 @@ class SessionDetailTest {
      * OFFLINE, and this is the hazard the resolution note calls out by name. Input is
      * live-only (ADR-007 D7); a Stop held for a reconnection arrives after the user has given
      * up and done something else, and interrupts whatever is running then.
+     *
+     * THE NOTICE CLAUSE IS REWRITTEN, and agents-tracker-4lta is why. It read:
+     *
+     *     assertTrue(
+     *         "the user must be TOLD it did not reach the machine (PB-INPUT-1)",
+     *         d.notSentNotice.isNotBlank(),
+     *     )
+     *
+     * over a detail nobody had pressed Stop on -- because the notice was a pure function of
+     * `!online`. PB-INPUT-1 is about telling the user what did not reach the machine, and NOTHING
+     * had been sent to fail: the sentence "Stop did not reach your machine and was not held for
+     * later" was on screen, in the past tense, reporting a failed Stop the user never pressed. The
+     * requirement is unchanged and this asserts it in both directions instead of one -- silence
+     * until a press resolves NOT_SENT, and the sentence once one has.
      */
     @Test
     fun `an offline stop resolves as not sent and is never queued`() {
@@ -92,8 +108,14 @@ class SessionDetailTest {
         assertEquals(StopAction.NOT_SENT, d.confirmStop())
         assertFalse("a queued Stop is ADR-007 D7's forbidden replay", d.stopQueued)
         assertTrue(
+            "the screen reports a Stop that did not reach the machine before any Stop was " +
+                "pressed, which is a failure the user is being told about in the past tense and " +
+                "did not cause",
+            d.notSentNotice.isBlank(),
+        )
+        assertTrue(
             "the user must be TOLD it did not reach the machine (PB-INPUT-1)",
-            d.notSentNotice.isNotBlank(),
+            detail(leaseHeld = true, online = false, stopNotSent = true).notSentNotice.isNotBlank(),
         )
     }
 

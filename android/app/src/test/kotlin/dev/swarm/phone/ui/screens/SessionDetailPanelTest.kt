@@ -42,6 +42,7 @@ class SessionDetailPanelTest {
         leaseHeld: Boolean = true,
         online: Boolean = true,
         journalStale: Boolean = false,
+        stopNotSent: Boolean = false,
     ) = SessionDetail(
         sessionId = "mbp/api",
         journal = journal,
@@ -49,6 +50,7 @@ class SessionDetailPanelTest {
         leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
+        stopNotSent = stopNotSent,
     )
 
     // ---- what the screen is about -----------------------------------------
@@ -134,21 +136,43 @@ class SessionDetailPanelTest {
         )
     }
 
+    /**
+     * THE PRESS IS PART OF THIS TEST NOW, and agents-tracker-4lta is why. The middle assertion read:
+     *
+     *     assertTrue(
+     *         "the screen does not tell the user their Stop never reached the machine",
+     *         panel.notSentNotice.isNotEmpty(),
+     *     )
+     *
+     * over `detail(online = false)` -- a session nobody had pressed Stop on. The notice was a pure
+     * function of connectivity, so a phone that merely lost its link reported, in the past tense,
+     * a Stop that was never pressed and therefore never failed. What PB-INPUT-1 asks for is that
+     * the user is told what did not reach the machine; a report of a loss that did not happen is
+     * not that, and it is the same defect the not-sent line's own view test was drawing.
+     */
     @Test
     fun `an offline Stop says it was not sent and does not promise a retry`() {
         val panel = SessionDetailScreen.of(detail(online = false))
 
         assertEquals(StopAction.NOT_SENT, panel.confirmedStopAction)
+        assertEquals(
+            "the screen reports a Stop that never reached the machine to a user who has not " +
+                "pressed Stop -- a failure in the past tense that they did not cause",
+            "",
+            panel.notSentNotice,
+        )
+
+        val pressed = SessionDetailScreen.of(detail(online = false, stopNotSent = true))
         assertTrue(
             "the screen does not tell the user their Stop never reached the machine",
-            panel.notSentNotice.isNotEmpty(),
+            pressed.notSentNotice.isNotEmpty(),
         )
         // ADR-007 D7: input is live-only and NEVER queued. Copy that said "will be sent when you
         // reconnect" would be a promise the transport cannot keep.
         assertTrue(
             "the not-sent notice implies the Stop is queued and will be delivered later, which " +
                 "is a promise ADR-007 D7 forbids this product from making",
-            !panel.notSentNotice.lowercase().contains("will be sent when"),
+            !pressed.notSentNotice.lowercase().contains("will be sent when"),
         )
     }
 

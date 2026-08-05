@@ -48,6 +48,7 @@ class SessionDetailViewTest {
         leaseHeld: Boolean = true,
         online: Boolean = true,
         journalStale: Boolean = false,
+        stopNotSent: Boolean = false,
     ) = SessionDetailScreen.of(
         SessionDetail(
             sessionId = "mbp/api",
@@ -56,6 +57,7 @@ class SessionDetailViewTest {
             leaseHeld = leaseHeld,
             online = online,
             journalStale = journalStale,
+            stopNotSent = stopNotSent,
         ),
     )
 
@@ -164,17 +166,35 @@ class SessionDetailViewTest {
         assertNotNull(printing.kitFind(DetailTag.SNAPSHOT))
     }
 
+    /**
+     * "SOMETHING WAS NOT SENT" NOW MEANS A PRESS, and agents-tracker-4lta is why. The last line read:
+     *
+     *     assertTrue(textOf(offline.kitFind(DetailTag.NOT_SENT)).isNotEmpty())
+     *
+     * over `panel(online = false)`, a session nobody had pressed Stop on -- so the screen drew
+     * "Stop did not reach your machine and was not held for later" the moment the link dropped, in
+     * the past tense, about a Stop that was never pressed. That is the same warning-about-a-loss-
+     * that-did-not-happen this test's own first assertion is against, one state over. Both
+     * directions are asserted below: nothing while the link is merely down, and the notice once a
+     * press has resolved NOT_SENT.
+     */
     @Test
     fun `the not-sent notice appears only when something was not sent`() {
         val live = view(panel(online = true))
         val offline = view(panel(online = false))
+        val pressed = view(panel(online = false, stopNotSent = true))
 
         assertNull(
             "a not-sent notice was drawn over a session whose link is up, which warns about a " +
                 "loss that did not happen",
             live.kitFind(DetailTag.NOT_SENT),
         )
-        assertTrue(textOf(offline.kitFind(DetailTag.NOT_SENT)).isNotEmpty())
+        assertNull(
+            "a not-sent notice was drawn over a session whose link is down and whose Stop was " +
+                "never pressed, which reports a failure the user did not cause",
+            offline.kitFind(DetailTag.NOT_SENT),
+        )
+        assertTrue(textOf(pressed.kitFind(DetailTag.NOT_SENT)).isNotEmpty())
     }
 
     @Test
@@ -234,8 +254,11 @@ class SessionDetailViewTest {
      */
     @Test
     fun `the parts are drawn in the order the recorded composition names`() {
+        // `stopNotSent` joins the state this draws from because the not-sent line is press-gated
+        // (agents-tracker-4lta): a panel that is merely offline no longer draws it, and a part
+        // this asserts the ORDER of has to be on screen for the order to mean anything.
         val root = view(
-            panel = panel(journalStale = true, online = false),
+            panel = panel(journalStale = true, online = false, stopNotSent = true),
             outcome = "Your machine refused that.",
         )
 
