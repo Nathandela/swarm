@@ -1,6 +1,8 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.keys.ConnectionState
 import dev.swarm.phone.ui.CommandVerdict
+import dev.swarm.phone.ui.ConnectionBanner
 
 /**
  * Which screen the window holds: the whole app, or the one offer an unpaired phone gets.
@@ -19,6 +21,51 @@ enum class Presentation {
     /** Today's four-tab scaffold, which a live pairing is what makes appear. */
     FULL_APP,
 }
+
+/**
+ * WHY this phone is on the pairing screen, which is the half [Presentation] does not carry
+ * (agents-tracker-w6o3).
+ *
+ * THE SCREEN IS THE SAME SCREEN AND THE WORDS ARE NOT. `PairOnlyScreen.presentationOf` reads one
+ * fact -- is this handset usably paired -- and every way of being unpaired answers PAIR_ONLY,
+ * which is right and is where the last fix stopped. What it left is a phone whose owner ran
+ * `swarm remote revoke` opening on the screen a FRESH INSTALL opens on: "Pair this phone", one
+ * control, no statement of what happened. The two facts most worth telling a person are the two
+ * this enum names, and the banners that used to carry them are unreachable on a phone the
+ * transport has just unpaired -- `mobile/relay.go`'s `transportEndsPairing` folds both into
+ * `paired = false`, and the pair-only gate returns before any banner is read.
+ *
+ * IT IS EXACTLY THE TWO STATES THAT END A PAIRING, and the boundary is Go's rather than this
+ * file's. `RELAY_UNTRUSTED` and `RELAY_INSECURE` are terminal and do NOT end a pairing -- the
+ * first arrives on the ordinary first pairing (ADR-007 B58) -- so a phone in them stays in the app
+ * with the banner that names them, and a row here would be a screen nothing can reach.
+ */
+enum class PairOnlyReason {
+    /**
+     * No machine has ever been pinned here -- or nothing on this handset can say why one is not.
+     *
+     * IT IS ALSO THE ANSWER TO "I CANNOT TELL", for [PairOnlyScreen.presentationOf]'s asymmetry
+     * read in the other direction: guessing a terminal reason would tell a user their owner
+     * removed this device on the strength of a read that failed, which is a claim about the
+     * MACHINE that a phone which cannot read its own transport is in no position to make.
+     */
+    FIRST_RUN,
+
+    /** The owner removed this device. The registration is the machine's to clear. */
+    REVOKED,
+
+    /**
+     * This handset's relay-auth key is gone, and the machine still has the device registered.
+     *
+     * THE ORDER OF THE REMEDY IS THE WHOLE POINT of this row: `swarm remote pair` is refused
+     * while a device is registered (PB-STATE-10, single-device v1), so a phone offered a bare
+     * pairing control here walks into a refusal with the reason on no screen at all.
+     */
+    REPAIR_REQUIRED,
+}
+
+/** The three sentences one draw of [pairOnlyView] puts on screen. */
+data class PairOnlyCopy(val title: String, val body: String, val cta: String)
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on.
@@ -54,6 +101,46 @@ object PairOnlyScreen {
     const val CTA = "Pair a computer"
 
     /**
+     * The two commands that clear a machine-side registration, spelled ONCE.
+     *
+     * Every sentence on this screen that sends a user to their machine sends them to the same two
+     * verbs -- find the device, unregister it -- and [dev.swarm.phone.ui.ErrorRouter] spells them
+     * this way for `swarm/state-corrupt`, which is the same recovery. Three copies of a command
+     * line is three things to keep in agreement, and a user who reads two of them wonders which is
+     * the real one.
+     */
+    private const val UNREGISTER_FIRST = "run `swarm remote devices` on your machine to find " +
+        "this device and `swarm remote revoke <device-id>` to unregister it"
+
+    /** What a phone the owner removed is, stated as the fact and not as the remedy. */
+    const val TITLE_REVOKED = "This phone was removed"
+
+    /** What a phone whose relay-auth key is gone is. */
+    const val TITLE_REPAIR_REQUIRED = "This phone's key is gone"
+
+    /**
+     * The repair_required cause AND the order its remedy has to be carried out in
+     * (agents-tracker-w6o3).
+     *
+     * IT IS NOT `ConnectionBanner`'S SENTENCE, and that is the defect rather than a wording
+     * preference: the banner ends "Pair this device again", which is advice this screen cannot
+     * offer on its own terms. Nothing removed the machine-side registration here -- the key died
+     * on the HANDSET -- so `swarm remote pair` is refused until the owner clears it (PB-STATE-10),
+     * and a user who presses the control before that has been told nothing walks into the failure
+     * LOOP PB-APP-10 forbids, reached through the remedy.
+     *
+     * THE CONTROL STAYS ANYWAY, and the argument is the mirror of the one above. Nothing on this
+     * device can un-destroy a Keystore key, so this state never clears on its own; a screen that
+     * withheld the pairing control until it did would withhold it forever, while the recovery
+     * PB-STATE-10 documents ENDS with a pairing on this handset. What the requirement forbids is a
+     * BARE control -- one offered with no statement of the step that has to come first.
+     */
+    private const val REPAIR_REQUIRED_CAUSE = "This phone's key was destroyed and cannot be " +
+        "recovered. Your machine still has this device registered and `swarm remote pair` is " +
+        "refused until that is cleared, so " + UNREGISTER_FIRST + " before pairing this phone " +
+        "again."
+
+    /**
      * What a revoke leaves this phone unable to say, said (agents-tracker-qlf9).
      *
      * **THE PURGE ORDERING IS NOT THE DEFECT AND IS NOT CHANGED.** `SettingsSurface.onReplace`
@@ -79,9 +166,8 @@ object PairOnlyScreen {
      * moment they are least able to.
      */
     const val REVOKE_UNCONFIRMED = "This phone has unpaired itself, and your machine has not " +
-        "confirmed that it removed the device. If pairing is refused, run `swarm remote devices` " +
-        "on your machine to find this device and `swarm remote revoke <device-id>` to unregister " +
-        "it first."
+        "confirmed that it removed the device. If pairing is refused, " + UNREGISTER_FIRST +
+        " first."
 
     /** The head of the refused sentence; the machine's own reason follows it. */
     private const val REVOKE_REFUSED = "Your machine refused to remove this device"
@@ -92,9 +178,8 @@ object PairOnlyScreen {
      * IT IS ONE TAIL FOR BOTH because the fact is one fact: the purge ran, so the phone is
      * unpaired and the machine is not.
      */
-    private const val STILL_REGISTERED = " This phone has unpaired itself anyway, so run " +
-        "`swarm remote devices` on your machine to find this device and `swarm remote revoke " +
-        "<device-id>` to unregister it before pairing again."
+    private const val STILL_REGISTERED = " This phone has unpaired itself anyway, so " +
+        UNREGISTER_FIRST + " before pairing again."
 
     /**
      * The machine's answer to the revoke this phone issued, as the screen states it.
@@ -151,5 +236,78 @@ object PairOnlyScreen {
         if (pairedReader()) Presentation.FULL_APP else Presentation.PAIR_ONLY
     } catch (unreadable: Exception) {
         Presentation.PAIR_ONLY
+    }
+
+    /**
+     * WHY this phone is here, asked of the transport once [presentationOf] has said that it is
+     * (agents-tracker-w6o3).
+     *
+     * IT IS A SECOND QUESTION AND NOT A SECOND GATE, which is the line the d0b8 fence under
+     * `android/gate` draws and this must not cross: whether a handset is USABLY paired is ONE fact,
+     * assembled in Go over the durable unpair and the live transport together, and a call site
+     * that rebuilt it from the connection state would hold a second opinion to keep in step with
+     * the first. This asks nothing about that verdict. It asks what the screen the verdict already
+     * chose should SAY.
+     *
+     * THE READER IS A READER for [presentationOf]'s reason, twice over: `App.ConnectionState`
+     * fails through the same `ready()` check as every other verb, and `ConnectionState.of` errors
+     * on a wire string this build does not know -- deliberately, so a state the facade starts
+     * reporting is a loud failure rather than a screen that silently renders nothing. Neither is a
+     * reason to show a user a cause.
+     *
+     * WHAT IT CANNOT SEE, stated because a reader will otherwise assume it does: the connection
+     * state is PROCESS MEMORY. `recordUnpaired` writes down THAT the registration ended and the
+     * summary carries no reason, so a handset SIGKILLed after a revoke and reopened out of signal
+     * reads FIRST_RUN -- the honest answer for what is then knowable on the device, and the reason
+     * `mobile/relay.go` gives for keeping the live reading at all rather than a durable verdict a
+     * recovery would make stale.
+     *
+     * @param stateReader the transport's current opinion --
+     *  `ConnectionState.of(connectionState())`.
+     */
+    fun reasonFor(stateReader: () -> ConnectionState): PairOnlyReason = try {
+        when (stateReader()) {
+            ConnectionState.REVOKED -> PairOnlyReason.REVOKED
+            ConnectionState.REPAIR_REQUIRED -> PairOnlyReason.REPAIR_REQUIRED
+            else -> PairOnlyReason.FIRST_RUN
+        }
+    } catch (unreadable: Exception) {
+        PairOnlyReason.FIRST_RUN
+    }
+
+    /**
+     * What the screen says for one reason.
+     *
+     * THE REVOKED SENTENCE IS THE BANNER'S OWN, taken rather than re-typed. `ConnectionUi` argues
+     * that wording -- the owner removed this device, and the machine-side registration has to be
+     * cleared before a re-pair can succeed -- and it is the ONLY place in this product that states
+     * it. Since `transportEndsPairing` folds a past-grace revoke into `paired = false`, the banner
+     * carrying it is unreachable on exactly the handset it describes; the sentence therefore moves
+     * to the screen that handset lands on, and moving it as a reference is what stops the two
+     * drifting into two answers.
+     *
+     * [BODY] FOLLOWS BOTH CAUSES rather than being replaced by them, because it answers a
+     * different question -- why the app is empty -- and that question is sharper for a phone that
+     * had a machine an hour ago than for one that never did.
+     *
+     * [CTA] IS THE SAME CONTROL IN EVERY ROW. It is inventory C7's own name for the flow it opens,
+     * and the flow is the same flow: the recovery ends with `swarm remote pair` showing a code and
+     * this phone scanning it. See [REPAIR_REQUIRED_CAUSE] for why it is not withheld in the state
+     * that cannot clear itself.
+     */
+    fun copyFor(reason: PairOnlyReason): PairOnlyCopy = when (reason) {
+        PairOnlyReason.FIRST_RUN -> PairOnlyCopy(TITLE, BODY, CTA)
+
+        PairOnlyReason.REVOKED -> PairOnlyCopy(
+            TITLE_REVOKED,
+            ConnectionBanner.of(ConnectionState.REVOKED).text + " " + BODY,
+            CTA,
+        )
+
+        PairOnlyReason.REPAIR_REQUIRED -> PairOnlyCopy(
+            TITLE_REPAIR_REQUIRED,
+            REPAIR_REQUIRED_CAUSE + " " + BODY,
+            CTA,
+        )
     }
 }

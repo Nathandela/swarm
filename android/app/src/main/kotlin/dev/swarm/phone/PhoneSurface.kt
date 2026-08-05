@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import dev.swarm.phone.keys.ConnectionState
 import dev.swarm.phone.runtime.ConnectivityPolicy
 import dev.swarm.phone.runtime.LifecycleConvergence
 import dev.swarm.phone.runtime.LifecycleEvent
@@ -44,6 +45,7 @@ import dev.swarm.phone.ui.screens.LaunchPanelScreen
 import dev.swarm.phone.ui.screens.LinkPanel
 import dev.swarm.phone.ui.screens.LinkPanelScreen
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
+import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PeekPanel
 import dev.swarm.phone.ui.screens.PeekPanelScreen
@@ -531,7 +533,12 @@ class PhoneSurface(
     // THE NOTICE IS PART OF THE KEY (agents-tracker-qlf9). A revoke lands the phone on this screen
     // and the sentence explaining what it left behind arrives with it; keyed on `pairingStarted`
     // alone, the early return would keep drawing the screen the phone had before the revoke.
-    private var pairOnlyDrawn: Pair<Boolean, String>? = null
+    //
+    // AND SO IS THE REASON (agents-tracker-w6o3), for the same reason one step earlier: a handset
+    // reaches this screen and only then dials, so the transport's verdict routinely arrives AFTER
+    // the first draw. Keyed without it, the redraw that carries "the owner removed this device"
+    // would be the one the early return skips.
+    private var pairOnlyDrawn: Triple<Boolean, String, PairOnlyReason>? = null
 
     /**
      * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
@@ -1041,10 +1048,21 @@ class PhoneSurface(
         // pinned machine -- phonecore filters the durable blob on it -- so a gate that read it
         // showed the app to a handset whose owner had just revoked it, with the pairing entry point
         // on the settings screen inside.
+        //
+        // AND THE SCREEN IS TOLD WHY, WHICH IS A SECOND QUESTION AND NOT A SECOND GATE
+        // (agents-tracker-w6o3). The verdict above is one fact assembled in Go; what the reason
+        // decides is only what the screen it has already chosen SAYS. It has to be asked here
+        // because the transport's own banner never gets the chance: `transportEndsPairing` folds
+        // a revoked and a repair_required handset into `paired = false`, so the two sentences that
+        // name a cause the user cannot otherwise discover sit behind the early return below.
         if (PairOnlyScreen.presentationOf { startup.app.stateSummary().paired } ==
             Presentation.PAIR_ONLY
         ) {
-            drawPairOnly()
+            drawPairOnly(
+                PairOnlyScreen.reasonFor {
+                    ConnectionState.of(startup.app.connectionState())
+                },
+            )
             return
         }
         // AND THE REVOKE'S DIVERGENCE IS SPENT HERE AND NOWHERE ELSE (agents-tracker-qlf9). The
@@ -1183,14 +1201,22 @@ class PhoneSurface(
      * machine, which nothing clears. Now `App.StateSummary.paired` is false for all three endings
      * (the local Replace, the owner's `swarm remote revoke`, a destroyed relay-auth key), so that
      * sentence is load-bearing rather than aspirational.
+     *
+     * AND THE THREE ENDINGS NO LONGER READ ALIKE (agents-tracker-w6o3). They shared one screen AND
+     * one set of words -- the fresh install's -- so a phone whose owner removed it this morning
+     * opened on "Pair this phone" with no statement of what had happened, and a phone whose
+     * relay-auth key was destroyed was offered a control the machine refuses while it still holds
+     * the registration. [PairOnlyScreen.copyFor] owns the words; this passes the reason.
+     *
+     * @param reason why this handset is unpaired, from [PairOnlyScreen.reasonFor].
      */
-    private fun drawPairOnly() {
+    private fun drawPairOnly(reason: PairOnlyReason) {
         // WHAT THE REVOKE LEFT BEHIND, READ FROM THE PANEL THAT ISSUED IT (agents-tracker-qlf9).
         // The settings panel is gone by the time this draws -- a revoked phone is an unpaired one
         // and this screen replaces the whole scaffold -- so the one sentence explaining why the
         // pairing about to be attempted may be refused has nowhere else to land.
         val revoked = settings.unpairNotice
-        val next = pairingStarted to revoked
+        val next = Triple(pairingStarted, revoked, reason)
         if (pairOnlyDrawn == next && host.childCount > 0) return
         pairOnlyDrawn = next
         // THE SCAFFOLD IS COMING DOWN, SO WHAT IT LAST DREW SAYS NOTHING ABOUT WHAT IS ON SCREEN.
@@ -1210,6 +1236,7 @@ class PhoneSurface(
                     render()
                 },
                 notice = revoked,
+                copy = PairOnlyScreen.copyFor(reason),
             ),
         )
     }

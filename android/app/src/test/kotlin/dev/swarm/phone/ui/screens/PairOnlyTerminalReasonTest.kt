@@ -58,10 +58,10 @@ class PairOnlyTerminalReasonTest {
         for (reason in terminal) {
             val copy = PairOnlyScreen.copyFor(reason)
             assertNotEquals(
-                "a phone in $reason reads the same heading as a fresh install. The handset had a " +
-                    "machine until this morning and the app is now empty; a screen that says only " +
-                    "\"Pair this phone\" leaves the one fact the user cannot discover -- WHY -- on " +
-                    "no screen in the product",
+                "a phone in $reason reads the same heading as a fresh install. The handset had " +
+                    "a machine until this morning and the app is now empty; a screen saying only " +
+                    "\"Pair this phone\" leaves the one fact the user cannot discover -- WHY -- " +
+                    "on no screen in the product",
                 firstRun.title,
                 copy.title,
             )

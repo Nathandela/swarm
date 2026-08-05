@@ -79,6 +79,11 @@ object PairOnlyTag {
  *  to say. It is drawn in BOTH states and above both, because the state it warns about is the one
  *  the pairing flow is walking into -- see [PairOnlyTag.NOTICE]. It is LAST and defaulted so the
  *  existing call sites are unaffected, which is the shape `phoneScaffoldView`'s banner took.
+ * @param copy the three sentences, which differ by WHY this phone is unpaired
+ *  (agents-tracker-w6o3). It defaults to the first-run screen because that is what an offer with
+ *  no reason behind it is; every other value comes from [PairOnlyScreen.reasonFor], and the screen
+ *  decides none of it -- a composition that chose its own words would be the copy-in-the-view
+ *  arrangement PB-DS-9 forbids.
  */
 fun pairOnlyView(
     context: Context,
@@ -86,6 +91,7 @@ fun pairOnlyView(
     started: Boolean,
     onStartPairing: () -> Unit,
     notice: String = "",
+    copy: PairOnlyCopy = PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -120,7 +126,7 @@ fun pairOnlyView(
         )
     } else {
         column.addView(
-            navHeader(context, PairOnlyScreen.TITLE, null).apply {
+            navHeader(context, copy.title, null).apply {
                 // THE TAG GOES ON THE TITLE CELL AND NOT ON THE HEADER ROW, which is the one place
                 // this screen differs from every other one's `navHeader`. The others name the row
                 // because they assert its position; here the tag names the SENTENCE, and a tag on
@@ -134,9 +140,9 @@ fun pairOnlyView(
         // nothing here, and here is why. The alternative was a bare `TextView` with no appearance
         // at all, which is what `LinkPanelView`'s clock line settles for because it sits inside a
         // populated screen; this sentence is half of the only screen this phone has.
-        column.addView(emptyState(context, PairOnlyScreen.BODY).apply { tag = PairOnlyTag.BODY })
+        column.addView(emptyState(context, copy.body).apply { tag = PairOnlyTag.BODY })
         column.addView(
-            ctaButton(context, PairOnlyScreen.CTA, CtaKind.APPROVE).apply {
+            ctaButton(context, copy.cta, CtaKind.APPROVE).apply {
                 tag = PairOnlyTag.CTA
                 setOnClickListener { onStartPairing() }
                 // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close
