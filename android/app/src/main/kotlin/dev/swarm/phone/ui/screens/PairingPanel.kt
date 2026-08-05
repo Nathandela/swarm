@@ -63,6 +63,19 @@ data class PairingPanel(
     val relayNotice: String,
     /** PB-PAIR-6: the destination on screen, and empty until it is the step to show one. */
     val destination: String,
+    /**
+     * Whether the line under the viewfinder reporting what the camera has looked at is on
+     * screen (agents-tracker-av7k).
+     *
+     * IT IS A FLAG AND NOT THE SENTENCE, WHICH IS THE ONE DESIGN DECISION IN THIS FIELD. The
+     * count changes several times a second, and this panel is compared against the last one to
+     * decide whether the view tree is rebuilt -- so a panel carrying the number would tear the
+     * camera preview out of the hierarchy and put it back multiple times a second, which is the
+     * defect the counter exists to diagnose, caused by the counter. The number is written
+     * straight into the slot by the surface; the COPY is still the screen's
+     * ([PairingPanelScreen.scanProgress]) and so is the decision to show the line at all.
+     */
+    val showsScanProgress: Boolean,
     /** PB-SAS-3's symbols, empty until the handshake has derived them. */
     val sas: List<String>,
     val sasInstruction: String,
@@ -273,6 +286,26 @@ object PairingPanelScreen {
         "is remembered after this pairing."
 
     /**
+     * What the camera has looked at so far, or nothing at all before it has looked at anything.
+     *
+     * THE OWNER'S REPORT IS "I HOLD IT OVER THE CODE AND NOTHING HAPPENS" (agents-tracker-av7k),
+     * and nothing is what a dead pipeline, a camera that never opened and a symbol that will not
+     * decode all look like. This is the one number that separates them, and it is on the phone
+     * because that is where the person is standing.
+     *
+     * IT IS A COUNT AND NEVER A PROGRESS BAR. There is nothing to be a fraction of -- a scan
+     * succeeds on the frame it succeeds on -- and a bar filling toward an end that does not exist
+     * is the fake progress this screen has no business inventing. Zero frames says nothing rather
+     * than "0 frames analysed", because a line claiming a camera is looking is a claim, and
+     * before the first frame nobody has established it.
+     */
+    fun scanProgress(frames: Long): String = when {
+        frames <= 0 -> ""
+        frames == 1L -> "1 frame analysed, no code found yet"
+        else -> "$frames frames analysed, no code found yet"
+    }
+
+    /**
      * @param machine the machine this phone is pinned to, for the one heading that names it.
      *  Empty is not a placeholder -- a completed pairing whose machine this screen cannot read
      *  says `Paired` rather than `Paired with `, which is what a naive interpolation renders.
@@ -303,6 +336,11 @@ object PairingPanelScreen {
      *  asked, and this screen has now shipped three defects whose common shape is a first-run
      *  state no test ever constructed (agents-tracker-qx9m, -qun0, -v5qc). A caller that has to
      *  say which phone it means cannot forget that there are two.
+     * @param cameraLive whether the analysis pipeline is actually running. It is NOT derivable
+     *  from [scanner], which answers who may open the camera and knows nothing about whether one
+     *  was opened -- that is a fact about a control someone pressed, so it belongs to the surface
+     *  and arrives here as a parameter. It is what keeps the frame counter off a screen where no
+     *  camera is looking at anything.
      * @param typedEntryCarriesItsOwnRelay what `PairingFlow.entryCarriesItsOwnRelay` answers
      *  about the text in the field right now. The decision is the FLOW's and the fact is the
      *  SURFACE's; what arrives here is the answer, so no composition has to look at a field to
@@ -315,6 +353,7 @@ object PairingPanelScreen {
         holding: Boolean,
         machine: String = "",
         manualEntryRevealed: Boolean = false,
+        cameraLive: Boolean = false,
         relayKnown: Boolean,
         typedEntryCarriesItsOwnRelay: Boolean = false,
     ): PairingPanel {
@@ -404,6 +443,11 @@ object PairingPanelScreen {
             // decision written down twice.
             relayNotice = if (PairingControl.RELAY_URL in controls) RELAY_ASK else "",
             destination = if (confirming) attempt.originShown else "",
+            // ONLY WHERE A CAMERA IS ACTUALLY LOOKING. A live attempt has its payload and the
+            // preview is closed, so a count surviving into it would be reporting on a pipeline
+            // that has stopped -- and before the scan control is pressed there is no pipeline to
+            // report on at all.
+            showsScanProgress = scanning && cameraLive,
             sas = if (comparing) checkNotNull(sas).symbols else emptyList(),
             sasInstruction = if (comparing) checkNotNull(sas).instruction else "",
             // THE SCAN STEP AND NOTHING ELSE. Every terminal state's message was argued line by

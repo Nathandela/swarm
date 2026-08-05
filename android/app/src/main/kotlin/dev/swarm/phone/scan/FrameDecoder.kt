@@ -33,12 +33,38 @@ class FrameDecoder {
     private val reader = QRCodeReader()
 
     /**
+     * How many ZXing decodes the LAST frame cost: 0 when the geometry was refused before any,
+     * 1 when the first attempt read a symbol, 2 otherwise.
+     *
+     * IT DESCRIBES THE FRAME IN HAND AND NOT THE RUN (agents-tracker-av7k). A running total is
+     * the scanner's to keep, because it is the scanner that knows when a scan began; what this
+     * answers is what the frame just decoded actually cost, which is the number that pairs with
+     * [decodedOnAttempt].
+     */
+    var attempts: Int = 0
+        private set
+
+    /**
+     * Which attempt read the payload -- 1 normal, 2 inverted -- or 0 when none did.
+     *
+     * ONE INTEGER SETTLES A HYPOTHESIS. The field report is a scanner that never locks on
+     * (agents-tracker-av7k), and the second attempt succeeding says the terminal handed the
+     * camera a light-on-dark symbol, which is a different defect from the seam and the exposure
+     * ones and has a different fix. Without it the log can only say "decoded" and the polarity
+     * question stays open.
+     */
+    var decodedOnAttempt: Int = 0
+        private set
+
+    /**
      * Decode the Y plane of a YUV_420_888 frame. [stride] rather than [width] is the data
      * width, and that is not a detail: the camera pads rows to a hardware alignment, so a
      * source built with `width` reads the padding of row n as the start of row n+1 and decodes
      * nothing at all on the devices that pad (bitwarden/android 7097 shipped exactly that).
      */
     fun payload(luma: ByteArray, stride: Int, width: Int, height: Int): String? {
+        attempts = 0
+        decodedOnAttempt = 0
         if (stride <= 0 || width > stride) return null
         val rows = minOf(height, luma.size / stride)
         if (rows <= 0) return null
@@ -47,7 +73,9 @@ class FrameDecoder {
     }
 
     private fun attempt(source: LuminanceSource): String? = try {
+        attempts++
         reader.decode(BinaryBitmap(HybridBinarizer(source)), HINTS).text
+            .also { decodedOnAttempt = attempts }
     } catch (absent: NotFoundException) {
         // No code in this frame. The overwhelmingly common case: every frame before the
         // user has the code in shot lands here.

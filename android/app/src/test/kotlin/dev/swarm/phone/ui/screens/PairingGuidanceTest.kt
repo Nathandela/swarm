@@ -62,6 +62,7 @@ class PairingGuidanceTest {
         revealed: Boolean = false,
         relayKnown: Boolean = true,
         typedEntry: String = "",
+        cameraLive: Boolean = false,
     ) = PairingPanelScreen.of(
         attempt = PairingAttempt(
             step = step,
@@ -74,6 +75,7 @@ class PairingGuidanceTest {
         holding = holding,
         machine = "",
         manualEntryRevealed = revealed,
+        cameraLive = cameraLive,
         relayKnown = relayKnown,
         // RESOLVED THE WAY THE SURFACE RESOLVES IT, never named by hand: the surface asks
         // PairingFlow what the field holds, and a test that answered the question itself would
@@ -371,6 +373,56 @@ class PairingGuidanceTest {
             ),
             controls,
         )
+    }
+
+    // ---- a viewfinder that is looking, and says so ---------------------------
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-av7k's on-screen half.
+     *
+     * WHAT THE OWNER CANNOT TELL APART, AND IT IS THE WHOLE BUG REPORT. They hold the phone over
+     * the terminal symbol and nothing happens. "Nothing" is the same picture for a camera that
+     * never started, an analysis pipeline delivering no frames, and a decoder reading thirty
+     * frames a second and finding no symbol in any of them -- and those are three different
+     * defects with three different fixes. The screen showed a live preview and said nothing else,
+     * so the one number that separates them was never on it.
+     *
+     * IT IS A COUNT AND NEVER A PROGRESS BAR. There is nothing to be a fraction of: a scan
+     * succeeds on the frame it succeeds on, and a bar filling up would be an invention that
+     * implies an end. What this reports is the thing that is actually happening.
+     */
+    @Test
+    fun `a running camera reports what it has looked at`() {
+        assertTrue(
+            "a live camera says nothing about whether it is receiving frames, which is the one " +
+                "fact separating a dead pipeline from a symbol that will not decode",
+            panel(cameraLive = true).showsScanProgress,
+        )
+        assertEquals("1 frame analysed, no code found yet", PairingPanelScreen.scanProgress(1))
+        assertEquals("50 frames analysed, no code found yet", PairingPanelScreen.scanProgress(50))
+    }
+
+    @Test
+    fun `a camera nobody has started reports nothing`() {
+        // NO FAKE PROGRESS. Before the scan control is pressed there is no pipeline and no count,
+        // and a line reading "0 frames analysed" would be a claim that something is looking.
+        assertTrue(
+            "the frame counter is on screen before anyone opened the camera",
+            !panel(cameraLive = false).showsScanProgress,
+        )
+        assertEquals("", PairingPanelScreen.scanProgress(0))
+    }
+
+    @Test
+    fun `the counter goes with the scanner when an attempt begins`() {
+        // A payload has been read by this point and the camera is released. A frame count left
+        // on screen would be reporting on a pipeline that has stopped.
+        PairingStep.entries.forEach { step ->
+            assertTrue(
+                "$step reports frame counts over a live attempt, whose camera is already closed",
+                !panel(step = step, holding = true, cameraLive = true).showsScanProgress,
+            )
+        }
     }
 
     // ---- the relay a ten-character code cannot carry -------------------------

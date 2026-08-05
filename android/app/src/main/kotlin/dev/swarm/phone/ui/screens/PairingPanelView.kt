@@ -74,6 +74,9 @@ object PairingTag {
     /** The camera preview, which has no design source at all -- see [PairingSlots.scanner]. */
     const val SCANNER = "pairing.scanner"
 
+    /** What the camera has looked at, under the viewfinder it is about. */
+    const val SCAN_PROGRESS = "pairing.scan.progress"
+
     /** One control. The tag names WHICH control, so an assertion cannot confuse two. */
     fun control(control: PairingControl): String = "pairing.control." + control.name
 }
@@ -95,6 +98,12 @@ class PairingSlots(
     val sas: View,
     val sasInstruction: View,
     val scanner: View,
+    /**
+     * The frame counter under the preview. It is a SLOT and not a string on the panel because
+     * its text changes several times a second while the panel must not: see
+     * [PairingPanel.showsScanProgress].
+     */
+    val scanProgress: View,
     val controls: Map<PairingControl, View>,
 )
 
@@ -140,6 +149,12 @@ fun pairingPanelView(
     // -- so whether it is showing is a fact about the camera rather than about the step, and the
     // surface is what holds it.
     column.addView(slots.scanner.tagged(PairingTag.SCANNER))
+    // DIRECTLY UNDER THE PREVIEW, because that is what makes it a caption rather than a number.
+    // "N frames analysed, no code found yet" beside the thing the user is aiming reads as "this
+    // is looking and not finding"; anywhere else on the screen it reads as an error.
+    if (panel.showsScanProgress) {
+        column.addView(slots.scanProgress.tagged(PairingTag.SCAN_PROGRESS))
+    }
     if (panel.destination.isNotEmpty()) {
         column.addView(slots.destination.tagged(PairingTag.DESTINATION))
     }

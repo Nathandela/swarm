@@ -114,6 +114,18 @@ class PairingSurface(
     private val outcome = label()
 
     /**
+     * What the camera has looked at, under the viewfinder (agents-tracker-av7k).
+     *
+     * ITS TEXT IS WRITTEN HERE AND ITS PRESENCE IS DECIDED BY THE SCREEN, and the split is not a
+     * compromise -- it is what keeps the diagnostic from causing the thing it diagnoses. The
+     * count changes several times a second; [PairingPanel] is compared against the last drawn one
+     * to decide whether the view tree is rebuilt, so a count carried on the panel would tear the
+     * live PreviewView out of the hierarchy and put it back at that rate. The words are still the
+     * screen model's ([PairingPanelScreen.scanProgress]).
+     */
+    private val scanProgress = label()
+
+    /**
      * The six symbols. Named for what it is -- a DISPLAY -- because the one thing this screen
      * must never grow is a field beside it; android/gate/s16_ui_test.go fences the shape and
      * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
@@ -331,6 +343,15 @@ class PairingSurface(
      */
     private var scanner: QrScanner? = null
 
+    /**
+     * Whether the analysis pipeline is running, as against whether the permission would allow it.
+     *
+     * IT IS NOT DERIVABLE FROM [scannerState], which answers who MAY open the camera. A granted
+     * permission on a screen nobody has pressed Scan on has no pipeline, no frames and nothing to
+     * report -- and a frame counter over that is a claim that something is looking.
+     */
+    private var cameraLive = false
+
     private val poller = Handler(Looper.getMainLooper())
 
     /**
@@ -351,6 +372,7 @@ class PairingSurface(
         sas = sasDisplay,
         sasInstruction = sasInstruction,
         scanner = scannerHost,
+        scanProgress = scanProgress,
         controls = mapOf(
             PairingControl.SCAN to startScan,
             PairingControl.REVEAL_TYPED_PAYLOAD to revealTypedPayload,
@@ -415,6 +437,7 @@ class PairingSurface(
     /** Release the camera and stop polling. Called from the Activity's pause. */
     fun release() {
         scanner?.stop()
+        cameraLive = false
         poller.removeCallbacksAndMessages(null)
     }
 
@@ -484,17 +507,59 @@ class PairingSurface(
             render()
             return
         }
+        // THE PANEL IS REDRAWN BEFORE THE CAMERA EXISTS, and the order is the point: the frame
+        // counter joining the screen is a panel change, which rebuilds the view tree, which
+        // detaches every slot -- including the preview. Bound first, that rebuild would pull the
+        // PreviewView's surface out from under a camera that had just been given it.
+        cameraLive = true
+        scanProgress.text = ""
+        render()
+
         val live = scanner ?: QrScanner(activity).also {
             scanner = it
             scannerHost.addView(it.view, LinearLayout.LayoutParams(MATCH, MATCH))
+            // THE DIAGNOSTIC IS BEHIND A LONG PRESS, on the one view whose whole purpose is
+            // being aimed (agents-tracker-av7k). It is not on the panel as a control because it
+            // is not part of pairing: a person following the guided steps must never meet it,
+            // and the person who needs it is being told where to press.
+            it.view.setOnLongClickListener { _ -> dumpOneAnalysisFrame() }
         }
         live.view.visibility = View.VISIBLE
         scannerHost.visibility = View.VISIBLE
-        live.start { payload -> acceptScannedPayload(payload) }
+        live.start(
+            onPayload = { payload -> acceptScannedPayload(payload) },
+            // WRITTEN STRAIGHT INTO THE VIEW, never through a redraw: a render() here would ask
+            // the Go core for its state several times a second and rebuild the tree under the
+            // running preview. The screen model still owns the words.
+            onFrames = { seen -> scanProgress.text = PairingPanelScreen.scanProgress(seen) },
+        )
+    }
+
+    /**
+     * PB-E2E-5's missing evidence, on demand: one analysis frame written where a person can
+     * fetch it (agents-tracker-av7k).
+     *
+     * THE FRAME MAY CONTAIN A LIVE PAIRING SYMBOL, so where it goes is a decision and not a
+     * default. `getExternalFilesDir` is this app's own directory on external storage -- no other
+     * app can read it under scoped storage, and it is the one place the OWNER can reach on a
+     * release-signed internal-testing build, where `run-as` is unavailable and a file under
+     * `noBackupFilesDir` would be evidence nobody can collect. The transfer surface that opens is
+     * shut in `res/xml/data_extraction_rules.xml`, which now excludes `domain="external"` beside
+     * the private root for exactly this file.
+     *
+     * @return true always: the press was consumed either way, and a long press that reports
+     *  "unhandled" would fall through to whatever the platform does with it next.
+     */
+    private fun dumpOneAnalysisFrame(): Boolean {
+        scanner?.dumpNextFrame(activity.getExternalFilesDir(null) ?: activity.noBackupFilesDir)
+        outcome.text = "Saving the next camera frame for diagnosis. Its path is in the log."
+        render()
+        return true
     }
 
     private fun stopScanning() {
         scanner?.stop()
+        cameraLive = false
         scannerHost.visibility = View.GONE
     }
 
@@ -618,6 +683,7 @@ class PairingSurface(
                 holding = holding,
                 machine = machineOf(startup),
                 manualEntryRevealed = manualEntryRevealed,
+                cameraLive = cameraLive,
                 // ASKED OF THE RUNTIME ON EVERY DRAW, never latched: the URL is written during
                 // this screen's own confirm step, so a value cached at construction would keep
                 // the field on screen for the rest of a session that had already answered it.

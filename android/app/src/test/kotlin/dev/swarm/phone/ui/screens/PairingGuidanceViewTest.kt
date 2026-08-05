@@ -40,6 +40,7 @@ class PairingGuidanceViewTest {
         scanner: ScannerState = ScannerState.PERMISSION_DENIED,
         revealed: Boolean = false,
         relayKnown: Boolean = true,
+        cameraLive: Boolean = false,
     ) = PairingPanelScreen.of(
         attempt = PairingAttempt(
             step = step,
@@ -52,6 +53,7 @@ class PairingGuidanceViewTest {
         holding = holding,
         machine = "",
         manualEntryRevealed = revealed,
+        cameraLive = cameraLive,
         relayKnown = relayKnown,
     )
 
@@ -67,6 +69,7 @@ class PairingGuidanceViewTest {
             sas = View(context),
             sasInstruction = View(context),
             scanner = View(context),
+            scanProgress = View(context),
             controls = controls,
         )
     }
@@ -77,9 +80,10 @@ class PairingGuidanceViewTest {
         scanner: ScannerState = ScannerState.PERMISSION_DENIED,
         revealed: Boolean = false,
         relayKnown: Boolean = true,
+        cameraLive: Boolean = false,
     ): View = pairingPanelView(
         context,
-        panel(step, holding, scanner, revealed, relayKnown),
+        panel(step, holding, scanner, revealed, relayKnown, cameraLive),
         Stubs(context).slots,
     )
 
@@ -215,6 +219,35 @@ class PairingGuidanceViewTest {
                 PairingTag.control(PairingControl.USE_TYPED_PAYLOAD),
             ),
             order,
+        )
+    }
+
+    // ---- the frame counter under the viewfinder ------------------------------
+
+    @Test
+    fun `the frame count is drawn directly under the viewfinder it is about`() {
+        // Anywhere else it is a number on a screen. Under the preview it is a caption on the
+        // thing the user is pointing at a symbol, which is what makes "no code found yet"
+        // readable as "this is looking and not finding" rather than as an error.
+        val order = draw(cameraLive = true).tags()
+
+        assertNotNull(
+            "a running camera reports nothing, so a dead pipeline and a symbol that will not " +
+                "decode look identical to the person holding the phone",
+            draw(cameraLive = true).kitFind(PairingTag.SCAN_PROGRESS),
+        )
+        assertEquals(
+            "the frame count is not immediately under the preview",
+            order.indexOf(PairingTag.SCANNER) + 1,
+            order.indexOf(PairingTag.SCAN_PROGRESS),
+        )
+    }
+
+    @Test
+    fun `a camera nobody started draws no counter`() {
+        assertNull(
+            "a frame counter is on screen with no camera behind it",
+            draw(cameraLive = false).kitFind(PairingTag.SCAN_PROGRESS),
         )
     }
 

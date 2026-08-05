@@ -102,6 +102,16 @@ var permittedAtRestWriters = map[string]string{
 		"census's scan root -- the endpoint travels in the pairing QR and is public by design (ADR-007 B88).",
 	filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm", "phone", "keys", "CustodyBacking.kt"): "the " +
 		"Android sealed-store backing: staged sealed records for the two key tiers.",
+	filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm", "phone", "scan", "QrScanner.kt"): "" +
+		"scan-frame-<millis>.pgm: ONE camera luminance frame, written only when a person long-presses the " +
+		"viewfinder (agents-tracker-av7k). ITS AT-REST FORM IS CLEARTEXT AND THAT IS THE POINT -- a sealed " +
+		"diagnostic is one nobody can open, and this file exists to be looked at. It is also the only entry in " +
+		"this list whose contents an extracted copy really does open: it is a picture, and a picture taken at " +
+		"the pairing screen can hold the pairing symbol, which is a live secret until the rendezvous TTL " +
+		"expires. What bounds it: nothing is written unless asked, one frame per ask, it goes to this app's " +
+		"own external files directory rather than the state root, and res/xml/data_extraction_rules.xml now " +
+		"excludes domain=\"external\" from cloud backup AND device transfer for this file specifically. It is " +
+		"a DIAGNOSTIC AND NOT A FEATURE: when av7k closes it should go, and agents-tracker records that.",
 }
 
 func b88RepoRoot(t *testing.T) string {

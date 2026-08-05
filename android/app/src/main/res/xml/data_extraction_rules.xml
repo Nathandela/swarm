@@ -23,12 +23,26 @@
     the sealed PB-STATE-9 tier containers. Those are sealed under Keystore-backed KEKs that do
     not travel, so an extracted copy is not a break by itself. It is the whole extraction surface,
     handed over; PB-SEC-10 exists to shut it rather than to argue about how hard it is to open.
+
+    WHY domain="external" JOINED THEM (agents-tracker-av7k). domain="root" covers the app's
+    private data directory and nothing else, and the scanner's frame dump writes into
+    getExternalFilesDir: app-specific external storage, which is where the OWNER can actually
+    fetch a file from a release-signed internal-testing build. A dumped analysis frame is a
+    camera image taken during a pairing, so it can hold the pairing symbol itself. Unlike the
+    sealed state, that is material an extracted copy DOES open, because it is a picture. It is
+    written only on a deliberate long press and only one frame at a time, and it must still not
+    ride a device transfer to a handset the pairing was never for.
+
+    (No double hyphen appears in this file's prose: XML forbids it inside a comment, and the
+    build fails at resource compilation rather than at review.)
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" />
+        <exclude domain="external" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" />
+        <exclude domain="external" />
     </device-transfer>
 </data-extraction-rules>

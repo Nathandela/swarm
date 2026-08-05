@@ -164,6 +164,17 @@ const pushTokensNote = "PB-PUSH-5's graceful-and-loud degradation, both arms: st
 var pushTokensPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
 	"phone", "push", "PushTokens.kt")
 
+var qrScannerPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
+	"phone", "scan", "QrScanner.kt")
+
+// THE SCANNER'S FIVE LINES ARE REVIEWED ONE BY ONE, which is what the per-call keying is for:
+// they were added together, for one investigation (agents-tracker-av7k), and "they are all just
+// counters" is exactly the sentence that would let a sixth one in behind them.
+//
+// The thing that must never appear in any of them is the DECODED PAYLOAD -- a pairing secret,
+// in a buffer `adb logcat` reads from any workstation the handset has trusted. It is in scope
+// on the decode path, three lines from a Log.i, which is why the note on that line says what it
+// does NOT print as carefully as what it does.
 var logSinkNotes = []logSinkNote{
 	{
 		File: pushTokensPath,
@@ -176,6 +187,64 @@ var logSinkNotes = []logSinkNote{
 		Call: `Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " + ` +
 			`"the phone works without push and will not receive background wakes", e)`,
 		Note: pushTokensNote,
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.i( TAG, "analysis ${image.width}x${image.height} stride=${plane.rowStride} " + ` +
+			`"rotation=${image.imageInfo.rotationDegrees}", )`,
+		Note: "The GEOMETRY CameraX granted, once per scan: the analysis buffer's width, " +
+			"height, row stride and rotation. Four integers describing the frame's shape and " +
+			"nothing in it -- the pixels are never in scope on this line, and it runs before " +
+			"any decode. It exists because 'CameraX granted a size nobody asked for' is one of " +
+			"the live explanations for a scanner that never locks on (agents-tracker-av7k) and " +
+			"is the only one a single log line settles.",
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.i( TAG, "$framesAnalysed frames, $decodeAttempts decode attempts, " + ` +
+			`"${SystemClock.elapsedRealtime() - startedAtMillis} ms", )`,
+		Note: "Three running totals every fifty frames: frames delivered, ZXing decodes " +
+			"attempted, milliseconds elapsed. Counters and a clock; no frame data and no " +
+			"decode result is in scope. What it distinguishes is a pipeline delivering " +
+			"nothing from one delivering frames that hold no readable symbol, which is the " +
+			"same observation to the person holding the phone.",
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.i( TAG, "decoded on attempt ${decoder.decodedOnAttempt} at frame ` +
+			`$framesAnalysed", )`,
+		Note: "TWO SMALL INTEGERS ON THE ONE PATH WHERE THE PAYLOAD EXISTS, and the payload is " +
+			"deliberately not among them: `decodedOnAttempt` is 1 for a normal frame and 2 for " +
+			"an inverted one, and the frame ordinal is a count. The decoded string is a " +
+			"pairing secret and is in scope three lines away, which is why this line names the " +
+			"attempt rather than the result -- polarity is the fact the investigation needs " +
+			"and the payload is the one it must never write down.",
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.w(TAG, "no analysis frame was written: this frame's geometry describes no image")`,
+		Note: "Static prose on the refusal path of the debug frame dump: the stride/width " +
+			"guard rejected the geometry, so no file was written. Nothing is interpolated at " +
+			"all. It is loud rather than silent because a dump that appears to work and writes " +
+			"nothing sends someone looking for a file that never existed.",
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.i(TAG, "wrote one analysis frame to ${file.absolutePath}")`,
+		Note: "The absolute path of the dumped frame, and the path is the point: it is how the " +
+			"owner finds the file on the handset (agents-tracker-av7k). It names a directory " +
+			"and a millisecond timestamp under this app's own external files directory. The " +
+			"frame CONTENTS are not in scope on this line -- they went to the file, whose " +
+			"exposure is argued in res/xml/data_extraction_rules.xml, which excludes " +
+			"domain=\"external\" from both extraction paths for this reason.",
+	},
+	{
+		File: qrScannerPath,
+		Call: `Log.w(TAG, "no analysis frame was written", unwritable)`,
+		Note: "Static prose plus the caught IOException from the frame dump's write. The " +
+			"platform message names the file and the reason -- a full disk, a read-only data " +
+			"directory -- and carries no frame data: the write is what failed, so nothing of " +
+			"the image reached anywhere.",
 	},
 }
 

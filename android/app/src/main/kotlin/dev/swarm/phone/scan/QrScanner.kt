@@ -1,5 +1,7 @@
 package dev.swarm.phone.scan
 
+import android.os.SystemClock
+import android.util.Log
 import android.util.Size
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
@@ -12,6 +14,8 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.PreviewView
 import dev.swarm.phone.ui.kit.scanReticle
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -64,17 +68,47 @@ class QrScanner(private val activity: AppCompatActivity) {
     private var handedOn = false
 
     /**
+     * What this scan has actually done, for the log and for the line under the viewfinder
+     * (agents-tracker-av7k).
+     *
+     * THE COUNTERS EXIST BECAUSE THE FIELD REPORT IS "NOTHING HAPPENS", and nothing is what a
+     * camera that never opened, a pipeline delivering no frames and a symbol that will not decode
+     * all look like from the outside. They are read and written on the analysis executor alone --
+     * one executor per scan, created in [start] and shut down in [stop] -- so they need no
+     * synchronisation and none is implied by their being on the object.
+     */
+    private var framesAnalysed = 0L
+    private var decodeAttempts = 0L
+    private var startedAtMillis = 0L
+
+    /**
+     * Where to write the next frame, set by [dumpNextFrame] and cleared by the analyzer that
+     * honours it. Volatile because those are two different threads: the request comes from a
+     * long press on the main thread and the write happens on the analysis executor.
+     */
+    @Volatile
+    private var dumpTo: File? = null
+
+    /**
      * Start the camera and call [onPayload] on the MAIN thread with the first payload decoded.
      *
      * The caller is responsible for having the CAMERA permission; PB-PAIR-2's three scanner
      * states are [dev.swarm.phone.ui.PairingFlow]'s to decide and this class is not the place
      * that asks for anything.
+     *
+     * @param onFrames called on the MAIN thread with the number of frames analysed so far, every
+     *  [SCREEN_EVERY] frames. It is throttled here rather than at the screen because the caller
+     *  cannot throttle what it is not told: at thirty frames a second an un-throttled callback is
+     *  thirty main-thread posts a second for a line of text that a person reads at reading speed.
      */
-    fun start(onPayload: (String) -> Unit) {
+    fun start(onPayload: (String) -> Unit, onFrames: (Long) -> Unit = {}) {
         if (frames != null) return
         val executor = Executors.newSingleThreadExecutor()
         frames = executor
         handedOn = false
+        framesAnalysed = 0
+        decodeAttempts = 0
+        startedAtMillis = SystemClock.elapsedRealtime()
 
         val future = ProcessCameraProvider.getInstance(activity)
         future.addListener({
@@ -99,14 +133,55 @@ class QrScanner(private val activity: AppCompatActivity) {
                     val plane = image.planes[0]
                     val luma = ByteArray(plane.buffer.remaining())
                     plane.buffer.get(luma)
+                    framesAnalysed++
+                    if (framesAnalysed == 1L) {
+                        // THE GEOMETRY THE PIPELINE ACTUALLY GRANTED, once, at the top of the
+                        // scan. `analysisResolution` REQUESTS 1280x720 and CameraX is free to
+                        // answer with the nearest size the sensor supports -- "CameraX granted a
+                        // different resolution than we asked for" is one of the four live
+                        // explanations for the scanner that never locks on, and it is the only
+                        // one this line can settle outright. The rotation is here because a
+                        // portrait hold delivers a sensor-native landscape buffer, which the
+                        // decode ladder benched so far does not account for.
+                        Log.i(
+                            TAG,
+                            "analysis ${image.width}x${image.height} stride=${plane.rowStride} " +
+                                "rotation=${image.imageInfo.rotationDegrees}",
+                        )
+                    }
+                    dumpIfAsked(luma, plane.rowStride, image.width, image.height)
                     decoder.payload(luma, plane.rowStride, image.width, image.height)
                 } finally {
                     // Not closing an ImageProxy stalls the whole analysis pipeline after two
                     // frames, which looks exactly like a camera that does not work.
                     image.close()
                 }
+                decodeAttempts += decoder.attempts
+                if (framesAnalysed % LOG_EVERY == 0L) {
+                    // FRAMES AND ATTEMPTS ARE TWO NUMBERS BECAUSE THEY ANSWER TWO QUESTIONS. The
+                    // frame count says the pipeline is alive; the attempt count says the decoder
+                    // is being run on what it delivers, and the two would diverge if the geometry
+                    // guard started refusing frames before ZXing ever saw one.
+                    Log.i(
+                        TAG,
+                        "$framesAnalysed frames, $decodeAttempts decode attempts, " +
+                            "${SystemClock.elapsedRealtime() - startedAtMillis} ms",
+                    )
+                }
+                if (framesAnalysed % SCREEN_EVERY == 0L) {
+                    val seen = framesAnalysed
+                    activity.runOnUiThread { onFrames(seen) }
+                }
                 if (payload != null && !handedOn) {
                     handedOn = true
+                    // WHICH ATTEMPT READ IT, never what it read. The second attempt succeeding
+                    // says the terminal handed the camera a light-on-dark symbol, which is a
+                    // different defect with a different fix -- and the payload itself is a
+                    // pairing secret that must never reach a log buffer.
+                    Log.i(
+                        TAG,
+                        "decoded on attempt ${decoder.decodedOnAttempt} at frame $framesAnalysed",
+                    )
                     activity.runOnUiThread { onPayload(payload) }
                 }
             }
@@ -133,7 +208,53 @@ class QrScanner(private val activity: AppCompatActivity) {
         provider = null
         frames?.shutdown()
         frames = null
+        dumpTo = null
         view.visibility = View.GONE
+    }
+
+    /**
+     * Write the NEXT analysis frame into [dir] as a PGM, and log where it went
+     * (agents-tracker-av7k).
+     *
+     * WHY THIS IS IN THE PRODUCT AND NOT IN A BRANCH. Four explanations for the scanner that
+     * never locks on -- seams, exposure, undersampling, a resolution nobody asked for -- are all
+     * claims about what the analysis buffer holds, and no bench can settle them because a bench
+     * builds its own frames. The evidence has to come off the handset that fails, which is the
+     * owner's, running an internal-testing build. A diagnostic that only exists in a developer's
+     * checkout cannot be run on the phone that has the defect.
+     *
+     * ONE FRAME, ON REQUEST. Not a stream, not a ring buffer, and nothing at all until somebody
+     * long-presses the viewfinder: the frames are camera images taken during a pairing, so the
+     * cheapest thing that answers the question is also the least this can hold.
+     */
+    fun dumpNextFrame(dir: File) {
+        dumpTo = dir
+    }
+
+    /**
+     * Honour a pending [dumpNextFrame], on the analysis executor, before the decode.
+     *
+     * BEFORE THE DECODE, so what lands on disk is the frame the decoder is about to be given
+     * rather than the next one -- the whole question is what the decoder is being handed.
+     */
+    private fun dumpIfAsked(luma: ByteArray, stride: Int, width: Int, height: Int) {
+        val dir = dumpTo ?: return
+        dumpTo = null
+        val image = FrameDump.pgm(luma, stride, width, height)
+        if (image.isEmpty()) {
+            Log.w(TAG, "no analysis frame was written: this frame's geometry describes no image")
+            return
+        }
+        val file = File(dir, "scan-frame-${System.currentTimeMillis()}.pgm")
+        try {
+            dir.mkdirs()
+            file.writeBytes(image)
+            Log.i(TAG, "wrote one analysis frame to ${file.absolutePath}")
+        } catch (unwritable: IOException) {
+            // Loud rather than silent: a debug affordance that appears to work and writes
+            // nothing sends someone looking for a file that was never there.
+            Log.w(TAG, "no analysis frame was written", unwritable)
+        }
     }
 
     /**
@@ -144,14 +265,41 @@ class QrScanner(private val activity: AppCompatActivity) {
     private val decoder = FrameDecoder()
 
     companion object {
+
+        /** The logcat tag. One scan's lines are one `adb logcat -s` filter. */
+        private const val TAG = "QrScanner"
+
         /**
-         * The analysis resolution, and it is the fix for the owner's handset scanning nothing
-         * (agents-tracker-v5qc): CameraX's unconfigured ImageAnalysis default is a 640x480
-         * bound, a quarter the area of the preview the user watches, which put a version-6/7
-         * ECC-L pairing symbol at two or three pixels per module -- below what ZXing locks
-         * onto, while the preview looked sharp. 1280x720 is Signal's number for the same job;
-         * CLOSEST_HIGHER_THEN_LOWER so a sensor without 720p yields the next size up rather
-         * than quietly down.
+         * How often the running totals reach the log, in frames. Roughly every second and a half
+         * at thirty frames a second: often enough that a stalled pipeline is visible as a line
+         * that stops arriving, rare enough that the buffer is still readable afterwards.
+         */
+        private const val LOG_EVERY = 50L
+
+        /**
+         * How often the count reaches the SCREEN, in frames. It is ten times the log's rate
+         * because the two are read differently: the log is read afterwards and the line under
+         * the viewfinder is read while it changes, where a number that only moves every second
+         * and a half looks stuck.
+         */
+        private const val SCREEN_EVERY = 5L
+
+        /**
+         * The analysis resolution, RAISED from the 640x480 floor CameraX applies when nobody
+         * configures ImageAnalysis (agents-tracker-v5qc). That default is a quarter the area of
+         * the preview the user watches, which put a version-6/7 ECC-L pairing symbol at two or
+         * three pixels per module -- below what ZXing locks onto, while the preview looked
+         * sharp. 1280x720 is Signal's number for the same job; CLOSEST_HIGHER_THEN_LOWER so a
+         * sensor without 720p yields the next size up rather than quietly down.
+         *
+         * IT WAS CALLED "THE FIX FOR THE OWNER'S HANDSET" HERE AND THE FIELD RETEST FALSIFIED
+         * THAT. The owner ran 0.2.2 and 0.2.3 with this setting and the scanner still never
+         * locked onto the terminal symbol (agents-tracker-av7k), so what this removes is one
+         * necessary condition among several rather than the cause. The remaining candidates --
+         * half-block seams, exposure bloom off the monitor, the rotation of a portrait hold, and
+         * whether CameraX grants what this asks for -- are what the instrumentation in this file
+         * exists to separate. A comment that claims a defect is closed is worse than no comment
+         * when the next reader is looking for what is still open.
          *
          * The aspect strategy is set WITH the bound because it outranks it: CameraX sorts
          * candidates by aspect strategy first, and the default 4:3 strategy would steer the

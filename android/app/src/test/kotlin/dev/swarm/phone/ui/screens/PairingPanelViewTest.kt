@@ -80,6 +80,7 @@ class PairingPanelViewTest {
         val sas = View(context)
         val sasInstruction = View(context)
         val scanner = View(context)
+        val scanProgress = View(context)
         val controls: Map<PairingControl, View> =
             PairingControl.entries.associateWith { View(context) }
 
@@ -90,6 +91,7 @@ class PairingPanelViewTest {
             sas = sas,
             sasInstruction = sasInstruction,
             scanner = scanner,
+            scanProgress = scanProgress,
             controls = controls,
         )
     }
@@ -308,6 +310,7 @@ class PairingPanelViewTest {
             sas = stubs.sas,
             sasInstruction = stubs.sasInstruction,
             scanner = stubs.scanner,
+            scanProgress = stubs.scanProgress,
             controls = stubs.controls.filterKeys { it != PairingControl.CODES_DO_NOT_MATCH },
         )
         val page = panel(
