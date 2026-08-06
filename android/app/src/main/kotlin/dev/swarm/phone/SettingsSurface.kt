@@ -501,7 +501,16 @@ class SettingsSurface(
             PushSync.REFUSED -> {
                 pendingOp = null
                 say(PressFeedback.ofRefusal(SettingsScreen.refusalNotice(answer)))
-                held.refused()
+                // THE TOKEN GOES BACK WITH THE SWITCHES (agents-tracker-b6iu). The tap reconciled
+                // it optimistically against the screen the machine has now rejected, so the
+                // deletion (or registration) it made stands for a preference that is no longer in
+                // effect: a category shown ON over a deleted token is a phone no wake can reach
+                // (ADR-007 B16), and both shown OFF over a live token is the identifier
+                // PB-PUSH-9's deletion-on-disable exists to remove. The restored screen is the
+                // preference in effect, so it is what the token is reconciled against.
+                val restored = held.refused()
+                reconcileTheToken(restored)
+                restored
             }
         }
     }
@@ -852,16 +861,13 @@ class SettingsSurface(
         // and the tap left a control showing a preference nothing recorded, with nothing on screen
         // about it. [readyApp] says what is wrong; [restore] undoes what the finger did.
         val app = readyApp() ?: return restore(toggle, current)
-        try {
-            val op = app.setPushPreference(
+        val op = try {
+            app.setPushPreference(
                 PushPreference().apply {
                     alerts = next.alerts
                     mentions = next.mentions
                 },
             )
-            pendingOp = op.operationID
-            reconcileTheToken(next)
-            say(PressFeedback.ofSuccess(null))
         } catch (refused: Exception) {
             // THROUGH THE BRIDGE AND NOT THROUGH `ErrorRouter` DIRECTLY (agents-tracker-os37).
             // This was the one call site in the app that routed a facade refusal on the Kotlin
@@ -871,7 +877,16 @@ class SettingsSurface(
             // UNKNOWN here and is classified correctly there, and UNKNOWN's remedy is "try again"
             // -- advice that is wrong for every permanent class in the taxonomy.
             say(PressFeedback.ofRefusal(FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message))
+            // AND THE TAP ENDS HERE (agents-tracker-o6ut). The command was never issued, so there
+            // is no operation to wait for: falling through would draw the screen the tap WANTED,
+            // whose pendingSync is raised with pendingOp null -- a "waiting for your machine"
+            // notice nothing can ever clear -- and would leave the switch where the finger
+            // dragged it. The screen to show is the one the tap started from.
+            return restore(toggle, current)
         }
+        pendingOp = op.operationID
+        reconcileTheToken(next)
+        say(PressFeedback.ofSuccess(null))
         draw(next, machineOf(app))
     }
 
