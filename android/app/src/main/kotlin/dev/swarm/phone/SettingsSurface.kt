@@ -839,7 +839,23 @@ class SettingsSurface(
             SendPlane.COMMAND,
             work = {
                 try {
-                    app.revokeThisDevice()
+                    // THE ID IS LATCHED HERE AND NOT IN THE SETTLE (agents-tracker-xeex, moving
+                    // agents-tracker-0rle's write). `VerbDispatch.press` ends in
+                    // `if (attached) settle(answer)` and `PhoneSurface.release` detaches on every
+                    // pause, while this lambda runs on the lane whatever is attached. A revoke
+                    // whose round trip outlives the user's attention therefore loses its whole
+                    // settle -- the latch AND the sentence composed beside it -- with the purge
+                    // below already done: a phone that has unpaired and purged itself, drawing
+                    // the pair-only screen with no id to claim an answer by and nothing written
+                    // on it. This press is the likeliest of all of them to be dropped: the revoke
+                    // severs the connection its own reply would come back on, `sendContext` can
+                    // wait five seconds before the append, and people put the phone down after
+                    // confirming a destructive dialog.
+                    //
+                    // `latchRevoke` is `@Synchronized`, so what the lane writes here is visible
+                    // to the looper that reads it through the same monitor rather than through
+                    // this dispatch's handoff.
+                    app.revokeThisDevice().also { runtime.latchRevoke(it?.operationID.orEmpty()) }
                 } finally {
                     // Off the looper with the verb: PhoneRuntime is `@Synchronized` throughout and
                     // a purge is Keystore work of its own.
@@ -878,18 +894,16 @@ class SettingsSurface(
                 // answer to.
                 val purgeFailure = runtime.purgeFailure()
                 unpairNotice = answer.fold(
+                    // THE SENTENCE COMPOSED HERE IS THE FALLBACK AND NOT THE ANSWER
+                    // (agents-tracker-0rle, the write half of agents-tracker-4zue). It is written
+                    // at the moment `signedCommand` sealed and appended -- a relay round trip
+                    // before the machine can have answered -- so [revokeVerdict] is UNANSWERED by
+                    // construction. The screen this press lands on re-reads the outcome on every
+                    // draw and replaces it, by the id [work] latched: the panel that issued the
+                    // revoke is destroyed by it, so `PhoneRuntime` keeps the id for the same
+                    // reason it keeps the relay coordinate, and `PhoneSurface.renderReady` clears
+                    // it when the gate says this handset is usably paired again.
                     onSuccess = { issued ->
-                        // AND THE ID OUTLIVES THIS PANEL (agents-tracker-0rle, the write half of
-                        // agents-tracker-4zue). The sentence below is composed at the moment
-                        // `signedCommand` sealed and appended -- a relay round trip before the
-                        // machine can have answered -- so [revokeVerdict] is UNANSWERED here by
-                        // construction and what it composes is the fallback. The screen this press
-                        // lands on re-reads the outcome on every draw, and the one thing it cannot
-                        // recover for itself is which operation to read: the panel that issued it
-                        // is destroyed by it. `PhoneRuntime` keeps the id for the same reason it
-                        // keeps the relay coordinate, and `PhoneSurface.renderReady` clears it
-                        // when the gate says this handset is usably paired again.
-                        runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())
                         PairOnlyScreen.revokeNoticeFor(
                             revokeVerdict(app, issued),
                             purgeFailure = purgeFailure,
