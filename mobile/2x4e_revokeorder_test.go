@@ -26,10 +26,34 @@ package swarmmobile
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // errRelayRefusedTokenDelete stands for every refusal handleTokenDelete can seal.
 var errRelayRefusedTokenDelete = errors.New("relay: token delete refused (quota exceeded)")
+
+// hopWait is how long a test waits for the relay hop, which no longer runs on the caller's
+// goroutine (agents-tracker-j4pi). It is generous because it bounds a scheduling delay and
+// nothing else: the assertions it guards are about whether the hop happens AT ALL.
+const hopWait = 5 * time.Second
+
+// awaitHop returns the next thing the hop recorded, or fails the test.
+//
+// IT IS A WAIT AND NOT AN ASSUMPTION, which is what changed when the hop stopped blocking the
+// verb. What it must not become is an assertion that quietly passes when nothing arrives -- the
+// deletion the phone owes would then be owed to nobody, with the test agreeing.
+func awaitHop(t *testing.T, ran <-chan string) string {
+	t.Helper()
+	select {
+	case what := <-ran:
+		return what
+	case <-time.After(hopWait):
+		t.Fatal("agents-tracker-2x4e: the relay was never told. PB-PUSH-9's deletion on revoke is " +
+			"owed by durable state and carried on the next authenticated reconnect, but the hop " +
+			"that would spare a revoked handset that wait did not run at all")
+		return ""
+	}
+}
 
 func TestRevokeOrder_ARelayRefusalDoesNotSuppressTheSignedRevoke(t *testing.T) {
 	issued := &Op{Action: "device_revoke", OperationID: "op-2x4e"}
@@ -51,18 +75,62 @@ func TestRevokeOrder_ARelayRefusalDoesNotSuppressTheSignedRevoke(t *testing.T) {
 }
 
 func TestRevokeOrder_TheRevokeIsIssuedBeforeTheRelayIsTold(t *testing.T) {
-	var order []string
+	// A channel rather than a slice, because the hop no longer runs on this goroutine: the order
+	// is still the subject, and appending to a slice from two goroutines would race the test
+	// rather than test the code.
+	ran := make(chan string, 2)
 
 	if _, err := issueRevokeThenDropTokenAtRelay(
-		func() (*Op, error) { order = append(order, "revoke"); return &Op{}, nil },
-		func() error { order = append(order, "relay"); return nil },
+		func() (*Op, error) { ran <- "revoke"; return &Op{}, nil },
+		func() error { ran <- "relay"; return nil },
 	); err != nil {
 		t.Fatalf("a clean run refused the revoke: %v", err)
 	}
 
-	if len(order) != 2 || order[0] != "revoke" || order[1] != "relay" {
-		t.Fatalf("agents-tracker-2x4e: the halves ran %v. The signed revoke is the security-critical "+
-			"one and goes first; anything before it is something that can stop it", order)
+	if first := awaitHop(t, ran); first != "revoke" {
+		t.Fatalf("agents-tracker-2x4e: %q ran first. The signed revoke is the security-critical "+
+			"half and goes before anything that could stop it", first)
+	}
+	if second := awaitHop(t, ran); second != "relay" {
+		t.Fatalf("agents-tracker-2x4e: %q ran second, so the two halves are not the two this "+
+			"function is named for", second)
+	}
+}
+
+// TestRevokeOrder_TheVerbDoesNotWaitOnTheRelayHop is agents-tracker-j4pi.
+//
+// THE HOP IS BOUNDED AND THE BOUND IS THE PROBLEM. relay.DefaultCallTimeout is ten seconds, and
+// the phone's Kotlin side destroys both key tiers in the `finally` that runs when this verb
+// RETURNS -- so a hop this function waited on put a ten-second network delay in front of the
+// local destruction of key material. Android kills a backgrounded app freely and the user has
+// just confirmed a destructive dialog, so the window is one the product hands out: process death
+// inside it leaves the machine revoked and both key tiers still on the handset, which is exactly
+// the state ADR-007 B133 makes revoke-from-the-computer the mitigation for.
+//
+// The hop's own error was already going nowhere -- it decides nothing, by 2x4e -- so waiting for
+// it bought the caller no information at any price, let alone this one.
+func TestRevokeOrder_TheVerbDoesNotWaitOnTheRelayHop(t *testing.T) {
+	// The hop hangs for as long as this test wants it to, which is what a relay behind a dead
+	// network does for DefaultCallTimeout.
+	release := make(chan struct{})
+	defer close(release)
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		_, _ = issueRevokeThenDropTokenAtRelay(
+			func() (*Op, error) { return &Op{Action: "device_revoke"}, nil },
+			func() error { <-release; return nil },
+		)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(hopWait):
+		t.Fatal("agents-tracker-j4pi: the revoke has not returned while the relay hop is still in " +
+			"flight, so the phone's own purge is queued behind a network round trip -- up to " +
+			"relay.DefaultCallTimeout of it. A process death in that window leaves the machine " +
+			"revoked with both key tiers still on the handset")
 	}
 }
 
@@ -75,18 +143,16 @@ func TestRevokeOrder_TheRevokeIsIssuedBeforeTheRelayIsTold(t *testing.T) {
 // screen has to report.
 func TestRevokeOrder_TheRelayIsToldEvenWhenTheRevokeItselfFailed(t *testing.T) {
 	refused := errors.New("swarmmobile: offline")
-	told := false
+	ran := make(chan string, 1)
 
 	op, err := issueRevokeThenDropTokenAtRelay(
 		func() (*Op, error) { return nil, refused },
-		func() error { told = true; return nil },
+		func() error { ran <- "relay"; return nil },
 	)
 
-	if !told {
-		t.Error("agents-tracker-2x4e: a revoke that failed left the relay holding the token, with " +
-			"nothing on this handset that still remembers it -- the local state was cleared before " +
-			"the command was attempted")
-	}
+	// Waited for rather than read, since agents-tracker-j4pi took the hop off this goroutine. The
+	// property is unchanged and so is its strength: the hop must RUN.
+	awaitHop(t, ran)
 	if !errors.Is(err, refused) {
 		t.Errorf("agents-tracker-2x4e: the caller was told %v rather than why the revoke failed", err)
 	}
