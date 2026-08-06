@@ -106,6 +106,32 @@ class VerbDispatch(
         }
     }
 
+    /**
+     * Run [work] on [plane]'s lane and hand its answer back on the looper, with no control to
+     * mark (agents-tracker-xla6).
+     *
+     * IT IS NOT [press] WITH A NULL CONTROL, and the difference is the double-tap fence rather
+     * than the disabled pair. [press] DROPS a second press of a control whose first has not
+     * settled, which is the honest answer to a finger and the wrong one for work nobody tapped:
+     * the push-token reconciliation that follows a machine's refusal must not be discarded
+     * because an earlier reconciliation is still crossing -- a dropped one leaves the token
+     * disagreeing with the switches, which is agents-tracker-b6iu exactly.
+     *
+     * ORDER IS THE LANE'S. Each lane is a single serial thread, so a reconciliation enqueued
+     * after a preference write runs after it, and two reconciliations run in the order they were
+     * asked for. That is the whole of the sequencing this needs; nothing here queues or retries.
+     *
+     * @param work the facade call. It runs off the main thread and must not touch a View.
+     * @param settle what the answer changes on screen. It runs on [main], and only while this
+     *  dispatch is attached -- a reconciliation whose panel has gone has nothing to report to.
+     */
+    fun <T> enqueue(plane: SendPlane, work: () -> T, settle: (Result<T>) -> Unit) {
+        laneFor(plane).execute {
+            val answer = runCatching(work)
+            main.execute { if (attached) settle(answer) }
+        }
+    }
+
     /** Whether a press of [control] is still crossing to the machine. */
     fun inFlight(control: View): Boolean = crossing.contains(control)
 

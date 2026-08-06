@@ -977,13 +977,52 @@ class SettingsSurface(
      * A phone that has turned both categories off has asked for no wake at all, so the token it
      * still holds is a provider-visible identifier the relay would go on using. Deleting it is
      * the requirement; re-registering on the way back is what makes the switch usable twice.
+     *
+     * IT RUNS ON A LANE AND NOT WHERE IT WAS CALLED (agents-tracker-xla6). `PushTokens.disable`
+     * reaches `App.DeletePushToken` -> `dropPushToken` -> `cl.TokenDelete(context.Background())`
+     * -- a relay round trip with NO DEADLINE -- and both call sites are main-thread ones: a
+     * switch's settle, and [settleWithTheMachine], which runs from [read] on every resume and
+     * every journal-event render. So the reconcile the b6iu fix added put a deadline-less network
+     * call on the looper on a path nobody taps. s25_mainthread_test.go cannot see this one: its
+     * waiting set is derived from `sendContext` and the token verbs do not reach it, so
+     * android/gate/il7u_tokenrevert_test.go is the fence.
+     *
+     * IT IS [VerbDispatch.enqueue] AND NOT [VerbDispatch.press], because a press keyed on a
+     * control DROPS a second press while the first is crossing. This is not a tap and must not be
+     * dropped: a refusal's reconcile discarded because the tap's is still in flight leaves the
+     * token disagreeing with the switches, which is b6iu with an extra step.
+     *
+     * WHAT IT ANSWERS IS SAID. The re-registration arm is INERT on a build with no Firebase
+     * project (agents-tracker-ojnd) -- `requestInitialToken` says so in its return value -- so a
+     * user who turns a category back on over a deleted token is told that this build cannot
+     * re-register it, rather than shown a switch that promises wakes nothing can deliver.
      */
     private fun reconcileTheToken(next: SettingsScreen) {
-        if (!next.alerts && !next.mentions) {
-            PushTokens.disable(activity)
-        } else {
-            PushTokens.requestInitialToken(activity)
-        }
+        dispatch.enqueue(
+            SendPlane.COMMAND,
+            work = {
+                if (!next.alerts && !next.mentions) {
+                    PushTokens.disable(activity)
+                    true
+                } else {
+                    PushTokens.requestInitialToken(activity)
+                }
+            },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { asked ->
+                        if (!asked) say(PressFeedback.ofRefusal(SettingsScreen.PUSH_TRANSPORT_ABSENT))
+                    },
+                    // NOT ROUTED THROUGH THE ERROR TABLE, unlike every other refusal on this
+                    // surface, and the reason is what reaches here. The ordinary offline case
+                    // never does: `dropPushToken` clears durable state and returns nil when there
+                    // is no connection, leaving the relay to `onConnected` -- which is why nothing
+                    // retries. What is left is a fault whose remedy is the same whatever class it
+                    // carries, and the fact the user needs is the one this sentence states.
+                    onFailure = { say(PressFeedback.ofRefusal(SettingsScreen.PUSH_TOKEN_UNRECONCILED)) },
+                )
+            },
+        )
     }
 
     /**

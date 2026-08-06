@@ -393,6 +393,36 @@ data class SettingsScreen(
         const val SYNC_REFUSED = "Your machine did not save this change."
 
         /**
+         * What the screen says when a push-token reconciliation failed (agents-tracker-xla6).
+         *
+         * IT IS ONE SENTENCE FOR EVERY CLASS OF FAILURE, which is the opposite of what this app
+         * does with a command refusal, and the difference is what can reach here. The ordinary
+         * offline case does not: `App.DeletePushToken` clears durable state and returns without
+         * error when there is no connection, leaving the relay to be reconciled on the next
+         * authenticated reconnect. What is left is a fault with no remedy the user can act on, so
+         * the honest thing to say is what is now true of their phone rather than a routed cause.
+         */
+        const val PUSH_TOKEN_UNRECONCILED =
+            "This phone could not update its push registration, so what it receives may not " +
+                "match these switches until it reconnects."
+
+        /**
+         * What the screen says when a category comes back on and nothing can re-register the
+         * phone (agents-tracker-ojnd).
+         *
+         * IT IS NOT HYPOTHETICAL ON THIS BUILD. `PushTokens.requestInitialToken` needs a default
+         * FirebaseApp and this module deliberately configures none -- build.gradle.kts does not
+         * apply the google-services plugin, because there is no Firebase project (PB-E2E-5,
+         * deferred). So the DELETION half of PB-PUSH-9 works here and the re-registration half
+         * cannot, and a switch drawn ON over a token nothing will re-issue is the same lie
+         * agents-tracker-b6iu is about. PB-PUSH-5 asks for degradation that is graceful AND loud;
+         * a line in logcat is only the first.
+         */
+        const val PUSH_TRANSPORT_ABSENT =
+            "This build has no push transport, so turning this back on cannot re-register the " +
+                "phone for wakes."
+
+        /**
          * PB-SYNC-2's answer for the push_prefs command [operationId], read as a CODE.
          *
          * THE OLD READING WAS `code.isNotEmpty()` AND THAT IS THE BUG. Any answer counted as an

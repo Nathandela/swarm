@@ -47,8 +47,17 @@ object PushTokens {
      * deliberate: `PhoneRuntime.phone()` reaches Keystore, the filesystem and the native
      * library, and doing that inside `Application.onCreate` is what turns a locked handset into
      * a process that dies before any screen exists to say why.
+     *
+     * @return whether this build could ASK for a token at all. False is not an error and is not a
+     *  failure of this call: it is the deliberate state of a build with no Firebase project
+     *  (see the guard below), and it is returned rather than only logged because one caller has a
+     *  user in front of it. `SettingsSurface` turns a category back on, this arm cannot
+     *  re-register the phone, and a switch that says wakes are coming over a transport that
+     *  cannot exist is the same lie as a switch over a deleted token (agents-tracker-b6iu). What
+     *  the answer does NOT promise is a token: the fetch is asynchronous and its own failure
+     *  arrives in the listener below, on a later thread, with nobody waiting.
      */
-    fun requestInitialToken(context: Context) {
+    fun requestInitialToken(context: Context): Boolean {
         // GUARDED, and this is not defensive padding. FirebaseMessaging.getInstance() throws
         // IllegalStateException when no default FirebaseApp exists -- which is the DELIBERATE
         // state of this module: build.gradle.kts does not apply the google-services plugin and
@@ -68,7 +77,7 @@ object PushTokens {
         // is broken rather than unconfigured -- still surfaces instead of being logged as "no
         // project configured" and explained away. Broadening it back is how the guard stops
         // being a guard.
-        try {
+        return try {
             FirebaseMessaging.getInstance().token
                 .addOnSuccessListener { token -> register(context, token) }
                 // THE OTHER HALF OF "LOUDLY". getInstance() succeeding only means a FirebaseApp
@@ -81,9 +90,11 @@ object PushTokens {
                     Log.w(TAG, "push token fetch failed; this launch registered no token and the " +
                         "phone will not receive background wakes until the next one", e)
                 }
+            true
         } catch (e: IllegalStateException) {
             Log.w(TAG, "push unavailable: no Firebase project is configured for this build; " +
                 "the phone works without push and will not receive background wakes", e)
+            false
         }
     }
 
@@ -121,6 +132,16 @@ object PushTokens {
      * onConnected reconciles the relay to, so a deletion issued while backgrounded -- the normal
      * state under ADR-007 B16 -- is delivered on the next authenticated reconnect rather than
      * lost. Nothing here has to retry it.
+     *
+     * IT DOES NOT RUN ON THE MAIN THREAD AND IT DOES NOT CATCH, and both are now the caller's
+     * contract rather than this object's oversight (agents-tracker-xla6). `dropPushToken` ends in
+     * `cl.TokenDelete(context.Background())`: a relay round trip with no deadline, which on the
+     * looper is an ANR nothing in the platform would report -- Go opens its sockets below the
+     * JVM. And unlike [register], whose callers are background callbacks with no user present,
+     * this one is reached from a screen somebody is looking at: `SettingsSurface` runs it on a
+     * `VerbDispatch` lane, where the refusal comes back as a `Result` and lands on the outcome
+     * line. A catch here would put that back to being invisible, which is the shape
+     * agents-tracker-b6iu is about.
      */
     fun disable(context: Context) {
         val app = phoneOf(context) ?: return

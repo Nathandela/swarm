@@ -377,6 +377,34 @@ class SettingsScreenTest {
     }
 
     /**
+     * The two things a token reconciliation can leave behind both have words
+     * (agents-tracker-xla6).
+     *
+     * NEITHER IS A COMMAND REFUSAL and neither routes through the error table, which is why they
+     * are constants here rather than a `RoutedError`. [SettingsScreen.PUSH_TOKEN_UNRECONCILED] is
+     * a fault with no remedy the user can act on -- the ordinary offline case never reaches it,
+     * because `App.DeletePushToken` clears durable state and leaves the relay to the reconnect --
+     * and [SettingsScreen.PUSH_TRANSPORT_ABSENT] is a property of the BUILD: this module
+     * configures no Firebase project, so the re-registration half of PB-PUSH-9 cannot run at all.
+     *
+     * THEY MUST DIFFER, because they send the reader to different places: one says the phone will
+     * catch up, the other says it will not. One sentence for both would be the same collapse
+     * agents-tracker-0dij made between a permission that will be asked again and one that will
+     * not.
+     */
+    @Test
+    fun `a token that could not be reconciled says which of the two things happened`() {
+        assertTrue(SettingsScreen.PUSH_TOKEN_UNRECONCILED.isNotBlank())
+        assertTrue(SettingsScreen.PUSH_TRANSPORT_ABSENT.isNotBlank())
+        assertNotEquals(
+            "agents-tracker-xla6: a reconciliation this phone will retry on its next connection " +
+                "and one that cannot happen on this build at all read as the same event",
+            SettingsScreen.PUSH_TOKEN_UNRECONCILED,
+            SettingsScreen.PUSH_TRANSPORT_ABSENT,
+        )
+    }
+
+    /**
      * The machine's own words are what the user reads, and there is a sentence for the refusal that
      * carries none.
      *
