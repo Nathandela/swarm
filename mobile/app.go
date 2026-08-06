@@ -1312,9 +1312,27 @@ func (a *App) DeletePushToken() (err error) {
 // no second flag to keep in step, and the converse holds too -- re-registration carries what
 // durable state HOLDS, and after a deletion that is nothing.
 func (a *App) dropPushToken(core *phonecore.Core) error {
-	if err := core.Mutate(func(st *phonecore.State) { st.PushToken = "" }); err != nil {
+	if err := a.dropPushTokenLocally(core); err != nil {
 		return err
 	}
+	return a.dropPushTokenAtRelay()
+}
+
+// dropPushTokenLocally is the AUTHORITATIVE half, and the one that needs no relay: after it the
+// phone holds no token, so onConnected has nothing to re-register and the deletion is owed by
+// the mechanism that owes every other reconciliation.
+//
+// It is separate from the hop below because RevokeThisDevice needs exactly this half before the
+// command and the other half after it (agents-tracker-2x4e).
+func (a *App) dropPushTokenLocally(core *phonecore.Core) error {
+	return core.Mutate(func(st *phonecore.State) { st.PushToken = "" })
+}
+
+// dropPushTokenAtRelay tells the relay now rather than leaving the deletion owed. A missing
+// connection is not an error for RegisterPushToken's reason: the work is durable and carried on
+// the next authenticated reconnect. A relay that is REACHED and refuses is reported, and it is
+// the caller that decides what that refusal is allowed to stop.
+func (a *App) dropPushTokenAtRelay() error {
 	cl, cerr := a.conn()
 	if cerr != nil {
 		return nil

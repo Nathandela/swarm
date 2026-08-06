@@ -202,20 +202,56 @@ func (a *App) RevokeThisDevice() (op *Op, err error) {
 	// the next connection dutifully re-registers. Left in place it is a provider-visible
 	// identifier for a device its owner disowned, and a machine that can still wake it.
 	//
-	// It still runs FIRST, and the reason has changed rather than gone away. A revoke is the
-	// one command whose success DESTROYS the path its own reply would come back on: the daemon
+	// ONLY THE LOCAL HALF RUNS FIRST, AND THAT SPLIT IS THE FIX (agents-tracker-2x4e). The
+	// durable clear must precede the command, for the reason a revoke is unlike every other
+	// verb: its success DESTROYS the path its own reply would come back on -- the daemon
 	// removes the device and rotates the epoch in one transaction, and the gateway severs and
-	// exits. So the local half must be durable before the remote half is attempted, or a
-	// revoke that reaches the machine leaves the token behind on a phone that can no longer be
-	// told anything. dropPushToken persists before it speaks to the relay, so a transport
-	// failure leaves the deletion owed and onConnected carries it.
-	if err = a.dropPushToken(core); err != nil {
+	// exits -- so a revoke that lands while this handset still holds the token leaves it held
+	// on a phone that can no longer be told anything. That half writes to this device's own
+	// disk and speaks to nobody, and a core that cannot take the write cannot reserve a command
+	// seq either, so it is not a gate the command would otherwise have passed.
+	//
+	// THE RELAY HOP IS NOT THAT, AND IT USED TO RIDE THE SAME LINE. handleTokenDelete refuses
+	// over the connection's op quota, over authorization and over its own persistence failure,
+	// and every one of those returned from here -- so the owner's panic action was suppressed
+	// by the relay's answer to a housekeeping call that the revoke itself makes redundant, the
+	// machine-side revokeAndPurge dropping the token in the same transaction that removes the
+	// device. It now runs after the command and decides nothing: see
+	// issueRevokeThenDropTokenAtRelay.
+	if err = a.dropPushTokenLocally(core); err != nil {
 		return nil, err
 	}
 	// The target device id sits in the SESSION position of the signed tuple -- that tuple has
 	// no separate device field -- so a self-revoke names this phone, and the gateway moves it
 	// to Control.TargetDeviceID on the daemon hop.
-	return a.signedCommand(schema.ActionDeviceRevoke, a.deviceID(), nil, commandBody{})
+	return issueRevokeThenDropTokenAtRelay(
+		func() (*Op, error) {
+			return a.signedCommand(schema.ActionDeviceRevoke, a.deviceID(), nil, commandBody{})
+		},
+		a.dropPushTokenAtRelay,
+	)
+}
+
+// issueRevokeThenDropTokenAtRelay is the ORDER, as a function, because the order IS the decision
+// and neither half can be reached from a test: the revoke resolves through sendContext, whose
+// awaitConn polls up to five seconds for a live relay connection, and the refusal the cleanup
+// can produce comes from a relay client this package holds as a concrete type.
+//
+// THE CLEANUP ANSWERS FOR NOTHING, and dropping its error is the honest handling rather than a
+// shortcut. Nothing in this package logs -- the facade has no sink and the log gates under
+// android/gate exist to keep it that way -- and there is no event kind for a housekeeping
+// failure; what there is instead is the recovery, which needs no report: durable state already
+// holds no token, and onConnected reconciles the relay to whatever durable state holds on the
+// next authenticated reconnect.
+//
+// IT RUNS ON BOTH PATHS. A revoke that never reached the machine still leaves a handset whose
+// owner confirmed the destructive dialog -- SettingsSurface purges both key tiers in a `finally`
+// for that reason -- so the token goes either way, and what comes back is the REVOKE's own
+// answer, because that is the one the screen has to report.
+func issueRevokeThenDropTokenAtRelay(revoke func() (*Op, error), atRelay func() error) (*Op, error) {
+	op, err := revoke()
+	_ = atRelay()
+	return op, err
 }
 
 // interruptByte is Ctrl-C. A PTY in its default ISIG mode turns 0x03 into SIGINT for the
