@@ -279,6 +279,14 @@ class PhoneRuntime(private val context: Context) {
      */
     @Synchronized
     fun purgeKeys(): RoutedError? {
+        // CLEARED FIRST, SO THE LATCH ALWAYS DESCRIBES THIS CALL. The early return below is the
+        // reason: a runtime that never built a phone purged nothing, and leaving a previous
+        // purge's failure standing would report key material as surviving a purge that never ran.
+        // Reaching that needs a re-pair between two revokes and `ready` gone at exactly the wrong
+        // moment, which no caller can produce today -- but the readers are on another surface and
+        // this keeps them from having to know that. No reader can see the gap: both this and
+        // [purgeFailure] hold the same monitor.
+        purgeFailed = ""
         val live = ready ?: return null
         val failure = try {
             live.app.purgeKeys()
@@ -300,9 +308,10 @@ class PhoneRuntime(private val context: Context) {
      * sentence would be on screen until the machine replied and gone from the moment it did.
      *
      * IT NEEDS NO CLEARING VERB, which is the whole reason it is written HERE. [purgeKeys] is the
-     * only thing that sets it and it sets it on both outcomes, so a purge that finishes clears the
-     * last one; and the only reader is the pair-only screen, which is not drawn at all once the
-     * phone is paired again. A stale value therefore has no draw to appear on.
+     * only thing that sets it and it sets it on EVERY path, including the early return, so this
+     * always describes the last purge attempted; and the only reader is the pair-only screen,
+     * which is not drawn at all once the phone is paired again. A stale value therefore has
+     * neither a way to arise nor a draw to appear on.
      */
     @Synchronized
     fun purgeFailure(): String = purgeFailed
