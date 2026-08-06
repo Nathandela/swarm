@@ -6,10 +6,19 @@ package gate
 // WHAT HAPPENS. `SettingsSurface.revokeVerdict` resolves the verdict inside the press SETTLE, and
 // a settle runs the moment the work returns -- `signedCommand` seals, appends and returns, with
 // the reply a relay round trip away. `CommandVerdict.of` refuses to claim an outcome whose code
-// is blank, which is what the durable map holds for an operation nobody has answered yet, so the
-// verdict is UNANSWERED on every run. `PairOnlyScreen.revokeNoticeFor`'s other two arms -- the
+// is blank, which is what the durable map holds for an operation nobody has answered yet, so in
+// practice that reading is UNANSWERED: `PairOnlyScreen.revokeNoticeFor`'s other two arms -- the
 // silence for a confirmed removal and the machine's own words for a refused one -- are dead in
-// production, and every revoke this app has ever issued reads REVOKE_UNCONFIRMED.
+// production, and every revoke this app has issued reads REVOKE_UNCONFIRMED.
+//
+// "IN PRACTICE" AND NOT "ALWAYS", because the difference is a RACE rather than an invariant and
+// this sentence is the kind that gets fenced later. The reply lands through a different goroutine
+// entirely -- `mobile/relay.go`'s drain calls accept -> onReply -> resolve, ordered against
+// neither the dispatch lane nor the looper -- so a machine that answered before the settle reached
+// the main thread would resolve ACCEPTED there. Nothing forbids it; what makes it unreachable in
+// the field is that a revoke which SUCCEEDS severs the path its own reply comes back on. The fence
+// below therefore pins the re-read, which is right whichever way that race falls, and not the
+// timing, which is nobody's promise to keep.
 //
 // THE SURFACE'S OWN COMMENT ARGUES IT IS FORCED: "there is no later draw of this surface to ask
 // again from -- the phone is unpaired the moment the purge above finishes". The premise is right

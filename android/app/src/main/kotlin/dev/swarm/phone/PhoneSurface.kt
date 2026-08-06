@@ -1358,11 +1358,20 @@ class PhoneSurface(
      * WHY THE PANEL'S SETTLE COULD NOT DO IT. `SettingsSurface` resolves the verdict when its
      * press settles, which is the moment `signedCommand` has SEALED and APPENDED: the reply is a
      * relay round trip away, and `CommandVerdict.of` refuses to claim an outcome carrying no code
-     * -- so that reading is UNANSWERED on every run this app has ever made, and both of
+     * -- so in practice that reading is UNANSWERED, and both of
      * `PairOnlyScreen.revokeNoticeFor`'s answered arms were unreachable. The panel's own comment
      * argues there is no later draw to ask again from, which is true of that PANEL: this surface
      * redraws on every resume and every journal event, and the id outlives the panel in
      * [PhoneRuntime] for exactly that reason.
+     *
+     * "IN PRACTICE" IS THE HONEST WORD AND NOT A HEDGE. The reply arrives on a different goroutine
+     * -- `mobile/relay.go`'s drain runs accept -> onReply -> resolve with no ordering against the
+     * dispatch lane or this looper -- so a machine that answered first would resolve ACCEPTED in
+     * the settle, and nothing in the code forbids it. What keeps it out of the field is that a
+     * revoke which succeeds severs the path its own reply comes back on. This function is correct
+     * either way, and that is the property to rely on rather than the timing: it composes whatever
+     * verdict it is handed, so an answered one becomes the answer and an unanswered one becomes
+     * the fallback below.
      *
      * THE PANEL'S SENTENCE IS THE FALLBACK AND NOT THE ANSWER. It is what an unanswered,
      * unreadable or never-issued revoke says -- including the routed reason a revoke that never
