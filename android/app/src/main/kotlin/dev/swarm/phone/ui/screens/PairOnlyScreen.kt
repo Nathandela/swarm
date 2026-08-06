@@ -182,16 +182,74 @@ object PairOnlyScreen {
         UNREGISTER_FIRST + " before pairing again."
 
     /**
+     * What a purge that could not finish leaves behind, stated as the fact it is
+     * (agents-tracker-jx23).
+     *
+     * IT IS A DIFFERENT FACT FROM EVERY OTHER SENTENCE ON THIS SCREEN, which is why it is its own
+     * constant rather than another tail on [STILL_REGISTERED]. Those are about the REGISTRATION --
+     * whether a computer somewhere still knows this device -- and this one is about the sealed
+     * containers in the hand of the person reading it. `App.PurgeKeys` states the boundary
+     * exactly: an error means the material AT REST survived, while the memory half happened
+     * regardless. So the live keys ARE gone and the phone is unpaired; what did not happen is the
+     * destruction of the blobs, and only a person who knows that can decide what to do about the
+     * handset.
+     *
+     * THE REMEDY IS NOT NAMED, and that is deliberate. There is nothing to type: the failure is a
+     * full disk or a data directory gone read-only, and the app cannot tell which. Inventing a
+     * step here -- "clear the app's data" -- would send a user to destroy the durable state of a
+     * pairing they may be about to re-make, on a guess about a platform condition this screen
+     * cannot read.
+     */
+    private const val PURGE_INCOMPLETE = "This phone could not destroy the key material it had " +
+        "stored, so it is still on this device."
+
+    /**
      * The machine's answer to the revoke this phone issued, as the screen states it.
      *
      * A CONFIRMED REMOVAL SAYS NOTHING. Both sides agree, so there is no divergence to report, and
      * a warning shown over a state that is fine teaches the user to ignore the one that is not.
+     * That rule is why the second fact is a PARAMETER here rather than a sentence a caller appends:
+     * "say nothing" has to survive the join, and a caller that concatenated two composed strings
+     * would put a lone separator on the screen of a phone where everything went right.
+     *
+     * THE ORDER IS A COPY DECISION AND IS MADE HERE (agents-tracker-jx23). The machine's answer
+     * comes first because the user's next action turns on it -- whether `swarm remote pair` will
+     * be refused -- and the purge failure is a fact about this handset that no command of theirs
+     * undoes. Leading with the second buries the actionable one.
+     *
+     * @param purgeFailure PB-APP-9's routed reason the key material at rest survived, or empty
+     *  where the purge finished. It is carried VERBATIM for [revokeUnsentNotice]'s reason: the
+     *  router owns what a custody failure reads as, and a second wording here is two files
+     *  deciding one sentence.
      */
-    fun revokeNoticeFor(verdict: CommandVerdict): String = when {
-        verdict.accepted -> ""
-        verdict.answered -> verdict.sentence(REVOKE_REFUSED) + STILL_REGISTERED
-        else -> REVOKE_UNCONFIRMED
+    fun revokeNoticeFor(verdict: CommandVerdict, purgeFailure: String = ""): String {
+        val machine = when {
+            verdict.accepted -> ""
+            verdict.answered -> verdict.sentence(REVOKE_REFUSED) + STILL_REGISTERED
+            else -> REVOKE_UNCONFIRMED
+        }
+        return joinedWithPurgeFailure(machine, purgeFailure)
     }
+
+    /**
+     * The two facts as one notice, in the one place that knows how they read together.
+     *
+     * BOTH CAN BE TRUE AT ONCE and the worst case is exactly that: a machine that refused the
+     * removal AND a handset that could not destroy what it held. Neither answers for the other, so
+     * neither replaces the other.
+     */
+    private fun joinedWithPurgeFailure(machine: String, purgeFailure: String): String = when {
+        purgeFailure.isBlank() -> machine
+        machine.isEmpty() -> purgeFailure + " " + PURGE_INCOMPLETE
+        else -> machine + " " + purgeFailure + " " + PURGE_INCOMPLETE
+    }
+
+    /**
+     * The same join for the revoke that never reached the wire, so the panel composing the
+     * fallback has one call for either shape (agents-tracker-jx23).
+     */
+    fun revokeUnsentNotice(routed: String, purgeFailure: String): String =
+        joinedWithPurgeFailure(revokeUnsentNotice(routed), purgeFailure)
 
     /**
      * The revoke that never reached the wire at all.

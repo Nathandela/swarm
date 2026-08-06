@@ -1384,7 +1384,11 @@ class PhoneSurface(
             return settings.unpairNotice
         }
         if (!verdict.answered) return settings.unpairNotice
-        return PairOnlyScreen.revokeNoticeFor(verdict)
+        // THE OTHER FACT TRAVELS WITH IT (agents-tracker-jx23). This line REPLACES the sentence
+        // the panel composed, so anything that sentence carried and this call does not is dropped
+        // the moment the machine answers -- and what the panel carried is whether the key material
+        // at rest survived the purge, which no reply from the machine has any bearing on.
+        return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
     }
 
     /**

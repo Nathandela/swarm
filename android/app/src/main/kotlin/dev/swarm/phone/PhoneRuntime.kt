@@ -280,13 +280,34 @@ class PhoneRuntime(private val context: Context) {
     @Synchronized
     fun purgeKeys(): RoutedError? {
         val live = ready ?: return null
-        return try {
+        val failure = try {
             live.app.purgeKeys()
             null
         } catch (refused: Exception) {
             routeStartupFailure(refused)
         }
+        purgeFailed = failure?.message.orEmpty()
+        return failure
     }
+
+    /**
+     * The routed reason the last purge could not finish at rest, or empty (agents-tracker-jx23).
+     *
+     * WHY IT IS REMEMBERED AND NOT ONLY RETURNED. The return is for the caller holding a screen at
+     * the moment of the press; this is for the screen the phone LANDS on, which redraws long
+     * afterwards and recomposes its notice from scratch every time the machine's answer changes
+     * ([PhoneSurface] does the recomposing). Without the fact kept somewhere both can reach, the
+     * sentence would be on screen until the machine replied and gone from the moment it did.
+     *
+     * IT NEEDS NO CLEARING VERB, which is the whole reason it is written HERE. [purgeKeys] is the
+     * only thing that sets it and it sets it on both outcomes, so a purge that finishes clears the
+     * last one; and the only reader is the pair-only screen, which is not drawn at all once the
+     * phone is paired again. A stale value therefore has no draw to appear on.
+     */
+    @Synchronized
+    fun purgeFailure(): String = purgeFailed
+
+    private var purgeFailed: String = ""
 
     /**
      * PB-KEY-7's "require a fresh unwrap before restoring content".
