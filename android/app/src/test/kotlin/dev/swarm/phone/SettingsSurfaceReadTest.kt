@@ -6,6 +6,7 @@ import dev.swarm.phone.runtime.AppPermission
 import dev.swarm.phone.runtime.PermissionAsks
 import dev.swarm.phone.runtime.PermissionState
 import dev.swarm.phone.ui.SettingsScreen
+import java.util.concurrent.Executor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -106,32 +107,75 @@ class SettingsSurfaceReadTest {
     // agents-tracker-ix2v both switches are disabled for as long as it does.
 
     /**
-     * A held screen whose operation this surface can no longer claim is not settleable.
+     * A held screen whose operation this surface can no longer claim is not settleable -- and one
+     * whose verb is STILL CROSSING is (agents-tracker-k6w2).
      *
-     * IT IS THE ONE QUESTION [read] ASKS BEFORE IT DECIDES WHERE THE SCREEN COMES FROM, and it
-     * used to ask only half of it. `pendingSync` says a change is unacknowledged; `pendingOp` says
-     * whether THIS surface still holds the id that could acknowledge it (PB-SYNC-2 claims outcomes
-     * by id, never by proximity). Without the second half the panel waits on an answer nobody can
-     * deliver.
+     * THE SEQUENCE THIS DRIVES IS THE ONE THE FIRST FIX MISSED, and it is the ordinary one rather
+     * than an edge: [onToggled] draws the wanted screen -- `pendingSync` raised -- BEFORE the
+     * write leaves, and assigns `pendingOp` in the settle. So for the whole round trip the pair is
+     * (raised, null). `PhoneSurface.render` calls this surface's render unconditionally and runs
+     * on every journal event, so ANY event mid-flight asked the question, got "not claimable", and
+     * re-read durable state: the pending notice vanished while the change was unconfirmed, both
+     * switches came back live (agents-tracker-ix2v defeated by its own sibling), and the re-read
+     * screen's `pendingSync` was false FOR EVER after -- so the machine's refusal was never
+     * claimed, which is agents-tracker-os37 resurrected, and a later flip could claim an earlier
+     * operation's outcome, which is what PB-SYNC-2's claim-by-id exists to prevent.
      *
-     * WHAT REPLACES IT IS THE DURABLE VALUE, not a default and not the wanted screen:
-     * `App.SetPushPreference` persists BEFORE it sends, so the facade holds what the user chose if
-     * the command was issued and what the machine last confirmed if it never was. Either way it is
-     * the truth this phone can still see, and it is what a fresh process would show.
+     * WHAT THE PREDICATE WAS MISSING is a fact the surface can only get from the thing that owns
+     * it: `VerbDispatch.inFlight`. It is true from press-issue time rather than from the settle,
+     * and it is DROP-AWARE, which is the property that makes it the right fact and not merely an
+     * earlier one -- `press` frees the control BEFORE its `if (attached)` check, so a settle
+     * dropped by a pause still clears the mark. Crossing means hold; cleared with no operation
+     * means the answer is gone and the durable value is the truth (agents-tracker-n9w7).
+     *
+     * IT IS DRIVEN THROUGH A REAL DISPATCH, on the real control identity the tap presses, with a
+     * lane this test holds: that is as close to the sequence as a JVM gets. What it cannot execute
+     * is `read` itself -- `PhoneRuntime.phone()` answers Unavailable here, so there is no facade
+     * to re-read from -- which is why the assertion is on the question `read` asks rather than on
+     * what it returns.
      */
     @Test
-    fun `a pending change with no operation left to claim is not settleable`() {
-        withSettingsSurface { _, surface ->
+    fun `a change still crossing to the machine is held, and one nobody can claim is not`() {
+        val lane = mutableListOf<Runnable>()
+        val dispatch = VerbDispatch(
+            command = Executor { work -> lane += work },
+            live = Executor(Runnable::run),
+            main = Executor(Runnable::run),
+        )
+
+        withSettingsSurface(dispatch) { _, surface ->
             val pending = SettingsScreen(alerts = true, mentions = true).setAlerts(false)
 
+            // The press a tap issues: the panel root is the control [onToggled] presses, and the
+            // work sits in the lane, which is where it is for the whole round trip.
+            dispatch.press(surface.root, SendPlane.COMMAND, work = { "op-push-prefs-1" }, settle = {})
+
+            assertTrue(
+                "the fixture is not holding the press, so what follows would be about nothing",
+                dispatch.inFlight(surface.root),
+            )
+            assertTrue(
+                "agents-tracker-k6w2: a journal event mid-flight discards the pending change -- " +
+                    "the notice vanishes while it is unconfirmed, both switches come back live, " +
+                    "and the screen that replaces it can never claim the machine's answer",
+                surface.claimable(pending, null),
+            )
+
+            // The lane runs, and with it the settle: this is the answer arriving.
+            lane.forEach { it.run() }
+
+            assertFalse(
+                "the mark outlived the press, so the panel would hold a pending screen for ever",
+                dispatch.inFlight(surface.root),
+            )
             assertTrue(
                 "a change with an operation in hand is exactly what the settle is for",
                 surface.claimable(pending, "op-push-prefs-1"),
             )
             assertFalse(
-                "agents-tracker-n9w7: the panel goes on waiting for an answer to an operation it " +
-                    "no longer holds the id of -- a dropped settle, which every pause can cause -- " +
-                    "so the pending notice stands for ever and both switches stay dead behind it",
+                "agents-tracker-n9w7: nothing is crossing and no id was kept -- a settle dropped " +
+                    "by a pause -- so the panel would wait for an answer nobody can deliver, with " +
+                    "the notice standing for ever and both switches dead behind it",
                 surface.claimable(pending, null),
             )
             assertFalse(
@@ -187,11 +231,19 @@ class SettingsSurfaceReadTest {
         }
     }
 
-    /** See `SettingsSurfaceNotificationsTest`: construction reaches neither the core nor the window. */
-    private fun withSettingsSurface(assertions: (Activity, SettingsSurface) -> Unit) {
+    /**
+     * See `SettingsSurfaceNotificationsTest`: construction reaches neither the core nor the window.
+     *
+     * @param dispatch the surface's own, so a test can hold a press in flight. The default is the
+     *  process-wide one, which is right for every assertion that is not about a crossing verb.
+     */
+    private fun withSettingsSurface(
+        dispatch: VerbDispatch = VerbDispatch.direct(),
+        assertions: (Activity, SettingsSurface) -> Unit,
+    ) {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                assertions(activity, SettingsSurface(activity, PhoneRuntime(activity)))
+                assertions(activity, SettingsSurface(activity, PhoneRuntime(activity), dispatch))
             }
         }
     }
