@@ -248,9 +248,21 @@ func (a *App) RevokeThisDevice() (op *Op, err error) {
 // owner confirmed the destructive dialog -- SettingsSurface purges both key tiers in a `finally`
 // for that reason -- so the token goes either way, and what comes back is the REVOKE's own
 // answer, because that is the one the screen has to report.
+//
+// AND IT LEAVES WITH THE CALLER RATHER THAN IN FRONT OF IT (agents-tracker-j4pi). The hop is
+// bounded -- relay.DefaultCallTimeout gives every control call ten seconds -- and the bound was
+// the defect: this verb's RETURN is what runs the phone's own purge, because the Kotlin side
+// destroys both key tiers in the `finally` around the call. So a hop on this goroutine put up to
+// ten seconds of network in front of the local destruction of key material, on a handset whose
+// owner has just confirmed a destructive dialog and whose process Android may kill at any moment.
+// Waiting bought nothing at that price: the error was already going nowhere.
+//
+// A GOROUTINE NEEDS NO CONTEXT OF ITS OWN HERE. Conn.bounded applies the connection's call
+// deadline to the context.Background() the hop passes, so it is bounded before it starts; and a
+// hop that outlives the App finds a closed one at a.conn() and returns without dialling anything.
 func issueRevokeThenDropTokenAtRelay(revoke func() (*Op, error), atRelay func() error) (*Op, error) {
 	op, err := revoke()
-	_ = atRelay()
+	go func() { _ = atRelay() }()
 	return op, err
 }
 
