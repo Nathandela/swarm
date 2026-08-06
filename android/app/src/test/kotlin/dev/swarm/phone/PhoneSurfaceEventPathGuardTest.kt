@@ -1,6 +1,7 @@
 package dev.swarm.phone
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -105,6 +106,70 @@ class PhoneSurfaceEventPathGuardTest {
                 "while a session is open. Guard it the way FacadeBridge.terminalPeek already " +
                 "guards App.peek (agents-tracker-9ds)",
             guarded(member, ".triageInbox("),
+        )
+    }
+
+    // ---- the scan's own controls ----------------------------------------------
+    //
+    // FAILING-FIRST for the audit committee's S8: this scan read RAW source, so a COMMENT could
+    // satisfy `try {` -> call -> `catch (` with the guard deleted. drawActivity's real body
+    // already quotes `it.journal(...)` in prose one line above its try -- one comment reflow away
+    // from defeating the fence. The Go gates learned this exact lesson once
+    // (android/gate/helpers_test.go built kotlinCodeOnly after a fence was defeated by its own
+    // documentation); this suite scans the same file for the same kind of fact, so it must strip
+    // the same things. These controls run the real [guarded] over perturbed fixtures, the
+    // o6ut_pendingsync_test.go pattern.
+
+    @Test
+    fun `a comment inside an unrelated try cannot stand in for the guard`() {
+        val member = """
+        val lease = try {
+            // the peek used to call `it.journal(cursor)` here before the split
+            bridge.lease()
+        } catch (refused: Exception) {
+            null
+        }
+        val page = bridge.journal(cursor)
+        """
+        assertFalse(
+            "the scan accepted a member whose only guarded thing is a COMMENT mentioning the " +
+                "call: the real call sits after the catch, unguarded, and one comment reflow " +
+                "in production would hide a deleted guard from this fence",
+            guarded(member, ".journal("),
+        )
+    }
+
+    @Test
+    fun `a string literal naming the call cannot stand in for the guard`() {
+        val member = """
+        val note = try {
+            log("about to run .journal( for the activity tab")
+        } catch (ignored: Exception) {
+        }
+        val page = bridge.journal(cursor)
+        """
+        assertFalse(
+            "the scan accepted a member whose try guards only a LOG STRING naming the call; " +
+                "the real call sits after the catch, unguarded",
+            guarded(member, ".journal("),
+        )
+    }
+
+    @Test
+    fun `the scan still accepts the genuinely guarded shape`() {
+        val member = """
+        // A refusal here is routed, never thrown (agents-tracker-3nx6); the guarded call is
+        // `it.journal(...)`, quoted here exactly the way the production KDoc quotes it.
+        val page = try {
+            bridge.journal(cursor)
+        } catch (refused: Exception) {
+            routed(refused)
+        }
+        """
+        assertTrue(
+            "the scan rejected a member that guards the call correctly while a comment above " +
+                "quotes it -- a fence nobody can satisfy",
+            guarded(member, ".journal("),
         )
     }
 
