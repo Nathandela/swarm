@@ -95,13 +95,19 @@ func il7uRevertingFunctions(code string) []string { return il7uEnclosing(code, i
 // below has nothing to say about it, which is correct -- there is no rejected screen to pass.
 func il7uReconcileIn(body string, reconcilers []string) (called, arg string, ok bool) {
 	for _, name := range reconcilers {
-		for _, open := range kotlinCallSites(body, name) {
-			args := s23CallArguments(body, open)
-			if len(args) == 0 {
-				return name, "", true
-			}
-			return name, args[0], true
+		// THE FIRST CALL IS THE ONE JUDGED, and taking it explicitly rather than by breaking out
+		// of a loop is what staticcheck's SA4004 asks for on the shape this replaced. An arm that
+		// reconciles twice is not a case to average: the first is what the arm decided to do, and
+		// a second against a different screen would be a fault the caller reports anyway.
+		sites := kotlinCallSites(body, name)
+		if len(sites) == 0 {
+			continue
 		}
+		args := s23CallArguments(body, sites[0])
+		if len(args) == 0 {
+			return name, "", true
+		}
+		return name, args[0], true
 	}
 	if at := il7uTokenCall.FindStringIndex(body); at != nil {
 		return strings.TrimSpace(body[at[0]:at[1]-1]), "", true
