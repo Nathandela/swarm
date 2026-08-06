@@ -397,9 +397,26 @@ class SettingsSurface(
      * (agents-tracker-n9w7).
      *
      * IT IS THE WHOLE QUESTION AND [read] USED TO ASK HALF OF IT. `pendingSync` says a change is
-     * unacknowledged; [pendingOp] says whether THIS surface still holds the id that could
-     * acknowledge it, and PB-SYNC-2 claims outcomes BY ID and never by proximity. Both halves or
-     * neither.
+     * unacknowledged; the rest says whether anyone can still bring an answer for it -- either
+     * because the verb is still crossing, or because [pendingOp] holds the id that could claim
+     * one, and PB-SYNC-2 claims outcomes BY ID and never by proximity.
+     *
+     * THE CROSSING HALF IS NOT OPTIONAL AND ITS ABSENCE WAS A BLOCKER (agents-tracker-k6w2). This
+     * asked `pendingSync && pendingOp != null`, and [pendingOp] is assigned in the SETTLE while
+     * `pendingSync` is raised by [onToggled]'s draw BEFORE the verb leaves -- so for the whole
+     * round trip the pair was (raised, null). `PhoneSurface.render` calls this surface's render
+     * unconditionally and runs on every journal event, so a single event mid-flight answered "no"
+     * and sent the draw to the durable re-read: the pending notice vanished while the change was
+     * unconfirmed, both switches came back live -- agents-tracker-ix2v undone by its own sibling
+     * -- and because the re-read screen's `pendingSync` is false, the machine's later refusal
+     * could never be claimed at all (agents-tracker-os37, resurrected), while a stale [pendingOp]
+     * left behind could be claimed by a LATER flip's outcome.
+     *
+     * `VerbDispatch.inFlight` IS THE RIGHT FACT AND NOT MERELY AN EARLIER ONE. It is true from
+     * press-issue time, and it is DROP-AWARE: `press` frees the control BEFORE its `if (attached)`
+     * check, so a settle a pause threw away still clears the mark. That is what lets one predicate
+     * answer both this issue and [n9w7]'s -- crossing means hold, and cleared with no operation
+     * means the answer is gone and the durable value is the truth.
      *
      * THE HALF THAT WAS MISSING IS REACHED BY BACKGROUNDING THE APP. [onToggled] draws the wanted
      * screen before the write leaves -- that is what raises `pendingSync` while the machine is
@@ -422,7 +439,7 @@ class SettingsSurface(
      * guard nothing can execute is a guard nobody has checked.
      */
     internal fun claimable(held: SettingsScreen, operation: String?): Boolean =
-        held.pendingSync && operation != null
+        held.pendingSync && (dispatch.inFlight(host) || operation != null)
 
     /**
      * The preference the facade holds, or the last screen this panel drew where it cannot be read
