@@ -7,9 +7,9 @@ PB-SAS-2, then PB-GW-7/8, PB-KEY-8, PB-PUSH-10). Ownership lived in prose, so th
 error was only ever caught by a human reading carefully. This makes it mechanical.
 
 Fails if a requirement defined in the spec is unowned, owned more than once, or if
-the manifest names an id the spec does not define; if the slice DAG has a dangling
-edge, a cycle, or an orphan; or if section 11's readable table CONTRADICTS either
-authoritative file, including by using a wildcard.
+the manifest names an id the spec does not define; if the slice DAG declares a slice
+twice or has a dangling edge, a cycle, or an orphan; or if section 11's readable
+table CONTRADICTS either authoritative file, including by using a wildcard.
 
 Usage:
     check-phaseb-manifest.py [ROOT] [--strict-section11]
@@ -79,6 +79,13 @@ for raw in SLICES.read_text().splitlines():
     if not raw.strip() or raw.startswith("#"):
         continue
     name, d = raw.split("\t")
+    # A slice declared twice leaves the DAG decided by line order, and drops one of the two
+    # dependency sets unseen -- which is how the orphan negative control went stale: it
+    # injected a second row for S22 and the later row silently won.
+    if name in deps:
+        errors.append(f"DUPSLICE  {name} is declared twice; one dependency set would be "
+                      "discarded by line order")
+        continue
     deps[name] = [] if d.strip() == "-" else [x.strip() for x in d.split(",")]
 
 for rid, owners in owned.items():
