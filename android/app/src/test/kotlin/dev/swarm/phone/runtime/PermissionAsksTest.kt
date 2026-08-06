@@ -63,6 +63,38 @@ class PermissionAsksTest {
         )
     }
 
+    /**
+     * The bit can come back off, and it is per permission on the way out too
+     * (agents-tracker-qyb3).
+     *
+     * IT WAS WRITE-ONCE, AND THAT MADE IT A ONE-WAY DOOR. `shouldShowRequestPermissionRationale`
+     * is false after a GRANT as well as after a permanent refusal, so once the bit was set the
+     * resolver could only ever say PERMANENTLY_DENIED about an ungranted permission -- and a user
+     * who granted the permission and later revoked it in system settings got two dead switches
+     * and a redirect, on a phone the platform would still have prompted for. The grant is the
+     * moment the truth is in hand, so it is the moment the record of the ask stops being needed.
+     */
+    @Test
+    fun `the bit can be cleared, and clearing one does not clear the other`() {
+        PermissionAsks.remember(context, AppPermission.POST_NOTIFICATIONS)
+        PermissionAsks.remember(context, AppPermission.CAMERA)
+
+        PermissionAsks.forget(context, AppPermission.POST_NOTIFICATIONS)
+
+        assertFalse(
+            "agents-tracker-qyb3: the ask bit cannot be cleared, so a permission that was " +
+                "granted and later revoked in system settings resolves to PERMANENTLY_DENIED for " +
+                "the life of the install",
+            PermissionAsks.hasAsked(context, AppPermission.POST_NOTIFICATIONS),
+        )
+        assertTrue(
+            "clearing the notification bit cleared the camera's. The two permissions are asked " +
+                "by different screens and answered at different times; one bit for both is the " +
+                "defect `keyFor` exists to prevent, in the other direction",
+            PermissionAsks.hasAsked(context, AppPermission.CAMERA),
+        )
+    }
+
     @Test
     fun `the camera bit keeps the store and the key the shipped build wrote`() {
         // THE LITERALS ARE THE POINT. `PairingSurface` shipped this bit under

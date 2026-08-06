@@ -151,6 +151,34 @@ class PermissionGateTest {
         )
     }
 
+    /**
+     * A GRANT THAT WAS LATER REVOKED IN SYSTEM SETTINGS IS AN ASKABLE STATE, and the resolver can
+     * only say so if the bit it is handed is the truth (agents-tracker-qyb3).
+     *
+     * The inputs are identical to `postNotifications_at_api33_and_above_resolves_normally`'s
+     * PERMANENTLY_DENIED row apart from `hasAskedBefore`, which is the whole point: after a
+     * revoke the platform will prompt again, `showRationale` is false exactly as it is after a
+     * permanent refusal, and nothing on the phone distinguishes the two except the bit. It was
+     * write-once, so a phone that had ever been asked could never resolve back to DENIED -- two
+     * dead switches and a redirect, on a phone where the prompt still works. `PermissionAsks`
+     * clears it on a grant; this row is what that clearing buys.
+     */
+    @Test
+    fun postNotifications_asked_bit_cleared_by_a_grant_resolves_a_later_revoke_as_askable() {
+        assertEquals(
+            "a permission granted and then revoked in system settings resolved to " +
+                "PERMANENTLY_DENIED, so the app offers a redirect where the platform would prompt",
+            PermissionState.DENIED,
+            PermissionStateResolver.resolve(
+                permission = AppPermission.POST_NOTIFICATIONS,
+                sdkInt = 35,
+                granted = false,
+                hasAskedBefore = false,
+                showRationale = false,
+            ),
+        )
+    }
+
     // --- The denial must be VISIBLE, which is the whole point ----------------
 
     /**
