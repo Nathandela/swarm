@@ -382,7 +382,7 @@ class SettingsSurface(
     private fun read(app: App): SettingsScreen {
         val bridge = FacadeBridge(app)
         val held = screen
-        val base = if (held != null && held.pendingSync) {
+        val base = if (held != null && claimable(held, pendingOp)) {
             settleWithTheMachine(bridge, held)
         } else {
             settingsOr(held) { bridge.pushSettings() }
@@ -391,6 +391,38 @@ class SettingsSurface(
             .withNotificationPermission(notificationPermissionNow())
             .withNotificationDelivery(deliveryNow())
     }
+
+    /**
+     * Whether the machine's answer to what this panel is holding is still one it can claim
+     * (agents-tracker-n9w7).
+     *
+     * IT IS THE WHOLE QUESTION AND [read] USED TO ASK HALF OF IT. `pendingSync` says a change is
+     * unacknowledged; [pendingOp] says whether THIS surface still holds the id that could
+     * acknowledge it, and PB-SYNC-2 claims outcomes BY ID and never by proximity. Both halves or
+     * neither.
+     *
+     * THE HALF THAT WAS MISSING IS REACHED BY BACKGROUNDING THE APP. [onToggled] draws the wanted
+     * screen before the write leaves -- that is what raises `pendingSync` while the machine is
+     * being asked -- and assigns [pendingOp] in the settle. `VerbDispatch` DROPS a settle whose
+     * dispatch has been detached, which `PhoneSurface.release` does on every pause and argues for
+     * in its own comment: an answer routinely outlives the screen it was meant for. So a flip
+     * followed by a pause inside the command's round trip left `pendingSync` raised with
+     * [pendingOp] null, [settleWithTheMachine] returning early for ever, the pending notice
+     * permanent -- and, since agents-tracker-ix2v holds both switches while it stands, a settings
+     * screen with two dead controls and no way back short of process death.
+     *
+     * WHAT REPLACES THE WAIT IS THE DURABLE VALUE, which is why this is safe to give up on.
+     * `App.SetPushPreference` persists BEFORE it sends, so the facade holds what the user chose if
+     * the command was issued at all and what the machine last confirmed if it never was. Either
+     * way it is the truth this phone can still see, and it is exactly what a fresh process would
+     * draw -- the same degradation `PhoneRuntime`'s revoke latch already accepts for a process
+     * that died mid-command.
+     *
+     * INTERNAL so `SettingsSurfaceReadTest` has a subject: [read] is unreachable on the JVM, and a
+     * guard nothing can execute is a guard nobody has checked.
+     */
+    internal fun claimable(held: SettingsScreen, operation: String?): Boolean =
+        held.pendingSync && operation != null
 
     /**
      * The preference the facade holds, or the last screen this panel drew where it cannot be read
