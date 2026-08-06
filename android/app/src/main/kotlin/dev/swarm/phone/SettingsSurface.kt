@@ -831,7 +831,20 @@ class SettingsSurface(
                 // honest report at this moment is that the machine has not confirmed it, and
                 // [PairOnlyScreen] carries that sentence onto the screen this press lands on.
                 unpairNotice = answer.fold(
-                    onSuccess = { issued -> PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued)) },
+                    onSuccess = { issued ->
+                        // AND THE ID OUTLIVES THIS PANEL (agents-tracker-0rle, the write half of
+                        // agents-tracker-4zue). The sentence below is composed at the moment
+                        // `signedCommand` sealed and appended -- a relay round trip before the
+                        // machine can have answered -- so [revokeVerdict] is UNANSWERED here by
+                        // construction and what it composes is the fallback. The screen this press
+                        // lands on re-reads the outcome on every draw, and the one thing it cannot
+                        // recover for itself is which operation to read: the panel that issued it
+                        // is destroyed by it. `PhoneRuntime` keeps the id for the same reason it
+                        // keeps the relay coordinate, and `PhoneSurface.renderReady` clears it
+                        // when the gate says this handset is usably paired again.
+                        runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())
+                        PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued))
+                    },
                     // Every facade refusal arrives as an exception whose message carries the error
                     // class as a prefix, so it routes through the table rather than being shown raw.
                     onFailure = { refused ->
