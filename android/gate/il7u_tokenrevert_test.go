@@ -440,6 +440,58 @@ func TestIl7u_TheRevertScanDiscriminates(t *testing.T) {
 			"fence nobody can satisfy:\n%s", strings.Join(faults, "\n"))
 	}
 
+	// THE RECONCILE IS IN THE WRONG ARM, which is the way a whole-function scan is defeated
+	// without anybody trying. Reconciling on ACCEPTED is a perfectly sensible thing to write --
+	// the machine took the preference, so the token should match it -- and it leaves the REFUSED
+	// defect this fence exists for standing verbatim: the switches go back and the token does not.
+	const reconcilesTheAcceptedArm = `class SettingsSurface {
+    private fun settleWithTheMachine(bridge: FacadeBridge, held: SettingsScreen): SettingsScreen {
+        return when (SettingsScreen.syncAnswer(bridge.launchOutcome(id), id)) {
+            PushSync.PENDING -> held
+            PushSync.ACCEPTED -> {
+                pendingOp = null
+                val settled = held.acknowledged()
+                reconcileTheToken(settled)
+                settled
+            }
+
+            PushSync.REFUSED -> {
+                pendingOp = null
+                say(PressFeedback.ofRefusal(SettingsScreen.refusalNotice(answer)))
+                held.refused()
+            }
+        }
+    }
+}` + surface
+
+	if faults := il7uFaults("wrongarm.kt", reconcilesTheAcceptedArm); len(faults) != 1 {
+		t.Errorf("the scan reads the whole function, so a reconcile in the ACCEPTED arm satisfies "+
+			"it while the REFUSED arm -- the one this fence is about -- puts the switches back "+
+			"over a token nothing touched:\n%s", strings.Join(faults, "\n"))
+	}
+
+	// THE RECEIVER UNDER ANOTHER NAME. The argument check compares two identifiers, so one
+	// assignment defeats it: `rejected` IS the screen the machine refused, and reconciling against
+	// it agrees with the optimistic deletion exactly as `reconcileTheToken(held)` would.
+	const aliasedReceiver = `class SettingsSurface {
+    private fun settleWithTheMachine(bridge: FacadeBridge, held: SettingsScreen): SettingsScreen {
+        return when (SettingsScreen.syncAnswer(bridge.launchOutcome(id), id)) {
+            PushSync.REFUSED -> {
+                pendingOp = null
+                say(PressFeedback.ofRefusal(SettingsScreen.refusalNotice(answer)))
+                val rejected = held
+                reconcileTheToken(rejected)
+                held.refused()
+            }
+        }
+    }
+}` + surface
+
+	if faults := il7uFaults("aliased.kt", aliasedReceiver); len(faults) != 1 {
+		t.Errorf("the scan compares identifiers, so binding the rejected screen to a second name "+
+			"passes a reconcile that restores nothing:\n%s", strings.Join(faults, "\n"))
+	}
+
 	// And the comment case: this fix's own notes quote the defective arm. A scan that read comments
 	// would fail on the explanation of the thing it checks.
 	const commented = `class SettingsSurface {
