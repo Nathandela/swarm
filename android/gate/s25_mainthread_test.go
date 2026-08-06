@@ -59,7 +59,10 @@ import (
 //     returns (mobile/app.go:266-284), so the call itself does not block.
 //   - Other surfaces. `PairingSurface` has click paths of its own. `App.BeginPairing` was read
 //     and does not dial -- its own comment records that `join()` is "the only thing that dials"
-//     -- but nothing here has audited the rest of that flow.
+//     -- but nothing here has audited the rest of that flow. `SettingsSurface` WAS in this
+//     paragraph until agents-tracker-h39k, where the omission turned out to be a live defect
+//     rather than a stated limit: it called `SetPushPreference` -- a signed command -- from a
+//     switch's listener on the looper. It is a subject now; see [s25Surfaces].
 //   - It reads SOURCE. That PhoneSurface's `Ready` branch really reaches the dispatcher at
 //     runtime is not established by any test in this repository; see VerbDispatchTest's own
 //     header. The join is owed to the hardware run.
@@ -69,33 +72,61 @@ import (
 // something about the copy and nothing about the assertion.
 
 // ---------------------------------------------------------------------------
-// The subject.
+// The subjects.
 // ---------------------------------------------------------------------------
 
-func s25SurfacePath(t *testing.T) string {
-	return filepath.Join(appModule(t), "src", "main", "kotlin", "dev", "swarm", "phone", "PhoneSurface.kt")
+// s25Surfaces are the Kotlin surfaces that wire a facade verb onto a control, by file name.
+//
+// IT IS A SET AND NOT ONE FILE (agents-tracker-h39k). This fence was written over
+// PhoneSurface.kt alone, and the defect it describes then shipped again one file over:
+// `SettingsSurface.onToggled` called `App.SetPushPreference` -- a signed command, so awaitConn's
+// five-second poll and then a relay round trip -- straight from a switch's listener, on the
+// looper, while `onReplace` in that same file already routed its verb through `VerbDispatch` and
+// cited THIS FENCE'S OWN reasoning for doing so. A gate that reads one file says nothing about
+// the file beside it, and says it in a way that reads like coverage.
+//
+// A SURFACE ADDED HERE IS READ BY ALL THREE ASSERTIONS BELOW. The cost of covering the next
+// surface is one line; the cost of not covering it is agents-tracker-7j4b a third time.
+func s25Surfaces(t *testing.T) map[string]string {
+	t.Helper()
+	dir := filepath.Join(appModule(t), "src", "main", "kotlin", "dev", "swarm", "phone")
+	return map[string]string{
+		"PhoneSurface.kt":    filepath.Join(dir, "PhoneSurface.kt"),
+		"SettingsSurface.kt": filepath.Join(dir, "SettingsSurface.kt"),
+	}
 }
 
-// s25SurfaceCode is PhoneSurface.kt with its comments stripped.
+// s25SurfaceCodes is every subject with its comments stripped, keyed by file name.
 //
-// The strip is not cosmetic. This file's whole subject is discussed at length in that file's
+// The strip is not cosmetic. This file's whole subject is discussed at length in those files'
 // KDoc -- "app.kill", "awaitConn", "SendPlane.COMMAND" all appear in prose -- and a fence a
 // comment can satisfy is a fence the next thorough comment turns off. `kotlinCodeOnly` is the
 // package's existing answer to exactly that failure, which it has already had once.
-func s25SurfaceCode(t *testing.T) string {
+func s25SurfaceCodes(t *testing.T) map[string]string {
 	t.Helper()
-	return kotlinCodeOnly(readFileOrFail(t, s25SurfacePath(t),
-		"agents-tracker-7j4b: the surface that wires the action controls"))
+	out := map[string]string{}
+	for name, path := range s25Surfaces(t) {
+		out[name] = kotlinCodeOnly(readFileOrFail(t, path,
+			"agents-tracker-7j4b: a surface that wires the action controls"))
+	}
+	return out
 }
 
-// s25RenderPathExemptions are the functions in PhoneSurface.kt that still reach a waiting verb
-// from the main thread, each one a known open defect rather than a permitted pattern.
+// s25RenderPathExemptions are the functions that still reach a waiting verb from the main
+// thread, keyed by the FILE they sit in, each one a known open defect rather than a permitted
+// pattern.
+//
+// THE FILE IS PART OF THE KEY (agents-tracker-h39k). A bare function name exempts that name in
+// every surface this fence ever grows to cover -- a `watch` written tomorrow on a third surface
+// would arrive pre-forgiven -- which is an allowlist wearing a ledger's clothes.
 //
 // IT MUST SHRINK, NOT GROW. The assertion over it is an equality, so paying one off is a green
 // edit and adding a third is a red one that has to be argued for in review.
-var s25RenderPathExemptions = map[string]string{
-	"watch":   "agents-tracker-jx1x: TerminalWatch from renderReady reaches awaitConn",
-	"unwatch": "agents-tracker-jx1x: TerminalUnwatch from release, which must precede the socket close",
+var s25RenderPathExemptions = map[string]map[string]string{
+	"PhoneSurface.kt": {
+		"watch":   "agents-tracker-jx1x: TerminalWatch from renderReady reaches awaitConn",
+		"unwatch": "agents-tracker-jx1x: TerminalUnwatch from release, which must precede the socket close",
+	},
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +329,11 @@ func s25Bodies(code, opener string, open, closing byte) []s25Span {
 // `confirmThenPress(` and of `dispatchPress(`, so without the first check the plane scan
 // reported four planeless presses that do not exist; and `private class Press(` is the type's
 // own declaration, whose parameter list of course names no plane.
+//
+// `fun` JOINS `class` WITH THE SECOND OPENER (agents-tracker-h39k). `private fun press(control:
+// View, plan: () -> Press?)` is the dispatcher's own declaration, and reading its parameter list
+// as a press body reports a press that declares no plane and calls no verb -- a fault invented
+// out of a signature.
 func s25WholeToken(code string, at int, opener string) bool {
 	if at > 0 {
 		prev := rune(code[at-1])
@@ -309,7 +345,28 @@ func s25WholeToken(code string, at int, opener string) bool {
 		return true
 	}
 	before := strings.TrimRight(code[:at], " \t\n")
-	return !strings.HasSuffix(before, "class")
+	return !strings.HasSuffix(before, "class") && !strings.HasSuffix(before, "fun")
+}
+
+// s25PressOpeners are the two shapes a dispatched press takes in this module.
+//
+// `Press(` is `PhoneSurface`'s own declaration type -- a plane, a verb and a settle, planned on
+// the looper and handed to [VerbDispatch] by `dispatchPress`. `press(` is that dispatcher call
+// itself, which is what `SettingsSurface` makes directly: its presses have no plan step, so a
+// Press type there would be a wrapper around one call site. BOTH ARE DISPATCHED, and a fence
+// that knew only the first read every SettingsSurface press as a stray main-thread call -- which
+// is the direction that fails loudly. The direction that fails silently is the one this pair
+// closes: a verb dispatched in the second shape looked, to the plane scan, like no press at all.
+var s25PressOpeners = []string{"Press(", "press("}
+
+// s25PressBodies is every dispatched press in one source, in either shape, in source order.
+func s25PressBodies(code string) []s25Span {
+	var out []s25Span
+	for _, opener := range s25PressOpeners {
+		out = append(out, s25Bodies(code, opener, '(', ')')...)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].start < out[b].start })
+	return out
 }
 
 // s25CallsIn reports which of `verbs` are called on some receiver inside the span.
@@ -403,7 +460,6 @@ func s25CallSitesOf(code string, verbs map[string]bool) []s25CallSite {
 // TestS25_NoFacadeVerbRunsInsideAClickListener is the literal acceptance criterion: something
 // that prevents a future verb being wired back onto the click listener.
 func TestS25_NoFacadeVerbRunsInsideAClickListener(t *testing.T) {
-	code := s25SurfaceCode(t)
 	waiting, live := s25Planes(t)
 	all := map[string]bool{}
 	for v := range waiting {
@@ -423,7 +479,14 @@ func TestS25_NoFacadeVerbRunsInsideAClickListener(t *testing.T) {
 			len(live), sortedKeys(live), s25LiveFloor)
 	}
 
-	if bad := s25VerbsInListeners(code, all); len(bad) > 0 {
+	var bad []string
+	for name, code := range s25SurfaceCodes(t) {
+		for _, fault := range s25VerbsInListeners(code, all) {
+			bad = append(bad, "  "+name+":"+fault)
+		}
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
 		t.Errorf("agents-tracker-7j4b: %s\n\n"+
 			"A facade verb called inside a click listener runs on the Android main thread. Every "+
 			"verb on this surface crosses JNI into a Go network call, and a command verb resolves "+
@@ -445,7 +508,7 @@ func s25VerbsInListeners(code string, verbs map[string]bool) []string {
 	var bad []string
 	for _, span := range s25Bodies(code, "setOnClickListener {", '{', '}') {
 		for _, verb := range s25CallsIn(code, span, verbs) {
-			bad = append(bad, fmt.Sprintf("  a click listener calls the facade verb %q directly", verb))
+			bad = append(bad, fmt.Sprintf(" a click listener calls the facade verb %q directly", verb))
 		}
 	}
 	return bad
@@ -487,17 +550,25 @@ func TestS25_ListenerScanDiscriminates(t *testing.T) {
 // A LIVE VERB ON THE COMMAND LANE is the same defect wearing the other hat: the keystroke now
 // waits behind whatever command is in awaitConn, which is exactly what two lanes exist to stop.
 func TestS25_EveryPressDeclaresThePlaneItsVerbResolvesThrough(t *testing.T) {
-	code := s25SurfaceCode(t)
 	waiting, live := s25Planes(t)
 
-	presses := s25Bodies(code, "Press(", '(', ')')
-	if len(presses) < s25PressFloor {
-		t.Fatalf("agents-tracker-7j4b: found only %d Press( declarations in %s, below the floor of "+
-			"%d. The surface carries six action controls; a scan that finds fewer has stopped "+
-			"parsing and is asserting over nothing",
-			len(presses), mustRel(t, s25SurfacePath(t)), s25PressFloor)
+	found := 0
+	var bad []string
+	for name, code := range s25SurfaceCodes(t) {
+		presses := s25PressBodies(code)
+		found += len(presses)
+		for _, fault := range s25MisplanedPresses(code, presses, waiting, live) {
+			bad = append(bad, "  "+name+":"+fault)
+		}
 	}
-	if bad := s25MisplanedPresses(code, presses, waiting, live); len(bad) > 0 {
+	if found < s25PressFloor {
+		t.Fatalf("agents-tracker-7j4b: found only %d dispatched presses across %v, below the floor "+
+			"of %d. The two surfaces carry eight action controls between them; a scan that finds "+
+			"fewer has stopped parsing and is asserting over nothing",
+			found, sortedKeys(s25Surfaces(t)), s25PressFloor)
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
 		t.Errorf("agents-tracker-7j4b: %s\n\n"+
 			"mobile/commands.go has exactly two destination policies and the difference IS the "+
 			"requirement. sendContext waits on awaitConn for up to five seconds, which is right "+
@@ -510,35 +581,46 @@ func TestS25_EveryPressDeclaresThePlaneItsVerbResolvesThrough(t *testing.T) {
 	}
 }
 
-// s25PressFloor is the scan floor for the surface's declared presses.
-const s25PressFloor = 5
+// s25PressFloor is the scan floor for the presses declared across the whole subject set.
+const s25PressFloor = 6
 
 func s25MisplanedPresses(code string, presses []s25Span, waiting, live map[string]bool) []string {
 	var bad []string
 	for _, span := range presses {
 		body := code[span.start:span.end]
+		waits := s25CallsIn(code, span, waiting)
+		lives := s25CallsIn(code, span, live)
+		// A FORWARDER IS NOT A DECLARATION (agents-tracker-h39k). `PhoneSurface.dispatchPress`
+		// hands `planned.plane` and `planned.verb` to VerbDispatch: the plane it takes is the one
+		// the `Press(` above declared, which this scan has already read, and the verb is a lambda
+		// it cannot see through. Judging it too would report "declares no plane" over a call that
+		// carries one -- a fault invented out of the seam between the two shapes. A press body
+		// that names no facade verb has nothing whose lane could be wrong.
+		if len(waits) == 0 && len(lives) == 0 {
+			continue
+		}
 		declaresCommand := strings.Contains(body, "SendPlane.COMMAND")
 		declaresLive := strings.Contains(body, "SendPlane.LIVE")
 		switch {
 		case !declaresCommand && !declaresLive:
-			bad = append(bad, "  a Press declares no SendPlane at all, so nothing says which lane "+
+			bad = append(bad, " a press declares no SendPlane at all, so nothing says which lane "+
 				"its verb may wait on")
 			continue
 		case declaresCommand && declaresLive:
-			bad = append(bad, "  a Press declares both planes, so which lane it takes is ambiguous")
+			bad = append(bad, " a press declares both planes, so which lane it takes is ambiguous")
 			continue
 		}
-		for _, verb := range s25CallsIn(code, span, waiting) {
+		for _, verb := range waits {
 			if !declaresCommand {
 				bad = append(bad, fmt.Sprintf(
-					"  %q resolves through sendContext, which polls awaitConn for up to five "+
-						"seconds, but its Press is declared SendPlane.LIVE", verb))
+					" %q resolves through sendContext, which polls awaitConn for up to five "+
+						"seconds, but its press is declared SendPlane.LIVE", verb))
 			}
 		}
-		for _, verb := range s25CallsIn(code, span, live) {
+		for _, verb := range lives {
 			if !declaresLive {
 				bad = append(bad, fmt.Sprintf(
-					"  %q is a LIVE-ONLY verb (ADR-007 D7) but its Press is declared "+
+					" %q is a LIVE-ONLY verb (ADR-007 D7) but its press is declared "+
 						"SendPlane.COMMAND, where a five-second awaitConn poll can sit in front "+
 						"of it", verb))
 			}
@@ -570,8 +652,41 @@ func TestS25_PlaneScanDiscriminates(t *testing.T) {
 	}
 
 	noPlane := `Press(verb = { app -> app.kill(target) })`
-	if bad := s25MisplanedPresses(noPlane, s25Bodies(noPlane, "Press(", '(', ')'), waiting, live); len(bad) == 0 {
+	if bad := s25MisplanedPresses(noPlane, s25PressBodies(noPlane), waiting, live); len(bad) == 0 {
 		t.Error("the plane scan passed a Press that declares no plane at all")
+	}
+
+	// THE SECOND SHAPE (agents-tracker-h39k). SettingsSurface calls the dispatcher directly, so a
+	// scan that knew only `Press(` would read this as no press at all -- and then the stray scan
+	// below would report a correctly dispatched verb, or, worse, the plane scan would have
+	// nothing to disagree with.
+	dispatchedDirectly := `dispatch.press(control, SendPlane.COMMAND, work = { app.kill(target) }, settle = {})`
+	if got := s25PressBodies(dispatchedDirectly); len(got) != 1 {
+		t.Fatalf("the press reader finds %d presses in a direct `dispatch.press(` call, so every "+
+			"assertion over the surfaces that use that shape is about nothing", len(got))
+	}
+	if bad := s25MisplanedPresses(dispatchedDirectly, s25PressBodies(dispatchedDirectly), waiting, live); len(bad) != 0 {
+		t.Errorf("the plane scan rejects a correctly planed direct dispatch: %v", bad)
+	}
+	misplanedDirectly := `dispatch.press(control, SendPlane.LIVE, work = { app.kill(target) }, settle = {})`
+	if bad := s25MisplanedPresses(misplanedDirectly, s25PressBodies(misplanedDirectly), waiting, live); len(bad) == 0 {
+		t.Error("the plane scan passed a waiting verb on the live lane in the direct-dispatch " +
+			"shape, so the second shape is read but not judged")
+	}
+
+	// THE FORWARDER. `PhoneSurface.dispatchPress` hands on a plane it was given and calls no verb
+	// of its own; reporting it would be a fault invented out of the seam between the two shapes.
+	forwarder := `dispatch.press(control, planned.plane, work = { planned.verb(app) }, settle = {})`
+	if bad := s25MisplanedPresses(forwarder, s25PressBodies(forwarder), waiting, live); len(bad) != 0 {
+		t.Errorf("the plane scan reports the forwarder that hands VerbDispatch a plane it was "+
+			"given, which is a fence PhoneSurface cannot satisfy: %v", bad)
+	}
+
+	// AND THE DISPATCHER'S OWN DECLARATION IS NOT A PRESS. `fun press(` has a parameter list, not
+	// a body, so reading it as one reports a planeless press that does not exist.
+	declaration := `private fun press(control: View, plan: () -> Press?) { }`
+	if got := s25PressBodies(declaration); len(got) != 0 {
+		t.Errorf("the press reader treats `fun press(`'s own declaration as a press: %v", got)
 	}
 }
 
@@ -583,17 +698,32 @@ func TestS25_PlaneScanDiscriminates(t *testing.T) {
 // waiting verb called from neither a listener nor a Press -- from `render`, say, where the
 // original defect also lives and where nothing above would look.
 func TestS25_EveryWaitingVerbIsDispatchedOrLedgered(t *testing.T) {
-	code := s25SurfaceCode(t)
 	waiting, _ := s25Planes(t)
-	stray := s25StrayWaitingCalls(code, waiting)
+	codes := s25SurfaceCodes(t)
 
 	var unledgered []string
-	for fn, verbs := range stray {
-		if _, ok := s25RenderPathExemptions[fn]; ok {
-			continue
+	for file, code := range codes {
+		stray := s25StrayWaitingCalls(code, waiting)
+		exempt := s25RenderPathExemptions[file]
+		for fn, verbs := range stray {
+			if _, ok := exempt[fn]; ok {
+				continue
+			}
+			sort.Strings(verbs)
+			unledgered = append(unledgered, fmt.Sprintf("  %s: %q calls %v outside any press", file, fn, verbs))
 		}
-		sort.Strings(verbs)
-		unledgered = append(unledgered, fmt.Sprintf("  %q calls %v outside any Press", fn, verbs))
+
+		// The ledger must SHRINK. An exemption that can be extended silently is not a ledger, it
+		// is an allowlist, and PB-DS-11's own wording -- existing violations are fixed, not
+		// allowlisted -- is what a row here is borrowing against.
+		for fn, reason := range exempt {
+			if len(stray[fn]) == 0 {
+				t.Errorf("agents-tracker-7j4b: %s's %q is ledgered as still reaching a waiting "+
+					"verb from the main thread (%s) and no longer does. Delete the row: a ledger "+
+					"nobody prunes stops meaning anything, and this one is the record of a debt",
+					file, fn, reason)
+			}
+		}
 	}
 	sort.Strings(unledgered)
 	if len(unledgered) > 0 {
@@ -605,14 +735,14 @@ func TestS25_EveryWaitingVerbIsDispatchedOrLedgered(t *testing.T) {
 			strings.Join(unledgered, "\n"))
 	}
 
-	// The ledger must SHRINK. An exemption that can be extended silently is not a ledger, it is
-	// an allowlist, and PB-DS-11's own wording -- existing violations are fixed, not allowlisted
-	// -- is what a row here is borrowing against.
-	for fn, reason := range s25RenderPathExemptions {
-		if len(stray[fn]) == 0 {
-			t.Errorf("agents-tracker-7j4b: %q is ledgered as still reaching a waiting verb from "+
-				"the main thread (%s) and no longer does. Delete the row: a ledger nobody prunes "+
-				"stops meaning anything, and this one is the record of a debt", fn, reason)
+	// A LEDGER ROW OVER A FILE NOBODY SCANS IS A ROW NOBODY CHECKS (agents-tracker-h39k). The
+	// exemptions are keyed by file now, so a subject removed from the set above would leave its
+	// rows behind reading as live debt over source this fence no longer opens.
+	for file := range s25RenderPathExemptions {
+		if _, ok := codes[file]; !ok {
+			t.Errorf("agents-tracker-7j4b: %q is ledgered in s25RenderPathExemptions and is not "+
+				"one of this fence's subjects (%v), so its rows are checked against nothing",
+				file, sortedKeys(s25Surfaces(t)))
 		}
 	}
 }
@@ -620,7 +750,7 @@ func TestS25_EveryWaitingVerbIsDispatchedOrLedgered(t *testing.T) {
 // s25StrayWaitingCalls finds waiting verbs called outside any Press, keyed by the function they
 // sit in, so the ledger can name the ones that are known and filed.
 func s25StrayWaitingCalls(code string, waiting map[string]bool) map[string][]string {
-	dispatched := s25Bodies(code, "Press(", '(', ')')
+	dispatched := s25PressBodies(code)
 	stray := map[string][]string{}
 	for _, call := range s25CallSitesOf(code, waiting) {
 		covered := false
@@ -654,6 +784,22 @@ func TestS25_StrayCallScanDiscriminates(t *testing.T) {
 	if got := stray["render"]; len(got) != 1 || got[0] != "kill" {
 		t.Errorf("the stray scan attributed the call to %v, not to the function it sits in; the "+
 			"ledger is keyed by that name, so a misattribution exempts the wrong function", stray)
+	}
+
+	// The second shape is dispatched too (agents-tracker-h39k). Before this file read it, the fix
+	// for the settings surface's main-thread write would have failed this scan.
+	dispatchedDirectly := `private fun onToggled(toggle: PushToggle, value: Boolean) {
+        dispatch.press(control, SendPlane.COMMAND, work = { app.setPushPreference(pref) }, settle = {})
+    }`
+	if bad := s25StrayWaitingCalls(dispatchedDirectly, map[string]bool{"setPushPreference": true}); len(bad) != 0 {
+		t.Errorf("the stray scan reports a verb handed straight to VerbDispatch: %v", bad)
+	}
+	onTheLooper := `private fun onToggled(toggle: PushToggle, value: Boolean) {
+        val op = app.setPushPreference(pref)
+    }`
+	if bad := s25StrayWaitingCalls(onTheLooper, map[string]bool{"setPushPreference": true}); len(bad) == 0 {
+		t.Error("the stray scan passed a signed command called straight from a switch's own " +
+			"handler, which is agents-tracker-h39k exactly")
 	}
 }
 
