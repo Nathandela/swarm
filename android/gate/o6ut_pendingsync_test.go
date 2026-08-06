@@ -247,6 +247,76 @@ func TestO6ut_TheRefusalArmScanDiscriminates(t *testing.T) {
 			"can satisfy:\n%s", strings.Join(faults, "\n"))
 	}
 
+	// ---- the arm after the write crossed to a lane (agents-tracker-h39k) ----
+	//
+	// `SetPushPreference` is a signed command: it resolves through `sendContext`, whose `awaitConn`
+	// polls for up to five seconds, so the write cannot run on the looper and the refusal cannot
+	// arrive as a catch. `VerbDispatch.press` hands the answer back as a `Result` on the looper,
+	// and the refusal arm is `onFailure`.
+	//
+	// THE REQUIREMENT DID NOT CHANGE, ONLY WHERE IT LANDS. The wanted screen is now drawn BEFORE
+	// the verb leaves -- that is what raises `pendingSync` while the machine is being asked -- so
+	// an arm that says the refusal and stops leaves exactly the notice this fence was written
+	// about, with `pendingOp` null and nothing that can ever clear it. The arm has to put the
+	// control back and draw the screen it put it back TO.
+
+	const dispatched = `class SettingsSurface {
+    private fun onToggled(toggle: PushToggle, value: Boolean) {
+        draw(next, machineOf(app))
+        dispatch.press(
+            host,
+            SendPlane.COMMAND,
+            work = { app.setPushPreference(pref) },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { issued -> pendingOp = issued.operationID },
+                    onFailure = { refused ->
+                        say(PressFeedback.ofRefusal(FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message))
+                        restore(toggle, current)
+                        draw(current, machineOf(app))
+                    },
+                )
+            },
+        )
+    }
+}`
+	if faults := o6utFaults("dispatched.kt", dispatched); len(faults) > 0 {
+		t.Errorf("the scan rejects the arm a dispatched write produces -- it says what happened, "+
+			"puts the switch back and draws the screen the tap started from -- which is a fence "+
+			"nobody can satisfy:\n%s", strings.Join(faults, "\n"))
+	}
+
+	// The optimistic draw is what makes this one a defect rather than a style: `next` is the screen
+	// whose `pendingSync` is raised, and `pendingOp` is null because the command never issued.
+	drawsTheWantedScreen := strings.Replace(dispatched, "draw(current, machineOf(app))",
+		"draw(next, machineOf(app))", 1)
+	if faults := o6utFaults("drawswanted.kt", drawsTheWantedScreen); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults in an arm that puts the switch back and then draws the "+
+			"screen the tap WANTED, whose pendingSync is raised over a command that was never "+
+			"issued:\n%s", len(faults), strings.Join(faults, "\n"))
+	}
+
+	saysAndDraws := strings.Replace(dispatched, "restore(toggle, current)\n                        ", "", 1)
+	if faults := o6utFaults("saysanddraws.kt", saysAndDraws); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults in an arm that redraws and leaves the switch where the "+
+			"finger dragged it:\n%s", len(faults), strings.Join(faults, "\n"))
+	}
+
+	saysOnly := strings.Replace(saysAndDraws, "draw(current, machineOf(app))\n                    ", "", 1)
+	if faults := o6utFaults("saysonly.kt", saysOnly); len(faults) != 2 {
+		t.Errorf("the scan finds %d faults in an arm that says the refusal and does nothing else, "+
+			"which leaves the dragged switch AND the eternal pending notice:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+
+	// The success arm is not a refusal arm and must not be read as one: it neither restores nor
+	// redraws, and demanding either of it would make this fence unsatisfiable.
+	if faults := o6utFaults("success.kt", strings.Replace(dispatched,
+		"pendingOp = issued.operationID", "pendingOp = issued.operationID; say(PressFeedback.ofSuccess(null))", 1)); len(faults) > 0 {
+		t.Errorf("the scan reads the SUCCESS arm of a dispatched press as a refusal arm:\n%s",
+			strings.Join(faults, "\n"))
+	}
+
 	// A catch that swallows without routing is not this fence's subject and must not be reported by
 	// it -- `PushTokens.register` has one, and os37 is the issue that owns "a refusal said nothing".
 	const swallowing = `class SettingsSurface {
