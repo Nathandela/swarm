@@ -1381,14 +1381,29 @@ class PhoneSurface(
             )
         } catch (unreadable: Exception) {
             // A facade that cannot answer has not answered, and the next draw asks again.
-            return settings.unpairNotice
+            CommandVerdict.UNANSWERED
         }
-        if (!verdict.answered) return settings.unpairNotice
-        // THE OTHER FACT TRAVELS WITH IT (agents-tracker-jx23). This line REPLACES the sentence
-        // the panel composed, so anything that sentence carried and this call does not is dropped
-        // the moment the machine answers -- and what the panel carried is whether the key material
-        // at rest survived the purge, which no reply from the machine has any bearing on.
-        return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+        // THE OTHER FACT TRAVELS WITH IT (agents-tracker-jx23). This REPLACES the sentence the
+        // panel composed, so anything that sentence carried and this call does not is dropped the
+        // moment the machine answers -- and what the panel carried is whether the key material at
+        // rest survived the purge, which no reply from the machine has any bearing on.
+        val composed = PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+        // AND THE PANEL MAY HAVE SAID NOTHING AT ALL (agents-tracker-xeex). `VerbDispatch.press`
+        // ends in `if (attached) settle(answer)` and `release()` detaches on every pause, so a
+        // revoke whose round trip outlives the user's attention loses the whole settle -- while
+        // the purge in the same press's `finally` destroyed both key tiers regardless. Returning
+        // that empty string drew the screen a FRESH INSTALL gets, on a handset that had just
+        // unpaired and purged itself.
+        //
+        // WHAT MAKES THE FALLBACK POSSIBLE is that both latches are written where nothing can drop
+        // them: the operation id on the command lane inside the work lambda, and the purge answer
+        // by `PhoneRuntime.purgeKeys` itself. So the two facts the settle would have reported are
+        // still derivable here, from this side alone.
+        //
+        // THE PANEL'S SENTENCE STILL WINS WHERE IT EXISTS, because it can say one thing this
+        // cannot: the routed reason a revoke that never reached the wire failed, which no outcome
+        // carries and no verdict can express.
+        return if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed }
     }
 
     /**
