@@ -830,6 +830,21 @@ class SettingsSurface(
                 // that a successful revoke DESTROYS the path its reply would come back on. So the
                 // honest report at this moment is that the machine has not confirmed it, and
                 // [PairOnlyScreen] carries that sentence onto the screen this press lands on.
+                // WHAT THE PURGE ANSWERED, WHICH THIS SETTLE USED TO DROP (agents-tracker-jx23).
+                // The `finally` above destroys both key tiers whether or not the command reached
+                // the machine, and `App.PurgeKeys` reports an error to say the material AT REST
+                // survived -- a full disk, a read-only data directory -- while the memory half
+                // happened regardless. A phone in that state looks unpaired and is still holding
+                // what its owner just disowned, and this is the last frame that could say so.
+                //
+                // IT IS READ FROM THE RUNTIME RATHER THAN CARRIED OUT OF `work`, and the reason is
+                // agreement rather than convenience: `PhoneSurface.revokeNotice` RECOMPOSES this
+                // sentence from `runtime.purgeFailure()` on every draw once the machine answers,
+                // so a value captured here would be a second reading of the same fact that could
+                // differ from the one the screen ends up showing. `purgeKeys` is called from
+                // nowhere else, and the call that set the latch is the one this settle is the
+                // answer to.
+                val purgeFailure = runtime.purgeFailure()
                 unpairNotice = answer.fold(
                     onSuccess = { issued ->
                         // AND THE ID OUTLIVES THIS PANEL (agents-tracker-0rle, the write half of
@@ -843,13 +858,21 @@ class SettingsSurface(
                         // keeps the relay coordinate, and `PhoneSurface.renderReady` clears it
                         // when the gate says this handset is usably paired again.
                         runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())
-                        PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued))
+                        PairOnlyScreen.revokeNoticeFor(
+                            revokeVerdict(app, issued),
+                            purgeFailure = purgeFailure,
+                        )
                     },
                     // Every facade refusal arrives as an exception whose message carries the error
                     // class as a prefix, so it routes through the table rather than being shown raw.
+                    // AND THIS ARM CARRIES IT TOO. The two facts are independent and the worst
+                    // case is both at once: a revoke that never left the handset (offline, a
+                    // facade refusal) over a purge that could not finish at rest. An arm that
+                    // dropped it would be jx23's own silence, one branch over.
                     onFailure = { refused ->
                         PairOnlyScreen.revokeUnsentNotice(
                             FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message,
+                            purgeFailure = purgeFailure,
                         )
                     },
                 )

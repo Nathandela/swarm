@@ -63,6 +63,18 @@ func jxSource(t *testing.T) string {
 //
 // @param code the source, comments and string literals already stripped.
 func jxFaults(where, code string) []string {
+	// A LOCAL BOUND TO THE PURGE ANSWER IS THE PURGE ANSWER, and following one binding is what
+	// lets the surface read the fact ONCE for a settle whose two arms are mutually exclusive.
+	// It is the positive test android/gate/il7u_tokenrevert_test.go arrived at for the same class
+	// of defeat: what makes a name acceptable is the expression it is bound to, so no amount of
+	// renaming satisfies it and `val purgeFailure = ""` still fails.
+	fromPurge := map[string]bool{}
+	for _, m := range il7uBinding.FindAllStringSubmatch(code, -1) {
+		if jxPurgeSource.MatchString(m[2]) {
+			fromPurge[m[1]] = true
+		}
+	}
+
 	var faults []string
 	for _, composer := range jxComposers {
 		for _, open := range kotlinCallSites(code, composer) {
@@ -70,6 +82,15 @@ func jxFaults(where, code string) []string {
 			carried := false
 			for _, arg := range args {
 				if jxPurgeSource.MatchString(arg) {
+					carried = true
+					continue
+				}
+				// `purgeFailure = purgeFailure` names the parameter on the left and the local on
+				// the right; only the right-hand side is a source.
+				if at := strings.LastIndex(arg, "="); at >= 0 {
+					arg = arg[at+1:]
+				}
+				if fromPurge[strings.TrimSpace(arg)] {
 					carried = true
 				}
 			}
@@ -178,6 +199,31 @@ func TestJx23_ThePurgeReportScanDiscriminates(t *testing.T) {
 	if faults := jxFaults("literal.kt", kotlinWithoutStringLiterals(literal)); len(faults) != 2 {
 		t.Errorf("the scan reports %d faults on notices handed a literal purge failure, which is "+
 			"the silence this fence exists to end wearing the fix's shape:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+
+	// ONE READING FOR A SETTLE WHOSE ARMS ARE MUTUALLY EXCLUSIVE. A local bound to the purge answer
+	// is the purge answer, and this is the shape the surface ships.
+	bound := strings.Replace(shipped, "settle = { answer ->", `settle = { answer ->
+                val purgeFailure = runtime.purgeFailure()`, 1)
+	bound = strings.Replace(bound,
+		"PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued))",
+		"PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued), purgeFailure = purgeFailure)", 1)
+	bound = strings.Replace(bound,
+		"PairOnlyScreen.revokeUnsentNotice(routed(refused))",
+		"PairOnlyScreen.revokeUnsentNotice(routed(refused), purgeFailure = purgeFailure)", 1)
+	if faults := jxFaults("bound.kt", bound); len(faults) > 0 {
+		t.Errorf("the scan rejects a settle that reads the purge answer once and hands it to both "+
+			"arms, which is a fence nobody can satisfy:\n%s", strings.Join(faults, "\n"))
+	}
+
+	// AND A LOCAL IS NOT A PASS BY ITSELF. Following one binding must not become "any name spelled
+	// like the parameter", which is the renaming defeat the binding check exists to close.
+	renamed := strings.Replace(bound, "val purgeFailure = runtime.purgeFailure()",
+		`val purgeFailure = ""`, 1)
+	if faults := jxFaults("renamed.kt", kotlinWithoutStringLiterals(renamed)); len(faults) != 2 {
+		t.Errorf("the scan reports %d faults on a local named for the parameter and bound to "+
+			"nothing, so the fact travels no further than the identifier:\n%s",
 			len(faults), strings.Join(faults, "\n"))
 	}
 }
