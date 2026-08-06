@@ -62,23 +62,64 @@ class PhoneSurfaceEventPathGuardTest {
     }
 
     /**
-     * Whether [call] sits inside a `try { ... } catch ( ... )` in [member], WHITESPACE-INSENSITIVE
-     * so this cannot be defeated by reformatting alone. It is not brace-matched either: `try {`
-     * before the call and `catch (` after it, in that order, is what "the call is guarded" means
-     * for a member with exactly one try/catch, which is what the fix adds to each of these two.
+     * Whether [call] sits inside a `try { ... } catch ( ... )` in [member], scanned over CODE
+     * ONLY ([codeOnly] strips comments and string literals first) and WHITESPACE-INSENSITIVE so
+     * this cannot be defeated by reformatting alone. It is not brace-matched: `try {` before the
+     * call and `catch (` after it, in that order, is what "the call is guarded" means for a
+     * member with exactly one try/catch, which is what the fix adds to each of these two.
      *
-     * [call] IS SEARCHED FOR ONLY AFTER `try {`, not from the start of [member] -- the fix's own
-     * KDoc, right beside the try/catch it documents, names the guarded call in backticks (for a
-     * reader), and a search from the start would match that prose instead of the code.
+     * THE STRIP IS WHAT MAKES THE ORDER CHECK MEAN ANYTHING. The fix's own KDoc names the
+     * guarded call in backticks one line above the try, and a log string could name it inside
+     * one -- either would satisfy a raw-text `try{` -> call -> `catch(` scan with the guard
+     * deleted. The three controls below hold that door shut.
      */
     private fun guarded(member: String, call: String): Boolean {
-        val text = member.filterNot { it.isWhitespace() }
+        val text = codeOnly(member).filterNot { it.isWhitespace() }
         val tryAt = text.indexOf("try{")
         if (tryAt < 0) return false
         val callAt = text.indexOf(call.filterNot { it.isWhitespace() }, tryAt)
         if (callAt < 0) return false
         val catchAt = text.indexOf("catch(", callAt)
         return catchAt > callAt
+    }
+
+    /**
+     * [text] with line comments, block comments, and string literals removed -- the minimal
+     * state machine android/gate's `kotlinCodeOnly` exists for, ported here because this suite
+     * scans the same file for the same kind of source fact and was defeatable the same way.
+     * Triple-quoted strings are consumed before double-quoted ones; escapes inside ordinary
+     * strings are honoured so an escaped quote cannot end one early.
+     */
+    private fun codeOnly(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            when {
+                text.startsWith("//", i) -> {
+                    while (i < text.length && text[i] != '\n') i++
+                }
+                text.startsWith("/*", i) -> {
+                    i += 2
+                    while (i < text.length && !text.startsWith("*/", i)) i++
+                    i = minOf(i + 2, text.length)
+                }
+                text.startsWith("\"\"\"", i) -> {
+                    i += 3
+                    while (i < text.length && !text.startsWith("\"\"\"", i)) i++
+                    i = minOf(i + 3, text.length)
+                }
+                text[i] == '"' -> {
+                    i++
+                    while (i < text.length && text[i] != '"') i += if (text[i] == '\\') 2 else 1
+                    i = minOf(i + 1, text.length)
+                }
+                else -> {
+                    out.append(text[i])
+                    i++
+                }
+            }
+        }
+        return out.toString()
     }
 
     @Test
