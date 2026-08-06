@@ -134,14 +134,20 @@ internal class ToastHost(context: Context) : FrameLayout(context) {
      * Say [message], restarting the lifetime.
      *
      * The text is written even when it is the same words twice, and that is what makes the second
-     * announcement happen: `TextView.setText` notifies accessibility unconditionally, so a live
+     * announcement happen: `TextView.setText` notifies accessibility on every write, so a live
      * region re-announces a repeated message rather than falling silent on it -- which is the
      * state a user gets when the same refusal happens twice.
+     *
+     * VISIBLE FIRST, TEXT SECOND, and the order is load-bearing: the platform DROPS the text
+     * change's live-region event while the view is not shown (`sendAccessibilityEventUnchecked`
+     * early-returns on `!isShown()`), so a write into a GONE view is a first message no screen
+     * reader is told about. The wrong order announced only repeats inside the 3200 ms window --
+     * the inverse of the burst case above.
      */
     fun show(message: CharSequence, suffix: CharSequence? = null) {
         lifetime.removeCallbacks(expiry)
-        line.text = toastText(context, message, suffix)
         line.visibility = VISIBLE
+        line.text = toastText(context, message, suffix)
         lifetime.postDelayed(expiry, KitMetrics.TOAST_LIFETIME_MS)
     }
 
