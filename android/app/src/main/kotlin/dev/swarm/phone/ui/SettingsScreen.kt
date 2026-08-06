@@ -414,6 +414,20 @@ data class SettingsScreen(
         const val SYNC_REFUSED = "Your machine did not save this change."
 
         /**
+         * What the screen says when the system screen a redirect leads to is not on this phone
+         * (agents-tracker-bpo4).
+         *
+         * ONE SENTENCE FOR BOTH REDIRECTS, unlike [OPEN_NOTIFICATION_SETTINGS] and
+         * [OPEN_CHANNEL_SETTINGS], which are deliberately different words because they lead to
+         * different places. This is what is left when neither leads anywhere: the destinations
+         * differ and the situation does not, and there is no second remedy to name -- an OEM
+         * build that ships no notification settings activity offers this app nothing else to
+         * point at.
+         */
+        const val SETTINGS_SCREEN_MISSING =
+            "This phone has no system screen for that, so it cannot be changed from here."
+
+        /**
          * What the screen says when a push-token reconciliation failed (agents-tracker-xla6).
          *
          * IT IS ONE SENTENCE FOR EVERY CLASS OF FAILURE, which is the opposite of what this app

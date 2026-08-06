@@ -2,6 +2,7 @@ package dev.swarm.phone
 
 import android.app.Activity
 import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -190,7 +191,7 @@ class SettingsSurface(
         ctaButton(activity, "", CtaKind.MORE).apply {
             announceAsButton()
             setOnClickListener {
-                activity.startActivity(
+                leaveFor(
                     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                         .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName),
                 )
@@ -220,7 +221,7 @@ class SettingsSurface(
         ctaButton(activity, "", CtaKind.MORE).apply {
             announceAsButton()
             setOnClickListener {
-                activity.startActivity(
+                leaveFor(
                     Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                         .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
                         .putExtra(Settings.EXTRA_CHANNEL_ID, WakeNotifications.CHANNEL_ID),
@@ -1080,6 +1081,30 @@ class SettingsSurface(
                 )
             },
         )
+    }
+
+    /**
+     * Leave for a system screen, or say that this phone has none (agents-tracker-bpo4).
+     *
+     * BOTH REDIRECTS CALLED `startActivity` BARE. Neither `ACTION_APP_NOTIFICATION_SETTINGS` nor
+     * `ACTION_CHANNEL_NOTIFICATION_SETTINGS` is guaranteed to resolve -- they are Settings
+     * activities, and OEM builds rename, gate and remove them -- so an unresolved intent threw
+     * `ActivityNotFoundException` out of a click listener. The control offered to a user who
+     * cannot receive notifications at all was then the control that killed the app.
+     *
+     * THE CATCH IS SCOPED TO THE ONE THROW THIS IS ABOUT, for `PushTokens.requestInitialToken`'s
+     * reason: a broader catch would swallow faults that are not "this phone has no such screen"
+     * and explain them away as one.
+     *
+     * IT SAYS THE MODEL'S SENTENCE, not one typed here: [SettingsScreen] owns the copy on this
+     * screen, and this is the only remedy-less state either redirect has.
+     */
+    private fun leaveFor(destination: Intent) {
+        try {
+            activity.startActivity(destination)
+        } catch (absent: ActivityNotFoundException) {
+            say(PressFeedback.ofRefusal(SettingsScreen.SETTINGS_SCREEN_MISSING))
+        }
     }
 
     /**
