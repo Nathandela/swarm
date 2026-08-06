@@ -913,13 +913,24 @@ class SettingsSurface(
                 unpairNotice = answer.fold(
                     // THE SENTENCE COMPOSED HERE IS THE FALLBACK AND NOT THE ANSWER
                     // (agents-tracker-0rle, the write half of agents-tracker-4zue). It is written
-                    // at the moment `signedCommand` sealed and appended -- a relay round trip
-                    // before the machine can have answered -- so [revokeVerdict] is UNANSWERED by
-                    // construction. The screen this press lands on re-reads the outcome on every
-                    // draw and replaces it, by the id [work] latched: the panel that issued the
-                    // revoke is destroyed by it, so `PhoneRuntime` keeps the id for the same
-                    // reason it keeps the relay coordinate, and `PhoneSurface.renderReady` clears
-                    // it when the gate says this handset is usably paired again.
+                    // at the moment `signedCommand` sealed and appended, which is a relay round
+                    // trip before the machine can be expected to have answered, so in practice
+                    // [revokeVerdict] resolves UNANSWERED and what it composes is the fallback.
+                    // The screen this press lands on re-reads the outcome on every draw and
+                    // replaces it, by the id [work] latched: the panel that issued the revoke is
+                    // destroyed by it, so `PhoneRuntime` keeps the id for the same reason it keeps
+                    // the relay coordinate, and `PhoneSurface.renderReady` clears it when the gate
+                    // says this handset is usably paired again.
+                    //
+                    // "IN PRACTICE" AND NOT "BY CONSTRUCTION", which is what this comment used to
+                    // claim. The reply arrives on the relay drain goroutine -- accept -> onReply
+                    // -> resolve -- with nothing ordering it against this lane or the looper, so a
+                    // machine that answered before the settle reached the looper WOULD resolve
+                    // here. Nothing depends on which way it goes: [PairOnlyScreen.revokeNoticeFor]
+                    // takes the verdict it is given, so an answered one composes the answer and an
+                    // unanswered one composes the fallback the draw will replace. An invariant
+                    // asserted out of a race is the kind that gets fenced later and then holds
+                    // somebody to a promise the drain never made.
                     onSuccess = { issued ->
                         PairOnlyScreen.revokeNoticeFor(
                             revokeVerdict(app, issued),
