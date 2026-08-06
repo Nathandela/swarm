@@ -11,15 +11,33 @@ package gate
 // the sentence composed in the settle -- which is the very defect 4zue was filed about, still
 // live, behind a gate that is green because it only ever looked at the reader.
 //
-// WHY THE WRITE CANNOT BE FENCED THERE. The id exists for one moment, in one place: the settle of
-// the revoke press, where `App.RevokeThisDevice`'s `Op` is in hand. That is
-// `SettingsSurface.onReplace`, a different file with a different owner, so the read fence names
-// its own subject honestly and this one names the other half.
+// WHY THE WRITE CANNOT BE FENCED THERE. The id belongs to one press, in one file:
+// `SettingsSurface.onReplace`, where `App.RevokeThisDevice`'s `Op` is in hand. That is a different
+// file with a different owner, so the read fence names its own subject honestly and this one names
+// the other half.
+//
+// AND WHERE IN THAT PRESS IS THE WHOLE OF IT NOW (agents-tracker-xeex). This fence's first version
+// pinned the write to the SETTLE's success arm, which is where it was first wired and is exactly
+// the wrong place: `VerbDispatch.press` ends in `if (attached) settle(answer)`, and
+// `PhoneSurface.release` detaches on every pause -- while `work` runs on the lane whatever is
+// attached. So a revoke whose round trip outlives the user's attention loses its settle, and with
+// it the latch AND the fallback sentence, while the purge in the same press's `finally` has
+// already destroyed both key tiers. The phone comes back unpaired, purged, and drawing the
+// pair-only screen with nothing on it at all -- not even "your machine has not confirmed it".
+//
+// It is likelier on this press than on any other in the app: the revoke severs the connection its
+// own reply would come back on, `sendContext` can wait five seconds before the append, and people
+// put the phone down after confirming a destructive dialog.
+//
+// SO THE REQUIREMENT IS THE LANE, NOT THE ARM. The latch is written where the answer cannot be
+// dropped, which is inside the `work` the press hands to a lane. That also retires this fence's
+// old ordering check -- "the latch precedes the redraw that reads it" -- because `work` completes
+// before any settle can run, so the ordering is structural rather than something to assert.
 //
 // WHY IT IS A GO GATE AND THE ONLY ONE THERE CAN BE, in the words 4zue's own header uses:
 // `PhoneRuntime.phone()` answers Unavailable on every JVM run -- the phone core is a gomobile AAR
 // of .so files cross-compiled for Android ABIs -- so `onReplace` returns at its `readyApp()` guard
-// under Robolectric and no unit test can reach a settle at all.
+// under Robolectric and no unit test can reach a press at all.
 //
 // NOTHING HERE WALKS THE REPOSITORY ROOT. The scan is one named file.
 
@@ -35,13 +53,16 @@ const rleSurfaceFile = "dev/swarm/phone/SettingsSurface.kt"
 // rleLatchWrite is the write this fence exists for.
 var rleLatchWrite = regexp.MustCompile(`\blatchRevoke\s*\(`)
 
-// rleComposes is the fallback sentence the settle writes, which is the arm the latch belongs in:
-// both are about the same answer, and the screen replaces the second with the first's re-read.
+// rleComposes is the fallback sentence the settle writes. It is what a DROPPED settle takes with
+// it, and the reason the latch may not keep it company.
 var rleComposes = regexp.MustCompile(`\brevokeNoticeFor\s*\(`)
 
-// rleHandsOffTheWindow is the redraw that ENDS this panel: `PhoneSurface.renderReady` re-asks the
-// presentation gate and draws the pair-only screen, which is the reader of the latch.
-var rleHandsOffTheWindow = regexp.MustCompile(`\bonReplaced\b`)
+// rleRevoke is the verb whose answer the latch names.
+var rleRevoke = regexp.MustCompile(`\brevokeThisDevice\s*\(`)
+
+// rleFromTheAnswer is the operation id read off the `Op` the verb returned. A literal, or an id
+// this surface happens to be holding from somewhere else, is a latch that names another command.
+var rleFromTheAnswer = regexp.MustCompile(`\boperationID\b`)
 
 func rleSource(t *testing.T) string {
 	t.Helper()
@@ -70,44 +91,40 @@ func rleFaults(where, code string) []string {
 	}
 
 	var faults []string
-	arm, ok := il7uEnclosingBlock(code, at[0])
-	if !ok {
-		return append(faults, where+": the latch sits in no block this fence can read")
-	}
-	if !rleComposes.MatchString(arm) {
-		faults = append(faults, where+": the latch is written in an arm that composes no revoke "+
-			"notice, so the id and the sentence it is supposed to replace are decided in different "+
-			"places. The settle has an arm for a verb that never reached the wire, and an id "+
-			"latched there names an operation no machine will ever answer -- while a REAL revoke's "+
-			"id, latched on the arm above, is what the screen needs")
-	}
 
-	// The id must come from the answer the verb returned. A literal, or the last operation this
-	// surface happens to be holding, is a latch that reads as an answer about something else.
-	sites := kotlinCallSites(arm, "latchRevoke")
-	issued := ""
-	if v := kotlinCallSites(arm, "revokeVerdict"); len(v) > 0 {
-		if args := s23CallArguments(arm, v[0]); len(args) > 1 {
-			issued = args[1]
+	// THE LANE, NOT THE ARM (agents-tracker-xeex). `work` is the only part of a press that runs
+	// whatever is attached; everything in the settle is conditional on a screen still being there
+	// to receive it, and the revoke is the press most likely to outlive one.
+	lane := s25Span{}
+	found := false
+	for _, span := range s25Bodies(code, "work = {", '{', '}') {
+		if rleRevoke.MatchString(code[span.start:span.end]) {
+			lane, found = span, true
+			break
 		}
 	}
-	if len(sites) > 0 && issued != "" {
-		args := s23CallArguments(arm, sites[0])
-		if len(args) == 0 || !strings.Contains(args[0], issued) {
-			faults = append(faults, where+": the latch is handed something other than the value the "+
-				"verdict is resolved from (`"+issued+"`), so the screen re-reads an outcome for an "+
-				"operation this revoke did not issue -- which PB-SYNC-2 answers PENDING for, for "+
-				"ever, exactly as an unlatched id does")
-		}
+	if !found {
+		return append(faults, where+": no `work` lambda in this file issues the revoke, so this "+
+			"fence cannot tell the lane from the settle. Re-point it rather than deleting it")
+	}
+	if at[0] < lane.start || at[0] >= lane.end {
+		faults = append(faults, where+": the latch is written outside the `work` the revoke is "+
+			"dispatched as -- in the settle, which `VerbDispatch.press` runs only `if (attached)` "+
+			"and `PhoneSurface.release` detaches on every pause. The purge in the same press's "+
+			"`finally` has already destroyed both key tiers by then, so a dropped settle leaves a "+
+			"phone that has unpaired and purged itself drawing the pair-only screen with no id to "+
+			"claim an answer by and no sentence on it at all")
 	}
 
-	// And it must be set before the window that reads it is drawn.
-	if hand := rleHandsOffTheWindow.FindAllStringIndex(code, -1); len(hand) > 0 {
-		last := hand[len(hand)-1][0]
-		if at[0] > last {
-			faults = append(faults, where+": the latch is written after the window is handed to "+
-				"`onReplaced`, which is the redraw that draws the pair-only screen. That draw reads "+
-				"the latch, so a write after it is a write the first draw cannot see")
+	// The id must come from the answer the verb returned, and not from a literal or from whatever
+	// this surface happens to be holding: an outcome read by the wrong id answers PENDING for ever,
+	// exactly as an unlatched one does.
+	if sites := kotlinCallSites(code, "latchRevoke"); len(sites) > 0 {
+		args := s23CallArguments(code, sites[0])
+		if len(args) == 0 || !rleFromTheAnswer.MatchString(args[0]) {
+			faults = append(faults, where+": the latch is handed something that is not the "+
+				"`operationID` of the `Op` the verb returned, so the pair-only screen re-reads an "+
+				"outcome for an operation this revoke did not issue")
 		}
 	}
 	return faults
@@ -160,49 +177,46 @@ func TestRle_TheLatchScanDiscriminates(t *testing.T) {
 			len(faults), strings.Join(faults, "\n"))
 	}
 
-	// What the fix produces.
-	fixed := strings.Replace(shipped,
+	// THE FIRST WIRING, which this fence itself pinned until agents-tracker-xeex: the latch is
+	// written, correctly derived, and in the one part of the press that a pause throws away.
+	inTheSettle := strings.Replace(shipped,
 		"onSuccess = { issued -> PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued)) },",
 		`onSuccess = { issued ->
                         runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())
                         PairOnlyScreen.revokeNoticeFor(revokeVerdict(app, issued))
                     },`, 1)
+	if faults := rleFaults("inthesettle.kt", inTheSettle); len(faults) != 1 {
+		t.Errorf("the scan reports %d faults on a latch written in the settle, which is dropped "+
+			"whenever the dispatch is detached -- every pause -- while the purge in the same "+
+			"press has already destroyed both key tiers:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+
+	// What the fix produces: the latch rides the lane, where the answer is in hand and nothing is
+	// conditional on a screen still being there.
+	fixed := strings.Replace(shipped, "work = { app.revokeThisDevice() },",
+		"work = { app.revokeThisDevice().also { runtime.latchRevoke(it?.operationID.orEmpty()) } },", 1)
 	if faults := rleFaults("fixed.kt", fixed); len(faults) > 0 {
-		t.Errorf("the scan rejects a settle that latches the id it just issued, which is a fence "+
-			"nobody can satisfy:\n%s", strings.Join(faults, "\n"))
+		t.Errorf("the scan rejects a latch written on the lane that issues the revoke, which is a "+
+			"fence nobody can satisfy:\n%s", strings.Join(faults, "\n"))
 	}
 
 	// A LATCH HOLDING SOMETHING ELSE. An empty id is what `revokeOperation()` already answers, so
 	// this changes nothing while looking exactly like the wiring.
-	literal := strings.Replace(fixed, `runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())`,
+	literal := strings.Replace(fixed, `runtime.latchRevoke(it?.operationID.orEmpty())`,
 		`runtime.latchRevoke("")`, 1)
 	if faults := rleFaults("literal.kt", kotlinWithoutStringLiterals(literal)); len(faults) == 0 {
 		t.Error("the scan passes a latch handed a literal rather than the operation the verb " +
 			"returned, which leaves the screen reading exactly what it read unlatched")
 	}
 
-	// THE WRONG ARM. The failure arm is the verb that never reached the wire: there is no operation
-	// id, so latching there names an operation no machine will answer -- and it does it while the
-	// success arm, which has one, latches nothing.
-	wrongArm := strings.Replace(shipped,
-		"onFailure = { refused -> PairOnlyScreen.revokeUnsentNotice(routed(refused)) },",
-		`onFailure = { refused ->
-                        runtime.latchRevoke(lastIssued)
-                        PairOnlyScreen.revokeUnsentNotice(routed(refused))
-                    },`, 1)
-	if faults := rleFaults("wrongarm.kt", wrongArm); len(faults) == 0 {
-		t.Error("the scan passes a latch written in the arm for a verb that never reached the " +
-			"wire, so the id the screen re-reads belongs to no revoke this press issued")
-	}
-
-	// AFTER THE WINDOW IS GONE. `onReplaced` re-asks the presentation gate and draws the pair-only
-	// screen in the same frame, so a latch written after it is one the first draw cannot see.
-	late := strings.Replace(fixed, "onReplaced?.invoke() ?: render()",
-		`onReplaced?.invoke() ?: render()
-                runtime.latchRevoke(issuedId)`, 1)
-	late = strings.Replace(late, "runtime.latchRevoke((issued as? Op)?.operationID.orEmpty())\n                        ", "", 1)
-	if faults := rleFaults("late.kt", late); len(faults) == 0 {
-		t.Error("the scan passes a latch written after the redraw that reads it, so the draw the " +
-			"revoke lands on is the one draw that cannot claim the answer")
+	// AND THE LANE HAS TO BE THE REVOKE'S. This surface dispatches other work -- the preference
+	// write, the token reconcile -- and a latch on one of those names an operation the pair-only
+	// screen will never be able to resolve.
+	otherLane := strings.Replace(shipped, "work = { app.revokeThisDevice() },",
+		`work = { app.setPushPreference(pref).also { runtime.latchRevoke(it?.operationID.orEmpty()) } },`, 1)
+	if faults := rleFaults("otherlane.kt", otherLane); len(faults) == 0 {
+		t.Error("the scan passes a latch written on a lane that issues no revoke, so the id the " +
+			"pair-only screen reads belongs to another command entirely")
 	}
 }
