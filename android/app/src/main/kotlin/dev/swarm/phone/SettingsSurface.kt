@@ -842,6 +842,23 @@ class SettingsSurface(
      * again over a permission that now exists. Persisting alongside the ask would put a
      * "saved, waiting for your machine" notice on screen underneath a system dialog, about a
      * preference whose only effect is a notification the phone still cannot display.
+     *
+     * AND THE WRITE ITSELF NEVER RUNS HERE (agents-tracker-h39k). `setPushPreference` seals a
+     * SIGNED push_prefs command: it resolves through `sendContext`, whose `awaitConn` polls for up
+     * to five seconds (mobile/relay.go:149-168), and then waits on the relay append. Called from
+     * this listener it froze the looper for a round trip and, on a link that was reconnecting, for
+     * long enough that Android offers to kill the app -- which is agents-tracker-7j4b, on the
+     * screen [onReplace] four members up already cites 7j4b to avoid. Nothing in the platform
+     * would have said so: Go opens its sockets below the JVM. The listener does what a listener
+     * may -- read the model, apply its refusals, decide what the tap means -- and hands the verb
+     * to [dispatch]. android/gate/s25_mainthread_test.go reads this file for it now.
+     *
+     * THE WANTED SCREEN IS DRAWN BEFORE THE VERB LEAVES, and that is a decision rather than an
+     * ordering accident. The tap has to be visible immediately -- the switch has already moved
+     * under the finger -- and `pendingSync` is exactly the honest thing to show while the machine
+     * is being asked: "saved on this phone, waiting for your machine". It is also what holds BOTH
+     * switches while one operation is in flight (agents-tracker-ix2v), which is why the failure
+     * arm has to put the panel back and not only the control.
      */
     private fun onToggled(toggle: PushToggle, value: Boolean) {
         if (drawing) return
@@ -861,33 +878,58 @@ class SettingsSurface(
         // and the tap left a control showing a preference nothing recorded, with nothing on screen
         // about it. [readyApp] says what is wrong; [restore] undoes what the finger did.
         val app = readyApp() ?: return restore(toggle, current)
-        val op = try {
-            app.setPushPreference(
-                PushPreference().apply {
-                    alerts = next.alerts
-                    mentions = next.mentions
-                },
-            )
-        } catch (refused: Exception) {
-            // THROUGH THE BRIDGE AND NOT THROUGH `ErrorRouter` DIRECTLY (agents-tracker-os37).
-            // This was the one call site in the app that routed a facade refusal on the Kotlin
-            // side's own token table: the message crosses JNI with the class stamped on it, but
-            // `FacadeBridge.routeFacadeError` asks GO to classify it (`App.ErrorClass`), which is
-            // the side that produced it. A token this build has never heard of degrades to
-            // UNKNOWN here and is classified correctly there, and UNKNOWN's remedy is "try again"
-            // -- advice that is wrong for every permanent class in the taxonomy.
-            say(PressFeedback.ofRefusal(FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message))
-            // AND THE TAP ENDS HERE (agents-tracker-o6ut). The command was never issued, so there
-            // is no operation to wait for: falling through would draw the screen the tap WANTED,
-            // whose pendingSync is raised with pendingOp null -- a "waiting for your machine"
-            // notice nothing can ever clear -- and would leave the switch where the finger
-            // dragged it. The screen to show is the one the tap started from.
-            return restore(toggle, current)
-        }
-        pendingOp = op.operationID
-        reconcileTheToken(next)
-        say(PressFeedback.ofSuccess(null))
+        // The line holds the LAST answer, and leaving it under a press in flight reads as this
+        // press's -- [onReplace] clears it in the same place and for the same reason.
+        outcome.text = ""
         draw(next, machineOf(app))
+        dispatch.press(
+            // THE CONTROL IS THE PANEL AND NOT THE SWITCH, which is the one way this press differs
+            // from [onReplace]'s. `VerbDispatch.press` disables the control it is given and
+            // RE-ENABLES it when the answer lands -- and what holds these two switches is the
+            // model (`pendingSync`, agents-tracker-ix2v), which is still raised at that moment.
+            // Handing it a switch would therefore un-hold that switch alone the instant the
+            // command was accepted, leaving one live control over an unanswered operation. The
+            // verb also carries BOTH categories, so the press is the pair's rather than either
+            // one's; the panel root is the view that is both of them.
+            host,
+            SendPlane.COMMAND,
+            work = {
+                app.setPushPreference(
+                    PushPreference().apply {
+                        alerts = next.alerts
+                        mentions = next.mentions
+                    },
+                )
+            },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { issued ->
+                        pendingOp = issued.operationID
+                        reconcileTheToken(next)
+                        say(PressFeedback.ofSuccess(null))
+                    },
+                    // THROUGH THE BRIDGE AND NOT THROUGH `ErrorRouter` DIRECTLY
+                    // (agents-tracker-os37). This was the one call site in the app that routed a
+                    // facade refusal on the Kotlin side's own token table: the message crosses JNI
+                    // with the class stamped on it, but `FacadeBridge.routeFacadeError` asks GO to
+                    // classify it (`App.ErrorClass`), which is the side that produced it. A token
+                    // this build has never heard of degrades to UNKNOWN here and is classified
+                    // correctly there, and UNKNOWN's remedy is "try again" -- advice that is wrong
+                    // for every permanent class in the taxonomy.
+                    onFailure = { refused ->
+                        say(PressFeedback.ofRefusal(FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message))
+                        // AND THE TAP ENDS HERE (agents-tracker-o6ut). The command was never
+                        // issued, so there is no operation to wait for and no answer that can
+                        // arrive: the screen above -- whose `pendingSync` is raised with
+                        // `pendingOp` null -- is a "waiting for your machine" notice nothing can
+                        // ever clear. Both the switch and the panel go back to the screen the tap
+                        // started from.
+                        restore(toggle, current)
+                        draw(current, machineOf(app))
+                    },
+                )
+            },
+        )
     }
 
     /**

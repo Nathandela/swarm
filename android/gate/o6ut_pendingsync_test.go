@@ -48,6 +48,14 @@ var o6utPreferenceWrite = regexp.MustCompile(`\bsetPushPreference\s*\(`)
 // o6utCatch is a Kotlin catch clause.
 var o6utCatch = regexp.MustCompile(`\bcatch\s*\(`)
 
+// o6utSettleFailure is the refusal arm of a write that crossed to a lane (agents-tracker-h39k).
+//
+// `SetPushPreference` resolves through `sendContext`, whose `awaitConn` polls for up to five
+// seconds, so the write cannot run on the looper -- and a write handed to `VerbDispatch.press`
+// does not throw where the tap was: the answer comes back as a `Result` and the refusal is
+// `onFailure`. A fence that read only catch clauses would report the whole file clean.
+var o6utSettleFailure = regexp.MustCompile(`\bonFailure\b\s*=?\s*\{`)
+
 // o6utRoutesARefusal is a catch that turns the exception into words for the user, which is what
 // tells the refusal handler apart from a catch that merely swallows something.
 var o6utRoutesARefusal = regexp.MustCompile(`routeFacadeError|ofRefusal`)
@@ -90,17 +98,56 @@ func o6utBlockAfter(src string, from int) (string, bool) {
 	return "", false
 }
 
-// o6utRefusalArms returns every catch block in one function body that routes a refusal.
-func o6utRefusalArms(body string) []string {
-	var out []string
+// o6utArm is one refusal arm and the shape it arrived in, which decides what is asked of it.
+type o6utArm struct {
+	// dispatched is true for a `onFailure` arm, false for a catch clause.
+	dispatched bool
+	block      string
+}
+
+// o6utRefusalArms returns every block in one function body that routes a refusal, in either
+// shape: the catch clause a synchronous write throws into, and the `onFailure` arm a dispatched
+// one settles into.
+func o6utRefusalArms(body string) []o6utArm {
+	var out []o6utArm
 	for _, at := range o6utCatch.FindAllStringIndex(body, -1) {
 		block, ok := o6utBlockAfter(body, at[1])
 		if !ok || !o6utRoutesARefusal.MatchString(block) {
 			continue
 		}
-		out = append(out, block)
+		out = append(out, o6utArm{block: block})
+	}
+	for _, at := range o6utSettleFailure.FindAllStringIndex(body, -1) {
+		// The match ENDS on the arm's own `{`, so the block starts there rather than at whatever
+		// brace comes next -- which for `onFailure = { refused -> ... }` is the same character,
+		// and for a lambda with a nested block would otherwise be the inner one.
+		block, ok := o6utBlockAfter(body, at[1]-1)
+		if !ok || !o6utRoutesARefusal.MatchString(block) {
+			continue
+		}
+		out = append(out, o6utArm{dispatched: true, block: block})
 	}
 	return out
+}
+
+// o6utArgumentOf is the argument at index of the first call to name inside the arm, or "" where
+// the arm makes no such call.
+//
+// IT IS HOW THE DISPATCHED ARM IS JUDGED. The synchronous arm is checked structurally -- does it
+// transfer control out before the tail that draws the wanted screen -- and a lambda has no tail
+// to fall into, so the equivalent question is which screen it draws. `restore(toggle, current)`
+// names the screen the control goes back to and `draw(current, ...)` names the screen the panel
+// goes back to, and the requirement is that they are the SAME one. Comparing the two arguments
+// rather than looking for a particular identifier keeps the fence independent of what the
+// surface calls its local.
+func o6utArgumentOf(arm, name string, index int) string {
+	for _, open := range kotlinCallSites(arm, name) {
+		args := s23CallArguments(arm, open)
+		if len(args) > index {
+			return args[index]
+		}
+	}
+	return ""
 }
 
 // o6utFaults reports every refusal arm that leaves the tap half-done.
@@ -119,15 +166,35 @@ func o6utFaults(where, code string) []string {
 			continue
 		}
 		for _, arm := range o6utRefusalArms(body) {
-			if !o6utEndsTheTap.MatchString(arm) {
-				faults = append(faults, where+": `"+name+"` routes the refusal and falls through "+
-					"into its own tail, which draws the screen the tap WANTED -- so the panel "+
-					"carries \"Saved on this phone, waiting for your machine\" about a command "+
-					"that was never issued, with `pendingOp` null so nothing can ever clear it")
-			}
-			if !o6utPutsTheControlBack.MatchString(arm) {
+			if !o6utPutsTheControlBack.MatchString(arm.block) {
 				faults = append(faults, where+": `"+name+"` routes the refusal and leaves the "+
 					"switch where the finger dragged it, showing a preference nothing recorded")
+			}
+			if !arm.dispatched {
+				if !o6utEndsTheTap.MatchString(arm.block) {
+					faults = append(faults, where+": `"+name+"` routes the refusal and falls through "+
+						"into its own tail, which draws the screen the tap WANTED -- so the panel "+
+						"carries \"Saved on this phone, waiting for your machine\" about a command "+
+						"that was never issued, with `pendingOp` null so nothing can ever clear it")
+				}
+				continue
+			}
+			// THE DISPATCHED ARM HAS NO TAIL TO FALL INTO, and the optimistic draw has already
+			// happened by the time it runs: the wanted screen went on the panel before the verb
+			// left, which is what raises `pendingSync` while the machine is being asked. So the
+			// arm has to put the PANEL back as well as the switch, and to the same screen.
+			restored := o6utArgumentOf(arm.block, "restore", 1)
+			drawn := o6utArgumentOf(arm.block, "draw", 0)
+			if drawn == "" {
+				faults = append(faults, where+": `"+name+"` routes the refusal and redraws "+
+					"nothing, so the panel keeps the screen the tap WANTED -- \"Saved on this "+
+					"phone, waiting for your machine\" about a command that was never issued, "+
+					"with `pendingOp` null so nothing can ever clear it")
+			} else if restored != "" && drawn != restored {
+				faults = append(faults, where+": `"+name+"` puts the switch back to `"+restored+
+					"` and draws `"+drawn+"` -- the screen the tap WANTED, whose pendingSync is "+
+					"raised over a command that was never issued, with `pendingOp` null so "+
+					"nothing can ever clear it")
 			}
 		}
 	}
