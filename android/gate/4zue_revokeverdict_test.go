@@ -47,6 +47,11 @@ var zueAsksTheMachine = regexp.MustCompile(`\blaunchOutcome\s*\(`)
 // zueComposes is the screen's own sentence for a verdict, which is where the answered arms live.
 var zueComposes = regexp.MustCompile(`\brevokeNoticeFor\s*\(`)
 
+// zueCarriesThePurgeFact is the OTHER thing a revoke leaves behind (agents-tracker-jx23): the
+// routed reason the key material at rest survived the purge. It is read here for the same reason
+// the operation id is -- the panel that learned it is destroyed by the command that produced it.
+var zueCarriesThePurgeFact = regexp.MustCompile(`\bpurgeFailure\b`)
+
 // zueFaults reports every way the pair-only draw can fail to claim the machine's answer.
 //
 // THE FOUR CHECKS ARE SEPARATE BECAUSE THE FOUR FAILURES ARE, and three of them are states a
@@ -80,6 +85,16 @@ func zueFaults(where, code string) []string {
 				"confirmed removal, the machine's own reason for a refused one, and the "+
 				"unconfirmed notice -- and a verdict composed anywhere else is a second copy of "+
 				"copy the screen owns (PB-DS-9)")
+		}
+		// THE RECOMPOSITION MUST NOT DROP THE OTHER FACT (agents-tracker-jx23). This function
+		// REPLACES the sentence the panel composed, so a purge failure the panel joined on and
+		// this one does not pass through vanishes from the screen at the moment the machine
+		// answers -- which is the moment the user is reading it.
+		if !zueCarriesThePurgeFact.MatchString(body) {
+			faults = append(faults, where+": `"+name+"` recomposes the notice without the purge "+
+				"failure. `App.PurgeKeys` reports that the key material AT REST survived, and this "+
+				"draw is what overwrites the panel's sentence -- so the fact would be on screen "+
+				"until the machine replied and gone from the moment it did")
 		}
 	}
 	drawn := false
@@ -141,9 +156,10 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
     }
 }`
-	if faults := zueFaults("claimedandunasked.kt", claimedAndUnasked); len(faults) != 2 {
-		t.Errorf("the scan does not report an id claimed with nothing asked of the machine and no "+
-			"sentence composed from the answer:\n%s", strings.Join(faults, "\n"))
+	if faults := zueFaults("claimedandunasked.kt", claimedAndUnasked); len(faults) != 3 {
+		t.Errorf("the scan does not report an id claimed with nothing asked of the machine, no "+
+			"sentence composed from the answer and no purge fact carried:\n%s",
+			strings.Join(faults, "\n"))
 	}
 
 	// The answer is read and the screen draws the settle's sentence over it anyway.
@@ -160,9 +176,10 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
     }
 }`
-	if faults := zueFaults("askedanduncomposed.kt", askedAndUncomposed); len(faults) != 1 {
+	if faults := zueFaults("askedanduncomposed.kt", askedAndUncomposed); len(faults) != 2 {
 		t.Errorf("the scan passes a verdict that is resolved and never turned into the screen's "+
-			"words:\n%s", strings.Join(faults, "\n"))
+			"words (nor carries the purge fact those words would have taken):\n%s",
+			strings.Join(faults, "\n"))
 	}
 
 	// The whole re-read, on a draw that does not call it.
@@ -171,7 +188,7 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         val issued = runtime.revokeOperation()
         if (issued.isEmpty()) return settings.unpairNotice
         val verdict = CommandVerdict.of(FacadeBridge(app).launchOutcome(issued), issued, CommandVerdict.ACCEPTED_OK)
-        return PairOnlyScreen.revokeNoticeFor(verdict)
+        return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
     }
 
     private fun drawPairOnly(reason: PairOnlyReason) {
@@ -182,6 +199,28 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
 	if faults := zueFaults("readbutnotdrawn.kt", readButNotDrawn); len(faults) != 1 {
 		t.Errorf("the scan passes a re-read the draw never reaches, which is the fix written and "+
 			"not wired:\n%s", strings.Join(faults, "\n"))
+	}
+
+	// THE PURGE FACT DROPPED BY THE RECOMPOSITION (agents-tracker-jx23): everything else wired,
+	// and the sentence the panel joined on is overwritten the moment the machine answers.
+	const purgeDropped = `class PhoneSurface {
+    private fun revokeNotice(app: App): String {
+        val issued = runtime.revokeOperation()
+        if (issued.isEmpty()) return settings.unpairNotice
+        val verdict = CommandVerdict.of(FacadeBridge(app).launchOutcome(issued), issued, CommandVerdict.ACCEPTED_OK)
+        if (!verdict.answered) return settings.unpairNotice
+        return PairOnlyScreen.revokeNoticeFor(verdict)
+    }
+
+    private fun drawPairOnly(reason: PairOnlyReason, app: App) {
+        val revoked = revokeNotice(app)
+        host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
+    }
+}`
+	if faults := zueFaults("purgedropped.kt", purgeDropped); len(faults) != 1 {
+		t.Errorf("the scan passes a recomposition that silently drops the purge failure, which is "+
+			"a warning that disappears exactly when the user is reading it:\n%s",
+			strings.Join(faults, "\n"))
 	}
 
 	// What the fix produces.
@@ -195,7 +234,7 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
             return settings.unpairNotice
         }
         if (!verdict.answered) return settings.unpairNotice
-        return PairOnlyScreen.revokeNoticeFor(verdict)
+        return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
     }
 
     private fun drawPairOnly(reason: PairOnlyReason, app: App) {
