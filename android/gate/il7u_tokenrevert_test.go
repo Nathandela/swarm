@@ -109,33 +109,88 @@ func il7uReconcileIn(body string, reconcilers []string) (called, arg string, ok 
 	return "", "", false
 }
 
+// il7uEnclosingBlock returns the innermost brace-balanced block containing at.
+//
+// IT IS WHAT MAKES THIS FENCE PER-ARM, and per-arm is what it lacked. Blocks close inner-first,
+// so the first `}` that closes over the offset closes the innermost block holding it -- for
+// `PushSync.REFUSED -> { ... }` that is the arm, and for a `refused()` written straight in a
+// function body it is the body, which is the right answer in both cases.
+func il7uEnclosingBlock(code string, at int) (string, bool) {
+	var open []int
+	for i := 0; i < len(code); i++ {
+		switch code[i] {
+		case '{':
+			open = append(open, i)
+		case '}':
+			if len(open) == 0 {
+				return "", false
+			}
+			start := open[len(open)-1]
+			open = open[:len(open)-1]
+			if start <= at && at <= i {
+				return code[start : i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// il7uBinding is a local declaration: `val NAME = EXPRESSION`, to the end of the line.
+var il7uBinding = regexp.MustCompile(`\b(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\n]*)`)
+
+// il7uRestoredNames are the locals in one arm bound to the RESTORED screen -- an expression that
+// calls `refused()`.
+//
+// IT IS A POSITIVE TEST AND THAT IS THE POINT. The check it replaces asked whether the reconcile's
+// argument DIFFERED from the receiver `refused()` was called on, which one assignment defeats:
+// `val rejected = held` is a second name for the very screen the machine turned down. Asking
+// instead which locals ARE the restored screen cannot be satisfied by renaming anything, because
+// the name has to be bound to the call that does the restoring.
+func il7uRestoredNames(arm string) map[string]bool {
+	names := map[string]bool{}
+	for _, m := range il7uBinding.FindAllStringSubmatch(arm, -1) {
+		if il7uRevert.MatchString(m[2]) {
+			names[m[1]] = true
+		}
+	}
+	return names
+}
+
 // il7uFaults reports every place the switches go back and the token does not.
+//
+// IT IS ONE ARM AT A TIME (agents-tracker-b6iu, tightened by the audit committee). This read the
+// whole `fun` body, so a reconcile ANYWHERE in the function satisfied it: reconciling in the
+// ACCEPTED arm -- a sensible thing to write, since the machine took the preference -- left the
+// REFUSED arm putting the switches back over a token nothing had touched, which is the defect
+// itself. android/gate/o6ut_pendingsync_test.go is the model: it reads each catch block rather
+// than the function that holds them.
 //
 // @param code the source, comments and string literals already stripped.
 func il7uFaults(where, code string) []string {
 	reconcilers := il7uReconcilers(code)
 	var faults []string
-	for _, name := range il7uRevertingFunctions(code) {
-		body, ok := kotlinFunBody(code, name)
-		if !ok {
+	seen := map[string]bool{}
+	for _, at := range il7uRevert.FindAllStringIndex(code, -1) {
+		arm, ok := il7uEnclosingBlock(code, at[0])
+		if !ok || seen[arm] {
 			continue
 		}
-		called, arg, ok := il7uReconcileIn(body, reconcilers)
+		seen[arm] = true
+		name, _ := kotlinEnclosingFunction(code, at[0])
+		called, arg, ok := il7uReconcileIn(arm, reconcilers)
 		if !ok {
-			faults = append(faults, where+": `"+name+"` puts the switches back with `refused()` "+
-				"and reconciles no token, so the deletion the tap made optimistically stands over "+
-				"a preference the machine rejected")
+			faults = append(faults, where+": `"+name+"`'s refusal arm puts the switches back with "+
+				"`refused()` and reconciles no token, so the deletion the tap made optimistically "+
+				"stands over a preference the machine rejected")
 			continue
 		}
-		rejected := ""
-		if m := il7uRevert.FindStringSubmatch(body); m != nil {
-			rejected = m[1]
+		// A direct `PushTokens.` call takes a Context, so there is no screen to judge.
+		if arg == "" || il7uRestoredNames(arm)[arg] || il7uRevert.MatchString(arg) {
+			continue
 		}
-		if rejected != "" && arg == rejected {
-			faults = append(faults, where+": `"+name+"` reconciles the token with `"+called+"("+
-				arg+")`, and `"+arg+"` is the screen the machine REJECTED -- the reconcile agrees "+
-				"with the optimistic deletion instead of undoing it")
-		}
+		faults = append(faults, where+": `"+name+"`'s refusal arm reconciles the token with `"+
+			called+"("+arg+")`, and `"+arg+"` is not the screen `refused()` returned -- the "+
+			"reconcile agrees with the optimistic deletion instead of undoing it")
 	}
 	sort.Strings(faults)
 	return faults
