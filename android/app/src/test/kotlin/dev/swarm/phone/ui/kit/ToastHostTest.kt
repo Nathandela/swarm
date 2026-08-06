@@ -2,6 +2,8 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
@@ -217,6 +219,46 @@ class ToastHostTest {
         assertTrue(
             "the toast host is not shown, so nothing it says can be read",
             toastIn(subject).visibility == View.VISIBLE,
+        )
+    }
+
+    // ---- announcement ordering ------------------------------------------------
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for the audit committee's S4: the FIRST show of any burst
+     * writes its text into a view that is still GONE.
+     *
+     * The live region announces on the TEXT change -- that is the whole §8.7 design, stated in
+     * [toast]'s own KDoc -- and the platform DROPS that event while the view is not shown:
+     * `View.sendAccessibilityEventUnchecked` early-returns on `!isShown()`. So a text write that
+     * precedes the visibility change is a first message no screen reader is ever told about, and
+     * only a repeat inside the 3200 ms window is read -- the inverse of the burst case [show]'s
+     * KDoc designs for. The mechanical, JVM-assertable form of the requirement is the ORDER:
+     * the line is already VISIBLE at the moment its text is written. (Whether a real TalkBack
+     * utterance follows also needs an attached window and an enabled accessibility manager,
+     * which no JVM test has -- the order is the half this suite can pin.)
+     */
+    @Test
+    fun `the line is visible at the moment its text is written`() {
+        val subject = host()
+        val toast = toastIn(subject)
+        var visibilityAtWrite = View.GONE
+        toast.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!s.isNullOrEmpty()) visibilityAtWrite = toast.visibility
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        subject.show(message)
+
+        assertEquals(
+            "the toast's text was written while the line was still GONE, so the live-region " +
+                "announcement for the first message of a burst is dropped by the platform; " +
+                "visibility must change before the text does",
+            View.VISIBLE,
+            visibilityAtWrite,
         )
     }
 }
