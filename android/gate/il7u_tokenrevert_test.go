@@ -168,6 +168,186 @@ func TestIl7u_TheTokenGoesBackWithTheSwitches(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// The token lifecycle never runs on the thread that drew the screen.
+// ---------------------------------------------------------------------------
+
+// il7uDispatchOpeners are the calls that put a body on a [VerbDispatch] lane.
+//
+// `press` marks a control while the answer crosses; `enqueue` marks nothing, which is what a
+// reconciliation nobody tapped needs -- see the fix for agents-tracker-xla6.
+var il7uDispatchOpeners = []string{"dispatch.press(", "dispatch.enqueue("}
+
+// il7uDispatchedBodies are the argument lists handed to a dispatch lane, in source order.
+func il7uDispatchedBodies(code string) []s25Span {
+	var out []s25Span
+	for _, opener := range il7uDispatchOpeners {
+		out = append(out, s25Bodies(code, opener, '(', ')')...)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].start < out[b].start })
+	return out
+}
+
+// il7uUndispatchedTokenCalls reports every token-lifecycle call that runs on whatever thread
+// called it.
+//
+// WHY THE TOKEN IS A MAIN-THREAD QUESTION AT ALL, which is not obvious from this side of JNI:
+// `PushTokens.disable` reaches `App.DeletePushToken` -> `dropPushToken`, which clears durable
+// state and then calls `cl.TokenDelete(context.Background())` (mobile/app.go:1314-1323). That is
+// a relay round trip with NO DEADLINE. `s25_mainthread_test.go` cannot see it -- its waiting set
+// is derived from `sendContext`, and the token verbs do not go through it -- so the one fence
+// that can is this one.
+//
+// AND THE CALLER WAS THE RENDER PATH. agents-tracker-b6iu's fix put the reconcile in
+// `settleWithTheMachine`, which runs from `read()` on every resume and every journal-event
+// render. So the deadline-less network call was on the looper, on a path nobody taps.
+func il7uUndispatchedTokenCalls(where, code string) []string {
+	lanes := il7uDispatchedBodies(code)
+	var faults []string
+	for _, at := range il7uTokenCall.FindAllStringIndex(code, -1) {
+		dispatched := false
+		for _, lane := range lanes {
+			if at[0] >= lane.start && at[0] < lane.end {
+				dispatched = true
+				break
+			}
+		}
+		if dispatched {
+			continue
+		}
+		name, _ := kotlinEnclosingFunction(code, at[0])
+		faults = append(faults, where+": `"+name+"` reaches the token lifecycle on its own thread")
+	}
+	sort.Strings(faults)
+	return faults
+}
+
+// il7uUnroutedTokenFailures reports every reconciler whose failure nobody says out loud.
+//
+// `PushTokens.disable` has no catch of its own and the Go verb it reaches swallows the ORDINARY
+// offline case already -- it clears durable state and leaves the relay to `onConnected`, which is
+// why nothing here retries. What is left to arrive is a fault the user cannot route around, and
+// the screen still has to say that the registration this phone holds no longer matches the
+// switches on it. Silence there is the same defect as b6iu itself: the token disagreeing with the
+// screen, with nothing on the screen about it.
+func il7uUnroutedTokenFailures(where, code string) []string {
+	var faults []string
+	for _, name := range il7uReconcilers(code) {
+		body, ok := kotlinFunBody(code, name)
+		if !ok {
+			continue
+		}
+		if !o6utRoutesARefusal.MatchString(body) {
+			faults = append(faults, where+": `"+name+"` reconciles the token and turns no failure "+
+				"of it into words")
+		}
+	}
+	return faults
+}
+
+// TestIl7u_TheTokenLifecycleNeverRunsOnTheThreadThatDrewTheScreen is the second fence.
+func TestIl7u_TheTokenLifecycleNeverRunsOnTheThreadThatDrewTheScreen(t *testing.T) {
+	code := il7uSource(t)
+
+	if len(il7uReconcilers(code)) == 0 {
+		t.Fatalf("agents-tracker-xla6: nothing in %s reaches `PushTokens`, so this fence has no "+
+			"subject. If the reconcile moved to another file, re-point this gate at it rather than "+
+			"deleting it.", il7uSurfaceFile)
+	}
+	if faults := il7uUndispatchedTokenCalls(il7uSurfaceFile, code); len(faults) > 0 {
+		t.Errorf("agents-tracker-xla6: the push token is reconciled on the calling thread:\n  %s\n\n"+
+			"Both callers are main-thread ones -- a switch's listener and `settleWithTheMachine`, "+
+			"which runs from `read()` on EVERY resume and every journal-event render. The call "+
+			"reaches `App.DeletePushToken` -> `dropPushToken` -> `cl.TokenDelete(context."+
+			"Background())`: a relay round trip with no deadline, on the looper, on a path nobody "+
+			"tapped. Hand it to VerbDispatch like every other verb this surface issues.",
+			strings.Join(faults, "\n  "))
+	}
+	if faults := il7uUnroutedTokenFailures(il7uSurfaceFile, code); len(faults) > 0 {
+		t.Errorf("agents-tracker-xla6: a token reconciliation fails in silence:\n  %s\n\n"+
+			"The token is what the wake arrives on (ADR-007 B16), so a reconcile that did not "+
+			"happen leaves the screen and the transport disagreeing -- which is agents-tracker-b6iu "+
+			"exactly, and the user has no way to know.", strings.Join(faults, "\n  "))
+	}
+}
+
+// TestIl7u_TheDispatchScanDiscriminates is the second fence's control, in both directions.
+func TestIl7u_TheDispatchScanDiscriminates(t *testing.T) {
+	// The shape agents-tracker-b6iu shipped: a helper that calls the token lifecycle straight.
+	const onTheLooper = `class SettingsSurface {
+    private fun reconcileTheToken(next: SettingsScreen) {
+        if (!next.alerts && !next.mentions) {
+            PushTokens.disable(activity)
+        } else {
+            PushTokens.requestInitialToken(activity)
+        }
+    }
+}`
+	if faults := il7uUndispatchedTokenCalls("looper.kt", onTheLooper); len(faults) != 2 {
+		t.Fatalf("the dispatch scan finds %d undispatched token calls in the arm that plainly has "+
+			"two, so every clean run of the assertion is about nothing:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+	if faults := il7uUnroutedTokenFailures("looper.kt", onTheLooper); len(faults) != 1 {
+		t.Errorf("the routing scan does not report a reconcile that says nothing when it fails:\n%s",
+			strings.Join(faults, "\n"))
+	}
+
+	// What the fix produces.
+	const dispatched = `class SettingsSurface {
+    private fun reconcileTheToken(next: SettingsScreen) {
+        dispatch.enqueue(
+            SendPlane.COMMAND,
+            work = {
+                if (!next.alerts && !next.mentions) {
+                    PushTokens.disable(activity)
+                    true
+                } else {
+                    PushTokens.requestInitialToken(activity)
+                }
+            },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { asked -> if (!asked) say(PressFeedback.ofRefusal(SettingsScreen.PUSH_TRANSPORT_ABSENT)) },
+                    onFailure = { say(PressFeedback.ofRefusal(SettingsScreen.PUSH_TOKEN_UNRECONCILED)) },
+                )
+            },
+        )
+    }
+}`
+	if faults := il7uUndispatchedTokenCalls("dispatched.kt", dispatched); len(faults) != 0 {
+		t.Errorf("the dispatch scan rejects a reconcile handed to a lane, which is a fence nobody "+
+			"can satisfy:\n%s", strings.Join(faults, "\n"))
+	}
+	if faults := il7uUnroutedTokenFailures("dispatched.kt", dispatched); len(faults) != 0 {
+		t.Errorf("the routing scan rejects a settle that says what failed:\n%s",
+			strings.Join(faults, "\n"))
+	}
+
+	// HALF A FIX: the lane is taken and the answer is dropped. It is the more likely regression of
+	// the two, because nothing on screen changes when it is right.
+	swallowed := strings.Replace(dispatched,
+		"settle = { answer ->", "settle = { _ ->", 1)
+	swallowed = swallowed[:strings.Index(swallowed, "answer.fold(")] + "},\n        )\n    }\n}"
+	if faults := il7uUnroutedTokenFailures("swallowed.kt", swallowed); len(faults) != 1 {
+		t.Errorf("the routing scan passes a reconcile whose settle throws the answer away:\n%s",
+			strings.Join(faults, "\n"))
+	}
+
+	// One arm dispatched and one not. A partial move is exactly what a refactor leaves behind.
+	half := strings.Replace(dispatched, `                    PushTokens.disable(activity)
+                    true`, "                    true", 1)
+	half = strings.Replace(half, "    private fun reconcileTheToken", `    private fun disableNow() {
+        PushTokens.disable(activity)
+    }
+
+    private fun reconcileTheToken`, 1)
+	if faults := il7uUndispatchedTokenCalls("half.kt", half); len(faults) != 1 {
+		t.Errorf("the dispatch scan misses an arm left on the calling thread beside one that "+
+			"moved:\n%s", strings.Join(faults, "\n"))
+	}
+}
+
 // TestIl7u_TheRevertScanDiscriminates is the control, in both directions.
 //
 // The direction that fails silently is a scan that matches nothing: it reports the file clean, and
