@@ -4,9 +4,12 @@ import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.provider.Settings
+import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import dev.swarm.phone.push.WakeNotifications
 import dev.swarm.phone.runtime.NotificationDelivery
+import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.kit.ToastHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -237,6 +240,47 @@ class SettingsSurfaceNotificationsTest {
                 "PB-SEC-12 clause 1: the channel redirect does not filter obscured touches",
                 surface.openChannelSettings.filterTouchesWhenObscured,
             )
+        }
+    }
+
+    // ---- agents-tracker-bpo4: an OEM build with no screen to open ----------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). Both redirects called `startActivity` with no catch. Neither
+    // `ACTION_APP_NOTIFICATION_SETTINGS` nor `ACTION_CHANNEL_NOTIFICATION_SETTINGS` is guaranteed
+    // to resolve -- they are Settings activities, and OEM builds ship, rename and remove them --
+    // and an unresolved intent throws `ActivityNotFoundException` straight out of a click
+    // listener. So the one control offered to a user who cannot receive notifications killed the
+    // app when the platform had nothing behind it. Robolectric can execute exactly this: the
+    // press reaches the platform and no phone core.
+
+    /**
+     * A phone with no such system screen says so, and stays up.
+     *
+     * THE SENTENCE IS THE MODEL'S, like every other word on this screen: what a user reads is
+     * [SettingsScreen]'s to own, and a string typed at the call site would be copy invented in
+     * the one place PB-DS-9 keeps copy out of.
+     */
+    @Test
+    fun `a redirect the platform cannot resolve is said, not thrown`() {
+        withSettingsSurface { activity, surface ->
+            // Robolectric resolves any intent by default. This is what a handset does: refuse the
+            // ones no installed activity handles.
+            shadowOf(activity.application).checkActivities(true)
+
+            for (control in listOf(surface.openNotificationSettings, surface.openChannelSettings)) {
+                val toasts = ToastHost(activity)
+                surface.toasts = toasts
+
+                control.performClick()
+
+                assertEquals(
+                    "agents-tracker-bpo4: the redirect threw ActivityNotFoundException out of a " +
+                        "click listener, or went off without a word -- either way the one " +
+                        "control this state offers is the one that ends the app",
+                    SettingsScreen.SETTINGS_SCREEN_MISSING,
+                    (toasts.getChildAt(0) as TextView).text.toString(),
+                )
+            }
         }
     }
 
