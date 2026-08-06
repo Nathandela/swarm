@@ -271,16 +271,107 @@ func TestOdij_TheBlockedNotificationRedirectOpensNotificationSettings(t *testing
 	}
 }
 
+// notifyBalancedEnd returns the index just past the parenthesis that closes the one at open.
+func notifyBalancedEnd(code string, open int) (int, bool) {
+	depth := 0
+	for i := open; i < len(code); i++ {
+		switch code[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// notifyIntentChain is one whole intent EXPRESSION: the `Intent(...)` construction whose opening
+// parenthesis is at open, plus every call chained onto it.
+//
+// IT IS THE UNIT THE EXTRAS BELONG TO, and reading anything larger is what made this file's
+// redirect check vacuous: two intents in one source both carry `EXTRA_APP_PACKAGE`, so a
+// file-wide search for the token is answered by whichever one still has it. An extra names the
+// intent it is chained to and no other.
+//
+// A CHAIN THAT IS NOT A CALL ENDS IT -- `.also { }`, a property access -- and that is stated
+// rather than handled: this module builds both intents as one chained expression, and a shape
+// this cannot read fails LOUDLY here (the extra is reported missing) rather than silently.
+func notifyIntentChain(code string, open int) (string, bool) {
+	end, ok := notifyBalancedEnd(code, open)
+	if !ok {
+		return "", false
+	}
+	for {
+		rest := strings.TrimLeft(code[end:], " \t\r\n")
+		if !strings.HasPrefix(rest, ".") {
+			break
+		}
+		next := strings.IndexByte(code[end:], '(')
+		if next < 0 {
+			break
+		}
+		after, ok := notifyBalancedEnd(code, end+next)
+		if !ok {
+			break
+		}
+		end = after
+	}
+	return code[open:end], true
+}
+
+// notifyRedirectExtras is what each system screen this app opens must be told, by the intent that
+// opens it.
+//
+// THE CHANNEL PAGE IS HERE TOO, though it is agents-tracker-2yfn's control rather than 0dij's,
+// because the vacuity was one scan and covered both: nothing else in this repository looks at
+// `EXTRA_CHANNEL_ID`, and `ACTION_CHANNEL_NOTIFICATION_SETTINGS` resolves to nothing at all
+// without it -- not to a wrong page, to nothing.
+var notifyRedirectExtras = map[string][]string{
+	"ACTION_APP_NOTIFICATION_SETTINGS":     {"EXTRA_APP_PACKAGE"},
+	"ACTION_CHANNEL_NOTIFICATION_SETTINGS": {"EXTRA_APP_PACKAGE", "EXTRA_CHANNEL_ID"},
+}
+
 // notifyRedirectFaults reports the ways one file's settings redirects fail to name what they open.
 //
 // @param code the source, comments and string literals already stripped.
 func notifyRedirectFaults(where, code string) []string {
 	var faults []string
-	if !strings.Contains(code, "EXTRA_APP_PACKAGE") {
-		faults = append(faults, where+
-			": opens the notification settings screen without `EXTRA_APP_PACKAGE`, so the "+
-			"intent names no app and the system has nothing to open")
+	built := map[string]bool{}
+	for _, open := range kotlinCallSites(code, "Intent") {
+		chain, ok := notifyIntentChain(code, open)
+		if !ok {
+			continue
+		}
+		for action, extras := range notifyRedirectExtras {
+			if !strings.Contains(chain, action) {
+				continue
+			}
+			built[action] = true
+			for _, extra := range extras {
+				if strings.Contains(chain, extra) {
+					continue
+				}
+				faults = append(faults, where+": the `"+action+"` intent is built without `"+
+					extra+"`, so it names nothing the system can open. An extra belongs to the "+
+					"intent it is chained to -- another intent in this file carrying the same "+
+					"one is not this intent carrying it")
+			}
+		}
 	}
+	// AND AN ACTION THIS SCAN NEVER SAW BUILT IS A LOUD FAILURE, not a clean file. The check
+	// above is over intent CONSTRUCTIONS, so a redirect assembled behind a helper -- or through
+	// a shape the chain reader cannot follow -- would leave every extra unchecked while the file
+	// still mentions the action. Re-point the gate rather than deleting it.
+	for action := range notifyRedirectExtras {
+		if strings.Contains(code, action) && !built[action] {
+			faults = append(faults, where+": names `"+action+"` and builds no `Intent(` this scan "+
+				"can read, so nothing checks the extras that intent needs")
+		}
+	}
+	sort.Strings(faults)
 	return faults
 }
 
@@ -355,6 +446,20 @@ func TestOdij_TheRedirectExtraScanDiscriminates(t *testing.T) {
 				"this gate green and the control opens a system screen that shows nothing",
 				len(got), c.what)
 		}
+	}
+
+	// The scan is over intent CONSTRUCTIONS, so a redirect assembled somewhere it cannot read
+	// must fail loudly rather than pass for want of anything to look at.
+	const behindAHelper = `class SettingsSurface {
+    private val destination = Settings.ACTION_APP_NOTIFICATION_SETTINGS
+
+    private fun open() {
+        leaveFor(intentFor(destination))
+    }
+}`
+	if got := notifyRedirectFaults("helper.kt", behindAHelper); len(got) != 1 {
+		t.Errorf("the extras scan reports %d faults on a redirect built behind a helper, so the "+
+			"extras go unchecked and the run is clean about nothing", len(got))
 	}
 }
 
