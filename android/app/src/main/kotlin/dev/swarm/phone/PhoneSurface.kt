@@ -1378,6 +1378,19 @@ class PhoneSurface(
      * reached the wire failed, which no outcome can carry -- and a machine that has since answered
      * replaces it. With silence, where the removal was confirmed: a warning drawn over a state
      * that is fine teaches the user to ignore the one that is not.
+     *
+     * AND ON THIS VERB THE FALLBACK IS WHAT ACTUALLY RENDERS (agents-tracker-j45x). The purge in
+     * the press's `finally` erases the answer this would claim: `dropContentMaterial` nils
+     * `State.OpOutcomes`, the router's reply cache is rebuilt from those same empty outcomes, and
+     * the content key is destroyed -- so an outcome received before the purge is gone and one
+     * received after cannot be opened by a disowned phone. `launchOutcome` therefore answers
+     * nothing for a revoke, and the answered branch below does not fire in production today.
+     *
+     * THAT IS RECORDED RATHER THAN REMOVED, and the shipped sentence is the honest one either way:
+     * a successful revoke severs the path its own reply comes back on, so "your machine has not
+     * confirmed it" is the designed terminal state and not a gap in this function. What the branch
+     * costs is a `when` arm; what deleting it would cost is the only correct behaviour available
+     * if the outcome ever survives the purge. j45x holds the decision.
      */
     private fun revokeNotice(app: App): String {
         val issued = runtime.revokeOperation()

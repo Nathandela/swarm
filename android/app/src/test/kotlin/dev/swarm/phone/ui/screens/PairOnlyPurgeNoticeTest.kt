@@ -35,6 +35,16 @@ import org.junit.Test
  * sentence when the answer lands -- so a purge failure joined on by `SettingsSurface` and not
  * passed through the composer would vanish from the screen at the moment the machine finally
  * answered, which is the one moment the user is reading it.
+ *
+ * **WHAT THESE TESTS ARE, STATED SO THEY ARE NOT MISREAD AS COVERAGE OF A RUNTIME STATE**
+ * (agents-tracker-j45x). The answered verdicts below are FABRICATED, and for the revoke they name
+ * a state this runtime cannot currently reach: the purge in the press's `finally` nils
+ * `State.OpOutcomes` and destroys the content key, so `launchOutcome` never answers for a revoke
+ * and only the unanswered arm renders. These remain worth having and are honest about their
+ * subject -- [PairOnlyScreen.revokeNoticeFor] is a pure function over a verdict and a routed
+ * reason, and what they pin is the COMPOSITION: the join, its order, and the silence rule. What
+ * they must not be read as is evidence that a user has ever seen the accepted or refused sentence
+ * for a revoke. j45x holds the decision about the arms themselves.
  */
 class PairOnlyPurgeNoticeTest {
 
