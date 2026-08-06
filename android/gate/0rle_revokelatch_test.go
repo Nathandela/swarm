@@ -39,9 +39,6 @@ var rleLatchWrite = regexp.MustCompile(`\blatchRevoke\s*\(`)
 // both are about the same answer, and the screen replaces the second with the first's re-read.
 var rleComposes = regexp.MustCompile(`\brevokeNoticeFor\s*\(`)
 
-// rleVerdict is the resolve whose argument names the value the machine answered about.
-var rleVerdict = regexp.MustCompile(`\brevokeVerdict\s*\(`)
-
 // rleHandsOffTheWindow is the redraw that ENDS this panel: `PhoneSurface.renderReady` re-asks the
 // presentation gate and draws the pair-only screen, which is the reader of the latch.
 var rleHandsOffTheWindow = regexp.MustCompile(`\bonReplaced\b`)
