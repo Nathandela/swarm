@@ -1136,13 +1136,21 @@ class SettingsSurface(
      * the requirement; re-registering on the way back is what makes the switch usable twice.
      *
      * IT RUNS ON A LANE AND NOT WHERE IT WAS CALLED (agents-tracker-xla6). `PushTokens.disable`
-     * reaches `App.DeletePushToken` -> `dropPushToken` -> `cl.TokenDelete(context.Background())`
-     * -- a relay round trip with NO DEADLINE -- and both call sites are main-thread ones: a
-     * switch's settle, and [settleWithTheMachine], which runs from [read] on every resume and
-     * every journal-event render. So the reconcile the b6iu fix added put a deadline-less network
-     * call on the looper on a path nobody taps. s25_mainthread_test.go cannot see this one: its
-     * waiting set is derived from `sendContext` and the token verbs do not reach it, so
-     * android/gate/il7u_tokenrevert_test.go is the fence.
+     * reaches `App.DeletePushToken` -> `dropPushToken` -> `cl.TokenDelete(context.Background())`,
+     * and both call sites are main-thread ones: a switch's settle, and [settleWithTheMachine],
+     * which runs from [read] on every resume and every journal-event render. So the reconcile the
+     * b6iu fix added put a relay round trip on the looper, on a path nobody taps.
+     *
+     * TEN SECONDS, NOT UNBOUNDED, and the correction matters because the first version of this
+     * comment claimed the latter. The context carries no deadline of its own, but the connection
+     * bounds the exchange: `Conn.roundtrip` wraps every call in `relay.DefaultCallTimeout`, which
+     * is 10 s (internal/remote/relay/client.go). That is not a reprieve -- Android's input
+     * dispatch gives an app 5 s before it offers to kill it, so the bound is twice the ANR
+     * threshold -- but a fence should say what is true, and "unbounded" would send the next reader
+     * looking for a missing deadline instead of at the thread this call is on.
+     *
+     * s25_mainthread_test.go cannot see this one: its waiting set is derived from `sendContext`
+     * and the token verbs do not reach it, so android/gate/il7u_tokenrevert_test.go is the fence.
      *
      * IT IS [VerbDispatch.enqueue] AND NOT [VerbDispatch.press], because a press keyed on a
      * control DROPS a second press while the first is crossing. This is not a tap and must not be

@@ -135,9 +135,12 @@ object PushTokens {
      *
      * IT DOES NOT RUN ON THE MAIN THREAD AND IT DOES NOT CATCH, and both are now the caller's
      * contract rather than this object's oversight (agents-tracker-xla6). `dropPushToken` ends in
-     * `cl.TokenDelete(context.Background())`: a relay round trip with no deadline, which on the
-     * looper is an ANR nothing in the platform would report -- Go opens its sockets below the
-     * JVM. And unlike [register], whose callers are background callbacks with no user present,
+     * `cl.TokenDelete(context.Background())`: a relay round trip bounded at ten seconds by the
+     * connection (`relay.DefaultCallTimeout`, applied in `Conn.roundtrip`) rather than by that
+     * context, which carries no deadline of its own. Ten seconds on the looper is twice Android's
+     * 5 s input-dispatch threshold, so it is an ANR the platform would never attribute -- Go opens
+     * its sockets below the JVM. And unlike [register], whose callers are background callbacks
+     * with no user present,
      * this one is reached from a screen somebody is looking at: `SettingsSurface` runs it on a
      * `VerbDispatch` lane, where the refusal comes back as a `Result` and lands on the outcome
      * line. A catch here would put that back to being invisible, which is the shape

@@ -254,14 +254,21 @@ func il7uDispatchedBodies(code string) []s25Span {
 //
 // WHY THE TOKEN IS A MAIN-THREAD QUESTION AT ALL, which is not obvious from this side of JNI:
 // `PushTokens.disable` reaches `App.DeletePushToken` -> `dropPushToken`, which clears durable
-// state and then calls `cl.TokenDelete(context.Background())` (mobile/app.go:1314-1323). That is
-// a relay round trip with NO DEADLINE. `s25_mainthread_test.go` cannot see it -- its waiting set
-// is derived from `sendContext`, and the token verbs do not go through it -- so the one fence
-// that can is this one.
+// state and then calls `cl.TokenDelete(context.Background())` (mobile/app.go:1314-1323) -- a
+// relay round trip, bounded at ten seconds by the connection rather than by that context.
+// `relay.DefaultCallTimeout` is what bounds it, applied in `Conn.roundtrip`; this comment claimed
+// the call was UNBOUNDED until the delta committee read the other side, and the difference is
+// worth keeping straight because "unbounded" sends the next reader hunting a missing deadline
+// instead of looking at the thread. Ten seconds is twice the 5 s Android gives input dispatch
+// before it offers to kill the app, so the thread is still the whole problem.
+//
+// `s25_mainthread_test.go` cannot see it -- its waiting set is derived from `sendContext`, and
+// the token verbs do not go through it -- so the one fence that can is this one.
 //
 // AND THE CALLER WAS THE RENDER PATH. agents-tracker-b6iu's fix put the reconcile in
 // `settleWithTheMachine`, which runs from `read()` on every resume and every journal-event
-// render. So the deadline-less network call was on the looper, on a path nobody taps.
+// render. So a network call that can hold its thread for ten seconds was on the looper, on a
+// path nobody taps.
 func il7uUndispatchedTokenCalls(where, code string) []string {
 	lanes := il7uDispatchedBodies(code)
 	var faults []string
@@ -320,8 +327,10 @@ func TestIl7u_TheTokenLifecycleNeverRunsOnTheThreadThatDrewTheScreen(t *testing.
 			"Both callers are main-thread ones -- a switch's listener and `settleWithTheMachine`, "+
 			"which runs from `read()` on EVERY resume and every journal-event render. The call "+
 			"reaches `App.DeletePushToken` -> `dropPushToken` -> `cl.TokenDelete(context."+
-			"Background())`: a relay round trip with no deadline, on the looper, on a path nobody "+
-			"tapped. Hand it to VerbDispatch like every other verb this surface issues.",
+			"Background())`: a relay round trip bounded at ten seconds by the connection "+
+			"(relay.DefaultCallTimeout), on the looper, on a path nobody tapped -- twice the 5 s "+
+			"Android gives input dispatch before it offers to kill the app. Hand it to "+
+			"VerbDispatch like every other verb this surface issues.",
 			strings.Join(faults, "\n  "))
 	}
 	if faults := il7uUnroutedTokenFailures(il7uSurfaceFile, code); len(faults) > 0 {
