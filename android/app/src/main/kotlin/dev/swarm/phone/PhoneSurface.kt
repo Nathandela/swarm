@@ -1112,6 +1112,7 @@ class PhoneSurface(
                 PairOnlyScreen.reasonFor {
                     ConnectionState.of(startup.app.connectionState())
                 },
+                startup.app,
             )
             return
         }
@@ -1122,6 +1123,11 @@ class PhoneSurface(
         // [renderUnavailable] draws that too: a phone core that failed to build says nothing about
         // whether the revoke landed, and clearing there would drop the sentence on the way past.
         settings.unpairNotice = ""
+        // AND THE OPERATION THE SENTENCE WAS ABOUT GOES WITH IT (agents-tracker-4zue). The id
+        // outlives the panel that issued it on purpose; what ends it is this, the one fact that
+        // resolves the divergence. Left latched, the next pairing's screens would go on asking the
+        // machine about a revoke from a registration that no longer exists.
+        runtime.latchRevoke("")
 
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
@@ -1305,13 +1311,15 @@ class PhoneSurface(
      * the registration. [PairOnlyScreen.copyFor] owns the words; this passes the reason.
      *
      * @param reason why this handset is unpaired, from [PairOnlyScreen.reasonFor].
+     * @param app the facade this draw asks for the revoke's answer -- see [revokeNotice].
      */
-    private fun drawPairOnly(reason: PairOnlyReason) {
-        // WHAT THE REVOKE LEFT BEHIND, READ FROM THE PANEL THAT ISSUED IT (agents-tracker-qlf9).
+    private fun drawPairOnly(reason: PairOnlyReason, app: App) {
+        // WHAT THE REVOKE LEFT BEHIND, RE-ASKED ON THE DRAW THAT SHOWS IT (agents-tracker-4zue).
         // The settings panel is gone by the time this draws -- a revoked phone is an unpaired one
         // and this screen replaces the whole scaffold -- so the one sentence explaining why the
-        // pairing about to be attempted may be refused has nowhere else to land.
-        val revoked = settings.unpairNotice
+        // pairing about to be attempted may be refused has nowhere else to land, and this is also
+        // the only surface left that can still ask what the machine said.
+        val revoked = revokeNotice(app)
         val next = Triple(pairingStarted, revoked, reason)
         if (pairOnlyDrawn == next && host.childCount > 0) return
         pairOnlyDrawn = next
@@ -1335,6 +1343,48 @@ class PhoneSurface(
                 copy = PairOnlyScreen.copyFor(reason),
             ),
         )
+    }
+
+    /**
+     * PB-SYNC-2's answer to the revoke this install issued, claimed by operation id on every draw
+     * of the screen the revoke sent the phone to (agents-tracker-4zue).
+     *
+     * IT IS [renderKillVerdict]'S PROGRAM ON THE ONE VERB THAT COULD NOT USE IT. Those run from
+     * [renderReady] after the presentation gate has said this handset is still usably paired --
+     * and a revoke is precisely the command that makes the gate answer otherwise, so the pair-only
+     * branch returns before [renderVerdicts] is ever reached. The answer has to be claimed here or
+     * nowhere.
+     *
+     * WHY THE PANEL'S SETTLE COULD NOT DO IT. `SettingsSurface` resolves the verdict when its
+     * press settles, which is the moment `signedCommand` has SEALED and APPENDED: the reply is a
+     * relay round trip away, and `CommandVerdict.of` refuses to claim an outcome carrying no code
+     * -- so that reading is UNANSWERED on every run this app has ever made, and both of
+     * `PairOnlyScreen.revokeNoticeFor`'s answered arms were unreachable. The panel's own comment
+     * argues there is no later draw to ask again from, which is true of that PANEL: this surface
+     * redraws on every resume and every journal event, and the id outlives the panel in
+     * [PhoneRuntime] for exactly that reason.
+     *
+     * THE PANEL'S SENTENCE IS THE FALLBACK AND NOT THE ANSWER. It is what an unanswered,
+     * unreadable or never-issued revoke says -- including the routed reason a revoke that never
+     * reached the wire failed, which no outcome can carry -- and a machine that has since answered
+     * replaces it. With silence, where the removal was confirmed: a warning drawn over a state
+     * that is fine teaches the user to ignore the one that is not.
+     */
+    private fun revokeNotice(app: App): String {
+        val issued = runtime.revokeOperation()
+        if (issued.isEmpty()) return settings.unpairNotice
+        val verdict = try {
+            CommandVerdict.of(
+                FacadeBridge(app).launchOutcome(issued),
+                issued,
+                CommandVerdict.ACCEPTED_OK,
+            )
+        } catch (unreadable: Exception) {
+            // A facade that cannot answer has not answered, and the next draw asks again.
+            return settings.unpairNotice
+        }
+        if (!verdict.answered) return settings.unpairNotice
+        return PairOnlyScreen.revokeNoticeFor(verdict)
     }
 
     /**

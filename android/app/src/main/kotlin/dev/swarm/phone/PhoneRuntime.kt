@@ -90,6 +90,42 @@ class PhoneRuntime(private val context: Context) {
     fun knownRelay(): String = rememberedRelay()
 
     /**
+     * The operation id of the revoke this install issued, or empty (agents-tracker-4zue).
+     *
+     * WHY IT IS HERE AND NOT ON THE SURFACE THAT ISSUED IT. The revoke DESTROYS that surface: a
+     * revoked phone is an unpaired phone, and `PhoneSurface.drawPairOnly` replaces the whole
+     * scaffold the settings panel is drawn inside -- so the panel is gone long before the machine
+     * can answer, and the answer belongs to the screen the phone was sent to. This runtime is the
+     * one object both surfaces already hold, and it is where the relay coordinate the facade has
+     * no field for is kept for the same reason.
+     *
+     * IT IS MEMORY AND NOT A FILE, unlike the relay URL, and the asymmetry is the honest one. A
+     * process that died between the revoke and its answer has lost the id, and what the pair-only
+     * screen says then is that the removal is unconfirmed -- the true statement about what is
+     * knowable on this handset, and the same degradation `PairOnlyScreen.reasonFor` already
+     * accepts for a transport state that is process memory too. Writing it down would instead
+     * leave an install remembering one command from a pairing that no longer exists.
+     */
+    private var revokeOp: String = ""
+
+    /**
+     * Remember the revoke whose answer the pair-only screen claims -- or, with an empty id, forget
+     * it.
+     *
+     * FORGETTING IS THE SAME VERB because the clearing has one reason and one call site:
+     * `PhoneSurface.renderReady` spends the divergence the moment the presentation gate says this
+     * handset is usably paired again, which is the fact that ends the warning.
+     */
+    @Synchronized
+    fun latchRevoke(operationId: String) {
+        revokeOp = operationId
+    }
+
+    /** The revoke this install issued, for the screen it sent the phone to. */
+    @Synchronized
+    fun revokeOperation(): String = revokeOp
+
+    /**
      * Throw away the built phone so the URL [rememberRelay] just learned takes effect.
      *
      * WITHOUT THIS A FRESH INSTALL CANNOT USE THE PAIRING IT JUST COMPLETED. `mobile.Config
@@ -221,19 +257,34 @@ class PhoneRuntime(private val context: Context) {
      * handset whose app has not been opened does not reach Keystore, the filesystem or the native
      * library on the way -- and there is nothing there to purge in the first place.
      *
-     * THE ERROR IS SWALLOWED, and that is the honest handling rather than a shortcut. The memory
-     * half of the purge is unconditional and has already happened when this returns; a failure
-     * means only that the decrypted caches AT REST survived it, on a full disk or a data
-     * directory gone read-only. The screen that issued the revoke has already reported the verb's
-     * own outcome, which is the fact the user acted on.
+     * THE ERROR IS RETURNED, AND IT USED TO BE SWALLOWED (agents-tracker-r3os). This comment said
+     * that was "the honest handling rather than a shortcut", on the argument that the memory half
+     * has happened regardless and the screen has already reported the verb's own outcome. The
+     * first half is true and the second is about a DIFFERENT fact: the verb's outcome is whether
+     * the machine removed the device, and this one is whether the sealed containers left on this
+     * handset are gone. `App.PurgeKeys` says so in its own words -- "an error means the material
+     * AT REST survived (a full disk, a read-only data directory)" -- and both Go layers keep that
+     * promise deliberately, at the cost of a fail-open path they argue for at length. A caller
+     * that is handed nothing draws an unpaired phone over key material still on disk.
+     *
+     * IT IS A VALUE AND NOT A THROW, which is the caller's shape rather than a style preference:
+     * `SettingsSurface.onReplace` runs this in a `finally` so that both tiers go whether or not
+     * the revoke reached the machine, and an exception raised in a `finally` REPLACES the one the
+     * block was carrying -- the user would be told about the disk instead of about their machine.
+     *
+     * @return null when the purge finished, at rest and in memory, or the routed reason the
+     *  at-rest half did not. It is [unlockContent]'s shape for [routeStartupFailure]'s reason:
+     *  the refusal is routed by the layer that knows the custody taxonomy and SAID by the layer
+     *  that has a screen.
      */
     @Synchronized
-    fun purgeKeys() {
-        val live = ready ?: return
-        try {
+    fun purgeKeys(): RoutedError? {
+        val live = ready ?: return null
+        return try {
             live.app.purgeKeys()
+            null
         } catch (refused: Exception) {
-            // See above: the live key and the decrypted caches are gone regardless.
+            routeStartupFailure(refused)
         }
     }
 
