@@ -161,6 +161,47 @@ class SettingsPanelScreenTest {
     }
 
     /**
+     * A change the machine has not answered holds both rows (agents-tracker-ix2v).
+     *
+     * IT IS THE PANEL'S JOB BECAUSE THE ROW IS WHERE `enabled` LIVES, and the surface writes the
+     * switch from the row. `SettingsSurface` holds ONE `pendingOp`, so a second flip issued
+     * before the first is answered makes the first answer unclaimable (PB-SYNC-2 claims BY ID)
+     * and leaves the switches, the phone's durable state and the machine holding three different
+     * things -- see `SettingsScreenTest`, which carries the scenario. A dead switch here is not a
+     * dead end: the wait ends by itself, on the next answer or the next render.
+     *
+     * IT IS NOT THE SAME AS THE PERMANENT BLOCK and does not borrow its notice. The panel already
+     * says "Saved on this phone. It takes effect once your machine confirms it." for this state,
+     * which is the sentence that explains why the rows are inert.
+     */
+    @Test
+    fun `a pending change disables the rows until the machine answers`() {
+        val pending = screen().setAlerts(false)
+
+        assertEquals(
+            "agents-tracker-ix2v: the rows stay live while a push_prefs is unanswered, so a " +
+                "second flip can be issued over the top of the first",
+            listOf(false, false),
+            rows(SettingsPanelScreen.of(pending)).map { it.enabled },
+        )
+        assertEquals(
+            "an acknowledged change left the rows dead, so the screen never takes another tap",
+            listOf(true, true),
+            rows(SettingsPanelScreen.of(pending.acknowledged())).map { it.enabled },
+        )
+        assertEquals(
+            "a refused change left the rows dead. A refusal is an answer: there is nothing left " +
+                "to wait for",
+            listOf(true, true),
+            rows(SettingsPanelScreen.of(pending.refused())).map { it.enabled },
+        )
+        assertTrue(
+            "the rows went dead with nothing on screen to say why",
+            SettingsPanelScreen.of(pending).notices.any { it == pending.pendingNotice },
+        )
+    }
+
+    /**
      * The panel carries the model's redirect, on the one state that has one.
      *
      * IT IS A LABEL AND NOT A CONTROL, for the reason the toggle and the replace chip are

@@ -347,18 +347,81 @@ class SettingsScreenTest {
     }
 
     /**
-     * TWO FLIPS BEFORE ONE ANSWER GO BACK TO THE LAST SETTLED VALUES, not to the previous flip. The
-     * surface watches one operation id at a time, so an answer that arrives after a second flip is
-     * about the first: the only position the machine is known to hold is the one before either.
+     * ONE OPERATION AT A TIME: a change the machine has not answered holds BOTH switches
+     * (agents-tracker-ix2v).
+     *
+     * THIS TEST PINNED THE OPPOSITE CONTRACT AND IS REWRITTEN RATHER THAN DELETED, because what
+     * it asserted is still true of the model and was wrong as a licence for the screen. It read:
+     *
+     *     val refused = settled.setAlerts(false).setMentions(false).refused()
+     *     assertTrue(refused.alerts); assertTrue(refused.mentions)
+     *
+     * under the title `a refusal after several flips reverts to what the machine last confirmed`,
+     * and its KDoc said "two flips before one answer go back to the last settled values". The
+     * model does exactly that -- [SettingsScreen.settled] is taken once per pending run -- and
+     * two flips before one answer is nevertheless a state nothing can be right about, because
+     * three layers then disagree:
+     *
+     *   start alerts=true mentions=true, which the machine holds.
+     *   op1 writes false,true. `SettingsSurface.pendingOp` names it.
+     *   op2 writes false,false BEFORE op1 is answered, and `pendingOp` -- one field -- now names
+     *     op2. op1's answer can never be claimed by anyone (PB-SYNC-2 claims BY ID), so its
+     *     acknowledgement is lost whatever it was.
+     *   op2 is REFUSED. `refused()` restores the snapshot, which is the one taken before op1:
+     *     true,true. That is what the switches then show.
+     *   Go has durably persisted BOTH writes -- `App.SetPushPreference` saves before it sends
+     *     (mobile/app.go) -- so durable state holds false,false, and the machine holds whatever
+     *     op1 did.
+     *
+     * The switches, the phone's own durable state and the machine now hold three different
+     * things, and no answer that arrives later can reconcile them. The fix is not a better
+     * revert: it is not letting the second flip be issued. A raised `pendingSync` holds both
+     * switches until the machine answers, which is one operation in flight at a time.
+     *
+     * THE DURABLE HALF IS NOT FIXED HERE and is agents-tracker-qf7x: even with one operation in
+     * flight, a refusal restores the switches in memory only, so a process death resurrects the
+     * value the machine rejected. That needs a Go verb that persists without sending, which does
+     * not exist.
      */
     @Test
-    fun `a refusal after several flips reverts to what the machine last confirmed`() {
+    fun `a change the machine has not answered holds both switches`() {
         val settled = SettingsScreen(alerts = true, mentions = true)
+        assertTrue("a settled screen takes taps", settled.togglesAcceptTaps)
 
-        val refused = settled.setAlerts(false).setMentions(false).refused()
+        val pending = settled.setAlerts(false)
 
-        assertTrue(refused.alerts)
-        assertTrue(refused.mentions)
+        assertFalse(
+            "agents-tracker-ix2v: a second flip can be issued while the first is unanswered. " +
+                "`pendingOp` is one field, so the first operation's answer becomes unclaimable, " +
+                "and a refusal of the second reverts to the snapshot taken before EITHER -- " +
+                "while Go has durably persisted both writes",
+            pending.togglesAcceptTaps,
+        )
+        assertTrue("an acknowledgement releases them", pending.acknowledged().togglesAcceptTaps)
+        assertTrue("a refusal is an answer too, so it releases them", pending.refused().togglesAcceptTaps)
+    }
+
+    /**
+     * The hold is IN ADDITION to the permanent block and does not replace it.
+     *
+     * [SettingsScreen.togglesDisabled] means the platform will not ask again and nothing weaker
+     * (agents-tracker-0dij), and it stays that way: a pending sync is a state that ends by
+     * itself, a permanent denial is not, and the screen offers different things for the two.
+     * What takes a tap is neither of them being true.
+     */
+    @Test
+    fun `a permanently denied permission holds the switches whether or not anything is pending`() {
+        val blocked = SettingsScreen(alerts = true, mentions = true)
+            .withNotificationPermission(dev.swarm.phone.runtime.PermissionState.PERMANENTLY_DENIED)
+
+        assertFalse(blocked.togglesAcceptTaps)
+        assertFalse(blocked.setAlerts(false).togglesAcceptTaps)
+        assertTrue("the permanent block is still its own fact", blocked.togglesDisabled)
+        assertFalse(
+            "a pending sync was folded into `togglesDisabled`, which means the platform will " +
+                "not ask again -- it says the wrong thing about a wait that ends by itself",
+            SettingsScreen(alerts = true, mentions = true).setAlerts(false).togglesDisabled,
+        )
     }
 
     /** An acknowledgement clears the revert point too: what is on screen IS what the machine has. */
