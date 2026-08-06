@@ -243,7 +243,14 @@ object SettingsPanelScreen {
                 PushCategory.NEEDS_INPUT -> settings.alerts
                 PushCategory.FINISHED -> settings.mentions
             },
-            enabled = !settings.togglesDisabled,
+            // AND IT ASKS ONE QUESTION RATHER THAN LISTING THE REASONS (agents-tracker-ix2v).
+            // This read `!settings.togglesDisabled`, which is the PERMANENT block alone, so both
+            // rows stayed live while a push_prefs was unanswered and a second flip could be
+            // issued over the top of the first -- `SettingsSurface` watches one operation id, so
+            // the first answer then becomes unclaimable and a refusal of the second reverts to a
+            // snapshot taken before either, while Go has durably persisted both writes.
+            // [SettingsScreen.togglesAcceptTaps] is where the two reasons are held apart.
+            enabled = settings.togglesAcceptTaps,
             description = "$label. $sublabel",
         )
     }

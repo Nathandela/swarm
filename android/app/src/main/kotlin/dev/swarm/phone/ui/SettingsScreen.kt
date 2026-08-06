@@ -344,6 +344,27 @@ data class SettingsScreen(
     val togglesDisabled: Boolean
         get() = notificationPermission == PermissionState.PERMANENTLY_DENIED
 
+    /**
+     * Whether a switch on this screen may be moved at all (agents-tracker-ix2v).
+     *
+     * IT IS THE UNION OF TWO DIFFERENT REASONS AND KEEPS THEM DIFFERENT. [togglesDisabled] is
+     * permanent -- the platform will not ask again, and the screen offers a settings redirect
+     * instead -- while an unanswered change ends by itself, on the next answer or the next
+     * render, and [pendingNotice] is already on screen saying so. Folding the second into
+     * [togglesDisabled] would make that property say "the platform will not ask again" about a
+     * wait, which is the collapse agents-tracker-0dij is about in the other direction.
+     *
+     * WHY A PENDING CHANGE HOLDS BOTH SWITCHES. `SettingsSurface` watches ONE operation id, so a
+     * second flip issued before the first is answered makes the first answer unclaimable
+     * (PB-SYNC-2 claims by id) -- and a refusal of the second then reverts to [settled], the
+     * snapshot taken before EITHER, while `App.SetPushPreference` has durably persisted both
+     * writes. The switches, this phone's durable state and the machine end up holding three
+     * different things, with no answer left that could reconcile them. One operation in flight at
+     * a time is what makes that state unreachable.
+     */
+    val togglesAcceptTaps: Boolean
+        get() = !togglesDisabled && !pendingSync
+
     companion object {
         /**
          * The redirect's words, once, so the sentence that names the control and the control itself
