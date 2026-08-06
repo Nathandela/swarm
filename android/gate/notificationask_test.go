@@ -257,11 +257,7 @@ func TestOdij_TheBlockedNotificationRedirectOpensNotificationSettings(t *testing
 			continue
 		}
 		found = true
-		if !strings.Contains(code, "EXTRA_APP_PACKAGE") {
-			faults = append(faults, mustRel(t, path)+
-				": opens the notification settings screen without `EXTRA_APP_PACKAGE`, so the "+
-				"intent names no app and the system has nothing to open")
-		}
+		faults = append(faults, notifyRedirectFaults(mustRel(t, path), code)...)
 	}
 	if !found {
 		t.Fatalf("agents-tracker-0dij: no production Kotlin opens " +
@@ -275,9 +271,92 @@ func TestOdij_TheBlockedNotificationRedirectOpensNotificationSettings(t *testing
 	}
 }
 
+// notifyRedirectFaults reports the ways one file's settings redirects fail to name what they open.
+//
+// @param code the source, comments and string literals already stripped.
+func notifyRedirectFaults(where, code string) []string {
+	var faults []string
+	if !strings.Contains(code, "EXTRA_APP_PACKAGE") {
+		faults = append(faults, where+
+			": opens the notification settings screen without `EXTRA_APP_PACKAGE`, so the "+
+			"intent names no app and the system has nothing to open")
+	}
+	return faults
+}
+
 // ---------------------------------------------------------------------------
 // Negative controls. Each feeds a perturbed source to the SAME functions the assertions call.
 // ---------------------------------------------------------------------------
+
+// notifyBothRedirects is the shape this surface ships: two controls, two system screens, and the
+// extras that name what each one opens.
+const notifyBothRedirects = `class SettingsSurface {
+    internal val openNotificationSettings: TextView = SecureWindow.gate(
+        ctaButton(activity, "", CtaKind.MORE).apply {
+            setOnClickListener {
+                leaveFor(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName),
+                )
+            }
+        },
+    )
+
+    internal val openChannelSettings: TextView = SecureWindow.gate(
+        ctaButton(activity, "", CtaKind.MORE).apply {
+            setOnClickListener {
+                leaveFor(
+                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, WakeNotifications.CHANNEL_ID),
+                )
+            }
+        },
+    )
+}`
+
+// TestOdij_TheRedirectExtraScanDiscriminates is the control on the extras, in both directions.
+//
+// THE DIRECTION THAT FAILS SILENTLY IS THE ONE THIS FILE SHIPPED. Two intents in one file both
+// carry `EXTRA_APP_PACKAGE`, so a check that asks whether the token appears ANYWHERE in the
+// source is answered by the OTHER intent: deleting the extra from the redirect this issue is
+// about leaves the gate green, and the control it fences opens a system screen that names no app.
+func TestOdij_TheRedirectExtraScanDiscriminates(t *testing.T) {
+	if faults := notifyRedirectFaults("both.kt", notifyBothRedirects); len(faults) > 0 {
+		t.Errorf("the extras scan rejects two correctly built intents, which is a fence nobody "+
+			"can satisfy:\n%s", strings.Join(faults, "\n"))
+	}
+
+	cuts := []struct{ what, src string }{
+		{
+			"the app-notification intent losing the extra that names this app",
+			strings.Replace(notifyBothRedirects,
+				`Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName),`,
+				`Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS),`, 1),
+		},
+		{
+			"the channel intent losing the extra that names this app",
+			strings.Replace(notifyBothRedirects,
+				`Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)`,
+				`Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)`, 1),
+		},
+		{
+			"the channel intent losing the extra that names the channel",
+			strings.Replace(notifyBothRedirects,
+				`
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, WakeNotifications.CHANNEL_ID)`, "", 1),
+		},
+	}
+	for _, c := range cuts {
+		if got := notifyRedirectFaults("cut.kt", c.src); len(got) != 1 {
+			t.Errorf("the extras scan reports %d faults on %s, so the extra can be deleted with "+
+				"this gate green and the control opens a system screen that shows nothing",
+				len(got), c.what)
+		}
+	}
+}
 
 // notifyWiredSurface is the shape the fix produces, in miniature: two switches built by a factory
 // that installs one listener, the listener calling the toggle handler, and the handler asking.
