@@ -115,6 +115,46 @@ class PairOnlyPurgeNoticeTest {
         )
     }
 
+    /**
+     * THE SAME PAIR ON THE OTHER ARM OF THE SAME SETTLE. A revoke that never reached the wire --
+     * offline, or a facade refusal -- and a purge that could not finish at rest are both reachable
+     * in one press, and the panel composing that arm calls [PairOnlyScreen.revokeUnsentNotice]
+     * rather than [PairOnlyScreen.revokeNoticeFor]. An overload that dropped the second fact would
+     * be the silence this issue is about, on the arm nobody looked at.
+     */
+    @Test
+    fun `a revoke that never reached the wire still reports a purge that could not finish`() {
+        val transport = "No link to your machine right now."
+        val notice = PairOnlyScreen.revokeUnsentNotice(transport, purgeFailure = routed)
+
+        assertTrue(
+            "the routed transport failure was dropped or re-worded once a purge also failed",
+            notice.startsWith(transport),
+        )
+        assertTrue(
+            "this device is still registered for certain -- the command never left the handset -- " +
+                "and the screen stopped saying so once a second failure arrived",
+            notice.contains("swarm remote revoke"),
+        )
+        assertTrue(
+            "the key material this phone could not destroy is reported on the arm where the " +
+                "machine answered and dropped on the arm where it never heard the question",
+            notice.contains(routed),
+        )
+    }
+
+    @Test
+    fun `the unsent sentence is unchanged when the purge finished`() {
+        val transport = "No link to your machine right now."
+
+        assertEquals(
+            "adding the purge fact changed what a phone whose purge finished is told on the " +
+                "unsent arm",
+            PairOnlyScreen.revokeUnsentNotice(transport),
+            PairOnlyScreen.revokeUnsentNotice(transport, purgeFailure = ""),
+        )
+    }
+
     @Test
     fun `the machine's answer is stated before the handset's own`() {
         val refusal = "remote control is disabled (kill switch off)"
