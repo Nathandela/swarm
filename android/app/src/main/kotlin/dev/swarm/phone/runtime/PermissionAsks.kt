@@ -48,6 +48,32 @@ object PermissionAsks {
     }
 
     /**
+     * Forget that the prompt was ever raised, because the answer is now in hand
+     * (agents-tracker-qyb3).
+     *
+     * THE BIT WAS WRITE-ONCE AND THAT MADE IT A ONE-WAY DOOR. It exists to tell a first run from a
+     * permanent refusal, and both of those are `showRationale == false` -- so once it was set, an
+     * ungranted permission could only ever resolve to PERMANENTLY_DENIED. A user who GRANTED the
+     * permission and later revoked it in system settings then met two dead switches and a
+     * "turn them on in system settings" notice, on a phone where the platform would still have
+     * raised its own prompt. The grant is the one moment this app KNOWS the answer, so it is the
+     * moment the record of having asked stops being evidence of anything.
+     *
+     * IT IS CALLED ON THE GRANT AND NOT ON THE DENIAL, and the asymmetry is the whole point: a
+     * denial is exactly the state the bit was written for. `SettingsSurface.notificationPermissionNow`
+     * is the caller.
+     *
+     * WHAT IT DOES NOT FIX, said here rather than left to be discovered: a first dialog the user
+     * DISMISSES rather than answers also leaves the bit set over a platform that would still
+     * prompt. Nothing in this app can see that, because nothing overrides
+     * `onRequestPermissionsResult` -- the answer arrives as a resume -- so it stays on
+     * agents-tracker-qyb3 rather than being half-handled here.
+     */
+    fun forget(context: Context, permission: AppPermission) {
+        store(context).edit().putBoolean(keyFor(permission), false).apply()
+    }
+
+    /**
      * The shipped names, and they are literals for a reason: installs in the field carry
      * `swarm-permission-asks`/`asked-camera` already, and a helper that renamed either would answer
      * false on every one of those handsets -- resolving a permission the user permanently refused

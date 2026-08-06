@@ -22,6 +22,7 @@ import dev.swarm.phone.runtime.AppPermission
 import dev.swarm.phone.runtime.NotificationDelivery
 import dev.swarm.phone.runtime.NotificationDeliveryResolver
 import dev.swarm.phone.runtime.PermissionAsks
+import dev.swarm.phone.runtime.PermissionState
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.FacadeBridge
@@ -383,31 +384,87 @@ class SettingsSurface(
         val base = if (held != null && held.pendingSync) {
             settleWithTheMachine(bridge, held)
         } else {
-            bridge.pushSettings()
+            settingsOr(held) { bridge.pushSettings() }
         }
-        return base.withNotificationPermission(
-            PermissionStateResolver.resolve(
-                permission = AppPermission.POST_NOTIFICATIONS,
-                sdkInt = Build.VERSION.SDK_INT,
-                granted = activity.checkSelfPermission(
-                    AppPermission.POST_NOTIFICATIONS.manifestName,
-                ) == PackageManager.PERMISSION_GRANTED,
-                // THE PERSISTED BIT, AND IT USED TO BE THE LITERAL `true` (agents-tracker-0dij).
-                // The comment beside it claimed "the permission is requested on the notification
-                // path" and no such path existed -- the app's only `requestPermissions` call was
-                // the camera's -- so on API 33+ every ungranted phone resolved PERMANENTLY_DENIED
-                // five seconds after install: both switches disabled, and a notice sending the
-                // owner to system settings where nothing was wrong. The ask is now [onToggled]'s,
-                // and this is the bit that tells a first run from a permanent refusal.
-                hasAskedBefore = PermissionAsks.hasAsked(
-                    activity,
-                    AppPermission.POST_NOTIFICATIONS,
-                ),
-                showRationale = activity.shouldShowRequestPermissionRationale(
-                    AppPermission.POST_NOTIFICATIONS.manifestName,
-                ),
+        return base
+            .withNotificationPermission(notificationPermissionNow())
+            .withNotificationDelivery(deliveryNow())
+    }
+
+    /**
+     * The preference the facade holds, or the last screen this panel drew where it cannot be read
+     * (agents-tracker-doza).
+     *
+     * IT IS THE SAME COMPOSITION [machineOf] ALREADY MAKES, on the call beside it. This one was
+     * unguarded: [read] runs from [render], which runs from `PhoneActivity.onResume` and from
+     * every journal event, so a facade that refuses -- a core that has been closed, a state blob
+     * that will not decode -- was an uncaught exception on the looper. The app died on a screen
+     * the user merely opened, with no tap anywhere in it.
+     *
+     * THE FALLBACK IS THE LAST SCREEN AND NOT A DEFAULT, which is [SettingsScreen]'s own rule
+     * ("it renders what was PERSISTED, never a default") applied to the error path: switches that
+     * flipped themselves off because a read failed would silently re-enable nothing and silently
+     * disable everything, which is the process-death defect that rule exists to prevent. With
+     * nothing held -- the first draw after a process death -- the honest answer is that no
+     * preference is known, which is the empty screen rather than an invented one.
+     *
+     * IT SAYS NOTHING, unlike every other refusal on this surface, and that is deliberate: this
+     * runs on EVERY render, so a toast here would fire repeatedly for one condition, over a panel
+     * that is still showing the user's settings correctly.
+     *
+     * INTERNAL AND TAKING THE READ AS A LAMBDA so `SettingsSurfaceReadTest` has a subject:
+     * `PhoneRuntime.phone()` answers Unavailable on every JVM run, so [read] itself is never
+     * entered there and a guard nothing can execute is a guard nobody has checked.
+     */
+    internal fun settingsOr(held: SettingsScreen?, read: () -> SettingsScreen): SettingsScreen =
+        try {
+            read()
+        } catch (unreadable: Exception) {
+            held ?: SettingsScreen(alerts = false, mentions = false)
+        }
+
+    /**
+     * PB-RUN-2's state for POST_NOTIFICATIONS, asked of the platform on every draw -- and the one
+     * place the persisted ask bit is corrected (agents-tracker-qyb3).
+     *
+     * THE BIT USED TO BE THE LITERAL `true` (agents-tracker-0dij). The comment beside it claimed
+     * "the permission is requested on the notification path" and no such path existed -- the
+     * app's only `requestPermissions` call was the camera's -- so on API 33+ every ungranted
+     * phone resolved PERMANENTLY_DENIED five seconds after install: both switches disabled, and a
+     * notice sending the owner to system settings where nothing was wrong. The ask is
+     * [onToggled]'s now, and the bit is what tells a first run from a permanent refusal.
+     *
+     * AND THE BIT IS CLEARED ON A GRANT, which is the half agents-tracker-qyb3 adds.
+     * `PermissionAsks.remember` was write-once, and `shouldShowRequestPermissionRationale` is
+     * false after a grant exactly as it is after a permanent refusal -- so a phone that granted
+     * the permission and later revoked it in system settings resolved PERMANENTLY_DENIED for the
+     * life of the install: two dead switches and a redirect, over a platform that would still
+     * have prompted. This is the one moment the app KNOWS, so it is where the record of the ask
+     * is retired. It is not cleared on any other state: a denial is precisely what the bit was
+     * written for.
+     *
+     * IT IS SPLIT OUT OF [read] FOR [deliveryNow]'S REASON, which is that the GATHER is what goes
+     * wrong. A resolver handed a constant decides nothing and every unit test over it stays
+     * green, which is 0dij's whole history; [read] cannot carry the assertion because
+     * `PhoneRuntime.phone()` answers Unavailable on every JVM run, and this touches only the
+     * Activity and the persisted bit, both of which Robolectric models.
+     */
+    internal fun notificationPermissionNow(): PermissionState {
+        val state = PermissionStateResolver.resolve(
+            permission = AppPermission.POST_NOTIFICATIONS,
+            sdkInt = Build.VERSION.SDK_INT,
+            granted = activity.checkSelfPermission(
+                AppPermission.POST_NOTIFICATIONS.manifestName,
+            ) == PackageManager.PERMISSION_GRANTED,
+            hasAskedBefore = PermissionAsks.hasAsked(activity, AppPermission.POST_NOTIFICATIONS),
+            showRationale = activity.shouldShowRequestPermissionRationale(
+                AppPermission.POST_NOTIFICATIONS.manifestName,
             ),
-        ).withNotificationDelivery(deliveryNow())
+        )
+        if (state == PermissionState.GRANTED) {
+            PermissionAsks.forget(activity, AppPermission.POST_NOTIFICATIONS)
+        }
+        return state
     }
 
     /**
