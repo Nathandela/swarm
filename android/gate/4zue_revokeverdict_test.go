@@ -52,6 +52,15 @@ var zueComposes = regexp.MustCompile(`\brevokeNoticeFor\s*\(`)
 // the operation id is -- the panel that learned it is destroyed by the command that produced it.
 var zueCarriesThePurgeFact = regexp.MustCompile(`\bpurgeFailure\b`)
 
+// zueFallsBackForASilentPanel is the join that keeps a dropped settle from drawing nothing
+// (agents-tracker-xeex): the panel's sentence where there is one, and the sentence composed from
+// the latches where the panel never got to speak.
+//
+// It names the SHAPE, `unpairNotice.ifEmpty { ... }`, because that is the only spelling this
+// surface uses for "prefer what was said, fall back to what can be derived". A different one has
+// to re-aim this clause rather than delete it.
+var zueFallsBackForASilentPanel = regexp.MustCompile(`unpairNotice\s*\.\s*ifEmpty`)
+
 // zueFaults reports every way the pair-only draw can fail to claim the machine's answer.
 //
 // THE FOUR CHECKS ARE SEPARATE BECAUSE THE FOUR FAILURES ARE, and three of them are states a
@@ -95,6 +104,18 @@ func zueFaults(where, code string) []string {
 				"failure. `App.PurgeKeys` reports that the key material AT REST survived, and this "+
 				"draw is what overwrites the panel's sentence -- so the fact would be on screen "+
 				"until the machine replied and gone from the moment it did")
+		}
+		// AND THE PANEL MAY NEVER HAVE SPOKEN AT ALL (agents-tracker-xeex). `VerbDispatch.press`
+		// ends in `if (attached) settle(answer)` and `release()` detaches on every pause, so a
+		// revoke whose round trip outlives the user's attention loses the sentence the settle
+		// would have written -- while the purge in the same press's `finally` has already
+		// destroyed both key tiers. Returning the panel's empty string then draws the screen a
+		// FRESH INSTALL gets on a handset that has just unpaired and purged itself.
+		if !zueFallsBackForASilentPanel.MatchString(body) {
+			faults = append(faults, where+": `"+name+"` hands back the panel's sentence with no "+
+				"fallback. A settle that was dropped wrote none, and this draw is the only thing "+
+				"left that can say anything -- both latches survive a dropped settle, so the "+
+				"unconfirmed sentence and the purge failure are both still derivable here")
 		}
 	}
 	drawn := false
@@ -156,10 +177,10 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
     }
 }`
-	if faults := zueFaults("claimedandunasked.kt", claimedAndUnasked); len(faults) != 3 {
+	if faults := zueFaults("claimedandunasked.kt", claimedAndUnasked); len(faults) != 4 {
 		t.Errorf("the scan does not report an id claimed with nothing asked of the machine, no "+
-			"sentence composed from the answer and no purge fact carried:\n%s",
-			strings.Join(faults, "\n"))
+			"sentence composed from the answer, no purge fact carried and no fallback for a "+
+			"panel that never spoke:\n%s", strings.Join(faults, "\n"))
 	}
 
 	// The answer is read and the screen draws the settle's sentence over it anyway.
@@ -176,10 +197,10 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
     }
 }`
-	if faults := zueFaults("askedanduncomposed.kt", askedAndUncomposed); len(faults) != 2 {
+	if faults := zueFaults("askedanduncomposed.kt", askedAndUncomposed); len(faults) != 3 {
 		t.Errorf("the scan passes a verdict that is resolved and never turned into the screen's "+
-			"words (nor carries the purge fact those words would have taken):\n%s",
-			strings.Join(faults, "\n"))
+			"words (nor carries the purge fact those words would have taken, nor falls back when "+
+			"the panel wrote nothing):\n%s", strings.Join(faults, "\n"))
 	}
 
 	// The whole re-read, on a draw that does not call it.
@@ -188,7 +209,8 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         val issued = runtime.revokeOperation()
         if (issued.isEmpty()) return settings.unpairNotice
         val verdict = CommandVerdict.of(FacadeBridge(app).launchOutcome(issued), issued, CommandVerdict.ACCEPTED_OK)
-        return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+        val composed = PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+        return if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed }
     }
 
     private fun drawPairOnly(reason: PairOnlyReason) {
@@ -208,8 +230,8 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         val issued = runtime.revokeOperation()
         if (issued.isEmpty()) return settings.unpairNotice
         val verdict = CommandVerdict.of(FacadeBridge(app).launchOutcome(issued), issued, CommandVerdict.ACCEPTED_OK)
-        if (!verdict.answered) return settings.unpairNotice
-        return PairOnlyScreen.revokeNoticeFor(verdict)
+        val composed = PairOnlyScreen.revokeNoticeFor(verdict)
+        return if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed }
     }
 
     private fun drawPairOnly(reason: PairOnlyReason, app: App) {
@@ -223,8 +245,9 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
 			strings.Join(faults, "\n"))
 	}
 
-	// What the fix produces.
-	const fixed = `class PhoneSurface {
+	// THE PANEL'S SENTENCE TAKEN AS THE ONLY ONE (agents-tracker-xeex): everything else wired, and
+	// a dropped settle draws the fresh-install screen on a phone that has purged itself.
+	const panelSilent = `class PhoneSurface {
     private fun revokeNotice(app: App): String {
         val issued = runtime.revokeOperation()
         if (issued.isEmpty()) return settings.unpairNotice
@@ -235,6 +258,31 @@ func TestZUE_TheVerdictScanDiscriminates(t *testing.T) {
         }
         if (!verdict.answered) return settings.unpairNotice
         return PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+    }
+
+    private fun drawPairOnly(reason: PairOnlyReason, app: App) {
+        val revoked = revokeNotice(app)
+        host.addView(pairOnlyView(notice = revoked, copy = PairOnlyScreen.copyFor(reason)))
+    }
+}`
+	if faults := zueFaults("panelsilent.kt", panelSilent); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults where the draw hands back a sentence the dropped settle "+
+			"never wrote, on a handset that has already destroyed both key tiers:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+
+	// What the fix produces.
+	const fixed = `class PhoneSurface {
+    private fun revokeNotice(app: App): String {
+        val issued = runtime.revokeOperation()
+        if (issued.isEmpty()) return settings.unpairNotice
+        val verdict = try {
+            CommandVerdict.of(FacadeBridge(app).launchOutcome(issued), issued, CommandVerdict.ACCEPTED_OK)
+        } catch (unreadable: Exception) {
+            CommandVerdict.UNANSWERED
+        }
+        val composed = PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = runtime.purgeFailure())
+        return if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed }
     }
 
     private fun drawPairOnly(reason: PairOnlyReason, app: App) {
