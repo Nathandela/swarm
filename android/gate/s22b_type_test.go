@@ -12,6 +12,14 @@ package gate
 // PB-DS-3: "Decision: the platform families -- sans-serif and monospace, zero bundled assets."
 // Criterion: "A gate asserts the mono style's family is the one recorded."
 //
+// ADR-009 D7 (phase O5) MOVED HALF OF PB-DS-3's DECISION and left the other half alone. The sans
+// half is unchanged: platform `sans-serif`, no bundled display face. The MONO half is taken --
+// JetBrains Mono is bundled, because the residual B134 recorded and MonoBoxDrawingTest measured
+// (box drawing resolving through fallback at 0.71em against the family's own 0.60em, an 18%
+// mismatch in the one place the app draws a frame) has no other fix. So this file now carries two
+// records rather than one, and `zero bundled assets` survives as a claim about the SANS family
+// only. See s22bFontRecord.
+//
 // THE STATE OF THE WORLD, verified before these assertions were written:
 //
 //	res/values/                                colors.xml, strings.xml, themes.xml -- no type.xml
@@ -43,19 +51,103 @@ import (
 // PB-DS-3: the recorded substitution.
 // ---------------------------------------------------------------------------
 
-// s22bFontSubstitution is ADR-007 B134 decision 2, as a map. The CSS font stacks name SF Pro and
-// SF Mono, neither of which is licensable off Apple; the decision is the platform families and
-// zero bundled assets.
+// s22bFontSubstitution is the recorded substitution, as a map: what Android renders for a token
+// whose CSS stack names a face the platform cannot supply.
 //
 // IT IS A CONSTANT HERE AND IT HAS TO BE. Unlike every other number in this slice, this one
 // cannot be computed from the artifact -- the artifact names fonts that do not exist on the
 // target platform, which is the whole reason a decision was required. So the constant is the
-// DECISION, and TestPBDS3_TheSubstitutionIsTheOneTheADRRecords joins it back to the ADR text so
-// that changing it here without changing the record fails.
+// DECISION, and TestPBDS3_TheSubstitutionIsTheOneTheADRRecords joins each row back to the ADR
+// that records it, so that changing it here without changing the record fails.
+//
+// AUTHORIZED REWRITE, ADR-009 D8.3 / D7 (phase O5). What this table said before, quoted so the
+// pin's move is visible rather than inferred:
+//
+//	var s22bFontSubstitution = map[string]string{
+//		"--p-font": "sans-serif",
+//		"--p-mono": "monospace",
+//	}
+//
+// The sans row does not move. The mono row does: `monospace` is Droid Sans Mono, which does not
+// cover U+2500-257F, and the app draws terminal frames out of that block. ADR-007 B134 itself set
+// the condition for taking the upgrade ("until the peek is seen to need it"), recorded that the
+// condition was met, and deferred the asset-weight decision to whoever owned the peek's screen;
+// ADR-009 D7 is that decision, and O5 is where it lands.
+//
+// THE TOKEN VALUE IN tokens.json DOES NOT MOVE, and the reason is worth stating because ADR-009
+// D3's row for `--p-mono` predicted it would ("O5 prepends bundled JetBrains Mono"). The maquette
+// is the normative design source (D2) and internal/design/tokens_test.go joins tokens.json to it
+// in BOTH directions with no exception mechanism, so prepending a family name to the JSON without
+// editing the owner-signed maquette is a drift failure, and editing the maquette to satisfy a
+// gate is the tail wagging the dog. The token states the design's intent (a mono stack); THIS
+// TABLE is the layer that says what Android renders for it, which is precisely the layer PB-DS-3
+// exists to be. ADR-009's D7 amendment records the same reasoning.
 var s22bFontSubstitution = map[string]string{
 	"--p-font": "sans-serif",
-	"--p-mono": "monospace",
+	"--p-mono": "@font/jetbrains_mono",
 }
+
+// s22bMonoFontFeatures is ADR-009 D7's other half: "`tnum` + `zero` + `calt` enabled wherever
+// machine data renders".
+//
+// WHERE MACHINE DATA RENDERS IS THE MONO FAMILY, and that is not a paraphrase -- it is what the
+// design already says. Every rule the artifact sets in `var(--p-mono)` is a machine's own
+// register: the LIVE counter, the section labels, the agent name, the command line, the binding
+// line, the toast's body, the terminal peek. Nothing proportional in this app renders a number
+// the machine produced. So the rule is exactly "mono styles carry the features, sans styles do
+// not", asserted in both directions in s22bStyleFaults.
+//
+// WHY EACH FEATURE. `tnum` gives digits one advance, so a counter that ticks 9 -> 10 does not
+// reflow the line it sits in; `zero` slashes the zero, which is the one glyph pair a person
+// reading a session id or a hash has to disambiguate; `calt` is ON BY DEFAULT and is stated
+// anyway, because Android's fontFeatureSettings is a full override -- naming two features
+// without it would silently DISABLE the contextual alternates the family ships, which in
+// JetBrains Mono is what keeps `->` and `!=` legible.
+const s22bMonoFontFeatures = "tnum, zero, calt"
+
+// s22bFontDecision is one row of the substitution table, joined to the record that decides it.
+type s22bFontDecision struct {
+	ADR    string // repo-relative path to the ADR of record
+	Anchor string // the heading the decision lives under, so the search is scoped to it
+	Wants  []string
+}
+
+// s22bFontRecord is where each half of the substitution is written down. Two ADRs, because
+// ADR-009 D7 supersedes ADR-007 B134 for the mono family and leaves the sans family standing;
+// a single-record join would have to pick one and would then be reading a superseded decision or
+// a decision that never mentioned sans.
+var s22bFontRecord = map[string]s22bFontDecision{
+	"--p-font": {
+		ADR:    "docs/adr/ADR-007-remote-access.md",
+		Anchor: "## B134.",
+		Wants:  []string{"`sans-serif`", "zero bundled assets"},
+	},
+	"--p-mono": {
+		ADR:    "docs/adr/ADR-009-obsidian-visual-direction.md",
+		Anchor: "### D7.",
+		Wants: []string{
+			"`JetBrainsMono-Regular.ttf`",
+			"`JetBrainsMono-Medium.ttf`",
+			"`" + s22bMonoFontFeatures + "`",
+		},
+	},
+}
+
+// s22bBundledFonts is the exact set of font files ADR-009 D7 authorizes, repo-relative.
+//
+// TWO FACES AND NOT A VARIABLE FONT. The type scale asks for 400, 500 and 600 on the mono
+// family; a two-file static pair covers 400 and 500 exactly and resolves 600 to the nearest, and
+// the variable `JetBrainsMono[wght].ttf` would cost 60% more bytes to serve one weight nobody
+// asked for at full fidelity. Recorded in D7 so the count is a decision rather than whatever was
+// convenient.
+var s22bBundledFonts = map[string]string{
+	"android/app/src/main/res/font/jetbrains_mono.xml":         "the family: which face answers which weight",
+	"android/app/src/main/res/font/jetbrains_mono_regular.ttf": "JetBrains Mono Regular, weight 400",
+	"android/app/src/main/res/font/jetbrains_mono_medium.ttf":  "JetBrains Mono Medium, weight 500",
+}
+
+// s22bFontLicence is where OFL-1.1's own condition lands: the licence travels with the font.
+const s22bFontLicence = "docs/design/fonts/JetBrainsMono-OFL.txt"
 
 // s22bDocChromeSelectors are rules in the shared block that style the DOCUMENTATION, not the
 // product, and therefore get no TextAppearance.
@@ -383,9 +475,32 @@ func s22bStyleFaults(where string, style s22bStyle, spec s22bTypeSpec) []string 
 			where, spec.Family, wantFamily)
 	} else if raw != wantFamily {
 		fault("PB-DS-3: %s has android:fontFamily=%q; %s substitutes to %q (ADR-007 B134 "+
-			"decision 2). Every text style in this app renders a substitute for a font that is "+
-			"not licensable off Apple; the point of the decision is that the substitute is "+
-			"chosen once and written down.", where, raw, spec.Family, wantFamily)
+			"decision 2, as amended for the mono family by ADR-009 D7). Every text style in this "+
+			"app renders a substitute for a font that is not licensable off Apple; the point of "+
+			"the decision is that the substitute is chosen once and written down.",
+			where, raw, spec.Family, wantFamily)
+	}
+
+	// FONT FEATURES, ADR-009 D7. Asserted in BOTH directions: a mono style without them is the
+	// defect the decision names, and a sans style WITH them is a feature string typed at a style
+	// rather than derived from what that style renders.
+	features, hasFeatures := style.Items["android:fontFeatureSettings"]
+	switch {
+	case spec.Family == "--p-mono" && !hasFeatures:
+		fault("ADR-009 D7: %s renders machine data and declares no android:fontFeatureSettings; "+
+			"it must be %q. Tabular figures and the slashed zero are the whole reason a mono face "+
+			"was bundled at all, and a bundled face nobody switched them on for is 540 KB of APK "+
+			"buying a slightly different letter shape.", where, s22bMonoFontFeatures)
+	case spec.Family == "--p-mono" && features != s22bMonoFontFeatures:
+		fault("ADR-009 D7: %s has android:fontFeatureSettings=%q, want %q. The attribute is a "+
+			"full override rather than an addition, so a partial list silently turns off every "+
+			"feature it omits -- including the contextual alternates the family ships on.",
+			where, features, s22bMonoFontFeatures)
+	case spec.Family != "--p-mono" && hasFeatures:
+		fault("ADR-009 D7: %s is a %s style and declares android:fontFeatureSettings=%q. The "+
+			"features are for machine data, which in this design is the mono family and nothing "+
+			"else; on a proportional face `tnum` is a width nobody asked for.",
+			where, spec.Family, features)
 	}
 
 	// LINE HEIGHT, where the design gives one. CSS's unitless multiplier has no Android form --
@@ -806,9 +921,11 @@ func TestPBDS2_TheDerivedReadersRefusePerturbedInput(t *testing.T) {
 		"the size in dp":                  {"android:textSize": "34dp"},
 		"a weight the row does not state": {"android:textFontWeight": "650"},
 		"tracking the row does not state": {"android:letterSpacing": "-0.025"},
-		"the mono family":                 {"android:fontFamily": "monospace"},
+		"the mono family":                 {"android:fontFamily": "@font/jetbrains_mono"},
 		"no size at all":                  {"android:textSize": ""},
 		"no tracking at all":              {"android:letterSpacing": ""},
+		// ADR-009 D7, the sans direction: features belong to machine data, and this row is sans.
+		"font features on a proportional face": {"android:fontFeatureSettings": s22bMonoFontFeatures},
 	} {
 		perturbed := map[string]string{}
 		for k, v := range correct {
@@ -837,6 +954,47 @@ func TestPBDS2_TheDerivedReadersRefusePerturbedInput(t *testing.T) {
 		t.Error("PB-DS-2: a derived style carrying a line height passes against a row that states " +
 			"none. §7 states three properties for an added style, and a fourth appearing in " +
 			"type.xml is a design decision taken in a resource file.")
+	}
+
+	// 3. ADR-009 D7's mono direction. The perturbations above all run against a SANS spec, so the
+	//    "a mono style must carry the features" branch would be unexercised by every one of them
+	//    -- and an unexercised branch that reports nothing is exactly how a feature string ends up
+	//    declared on no style at all while this file stays green.
+	monoSpec := s22bAddedTypeSpec(s22bAddedType{
+		Style: "Mono.Control", SizeSp: 11.5, Weight: 400, Family: "--p-mono", MockSize: 11.5,
+		Site: "control",
+	})
+	monoCorrect := map[string]string{
+		"android:textSize":            "11.5sp",
+		"android:textFontWeight":      "400",
+		"android:letterSpacing":       "0",
+		"android:fontFamily":          s22bFontSubstitution["--p-mono"],
+		"android:fontFeatureSettings": s22bMonoFontFeatures,
+	}
+	if faults := s22bStyleFaults("control", s22bStyle{Items: monoCorrect}, monoSpec); len(faults) != 0 {
+		t.Errorf("ADR-009 D7: the mono style the decision describes is reported as a fault: %v",
+			faults)
+	}
+	for what, items := range map[string]map[string]string{
+		"no font features at all":  {"android:fontFeatureSettings": ""},
+		"only two of the three":    {"android:fontFeatureSettings": "tnum, zero"},
+		"the platform mono family": {"android:fontFamily": "monospace"},
+	} {
+		perturbed := map[string]string{}
+		for k, v := range monoCorrect {
+			perturbed[k] = v
+		}
+		for k, v := range items {
+			if v == "" {
+				delete(perturbed, k)
+				continue
+			}
+			perturbed[k] = v
+		}
+		if faults := s22bStyleFaults("control", s22bStyle{Items: perturbed}, monoSpec); len(faults) == 0 {
+			t.Errorf("ADR-009 D7: a mono style carrying %s passes the comparison. The decision "+
+				"is then a paragraph the gate cites and never checks.", what)
+		}
 	}
 }
 
@@ -889,41 +1047,96 @@ func TestPBDS2_TheDocChromeExclusionIsStillTrue(t *testing.T) {
 // PB-DS-3.
 // ---------------------------------------------------------------------------
 
-// TestPBDS3_TheSubstitutionIsTheOneTheADRRecords joins the constant in this file to the record.
+// TestPBDS3_TheSubstitutionIsTheOneTheADRRecords joins each row of the constant in this file to
+// the ADR that decides it.
+//
+// AUTHORIZED REWRITE, ADR-009 D8.3 / D7. What this test asserted before, quoted so the pin's move
+// is visible rather than inferred:
+//
+//	adr := readFileOrFail(t, ...("docs/adr/ADR-007-remote-access.md"), "PB-DS-3")
+//	start := strings.Index(adr, "## B134.")
+//	entry := adr[start:]
+//	for token, family := range s22bFontSubstitution {
+//		if !strings.Contains(entry, "`"+family+"`") {
+//			t.Errorf("PB-DS-3: ADR-007 B134 does not record %q as the substitute for %s...")
+//		}
+//	}
+//	if !strings.Contains(entry, "zero bundled assets") {
+//		t.Errorf("PB-DS-3: ADR-007 B134 no longer records `zero bundled assets`...")
+//	}
+//
+// It read ONE entry because there was one decision. There are now two, and the rewrite is a
+// widening rather than a weakening: `zero bundled assets` is still required, of the sans row that
+// still claims it, and the mono row has to name its bundled family, both faces AND the feature
+// string in the ADR that decided them. A single-entry reader could not have said that.
 func TestPBDS3_TheSubstitutionIsTheOneTheADRRecords(t *testing.T) {
-	adr := readFileOrFail(t,
-		filepath.Join(repoRoot(t), filepath.FromSlash("docs/adr/ADR-007-remote-access.md")),
-		"PB-DS-3")
-
-	start := strings.Index(adr, "## B134.")
-	if start < 0 {
-		t.Fatalf("PB-DS-3: ADR-007 has no B134 entry; the font decision has no record and the " +
-			"substitution table in this file would be a choice made in a test")
-	}
-	entry := adr[start:]
-	for token, family := range s22bFontSubstitution {
-		if !strings.Contains(entry, "`"+family+"`") {
-			t.Errorf("PB-DS-3: ADR-007 B134 does not record %q as the substitute for %s. The "+
-				"gate's table and the record must be the same decision, or the decision is "+
-				"whatever the gate happens to say.", family, token)
+	for _, token := range sortedKeys(s22bFontSubstitution) {
+		record, ok := s22bFontRecord[token]
+		if !ok {
+			t.Errorf("PB-DS-3: %s substitutes to %q and no ADR is named for it, so the "+
+				"substitution is a choice made in a test", token, s22bFontSubstitution[token])
+			continue
+		}
+		adr := readFileOrFail(t,
+			filepath.Join(repoRoot(t), filepath.FromSlash(record.ADR)), "PB-DS-3")
+		start := strings.Index(adr, record.Anchor)
+		if start < 0 {
+			t.Errorf("PB-DS-3: %s has no %q section; %s's substitution has no record and the "+
+				"table in this file would be a choice made in a test",
+				record.ADR, record.Anchor, token)
+			continue
+		}
+		entry := adr[start:]
+		if end := strings.Index(entry[len(record.Anchor):], "\n## "); end >= 0 {
+			entry = entry[:len(record.Anchor)+end]
+		}
+		wants := append([]string{"`" + s22bFontSubstitution[token] + "`"}, record.Wants...)
+		for _, want := range wants {
+			if !strings.Contains(entry, want) {
+				t.Errorf("PB-DS-3: %s %s does not record %s for %s. The gate's table and the "+
+					"record must be the same decision, or the decision is whatever the gate "+
+					"happens to say.", record.ADR, strings.TrimSuffix(record.Anchor, "."), want, token)
+			}
 		}
 	}
-	if !strings.Contains(entry, "zero bundled assets") {
-		t.Errorf("PB-DS-3: ADR-007 B134 no longer records `zero bundled assets`, which is the " +
-			"half of the decision the assertion below enforces")
+
+	// The supersession has to be visible from the OLD record too. B134 still says "zero bundled
+	// assets" -- correctly, of the sans family -- and a reader who stops there would conclude the
+	// app bundles nothing, which is now false. Requiring the pointer is what stops two records
+	// disagreeing in silence.
+	b134 := readFileOrFail(t,
+		filepath.Join(repoRoot(t), filepath.FromSlash("docs/adr/ADR-007-remote-access.md")),
+		"PB-DS-3")
+	if !strings.Contains(b134, "ADR-009 D7") {
+		t.Error("PB-DS-3: ADR-007 does not name ADR-009 D7 anywhere. B134 decision 2 still reads " +
+			"`zero bundled assets`, which is true of the sans family and false of the app; the " +
+			"entry must carry the pointer to the decision that superseded its mono half.")
 	}
 }
 
-// TestPBDS3_NoFontIsBundled is the other half of the decision, and the only half with a
-// mechanical form: "zero bundled assets".
+// TestPBDS3_ExactlyTheDecidedFontsAreBundled is the mechanical half of the decision.
 //
-// IT SCANS res/ AND assets/ WHOLE rather than res/font/ alone, and that is the difference
-// between this assertion and a vacuous one. `res/font/` does not exist, so a scan pointed at it
-// walks nothing, finds nothing, and is green -- and would be equally green if the walk were
-// broken, if the extension list were empty, or if a font were sitting one directory away. Walking
-// the trees that DO have files gives the check a population to be right about, and the file count
-// below is asserted so an empty walk reports itself.
-func TestPBDS3_NoFontIsBundled(t *testing.T) {
+// AUTHORIZED REWRITE, ADR-009 D8.3 / D7. This test was TestPBDS3_NoFontIsBundled, and what it
+// asserted, quoted so the pin's move is visible rather than inferred:
+//
+//	sort.Strings(found)
+//	if len(found) > 0 {
+//		t.Errorf("PB-DS-3: the decision is the platform families with ZERO bundled assets, and "+
+//			"these are bundled:\n\t%s\nBundling JetBrains Mono is the recorded upgrade path for "+
+//			"the box-drawing residual, and taking it is a decision that belongs in ADR-007 B134 "+
+//			"rather than in a resource directory.", strings.Join(found, "\n\t"))
+//	}
+//
+// "Zero" becomes "exactly these three", which is a STRONGER assertion and not a relaxed one: the
+// old test could not tell a second mono weight, a bundled sans, or an italic nobody uses from
+// nothing at all, and each of those is a quarter-megabyte of APK arriving without a decision.
+// Set equality reports a missing file and a surplus file as two different failures.
+//
+// IT STILL SCANS res/ AND assets/ WHOLE rather than res/font/ alone, for the reason the old test
+// gave: a scan pointed at one directory is green when the walk is broken, when the extension list
+// is empty, and when a face is sitting one directory away. The file count below is asserted so an
+// empty walk reports itself.
+func TestPBDS3_ExactlyTheDecidedFontsAreBundled(t *testing.T) {
 	roots := []string{
 		filepath.Join(appModule(t), "src", "main", "res"),
 		filepath.Join(appModule(t), "src", "main", "assets"),
@@ -934,7 +1147,7 @@ func TestPBDS3_NoFontIsBundled(t *testing.T) {
 	binary := map[string]bool{".ttf": true, ".otf": true, ".ttc": true, ".woff": true, ".woff2": true}
 	fontDir := string(filepath.Separator) + "font" + string(filepath.Separator)
 
-	var found []string
+	found := map[string]bool{}
 	walked := 0
 	for _, root := range roots {
 		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -943,7 +1156,7 @@ func TestPBDS3_NoFontIsBundled(t *testing.T) {
 			}
 			walked++
 			if binary[strings.ToLower(filepath.Ext(path))] || strings.Contains(path, fontDir) {
-				found = append(found, mustRel(t, path))
+				found[filepath.ToSlash(mustRel(t, path))] = true
 			}
 			return nil
 		})
@@ -952,14 +1165,35 @@ func TestPBDS3_NoFontIsBundled(t *testing.T) {
 		t.Fatalf("PB-DS-3: walked no files under %s; a clean report would mean nothing",
 			mustRel(t, roots[0]))
 	}
-	sort.Strings(found)
-	if len(found) > 0 {
-		t.Errorf("PB-DS-3: the decision is the platform families with ZERO bundled assets, and "+
-			"these are bundled:\n\t%s\nBundling JetBrains Mono is the recorded upgrade path for "+
-			"the box-drawing residual, and taking it is a decision that belongs in ADR-007 B134 "+
-			"rather than in a resource directory.", strings.Join(found, "\n\t"))
+
+	for _, want := range sortedKeys(s22bBundledFonts) {
+		if !found[want] {
+			t.Errorf("ADR-009 D7: %s is not bundled (%s). The mono styles resolve %q, and an "+
+				"android:fontFamily Android cannot resolve does not fail the build -- it falls "+
+				"back to the default sans, silently, and the terminal peek stops being a terminal.",
+				want, s22bBundledFonts[want], s22bFontSubstitution["--p-mono"])
+		}
 	}
-	t.Logf("PB-DS-3: %d files under res/ and assets/, %d of them fonts", walked, len(found))
+	for _, got := range sortedKeys(found) {
+		if _, ok := s22bBundledFonts[got]; !ok {
+			t.Errorf("ADR-009 D7: %s is bundled and no decision names it. D7 authorizes exactly "+
+				"two faces; every extra weight, italic or family is a quarter-megabyte of APK "+
+				"that entered through a resource directory rather than through a record.", got)
+		}
+	}
+
+	// OFL-1.1's own condition: the licence travels with the font. It is checked in beside the
+	// design docs rather than under res/, because res/font/ takes font resources and nothing
+	// else -- a .txt there is an aapt error, not a licence.
+	if _, err := os.Stat(filepath.Join(repoRoot(t), filepath.FromSlash(s22bFontLicence))); err != nil {
+		t.Errorf("ADR-009 D7: %s is missing. JetBrains Mono ships under OFL-1.1, which requires "+
+			"the licence and the copyright notice to travel with the font; bundling the bytes "+
+			"without them is the one part of this decision that is not ours to make.",
+			s22bFontLicence)
+	}
+
+	t.Logf("PB-DS-3 / ADR-009 D7: %d files under res/ and assets/, %d of them fonts",
+		walked, len(found))
 }
 
 // TestPBDS3_EveryMonoRuleBecomesAMonoStyle is the criterion's exact words -- "a gate asserts the
