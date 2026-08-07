@@ -32,7 +32,7 @@ package remotegw
 // sleeping while holding it stalls the DSR/CPR replies the CLI is blocking on, which is a
 // hang rather than a latency cost.
 //
-// THE COST, stated rather than hidden: up to submitGap on a submit that closely follows
+// THE COST, stated rather than hidden: up to submitframe.Gap on a submit that closely follows
 // text -- once per prompt, not once per keystroke -- and the same bound on whatever else
 // shares that inbound batch, since processBatch is serial. §6.0's 150 ms p50 budget is a
 // keystroke-echo budget and is not touched.

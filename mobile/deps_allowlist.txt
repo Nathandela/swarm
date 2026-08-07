@@ -29,6 +29,13 @@ github.com/Nathandela/swarm/internal/phonecore
 github.com/Nathandela/swarm/internal/protocol/schema
 github.com/Nathandela/swarm/internal/status
 
+# --- the shared submit-boundary framing rule (ADR-010 Amendment 1 A2)
+# Arrives with internal/phonecore, whose coalescer it was extracted from, so the
+# daemon-side send_input writer applies ONE copy of the r3p rule. Stdlib-only leaf: two
+# predicates, a run length and a duration constant, importing nothing but time. No code
+# reaches the handset that was not already there.
+github.com/Nathandela/swarm/internal/submitframe
+
 # --- crypto: sealing, Noise, epoch keys, SAS, device id
 github.com/Nathandela/swarm/internal/remote/crypto
 github.com/Nathandela/swarm/internal/remote/device

@@ -21,6 +21,8 @@ package phonecore
 import (
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/submitframe"
 )
 
 const (
@@ -297,7 +299,9 @@ func (c *InputCoalescer) drain(s *inputBuffer, now time.Time, force bool) []Inpu
 }
 
 // frameLen is how many leading bytes of buf may share ONE frame: a maximal run of submit
-// bytes or a maximal run of ordinary ones, never a mixture, capped at MaxInputPayload.
+// bytes or a maximal run of ordinary ones, never a mixture, capped at MaxInputPayload. The
+// rule itself lives in internal/submitframe, shared with the hops that must not undo it
+// (ADR-010 Amendment 1 A2); what stays here is why this side is where the boundary is made.
 //
 // THE MIXTURE IS THE DEFECT (bead agents-tracker-r3p, spike-SA finding #1, measured against
 // the real CLIs). A PTY write carrying text AND the carriage return that submits it is read
@@ -325,17 +329,7 @@ func (c *InputCoalescer) drain(s *inputBuffer, now time.Time, force bool) []Inpu
 // Separate frames are NECESSARY and not sufficient: the heuristic keys on co-arrival in one
 // read tick at the PTY, and the relay's batched delivery compresses this window away. The
 // gap itself is made at the last hop that can guarantee it (remotegw.LeaseConn.WriteDataIn).
-func frameLen(buf []byte) int {
-	submit := isSubmit(buf[0])
-	n := 1
-	for n < len(buf) && isSubmit(buf[n]) == submit {
-		n++
-	}
-	return min(n, MaxInputPayload)
-}
-
-// isSubmit reports whether b is a byte a CLI reads as "run what I typed".
-func isSubmit(b byte) bool { return b == '\r' || b == '\n' }
+func frameLen(buf []byte) int { return submitframe.FrameLen(buf, MaxInputPayload) }
 
 // copyBytes copies a payload out of the buffer, so the emitted frame never aliases bytes a
 // later append may reuse.
