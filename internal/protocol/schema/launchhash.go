@@ -22,8 +22,10 @@ import (
 //
 // Bound fields: Agent, Cwd, sorted Options, InitialPrompt, Worktree. Env is excluded
 // (a remote launch drops client env entirely, R-POL.5) and Cols/Rows are excluded
-// (cosmetic terminal dimensions). The encoding is length-prefixed so no two distinct
-// specs share an encoding.
+// (cosmetic terminal dimensions). SpawnedFrom/SpawnIntent (ADR-010 lineage) are
+// excluded as display metadata the daemon does not act on -- the Name precedent: a
+// tampered value corrupts a roster label, never what runs or where. The encoding is
+// length-prefixed so no two distinct specs share an encoding.
 func LaunchContentHash(req *LaunchReq) []byte {
 	h := sha256.New()
 	writeHashField(h, []byte(req.Agent))

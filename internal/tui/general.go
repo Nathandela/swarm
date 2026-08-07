@@ -574,12 +574,16 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	// Two identity columns (field test 4): the session NAME (bold, editable) then the
 	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
 	// so padRight always leaves a separating space (no jamming, width discipline).
+	tail := padRight(compactElapsed(elapsedOf(s)), colElapsed) + s.Summary
+	if badge := lineageBadge(s, m.sessions); badge != "" {
+		tail += " " + badge
+	}
 	fields := icon + " " +
 		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
 		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		gs.Render(padRight(statusToken(g), colStatus)) +
-		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
+		styleDim.Render(tail)
 
 	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
 	// selected row, so a mid-confirm regroup/removal cannot paint the prompt onto a
@@ -615,6 +619,53 @@ func confirmPrompt(s protocol.SessionView) string {
 		return "kill? y/n"
 	}
 	return "delete? y/n"
+}
+
+// lineageBadge is the row's spawn-lineage decoration (ADR-010 D4): where a spawned
+// session came from, and whether it spawned any session currently on the roster.
+// Both are derived from the roster slice the model already holds — no extra state
+// and no extra RPC. SpawnedFrom carries the parent's LOCAL id, so the match is
+// against the local half of each row's namespaced id.
+func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) string {
+	var badge string
+	if s.SpawnedFrom != "" {
+		badge = "from " + lineageLabel(s.SpawnedFrom, sessions)
+	}
+	local := localID(s.ID)
+	children := 0
+	for _, o := range sessions {
+		if o.SpawnedFrom == local {
+			children++
+		}
+	}
+	if children > 0 {
+		if badge != "" {
+			badge += " "
+		}
+		badge += "spawned " + itoa(children)
+	}
+	return badge
+}
+
+// lineageLabel names a parent session: its display label while it is still on the
+// roster, else the raw local id — the source session stays alive only until the user
+// closes it (D4), and a child must still say where it came from afterwards.
+func lineageLabel(parent string, sessions []protocol.SessionView) string {
+	for _, s := range sessions {
+		if localID(s.ID) == parent && s.Name != "" {
+			return s.Name
+		}
+	}
+	return parent
+}
+
+// localID is the local half of a namespaced row id, or the id itself when it is not
+// namespaced.
+func localID(id string) string {
+	if _, local, ok := protocol.ParseID(id); ok {
+		return local
+	}
+	return id
 }
 
 // elapsedOf is the time since the session was last active.

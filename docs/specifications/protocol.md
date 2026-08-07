@@ -120,6 +120,8 @@ alongside the group.
 | `last_activity` | time            | timestamp of the session's last activity                      |
 | `created_at`    | time            | session creation timestamp                                    |
 | `summary`       | string          | V-4 one-line last-output summary                              |
+| `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
+| `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 
 ## The `LaunchReq` message
 
@@ -141,6 +143,8 @@ and unrelated secrets are dropped.
 | `rows`           | int                 | initial terminal rows                                      |
 | `initial_prompt` | string              | optional initial prompt text                               |
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
+| `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
+| `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 
 ## The `TerminalSnapshot` message
 

@@ -122,6 +122,13 @@ const (
 	CapPairing       = "pairing"
 )
 
+// The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
+// package so callers name it through the same spelling they use for LaunchReq.
+const (
+	SpawnIntentHandoff  = schema.SpawnIntentHandoff
+	SpawnIntentDelegate = schema.SpawnIntentDelegate
+)
+
 // The JSON message types are declared in the daemon-free subpackage schema and
 // aliased here, so every existing importer (and the GG-7 drift check, which
 // reflects them) sees exactly the same types. The split is PB-BIND-0: a Go

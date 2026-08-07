@@ -69,7 +69,21 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		// they take no idempotency reservation, unchanged.
 		OperationID:   operationID,
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
+		// ADR-010 D4: the spawn lineage is carried VERBATIM — the server validates the
+		// intent vocabulary and nothing else; the daemon stamps both into meta.
+		SpawnedFrom: req.SpawnedFrom,
+		SpawnIntent: req.SpawnIntent,
 	}
+}
+
+// validSpawnIntent reports whether an intent is one the closed ADR-010 D4 vocabulary
+// admits. Empty is valid: the overwhelming majority of launches carry no lineage.
+func validSpawnIntent(intent string) bool {
+	switch intent {
+	case "", SpawnIntentHandoff, SpawnIntentDelegate:
+		return true
+	}
+	return false
 }
 
 // sanitizeName re-validates a client-supplied session name (E6.6/P-6): it strips
@@ -1168,6 +1182,19 @@ func (cc *clientConn) handleLaunch(c Control) {
 	}
 	if req.Cols < 1 || req.Cols > maxDim || req.Rows < 1 || req.Rows > maxDim {
 		cc.replyError("launch: cols/rows out of range")
+		return
+	}
+	// ADR-010 D4: the spawn lineage is validated BEFORE any daemon side effect. The
+	// intent vocabulary is closed (an unvalidated value would persist into meta and
+	// out to every roster), and an intent names a LINK, so it is meaningless — and
+	// unrenderable — without the session it links to.
+	if !validSpawnIntent(req.SpawnIntent) {
+		cc.replyErrorCode("launch: spawn_intent "+strconv.Quote(req.SpawnIntent)+" is not "+
+			strconv.Quote(SpawnIntentHandoff)+" or "+strconv.Quote(SpawnIntentDelegate), CodeInvalidField)
+		return
+	}
+	if req.SpawnIntent != "" && req.SpawnedFrom == "" {
+		cc.replyErrorCode("launch: spawn_intent requires spawned_from", CodeInvalidField)
 		return
 	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
@@ -2429,6 +2456,10 @@ func stampView(endpointID string, m persist.Meta, group status.Group) *SessionVi
 		// the status engine (Epic 7/10), which persist.Meta does not yet carry. Left
 		// "" until then rather than presented as a stale/empty live summary (F12).
 		Summary: "",
+		// ADR-010 D4: carry the persisted lineage onto every view, so both the list
+		// snapshot and the subscribe stream show where a session came from.
+		SpawnedFrom: m.SpawnedFrom,
+		SpawnIntent: m.SpawnIntent,
 	}
 }
 

@@ -18,13 +18,14 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// agentClient is the narrow daemon surface these verbs use — only List, Subscribe
-// and Kill. Keeping it narrow (the internal/tui precedent) makes every verb unit
-// testable with no daemon and no socket; *protocol.Client satisfies it as-is.
+// agentClient is the narrow daemon surface these verbs use — only List, Subscribe,
+// Kill and Launch. Keeping it narrow (the internal/tui precedent) makes every verb
+// unit testable with no daemon and no socket; *protocol.Client satisfies it as-is.
 type agentClient interface {
 	List() ([]protocol.SessionView, error)
 	Subscribe() (<-chan protocol.Event, error)
 	Kill(id string) error
+	Launch(protocol.LaunchReq) (id, name string, err error)
 }
 
 // watchTimeoutExit is the exit code a watch that reached its deadline without a
@@ -230,7 +231,7 @@ func dispatchAgentVerb(run func([]string, agentClient, io.Writer, io.Writer) int
 	}
 	client, err := protocol.Dial(cc.SocketPath, caps)
 	if err != nil {
-		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		fmt.Fprintf(stderr, "swarm: %v (no daemon running? start swarm first)\n", err)
 		return 1
 	}
 	defer client.Close()
