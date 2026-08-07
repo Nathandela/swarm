@@ -1,6 +1,6 @@
 # ADR-010: Structured interaction capture is an optional, additive extension of the frozen adapter contract
 
-**Status**: Proposed
+**Status**: Accepted (owner sign-off 2026-08-07)
 **Date**: 2026-08-07
 **Extends**: the Epic 9 adapter freeze (`internal/adapter`) — additively and optionally. The `Adapter` interface method set and every existing data type are unchanged; nothing here supersedes ADR-001 or the E9.2 no-I/O rule.
 **Companions**: [ADR-009](ADR-009-structured-chat-interaction.md) (the structured-chat pivot this serves), [ADR-011](ADR-011-multi-device-epochs.md) (multi-device epochs), [docs/specifications/interaction-schema.md](../specifications/interaction-schema.md) (the normative item schema — field names and their meanings live there, not here).

@@ -1,6 +1,6 @@
 # ADR-011: Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces
 
-**Status**: Proposed
+**Status**: Accepted (owner sign-off 2026-08-07)
 **Date**: 2026-08-07
 **Extends**: ADR-007 (`ADR-007-remote-access.md`) decisions D2, D6, D9, closure decisions C6 and sonnet#3, and residual B1.
 **Amends**: the "cheap hardening" sentence at `ADR-007:460-462` — adopted here in both its halves (M1/M2 and M9), and found **insufficient as one line**. Two further amendments, stated rather than inherited: B133's trust boundary gains a stated delta for N devices (Context, below), and the 2026-07-24 revoke amendment's gateway-exit closure gains a second trigger (M5). Nothing else in ADR-007 is superseded; the frozen envelope format, the AAD, the nonce discipline and the seq/replay rules are untouched.

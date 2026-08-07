@@ -15,10 +15,10 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [008](ADR-008-status-events-latest-state-coalescing.md) | Status events are level-triggered latest-state snapshots (coalescing permitted) | Accepted | 2026-07-18 |
 | [008](ADR-008-go-toolchain-floor-1-25.md) | Go toolchain floor moves to 1.25 (gomobile tool directive) | Accepted | 2026-07-22 |
 | [009](ADR-009-obsidian-visual-direction.md) | Obsidian visual direction — warm material, champagne accent, one specular moment | Accepted | 2026-08-07 |
-| [009](ADR-009-structured-chat-interaction.md) | The phone surface is a structured chat transcript — the terminal grid is retired | Proposed | 2026-08-07 |
+| [009](ADR-009-structured-chat-interaction.md) | The phone surface is a structured chat transcript — the terminal grid is retired | Accepted | 2026-08-07 |
 | [010](ADR-010-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Accepted | 2026-08-07 |
-| [010](ADR-010-adapter-structured-capture.md) | Structured interaction capture is an optional, additive extension of the frozen adapter contract | Proposed | 2026-08-07 |
-| [011](ADR-011-multi-device-epochs.md) | Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces | Proposed | 2026-08-07 |
+| [010](ADR-010-adapter-structured-capture.md) | Structured interaction capture is an optional, additive extension of the frozen adapter contract | Accepted | 2026-08-07 |
+| [011](ADR-011-multi-device-epochs.md) | Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces | Accepted | 2026-08-07 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the

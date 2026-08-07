@@ -1,6 +1,6 @@
 # ADR-009: The phone surface is a structured chat transcript — the terminal grid is retired
 
-**Status**: Proposed (ratifies on owner sign-off)
+**Status**: Accepted (owner sign-off 2026-08-07)
 **Date**: 2026-08-07
 **Amends**: ADR-007-remote-access.md — the 2026-07-23 amendment's item 2 (line 295-297), item 4's
 **binding screen set** (line 309-313) and item 4's phasing clause (line 318-320); the 2026-07-24
