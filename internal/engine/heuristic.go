@@ -153,6 +153,14 @@ const escToInterrupt = "esc to interrupt"
 // wait. When the hint is visible, Codex is waiting on the user's decision.
 const codexApprovalHint = "Press enter to confirm or esc to cancel"
 
+// claudeApprovalHint is the standing help line of Claude's modal approval dialog
+// ("Do you want to proceed?" with its numbered options). The dialog's selected
+// option renders "❯ 1. Yes" — the same U+276F the idle composer uses — so without
+// this marker the frame reads as a settled composer and the session shows
+// ready_for_review while it is blocked on the human (live capture:
+// docs/verification/fixtures/spike-sc/c2-interactive-check).
+const claudeApprovalHint = "Esc to cancel · Tab to amend"
+
 // evaluateGridSig reads snap under the named per-adapter grid signature, returning
 // (turn, interaction, conclusive). A conclusive read (active or idle) is applied
 // by the engine; an inconclusive one (conclusive=false) is preserved (ADR-007).
@@ -192,13 +200,18 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	return status.TurnUnknown, status.InteractionUnknown, false
 }
 
-// evaluateClaudeGrid reads Claude's real screen (dqh). A busy marker is active; a
+// evaluateClaudeGrid reads Claude's real screen (dqh). The approval dialog is
+// checked FIRST: it is modal, and its selected option is spelled with the composer
+// glyph, so any later check would misread it. Then a busy marker is active; a
 // composer prompt anywhere in the bottom region with no busy marker is idle — it
 // does not require the cursor on the composer row, since Claude's idle footer
 // ("Brewed for Ns") renders below the composer box; else inconclusive.
 func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if snap == nil {
 		return status.TurnUnknown, status.InteractionUnknown, false
+	}
+	if regionContains(snap, claudeApprovalHint) {
+		return status.TurnIdle, status.InteractionPermission, true
 	}
 	if hasBusyMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true

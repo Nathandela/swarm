@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"log"
 	"net"
 	"time"
 
@@ -79,8 +80,10 @@ func (d *Daemon) handleConn(conn net.Conn) {
 }
 
 // serveHook decodes one raw-JSON hook callback (replaying the leading brace) and
-// routes it to the status engine, which authenticates it (S6/G5). A rejected or
-// malformed callback is dropped; the point is that a hook post never corrupts the
+// routes it to the status engine, which authenticates it (S6/G5). A rejected
+// callback is dropped but LOGGED: a bad token, a retired session or a replayed
+// sequence means a session's typed status signal is silently dead, which is worth
+// a line in the daemon log. The point is that a hook post never corrupts the
 // shared socket (this connection is the hook's alone and is closed here), so a
 // client can still use the socket afterward.
 func (d *Daemon) serveHook(conn net.Conn, brace byte) {
@@ -91,7 +94,9 @@ func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 	if err != nil {
 		return
 	}
-	_ = d.eng.HandleCallback(cb) // engine authenticates; rejection is expected pre-Epic-11
+	if err := d.eng.HandleCallback(cb); err != nil {
+		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
+	}
 }
 
 // serveVersionHandshake answers the daemon's version handshake with the daemon's

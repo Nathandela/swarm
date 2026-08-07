@@ -48,6 +48,11 @@ func TestHookMapping_DrivesStatusViaSignalSources(t *testing.T) {
 		{"Notification with no subtype degrades to none (B5)", "Notification", fixturePayload["Notification"], status.TurnIdle, status.InteractionNone},
 		{"Notification idle subtype -> none", "Notification", map[string]string{"notification_type": "idle"}, status.TurnIdle, status.InteractionNone},
 		{"Notification explicit permission subtype -> permission", "Notification", map[string]string{"notification_type": "permission"}, status.TurnIdle, status.InteractionPermission},
+		// The values real Claude Code posts (docs/verification/spike-SB.md, 3/3 runs).
+		// Unmapped, permission_prompt fell through to the safe default and wiped the
+		// needs_input a PermissionRequest had set 6s earlier (agents-tracker-sskl).
+		{"Notification permission_prompt -> permission", "Notification", map[string]string{"notification_type": "permission_prompt"}, status.TurnIdle, status.InteractionPermission},
+		{"Notification idle_prompt -> none", "Notification", map[string]string{"notification_type": "idle_prompt"}, status.TurnIdle, status.InteractionNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

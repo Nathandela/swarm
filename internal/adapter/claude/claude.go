@@ -43,12 +43,16 @@ const sessionMarker = "Session "
 // only on the contract + vt (T-5): a hook may not import internal/status.
 //
 // Notification is subtype-driven: its interaction comes from the payload subtype via
-// subtypeMap (permission->permission, idle->none, prompt->prompt). The nominal
-// descriptor interaction (permission) is the DOCUMENTED value, but at runtime a
-// MISSING or UNKNOWN subtype degrades to interaction=none in the engine (B5) — the
-// engine never asserts a permission prompt it cannot confirm from the payload.
-// PermissionRequest is the unconditional, dedicated permission event, so a genuine
-// permission signal never depends on guessing a Notification subtype.
+// subtypeMap. The map leads with the values a live claude actually posts
+// (permission_prompt / idle_prompt, confirmed 3/3 runs in docs/verification/spike-SB.md)
+// and keeps the shorter documented spellings behind them. The nominal descriptor
+// interaction (permission) is the DOCUMENTED value, but at runtime a MISSING subtype
+// degrades to interaction=none in the engine (B5) — the engine never asserts a
+// permission prompt it cannot confirm from the payload — and an UNRECOGNIZED subtype
+// (a value a newer claude added) yields NO interaction dimension at all, so it cannot
+// clobber a permission the dedicated event just set. PermissionRequest is the
+// unconditional, dedicated permission event, so a genuine permission signal never
+// depends on guessing a Notification subtype.
 var hookEvents = []struct {
 	event, turn, interaction string
 	subtypeField, subtypeMap string
@@ -56,7 +60,7 @@ var hookEvents = []struct {
 	{"UserPromptSubmit", "active", "none", "", ""},
 	{"PreToolUse", "active", "none", "", ""},
 	{"PostToolUse", "active", "none", "", ""},
-	{"Notification", "idle", "permission", "notification_type", "idle=none;permission=permission;prompt=prompt"},
+	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt"},
 	{"Stop", "idle", "none", "", ""},
 	{"SubagentStop", "active", "none", "", ""},
 	{"PermissionRequest", "idle", "permission", "", ""},

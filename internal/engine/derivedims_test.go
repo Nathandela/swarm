@@ -41,8 +41,11 @@ func TestDeriveDims(t *testing.T) {
 			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "none"}},
 		{"notification explicit permission subtype -> permission", "Notification", map[string]string{"notification_type": "permission"},
 			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "permission"}},
-		{"unknown subtype degrades to none (B5)", "Notification", map[string]string{"notification_type": "weird"},
-			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "none"}},
+		// B5's safe default covers a MISSING subtype (above). An unrecognized VALUE is
+		// not the same thing and no longer degrades to none: it emits no interaction
+		// dimension, so it cannot clobber one a dedicated event set (agents-tracker-sskl).
+		{"unrecognized subtype emits no interaction dimension", "Notification", map[string]string{"notification_type": "weird"},
+			map[string]string{PayloadKeyTurn: "idle"}},
 		{"explicit dims win over the descriptor", "Stop", map[string]string{PayloadKeyTurn: "active"},
 			map[string]string{PayloadKeyTurn: "active"}},
 		{"unmapped event yields no dims", "TotallyUnknown", nil, nil},

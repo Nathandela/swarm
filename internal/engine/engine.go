@@ -554,17 +554,21 @@ func deriveDims(sources []adapter.SignalSource, event string, payload map[string
 	}
 	interaction := desc[descKeyInteraction]
 	// Subtype-driven events (a descriptor with a subtype field) derive their
-	// interaction ENTIRELY from the payload subtype: a known subtype maps via the
-	// table; a MISSING or UNKNOWN subtype degrades to a SAFE default (none), NEVER the
-	// descriptor's nominal interaction — the engine must not assert a permission
-	// prompt it cannot confirm (B5). Events without a subtype field keep the
-	// descriptor's static interaction.
+	// interaction ENTIRELY from the payload subtype, NEVER the descriptor's nominal
+	// interaction — the engine must not assert a permission prompt it cannot confirm
+	// (B5). A MISSING subtype degrades to the safe default (none): the whole
+	// refinement is absent, so there is nothing to interpret. An UNRECOGNIZED subtype
+	// is different — the CLI IS saying something, this build just does not know what
+	// — so it emits NO interaction dimension and the previous interaction stands
+	// untouched. Defaulting it to none is what let a claude Notification wipe the
+	// needs_input its own PermissionRequest had set 6s earlier. Events without a
+	// subtype field keep the descriptor's static interaction.
 	if field := desc[descKeySubtypeField]; field != "" {
-		interaction = string(status.InteractionNone)
-		if sub := payload[field]; sub != "" {
-			if mapped, ok := lookupSubtype(desc[descKeySubtypeMap], sub); ok {
-				interaction = mapped
-			}
+		if sub := payload[field]; sub == "" {
+			interaction = string(status.InteractionNone)
+		} else {
+			// An unrecognized subtype yields "", which the guard below drops.
+			interaction, _ = lookupSubtype(desc[descKeySubtypeMap], sub)
 		}
 	}
 	if interaction != "" {
