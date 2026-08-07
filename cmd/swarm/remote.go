@@ -580,11 +580,22 @@ func runRemoteRevoke(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 //     second connection for a routing id SUPERSEDES the first;
 //   - the outbox is purged AFTER the gateway is stopped, so nothing is writing it.
 //
-// EVERY PURGE FAILURE IS A WARNING, never a nonzero exit. The revocation itself is
-// already durable by then -- the device is de-registered and the epoch rotated -- so
-// failing the command would tell the owner the revoke did not happen when it did,
-// and leave them no forward step. This is stopGatewayIfQuiescent's rule, for the
-// same reason.
+// THE RELAY HALF DECIDES THE EXIT CODE (ADR-007 B120 F3, D9). Exit 0 here is a claim
+// about the RELAY -- that the revoked handset keeps neither connectivity nor a drainable
+// mailbox -- so it is made only once the relay has ACKNOWLEDGED the purge. A relay that
+// refused and a relay that was never reached are different states with different
+// remedies, and both leave the handset draining, so each says which one it is and both
+// exit nonzero. B120 measured what "success" used to cover: a revoked handset that
+// retained mailbox drain, push wake and a relay re-auth saying it had not been revoked.
+// This REPLACES the earlier rule that every purge failure is a warning: that rule made
+// the exit code a claim about the LOCAL half only, which is the claim B120 falsified.
+//
+// A NONZERO EXIT NEVER MEANS "NOTHING HAPPENED". The local half is durable before the
+// relay is dialled at all -- the device is de-registered, the epoch rotated
+// (2026-07-24 amendment), the gateway stopped, the outbound custody purged -- and the
+// confirmation naming it and the next step is printed on every path. The failure is
+// scoped, on stderr, to the half that did not finish. Both callers -- the explicit-id
+// verb and the interactive picker -- inherit this, because both need the same honesty.
 func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.Writer) int {
 	stateDir := remoteStateDir()
 	routingID := deviceRoutingID(stateDir, deviceID)
@@ -594,15 +605,39 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 		return 1
 	}
 	stopGatewayIfQuiescent(stderr)
-	purgeRelayState(stateDir, routingID, stderr)
+	purge, purgeErr := purgeRelayState(stateDir, routingID)
 	purgeOutboundCustody(stateDir, stderr)
 
 	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
+	if purge == relayPurgeDone {
+		fmt.Fprintln(stdout, "relay state purged: its mailbox, its push token and its route are gone from the relay")
+	}
 	// PB-STATE-10: the revoke is the MIDDLE of a four-step recovery, not the end of a
 	// job. An owner who stops here has a machine with no device and a handset that
 	// still cannot pair, because nothing told them there was another step.
 	fmt.Fprintln(stdout, "run `swarm remote pair` to pair a device again")
-	return 0
+
+	switch purge {
+	case relayPurgeRefused:
+		fmt.Fprintf(stderr, "remote revoke: the relay REFUSED to purge this device's relay-side state: %v\n", purgeErr)
+	case relayPurgePending:
+		fmt.Fprintf(stderr, "remote revoke: the relay was not reached, so its half of this revocation is "+
+			"PENDING: %v\n", purgeErr)
+	default:
+		return 0
+	}
+	// ponytail: the honest ceiling. ADR-007 D9 says "an offline-at-revoke machine defers the
+	// purge to reconnect" and NOTHING IN THE TREE DEFERS IT (B120 F3) -- no pending-purge
+	// state is written here and no later relay connection completes one. So this names the
+	// state instead of promising a retry, and it does NOT tell the owner to re-run the verb:
+	// the local record naming that routing id is already gone, and a second run is refused
+	// "no such device" (internal/protocol/server.go handleDeviceRevoke, owner tier). The
+	// upgrade path is D9's own: persist the routing id and drain it on the machine's next
+	// relay connection, which is the gateway's connect and this CLI's own dial.
+	fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
+		"push wake and its route (routing id %s). Nothing retries it, and this verb cannot re-address "+
+		"the device: the local record naming that routing id is already gone.\n", routingID)
+	return 1
 }
 
 // remoteStateDir resolves the state dir every remote verb reads, the same way
@@ -720,6 +755,26 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 // that is down must cost them a reported delay and not a hang.
 const remoteRelayOpTimeout = 10 * time.Second
 
+// relayPurgeVerdict is what the relay half of a revocation actually did. ADR-007 D9
+// blesses a DEFERRED purge for a machine that is offline at revoke time, so "done" and
+// "not done yet" are both legitimate states -- and only one of them means the handset is
+// locked out now, which is why the operator is told which one they got.
+type relayPurgeVerdict int
+
+const (
+	// relayPurgeNone: this machine holds no relay-side state for that device -- no relay
+	// provisioned, no routing id, or a relay that says it has no such pairing -- so there
+	// was nothing to purge and nothing to report.
+	relayPurgeNone relayPurgeVerdict = iota
+	// relayPurgeDone: the relay acknowledged the de-authorization and the purge.
+	relayPurgeDone
+	// relayPurgeRefused: the relay answered, and the answer was a refusal.
+	relayPurgeRefused
+	// relayPurgePending: the relay was never reached or never answered, so the purge is
+	// deferred and the handset still holds everything it held.
+	relayPurgePending
+)
+
 // purgeRelayState is the RELAY half of PB-STATE-10's "purge machine and relay state":
 // it empties the revoked handset's mailbox and drops its push token, via the relay's own
 // device_revoke op -- which until this slice had no production caller anywhere in the
@@ -735,20 +790,33 @@ const remoteRelayOpTimeout = 10 * time.Second
 // relay.ErrNotAuthorized is not a failure here: it says the relay holds no pairing
 // between this machine and that routing id, which is the same statement as "there is no
 // mailbox of ours to empty" from the other end.
-func purgeRelayState(stateDir, routingID string, stderr io.Writer) {
+//
+// IT REPORTS ITS OUTCOME RATHER THAN SWALLOWING IT (ADR-007 B120 F3): the caller's exit
+// code is a claim about this call, so this call has to answer whether the relay agreed.
+func purgeRelayState(stateDir, routingID string) (relayPurgeVerdict, error) {
 	if routingID == "" {
-		return
+		return relayPurgeNone, nil
 	}
+	// The dial failure and the op's refusal come back through the same return, and the two
+	// are different verdicts, so the op records that it got to run at all.
+	reached := false
 	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
+		reached = true
 		return cl.DeviceRevoke(ctx, routingID)
 	})
 	switch {
-	case err == nil,
-		errors.Is(err, errRelayNotProvisioned),
+	case err == nil:
+		return relayPurgeDone, nil
+	case errors.Is(err, errRelayNotProvisioned),
 		errors.Is(err, relay.ErrNotAuthorized):
+		return relayPurgeNone, nil
+	case reached && !errors.Is(err, relay.ErrTimeout) && !errors.Is(err, relay.ErrConnClosed):
+		// The relay ANSWERED, and the answer was no. The two sentinels excluded here are the
+		// ones relay/errors.go defines as the relay answering NOTHING, which is the pending
+		// state and not a refusal.
+		return relayPurgeRefused, err
 	default:
-		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but its relay-side mailbox and "+
-			"push token were not purged: %v\n", err)
+		return relayPurgePending, err
 	}
 }
 

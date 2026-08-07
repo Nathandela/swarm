@@ -200,30 +200,38 @@ The command is the **middle** of a four-step recovery, not the end:
 4. `swarm remote pair` — pair the replacement handset. Until you do, the machine has no device and
    `remote control` reads OFF.
 
-> **`swarm remote revoke` reports success for a device id that was never paired.** Observed:
->
-> ```
-> $ swarm remote revoke deadbeefdeadbeef
-> revoked device deadbeefdeadbeef
-> run `swarm remote pair` to pair a device again
-> $ echo $?
-> 0
-> ```
->
-> Nothing was revoked and the machine epoch did **not** rotate (checked: still `epoch:1/1`), so it
-> is a harmless no-op — but it is a no-op that prints a success line naming the id you typed. During
-> a device-loss incident, a mistyped or stale device id therefore produces exactly the output that
-> tells you the lost phone is cut off. `swarm remote regrant` on the same id refuses properly
-> (`no such device "deadbeefdeadbeef"; nothing to re-grant`), so the asymmetry is in `revoke`.
+> **A device id that was never paired is refused, not reported as revoked.** `swarm remote revoke
+> <unknown-id>` exits nonzero, writes nothing to stdout, and prints
+> `remote revoke: device_revoke: no such device "<id>"; nothing to revoke`. Nothing is touched on
+> the way out: the machine epoch does not rotate and the outbound journal is not purged. So a
+> mistyped or stale id during a device-loss incident fails loudly instead of printing the line that
+> says the lost phone is cut off. `swarm remote regrant` refuses the same id in the same shape;
+> both are fenced by `TestRemoteRevoke_UnpairedIDIsRefused` and
+> `TestRemoteRevoke_UnpairedRefusalMatchesRegrant`.
 >
 > **Always confirm with `swarm remote devices` after a revoke.** An empty list is the evidence; the
 > success line is not.
 
-Every purge failure inside `revoke` is a **warning, not a nonzero exit**, and that is deliberate:
-the revocation itself is already durable by the time the purges run (the device is de-registered
-and the epoch rotated), so failing the command would tell you the revoke did not happen when it
-did, and leave you no forward step. Read the warnings — a failed relay purge means the mailbox and
-push token are still at the relay and want a manual purge.
+**The relay half of `revoke` decides the exit code** (ADR-007 B120 F3). Exit 0 is a claim about the
+relay — that the handset keeps neither connectivity nor a drainable mailbox — so it is made only
+once the relay has acknowledged the purge, and the confirmation says which state you are in:
+
+| exit | the line to read | what it means |
+|---|---|---|
+| `0` | `relay state purged: its mailbox, its push token and its route are gone from the relay` | the handset is cut off now |
+| `1` | `remote revoke: the relay REFUSED to purge …: <relay's own reason>` | the relay answered and declined |
+| `1` | `remote revoke: the relay was not reached, so its half of this revocation is PENDING: …` | the machine never reached the relay |
+
+A nonzero exit never means nothing happened: the local half — de-registration, epoch rotation,
+gateway stop, outbound custody — is durable before the relay is dialled at all, and the
+`revoked device <id>` confirmation and the `swarm remote pair` pointer are printed on every path.
+
+On both failing rows the handset still holds its relay mailbox, its push wake and its route.
+**Nothing retries the purge**, and re-running `swarm remote revoke <id>` will not do it either —
+the local record naming that routing id is already gone, so a second run is refused `no such
+device`. The routing id is printed with the warning so the leftover state can be identified at the
+relay. (ADR-007 D9's *"an offline-at-revoke machine defers the purge to reconnect"* is still
+unimplemented; that deferral is the fix this row is waiting on.)
 
 `swarm remote regrant <device-id>` re-issues a paired device's epoch grant. Use it when a device is
 still trusted but has lost its grant; it is not part of the loss procedure.

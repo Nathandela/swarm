@@ -295,8 +295,9 @@ swarm remote devices                 # VERIFY: empty table
 swarm remote pair
 ```
 
-`swarm remote revoke` prints `revoked device <id>` and exits 0 **even for an id that was never
-paired** (`docs/operations/operator-runbook.md:203-220`). The success line is not evidence; an empty
+`swarm remote revoke` refuses an id that was never paired (nonzero exit, `no such device`), and its
+exit code also carries the **relay** half of the purge — exit 0 only once the relay has acknowledged
+it (`docs/operations/operator-runbook.md` §5). The success line is still not the evidence; an empty
 `swarm remote devices` table is.
 
 Skipping the revoke gets you the fail-fast (`internal/skeleton/pairing.go:133-137`):
