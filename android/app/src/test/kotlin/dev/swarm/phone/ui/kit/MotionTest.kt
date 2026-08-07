@@ -150,7 +150,7 @@ class MotionTest {
         assertEquals(
             "and the curve it replaces, which is the mock's own",
             MockCss.cubicBezier(MockCss.declaration(".sheet", "transition")),
-            AdrRegister.cubicBezier(replaced),
+            AdrRegister.curve(replaced),
         )
         assertNotEquals(AdrRegister.millis(replaced), Motion.NAV_DURATION_MS)
     }
@@ -196,7 +196,7 @@ class MotionTest {
     @Test
     fun ease_is_the_cubic_bezier_the_register_names() {
         assertEquals(
-            AdrRegister.cubicBezier(AdrRegister.value("Entrance")),
+            AdrRegister.curve(AdrRegister.value("Entrance")),
             listOf(Motion.EASE_P1X, Motion.EASE_P1Y, Motion.EASE_P2X, Motion.EASE_P2Y),
         )
     }
@@ -219,7 +219,7 @@ class MotionTest {
         // The four control points above are what BUILDS the interpolator, so comparing them is a
         // comparison of inputs. This compares OUTPUTS: the curve the app runs against a curve
         // built here from the parsed values, sampled across the whole fraction range.
-        val p = AdrRegister.cubicBezier(AdrRegister.value("Entrance"))
+        val p = AdrRegister.curve(AdrRegister.value("Entrance"))
         val fromTheDocument = PathInterpolatorCompat.create(p[0], p[1], p[2], p[3])
         for (i in 0..100) {
             val f = i / 100f
@@ -237,7 +237,7 @@ class MotionTest {
         // NEGATIVE CONTROL for the test above, built through the same PathInterpolatorCompat.create
         // with one control point perturbed. If sampling could not tell two curves apart under this
         // harness, the comparison above would pass over any curve at all.
-        val p = AdrRegister.cubicBezier(AdrRegister.value("Entrance"))
+        val p = AdrRegister.curve(AdrRegister.value("Entrance"))
         val perturbed = PathInterpolatorCompat.create(p[0] + 0.4f, p[1], p[2], p[3])
         val differs = (0..100).any { i ->
             val f = i / 100f
@@ -940,7 +940,7 @@ private object AdrRegister {
     private const val NEXT_SECTION = "\n### "
 
     private val MILLIS = Regex("""(\d+)\s*ms""")
-    private val BEZIER = Regex("""cubic-bezier\(([^)]*)\)""")
+    private val PARENTHESISED = Regex("""\(([^)]*)\)""")
     private val DP = Regex("""(-?\d*\.?\d+)\s*dp""")
     private val DEGREES = Regex("""(-?\d*\.?\d+)\s*deg""")
     private val RGBA = Regex("""rgba\(([^)]*)\)""")
@@ -994,12 +994,30 @@ private object AdrRegister {
         requireNotNull(MILLIS.find(cell)) { "\"$cell\" states no duration in ms" }
             .groupValues[1].toLong()
 
-    /** `cubic-bezier(0.22, 1, 0.36, 1)` -> its four control values, in declaration order. */
-    fun cubicBezier(cell: String): List<Float> {
-        val m = requireNotNull(BEZIER.find(cell)) { "\"$cell\" names no cubic-bezier() curve" }
-        val points = m.groupValues[1].split(",").map { it.trim().toFloat() }
-        require(points.size == 4) { "cubic-bezier() in \"$cell\" carries ${points.size} values, want 4" }
-        return points
+    /**
+     * A curve's four control values, in declaration order.
+     *
+     * D5 WRITES A CURVE TWO WAYS AND BOTH ARE THE SAME STATEMENT: the Entrance row's value cell
+     * spells it as CSS, `cubic-bezier(0.22, 1, 0.36, 1)`, and the Navigation row's rule cell names
+     * the one it replaces as a bare tuple, `(0.32, 0.72, 0, 1)`, because there it is quoting a
+     * value rather than writing a declaration. A parser that only knew the CSS spelling could not
+     * read the supersession clause at all -- which is the half of that row this file exists to
+     * pin -- so what is matched is "a parenthesised group of exactly four numbers".
+     *
+     * EXACTLY ONE such group must be in the cell. `rgba(255,252,244,0.30)` in the sweep row is
+     * also four numbers in parentheses, and a reader that took the first match would answer a
+     * question about a colour with a curve. Ambiguity fails loudly rather than picking.
+     */
+    fun curve(cell: String): List<Float> {
+        val candidates = PARENTHESISED.findAll(cell).mapNotNull { m ->
+            val parts = m.groupValues[1].split(",").map { it.trim().toFloatOrNull() }
+            if (parts.size == 4 && parts.all { it != null }) parts.filterNotNull() else null
+        }.toList()
+        require(candidates.size == 1) {
+            "\"$cell\" carries ${candidates.size} parenthesised four-number groups; a curve is " +
+                "read only from a cell that states exactly one"
+        }
+        return candidates.single()
     }
 
     /** `max travel **4dp**` -> 4. */

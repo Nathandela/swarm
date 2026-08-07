@@ -24,8 +24,8 @@ import androidx.core.view.animation.PathInterpolatorCompat
  *   - the push banner: `translateY` -(its own height + its top inset) -> 0
  *   - the streaming caret: a liveness signal reporting text is still arriving, not decoration
  *
- * The first two share [NAV_DURATION_MS] (350ms) and [NAV_EASE]
- * (`cubic-bezier(0.32, 0.72, 0, 1)`, the mock's own curve). The caret is a discrete two-state
+ * The first two share [NAV_DURATION_MS] (300ms) and [EASE]
+ * (`cubic-bezier(0.22, 1, 0.36, 1)`, ADR-009 D5's curve). The caret is a discrete two-state
  * blink -- [CARET_PERIOD_MS] (0.9s), CSS `steps(2)` -- because a smooth fade would itself be
  * the decoration the ADR forbids.
  *
@@ -44,29 +44,84 @@ import androidx.core.view.animation.PathInterpolatorCompat
  */
 object Motion {
 
-    /** 350ms -- the bottom sheet's and the push banner's shared duration. */
-    const val NAV_DURATION_MS = 350L
+    /**
+     * 300ms -- the bottom sheet's and the push banner's shared duration.
+     *
+     * origin: ADR-009 D5 Navigation (sheet, banner)
+     *
+     * IT WAS 350ms AND THE MOCK STILL SAYS SO. `.banner` and `.sheet` declare `0.35s` in
+     * `remote-control-mock.html`, which is a Substrate drawing; D5's Navigation row replaces that
+     * duration and that curve in as many words ("replaces 350ms / (0.32, 0.72, 0, 1)"), and
+     * MotionTest reads BOTH cells so the supersession is asserted rather than assumed.
+     */
+    const val NAV_DURATION_MS = 300L
 
-    /** `cubic-bezier(0.32, 0.72, 0, 1)`, the mock's one named easing curve, as the four control
-     * values it is built from. Named rather than inlined into [NAV_EASE] so a test can compare
-     * them against the curve the document declares: an [Interpolator] does not report the points
-     * it was built from, so the only other check available is sampling the curve. */
-    const val NAV_EASE_P1X = 0.32f
-    const val NAV_EASE_P1Y = 0.72f
-    const val NAV_EASE_P2X = 0f
-    const val NAV_EASE_P2Y = 1f
+    /**
+     * 200ms -- an entrance: a component arriving on screen.
+     *
+     * origin: ADR-009 D5 Entrance
+     *
+     * NO ANIMATOR HERE TAKES IT YET, and that is the honest state rather than an omission. D5
+     * states the register for the whole skin; the app's three moving things are the sheet, the
+     * banner and the caret, so the entrance row is the number a future one is built at -- and it
+     * is here, joined to the decision, so that when one arrives it is not a fresh 200 typed at a
+     * call site. [ENTRANCE_MAX_TRAVEL_DP] is the other half of the same row.
+     */
+    const val ENTRANCE_DURATION_MS = 200L
 
-    /** The mock's one named easing curve. */
-    val NAV_EASE: Interpolator =
-        PathInterpolatorCompat.create(NAV_EASE_P1X, NAV_EASE_P1Y, NAV_EASE_P2X, NAV_EASE_P2Y)
+    /**
+     * 4dp -- the FURTHEST an entrance may travel, not the distance one travels.
+     *
+     * origin: ADR-009 D5 Entrance
+     *
+     * The row's reason is a property of the ground rather than of taste: "larger travel visibly
+     * bounces on a dark ground", which is the same amplification (~80:1 on near-black) that limits
+     * this skin to one moving element per viewport.
+     */
+    const val ENTRANCE_MAX_TRAVEL_DP = 4f
 
-    /** 0.9s -- the streaming caret's full blink period. */
+    /**
+     * 120ms -- the ceiling on a control's FIRST VISIBLE RESPONSE to a press.
+     *
+     * origin: ADR-009 D5 Press feedback
+     *
+     * IT IS AUDITED, NOT ANIMATED, which is the row's own clause and the reason no animator below
+     * takes this constant. Anything slower "reads as latency": the response has to be the
+     * platform's own pressed state on the ACTION_DOWN frame, not a transition into one.
+     * `PressFeedbackAuditTest` measures what the platform actually does against this number.
+     */
+    const val PRESS_RESPONSE_CEILING_MS = 120L
+
+    /** `cubic-bezier(0.22, 1, 0.36, 1)`, ADR-009 D5's one named easing curve, as the four control
+     * values it is built from. Named rather than inlined into [EASE] so a test can compare them
+     * against the curve the document declares: an [Interpolator] does not report the points it was
+     * built from, so the only other check available is sampling the curve.
+     *
+     * origin: ADR-009 D5 Entrance */
+    const val EASE_P1X = 0.22f
+    const val EASE_P1Y = 1f
+    const val EASE_P2X = 0.36f
+    const val EASE_P2Y = 1f
+
+    /**
+     * The register's one easing curve.
+     *
+     * IT IS `EASE` AND NOT `NAV_EASE`, WHICH IS A DECISION AND NOT A RENAME. D5 gives the entrance
+     * and both navigation surfaces the same curve -- the Navigation row writes it as "same curve"
+     * rather than as four control points of its own -- and two names for one curve is where the
+     * two come to differ. The sweep runs on it too.
+     */
+    val EASE: Interpolator =
+        PathInterpolatorCompat.create(EASE_P1X, EASE_P1Y, EASE_P2X, EASE_P2Y)
+
+    /** 0.9s -- the streaming caret's full blink period. D5 calls this row unchanged. */
     const val CARET_PERIOD_MS = 900L
 
     /** The caret's dim state, `@keyframes pulse { 50% { opacity: 0.35 } }`. */
     private const val CARET_DIM_ALPHA = 0.35f
 
-    /** 0.15s -- the toggle's background and thumb transitions (`.toggle`, `.toggle::after`). */
+    /** 0.15s -- the toggle's background and thumb transitions (`.toggle`, `.toggle::after`).
+     * D5 calls this row unchanged. */
     const val TOGGLE_DURATION_MS = 150L
 
     /**
@@ -98,7 +153,7 @@ object Motion {
     // The generic primitives.
     // ------------------------------------------------------------------
 
-    /** A `translationY` animator, reduced-motion-aware. [interpolator] defaults to [NAV_EASE]
+    /** A `translationY` animator, reduced-motion-aware. [interpolator] defaults to [EASE]
      * because every current caller is a navigation affordance; pass another only if a future
      * one deliberately is not. */
     fun translateY(
@@ -107,7 +162,7 @@ object Motion {
         fromPx: Float,
         toPx: Float,
         durationMs: Long,
-        interpolator: Interpolator = NAV_EASE,
+        interpolator: Interpolator = EASE,
     ): ObjectAnimator {
         val animator = ObjectAnimator.ofFloat(view, View.TRANSLATION_Y, fromPx, toPx)
         animator.duration = duration(context, durationMs)
@@ -117,7 +172,7 @@ object Motion {
 
     /** A `translationX` animator, reduced-motion-aware. No named easing curve is applied --
      * the toggle thumb is this primitive's only caller today and the artifact names no curve
-     * for it, so the platform default stands rather than borrowing [NAV_EASE] unasked. */
+     * for it, so the platform default stands rather than borrowing [EASE] unasked. */
     fun translateX(context: Context, view: View, fromPx: Float, toPx: Float, durationMs: Long): ObjectAnimator {
         val animator = ObjectAnimator.ofFloat(view, View.TRANSLATION_X, fromPx, toPx)
         animator.duration = duration(context, durationMs)
