@@ -322,7 +322,13 @@ object Motion {
 
     /**
      * How far [view] scales at full drag: [PREDICTIVE_BACK_SCALE], reduced on either axis where
-     * that would leave less than [PREDICTIVE_BACK_MARGIN_DP] of edge.
+     * that would leave less than [predictiveBackMarginPx] of edge.
+     *
+     * THE LINK IS TO THE FUNCTION AND NOT TO A CONSTANT, because there is no constant to link to.
+     * The margin was `PREDICTIVE_BACK_MARGIN_DP` for exactly as long as it took
+     * `TestPBDS1_NoRawPixelPaddingSurvives` to refuse it (see [predictiveBackMarginPx]); this
+     * sentence was left behind pointing at the name that refusal deleted, which is a KDoc link
+     * that resolves to nothing and a reader sent looking for a constant this file does not have.
      *
      * AN UNMEASURED VIEW FALLS BACK TO THE PLAIN SCALE rather than to zero. A width of 0 makes the
      * margin arithmetic negative, and a preview that inverted the screen because a gesture
