@@ -120,7 +120,7 @@ class FocusRingTest {
             view.isFocusable,
         )
         assertFalse(
-            "the control asks for focus in TOUCH mode, so every tap would leave a white ring " +
+            "the control asks for focus in TOUCH mode, so every tap would leave a champagne ring " +
                 "behind it. Row 23 cites `:focus-visible`, which is the pseudo-class that does not.",
             view.isFocusableInTouchMode,
         )

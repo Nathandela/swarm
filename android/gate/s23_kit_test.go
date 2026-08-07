@@ -279,12 +279,16 @@ var s23Inbox = []s23Component{
 		File:    "FocusRing.kt",
 		Derived: "#23 Focus ring",
 		Why: "PB-DS-12's other unenforced clause, and the one component in this kit that is not a " +
-			"thing on screen but a treatment applied to one. The artifact's own `:focus-visible` " +
-			"is `#e2a33b`, which is the DOCUMENTATION PAGE's chrome accent rather than a product " +
-			"token, so there is no origin to cite and §1.1 argues the replacement at length: not " +
-			"the four status tokens (they mean state), not `--p-hero` (it means selected, and a " +
-			"hero ring around an unselected chip says the opposite of what is true), not " +
-			"`--p-ink2` (the resting colour of chip labels, so a ring in it reads as a border). " +
+			"thing on screen but a treatment applied to one. It had no product origin at all -- " +
+			"PB-DS-7 flagged it as a standing gap, because the only ring anyone had drawn was the " +
+			"documentation page's own chrome accent, which is a fact about a documentation page. " +
+			"ADR-009 D3 closes the gap: 2 dp `--p-hero`. Obsidian's accent means YOU -- needs-you, " +
+			"CTA, focus, live, brand -- so focus is the fifth thing the one accent says rather " +
+			"than a sixth meaning bolted onto a fill; §1.1's amendment records that Substrate's " +
+			"rejection of hero rested on hero meaning SELECTED, which is the premise that went. " +
+			"Still rejected: the neutral pair `--p-ink` and `--p-ink2` (over a warm ladder whose " +
+			"hairline is `--p-hair`, a ring in either reads as a heavier border) and the three " +
+			"status tokens that are not the accent (they mean state). " +
 			"It is a FOREGROUND because every focusable in this kit has already spent its " +
 			"background on a surface, and a ring merged into each of those would be five copies " +
 			"of one rule.",

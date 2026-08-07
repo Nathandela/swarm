@@ -227,7 +227,7 @@ internal object Kit {
      *
      * `isFocusableInTouchMode` IS DELIBERATELY NOT SET, and the row's own selector is why. Row 23
      * cites `:focus-visible`, not `:focus` -- the ring is for the user traversing with a keyboard,
-     * a D-pad or switch access, and a control that took focus on touch would leave a white ring
+     * a D-pad or switch access, and a control that took focus on touch would leave a champagne ring
      * behind every tap. Android's touch-mode rule produces exactly the pseudo-class's behaviour for
      * free, so what would look like the more thorough call is the wrong one.
      *
