@@ -126,7 +126,7 @@ func s22bDesignSpacings(t *testing.T) map[float64][]string {
 		frame[f.Selector+" "+f.Property] = true
 	}
 	out := map[float64][]string{}
-	for sel, rule := range s22bSharedCSS(t) {
+	for sel, rule := range s22bMaquetteKitCSS(t) {
 		for prop, value := range rule.Decls {
 			if !s22bSpacingProps[prop] || frame[sel+" "+prop] {
 				continue

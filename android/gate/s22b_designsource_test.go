@@ -40,6 +40,41 @@ const (
 	s22bSharedBlockEnd   = "/* ============ D1 SUBSTRATE ============ */"
 )
 
+// s22bMaquetteRelPath is ADR-009 D2's normative design source, and the artifact
+// internal/design/tokens.json now cites as its "source".
+//
+// WHY TWO DESIGN SOURCES ARE READ IN THIS PACKAGE, WHICH IS A SPLIT AND NOT AN OVERSIGHT.
+// ADR-009 replaces the SKIN. The maquette redraws every surface the app owns, so app-surface
+// spacing is read from it below and the Substrate artifact no longer has any say over a padding.
+// Two things the older artifact still carries are NOT in the maquette, and each is named where it
+// is used rather than left to be discovered:
+//
+//   - THE THREE FRAME CONSTANTS (screen_top 54, screen_bottom 76, tabbar_height 74). They are the
+//     handset's own geometry -- the status-bar inset and the bar that occupies the bottom of the
+//     screen -- not skin values, which is why ADR-009 D1 lists them among the things the direction
+//     change deliberately keeps. The maquette draws a 300px gallery phone with no OS chrome and no
+//     fixed-height bar, so it states none of the three.
+//   - THE TYPE LADDER. The maquette's font sizes are a redraw (the nav title is 22px where
+//     Substrate's is 27px), and re-pointing type.xml's origins at it would move nineteen sizes.
+//     ADR-009 D3's table changes weight and tracking and no size; D7 keeps the scale's structure;
+//     the migration plan gives O5 the visual verification of the styles against the maquette. A
+//     type-scale change smuggled inside a token migration is the defect this whole regime exists
+//     to prevent, so it is not made here.
+//
+// The spacing values themselves confirm the maquette is dp-equivalent rather than a scaled
+// drawing: it declares 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,24 against Substrate's
+// 2,4,5,7,8,9,10,11,12,13,14,15,16,18 -- the same ladder, at the same size, on the same grid.
+const s22bMaquetteRelPath = "docs/research/obsidian-maquette.html"
+
+// The maquette's phone-kit block: every component the app draws, and nothing else. It stops at
+// the mark, so the gallery furniture around the phones -- the page chrome the file marks "NOT
+// part of the skin", the icon tiles, the feature-graphic composition and the component-sheet grid
+// -- cannot leak a 30px gallery gap into the app's spacing scale.
+const (
+	s22bMaquetteKitStart = "/* ---------- kit primitives, drawn at token fidelity ---------- */"
+	s22bMaquetteKitEnd   = "/* ---------- the mark ---------- */"
+)
+
 // s22bCSSRule is one parsed rule: one selector and its declarations, in declaration order.
 type s22bCSSRule struct {
 	Selector string
@@ -51,26 +86,59 @@ var (
 	s22bCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	s22bRuleRe    = regexp.MustCompile(`(?s)([^{}]+)\{([^{}]*)\}`)
 	s22bVarRe     = regexp.MustCompile(`var\(\s*(--[A-Za-z0-9-]+)\s*\)`)
+	// An at-rule that CONTAINS rules -- @keyframes, @media -- is removed whole before the flat
+	// rule regexp runs. s22bRuleRe cannot see nesting: fed `@keyframes s { 0% { left: 0 } }` it
+	// matches the inner block and then walks out of phase with the rest of the file, pairing
+	// selectors with the wrong declarations. It does that SILENTLY, which is worse than failing:
+	// the maquette's sweep keyframes sit in the middle of the kit block, and the first version of
+	// this reader attributed `.empty { padding }` to a value from three rules away.
+	s22bAtRuleRe = regexp.MustCompile(`(?s)@[a-zA-Z-]+[^{;]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}`)
 )
 
 // s22bSharedCSS parses the Substrate-inherited structural rules, selector -> declarations.
 //
-// A selector list (`.grain, .fx { ... }`) yields one entry per selector, and a selector that
-// appears twice merges later declarations over earlier ones, which is what a browser does.
+// It is kept, narrowly, for the two things ADR-009's maquette does not state: the three frame
+// constants and the type ladder. See s22bMaquetteRelPath for why each stays here.
 func s22bSharedCSS(t *testing.T) map[string]s22bCSSRule {
 	t.Helper()
-	path := filepath.Join(repoRoot(t), filepath.FromSlash(s22bDesignSourceRelPath))
+	return s22bParseCSSBlock(t, s22bDesignSourceRelPath, s22bSharedBlockStart, s22bSharedBlockEnd)
+}
+
+// s22bMaquetteKitCSS parses the Obsidian maquette's phone-kit block: the app's own surfaces, at
+// ADR-009 D2's normative design source. This is where every app spacing value comes from.
+func s22bMaquetteKitCSS(t *testing.T) map[string]s22bCSSRule {
+	t.Helper()
+	return s22bParseCSSBlock(t, s22bMaquetteRelPath, s22bMaquetteKitStart, s22bMaquetteKitEnd)
+}
+
+// s22bParseCSSBlock parses one delimited CSS block of one design source, selector -> declarations.
+//
+// A selector list (`.grain, .fx { ... }`) yields one entry per selector, and a selector that
+// appears twice merges later declarations over earlier ones, which is what a browser does.
+func s22bParseCSSBlock(t *testing.T, relPath, blockStart, blockEnd string) map[string]s22bCSSRule {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), filepath.FromSlash(relPath))
 	raw := readFileOrFail(t, path, "PB-DS-1..4")
 
-	start := strings.Index(raw, s22bSharedBlockStart)
-	end := strings.Index(raw, s22bSharedBlockEnd)
+	start := strings.Index(raw, blockStart)
+	end := strings.Index(raw, blockEnd)
 	if start < 0 || end < 0 || end <= start {
-		t.Fatalf("PB-DS-1..4: %s no longer delimits the shared structural block with\n\t%q\n\t%q\n"+
-			"Every expected value in this slice is computed from that block; without it the "+
-			"whole suite would compare against an empty map and pass vacuously.",
-			mustRel(t, path), s22bSharedBlockStart, s22bSharedBlockEnd)
+		t.Fatalf("PB-DS-1..4: %s no longer delimits its structural block with\n\t%q\n\t%q\n"+
+			"Every expected value computed from that block would come from an empty map, and "+
+			"every assertion over it would pass vacuously.",
+			mustRel(t, path), blockStart, blockEnd)
 	}
 	block := s22bCommentRe.ReplaceAllString(raw[start:end], "\n")
+	block = s22bAtRuleRe.ReplaceAllString(block, "\n")
+	// The flat rule regexp is only correct over a block with no remaining nesting, so that is
+	// checked rather than assumed: an unbalanced or nested residue means the parse below is
+	// out of phase and every value it reports belongs to some other rule.
+	if depth, deepest := s22bBraceDepth(block); depth != 0 || deepest > 1 {
+		t.Fatalf("PB-DS-1..4: the block %q..%q of %s does not flatten to unnested rules "+
+			"(deepest nesting %d, unbalanced by %d). The rule parser cannot see nesting and "+
+			"would pair selectors with declarations from other rules without saying so.",
+			blockStart, blockEnd, mustRel(t, path), deepest, depth)
+	}
 
 	out := map[string]s22bCSSRule{}
 	for _, m := range s22bRuleRe.FindAllStringSubmatch(block, -1) {
@@ -105,6 +173,22 @@ func s22bSharedCSS(t *testing.T) map[string]s22bCSSRule {
 		t.Fatalf("PB-DS-1..4: no CSS rules parsed from the shared block of %s", mustRel(t, path))
 	}
 	return out
+}
+
+// s22bBraceDepth returns the block's final brace balance and its deepest nesting.
+func s22bBraceDepth(block string) (balance, deepest int) {
+	for _, r := range block {
+		switch r {
+		case '{':
+			balance++
+			if balance > deepest {
+				deepest = balance
+			}
+		case '}':
+			balance--
+		}
+	}
+	return balance, deepest
 }
 
 // s22bTokenValues is internal/design/tokens.json's whole token map, colours included.
