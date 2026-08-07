@@ -162,6 +162,40 @@ PB-TOK-8 holds; that `--p-att` now equals `--p-hero` is a *pairing* across sets,
 kind to the existing CTA alias, and the join keeps every row separate so a future skin can
 break either alias in one line.
 
+#### OPEN CONFLICT (2026-08-07, recorded by the fix pass — NOT resolved here)
+
+**D2 and D1/D6 disagree about the status dot's glow, and the disagreement is real rather than a
+transcription slip.** Both authorities are this ADR's, so no implementing session can pick one.
+
+- **What D1/D6 keep.** The glow shares are a `color-mix()` the ORIGINAL design source writes:
+  `docs/research/remote-control-design-directions.html:78-79` gives `.pdot.att` 70% of `--p-att`
+  over transparent and `.pdot.wrk` 55% of `--p-work`. `docs/design/substrate-components.md:279`
+  records them, `internal/design.Derivations()` computes them, and `Kit.groupGlow` spends them.
+  D1 keeps the derivation mechanism unchanged and D6 keeps the Group binding unchanged; the app
+  therefore glows NeedsInput at 70% and Working at 55% today.
+- **What D2's maquette draws.** `.sdot.att { box-shadow: 0 0 9px rgba(201,168,118,0.5) }` — a flat
+  50% literal, not a `color-mix()` — and **no `box-shadow` at all** on `.sdot.work`, `.sdot.ok` or
+  `.sdot.done`. Its component-sheet legend annotates glow for NeedsInput only ("glow 9dp").
+
+So the shipped app glows the Working dot, which the maquette never draws, at a share the maquette
+does not state; and glows the NeedsInput dot at 70% where the maquette writes 50%.
+
+**Three readings, and choosing between them is a design call:**
+
+1. The maquette **under-drew** an effect it meant to keep — the working dot's glow is a liveness
+   signal ("nothing glows unless it is alive") and dropping it would make a running agent look
+   like a resolved one. The 0.5 is then a hand-typed approximation of the kept 0.70.
+2. The maquette **retired** the working glow deliberately, and 50% is the new NeedsInput share.
+   The dot's motion budget on near-black is real, and one glowing mark per viewport is a stronger
+   reading of "at most one moving element" than two.
+3. Both survive with the derivation re-pointed: the mechanism stays (D1), the SITES and SHARES
+   move to the maquette (D2), which is the disposition `internal/design/derive_test.go` already
+   flags for three of the four derivations as "ADR-009 D4's work, phase O3".
+
+**Nothing changes until the owner picks one.** The app keeps the derivation, because that is what
+D1 says is kept and it is the shipped behaviour; this note exists so the divergence is a recorded
+question rather than a discovery waiting for the O7 device pass.
+
 ### D7. Typography.
 
 Platform sans stays for UI text (no bundled display face — the narrow weight band 400/500 and
