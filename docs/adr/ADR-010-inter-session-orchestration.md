@@ -211,6 +211,16 @@ message is atomic, applying the frozen r3p discipline daemon-side:
   (`internal/remotegw/lease.go` semantics), slept daemon-side — never in the shim, whose
   `ptyWriter` lock is shared with the VT emulator's DSR/CPR reply pump.
 
+Those two bullets were REVISED on 2026-08-07 after a concurrency review of the shipped
+implementation (evidence: `docs/verification/adr010/phase3-red.md`). Framing a message into
+maximal runs made it sleep a gap per newline while holding the session's input
+serialization, so the hold was a function of the caller's text (2048 newlines is ~5 minutes,
+past the client timeout), and text already ending in a newline submitted twice. The
+semantics are now the phone lane's frozen Paste+Enter precedent: the TEXT is ONE frame —
+embedded newlines are content — followed by exactly one gap and one CR, so a message sleeps
+once and the hold is bounded. Maximal-run framing (`submitframe.FrameLen`) remains the rule
+for the phone lane's keystroke coalescer, which is what it was extracted from.
+
 Invariant S2 (single-controller) keeps its intent — at most one interactive controller,
 stale generations write nothing — and gains a sentence: the daemon itself may perform
 serialized one-shot message writes (`send_input`); the shim still has exactly one input
@@ -218,7 +228,12 @@ connection (the daemon), through which all writes serialize. An attached human w
 the child sees the injected message appear before submission — transparency by
 construction. `send_input` is refused on the remote socket; the remote tier keeps its
 own full lane. The TUI trigger in D3 becomes a caller of this same op, making "two
-triggers, one code path" literal.
+triggers, one code path" literal. Scope of the atomicity, recorded after review: the
+owner-tier and remote-tier servers are distinct values holding distinct per-session input
+serializations over one shared tap, so a remote `take_control` keystroke may land between
+the text and its CR — the guarantee is against OWNER-TIER lease input, and the remote case
+is accepted for the personal single-owner model because a remote take-control means the
+human deliberately grabbed the session.
 
 ### A3. D5 refined: `peek` is a gating relaxation, not a port
 

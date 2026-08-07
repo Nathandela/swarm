@@ -1056,6 +1056,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleJournalSubscribe()
 	case OpTerminalSubscribe:
 		cc.handleTerminalSubscribe(c)
+	case OpSendInput:
+		cc.handleSendInput(c)
 	case OpDeviceList:
 		cc.handleDeviceList()
 	case OpPolicyQuery:
@@ -1960,8 +1962,11 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 	}
 	// FIRST GATE (fail-closed): a disabled remote-control kill switch blanks the phone —
 	// refuse before any tap is opened or a single frame is streamed (R-KS.1). A valid peek
-	// must never survive `swarm remote off`.
-	if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+	// must never survive `swarm remote off`. REMOTE-TIER ONLY (ADR-010 A3, mirroring the
+	// journal fan-out's finding-B scoping): the owner tier shares the KillSwitch-implementing
+	// coreAPI, and the switch is the REMOTE tier's master override, so it must never blank
+	// the owner's own view of the owner's own machine.
+	if !cc.peekGateOpen() {
 		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
 		return
 	}
@@ -1991,13 +1996,11 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		prev()
 	}
 
-	// stillAllowed is the render loop's per-tick liveness gate: an idle peek (no output)
-	// must terminate PROMPTLY once the kill switch flips OFF, not linger until the conn
-	// drops (Blocker 1a). A backend with no kill switch is always allowed.
-	stillAllowed := func() bool {
-		ks, ok := cc.killSwitch()
-		return !ok || ks.RemoteControlEnabled()
-	}
+	// stillAllowed is the render loop's per-tick liveness gate: an idle REMOTE peek (no
+	// output) must terminate PROMPTLY once the kill switch flips OFF, not linger until the
+	// conn drops (Blocker 1a). A backend with no kill switch — and an owner-tier peek, which
+	// the switch does not govern — is always allowed.
+	stillAllowed := cc.peekGateOpen
 
 	cc.srv.wg.Add(1)
 	go func() {
@@ -2018,10 +2021,10 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		daemon.RenderTerminal(ctx, local, sub, stillAllowed, func(r daemon.TerminalRender) {
 			// Re-check the kill switch before EVERY emission (A7 C): the FIRST gate only
 			// covers subscribe time, so `swarm remote off` (or revoking the last device)
-			// mid-peek must BLANK an established peek. A disabled switch cancels the render
-			// ctx — the loop returns and the deferred sub.Close releases the tap. Mirrors
-			// controlGateOpen clause 1 (the switch is re-checked on every keystroke).
-			if ks, ok := cc.killSwitch(); ok && !ks.RemoteControlEnabled() {
+			// mid-peek must BLANK an established REMOTE peek. A disabled switch cancels the
+			// render ctx — the loop returns and the deferred sub.Close releases the tap.
+			// Mirrors controlGateOpen clause 1 (the switch is re-checked on every keystroke).
+			if !cc.peekGateOpen() {
 				cancel()
 				return
 			}
@@ -2136,7 +2139,12 @@ func clipPeek(lines []string, cols, rows int) ([]string, int, int) {
 // this connection (negotiated remote-gateway cap AND a tapping backend), replying with an
 // error refusal otherwise (mirrors journalBackend()).
 func (cc *clientConn) terminalTapper() (TerminalTapper, bool) {
-	if !cc.hasCap(CapRemoteGateway) {
+	// The negotiated remote-gateway capability is a REMOTE-tier precondition (ADR-010 A3):
+	// an owner-tier connection on the main socket already holds full daemon power by
+	// ADR-004's v1 trust model, so `swarm peek` needs no capability to look at the owner's
+	// own screen. The BACKEND requirement below is not authorization and stays for both
+	// tiers — a daemon that cannot tap must refuse, not leave the caller waiting.
+	if cc.srv.remoteTier && !cc.hasCap(CapRemoteGateway) {
 		cc.replyError("remote gateway capability not negotiated")
 		return nil, false
 	}
@@ -2572,6 +2580,20 @@ func (cc *clientConn) deviceAuthenticator() (DeviceAuthenticator, bool) {
 func (cc *clientConn) killSwitch() (KillSwitch, bool) {
 	ks, ok := cc.srv.d.(KillSwitch)
 	return ks, ok
+}
+
+// peekGateOpen reports whether the remote-control kill switch permits this connection's
+// terminal peek — at subscribe time, on every render tick, and before every emission.
+// It governs the REMOTE tier only (ADR-010 A3): `swarm remote off` is the remote tier's
+// master override, and an owner-tier caller on the main socket is already authorized by
+// ADR-004's filesystem trust model, so the switch must never blank the owner's own view.
+// A backend that exposes no kill switch is never disabled (behavior unchanged).
+func (cc *clientConn) peekGateOpen() bool {
+	if !cc.srv.remoteTier {
+		return true
+	}
+	ks, ok := cc.killSwitch()
+	return !ok || ks.RemoteControlEnabled()
 }
 
 // deviceRegistrar returns the backend's DeviceRegistrar if it implements one (C1): the

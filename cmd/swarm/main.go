@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|version]
+const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|send|peek|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
@@ -72,6 +72,9 @@ const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|version]
   swarm watch      wait for a session to reach a status
                    (--until needs_input|ready_for_review|completed|change, --timeout d)
   swarm kill       terminate a session
+  swarm send       type into a session <session>
+                   (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm peek       print a session's current screen <session> [--lines N]
   swarm version    print the build version
 `
 
@@ -110,6 +113,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runWatch, args[1:], []string{"subscribe"}, stdout, stderr)
 	case "kill":
 		return dispatchAgentVerb(runKill, args[1:], nil, stdout, stderr)
+	case "send":
+		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
+	case "peek":
+		return dispatchAgentVerb(runPeek, args[1:], nil, stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:

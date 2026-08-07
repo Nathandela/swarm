@@ -18,14 +18,16 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// agentClient is the narrow daemon surface these verbs use — only List, Subscribe,
-// Kill and Launch. Keeping it narrow (the internal/tui precedent) makes every verb
+// agentClient is the narrow daemon surface these verbs use — the read ops plus the two
+// Phase 3 steering ops. Keeping it narrow (the internal/tui precedent) makes every verb
 // unit testable with no daemon and no socket; *protocol.Client satisfies it as-is.
 type agentClient interface {
 	List() ([]protocol.SessionView, error)
 	Subscribe() (<-chan protocol.Event, error)
 	Kill(id string) error
 	Launch(protocol.LaunchReq) (id, name string, err error)
+	SendInput(id string, req protocol.SendInputReq) error
+	TerminalSnapshot(id string) (*protocol.TerminalSnapshot, error)
 }
 
 // watchTimeoutExit is the exit code a watch that reached its deadline without a

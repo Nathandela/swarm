@@ -100,6 +100,15 @@ const (
 	OpTerminalSubscribe = "terminal_subscribe"
 	OpTerminalSnapshot  = "terminal_snapshot"
 
+	// OpSendInput is the OWNER-TIER one-shot steering write (ADR-010 Amendment 1 A2):
+	// the daemon writes one message into a session's shim through the same input funnel
+	// every lease write uses, serialized against concurrent lease input so the whole
+	// message is atomic. It never takes or supersedes the attach lease — that is the
+	// whole reason it is a new op rather than a local control session (A1). Like attach
+	// it is gated by TIER and not by a negotiated capability, and like attach it is
+	// refused outright on the remote tier, which keeps its own signed take_control lane.
+	OpSendInput = "send_input"
+
 	// OpPushPrefs is the signed remote op behind ActionPushPrefs (PB-PUSH-8): the phone
 	// asks the machine to change which transitions may wake it. The daemon AUTHORIZES it
 	// and nothing more -- the durable record and the delivery decision live at the gateway,
@@ -147,6 +156,7 @@ type (
 	PairingControl   = schema.PairingControl
 	LaunchReq        = schema.LaunchReq
 	ReconcileRecord  = schema.ReconcileRecord
+	SendInputReq     = schema.SendInputReq
 )
 
 // The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no
