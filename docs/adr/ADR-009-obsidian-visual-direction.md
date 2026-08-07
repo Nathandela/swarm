@@ -171,6 +171,71 @@ which is already the recorded upgrade path for the box-drawing fallback defect; 
 `zero` + `calt` enabled wherever machine data renders. Type scale structure (19 styles, sp
 units, colour-free styles) is unchanged.
 
+#### Amendment (2026-08-07, executed by phase O5)
+
+The paragraph above names a font and a phase. This records what was actually bundled, where the
+decision lands in the pipeline, and the one prediction in D3 that turned out to be unexecutable.
+
+**What is bundled.** Two static faces from the `JetBrains/JetBrainsMono` v2.304 release, under
+OFL-1.1, with the licence and authors files checked in beside them at `docs/design/fonts/`:
+
+| release file | app resource | weight | sha256 |
+|---|---|---|---|
+| `JetBrainsMono-Regular.ttf` | `res/font/jetbrains_mono_regular.ttf` | 400 | `a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f` |
+| `JetBrainsMono-Medium.ttf` | `res/font/jetbrains_mono_medium.ttf` | 500 | `31c92d01a8a08528b718a43addf0ad3df0af2ca4b7b3290a452f70f358e14d3d` |
+
+joined by `res/font/jetbrains_mono.xml`, the family the styles name. **`--p-mono` substitutes to
+`@font/jetbrains_mono`.**
+
+**Two static faces, not the variable file, and not three.** The type scale asks the mono family
+for 400, 500 and 600. Two static faces answer 400 and 500 exactly and resolve 600 to the nearest
+(500, no synthetic bolding — the gap is under the 300-unit threshold that triggers it, and both
+faces are 600/1000 em on every glyph, so nothing about the advance grid moves). The variable
+`JetBrainsMono[wght].ttf` would cost roughly 60% more bytes to render one weight nobody asked for
+at full fidelity. Bundling a third static face to serve 600 literally would cost another 273 KB
+for a weight difference at 10 sp.
+
+**The features.** Every mono style declares `android:fontFeatureSettings` = `tnum, zero, calt`,
+and no sans style does. `tnum` gives digits one advance, so a live counter ticking 9 to 10 does
+not reflow the line it sits in; `zero` slashes the zero, which is the one glyph pair a person
+reading a session id has to disambiguate; `calt` is on by default in the family and is stated
+anyway, because Android's `fontFeatureSettings` is a full override rather than an addition — two
+features named without it would silently switch the family's contextual alternates off.
+
+**THE TOKEN VALUE DOES NOT MOVE, and D3's row for `--p-mono` is corrected here.** That row
+predicted "O5 prepends bundled JetBrains Mono" to the token's value in `internal/design/
+tokens.json`. **It is unexecutable as written.** D2 makes the maquette the normative design
+source, and `internal/design/tokens_test.go` joins `tokens.json` to the maquette's `:root` in
+both directions with no exception mechanism — so prepending a family name to the JSON is a drift
+failure, and editing the owner-signed maquette to satisfy a gate is the tail wagging the dog.
+
+The bundling belongs one layer down and always did. PB-DS-3 exists precisely because the token
+states a stack the platform cannot supply (`SF Mono`); the SUBSTITUTION table is what says what
+Android renders for it, and ADR-007 B134 is the record of that decision. So `--p-mono` keeps its
+maquette value, `android/gate/s22b_type_test.go`'s `s22bFontSubstitution` moves from `monospace`
+to `@font/jetbrains_mono`, and the change flows JSON (unchanged) → substitution → `type.xml` →
+resolved typeface, gated at every hop. ADR-007 B134 decision 2 carries the matching supersession
+note; its sans half, `sans-serif` with zero bundled assets, is untouched.
+
+**The defect is measured dead.** `MonoBoxDrawingTest` asserted the residual for as long as it was
+real — box drawing resolving through fallback at 0.71em against the family's own 0.60em, an 18%
+mismatch in the one place the app draws a frame. It now asserts the equality on the same
+measurement at the same size, per character and across the string, and keeps the old inequality
+as a control against `Typeface.MONOSPACE`: the platform family must still show the mismatch, or
+the equality is passing for a reason nothing in this repository caused.
+
+**The APK cost, measured rather than estimated.** 547,760 bytes of TTF on disk. The debug APK
+goes **35,165,498 → 35,574,834 bytes: +409,336, or +1.16%** (`assembleDebug`, same machine, same
+AAR, immediately before and after). The three `res/font/` entries account for 257,994 of that
+compressed (`jetbrains_mono_regular.ttf` 273,900 → 128,157; `jetbrains_mono_medium.ttf` 273,860 →
+129,597; `jetbrains_mono.xml` 540 → 240); the remaining ~151 KB is packaging overhead this
+measurement does not decompose, and the honest number to quote is the whole-file delta.
+
+**No subsetting.** The peek renders whatever an agent TUI emits, so a subset chosen against
+today's screens is a tofu bug waiting for tomorrow's — and tofu is the failure mode this whole
+decision exists to avoid. Revisit only if the release AAB's font contribution is ever the binding
+constraint; at 1.16% of a debug APK dominated by an 11.8 MB native library, it is not.
+
 ### D8. Quality gates added by this direction.
 
 1. **A contrast gate** (`android/gate/` — new, RED-first): computes APCA lightness contrast for

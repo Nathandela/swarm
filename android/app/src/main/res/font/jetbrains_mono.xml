@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ADR-009 D7 (phase O5): the bundled mono family, and the end of a measured defect.
+
+  WHAT THIS REPLACES. Every mono style in this app rendered `monospace`, which on Android is Droid
+  Sans Mono. That family does not cover U+2500..257F, so the terminal peek's frame resolved through
+  font FALLBACK to glyphs in another family at 0.71em against the mono family's own 0.60em: the
+  frame drew, 18 percent wider per character than the text it framed, and did not line up.
+  MonoBoxDrawingTest measured that, ADR-007 B134 recorded it, and D7 is the decision that pays for
+  the fix.
+
+  TWO FACES AND NOT THREE. The type scale asks the mono family for 400, 500 and 600. The two below
+  answer 400 and 500 exactly; 600 resolves to the nearest, which is the 500 here, and Android
+  applies no synthetic bolding for a 100 unit gap. Every glyph in both faces advances 600/1000 em,
+  including the box drawing block, so nothing about the frame's grid depends on which weight a
+  style asked for. A third static face would be another 273 KB for a weight difference at 10 sp.
+
+  FEATURES ARE NOT DECLARED HERE. `tnum`, `zero` and `calt` are per style, in res/values/type.xml,
+  because a family cannot state them and because the decision is about WHERE machine data renders
+  rather than about the face.
+
+  The two file names are the resource spelling of the release's own: JetBrainsMono-Regular.ttf and
+  JetBrainsMono-Medium.ttf, v2.304, OFL-1.1. The licence and the authors file travel with them at
+  docs/design/fonts/, which is OFL-1.1's own condition and not a courtesy.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/jetbrains_mono_regular"
+        android:fontStyle="normal"
+        android:fontWeight="400" />
+    <font
+        android:font="@font/jetbrains_mono_medium"
+        android:fontStyle="normal"
+        android:fontWeight="500" />
+</font-family>

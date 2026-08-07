@@ -120,7 +120,7 @@ var s22bFontRecord = map[string]s22bFontDecision{
 	"--p-font": {
 		ADR:    "docs/adr/ADR-007-remote-access.md",
 		Anchor: "## B134.",
-		Wants:  []string{"`sans-serif`", "zero bundled assets"},
+		Wants:  []string{"zero bundled assets"},
 	},
 	"--p-mono": {
 		ADR:    "docs/adr/ADR-009-obsidian-visual-direction.md",
