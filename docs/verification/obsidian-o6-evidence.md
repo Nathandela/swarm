@@ -4,6 +4,14 @@ Date: 2026-08-07
 Phase: [obsidian-migration-plan.md](../specifications/obsidian-migration-plan.md) O6
 Decision of record: [ADR-009](../adr/ADR-009-obsidian-visual-direction.md)
 
+**Phase status: PARTIAL.** Items 2 and 3 meet their exit criteria. Item 1, the pull-quote
+approval sheet, does not: it is built, tested, and has no production caller, so no user reaches it
+on any run and the composition cannot be validated by anything except its own unit tests. That was
+disclosed in section 6 item 4 from the first draft of this file, together with the correct
+blocker — `mobile/app.go` exports no approve, deny or answer verb — but the phase was nevertheless
+recorded as done. It is not. A protocol decision has to land before item 1 can be closed, and
+`obsidian-migration-plan.md` O6 now carries the same status note.
+
 O6 is the phase that adds things a screenshot cannot show. Two of its three items produce no
 pixels at all — a vibration leaves no visual trace, and a gesture preview exists only while a
 thumb is on the glass — which is why both are fenced by Go gates over source as well as asserted
