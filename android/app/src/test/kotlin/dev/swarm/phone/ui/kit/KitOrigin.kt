@@ -88,6 +88,23 @@ object KitOrigin {
     }
 
     /**
+     * EVERY colour in one resolved maquette declaration, in the order the design writes them.
+     *
+     * [maquetteColour] answers the first, which is the whole answer for `background: var(--p-card)`
+     * and exactly half of it for a gradient. ADR-009 D4.4 gives the app one vertical gradient and
+     * its two stops are two tokens; a reader that could only see the first would let the bottom
+     * stop drift to anything at all, including the top one.
+     */
+    fun maquetteColours(selector: String, property: String): List<Int> {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val found = HEX.findAll(DesignScale.resolve(raw)).map { DesignTokens.toArgb(it.value) }.toList()
+        require(found.isNotEmpty()) { "`$selector { $property: $raw }` resolves to no colour" }
+        return found
+    }
+
+    /**
      * The `rgba(r, g, b, a)` inside one resolved maquette declaration -- an effect token spent by
      * a rule, as `.slab.lit { box-shadow: var(--p-lit-fx) }` spends the promoted key light.
      *

@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -379,6 +380,104 @@ class KitFoundationTest {
             resting.spec.keyLight,
             surface.spec.keyLight,
         )
+    }
+
+    /**
+     * `.sheet`: ADR-009 D4.4's approval sheet -- the ONE vertical gradient in the app, and the
+     * heaviest material there is, reserved for the moment of decision.
+     *
+     * FOUR THINGS AT ONCE, AND THE GRADIENT IS ONLY THE OBVIOUS ONE. The maquette draws
+     * `background: linear-gradient(180deg, var(--p-sheet-hi), var(--p-sheet-lo))`, the hairline
+     * every surface carries, `box-shadow: var(--p-lit-fx)` -- the strong 0.22 edge, which D4.4
+     * gives to this and to a promoted slab and to nothing else -- and `border-radius:
+     * var(--p-sheet-r)`, the one radius in the scale that had no component spending it.
+     *
+     * THE TWO STOPS ARE READ SEPARATELY. They are two tokens because a gradient's endpoints are
+     * chosen rather than computed from a base; a reader that took the first colour and let the
+     * second follow from an alpha would accept the exact collapse `colors.xml`'s own comment says
+     * the two resources exist to prevent.
+     *
+     * THE UNIQUENESS IS ASSERTED, not assumed. "The only vertical gradient" is a property of the
+     * whole kit and it is the half a test of this component alone cannot see, so every other
+     * surface recipe is asked whether it has a second stop.
+     */
+    @Test
+    fun `the approval sheet is the one vertical gradient, under the strong edge`() {
+        val surface = sheetSurface(context)
+        val stops = KitOrigin.maquetteColours(".sheet", "background")
+        val highlight = (0 until surface.numberOfLayers)
+            .map { surface.getDrawable(it) }
+            .filterIsInstance<EdgeHighlight>()
+            .singleOrNull()
+        assertTrue("the sheet carries no EdgeHighlight layer, so `--p-lit-fx` is not on it", highlight != null)
+
+        assertEquals(
+            "`.sheet { background }` resolves to a number of colours other than two, so the " +
+                "expectations below are reading something that is not the design's gradient",
+            2,
+            stops.size,
+        )
+        assertEquals(
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim("`.sheet` gradient top", stops[0], surface.spec.fill),
+                    Claim("`.sheet` gradient bottom", stops[1], surface.spec.fillBottom),
+                    Claim("`.sheet` border", KitOrigin.maquetteColour(".sheet", "border"), surface.spec.stroke),
+                    Claim(
+                        "`.sheet` border width",
+                        px(KitOrigin.maquetteFirstPx(".sheet", "border")).roundToInt(),
+                        surface.spec.strokeWidthPx,
+                    ),
+                    Claim(
+                        "`.sheet` radius",
+                        px(KitOrigin.maquetteFirstPx(".sheet", "border-radius")),
+                        surface.spec.radiusPx,
+                    ),
+                    Claim("`.sheet` key light", KitOrigin.maquetteRgba(".sheet", "box-shadow"), highlight!!.colour),
+                    Claim("the sheet is not a row", null, surface.spec.rail),
+                ),
+            ),
+        )
+        assertNotEquals(
+            "the sheet's two gradient stops are the same colour, so it renders as a flat surface " +
+                "and the one vertical gradient in the app does not exist",
+            surface.spec.fill,
+            surface.spec.fillBottom,
+        )
+        assertEquals(
+            "the sheet's radius is the card's, which is the coincidence `--p-sheet-r` exists to " +
+                "stop being one",
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim(
+                        "the sheet radius differs from the card's",
+                        true,
+                        surface.spec.radiusPx != cardSurface(context, attention = false).spec.radiusPx,
+                    ),
+                ),
+            ),
+        )
+
+        // D4.4's word is ONLY, and that is a claim about every other surface in this kit.
+        listOf(
+            "cardSurface(resting)" to cardSurface(context, attention = false),
+            "cardSurface(promoted)" to cardSurface(context, attention = true),
+            "toastSurface" to toastSurface(context),
+            "chipSurface(idle)" to chipSurface(context, selected = false),
+            "chipSurface(selected)" to chipSurface(context, selected = true),
+            "wellSurface" to wellSurface(context),
+            "pillSurface" to pillSurface(context, KitOrigin.token("--p-att")),
+            "panelSurface" to panelSurface(context, Kit.killSwitchBorder(context)),
+        ).forEach { (name, other) ->
+            assertNull(
+                "$name carries a second gradient stop. ADR-009 D4.4 gives the app exactly one " +
+                    "vertical gradient and reserves it for the moment of decision; a second one " +
+                    "spends the heaviest material the skin has on something that is not a choice.",
+                other.spec.fillBottom,
+            )
+        }
     }
 
     /** `.chip` and `.chip.on`: the only component whose selected state changes three values. */
