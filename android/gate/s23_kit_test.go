@@ -81,6 +81,21 @@ var s23Inbox = []s23Component{
 			"hint IS the field's label on a surface with no XML layouts to carry one.",
 	},
 	{
+		Factory: "approvalSheet",
+		File:    "ApprovalSheet.kt",
+		Derived: "§4 Approval sheet pull-quote",
+		Why: "the contents of ADR-009 D4.4's sheet, and the FIRST CALLER `sheetSurface` has " +
+			"ever had -- O3 built that recipe and recorded that it had no screen, \"a recipe " +
+			"waiting for its screen, not a rendered surface\". It is `derived:` rather than " +
+			"`origin: .sheet2` because the whole component is a REORDERING of what Substrate " +
+			"drew: `.sheet2` puts an h4 question first with the machine and project under it, " +
+			"and the maquette reverses the two and grows the question into a pull-quote. Citing " +
+			"the Substrate rule would claim a join to a drawing this component deliberately " +
+			"contradicts. The well and the actions are SLOTS -- `monoWell` is already every mono " +
+			"block in the app and `ctaButton` is already every action, so a sheet that built its " +
+			"own would be a second copy of both, and `pairingStep`'s `detail` sets the precedent.",
+	},
+	{
 		Factory: "monoWell",
 		File:    "MonoWell.kt",
 		Origin:  ".sheet2 .cmd",
