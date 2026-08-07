@@ -235,9 +235,17 @@ class KitFoundationTest {
         // `inset 0 1px 0 rgba(246,243,236,0.10)`: one light source, top edge, linen-toned. The
         // assertion's point is unchanged and is still worth making at 0.10 -- an alpha this low
         // is exactly the one a missing alpha turns into 255 without anything else noticing.
+        //
+        // `.toInt()` BECAME `.roundToInt()` IN THE SAME BREATH, and that is a correction rather
+        // than an accommodation. `.toInt()` TRUNCATES, and 0.045 * 255 = 11.475 truncates and
+        // rounds to the same 11 -- so the control agreed with ColorMix.quantise by luck and
+        // nobody could see that the two used different arithmetic. At 0.10 the product is exactly
+        // 25.5 and the two answers separate: truncation says 25, rounding says 26, and rounding
+        // is what an 8-bit alpha quantisation must do (it is what ColorMix does, once, at the end
+        // of the blend, for the reason its own doc gives).
         assertEquals(
             "the key light is a translucent linen, not the opaque one a missing alpha produces",
-            (0.10f * 255f).toInt(),
+            (0.10f * 255f).roundToInt(),
             Color.alpha(highlight.colour),
         )
     }

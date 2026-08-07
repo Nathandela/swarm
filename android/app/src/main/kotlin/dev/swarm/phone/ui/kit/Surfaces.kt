@@ -2,7 +2,6 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -213,10 +212,21 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
         },
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
-        // rgba(255, 255, 255, 0.045). The white is `--p-card-fx`'s own RGB -- the token IS a
-        // translucent white -- and the alpha comes from KitMetrics, which the Go gate recomputes
-        // from that token. Color.WHITE rather than a hex, so nothing in this package is a literal.
-        keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        // rgba(246, 243, 236, 0.10) -- and the RGB is `swarm_text_primary`'s, not a hex and no
+        // longer `Color.WHITE`. ADR-009 D4 states the material rule this implements: surfaces are
+        // "gradients of LINEN over ground", one light source, top edge. `--p-card-fx`'s RGB is
+        // therefore exactly `--p-ink`, which is what the resource below resolves; the alpha comes
+        // from KitMetrics, which the Go gate recomputes from the same token.
+        //
+        // IT USED TO BE `Color.WHITE` AND THAT WAS RIGHT UNTIL IT WASN'T. Substrate's key light
+        // was a neutral white, so the constant was both correct and literal-free. Obsidian's is
+        // tinted, and a white key light over a warm ladder is the exact cool contamination the
+        // direction exists to remove -- visible on device, invisible in a diff, which is why the
+        // Kotlin appearance suite reads this colour out of the token rather than trusting it.
+        keyLight = ColorMix.withAlpha(
+            Kit.colour(context, R.color.swarm_text_primary),
+            KitMetrics.KEY_LIGHT_ALPHA,
+        ),
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
         rail = if (attention) Kit.colour(context, R.color.swarm_state_attention) else null,
         railPx = Kit.dp(context, KitMetrics.RAIL_DP),
@@ -247,9 +257,12 @@ internal fun toastSurface(context: Context): SubstrateSurface = surface(
         stroke = Kit.colour(context, R.color.swarm_hairline),
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
-        // The card's own recipe: `--p-card-fx`'s RGB is white and its alpha is the checked
-        // constant, exactly as `cardSurface` spends them.
-        keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        // The card's own recipe: `--p-card-fx`'s RGB is `--p-ink`'s linen and its alpha is the
+        // checked constant, exactly as `cardSurface` spends them.
+        keyLight = ColorMix.withAlpha(
+            Kit.colour(context, R.color.swarm_text_primary),
+            KitMetrics.KEY_LIGHT_ALPHA,
+        ),
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
         rail = null,
         railPx = 0f,
@@ -292,7 +305,14 @@ internal fun wellSurface(context: Context): SubstrateSurface = surface(
         fill = Kit.colour(context, R.color.swarm_surface_well),
         stroke = Kit.colour(context, R.color.swarm_hairline),
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
-        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        // THE BUTTON RADIUS, NOT THE CARD'S, AND IT USED TO BE THE CARD'S BY COINCIDENCE.
+        // Substrate set --p-card-r and --p-btn-r to the same 9px, and `.sheet2 .cmd` wrote a
+        // literal 9px rather than either token -- so every one of those three numbers agreed and
+        // nothing could tell which one the well was actually spending. ADR-009 separates them
+        // (14 and 10), and the maquette answers the question the coincidence had been hiding:
+        // it draws `.well { border-radius: var(--p-btn-r) }`. A well is a control-sized recess,
+        // not a slab.
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_button),
         keyLight = null,
         keyLightPx = 0f,
         rail = null,

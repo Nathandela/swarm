@@ -243,11 +243,33 @@ class InboxChromeTest {
                 ),
             ),
         )
-        assertNotEquals(
-            "the live counter renders in the badge's colour. §1.4 ships both counters ONLY " +
-                "because they are distinct instruments -- hero means live, attention means this " +
-                "needs you -- and one colour for both is the contradiction that argument avoids.",
-            KitOrigin.token("--p-att"),
+        // AUTHORIZED REWRITE, ADR-009 D3/D6. What this assertion said before:
+        //
+        //     assertNotEquals(
+        //         "the live counter renders in the badge's colour. §1.4 ships both counters ONLY " +
+        //             "because they are distinct instruments -- hero means live, attention means " +
+        //             "this needs you -- and one colour for both is the contradiction that " +
+        //             "argument avoids.",
+        //         KitOrigin.token("--p-att"),
+        //         counter.currentTextColor,
+        //     )
+        //
+        // ADR-009 D3 makes --p-att VALUE-ALIAS --p-hero deliberately: "in Obsidian the accent IS
+        // the needs-you signal", and D6 records the champagne as unifying five meanings Substrate
+        // had split across green and amber. So the two counters now render in the same colour ON
+        // PURPOSE, and an assertion that they differ is an assertion against the decision.
+        //
+        // WHAT SURVIVES IS THE PART THAT WAS ALWAYS THE POINT: each counter must read its own
+        // token. D3 keeps --p-att on its own row and its own resource exactly as --p-cta-bg
+        // already was, so a future skin can break either alias in one line -- and it can only do
+        // that if nothing downstream has quietly collapsed the two. Asserting the SOURCE rather
+        // than the VALUE is what makes that checkable while the alias holds.
+        assertEquals(
+            "the live counter must resolve --p-hero, not be handed the badge's --p-att. The two " +
+                "hold the same bytes today (ADR-009 D3) and are separate tokens on separate " +
+                "rows; a component that read the wrong one would look identical now and break " +
+                "silently the day a skin separates them.",
+            KitOrigin.token("--p-hero"),
             counter.currentTextColor,
         )
     }
@@ -564,12 +586,31 @@ class InboxChromeTest {
             mismatches(listOf(Claim("allCaps", true, false))).isNotEmpty(),
         )
 
-        // The readers must tell the two counters' colours apart, or §1.4's whole argument is
-        // unasserted.
+        // AUTHORIZED REWRITE, ADR-009 D3/D6. What this control said before:
+        //
+        //     // The readers must tell the two counters' colours apart, or §1.4's whole argument
+        //     // is unasserted.
+        //     assertNotEquals(
+        //         "the origin reader returns the same colour for --p-hero and --p-att",
+        //         KitOrigin.cssColour(".pnav .live", "color"),
+        //         KitOrigin.token("--p-att"),
+        //     )
+        //
+        // It was a discrimination control that happened to be satisfiable by the skin rather than
+        // by the reader: --p-hero and --p-att differed under Substrate, so the reader looked
+        // capable of telling colours apart without anything proving it could. ADR-009 D3 aliases
+        // them, which retires that accident and exposes what the control was really leaning on.
+        //
+        // The property it was defending survives, checked against a pair the ADR keeps distinct
+        // by decision: D6 holds the FOUR GROUP indicators pairwise distinct, so --p-att against
+        // --p-work is a difference the reader must see and one that no future skin may collapse.
         assertNotEquals(
-            "the origin reader returns the same colour for --p-hero and --p-att",
-            KitOrigin.cssColour(".pnav .live", "color"),
+            "the origin reader returns the same colour for --p-att and --p-work. PB-TOK-8's four " +
+                "Groups are pairwise distinct by decision (ADR-009 D6 keeps that intact while " +
+                "aliasing --p-att to --p-hero), so a reader that cannot separate these two " +
+                "cannot separate anything.",
             KitOrigin.token("--p-att"),
+            KitOrigin.token("--p-work"),
         )
         assertNotEquals(
             "the origin reader returns the same ink for an active tab and an inactive one",
