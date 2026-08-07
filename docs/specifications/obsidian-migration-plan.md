@@ -82,9 +82,15 @@ frame, every control, and the mark, at token fidelity:
    with new `swarm_sheet_gradient_top/bottom` resources). Resources regenerate.
 3. Authorized rewrites, quoting old assertions: skin pin, PB-TOK-5 count, design-source
    reader (now parses the maquette's `:root`).
-4. **NEW contrast gate, RED-first** (ADR-009 D8.1): APCA over the join — body pairs >= Lc 75,
-   large >= Lc 60, indicators >= 3:1 WCAG. Lands here so the new values are guarded at birth.
-   If any Obsidian pair fails, the token moves (ladder is tunable), never the threshold.
+4. **NEW contrast gate, RED-first** (ADR-009 D8.1): APCA over the join, against the **per-role
+   floors of D8.1's Amendment (2026-08-07, measured calibration)** — `--p-ink` >= 90,
+   `--p-ink2` >= 45, `--p-ink3` >= 24 (the named deviation, with its two standing rules),
+   `--p-hero-ink` on the champagne fills >= 55, `--p-hero` as text >= 50, `--p-err` as text
+   >= 38 (watch item for O7), indicators >= 3:1 WCAG. The blanket "Lc 75 body / Lc 60 large"
+   this line used to cite was set before measurement and failed the shipped Substrate palette
+   too; the amendment records the ceiling proof that made it unsatisfiable. Lands here so the
+   new values are guarded at birth. If any Obsidian pair fails, the token moves (ladder is
+   tunable), never the threshold.
 5. **Exit**: all four quality gates green; app builds and renders fully warm with zero Kotlin
    changes beyond the theme; device screenshot set (same shots as Substrate's PB-E2E-2 set)
    attached as evidence `docs/verification/obsidian-o2-evidence.md`.

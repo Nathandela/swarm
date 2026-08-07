@@ -180,6 +180,98 @@ units, colour-free styles) is unchanged.
    surface. WCAG 2.x alone is known to false-pass ~49% of dark pairs, which is why APCA leads
    and WCAG certifies. The gate reads token values through the join, so it guards every future
    skin, not just this one.
+
+   #### Amendment (2026-08-07, measured calibration)
+
+   **The two floors above — Lc 75 for body, Lc 60 for large — were written before anything in
+   this repository had ever measured a contrast number.** Phase O2 built the gate they ask for
+   and it failed **twelve of sixteen** text pairs, on Obsidian **and on the Substrate palette
+   that is live on the internal track today**. A threshold that fails the shipped product is not
+   a finding about the shipped product; it is an unmeasured number, and this amendment replaces
+   it with floors calibrated to what was measured, per role. **The inks do not move.** The
+   maquette is the owner-signed ground truth (D2) and the palette it states is kept whole.
+
+   The measurement, as phase O2 reported it (negative Lc is light ink on a dark ground, which is
+   the correct polarity for every pair but the two champagne fills):
+
+   ```
+     --p-ink   x 4 surfaces:  Substrate -103.0..-102.3 | Obsidian -100.0..-98.7 | floor 75 | PASS both
+     --p-ink2  x 4 surfaces:  -41.9..-41.1 | -49.7..-48.4 | 75 | fail both (Obsidian better by ~8)
+     --p-ink3  x 4 surfaces:  -22.9..-22.1 | -25.6..-24.2 | 60 | fail both (Obsidian better by ~3)
+     --p-hero-ink on hero/cta: +64.6 | +58.8 | 75 | fail both (Obsidian worse)
+     --p-err on --p-bg:        -47.3 | -40.6 | 75 | fail both (Obsidian worse)
+     --p-hero on --p-bg:       -63.8 | -57.7 | 75 | fail both (Obsidian worse)
+   ```
+
+   **THE CEILING FACT, which decides this.** A later verification swept every possible ink over
+   the champagne fill `#c9a876` and found the **maximum reachable `|Lc|` on it is 59.73** (pure
+   black; pure white reaches −49.05). The CTA carries its label on that fill. So the original
+   two-floor model was **unsatisfiable by construction** for any palette with a mid-luminance
+   accent fill carrying a label — no value of `--p-hero-ink`, in this skin or any future one,
+   could ever have cleared Lc 75, and the pair misses even the large floor of 60 by 0.3. The
+   defect was in this ADR's text, not in the palette.
+
+   **The three options, adjudicated.**
+
+   - **Re-light the maquette's inks and re-transcribe** — *rejected*. It compresses the
+     owner-signed luminance hierarchy (a secondary ink at Lc 75 sits close to a primary at
+     Lc 100, and the receding tertiary stops receding), and it does nothing for the two
+     champagne pairs, which no ink can fix.
+   - **Leave the gate permanently red as a quantified statement** — *rejected*. A forever-red
+     gate teaches red-blindness; the next real regression arrives into a suite already failing.
+   - **Per-role floors — a refined version of APCA's own conformance ladder, mapped to this
+     app's actual type roles** — **chosen**, and written out below.
+
+   **APCA's conformance ladder** (the standard's own rungs, not this app's):
+
+   | rung | what APCA says it is for |
+   |---|---|
+   | Lc 90 | preferred for body prose |
+   | Lc 75 | minimum for body text |
+   | Lc 60 | content text and headlines |
+   | Lc 45 | large-and-bold, and non-content text (button labels, placeholders, spot-read metadata) |
+   | Lc 30 | absolute minimum for any text |
+
+   **The app-role mapping, which is where the floors come from.** Each floor is the rung the role
+   sits on, raised to the measured value where Obsidian already exceeds it — a floor set below
+   what the palette achieves is a floor that permits a regression:
+
+   | token / pair | app role | rung | **floor** | note |
+   |---|---|---|---|---|
+   | `--p-ink` on bg/card/elev/well | primary body prose | 90 | **90** | measures −98.7…−100.0; exceeds its own rung |
+   | `--p-ink2` on the four surfaces | spot-read supplementary status text | 45 | **45** | the decision-carrying text in this app renders in `--p-ink` (sheet headline, well) or `--p-hero` (lit need line), **never** in ink2 |
+   | `--p-ink3` on the four surfaces | incidental / de-emphasized | — | **24** | **see the named deviation below** |
+   | `--p-hero-ink` on `--p-hero`, `--p-cta-bg` | CTA label, 14sp/500 | 45 | **55** | ceiling on this fill is 59.73; 55 is the achievable floor, not a comfortable one |
+   | `--p-hero` as text on `--p-bg` | LIVE counter, links | 45 | **50** | |
+   | `--p-err` as text on `--p-bg` | deny / revoke labels | 45 | **38** | **WATCH ITEM** — below its rung |
+   | the four Group indicators + presence | non-text | — | **WCAG ≥ 3.0:1** | unchanged, already passing on Obsidian |
+
+   **THE DEVIATION, named plainly rather than buried: `--p-ink3`'s floor of 24 sits below APCA's
+   Lc 30 absolute minimum for text.** It is accepted on exactly two conditions, both standing
+   rules from here on:
+
+   1. **`--p-ink3` is never the sole carrier of required information.** It is the section label
+      over a group whose rows state the same thing, the Completed group that has already
+      resolved, and the offline presence dot that is also a shape change. If a screen ever needs
+      ink3 to say something the user must read, the screen is wrong, not the floor.
+   2. **The O7 device glance pass is the empirical backstop** for it, on a real panel at real
+      brightness.
+
+   **`--p-err` at 38 is an EXPLICIT WATCH ITEM.** The O7 device pass must confirm deny/revoke
+   legibility. If it fails on device the **token lightens** — the ladder rule, D3 — and the floor
+   does not move.
+
+   **Obsidian improves the hierarchy inks over Substrate** and the gate now records it as a
+   requirement rather than a coincidence: ink2 goes −41.8 → −49.6 and ink3 −22.8 → −25.5, so the
+   45 floor *fails the shipped Substrate palette* and passes Obsidian. The gate is therefore
+   proof that this migration is an accessibility improvement, not merely a repaint. Obsidian is
+   **worse** on the three accent pairs (hero-ink, hero-as-text, err-as-text), which is why those
+   three are the watched ones.
+
+   **The two new effect tokens keep no TSV row, and that is correct.** `--p-lit-fx` and
+   `--p-sweep-fx` are typed `effect`, the one kind with no `res/values` converter, exactly like
+   the four effect tokens that preceded them; they live in `tokens.json` alone and the TSV header
+   records the absence. Adding rows would break the join gate. Blessed.
 2. **A sweep gate**: the four sweep constraints in D5, asserted over kit source (construction
    site, one-shot, single-concurrency, reduced-motion collapse).
 3. **The existing pins move deliberately**: the skin-name pin, the 17-colour count (→ 19), and
