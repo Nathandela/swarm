@@ -50,7 +50,7 @@ invisible while it held:
 | `go vet ./...` | green |
 | `golangci-lint run` | green, no new findings |
 | `go test ./...` | green, including `TestADR009D8_*` against the amended per-role floors (section 4) |
-| `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, **0 failures and 0 errors**, 124 result XML files per variant, counted out of the JUnit XML rather than read off an exit code |
+| `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, **0 failures and 0 errors**, 124 result XML files per variant, counted out of the JUnit XML rather than read off an exit code. Re-run with `--rerun` on both variants after the contrast gate was amended, so the counts above are a fresh execution and not an UP-TO-DATE verdict |
 
 Zero screen-code changes. Nothing under `ui/screens` was touched; the two `ui/kit` edits are
 `origin:`-annotated theme metrics. The app renders warm by value flow alone.
@@ -62,7 +62,9 @@ cost it twice.**
    time, waited on with `while pgrep -x java`. An *idle* Gradle daemon is also a java process —
    one had been resident 80 minutes at 0% CPU with no children — so that loop waits forever on a
    process that is not a build. Wait on `gradlew` or `GradleWorkerMain` instead, which are the
-   things that mean a build is actually in progress.
+   things that mean a build is actually in progress; better still, `--stop` then `--no-daemon`,
+   which is the *terminating* form of the same intent because it leaves no daemon behind for the
+   next run to block on.
 2. **A subagent shell here has neither `JAVA_HOME` nor `ANDROID_HOME`.** Without them the wrapper
    reports "Unable to locate a Java Runtime", then "SDK location not found". They are
    `/usr/local/Cellar/openjdk@21/21.0.12/libexec/openjdk.jdk/Contents/Home` and
@@ -73,6 +75,11 @@ cost it twice.**
    the table are that count. Gradle reported `testDebugUnitTest`/`testReleaseUnitTest` UP-TO-DATE
    on the final run, which is the stronger statement rather than a weaker one: it hashed the task
    inputs against the current tree and found the existing results are the results *for this tree*.
+
+All three are now encoded in `scripts/o2-gradle-run.sh`, which sets the two env vars, stops the
+daemon before running without one, captures `${PIPESTATUS[0]}` rather than the pipe's status, and
+prints the result-XML count and how many of them are fresh. Written down as a script because the
+hour these cost was spent twice already.
 
 **Go test flakes under load, in packages this phase never touched.** Running the suite alongside a
 Gradle build produced failures in `cmd/swarm`, `internal/remote/relay`, `internal/shim` and
