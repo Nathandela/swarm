@@ -543,6 +543,11 @@ func (m rootModel) View() tea.View {
 	// (there is no WithAltScreen program option), so it is set here, not in cmd.
 	v := tea.NewView(content)
 	v.AltScreen = true
+	// Like AltScreen, the tab title travels on the View in v2: the renderer emits
+	// the OSC only when it changes, clears it on quit, and re-asserts it from the
+	// cached View when the terminal is restored after an attach (agents-tracker-gcf6).
+	// During an attach the child agent's own title passes through and owns the tab.
+	v.WindowTitle = "swarm"
 	return v
 }
 
