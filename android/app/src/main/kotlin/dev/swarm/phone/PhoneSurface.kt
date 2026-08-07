@@ -466,7 +466,16 @@ class PhoneSurface(
      */
     internal var onDrillDownChanged: (Boolean) -> Unit = {}
 
-    /** What the inbox last drew, so a redraw that changes nothing rebuilds nothing. */
+    /**
+     * What the inbox last put IN FRONT OF THE USER: null whenever the inbox list is not what is on
+     * screen.
+     *
+     * IT ANSWERS TWO QUESTIONS AND THE SECOND IS THE ONE THAT COSTS. The first is cheap -- a
+     * redraw that changes nothing rebuilds nothing. The second is ADR-009 D5's: it is the screen
+     * `TriageInboxScreen.promotions` compares against, so it decides which rows sweep and whether
+     * the NEEDS_YOU haptic fires. That makes "last drawn" the wrong reading and "last seen" the
+     * right one, and [drawContent] is where the difference is maintained.
+     */
     private var inboxDrawn: InboxScreen? = null
 
     /**
@@ -1498,7 +1507,26 @@ class PhoneSurface(
     }
 
     /**
-     * Draw the destination the user is on.
+     * Draw the destination the user is on, and forget the inbox when it is not what they see.
+     *
+     * **THE CLEAR AT THE BOTTOM IS THE OTHER HALF OF [inboxDrawn]'s MEANING.** That field is the
+     * screen `TriageInboxScreen.promotions` compares against, and the whole claim its KDoc makes
+     * is that a promotion happened "in front of the user" -- so the memo has to be what the user
+     * SAW, not what was last drawn. Those are the same thing only while the inbox list is on
+     * screen. Without this line the memo froze for as long as the user was on Machines, Activity
+     * or Settings, or inside a drill-down, and every session that started asking during that
+     * window was announced when they came back: a NEEDS_YOU two-pulse and a slab sweep for
+     * transitions nobody was there for.
+     *
+     * NULL IS THE RIGHT VALUE TO FORGET WITH, and `promotions` already defines it: `previous ==
+     * null` returns the empty set, because nothing can have transitioned in front of a user who
+     * has not been shown anything. Coming back to the inbox therefore announces nothing, which is
+     * correct -- what waits for them is carried by the lit slab, which is a state and not an event.
+     *
+     * THE INBOX ARM RETURNS RATHER THAN FALLING THROUGH, and that is not a style choice. Clearing
+     * the memo on the inbox's own draw would forget the screen the user is looking at right now,
+     * so the next redraw would treat every waiting session as newly promoted -- the same defect,
+     * louder. `android/gate/o4_sweepmemo_test.go` asserts both halves and perturbs each.
      *
      * @param bridge null on the branch where the phone core refused, which is the only reason
      *  three of the four destinations can have nothing to draw.
@@ -1507,13 +1535,17 @@ class PhoneSurface(
     private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
         when (destination) {
             Destination.INBOX -> when (val open = detailPanel(bridge)) {
-                null -> drawInbox(inbox)
+                null -> {
+                    drawInbox(inbox)
+                    return
+                }
                 else -> drawDetail(open)
             }
             Destination.MACHINES -> drawMachines(bridge)
             Destination.ACTIVITY -> drawActivity(bridge)
             Destination.SETTINGS -> drawSettings()
         }
+        inboxDrawn = null
     }
 
     /**
