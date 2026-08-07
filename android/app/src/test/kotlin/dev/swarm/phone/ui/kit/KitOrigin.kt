@@ -63,6 +63,60 @@ object KitOrigin {
         return DesignTokens.toArgb(hex)
     }
 
+    /**
+     * One declaration of the OBSIDIAN MAQUETTE, resolved through `var()` to an ARGB.
+     *
+     * [cssColour]'s reader pointed at ADR-009 D2's normative source rather than at the Substrate
+     * artifact. Both are read in this suite and the split is recorded on [DesignScale]: the
+     * maquette states the app's own surfaces, the older artifact still states the three frame
+     * constants, the type ladder and the tab glyphs it does not draw.
+     *
+     * IT IS A SEPARATE FUNCTION AND NOT A FLAG ON [cssColour], because the selector names differ.
+     * The maquette calls the triage row `.slab` where Substrate calls it `.prow`, so a reader that
+     * fell back from one source to the other would answer `.prow` from the artifact that has it
+     * and silently stop being about the design that is normative.
+     */
+    fun maquetteColour(selector: String, property: String): Int {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property, so nothing can be expected of the " +
+                "component that cites it"
+        }
+        val resolved = DesignScale.resolve(raw)
+        val hex = HEX.find(resolved)?.value
+            ?: error("`$selector { $property: $resolved }` resolves to no colour")
+        return DesignTokens.toArgb(hex)
+    }
+
+    /**
+     * The `rgba(r, g, b, a)` inside one resolved maquette declaration -- an effect token spent by
+     * a rule, as `.slab.lit { box-shadow: var(--p-lit-fx) }` spends the promoted key light.
+     *
+     * READING THE RULE RATHER THAN THE TOKEN IS THE POINT. [rgbaToken] answers what `--p-lit-fx`
+     * IS; this answers which surface the design gives it to, which is the half no token can carry
+     * and the half a component gets wrong.
+     */
+    fun maquetteRgba(selector: String, property: String): Int {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val m = requireNotNull(RGBA.find(DesignScale.resolve(raw))) {
+            "`$selector { $property: $raw }` resolves to no rgba()"
+        }
+        val (r, g, b, a) = m.destructured.toList().map { it.toFloat() }
+        return Color.argb((a * 255f).roundToInt(), r.toInt(), g.toInt(), b.toInt())
+    }
+
+    /** The first px length anywhere in a resolved maquette declaration. */
+    fun maquetteFirstPx(selector: String, property: String): Float {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val m = requireNotNull(PX.find(DesignScale.resolve(raw))) {
+            "`$selector { $property: $raw }` carries no px length"
+        }
+        return m.groupValues[1].toFloat()
+    }
+
     /** The nth px field of a CSS declaration, in design px (which is Android dp at 1:1). */
     fun cssDp(selector: String, property: String, index: Int = 0): Float {
         val raw = requireNotNull(DesignScale.rule(selector)[property]) {

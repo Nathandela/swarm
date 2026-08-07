@@ -279,7 +279,23 @@ class KitFoundationTest {
                     Claim("`.prow.attention` border", expectedBorder, surface.spec.stroke),
                     Claim("rail colour", KitOrigin.cssColour(".prow.attention::before", "background"), rail!!.colour),
                     Claim("rail width", px(KitOrigin.cssDp(".prow.attention::before", "width")), rail.widthPx),
-                    Claim("the fill is unchanged", KitOrigin.cssColour(".prow", "background"), surface.spec.fill),
+                    // AUTHORIZED CLAIM MIGRATION, ADR-009 D3/D4. What this said before:
+                    //
+                    //     Claim("the fill is unchanged",
+                    //           KitOrigin.cssColour(".prow", "background"), surface.spec.fill)
+                    //
+                    // It was Substrate's decision stated as a property: the attention row differed
+                    // from a resting one by a border and a rail and by nothing else. ADR-009 adds
+                    // `--p-lit-fx` as a NEW effect for exactly this row -- "the promoted card: a
+                    // NeedsInput slab carries the stronger key-light" -- and the maquette draws it
+                    // one ladder step up, `.slab.lit { background: var(--p-elev) }`. So the fill
+                    // moves, and the claim is re-pointed at the source that moved it rather than
+                    // deleted: `.slab.lit` is read here, not transcribed.
+                    Claim(
+                        "the promoted fill is the maquette's",
+                        KitOrigin.maquetteColour(".slab.lit", "background"),
+                        surface.spec.fill,
+                    ),
                 ),
             ),
         )
@@ -288,6 +304,80 @@ class KitFoundationTest {
                 "computed at all",
             KitOrigin.token("--p-hair"),
             surface.spec.stroke,
+        )
+    }
+
+    /**
+     * `.slab.lit`: ADR-009 D4's promoted slab, which is a MATERIAL statement and not a decoration.
+     *
+     * The maquette gives a promoted row two things at once and either alone is the wrong drawing.
+     * It sits one ladder step up -- `background: var(--p-elev)` -- and it catches more of the one
+     * light source -- `box-shadow: var(--p-lit-fx)`, 0.22 against the resting 0.10. A slab that
+     * took the stronger edge on the card fill is a card with a bright line on it; a slab that took
+     * the elevated fill with the resting edge is a toast. Together they are the single thing D4
+     * describes: the same light, on material that has come forward.
+     *
+     * EVERY EXPECTATION IS READ FROM THE MAQUETTE, which is what makes this an assertion about the
+     * design rather than about itself. `.slab.lit`'s two declarations name tokens; the reader
+     * resolves them. A suite that wrote `--p-elev` and `0.22f` here would agree with the kit
+     * forever and could not tell a promoted slab from a toast.
+     */
+    @Test
+    fun `the promoted card is the elevated slab under the stronger key light`() {
+        val surface = cardSurface(context, attention = true)
+        val highlight = (0 until surface.numberOfLayers)
+            .map { surface.getDrawable(it) }
+            .filterIsInstance<EdgeHighlight>()
+            .singleOrNull()
+        assertTrue(
+            "the promoted card carries no EdgeHighlight layer at all, so --p-lit-fx is either " +
+                "missing or has been approximated by something that is not a layer",
+            highlight != null,
+        )
+        assertEquals(
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim(
+                        "`.slab.lit` fill",
+                        KitOrigin.maquetteColour(".slab.lit", "background"),
+                        surface.spec.fill,
+                    ),
+                    Claim(
+                        "`.slab.lit` key light",
+                        KitOrigin.maquetteRgba(".slab.lit", "box-shadow"),
+                        highlight!!.colour,
+                    ),
+                    Claim(
+                        "`.slab.lit` key-light band",
+                        px(KitOrigin.maquetteFirstPx(".slab.lit", "box-shadow")),
+                        highlight.heightPx,
+                    ),
+                    Claim(
+                        "the promoted key light is `--p-lit-fx` and not `--p-card-fx`",
+                        KitOrigin.rgbaToken("--p-lit-fx"),
+                        highlight.colour,
+                    ),
+                ),
+            ),
+        )
+
+        // THE TWO SURFACES MUST DIFFER, or every claim above holds over one value repeated. The
+        // resting slab is the subject of `the card surface resolves the design's card`; what is
+        // asserted here is that promotion is VISIBLE -- a lit slab whose fill and edge happened to
+        // equal the resting one would satisfy each equality above and render no promotion at all.
+        val resting = cardSurface(context, attention = false)
+        assertNotEquals(
+            "the promoted slab and the resting one paint the same fill, so ADR-009 D4's ladder " +
+                "step does not exist on screen",
+            resting.spec.fill,
+            surface.spec.fill,
+        )
+        assertNotEquals(
+            "the promoted slab and the resting one carry the same key light, so `--p-lit-fx` is " +
+                "`--p-card-fx` under another name",
+            resting.spec.keyLight,
+            surface.spec.keyLight,
         )
     }
 

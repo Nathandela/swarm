@@ -39,12 +39,52 @@ object DesignScale {
     private const val SHARED_START = "/* ---------- shared phone structure ---------- */"
     private const val SHARED_END = "/* ============ D1 SUBSTRATE ============ */"
 
+    /**
+     * ADR-009 D2's normative design source: every screen and every kit primitive, at token
+     * fidelity, and the `:root` block [TOKENS_RESOURCE] transcribes.
+     *
+     * WHY BOTH SOURCES ARE READ, which is a split and not an oversight -- the Go gate makes the
+     * same one and records it at `s22bMaquetteRelPath`. ADR-009 replaced the SKIN. What the
+     * maquette states about the app's own surfaces is authoritative; what it does not state at
+     * all -- the three frame constants (it draws a gallery phone with no OS chrome), the type
+     * ladder (a redraw whose sizes ADR-009 D3 does not move), the four tab glyphs (it draws
+     * labels, not `<svg>`) -- is still the directions artifact's, and re-pointing those at a
+     * drawing that does not contain them would be inventing values rather than reading them.
+     */
+    private const val MAQUETTE_RESOURCE = "obsidian-maquette.html"
+
+    /**
+     * The maquette's phone-kit block: every component the app draws, and nothing else.
+     *
+     * It stops at the mark, so the gallery furniture around the phones -- the page chrome the file
+     * itself marks "NOT part of the skin", the icon tiles, the feature-graphic composition -- can
+     * never leak a gallery value into an assertion about a component.
+     */
+    private const val MAQUETTE_KIT_START =
+        "/* ---------- kit primitives, drawn at token fidelity ---------- */"
+    private const val MAQUETTE_KIT_END = "/* ---------- the mark ---------- */"
+
     /** `"--p-card-r": "9px"`, and every other token regardless of what kind of value it holds. */
     private val ANY_TOKEN = Regex("\"(--[A-Za-z0-9-]+)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
 
     private val COMMENT = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL)
     private val RULE = Regex("([^{}]+)\\{([^{}]*)\\}", RegexOption.DOT_MATCHES_ALL)
     private val VAR = Regex("var\\(\\s*(--[A-Za-z0-9-]+)\\s*\\)")
+
+    /**
+     * An at-rule that CONTAINS rules -- `@keyframes`, `@media` -- removed whole before [RULE] runs.
+     *
+     * [RULE] cannot see nesting. Fed `@keyframes sweep { 0% { left: 0 } }` it matches the INNER
+     * block and then walks out of phase with everything after it, pairing selectors with the wrong
+     * declarations, silently. The maquette's sweep keyframes and its reduced-motion query both sit
+     * inside the kit block, so this is not a precaution: it is the difference between reading the
+     * design and reading three rules further down. The Go gate strips the same shape for the same
+     * reason (`s22bAtRuleRe`).
+     */
+    private val AT_RULE = Regex(
+        "@[a-zA-Z-]+[^{;]*\\{(?:[^{}]*\\{[^{}]*\\})*[^{}]*\\}",
+        RegexOption.DOT_MATCHES_ALL,
+    )
 
     /** Every token the origin declares, colour or not. */
     fun tokens(): Map<String, String> {
@@ -75,16 +115,58 @@ object DesignScale {
     }
 
     /** The shared structural CSS: selector -> declarations, in declaration order. */
-    fun sharedCss(): Map<String, Map<String, String>> {
-        val text = readResource(DESIGN_RESOURCE)
-        val start = text.indexOf(SHARED_START)
-        val end = text.indexOf(SHARED_END)
+    fun sharedCss(): Map<String, Map<String, String>> =
+        parseBlock(DESIGN_RESOURCE, SHARED_START, SHARED_END)
+
+    /**
+     * The maquette's kit block: ADR-009 D2's design source for the app's own surfaces.
+     *
+     * This is where a fact about a component that the token set cannot carry comes from -- that a
+     * promoted slab sits on `--p-elev` and takes `--p-lit-fx`, for instance, which is a binding
+     * between two tokens rather than a value of either.
+     */
+    fun maquetteKitCss(): Map<String, Map<String, String>> =
+        parseBlock(MAQUETTE_RESOURCE, MAQUETTE_KIT_START, MAQUETTE_KIT_END)
+
+    /** One maquette rule's declarations. Fails loudly rather than returning an empty map. */
+    fun maquetteRule(selector: String): Map<String, String> =
+        requireNotNull(maquetteKitCss()[selector]) {
+            "the maquette's kit block declares no `$selector`; an assertion over it would say " +
+                "nothing. ADR-009 D2 makes that file normative, so a selector the app cites and " +
+                "the maquette does not draw is a component with no design behind it."
+        }
+
+    private fun parseBlock(
+        resource: String,
+        blockStart: String,
+        blockEnd: String,
+    ): Map<String, Map<String, String>> {
+        val text = readResource(resource)
+        val start = text.indexOf(blockStart)
+        val end = text.indexOf(blockEnd)
         require(start >= 0 && end > start) {
-            "$DESIGN_RESOURCE no longer delimits the shared structural block with \"$SHARED_START\"" +
-                " and \"$SHARED_END\". Every expected value in these tests is computed from that " +
+            "$resource no longer delimits its structural block with \"$blockStart\"" +
+                " and \"$blockEnd\". Every expected value in these tests is computed from that " +
                 "block; without it they would compare against an empty map and pass vacuously."
         }
-        val block = COMMENT.replace(text.substring(start, end), "\n")
+        val block = AT_RULE.replace(COMMENT.replace(text.substring(start, end), "\n"), "\n")
+        // The flat rule regexp is only correct over a block with no remaining nesting, so that is
+        // CHECKED rather than assumed: a residue means the parse below is out of phase and every
+        // value it reports belongs to some other rule -- which it would report cheerfully.
+        var depth = 0
+        var deepest = 0
+        block.forEach { c ->
+            if (c == '{') {
+                depth++
+                if (depth > deepest) deepest = depth
+            }
+            if (c == '}') depth--
+        }
+        require(depth == 0 && deepest <= 1) {
+            "the block \"$blockStart\"..\"$blockEnd\" of $resource does not flatten to unnested " +
+                "rules (deepest nesting $deepest, unbalanced by $depth). The rule parser cannot " +
+                "see nesting and would pair selectors with declarations from other rules."
+        }
 
         val out = LinkedHashMap<String, LinkedHashMap<String, String>>()
         RULE.findAll(block).forEach { m ->
@@ -101,7 +183,7 @@ object DesignScale {
                 }
             }
         }
-        require(out.isNotEmpty()) { "no CSS rules parsed from the shared block of $DESIGN_RESOURCE" }
+        require(out.isNotEmpty()) { "no CSS rules parsed from the block of $resource" }
         return out
     }
 

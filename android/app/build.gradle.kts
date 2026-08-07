@@ -151,6 +151,21 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // states it. Staged for the same reason as everything above it: read from the classpath, never
     // by relative path, so the test does not depend on Gradle's working directory.
     from(rootProject.layout.projectDirectory.dir("..").file("docs/design/substrate-components.md"))
+    // ADR-009 D2 (O3): the OBSIDIAN MAQUETTE, which is the normative design source from the
+    // moment tokens.json cited it, and which the Go gate has read since O2 (s22bMaquetteRelPath).
+    //
+    // THE ROBOLECTRIC SUITE HAD NO WAY TO REACH IT, and that gap is what this line closes. Two
+    // facts about a promoted slab live in the maquette and nowhere else -- `.slab.lit` sits on
+    // `--p-elev` rather than `--p-card`, and it carries `--p-lit-fx` rather than `--p-card-fx` --
+    // and a suite that transcribed either into an expectation would agree with itself forever,
+    // which is precisely how colors.xml drifted to a third palette with its own test green.
+    // Staged from the classpath, never by relative path, like everything above it.
+    //
+    // The directions artifact above is NOT retired by this. ADR-009 changed the skin, not the
+    // structure: the frame constants and the type ladder are still Substrate's, and the kit still
+    // cites `.prow`, `.pdot` and `.workbar` for its geometry. The Go gate makes the same split and
+    // records the three reasons at s22bMaquetteRelPath.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/research/obsidian-maquette.html"))
     into(policyTestResourceDir)
 }
 
