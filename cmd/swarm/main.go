@@ -59,12 +59,16 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|version]
+const usage = `usage: swarm [daemon|shim|hook|ls|watch|kill|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
+  swarm ls         list sessions (--json for the full roster)
+  swarm watch      wait for a session to reach a status
+                   (--until needs_input|ready_for_review|completed|change, --timeout d)
+  swarm kill       terminate a session
   swarm version    print the build version
 `
 
@@ -95,6 +99,12 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], stdout, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "ls":
+		return dispatchAgentVerb(runLS, args[1:], nil, stdout, stderr)
+	case "watch":
+		return dispatchAgentVerb(runWatch, args[1:], []string{"subscribe"}, stdout, stderr)
+	case "kill":
+		return dispatchAgentVerb(runKill, args[1:], nil, stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:
