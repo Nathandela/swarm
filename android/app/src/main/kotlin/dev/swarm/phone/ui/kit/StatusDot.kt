@@ -25,10 +25,26 @@ internal class StatusDotDrawable(
     val glow: Int?,
     val diameterPx: Float,
     val glowRadiusPx: Float,
+    /**
+     * The maquette's `.pdot.unknown`: a RING rather than a disc. 0 is the disc every other mark
+     * in this app draws, which is why it is the default.
+     *
+     * ONE DRAWABLE FOR BOTH SHAPES, and the argument is [TogglePill]'s: the ring is the disc with
+     * a different Paint style, and a second class would be a second implementation of the 7 dp
+     * circle that PB-DS-4's clamp degeneracy already makes delicate. The stroke is drawn INSIDE
+     * the diameter (see [draw]) because the maquette sets `box-sizing: border-box` on everything
+     * it draws -- a border there is inside the box, and a ring that grew the mark by its own
+     * weight would shift every machine row's text sideways when a relay restarts.
+     */
+    val strokePx: Float = 0f,
 ) : Drawable() {
 
     val paint: Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = fill
+        if (strokePx > 0f) {
+            style = Paint.Style.STROKE
+            strokeWidth = strokePx
+        }
         // `box-shadow: 0 0 9px <colour>` -- symmetric, zero offset, no spread. Android has no
         // other primitive for it: View.elevation with setOutlineSpotShadowColor produces a
         // DIRECTIONAL light-source shadow, not a halo, and clamps saturation (ADR-007 B134
@@ -38,7 +54,12 @@ internal class StatusDotDrawable(
 
     override fun draw(canvas: Canvas) {
         if (bounds.isEmpty) return
-        canvas.drawCircle(bounds.exactCenterX(), bounds.exactCenterY(), diameterPx / 2f, paint)
+        // A stroke straddles the path, half in and half out, so the path a RING follows is inset
+        // by half its own weight -- that is what keeps the ring's outer edge on the design's 7 dp
+        // rather than 1 dp beyond it. `strokePx` is 0 for a disc, so this is `diameterPx / 2f`
+        // for every other mark and there is no second expression to keep in step.
+        val radius = (diameterPx - strokePx) / 2f
+        canvas.drawCircle(bounds.exactCenterX(), bounds.exactCenterY(), radius, paint)
     }
 
     override fun setAlpha(alpha: Int) { paint.alpha = alpha }

@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.MachinePane
+import dev.swarm.phone.ui.kit.PresenceMark
 
 /**
  * Phase B slice S25 -- PB-DS-9: the MACHINES screen's model.
@@ -99,15 +100,19 @@ data class MachineRow(
      */
     val presenceLine: String,
     /**
-     * Whether the mark reads as reachable, which is TRUE FOR ONE OF THE RELAY'S THREE WORDS.
+     * Which of the relay's THREE words the mark draws, carried rather than collapsed.
      *
-     * `App.Presence` returns `unknown`, `offline` or `online` and row 11 gives the dot two
-     * colours, so the cheap implementation is "not offline". `unknown` means the relay has no live
-     * record -- presence is never persisted, so its own restart produces it -- and painting that
-     * as reachable reports the absence of evidence as evidence. Both non-online words take the
-     * recessive ink, which is §10's reading of the same token on `completed`: not active.
+     * `App.Presence` returns `unknown`, `offline` or `online`, and the cheap implementation is
+     * "not offline" -- which paints a machine nobody can vouch for as reachable. `unknown` means
+     * the relay has no live record (presence is never persisted, so its own restart produces it),
+     * and reporting the absence of evidence as evidence is the one thing this field must not do.
+     *
+     * IT WAS A `Boolean` UNTIL ADR-009 D2. The maquette draws `.pdot.unknown` as a hollow ring, so
+     * the third word now has a mark of its own; folding it onto `offline` here would put the
+     * collapse one layer up from where it was fixed. [PresenceMark] is a closed set, so a `when`
+     * over it cannot acquire a default arm to hide the third state in again.
      */
-    val online: Boolean,
+    val mark: PresenceMark,
 )
 
 /**
@@ -234,13 +239,21 @@ object MachinesPanelScreen {
     private const val COMMAND_ENABLE = "swarm remote on"
 
     /**
-     * The relay's word for a live authenticated connection (`relay.PresenceOnline`).
+     * The relay's words for a live authenticated connection and for a closed one
+     * (`relay.PresenceOnline`, `relay.PresenceOffline`).
      *
      * COMPARED AGAINST, NEVER RENDERED. The line a user reads is the pane's, which carries
-     * whatever the relay actually said; this constant only decides which of two inks the 7 dp
-     * mark takes.
+     * whatever the relay actually said; these constants only decide which of the maquette's three
+     * marks the 7 dp dot takes.
+     *
+     * ANYTHING ELSE IS `unknown`, INCLUDING THE RELAY'S OWN THIRD WORD, and that is the safe
+     * direction rather than a shrug: a word this phone does not recognise is a word it has
+     * learned nothing from, which is exactly what `unknown` means. The failure the old
+     * `presence == ONLINE` boolean could produce -- an unrecognised word reading as reachable --
+     * is impossible here for the same reason.
      */
     private const val ONLINE = "online"
+    private const val OFFLINE = "offline"
 
     /**
      * @param pane what [MachinePane] says is true now. Read once, so the panel cannot disagree
@@ -254,7 +267,11 @@ object MachinesPanelScreen {
         machine = MachineRow(
             name = pane.machineId,
             presenceLine = pane.presenceExplanation(formatTime),
-            online = pane.presence == ONLINE,
+            mark = when (pane.presence) {
+                ONLINE -> PresenceMark.ONLINE
+                OFFLINE -> PresenceMark.OFFLINE
+                else -> PresenceMark.UNKNOWN
+            },
         ),
         remoteAccess = remoteAccessOf(pane),
         pairedDevicesHeading = PAIRED_DEVICES,
