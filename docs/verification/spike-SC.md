@@ -289,3 +289,21 @@ than the from-scratch `PermissionRequest`-hook wiring this spike validated.
 Not investigated here (out of scope for R-SPK-C.1/.2/.4) — flagging for a
 possible fast follow-up spike, since if it already solves remote approval
 natively it could simplify or replace the custom hook-relay approach.
+
+**CLOSED 2026-08-07 (agents-tracker-n047): it cannot.** Investigated against
+Claude Code 2.1.224 on this machine. Remote Control is gated to Anthropic's
+own relay twice over (verbatim from the binary: "Remote Control is only
+available when using Claude via api.anthropic.com" and "... only available
+with claude.ai subscriptions"), and the underlying `--sdk-url` transport is
+hostname-allowlisted to Anthropic endpoints, confirmed by live rejection of
+a loopback listener: `--sdk-url rejected: host "127.0.0.1" is not an
+approved Anthropic endpoint. This flag is reserved for Remote Control
+worker processes connecting to Anthropic's backend.` (Rejections emit
+`tengu_sdk_url_host_rejected` telemetry — a monitored boundary.) `--sdk-url`
+is additionally print-mode-only and replaces the terminal UI, which is
+incompatible with the concurrent owner+phone model regardless of the
+allowlist. The hook-relay approach this spike validated stands (ADR-010).
+The one live residual is the co-occurrence risk observed above: a user who
+runs Remote Control themselves may race swarm's `PermissionRequest` hook
+answer, and a supervised session must not inherit ambient remote-control
+environment — tracked as its own issue.
