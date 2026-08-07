@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import android.text.style.TextAppearanceSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -462,6 +463,26 @@ object KitOrigin {
         isFixedPitch(TextPaint().apply { typeface = face })
 
     /**
+     * Is this span's face the mono one?
+     *
+     * WHY A SPAN NEEDS ITS OWN QUESTION, and why the answer stopped being a string comparison in
+     * ADR-009 D7. [TextAppearanceSpan] reports the family two different ways depending on what
+     * the style declared: a platform family name comes back from `getFamily()` with `getTypeface()`
+     * null, and a BUNDLED family (`@font/...`) comes back the other way round -- `getTypeface()`
+     * holds the resolved face and `getFamily()` is null, because the platform resolved the
+     * resource rather than passing a name along. A suite that kept comparing `getFamily()` to the
+     * substitution string would have gone from asserting the face to asserting null == a resource
+     * reference, and would have reported the bundling as a regression.
+     *
+     * So the question is asked as PITCH, which is what the terminal peek actually depends on and
+     * what this object already answers everywhere else. A span with neither a typeface nor a
+     * fixed-pitch one is not mono, which is the correct answer for a sans style AND the correct
+     * answer for a bundled family that failed to load.
+     */
+    fun isFixedPitch(span: TextAppearanceSpan): Boolean =
+        span.typeface?.let { isFixedPitch(it) } ?: false
+
+    /**
      * VALIDATES THE PROBE ITSELF, against two typefaces whose pitch is not in question.
      *
      * Every `is monospace` claim in this package is an inference from an advance-width comparison,
@@ -517,7 +538,7 @@ object KitOrigin {
             Claim("`$selector` size", quantisedTextSize(spec.sizePx * spScale), view.textSize),
             Claim("`$selector` tracking", spec.trackingEm, view.letterSpacing),
             Claim("`$selector` ink", ink, view.currentTextColor),
-            Claim("`$selector` is monospace", spec.androidFamily == "monospace", isFixedPitch(view.paint)),
+            Claim("`$selector` is monospace", spec.isMono, isFixedPitch(view.paint)),
         )
     }
 

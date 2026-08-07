@@ -195,7 +195,9 @@ class ToastTest {
                 KitOrigin.quantisedTextSize(spec.sizePx * spScale).roundToInt(),
                 appearance.textSize,
             ),
-            Claim("`.tcard .b` family", spec.androidFamily, appearance.family),
+            // ADR-009 D7: pitch, not a family string -- a bundled family reaches the span as a
+            // resolved Typeface and leaves getFamily() null.
+            Claim("`.tcard .b` family", spec.isMono, KitOrigin.isFixedPitch(appearance)),
             Claim("row 1 suffix ink", KitOrigin.token("--p-ink2"), ink.foregroundColor),
         )
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))

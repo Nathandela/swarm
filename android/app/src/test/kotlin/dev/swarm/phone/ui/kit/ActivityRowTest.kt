@@ -227,7 +227,11 @@ class ActivityRowTest {
                 KitOrigin.quantisedTextSize(spec.sizePx * spScale).roundToInt(),
                 appearance.textSize,
             ),
-            Claim("`.prow .ln b` family", spec.androidFamily, appearance.family),
+            // ADR-009 D7: the span's face is asked as PITCH rather than as a family string.
+            // TextAppearanceSpan.getFamily() returns null once the style names a bundled family,
+            // because the platform resolved the resource instead of carrying a name; see
+            // KitOrigin.isFixedPitch(TextAppearanceSpan).
+            Claim("`.prow .ln b` family", spec.isMono, KitOrigin.isFixedPitch(appearance)),
             Claim("`.prow .ln b` ink", KitOrigin.token("--p-ink"), ink.foregroundColor),
         )
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
@@ -252,14 +256,14 @@ class ActivityRowTest {
         val claims = listOf(
             Claim(
                 "`.prow .ln b` is monospace",
-                "monospace",
+                TypeScale.MONO_FAMILY,
                 TypeScale.designSpec(".prow .ln b").androidFamily,
             ),
-            Claim("`.m2` is not monospace", false, TypeScale.designSpec(".m2").androidFamily == "monospace"),
+            Claim("`.m2` is not monospace", false, TypeScale.designSpec(".m2").isMono),
             Claim(
                 "the emphasis span carries the mono family",
-                "monospace",
-                spansOf<TextAppearanceSpan>(row()).single().family,
+                true,
+                KitOrigin.isFixedPitch(spansOf<TextAppearanceSpan>(row()).single()),
             ),
             Claim("the body renders proportional", false, KitOrigin.isFixedPitch(bodyView(row()).paint)),
         )

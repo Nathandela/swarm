@@ -176,10 +176,52 @@ class DesignScaleResolutionTest {
                     values.getFloat(IDX_TRACKING, MISSING),
                     1e-6f,
                 )
+                // FAMILY, and ADR-009 D7 split this assertion in two because Android resolves the
+                // two kinds of family differently. A platform NAME arrives as a string; a BUNDLED
+                // family arrives as a resource reference, and getString on it returns the
+                // resource's file path -- so the string comparison that was here would have
+                // compared "@font/jetbrains_mono" against "res/font/jetbrains_mono.xml" and
+                // reported the bundling as a drift. The reference is checked as a reference.
+                //
+                // What this assertion said before (ADR-009 D8.3):
+                //
+                //     assertEquals(
+                //         "$name (origin `$origin`) fontFamily",
+                //         spec.androidFamily,
+                //         values.getString(IDX_FAMILY),
+                //     )
+                val bundled = TypeScale.bundledFontName(spec.androidFamily)
+                if (bundled == null) {
+                    assertEquals(
+                        "$name (origin `$origin`) fontFamily",
+                        spec.androidFamily,
+                        values.getString(IDX_FAMILY),
+                    )
+                } else {
+                    val want = id(bundled, "font")
+                    assertNotEquals(
+                        "R.font.$bundled is not in the merged resource table, so " +
+                            "`$name` names a family Android cannot resolve -- which does not " +
+                            "fail the build, it falls back to the default sans in silence",
+                        0,
+                        want,
+                    )
+                    assertEquals(
+                        "$name (origin `$origin`) fontFamily does not resolve to R.font.$bundled",
+                        want,
+                        values.getResourceId(IDX_FAMILY, 0),
+                    )
+                }
+
+                // FONT FEATURES, ADR-009 D7: tabular figures, slashed zero and the contextual
+                // alternates the bundled family ships on, wherever machine data renders -- which
+                // in this design is exactly the mono styles. Asserted in both directions, so a
+                // feature string on a proportional face is as much a failure as its absence on a
+                // mono one.
                 assertEquals(
-                    "$name (origin `$origin`) fontFamily",
-                    spec.androidFamily,
-                    values.getString(IDX_FAMILY),
+                    "$name (origin `$origin`) fontFeatureSettings",
+                    if (spec.isMono) MONO_FONT_FEATURES else null,
+                    values.getString(IDX_FEATURES),
                 )
                 spec.lineHeightPx?.let { wantLeading ->
                     assertEquals(
@@ -239,8 +281,14 @@ class DesignScaleResolutionTest {
             TypeScale.designSpec(".prow .pj").androidFamily,
             TypeScale.designSpec(".prow .ag").androidFamily,
         )
+        // AUTHORIZED VALUE MIGRATION, ADR-009 D8.3 / D7. What the mono half said before:
+        //
+        //     assertEquals("monospace", TypeScale.designSpec(".sheet2 .cmd").androidFamily)
+        //
+        // The sans half does not move. `.sheet2 .cmd` is the command well, and D7 is what put a
+        // bundled face under it.
         assertEquals("sans-serif", nav.androidFamily)
-        assertEquals("monospace", TypeScale.designSpec(".sheet2 .cmd").androidFamily)
+        assertEquals("@font/jetbrains_mono", TypeScale.designSpec(".sheet2 .cmd").androidFamily)
     }
 
     private fun assertNotNull(message: String, value: Any?) =
@@ -259,12 +307,20 @@ class DesignScaleResolutionTest {
          * whatever it fails to find. Every generated R.styleable array is sorted for the same
          * reason; hand-written ones are where this goes wrong.
          */
+        /**
+         * ADR-009 D7's feature string, verbatim. The Go gate (s22bMonoFontFeatures) is the
+         * authority; this copy exists because a Robolectric test cannot read a Go constant, and
+         * both are joined to the ADR's own words rather than to each other.
+         */
+        const val MONO_FONT_FEATURES = "tnum, zero, calt"
+
         val ATTR_IDS = intArrayOf(
             android.R.attr.textSize,
             android.R.attr.textFontWeight,
             android.R.attr.letterSpacing,
             android.R.attr.fontFamily,
             android.R.attr.lineHeight,
+            android.R.attr.fontFeatureSettings,
         ).sortedArray()
 
         val IDX_SIZE = ATTR_IDS.indexOf(android.R.attr.textSize)
@@ -272,5 +328,6 @@ class DesignScaleResolutionTest {
         val IDX_TRACKING = ATTR_IDS.indexOf(android.R.attr.letterSpacing)
         val IDX_FAMILY = ATTR_IDS.indexOf(android.R.attr.fontFamily)
         val IDX_LINE_HEIGHT = ATTR_IDS.indexOf(android.R.attr.lineHeight)
+        val IDX_FEATURES = ATTR_IDS.indexOf(android.R.attr.fontFeatureSettings)
     }
 }
